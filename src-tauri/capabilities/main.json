@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Local lazysh window only; remote pages never receive native permissions.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default", "allow-list-hosts", "allow-save-host", "allow-delete-host",
+    "allow-trust-host-key", "allow-connect", "allow-write-stdin", "allow-ack-output",
+    "allow-resize", "allow-disconnect", "allow-list-directory", "allow-read-file",
+    "allow-upload-file", "allow-get-diff", "allow-list-multiplexer-sessions",
+    "allow-attach-tmux", "allow-agent-snapshot"
+  ]
+}
