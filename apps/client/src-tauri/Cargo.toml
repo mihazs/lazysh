@@ -25,9 +25,3 @@ zeroize = "1"
 tempfile = "3"
 rand = "0.10"
 tauri = { version = "2", features = ["test"] }
-
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
-panic = "abort"

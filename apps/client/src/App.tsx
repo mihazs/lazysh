@@ -816,7 +816,7 @@ export default function App() {
         {!native && (
           <div className="browser-banner" role="status">
             Browser preview · SSH connections require the native lazysh app. Run{" "}
-            <code>bun run tauri dev</code> to connect.
+            <code>bun run dev</code> to connect.
           </div>
         )}
         {error && (

@@ -1,12 +1,14 @@
 # lazysh implementation boundary
 
-The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun**. Android/iOS and desktop share the client source. Native packaging, OS lifecycle behavior and platform extensions still require platform toolchains and acceptance tests.
+The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/Turborepo**. Android/iOS and desktop share the client source. Native packaging, OS lifecycle behavior and platform extensions still require platform toolchains and acceptance tests.
 
 ## Components
 
-- `src/`: accessible host/session workspace, xterm.js terminal, SFTP and diff views, and companion event board. Terminal models live outside React render cycles and remain mounted across view changes. Only connection metadata and native-owned pins persist; credentials are prompted per connection.
-- `src-tauri/`: direct Rust SSH transport (`russh`), local host metadata, strict SHA-256 host verification before authentication, PTY streaming/resize, bounded SFTP reads/uploads, explicit Git diffs and multiplexer discovery. All native commands are restricted to the bundled main window. Remote file content is text, never executable HTML.
-- `companion/`: optional Python standard-library CLI that accepts lifecycle events and emits a bounded local snapshot. It does not own agent processes, run an HTTP server, or grant approvals. The authenticated SSH connection carries snapshots.
+- `apps/client/src/`: accessible host/session workspace, xterm.js terminal, SFTP and diff views, and companion event board. Terminal models live outside React render cycles and remain mounted across view changes. Only connection metadata and native-owned pins persist; credentials are prompted per connection.
+- `apps/client/src-tauri/`: direct Rust SSH transport (`russh`), local host metadata, strict SHA-256 host verification before authentication, PTY streaming/resize, bounded SFTP reads/uploads, explicit Git diffs and multiplexer discovery. All native commands are restricted to the bundled main window. Remote file content is text, never executable HTML.
+- `apps/agent/`: optional Rust CLI that accepts lifecycle events and emits a bounded local SQLite snapshot. It does not own agent processes, run an HTTP server, or grant approvals. The authenticated SSH connection carries snapshots.
+
+The Bun workspace has two package-owned task sets, coordinated by Turbo; the Cargo workspace has both Rust crates and one root lockfile. No empty shared packages or duplicate configuration packages are introduced. The client owns its TypeScript/Vite/Vitest/Playwright configuration. Rust tests use Cargo's unit/integration conventions. Native tasks use Cargo's compilation cache and bypass Turbo artifact/test caching, avoiding cross-platform artifact reuse or cached integration results. Frontend outputs use an explicit `dist/**` cache boundary. There is no custom test runner or `scripts/` directory.
 
 ```mermaid
 flowchart LR

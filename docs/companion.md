@@ -2,13 +2,10 @@
 
 The terminal works without this optional host component. The initial companion observes lifecycle events; it does not parse transcripts, answer approvals, launch agents, or send data to a cloud service.
 
-Install on the **remote host**, using Python 3.11 or newer:
+Install on the **remote host**, using Rust stable from a checkout of this repository:
 
 ```sh
-python3 -m venv ~/.local/share/lazysh-venv
-~/.local/share/lazysh-venv/bin/pip install ./companion
-mkdir -p ~/.local/bin
-ln -s ~/.local/share/lazysh-venv/bin/lazysh-agent ~/.local/bin/lazysh-agent
+cargo install --path apps/agent --locked
 lazysh-agent snapshot --limit 50
 ```
 
@@ -30,6 +27,6 @@ printf '%s' '{"schemaVersion":1,"sessionId":"build-1","agent":"My agent","projec
 
 States are `working`, `needs_attention`, and `done`. Agent plus session ID identifies a row. No fields authorize remote command execution. Summaries are plain text and may contain project-sensitive information; the snapshot is visible to the authenticated SSH user. Only install hooks on hosts and agents you control.
 
-At most 100 session summaries are retained for seven days in `~/.local/state/lazysh/events.sqlite3`, using a mode-0700 directory and mode-0600 database on Unix. `LAZYSH_STATE_DIR` overrides that directory for testing. No original event payloads are retained. This does not yet provide history, usage/context metrics, native chat, automatic background refresh, or remote approval actions.
+At most 100 session summaries are retained for seven days in `events.sqlite3` in the user's state directory (`~/.local/state/lazysh` on Linux; the local application data directory on macOS/Windows). A mode-0700 directory and mode-0600 database are used on Unix. `LAZYSH_STATE_DIR` overrides that directory for testing. No original event payloads are retained. This does not yet provide history, usage/context metrics, native chat, automatic background refresh, or remote approval actions.
 
-Test the real CLI with `python3 -m unittest discover -s companion -v`.
+Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx turbo run test --filter=@lazysh/agent`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.

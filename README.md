@@ -1,6 +1,6 @@
 # lazysh
 
-A direct SSH terminal and agent workspace for Android, iOS, macOS, Linux, and Windows, built with Tauri 2, Rust, React, and xterm.js.
+A direct SSH terminal and agent workspace for Android, iOS, macOS, Linux, and Windows, built with Tauri 2, Rust, React, and xterm.js in a Bun/Turborepo monorepo.
 
 Implementation is in progress. Moshi parity is a release objective, not a claim about this initial repository. Track delivery in the [Project](https://github.com/users/mihazs/projects/2), [parity epic](https://github.com/mihazs/lazysh/issues/1), and [feature evidence](docs/moshi-evidence.md).
 
@@ -14,7 +14,7 @@ Requires Bun, Rust stable, and the [Tauri prerequisites](https://v2.tauri.app/st
 
 ```sh
 bun install --frozen-lockfile
-bun run tauri dev
+bun run dev
 ```
 
 The browser development server is a UI preview; direct SSH requires the native Tauri application.
@@ -24,14 +24,23 @@ The browser development server is a UI preview; direct SSH requires the native T
 ```sh
 bun run build
 bun run test
-bunx playwright install chromium
+bun run test:install-browser
 bun run test:e2e
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
-python3 -m unittest discover -s companion -v
+bun run check
+bun run lint
+bun run format:check
+bun run test:openssh
 ```
 
-The Rust suite includes a separately enabled OpenSSH/SFTP interoperability test; see its test documentation. Browser tests check responsive UI and keyboard behavior, not native SSH. Platform/toolchain and release results are recorded in the implementation PR.
+`test` runs the client Vitest suite and both Rust suites through Cargo. `test:openssh` additionally requires a local `sshd` executable. Browser tests check responsive UI and keyboard behavior, not native SSH. Platform/toolchain and release results are recorded in the implementation PR.
+
+## Monorepo
+
+- `apps/client`: shared React/xterm.js client and its Tauri Rust crate, desktop/mobile targets, Vitest tests, and Playwright tests.
+- `apps/agent`: optional Rust host companion, with library unit tests and CLI integration tests under `tests/`.
+- Root `Cargo.toml`/`Cargo.lock`: Rust workspace and dependency lock. Root `package.json`/`bun.lock`: Bun workspace and dependency lock. `turbo.json`: package task orchestration.
+
+Dependencies belong to their owning app. Root commands delegate to Turbo package tasks. Frontend build outputs are cached; native builds and integration tests run freshly and use Cargo's compilation cache. There is no `scripts/` directory or custom test runner.
 
 ## Connection safety
 
@@ -41,10 +50,10 @@ See [architecture and current limits](docs/architecture.md) for the component bo
 
 ## Platforms
 
-Desktop: `bun run tauri build`.
+Desktop: `bun run build:native` creates the native release executable. To create platform bundles, run `bun run --cwd apps/client tauri build`.
 
-Android (API 24+, current Android System WebView): install JDK 21, SDK platform 36, build tools 36.0.0 and NDK 29.0.14206865. Set `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME`, then run `bun run tauri android dev`. The Android project is checked in; do not reinitialize it. To build a debug ARM64 APK: `bun run tauri android build --target aarch64 --debug --apk`.
+Android (API 24+, current Android System WebView): install JDK 21, SDK platform 36, build tools 36.0.0 and NDK 29.0.14206865. Set `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME`, then run `bun run --cwd apps/client tauri android dev`. The Android project is checked in; do not reinitialize it. `bun run build:android` builds a debug ARM64 APK. For an optimized unsigned APK: `bun run --cwd apps/client tauri android build --target aarch64 --apk --ci`.
 
-iOS (16+): on macOS with Xcode, run `bun run tauri ios init` and `bun run tauri ios dev`. Distribution requires your own Apple signing identity. macOS desktop requires version 13+.
+iOS (16+): on macOS with Xcode, `bun run build:ios` initializes and builds an unsigned ARM64 simulator app. Distribution requires your own Apple signing identity. macOS desktop requires version 13+.
 
 lazysh is an independent implementation. It does not distribute Moshi code, branding, or assets.
