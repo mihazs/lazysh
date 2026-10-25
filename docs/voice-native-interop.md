@@ -43,19 +43,37 @@ embedded protobuf definition at final link.
 The Linux native CMake build now copies the hash-verified ORT archive into its own
 `private-ort/libonnxruntime.a` output. Target-toolchain `nm` inventories protobuf
 ABI symbols, and `objcopy --redefine-syms` consistently renames those definitions
-and references, including RTTI and vtables, from `google::protobuf` to
+and references, including RTTI, vtables and local COMDAT signatures, from `google::protobuf` to
 `lazysh_ort_google::protobuf`. It leaves the public ORT C API, STL/libc symbols,
 and unrelated generated descriptors unchanged. No tool script, source-cache
 mutation, model change, dependency-version change, or global compiler flag is
 used. Upstream license/provenance and the publisher archive remain unchanged.
 
-The build fails if tools fail, the expected namespace is absent, an externally
-visible old protobuf definition/reference remains, or the private namespace/C
+The build fails if tools fail, the expected namespace is absent, any old
+protobuf definition/reference/signature remains, or the private namespace/C
 entry point is missing. The standard native Cargo fixture independently checks
 the resulting archive. The existing archive-specific export guard remains in
 the client final link. The exact previously crashing Mosh fixture passed after
 this change; product publication additionally requires the full native suite,
 real manager lifecycle and both voice initialization orders to exit cleanly.
+
+The initial external-symbol-only inventory was insufficient on Ubuntu's
+protobuf 3.21.12. [Controlled CI run 40230029504](https://github.com/mihazs/lazysh/actions/runs/40230029504)
+retained the original failed executable's verified hash, a null destructor call,
+an unresolved weak `InternalMetadataD1Ev` relocation, and the private ORT archive's
+still-original local `InternalMetadataD5Ev` COMDAT signatures. Those signatures
+allowed the linker to discard Mosh's destructor even though ORT's actual
+destructor definitions had been renamed. The fix inventories and verifies all
+symbols in the same protobuf namespace, including local group signatures;
+it does not rename another library namespace or alter the upstream archive.
+
+Using extracted official Ubuntu 3.21.12 packages locally reproduced the exact
+Mosh fixture's SIGSEGV before this correction and passed afterward. The complete
+client library suite then passed 173 tests (nine existing ignores), and the
+runtime's native tests, including a separate ELF COMDAT-group assertion, passed.
+These local checks used GCC 16.2.1 rather than Ubuntu's compiler; a fresh hosted
+run of the corrected source remains required. Original protobuf symbols in
+the final client are expected because Mosh still uses the system library.
 
 Tool semantics: [GNU objcopy](https://sourceware.org/binutils/docs/binutils/objcopy.html)
 and [LLVM objcopy](https://llvm.org/docs/CommandGuide/llvm-objcopy.html). Linux

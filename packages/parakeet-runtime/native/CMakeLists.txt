@@ -73,7 +73,10 @@ target_link_libraries(lazysh-parakeet-native PRIVATE sherpa-onnx-c-api nlohmann_
 
 # ORT's pinned Linux archive embeds an older protobuf than the system Mosh
 # dependency. Hidden exports do not stop static Mosh relocations binding ORT's
-# incompatible ExtensionSet, RTTI or vtables at the final client link.
+# incompatible ExtensionSet, RTTI or vtables at the final client link. Local
+# COMDAT signatures also participate in deduplication: retaining an old D5
+# signature can discard Mosh's destructor while ORT defines only renamed D1/D2.
+# Inventory all symbols, not only externally visible definitions/references.
 function(lazysh_private_ort input output_variable)
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(${output_variable} "${input}" PARENT_SCOPE)
@@ -82,7 +85,7 @@ function(lazysh_private_ort input output_variable)
   if(NOT CMAKE_NM OR NOT CMAKE_OBJCOPY)
     message(FATAL_ERROR "The Linux ORT boundary requires target nm and objcopy")
   endif()
-  execute_process(COMMAND "${CMAKE_NM}" --format=posix --extern-only "${input}"
+  execute_process(COMMAND "${CMAKE_NM}" --format=posix "${input}"
     RESULT_VARIABLE nm_result OUTPUT_VARIABLE symbols ERROR_VARIABLE nm_error)
   if(NOT nm_result EQUAL 0)
     message(FATAL_ERROR "Cannot inspect the pinned ORT archive: ${nm_error}")
@@ -104,7 +107,8 @@ function(lazysh_private_ort input output_variable)
   set(mapping "")
   foreach(symbol IN LISTS protobuf_symbols)
     # Preserve valid Itanium mangling, including templates, RTTI, vtables and
-    # undefined references; never rename STL, libc or the public Ort C API.
+    # undefined references and local COMDAT signatures; never rename STL, libc
+    # or the public Ort C API.
     string(REPLACE "6google8protobuf" "17lazysh_ort_google8protobuf" private_symbol "${symbol}")
     string(APPEND mapping "${symbol} ${private_symbol}\n")
   endforeach()
@@ -120,7 +124,7 @@ function(lazysh_private_ort input output_variable)
   if(NOT copy_result EQUAL 0)
     message(FATAL_ERROR "Cannot isolate the pinned ORT protobuf archive: ${copy_error}")
   endif()
-  execute_process(COMMAND "${CMAKE_NM}" --format=posix --extern-only "${owned}"
+  execute_process(COMMAND "${CMAKE_NM}" --format=posix "${owned}"
     RESULT_VARIABLE verify_result OUTPUT_VARIABLE isolated ERROR_VARIABLE verify_error)
   if(NOT verify_result EQUAL 0 OR isolated MATCHES "(^|\n)_Z[^ \t\n]*6google8protobuf"
       OR NOT isolated MATCHES "17lazysh_ort_google8protobuf"

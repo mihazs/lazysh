@@ -8,7 +8,7 @@ fn embedded_protobuf_is_private_without_changing_the_ort_c_api() {
     let build = std::path::Path::new(env!("LAZYSH_PARAKEET_NATIVE_BUILD"));
     let archive = build.join("private-ort/libonnxruntime.a");
     let output = Command::new("nm")
-        .args(["--format=posix", "--extern-only"])
+        .arg("--format=posix")
         .arg(archive)
         .output()
         .expect("inspect transformed ORT archive");
@@ -28,11 +28,41 @@ fn embedded_protobuf_is_private_without_changing_the_ort_c_api() {
         !names
             .iter()
             .any(|name| name.starts_with("_Z") && name.contains("6google8protobuf")),
-        "no embedded protobuf definitions or references may share the system namespace"
+        "no embedded protobuf definitions, references or local signatures may share the system namespace"
     );
     assert!(
         names.contains(&"OrtGetApiBase"),
         "the public ORT C entry point is unchanged"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protobuf_comdat_groups_do_not_share_the_system_namespace() {
+    let build = std::path::Path::new(env!("LAZYSH_PARAKEET_NATIVE_BUILD"));
+    let output = Command::new("readelf")
+        .arg("--section-groups")
+        .arg(build.join("private-ort/libonnxruntime.a"))
+        .output()
+        .expect("inspect transformed ORT COMDAT groups");
+    assert!(
+        output.status.success(),
+        "target group inspection must succeed"
+    );
+    let groups = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        groups
+            .lines()
+            .any(|line| line.contains("COMDAT group section")
+                && line.contains("17lazysh_ort_google8protobuf")),
+        "inspection must find the actual private protobuf groups"
+    );
+    let original = groups
+        .lines()
+        .find(|line| line.contains("COMDAT group section") && line.contains("6google8protobuf"));
+    assert!(
+        original.is_none(),
+        "local COMDAT signatures must not discard system protobuf definitions: {original:?}"
     );
 }
 
