@@ -15,6 +15,19 @@ describe('bounded reviewed theme documents',()=>{
     expect(parseThemeImport(exported.code,info)).toEqual(imported);
     expect(terminalOptions(parsePreferences({...defaults,customTheme:colors})).theme?.black).toBeUndefined();
   });
+  it('round-trips bold policy and preserves bundled and pre-metadata bright defaults',()=>{
+    for(const [bold,normalized] of [[undefined,undefined],['bright','bright'],['#abc','#aabbcc'],['#A1B2C3','#a1b2c3']] as const) {
+      const imported=importedTheme({...theme,colors:{...theme.colors,...(bold===undefined?{}:{bold})}});
+      const saved=parsePreferences({...defaults,theme:'custom',customTheme:imported.colors,customThemeInfo:info});
+      expect(terminalOptions(saved).drawBoldTextInBrightColors).toBe(bold!==undefined);
+      expect(terminalOptions(saved).theme).not.toHaveProperty('bold');
+      expect(parseThemeImport(exportTheme(imported).code,info)).toEqual(imported);
+      expect(saved.customTheme?.bold).toBe(normalized);
+    }
+    expect(terminalOptions(defaults).drawBoldTextInBrightColors).toBe(true);
+    expect(terminalOptions(parsePreferences({...defaults,customTheme:theme.colors})).drawBoldTextInBrightColors).toBe(true);
+    for(const bold of [null,1,'Bright','#aabbccff','#aa','red','url(evil)']) expect(()=>importedTheme({...theme,colors:{...theme.colors,bold}})).toThrow();
+  });
   it('rejects unpaired UTF-16 surrogates in names while preserving emoji pairs',()=>{
     for(const name of ['\ud800','before\udfff','\ud800\ud800','\udfff\ud800']) {
       expect(()=>parseThemeImport(JSON.stringify({...theme,name}),info)).toThrow();
@@ -35,7 +48,7 @@ describe('bounded reviewed theme documents',()=>{
     expect(terminalOptions(old).theme).toEqual(old.customTheme);
   });
   it('rejects malformed/oversized documents, URLs, injection, unsupported color semantics and transparent app surfaces',()=>{
-    for(const source of ['x'.repeat(16385),' '.repeat(8193),'{', 'https://example.com/theme.json','lazysh-theme:a','lazysh-theme:%%%%', 'lazysh-theme:'+btoa('\xff'),JSON.stringify({...theme,v:2}),JSON.stringify({...theme,name:'a'.repeat(41)}),JSON.stringify({...theme,mode:'system'}),JSON.stringify({...theme,extra:true}),JSON.stringify({...theme,colors:{...theme.colors,bold:'#ffffff'}}),JSON.stringify({...theme,colors:{background:'#ffffff00',foreground:'#fff'}}),'{"background":"url(evil)","foreground":"#fff"}','{"background":"#fff","foreground":"#111","__proto__":"#fff"}']) expect(()=>parseThemeImport(source,info)).toThrow();
+    for(const source of ['x'.repeat(16385),' '.repeat(8193),'{', 'https://example.com/theme.json','lazysh-theme:a','lazysh-theme:%%%%', 'lazysh-theme:'+btoa('\xff'),JSON.stringify({...theme,v:2}),JSON.stringify({...theme,name:'a'.repeat(41)}),JSON.stringify({...theme,mode:'system'}),JSON.stringify({...theme,extra:true}),JSON.stringify({...theme,colors:{...theme.colors,bold:'#ffffff80'}}),JSON.stringify({...theme,colors:{background:'#ffffff00',foreground:'#fff'}}),'{"background":"url(evil)","foreground":"#fff"}','{"background":"#fff","foreground":"#111","__proto__":"#fff"}']) expect(()=>parseThemeImport(source,info)).toThrow();
     expect(()=>parseThemeImport(JSON.stringify(theme)+' '.repeat(8192),info)).toThrow();
   });
   it('keeps new selectors independent, validates metadata and defaults malformed custom app choices',()=>{
