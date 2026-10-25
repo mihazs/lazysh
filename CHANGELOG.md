@@ -5,15 +5,6 @@
 This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
 
-### Changed
-
-- Companion event storage uses WAL with explicit FULL synchronization, reducing
-  rollback-journal sync work while preserving event acknowledgements and the
-  three-second ingest wait budget. Existing databases migrate on successful open.
-  Bootstrap has one shared three-second native/SQLite wait deadline. Unix state
-  ancestors and sidecars now fail closed when unsafe; WAL requires local storage.
-  Slow-storage exhaustion remains possible and issue #36 is not declared fixed.
-
 ### Added
 
 - Opt-in Linux Parakeet inference acceptance with a licensed public speech
@@ -88,6 +79,14 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   the standard home fallback. No Devin process or exporter is launched.
 
 ### Changed
+
+- Companion event storage uses WAL with explicit FULL synchronization, reducing
+  rollback-journal sync work while preserving event acknowledgements and the
+  three-second ingest wait budget. Existing databases migrate on successful open.
+  Bootstrap has one shared three-second native/SQLite wait deadline. Unix state
+  ancestors and sidecars now fail closed when unsafe; unsupported/network/FUSE
+  storage and parent-traversal paths are rejected before mutation.
+  Slow-storage exhaustion remains possible and issue #36 is not declared fixed.
 
 - Paper and explicitly light imported terminal themes now darken bright indexed
   cube colors and reverse the indexed grayscale ramp using the pinned Moshi
