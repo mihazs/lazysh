@@ -39,5 +39,15 @@ reported selection, restore Default and inspect the Home Screen again. Test
 failure/recovery without losing the actual reported icon. A passing controller
 fixture or bundle/IPC test alone does not certify physical Home Screen changes.
 
+Observed native limitation: [run 40205323991](https://github.com/mihazs/lazysh/actions/runs/40205323991)
+compiled the iOS app and passed all three controller tests, but the first real
+icon mutation IPC promise did not reply within 20 seconds and the hosted app
+step ultimately exceeded eight minutes. No bundle/valid-change success was
+observed. Launch metadata had `OS_ACTIVITY_DT_MODE=YES`; no sampled stack proved
+the cause. A fresh run includes the independently merged hosted-logging marker
+fix and a status-only preflight before attempting mutation. Safe stage attachments
+record callback receipt and icon state, not credentials. The marker is not evidence
+of a successful icon change until the controlled runtime checks actually pass.
+
 References: [Moshi personalization](https://getmoshi.app/docs/personalization),
 [UIKit alternate icon API](https://developer.apple.com/documentation/uikit/uiapplication/setalternateiconname(_:completionhandler:)).

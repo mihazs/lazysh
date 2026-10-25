@@ -20,11 +20,47 @@ final class AppIconIntegrationTests: XCTestCase {
     wait(for: [ready], timeout: 30)
     return try XCTUnwrap(appWebView())
   }
+  private func record(_ stage: String, received: Bool, status: [String: Any]? = nil) {
+    var fields: [String: Any] = ["stage": stage, "received": received,
+      "mirrorPresent": ProcessInfo.processInfo.environment["OS_ACTIVITY_DT_MODE"] != nil,
+      "mirrorDisabledMarker": ProcessInfo.processInfo.environment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] == "1"]
+    if let available = status?["available"] as? Bool { fields["available"] = available }
+    if let current = status?["current"] as? String, ["default", "amber", "unknown"].contains(current) { fields["current"] = current }
+    let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+    let attachment = XCTAttachment(string: data.flatMap { String(data: $0, encoding: .utf8) } ?? stage)
+    attachment.name = "Icon acceptance: " + stage
+    attachment.lifetime = .keepAlways
+    add(attachment)
+  }
+  private func preflight(_ view: WKWebView) throws {
+    let replied = expectation(description: "Actual native icon status preflight")
+    var status: [String: Any]?
+    var received = false
+    record("status-requested", received: false)
+    view.callAsyncJavaScript("return await window.__TAURI_INTERNALS__.invoke('app_icon_status');",
+      arguments: [:], in: nil, in: .page) { response in
+        received = true
+        switch response {
+        case .success(let value): status = value as? [String: Any]
+        case .failure(let error): XCTFail("Native icon status preflight failed: \(error)")
+        }
+        replied.fulfill()
+      }
+    wait(for: [replied], timeout: 20)
+    record("status-completed", received: received, status: status)
+    let actual = try XCTUnwrap(status, "Icon mutation requires a working native status roundtrip first")
+    XCTAssertEqual(actual["available"] as? Bool, UIApplication.shared.supportsAlternateIcons)
+    let current = UIApplication.shared.alternateIconName.map { $0 == "LazyshAmber" ? "amber" : "unknown" } ?? "default"
+    XCTAssertEqual(actual["current"] as? String, current)
+  }
   private func icon(_ choice: String, in view: WKWebView) -> [String: Any]? {
     let replied = expectation(description: "Actual native icon change: " + choice)
     var status: [String: Any]?
+    var received = false
+    record(choice + "-requested", received: false)
     view.callAsyncJavaScript("return await window.__TAURI_INTERNALS__.invoke('set_app_icon', {icon: choice});",
       arguments: ["choice": choice], in: nil, in: .page) { response in
+        received = true
         switch response {
         case .success(let value): status = value as? [String: Any]
         case .failure(let error): XCTFail("Actual UIKit icon change failed: \(error)")
@@ -32,10 +68,12 @@ final class AppIconIntegrationTests: XCTestCase {
         replied.fulfill()
       }
     wait(for: [replied], timeout: 20)
+    record(choice + "-completed", received: received, status: status)
     return status
   }
   func testActualUIKitAmberRoundtripAndRestore() throws {
     let view = try readyAppView()
+    try preflight(view)
     guard UIApplication.shared.supportsAlternateIcons else {
       XCTFail("This simulator does not support alternate icons; valid-change acceptance remains unverified."); return
     }
