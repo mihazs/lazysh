@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
+import { cleanupNativeMocks } from "./test/nativeCoreMock";
 import { installSpeechCapture } from "./test/speechCapture";
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import VoicePanel from './VoicePanel';
+import { accessSnapshot, applyAccessStatus } from './access';
 
-vi.mock('@tauri-apps/api/core', async original => ({ ...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn(), Channel:class {onmessage:((event:unknown)=>void)|undefined;} }));
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
+vi.mock('@tauri-apps/api/core', async original => ({ ...await (await import("./test/nativeCoreMock")).mockNativeCore(original), Channel:class {onmessage:((event:unknown)=>void)|undefined;} }));
+afterEach(() => { cleanupNativeMocks(); vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'}); });
 
 it('requires a local model and explicit recording and handles microphone denial', async () => {
   vi.mocked(invoke).mockResolvedValue([{id:'ggml-tiny.en.bin',bytes:75*1024*1024}]);
@@ -29,7 +31,7 @@ it('stages an edited draft only on explicit request and never sends terminal inp
   expect(listener).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Stage in terminal composer'}));
   expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh1',text:'review this code'});
-  expect(vi.mocked(invoke).mock.calls.every(([name]) => name === 'voice_models' || name === 'apple_speech_capability' || name==='voice_model_catalog')).toBe(true);
+  expect(vi.mocked(invoke).mock.calls.every(([name]) => name === 'voice_models' || name === 'apple_speech_capability' || name==='voice_model_catalog' || name==='voice_parakeet_status')).toBe(true);
   window.removeEventListener('lazysh-prompt-draft',listener);
 });
 
@@ -232,4 +234,281 @@ it('resets direct input and Enter when Voice is closed and reopened for another 
   view.rerender(<VoicePanel key="second" sessionId="second" onDirectDictation={callback}/>);
   expect(screen.getByLabelText('Type final result directly into terminal')).toHaveProperty('checked',false);
   expect(screen.getByLabelText('Auto-send: press Enter')).toHaveProperty('checked',false);
+});
+
+const parakeetBytes = 487170055;
+function parakeetFixture(overrides: Record<string, unknown> = {}) {
+  const status = {available:true, reason:'Local CPU engine', installed:false, ready:false, busy:false,
+    stage:'idle', requestId:null as string|null, received:0, total:parakeetBytes, ...overrides};
+  let finishInstall!:()=>void, failInstall!:(error:Error)=>void;
+  let finishTranscription!:(result:{requestId:string;text:string})=>void;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === 'voice_models' || command === 'voice_model_catalog') return Promise.resolve([]) as never;
+    if (command === 'voice_parakeet_status') return Promise.resolve({...status}) as never;
+    if (command === 'voice_parakeet_install') {
+      Object.assign(status, {busy:true, stage:'downloading', requestId:(args as {requestId:string}).requestId});
+      return new Promise<void>((resolve,reject) => { finishInstall=resolve; failInstall=reject; }) as never;
+    }
+    if (command === 'voice_parakeet_remove') {
+      Object.assign(status, {installed:false, ready:false, busy:false, stage:'idle', requestId:null});
+      return Promise.resolve() as never;
+    }
+    if (command === 'voice_parakeet_cancel') {
+      Object.assign(status, {busy:true, stage:'finishing'});
+      return Promise.resolve({cancelled:true,finishing:true}) as never;
+    }
+    if (command === 'voice_parakeet_transcribe') {
+      Object.assign(status, {busy:true,stage:'loading',requestId:(args as {requestId:string}).requestId});
+      return new Promise<{requestId:string;text:string}>(resolve => { finishTranscription=resolve; }) as never;
+    }
+    return Promise.resolve() as never;
+  });
+  return {status, install:()=>finishInstall(), failInstall:()=>failInstall(new Error('Cancelled native installation')),
+    complete:(requestId:string,text:string)=>finishTranscription({requestId,text})};
+}
+function parakeetMicrophone() {
+  return installSpeechCapture().microphone;
+}
+async function chooseParakeet() {
+  await waitFor(()=>expect(screen.getByRole('option',{name:'Parakeet · local'})).toHaveProperty('disabled',false));
+  fireEvent.change(screen.getByLabelText('Speech engine'),{target:{value:'parakeet'}});
+}
+async function recordParakeet() {
+  fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+  await waitFor(()=>expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_parakeet_transcribe')).toBe(true));
+  return vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_transcribe').at(-1)![1] as {requestId:string;samples:number[]};
+}
+for (const outcome of ['success','failure'] as const) for (const replacement of ['microphone','decode'] as const) {
+  it(`does not let cancelled pre-request decode ${outcome} clear a replacement awaiting ${replacement}`,async()=>{
+    const fixture=parakeetFixture({installed:true});
+    const {microphone, audio:sample}=installSpeechCapture();
+    const audio=()=>sample;
+    let finishOld!:()=>void, finishNew!:()=>void;
+    const oldDecode=new Promise<ReturnType<typeof audio>>((resolve,reject)=>{finishOld=()=>outcome==='success'?resolve(audio()):reject(new Error('Cancelled old decode failed'));});
+    const newDecode=new Promise<ReturnType<typeof audio>>(resolve=>{finishNew=()=>resolve(audio());});
+    const decode=vi.fn().mockReturnValueOnce(oldDecode).mockReturnValueOnce(newDecode);
+    vi.stubGlobal('AudioContext',class {decodeAudioData(){return decode();}async close(){}});
+    render(<VoicePanel/>);await chooseParakeet();
+    fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
+    fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+    await waitFor(()=>expect(decode).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+    await act(async()=>{});
+    let grantMicrophone:undefined|(()=>void);
+    if(replacement==='microphone')microphone.mockImplementationOnce(()=>new Promise(resolve=>{grantMicrophone=()=>resolve({getTracks:()=>[{stop:vi.fn()}]});}));
+    fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
+    if(replacement==='decode') {
+      fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+      await waitFor(()=>expect(decode).toHaveBeenCalledTimes(2));
+    }
+    expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',true);
+    const statusReads=vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_status').length;
+    await act(async()=>finishOld());
+    expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',true);
+    expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',true);
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_status')).toHaveLength(statusReads);
+    expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_parakeet_transcribe'||name==='voice_parakeet_cancel')).toBe(false);
+    expect(screen.queryAllByRole('alert').filter(alert=>!alert.closest('[aria-label="Dictation history"]'))).toEqual([]);
+    const grant=grantMicrophone;
+    if(grant) {
+      await act(async()=>grant());
+      fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+    }
+    await act(async()=>finishNew());
+    await waitFor(()=>expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_transcribe')).toHaveLength(1));
+    const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_parakeet_transcribe')![1] as {requestId:string};
+    Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+    await act(async()=>fixture.complete(request.requestId,'Replacement result'));
+    expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','Replacement result');
+    expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',false);
+  });
+}
+it('retains real cancelled UUID cleanup and waits for native finishing capacity before recording again',async()=>{
+  const fixture=parakeetFixture({installed:true});parakeetMicrophone();
+  render(<VoicePanel/>);await chooseParakeet();vi.useFakeTimers();
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Record speech'}));});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Stop and transcribe'}));});
+  const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_parakeet_transcribe')![1] as {requestId:string};
+  expect(request.requestId).not.toBe('');
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Cancel'}));});
+  expect(invoke).toHaveBeenCalledWith('voice_parakeet_cancel',{requestId:request.requestId},expect.anything());
+  await act(async()=>fixture.complete(request.requestId,'Cancelled native result'));
+  expect(screen.getByRole('button',{name:'Finishing cancelled work…'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','');
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1000);});
+  expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',false);
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',false);
+});
+it('keeps Whisper default and requires explicit fixed Parakeet download with bounded request-scoped progress',async()=>{
+  const fixture=parakeetFixture();render(<VoicePanel/>);
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('value','whisper');
+  await chooseParakeet();
+  expect(screen.queryByLabelText('Language')).toBeNull();
+  expect(screen.getByText(/automatic language detection/)).toBeTruthy();
+  expect(screen.getByText(/487,170,055 bytes/)).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalledWith('voice_parakeet_install',expect.anything(),expect.anything());
+  fireEvent.click(screen.getByRole('button',{name:'Download Parakeet model'}));
+  const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_parakeet_install')![1] as {requestId:string;events:{onmessage:(event:unknown)=>void}};
+  expect(request.requestId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(Object.keys(request).sort()).toEqual(['events','requestId']);
+  await act(async()=>request.events.onmessage({...fixture.status,requestId:crypto.randomUUID(),received:123}));
+  expect(screen.getByRole('progressbar',{name:'Parakeet model download'})).toHaveProperty('value',0);
+  await act(async()=>request.events.onmessage({...fixture.status,received:123}));
+  expect(screen.getByRole('progressbar',{name:'Parakeet model download'})).toHaveProperty('value',123);
+  expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',true);
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null,installed:true,ready:true});
+  await act(async()=>fixture.install());
+  expect(screen.getByRole('button',{name:'Download Parakeet model'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',false);
+  fireEvent.click(screen.getByRole('button',{name:'Remove Parakeet model'}));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Download Parakeet model'})).toHaveProperty('disabled',false));
+  expect(invoke).toHaveBeenCalledWith('voice_parakeet_remove',{requestId:expect.any(String)},expect.anything());
+});
+it('cancels before install replies and keeps finishing controls blocked until native status releases capacity',async()=>{
+  const fixture=parakeetFixture();render(<VoicePanel/>);await chooseParakeet();
+  vi.useFakeTimers();
+  fireEvent.click(screen.getByRole('button',{name:'Download Parakeet model'}));
+  const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_parakeet_install')![1] as {requestId:string;events:{onmessage:(event:unknown)=>void}};
+  fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+  expect(invoke).toHaveBeenCalledWith('voice_parakeet_cancel',{requestId:request.requestId},expect.anything());
+  await act(async()=>{ request.events.onmessage({...fixture.status,stage:'downloading',received:999}); fixture.failInstall(); });
+  expect(screen.getByRole('status').textContent).toContain('Native work is still finishing');
+  expect(screen.getByRole('button',{name:'Finishing cancelled work…'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Download Parakeet model'})).toHaveProperty('disabled',true);
+  expect(screen.queryAllByRole('alert').filter(alert=>!alert.closest('[aria-label="Dictation history"]'))).toEqual([]);
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1000);});
+  expect(screen.getByRole('button',{name:'Download Parakeet model'})).toHaveProperty('disabled',false);
+  expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_install')).toHaveLength(1);
+});
+it('recovers finishing native work on remount and blocks all engine controls until native idle',async()=>{
+  const requestId=crypto.randomUUID();
+  const fixture=parakeetFixture({installed:true,ready:true,busy:true,stage:'finishing',requestId});
+  vi.useFakeTimers();
+  const view=render(<VoicePanel/>);await act(async()=>{});
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('value','whisper');
+  expect(screen.getByLabelText('Import model')).toHaveProperty('disabled',true);
+  view.unmount();
+  expect(invoke).toHaveBeenCalledWith('voice_parakeet_cancel',{requestId},expect.anything());
+  render(<VoicePanel/>);await act(async()=>{});
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',true);
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1000);});
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',false);
+  expect(screen.getByLabelText('Import model')).toHaveProperty('disabled',false);
+});
+it('transcribes the installed cold Parakeet model to an editable draft with no forced language or automatic delivery',async()=>{
+  const fixture=parakeetFixture({installed:true});parakeetMicrophone();const deliver=vi.fn();
+  render(<VoicePanel sessionId="ssh1" onDirectDictation={deliver}/>);await chooseParakeet();
+  const request=await recordParakeet();
+  expect(Object.keys(request).sort()).toEqual(['requestId','samples']);expect(request.samples).toHaveLength(1600);
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null,ready:true});
+  await act(async()=>fixture.complete(request.requestId,'local review draft'));
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','local review draft');
+  expect(deliver).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Dictation draft'),{target:{value:'edited local draft'}});
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','edited local draft');
+  expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_transcribe'||name==='voice_cloud_transcribe')).toBe(false);
+});
+for (const action of ['cancel','session','background','unmount'] as const) {
+  it(`cancels exact Parakeet inference and discards late result after ${action}`,async()=>{
+    const fixture=parakeetFixture({installed:true});parakeetMicrophone();const deliver=vi.fn();
+    const view=render(<VoicePanel sessionId="ssh1" onDirectDictation={deliver}/>);await chooseParakeet();
+    fireEvent.click(screen.getByLabelText('Type final result directly into terminal'));
+    const request=await recordParakeet();
+    if(action==='cancel')fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+    if(action==='session')view.rerender(<VoicePanel sessionId="ssh2" onDirectDictation={deliver}/>);
+    if(action==='background'){Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});fireEvent(document,new Event('visibilitychange'));}
+    if(action==='unmount'){view.unmount();render(<VoicePanel sessionId="ssh2" onDirectDictation={deliver}/>);}
+    expect(invoke).toHaveBeenCalledWith('voice_parakeet_cancel',{requestId:request.requestId},expect.anything());
+    await act(async()=>fixture.complete(request.requestId,'must never reach a terminal'));
+    expect(deliver).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','');
+    expect(screen.queryByRole('button',{name:'Reuse dictation 1'})).toBeNull();
+  });
+}
+it('shows native unavailable reason and does not offer Parakeet recording or implicit installation',async()=>{
+  parakeetFixture({available:false,reason:'Parakeet CPU is unavailable on this platform.'});render(<VoicePanel/>);
+  expect(await screen.findByText('Parakeet: Parakeet CPU is unavailable on this platform.')).toBeTruthy();
+  expect(screen.getByRole('option',{name:'Parakeet · local — unavailable'})).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('value','whisper');
+  expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_parakeet_install'||name==='voice_parakeet_transcribe')).toBe(false);
+});
+it('rejects a mismatched native result without changing the draft or falling back',async()=>{
+  const fixture=parakeetFixture({installed:true});parakeetMicrophone();const deliver=vi.fn();
+  render(<VoicePanel sessionId="ssh1" onDirectDictation={deliver}/>);await chooseParakeet();
+  fireEvent.change(screen.getByLabelText('Dictation draft'),{target:{value:'keep my edit'}});
+  await recordParakeet();
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+  await act(async()=>fixture.complete(crypto.randomUUID(),'wrong request result'));
+  expect(await screen.findByText('Invalid Parakeet transcription result.')).toBeTruthy();
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','keep my edit');
+  expect(deliver).not.toHaveBeenCalled();
+  expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_transcribe'||name==='voice_cloud_transcribe')).toBe(false);
+});
+it('waits for shared local capacity without cancelling an operation whose UUID is unknown',async()=>{
+  const fixture=parakeetFixture({busy:true});vi.useFakeTimers();
+  render(<VoicePanel/>);await act(async()=>{});
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText('Import model')).toHaveProperty('disabled',true);
+  expect(screen.queryByRole('button',{name:'Cancel'})).toBeNull();
+  expect(screen.getByRole('status').textContent).toContain('local speech engine is busy');
+  fixture.status.busy=false;
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1000);});
+  expect(screen.getByLabelText('Import model')).toHaveProperty('disabled',false);
+  expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_parakeet_cancel')).toBe(false);
+});
+function changeVoiceAccess(locked: boolean) {
+  applyAccessStatus({initialized:true,supported:true,enabled:true,locked,reason:'',
+    generation:String(BigInt(accessSnapshot().status?.generation ?? '0')+1n),
+    ...(locked ? {} : {nonce:'a'.repeat(64)})});
+}
+for (const operation of ['install','transcribe'] as const) {
+  it(`does not publish revoked ${operation} errors or completion on the same old mount after lock and unlock`,async()=>{
+    const fixture=parakeetFixture({installed:operation==='transcribe'});parakeetMicrophone();const deliver=vi.fn();
+    const view=render(<VoicePanel sessionId="ssh1" onDirectDictation={deliver}/>);await chooseParakeet();
+    let requestId='';
+    if(operation==='install')fireEvent.click(screen.getByRole('button',{name:'Download Parakeet model'}));
+    else requestId=(await recordParakeet()).requestId;
+    await act(async()=>changeVoiceAccess(true));
+    await act(async()=>changeVoiceAccess(false));
+    const calls=vi.mocked(invoke).mock.calls.length;
+    await act(async()=>{if(operation==='install')fixture.failInstall();else fixture.complete(requestId,'revoked private text');});
+    expect(screen.queryAllByRole('alert').filter(alert=>!alert.closest('[aria-label="Dictation history"]'))).toEqual([]);
+    expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','');
+    expect(deliver).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledTimes(calls);
+    view.unmount();
+    Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+    render(<VoicePanel/>);await chooseParakeet();
+    expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',false);
+  });
+}
+it.each(['success','failure'])('does not let an older cancel status %s overwrite the newer final idle status',async outcome=>{
+  const fixture=parakeetFixture();const implementation=vi.mocked(invoke).getMockImplementation()!;
+  let holdStatus=false, finishStatus!:()=>void;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    if(command==='voice_parakeet_status' && holdStatus){
+      holdStatus=false;const stale={...fixture.status};
+      return new Promise((resolve,reject)=>{finishStatus=()=>outcome==='success'?resolve(stale):reject(new Error('Old status failure'));}) as never;
+    }
+    return implementation(command,args,options);
+  });
+  render(<VoicePanel/>);await chooseParakeet();vi.useFakeTimers();
+  fireEvent.click(screen.getByRole('button',{name:'Download Parakeet model'}));
+  holdStatus=true;
+  fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+  await act(async()=>{});
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+  await act(async()=>fixture.failInstall());
+  expect(screen.getByRole('button',{name:'Download Parakeet model'})).toHaveProperty('disabled',false);
+  await act(async()=>finishStatus());
+  expect(screen.getByRole('button',{name:'Download Parakeet model'})).toHaveProperty('disabled',false);
+  expect(screen.queryByText(/Native work is still finishing/)).toBeNull();
+  expect(screen.queryAllByRole('alert').filter(alert=>!alert.closest('[aria-label="Dictation history"]'))).toEqual([]);
 });

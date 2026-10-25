@@ -650,6 +650,7 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "stop_preview"
             | "device_stream_stop"
             | "voice_cancel"
+            | "voice_parakeet_cancel"
             | "voice_download_cancel"
             | "voice_cloud_cancel"
             | "apple_speech_cancel"

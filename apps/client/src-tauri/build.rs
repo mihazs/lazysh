@@ -1,6 +1,7 @@
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
-        && std::env::var_os("CARGO_FEATURE_PARAKEET_ACCEPTANCE").is_some()
+        && (std::env::var_os("CARGO_FEATURE_PARAKEET_ACCEPTANCE").is_some()
+            || std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64"))
     {
         // ORT embeds protobuf; Mosh links the system protobuf-lite DSO.
         // Do not let the private static copy preempt that DSO's globals.
@@ -77,6 +78,11 @@ fn main() {
         "voice_remove_model",
         "voice_transcribe",
         "voice_cancel",
+        "voice_parakeet_status",
+        "voice_parakeet_install",
+        "voice_parakeet_remove",
+        "voice_parakeet_transcribe",
+        "voice_parakeet_cancel",
         "voice_cloud_status",
         "voice_cloud_enroll",
         "voice_cloud_refresh",

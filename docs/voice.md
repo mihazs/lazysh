@@ -1,5 +1,11 @@
 # Dictation
 
+Whisper remains the default. On Linux x86_64, [Parakeet dictation](voice-parakeet.md)
+adds an explicitly downloaded local model, automatic language detection, and a
+reusable recognizer. Cancel discards its result while synchronous native work may
+continue; controls remain busy until that worker finishes. Other platforms report
+Parakeet unavailable.
+
 Open Voice, explicitly download a catalog model or import a trusted Whisper tiny/base GGML `.bin` file, choose its language, and select Record speech. Microphone permission is requested only when recording starts. Stop and transcribe runs the model on this device. Edit the draft before copying it or staging it in the current terminal composer. Staging does not send a prompt.
 
 Models come from the [official whisper.cpp model collection](https://huggingface.co/ggerganov/whisper.cpp/tree/main). English-only `.en` models require English; use multilingual tiny/base for other languages. The app imports at most three models, each at most 160 MiB, through 1 MiB chunks. Imports validate the GGML magic and supported tiny/base architecture dimensions, then publish without replacing an existing model. Remove selected model deletes its local copy. Only import model binaries from a trusted publisher: the native model parser is not a sandbox for hostile files.
@@ -51,7 +57,7 @@ The implementation follows the current [SpeechAnalyzer API](https://developer.ap
 
 Rust tests validate the PCM, locale and request-ID boundary; UI tests cover explicit engine choice, installation and cancellation. Native Swift compilation is an iOS CI gate. No Apple microphone/model inference, accuracy, latency or battery claim has been verified on physical hardware.
 
-An optional Unix-host [transcription relay](cloud-transcription.md) provides revocable device tokens and durable audio quotas for explicitly selected Cloud dictation. Remaining issue #13 work includes Parakeet and real-device acceptance.
+An optional Unix-host [transcription relay](cloud-transcription.md) provides revocable device tokens and durable audio quotas for explicitly selected Cloud dictation. Remaining issue #13 work includes Parakeet on other platforms, forced-language support, and real-device acceptance.
 
 ## Explicit Cloud dictation
 

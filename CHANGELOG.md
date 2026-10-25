@@ -21,6 +21,15 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   text remain unchanged. Other panels, native permission text and translated
   languages remain follow-up work.
 
+- Linux x86_64 Parakeet dictation with an explicitly downloaded, hash-pinned
+  local model, one reusable recognizer, and model removal. Whisper remains the
+  default. Cancel discards the result while native preparation/inference may
+  continue; busy capacity and model files remain owned until the worker finishes.
+  Other platforms report Parakeet unavailable; language detection is automatic.
+- Linux native linking isolates ORT's embedded protobuf namespace so Mosh
+  messages use their matching system protobuf implementation. The existing
+  archive-specific export guard remains; upstream cached artifacts are unchanged.
+
 - Repository pre-commit duplicate detection with pinned jscpd and Bun now rejects
   every detected clone, including pre-existing duplication; the previous baseline
   allowance is removed. Refactor with DRY until the scan reports zero clones.
