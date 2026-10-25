@@ -47,6 +47,15 @@ struct Inner {
     require_nonce: bool,
     replacing: bool,
 }
+impl Inner {
+    fn accepts_proof(&self, expected: u64) -> bool {
+        self.initialized
+            && !self.replacing
+            && self.supported
+            && self.foreground
+            && self.generation == expected
+    }
+}
 #[derive(Clone)]
 pub struct AccessState {
     inner: Arc<Mutex<Inner>>,
@@ -166,9 +175,7 @@ impl AccessState {
         barrier(protected);
         i.foreground = false;
         if protected {
-            i.locked = true;
-            i.ui_ready = false;
-            self.advance(&mut i);
+            self.lock_inner(&mut i);
         }
         Ok(protected)
     }
@@ -181,22 +188,19 @@ impl AccessState {
     pub fn lock(&self) -> Result<(), AccessError> {
         let mut i = self.inner.lock().map_err(|_| AccessError)?;
         if i.enabled {
-            i.locked = true;
-            i.ui_ready = false;
-            self.advance(&mut i);
+            self.lock_inner(&mut i);
         }
         Ok(())
+    }
+    fn lock_inner(&self, i: &mut Inner) {
+        i.locked = true;
+        i.ui_ready = false;
+        self.advance(i);
     }
     /// Only call after the dedicated protected read succeeds for this captured generation.
     pub fn authorize(&self, expected: u64) -> Result<(), AccessError> {
         let mut i = self.inner.lock().map_err(|_| AccessError)?;
-        if !i.initialized
-            || i.replacing
-            || !i.supported
-            || !i.enabled
-            || !i.foreground
-            || i.generation != expected
-        {
+        if !i.accepts_proof(expected) || !i.enabled {
             return Err(AccessError);
         }
         self.advance(&mut i);
@@ -208,14 +212,7 @@ impl AccessState {
     }
     pub fn prepare_enable(&self, expected: u64) -> Result<u64, AccessError> {
         let mut i = self.inner.lock().map_err(|_| AccessError)?;
-        if !i.initialized
-            || i.replacing
-            || !i.supported
-            || !i.foreground
-            || i.locked
-            || i.enabled
-            || i.generation != expected
-        {
+        if !i.accepts_proof(expected) || i.locked || i.enabled {
             return Err(AccessError);
         }
         self.advance(&mut i);
@@ -243,12 +240,7 @@ impl AccessState {
     }
     pub fn configure_after_proof(&self, expected: u64, enabled: bool) -> Result<(), AccessError> {
         let mut i = self.inner.lock().map_err(|_| AccessError)?;
-        if !i.initialized
-            || i.replacing
-            || !i.supported
-            || !i.foreground
-            || i.generation != expected
-        {
+        if !i.accepts_proof(expected) {
             return Err(AccessError);
         }
         self.advance(&mut i);

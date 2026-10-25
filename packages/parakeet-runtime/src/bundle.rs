@@ -2,7 +2,6 @@ use crate::Error;
 use bzip2::read::BzDecoder;
 use sha2::{Digest, Sha256};
 use std::{
-    fs::OpenOptions,
     io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
 };
@@ -155,13 +154,7 @@ fn prepare(
         if !kind.is_file() || seen[index] || entry.size() != bytes {
             return Err(Error::InvalidBundle);
         }
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        let options = lazysh_common::fs::private_create_new();
         let mut file = options
             .open(directory.path().join(name))
             .map_err(|_| Error::Storage)?;

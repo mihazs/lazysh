@@ -3400,6 +3400,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "image",
+ "lazysh-common",
  "lazysh-et-transport",
  "lazysh-mosh-transport",
  "lazysh-parakeet-runtime",
@@ -3442,6 +3443,7 @@ dependencies = [
  "ctrlc",
  "dirs",
  "image",
+ "lazysh-common",
  "libc",
  "rusqlite",
  "serde",
@@ -3452,9 +3454,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazysh-common"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "hyper-util",
+ "libc",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "lazysh-et-transport"
 version = "0.1.0"
 dependencies = [
+ "lazysh-common",
  "prost",
  "tempfile",
  "tokio",
@@ -3483,6 +3497,7 @@ dependencies = [
  "bzip2",
  "cmake",
  "hound",
+ "lazysh-common",
  "libc",
  "sha2 0.10.9",
  "tar",
@@ -3497,6 +3512,7 @@ dependencies = [
  "clap",
  "futures-util",
  "hyper-util",
+ "lazysh-common",
  "libc",
  "mime",
  "percent-encoding",
@@ -3520,6 +3536,7 @@ dependencies = [
  "axum",
  "clap",
  "hyper-util",
+ "lazysh-common",
  "libc",
  "rand 0.10.3",
  "reqwest 0.12.28",
@@ -6649,6 +6666,7 @@ dependencies = [
 name = "tauri-plugin-lazysh-apple-speech"
 version = "0.1.0"
 dependencies = [
+ "lazysh-common",
  "serde",
  "tauri",
  "tauri-plugin",
@@ -6659,6 +6677,7 @@ dependencies = [
 name = "tauri-plugin-lazysh-apple-status"
 version = "0.1.0"
 dependencies = [
+ "lazysh-common",
  "serde",
  "serde_json",
  "tauri",

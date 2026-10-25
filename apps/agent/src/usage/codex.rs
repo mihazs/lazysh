@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read},
     path::Path,
 };
 
@@ -31,18 +31,7 @@ fn time(value: &Value, observed: DateTime<Utc>) -> (Option<String>, &'static str
     let recorded = value
         .as_str()
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
-    let freshness = recorded
-        .map(|recorded| {
-            let age = observed.signed_duration_since(recorded);
-            if age < chrono::TimeDelta::zero() {
-                "unknown"
-            } else if age > chrono::TimeDelta::minutes(15) {
-                "stale"
-            } else {
-                "fresh"
-            }
-        })
-        .unwrap_or("unknown");
+    let freshness = super::freshness(recorded, observed);
     (recorded.map(|value| value.to_rfc3339()), freshness)
 }
 fn label(value: &Value) -> Result<Option<String>> {
@@ -61,17 +50,7 @@ fn label(value: &Value) -> Result<Option<String>> {
 pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<Window> {
     let mut file = open_transcript(path)?;
     let before = file.metadata()?;
-    if offset > before.len() {
-        return Err(Error::InvalidArgument);
-    }
-    if offset > 0 {
-        file.seek(SeekFrom::Start(offset - 1))?;
-        let mut previous = [0];
-        file.read_exact(&mut previous)?;
-        if previous != *b"\n" {
-            return Err(Error::InvalidArgument);
-        }
-    }
+    crate::transcript::seek_record(&mut file, offset, before.len())?;
     let mut reader = BufReader::new(file.take(before.len() - offset));
     let mut cursor = offset;
     let mut pending_tail = false;
@@ -208,13 +187,7 @@ pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<
         cursor += size;
     }
     let after = open_transcript(path)?.metadata()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev() || before.ino() != after.ino() {
-            return Err(Error::InvalidEvent);
-        }
-    }
+    crate::transcript::same_file(&before, &after)?;
     if after.len() < before.len()
         || (after.len() == before.len() && after.modified()? != before.modified()?)
     {

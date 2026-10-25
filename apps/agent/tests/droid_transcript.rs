@@ -1,14 +1,10 @@
 use lazysh_agent::transcript::{discover, read_page, TranscriptAgent};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::{fs, io::Write};
 
-fn write(path: &std::path::Path, records: &[Value]) {
-    let mut file = fs::File::create(path).unwrap();
-    for record in records {
-        serde_json::to_writer(&mut file, record).unwrap();
-        writeln!(file).unwrap();
-    }
-}
+#[path = "support/jsonl.rs"]
+mod jsonl;
+use jsonl::write;
 
 #[test]
 fn persisted_droid_blocks_preserve_identity_without_hidden_or_unverified_data() {

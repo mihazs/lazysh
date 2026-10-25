@@ -1,6 +1,7 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::share::service::{valid_id as job_id, Enrollment};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
-use reqwest::{Client, Response, Url};
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{Arc, Mutex},
@@ -9,7 +10,7 @@ use std::{
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_lazysh_vault::VaultExt;
 use tokio::sync::{watch, Mutex as AsyncMutex, OwnedMutexGuard};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, String>;
 const ACCOUNT: &str = "cloud-transcription-enrollment-v1";
@@ -18,52 +19,15 @@ const HINTS: &[&str] = &["auto", "en", "es", "fr", "de", "pt", "ja", "zh"];
 const MAX_DEVICE: u64 = 86400 * 16000;
 const MAX_GLOBAL: u64 = MAX_DEVICE * 128;
 const MAX_DATE: u64 = 8_640_000_000_000;
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Enrollment {
-    version: u8,
-    origin: String,
-    token: String,
-}
-impl Drop for Enrollment {
-    fn drop(&mut self) {
-        self.token.zeroize();
-    }
-}
 fn origin(value: &str) -> Result<String> {
-    let url = Url::parse(value).map_err(|_| "Enter an HTTPS transcription service origin")?;
-    let authority = value
-        .split_once("://")
-        .map(|(_, value)| value.split(['/', '?', '#']).next().unwrap_or_default())
-        .unwrap_or_default();
-    if value.len() > 2048
-        || value.chars().any(|c| c.is_control() || c.is_whitespace())
-        || value.contains('\\')
-        || authority.is_empty()
-        || authority.contains('@')
-        || url.scheme() != "https"
-        || !url.has_host()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("Use an HTTPS origin without credentials, path, query or fragment".into());
-    }
-    Ok(url.origin().ascii_serialization())
+    crate::share::service::origin(value, "Enter an HTTPS transcription service origin")
+        .map(|url| url.origin().ascii_serialization())
 }
 fn token(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 fn request_id(value: &str) -> bool {
     value.len() == 36 && uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value)
-}
-fn job_id(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn decode(value: &str) -> Result<Enrollment> {
     if value.len() > 4096 {
@@ -687,19 +651,8 @@ fn wav(samples: &[f32]) -> Result<Zeroizing<Vec<u8>>> {
         return Err("Audio must contain 0.1–30 seconds of finite mono 16 kHz samples".into());
     }
     let size = (samples.len() * 2) as u32;
-    let mut bytes = Zeroizing::new(Vec::with_capacity(size as usize + 44));
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(size + 36).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&16000u32.to_le_bytes());
-    bytes.extend_from_slice(&32000u32.to_le_bytes());
-    bytes.extend_from_slice(&2u16.to_le_bytes());
-    bytes.extend_from_slice(&16u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&size.to_le_bytes());
+    let mut bytes = Zeroizing::new(lazysh_common::audio::pcm16_mono_16khz_header(size));
+    bytes.reserve_exact(size as usize);
     for value in samples {
         let value = (value * if *value < 0.0 { 32768.0 } else { 32767.0 }).round() as i16;
         bytes.extend_from_slice(&value.to_le_bytes());

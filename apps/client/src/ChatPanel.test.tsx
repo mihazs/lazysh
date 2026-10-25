@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
+import { cleanupNativeMocks } from "./test/nativeCoreMock";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  cleanup,
   fireEvent,
   render,
   screen,
@@ -10,14 +10,9 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import ChatPanel, { parseTranscript } from "./ChatPanel";
 
-vi.mock("@tauri-apps/api/core", async (original) => ({
-  ...(await original<typeof import("@tauri-apps/api/core")>()),
-  invoke: vi.fn(),
-}));
-afterEach(() => {
-  cleanup();
-  vi.clearAllMocks();
-});
+vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
+afterEach(cleanupNativeMocks);
+
 const message = {
   id: "a",
   role: "assistant",
@@ -123,6 +118,14 @@ it("opens explicit Grok record files without discovery or conversation claims", 
   ).toBe(false);
 });
 
+function openHostTranscript(view?: string) {
+  const rendered = render(<ChatPanel sessionId="ssh1" />);
+  fireEvent.change(screen.getByLabelText("Transcript path"), { target: { value: "/host/session.jsonl" } });
+  if (view) fireEvent.change(screen.getByLabelText("View"), { target: { value: view } });
+  fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+  return rendered;
+}
+
 it("reads selected host transcript, pages by returned cursor, and does not fetch embedded images", async () => {
   vi.mocked(invoke)
     .mockResolvedValueOnce({
@@ -144,11 +147,7 @@ it("reads selected host transcript, pages by returned cursor, and does not fetch
       messages: [{ ...message, id: "b" }],
       nextOffset: 160,
     });
-  const { container } = render(<ChatPanel sessionId="ssh1" />);
-  fireEvent.change(screen.getByLabelText("Transcript path"), {
-    target: { value: "/host/session.jsonl" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+  const { container } = openHostTranscript();
   await screen.findByText("[Image — view in terminal]");
   expect(container.querySelector("img, script, iframe")).toBeNull();
   expect(invoke).toHaveBeenLastCalledWith("agent_transcript", {
@@ -175,11 +174,7 @@ it("rejects a non-advancing pagination cursor", async () => {
     nextOffset: 0,
     hasMore: true,
   });
-  render(<ChatPanel sessionId="ssh1" />);
-  fireEvent.change(screen.getByLabelText("Transcript path"), {
-    target: { value: "/host/session.jsonl" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+  openHostTranscript();
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "Transcript changed. Open it again to restart.",
@@ -206,14 +201,7 @@ it("replaces the visible branch on conversation refresh instead of retaining aba
         },
       ],
     });
-  render(<ChatPanel sessionId="ssh1" />);
-  fireEvent.change(screen.getByLabelText("Transcript path"), {
-    target: { value: "/host/session.jsonl" },
-  });
-  fireEvent.change(screen.getByLabelText("View"), {
-    target: { value: "conversation" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+  openHostTranscript("conversation");
   await screen.findByText("Abandoned branch");
   fireEvent.click(screen.getByRole("button", { name: "Refresh new messages" }));
   await screen.findByText("Current branch");

@@ -1,4 +1,6 @@
 //! Synthetic native stores only; no developer state or external services.
+#[path = "../src/storage_schema.rs"]
+mod storage_schema;
 use chrono::Utc;
 use lazysh_agent::{Event, SessionState, Store};
 use rusqlite::Connection;
@@ -45,12 +47,10 @@ fn migration_preserves_existing_rows_and_verifies_full_wal_on_every_open() {
     let db = dir.path().join("events.sqlite3");
     let connection = Connection::open(&db).unwrap();
     connection
-        .execute_batch(
-            "PRAGMA journal_mode=DELETE;
-        CREATE TABLE sessions (agent TEXT NOT NULL, session_id TEXT NOT NULL, project TEXT NOT NULL,
-        state TEXT NOT NULL, summary TEXT NOT NULL, pane_id TEXT, updated_at REAL NOT NULL,
-        event_count INTEGER NOT NULL, PRIMARY KEY (agent,session_id));",
-        )
+        .execute_batch("PRAGMA journal_mode=DELETE;")
+        .unwrap();
+    connection
+        .execute_batch(storage_schema::V1_SESSIONS)
         .unwrap();
     connection.execute("INSERT INTO sessions VALUES ('Fixture','recovery','/fixture','working','Synthetic',NULL,?1,7)", [Utc::now().timestamp()]).unwrap();
     drop(connection);

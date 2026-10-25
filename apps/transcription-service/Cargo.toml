@@ -6,6 +6,7 @@ edition = "2021"
 description = "Optional authenticated and quota-limited transcription relay for lazysh"
 
 [dependencies]
+lazysh-common = { path = "../../packages/common", features = ["service"] }
 axum = "0.8.9"
 clap = { version = "4.6", features = ["derive"] }
 hyper-util = { version = "0.1", features = ["http1", "server-auto", "service", "tokio"] }

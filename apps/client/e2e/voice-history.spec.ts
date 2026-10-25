@@ -78,9 +78,7 @@ test('default is ephemeral; explicit opt-in persists, delete and clear work, dis
 
 for(const retry of ['delete','clear'] as const){
   test(`failed disable removal can be retried with ${retry} without reviving a pending capture`,async({page})=>{
-    await fixture(page);
-    await page.getByLabel('Remember dictation history on this device').click();
-    await expect.poll(()=>page.evaluate(()=>window.historyFixture.remember && !window.historyFixture.pending)).toBe(true);
+    await rememberedFixture(page);
     await page.evaluate(async()=>{
       await window.historyFixture.add('saved private text',window.historyFixture.capture());
       window.historyCapture=window.historyFixture.capture();
@@ -101,9 +99,7 @@ for(const retry of ['delete','clear'] as const){
 }
 
 test('unmount and local clear invalidate pending captures while fresh captures still work',async({page})=>{
-  await fixture(page);
-  await page.getByLabel('Remember dictation history on this device').click();
-  await expect.poll(()=>page.evaluate(()=>window.historyFixture.remember && !window.historyFixture.pending)).toBe(true);
+  await rememberedFixture(page);
   await page.evaluate(async()=>{await window.historyFixture.add('old text',window.historyFixture.capture());window.historyCapture=window.historyFixture.capture();});
   await page.getByRole('button',{name:'Clear history'}).click();
   await expect.poll(()=>page.evaluate(()=>window.historyFixture.pending)).toBe(false);
@@ -148,4 +144,10 @@ test(`view cancellation rejects queued captures but preserves an explicit ${oper
   expect((await change(page,{type:'read'})).history.entries).toEqual([]);
   await expect.poll(()=>page.evaluate(()=>window.historyFixture.remember)).toBe(true);
 });
+}
+
+async function rememberedFixture(page: Page) {
+  await fixture(page);
+  await page.getByLabel('Remember dictation history on this device').click();
+  await expect.poll(()=>page.evaluate(()=>window.historyFixture.remember && !window.historyFixture.pending)).toBe(true);
 }

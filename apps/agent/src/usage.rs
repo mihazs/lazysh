@@ -61,6 +61,23 @@ struct UsageSample {
 }
 
 /// Return recorded counters from one bounded transcript window; never add request counters.
+fn freshness(
+    recorded: Option<DateTime<chrono::FixedOffset>>,
+    observed: DateTime<Utc>,
+) -> &'static str {
+    recorded
+        .map(|time| {
+            let age = observed.signed_duration_since(time);
+            if age < chrono::TimeDelta::zero() {
+                "unknown"
+            } else if age > chrono::TimeDelta::minutes(15) {
+                "stale"
+            } else {
+                "fresh"
+            }
+        })
+        .unwrap_or("unknown")
+}
 pub fn read(
     path: &Path,
     agent: TranscriptAgent,
@@ -133,18 +150,7 @@ pub fn from_page(page: TranscriptPage, observed_at: DateTime<Utc>) -> Result<Usa
         let recorded_at = message["timestamp"]
             .as_str()
             .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok());
-        let freshness = recorded_at
-            .map(|recorded| {
-                let age = observed_at.signed_duration_since(recorded);
-                if age < chrono::TimeDelta::zero() {
-                    "unknown"
-                } else if age > chrono::TimeDelta::minutes(15) {
-                    "stale"
-                } else {
-                    "fresh"
-                }
-            })
-            .unwrap_or("unknown");
+        let freshness = freshness(recorded_at, observed_at);
         samples.push(UsageSample {
             id,
             recorded_at: recorded_at.map(|time| time.to_rfc3339()),

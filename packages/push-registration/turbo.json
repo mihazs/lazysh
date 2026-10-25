@@ -1,10 +1,15 @@
 {
-  "extends": ["//"],
+  "extends": [
+    "//"
+  ],
   "tasks": {
-    "check:rust": { "cache": false, "outputs": [] },
-    "test:rust": { "cache": false, "outputs": [] },
-    "lint": { "cache": false, "outputs": [] },
-    "format:check": { "cache": false, "outputs": [] },
-    "test:apns": { "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT", "APPLE_STATUS_SIMULATOR_ID"] }
+    "test:apns": {
+      "cache": false,
+      "passThroughEnv": [
+        "DEVELOPER_DIR",
+        "SDKROOT",
+        "APPLE_STATUS_SIMULATOR_ID"
+      ]
+    }
   }
 }

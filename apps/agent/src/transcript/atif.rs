@@ -4,10 +4,7 @@ use std::path::Path;
 
 /// Reads an existing Devin export; never starts an agent or resolves references.
 pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<TranscriptPage> {
-    if !(1..=100).contains(&limit) {
-        return Err(Error::InvalidArgument);
-    }
-    let export = snapshot::read(path)?;
+    let export = snapshot::read_export(path, limit)?;
     if export["schema_version"] != "ATIF-v1.7" {
         return Err(Error::InvalidEvent);
     }
@@ -101,19 +98,15 @@ fn normalize(step: &Value) -> Result<Option<Value>> {
         output["timestamp"] = json!(timestamp);
     }
     if role == "assistant" {
-        let mut usage = serde_json::Map::new();
-        for (source, target) in [
-            ("prompt_tokens", "inputTokens"),
-            ("completion_tokens", "outputTokens"),
-            ("cached_tokens", "cacheReadTokens"),
-        ] {
-            if let Some(count) = step["metrics"][source].as_u64() {
-                usage.insert(target.into(), json!(count));
-            }
-        }
-        if !usage.is_empty() {
-            output["usage"] = json!(usage);
-        }
+        super::copy_usage(
+            &mut output,
+            &step["metrics"],
+            &[
+                ("prompt_tokens", "inputTokens"),
+                ("completion_tokens", "outputTokens"),
+                ("cached_tokens", "cacheReadTokens"),
+            ],
+        );
     }
     Ok(Some(output))
 }

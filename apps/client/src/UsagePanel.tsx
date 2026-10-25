@@ -1,3 +1,4 @@
+import { usageAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 
@@ -5,11 +6,7 @@ import { errorMessage } from "./SessionTools";
 import type { RecordedProviderWindow, RecordedUsageContext } from "./bridge";
 import "./UsagePanel.css";
 
-const agents: Record<string, string> = {
-  claude: "Claude Code", codex: "Codex", pi: "Pi", omp: "OMP",
-  hermes: "Hermes", opencode: "OpenCode", copilot: "GitHub Copilot",
-  "qoder-ide": "Qoder IDE", kimi: "Kimi CLI", jcode: "jcode", droid: "Factory Droid", cursor: "Cursor IDE", omo: "OmO Native", "devin-atif":"Devin ATIF export", "amp-json":"Amp JSON export",
-};
+
 type Sample = {
   id: string; recordedAt: string | null; freshness: "fresh" | "stale" | "unknown";
   inputTokens: number | null; outputTokens: number | null;
@@ -107,7 +104,7 @@ export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId
     try {
       const result = await invoke<{ schemaVersion: number; sessions: Discovered[] }>("agent_transcripts", { sessionId, agent });
       if (current !== request.current) return;
-      if (result?.schemaVersion !== 1 || !Array.isArray(result.sessions) || result.sessions.length > 50 || result.sessions.some(item => !item || typeof item.path !== "string" || item.path.length > 4096 || typeof item.name !== "string" || item.name.length > 4096 || (item.sessionId !== undefined && (typeof item.sessionId !== "string" || item.sessionId.length > 256)))) throw new Error("Invalid transcript list.");
+      if (result?.schemaVersion !== 1 || !Array.isArray(result.sessions) || result.sessions.length > 50 || result.sessions.some(item => !isDiscoveredTranscript(item, 256))) throw new Error("Invalid transcript list.");
       setDiscovered(result.sessions);
     } catch (e) { if (current === request.current) setError(errorMessage(e)); }
     finally { if (current === request.current) setBusy(false); }

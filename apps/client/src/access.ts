@@ -1,5 +1,5 @@
 import { invoke as nativeInvoke, type InvokeArgs } from '@tauri-apps/api/core';
-import { useMemo, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { disposeStaleSessionResult } from './pendingSessions';
 
 export type AccessStatus = {
@@ -144,3 +144,11 @@ export const accessControl = {
   configure: (enabled: boolean) => protectedInvoke<AccessStatus>('app_lock_configure', { enabled }),
   ready: (generation: string) => nativeInvoke<void>('app_lock_ready', { generation }),
 };
+
+/** A component's async actions remain bound to its original mounted authority. */
+export function useMountedAccess() {
+  const access = useRef(captureAccess()).current;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  return { access, mounted };
+}

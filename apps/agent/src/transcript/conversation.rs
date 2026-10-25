@@ -1,11 +1,10 @@
 use super::{
-    normalize, open_transcript, string, validate_message, Error, Result, TranscriptAgent,
-    TranscriptPage, MAX_LINE, MAX_PAGE,
+    normalize, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage, MAX_PAGE,
 };
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    io::{BufRead, BufReader, Read},
+    io::{BufReader, Read},
     path::Path,
 };
 
@@ -22,14 +21,8 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
     let mut records = Vec::new();
     let mut offset = 0;
     while offset < size {
-        let mut line = Vec::new();
-        let bytes = reader
-            .by_ref()
-            .take(MAX_LINE + 1)
-            .read_until(b'\n', &mut line)?;
-        if bytes as u64 > MAX_LINE {
-            return Err(Error::InvalidEvent);
-        }
+        let line = super::read_record_line(&mut reader)?;
+        let bytes = line.len();
         if line.last() != Some(&b'\n') {
             break;
         }
@@ -74,10 +67,7 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
     for index in chain.into_iter().rev() {
         let (position, record) = &records[index];
         if let Some(message) = normalize(record, agent, *position) {
-            validate_message(&message)?;
-            let size = serde_json::to_vec(&message)
-                .map_err(|_| Error::InvalidEvent)?
-                .len();
+            let size = super::message_size(&message)?;
             if messages.len() == usize::from(limit) || output_bytes + size > MAX_PAGE {
                 truncated = true;
                 break;
@@ -100,6 +90,21 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
     })
 }
 
+fn candidate_results<'a>(
+    record: &'a Value,
+    index: usize,
+    seen: &HashSet<usize>,
+) -> Option<Vec<&'a str>> {
+    if seen.contains(&index) || record["type"] != "user" || !is_main(record) {
+        return None;
+    }
+    let calls = block_ids(record, "tool_result", "tool_use_id");
+    if calls.is_empty() {
+        None
+    } else {
+        Some(calls)
+    }
+}
 fn active_chain(records: &[(u64, Value)]) -> Result<Vec<usize>> {
     let mut by_id = HashMap::new();
     let mut parents = HashSet::new();
@@ -221,13 +226,9 @@ fn recover_parallel(
         .collect();
     let mut candidates: HashMap<&str, Vec<usize>> = HashMap::new();
     for (index, (_, record)) in records.iter().enumerate() {
-        if seen.contains(&index) || record["type"] != "user" || !is_main(record) {
+        let Some(calls) = candidate_results(record, index, seen) else {
             continue;
-        }
-        let calls = block_ids(record, "tool_result", "tool_use_id");
-        if calls.is_empty() {
-            continue;
-        }
+        };
         let mut possible = HashSet::new();
         for key in ["parentUuid", "sourceToolAssistantUUID"] {
             if let Some(owner) = record[key].as_str().and_then(|id| by_uuid.get(id)) {
@@ -272,13 +273,9 @@ fn recover_parallel(
         let mut results = Vec::new();
         for index in candidates.remove(id).unwrap_or_default() {
             let record = &records[index].1;
-            if seen.contains(&index) || record["type"] != "user" || !is_main(record) {
+            let Some(calls) = candidate_results(record, index, seen) else {
                 continue;
-            }
-            let calls = block_ids(record, "tool_result", "tool_use_id");
-            if calls.is_empty() {
-                continue;
-            }
+            };
             let parent_is_member = record["parentUuid"]
                 .as_str()
                 .is_some_and(|parent| member_ids.contains(parent));

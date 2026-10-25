@@ -94,21 +94,9 @@ describe("terminal settings", () => {
     render(<PreferencesPanel />);
     fireEvent.change(screen.getByLabelText('Shortcut builder'),{target:{value:'simple'}});
     fireEvent.change(screen.getByLabelText('Chord name'),{target:{value:'Unsent'}});
-    for (const text of ['a'.repeat(124),'a'.repeat(200),'a\nb']) {
-      fireEvent.change(screen.getByLabelText('Custom shortcut text'),{target:{value:text}});
-      fireEvent.click(screen.getByRole('button',{name:'Add chord'}));
-      expect(screen.getByRole('alert')).toBeTruthy();
-      expect(screen.getByLabelText<HTMLTextAreaElement>('Custom shortcut text').value).toBe(text);
-      expect(getPreferences().chords).toEqual([]);
-    }
+    expectRejectedShortcutDrafts(['a'.repeat(124),'a'.repeat(200),'a\nb']);
     fireEvent.click(screen.getByLabelText('Control'));
-    for (const text of ['b你好','abcdefghi','a,','1']) {
-      fireEvent.change(screen.getByLabelText('Custom shortcut text'),{target:{value:text}});
-      fireEvent.click(screen.getByRole('button',{name:'Add chord'}));
-      expect(screen.getByRole('alert')).toBeTruthy();
-      expect(screen.getByLabelText<HTMLTextAreaElement>('Custom shortcut text').value).toBe(text);
-      expect(getPreferences().chords).toEqual([]);
-    }
+    expectRejectedShortcutDrafts(['b你好','abcdefghi','a,','1']);
   });
   it("persists theme and reordered toolbar, rejects invalid theme import, and resets", () => {
     savePreferences({...defaults});
@@ -128,3 +116,13 @@ describe("terminal settings", () => {
     expect(getPreferences()).toEqual(defaults);
   });
 });
+
+function expectRejectedShortcutDrafts(values: string[]) {
+  for (const text of values) {
+      fireEvent.change(screen.getByLabelText('Custom shortcut text'),{target:{value:text}});
+      fireEvent.click(screen.getByRole('button',{name:'Add chord'}));
+      expect(screen.getByRole('alert')).toBeTruthy();
+      expect(screen.getByLabelText<HTMLTextAreaElement>('Custom shortcut text').value).toBe(text);
+      expect(getPreferences().chords).toEqual([]);
+  }
+}
