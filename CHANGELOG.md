@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- macOS Parakeet model-storage admission checks actual Darwin ACLs and trusted
+  descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
+  preparation remain disabled; real recognition and platform acceptance stay open.
+
 - Optional Simple custom-text shortcut builder with Control/Option/Shift,
   first-character modifiers, comma-separated groups and escaped commas. Advanced
   remains the default; existing shortcut records are unchanged. Unicode literal
