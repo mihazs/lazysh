@@ -10,3 +10,13 @@ Primary source: official `xai-org/grok-build`, commit `2bdd1d6a6369de0e8c68132ea
 - The pinned Grok `Cargo.lock` selects `agent-client-protocol` 0.10.4 and `agent-client-protocol-schema` 0.11.4. The [schema crate](https://crates.io/crates/agent-client-protocol-schema/0.11.4) archive checksum matches that lockfile: `ca68e7e55681ce56546c0cecc6bc8f20493d24b44c6d93ec46174f310730bba2`. Its `client.rs`, `content.rs`, `tool_call.rs`, and `plan.rs` define the standard camel-case payload fields, content chunks, optional shared `messageId`, replacement tool updates, and complete plan snapshots.
 
 This establishes the pinned public source contract. It does not establish equivalence to the previously inspected Grok 1.0.70 binary or compatibility with every installed release. No Grok CLI, exporter, plugin, hook, account API, or user transcript was executed/accessed. Stateful chunk assembly, tool replacement, turn reconstruction, active-branch rewinds, native discovery and live-agent control remain outside this reader.
+
+Recorded tool-status fixtures in `tests/grok_acp_transcript.rs` are independently
+constructed from the same pinned schema. `tool_call.rs:420–433` defines the
+snake-case `pending`, `in_progress`, `completed`, `failed` enum;
+`ToolCallUpdateFields.status` at line 217 is optional and does not require output.
+These fixtures intentionally retain explicit values only, not protocol defaults
+or inferred live state. They cover status-only records, original arguments/output,
+missing/null/unknown values, tool-linked attachment placeholders and existing
+999/1000-block boundaries. Status-only cards are generated metadata descriptions,
+not fabricated tool output. No new artifact/version compatibility is claimed.

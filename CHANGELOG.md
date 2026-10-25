@@ -16,6 +16,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   messages use their matching system protobuf implementation. The existing
   archive-specific export guard remains; upstream cached artifacts are unchanged.
 
+- Grok ACP record cards now preserve explicit recorded tool statuses and tool-ID
+  linkage, including status-only updates previously omitted. Missing/unknown
+  statuses remain unassigned and original output stays intact. These historical
+  labels do not imply live working state, pending approval or new controls.
+
 - Opt-in following for an explicitly opened Claude conversation branch: bounded
   refreshes run two seconds after completion, replace abandoned branches, pause
   on hidden pages and stop on errors/source/session/access changes. Following
