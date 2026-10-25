@@ -8,6 +8,12 @@ fileGroups: [{{join file-groups}}]
 configs:
   debug: debug
   release: release
+settings:
+  base:
+    CODE_SIGN_IDENTITY[sdk=iphonesimulator*]: "-"
+    CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: true
+    CODE_SIGN_IDENTITY[sdk=watchsimulator*]: "-"
+    CODE_SIGNING_ALLOWED[sdk=watchsimulator*]: true
 settingGroups:
   app:
     base:
@@ -248,8 +254,6 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
     scheme:
       buildImplicitDependencies: false
-      environmentVariables:
-        IDE_DISABLED_OS_ACTIVITY_DT_MODE: "1"
       testTargets: [LazyshMoshAppTests]
       # Keep unified logging enabled without LLDB's duplicate stderr mirror.
       environmentVariables:

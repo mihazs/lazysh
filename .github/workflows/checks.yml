@@ -237,6 +237,7 @@ jobs:
           app_path="apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app"
           entitlement_path="apps/client/src-tauri/gen/apple/lazysh_iOS/lazysh_iOS.entitlements"
           mkdir -p "$diagnostic_dir"
+          shasum -a 256 "$app_path/lazysh" > "$diagnostic_dir/host-binary.sha256"
           if [ -f "$entitlement_path" ] && [ "$(wc -c < "$entitlement_path")" -le 65536 ]; then
             cp "$entitlement_path" "$diagnostic_dir/app-entitlements.plist"
           fi
@@ -247,7 +248,7 @@ jobs:
             else
               printf 'Generated entitlements absent or exceed diagnostic limit\n'
             fi
-            printf '\nProject simulator settings (Tauri --no-sign invocation overrides are not replayed)\n'
+            printf '\nProject simulator settings (invocation overrides are not replayed)\n'
             if ! xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -target lazysh_iOS -configuration debug -sdk iphonesimulator -showBuildSettings 2>/dev/null |
               awk '$1 ~ /^(CODE_SIGNING_ALLOWED|CODE_SIGNING_REQUIRED|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|CODE_SIGN_ENTITLEMENTS|EXPANDED_CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM|SDKROOT|PRODUCT_BUNDLE_IDENTIFIER)$/ && $2 == "=" { print }'; then
               printf 'Cannot inspect simulator build settings\n'
@@ -265,6 +266,14 @@ jobs:
             printf '\nSimulator DER entitlement section\n'
             xcrun otool -s __TEXT __ents_der "$app_path/lazysh" 2>/dev/null || printf 'Cannot inspect DER entitlement section\n'
           } | awk 'NR <= 512 { print substr($0, 1, 256) }' > "$diagnostic_dir/signing-report.txt"
+      - name: Retain simulator signing evidence before runtime checks
+        timeout-minutes: 2
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-signing
+          path: ${{ runner.temp }}/lazysh-ios-signing
+          if-no-files-found: error
       - name: Link native Mosh tests for iOS devices
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '16.0'
@@ -323,6 +332,10 @@ jobs:
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' && steps.ios-mosh-app.outcome == 'success' }}
         run: bun run test:ios-workspace
+      - name: Verify tests preserve the prebuilt iOS host binary
+        timeout-minutes: 1
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
+        run: shasum -a 256 -c "$RUNNER_TEMP/lazysh-ios-signing/host-binary.sha256"
       - name: Upload iOS app acceptance results
         if: always()
         uses: actions/upload-artifact@v4
