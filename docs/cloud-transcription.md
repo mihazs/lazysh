@@ -4,8 +4,9 @@
 It requires a Unix host with private-file ownership/permission enforcement. Linux
 fixtures are verified; macOS runtime operation and reverse-proxy deployment are
 not yet verified. Other hosts fail before opening secrets or creating service
-state. This service-only slice does not configure or upload audio from the lazysh
-client. Whisper and Apple dictation defaults remain unchanged.
+state. The client's explicitly selected [Cloud engine](voice.md#explicit-cloud-dictation)
+can enroll a device and upload bounded dictation. No service is configured by
+default; local Whisper and Apple dictation defaults remain unchanged.
 
 The operator supplies an OpenAI API key on the server. Device credentials are
 separate revocable tokens; the provider key and administrator token must never be
@@ -44,8 +45,8 @@ There is no bundled deployment or automatic account lookup.
 Requests use `Authorization: Bearer <token>`. No cookies or CORS origins are
 enabled. Keep administrator credentials in private operator tooling, not in the
 client's settings or URLs. Enrollment returns a device token once; it cannot be
-recovered from storage. Later client integration will store that token in the
-platform vault under a separate service enrollment.
+recovered from storage. The client's Cloud enrollment stores an administrator-issued
+device token in its separate platform-vault account; it never needs the administrator token.
 
 ## API contract
 
@@ -146,5 +147,6 @@ physical-device behavior.
 Rollback is stopping the optional service. Revoke device tokens before retiring
 it if the endpoint may return. Preserve the private database to preserve quotas;
 deleting it resets device enrollment and usage accounting. Local dictation is
-independent. Client enrollment, microphone-to-WAV upload, editable draft staging,
-and real-device acceptance remain follow-up work under issue #13.
+independent. Client enrollment and editable Cloud dictation are available through
+the explicitly selected Cloud engine; real-provider and physical-device acceptance
+remain follow-up work under issue #13.
