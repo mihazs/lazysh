@@ -94,12 +94,24 @@ targets:
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
       groups: [app]
     dependencies:
+      # libapp.a retains Mosh's zlib references for the final Xcode link.
+      - sdk: libz.tbd
       - sdk: ActivityKit.framework
         weak: true
       - target: LazyshLiveActivity
         embed: true
       - target: LazyshWatch
         embed: true
+      - target: LazyshMoshAbseilPrivacy
+        embed: true
+        link: false
+        copy:
+          destination: resources
+      - target: LazyshMoshProtobufPrivacy
+        embed: true
+        link: false
+        copy:
+          destination: resources
       - framework: {{ lib-output-file-name }}
         embed: false
       {{~#each ios-libraries}}
@@ -184,6 +196,59 @@ targets:
         discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
       {{~/each~}}
     {{~/if}}
+
+  LazyshMoshAbseilPrivacy:
+    type: bundle
+    platform: iOS
+    sources:
+      - path: ../../../../../packages/mosh-transport/vendor-android/abseil/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}.privacy.abseil
+        SKIP_INSTALL: true
+    info:
+      path: LazyshMoshAbseilPrivacy/Info.plist
+      properties:
+        CFBundleShortVersionString: {{apple.bundle-version-short}}
+        CFBundleVersion: "{{apple.bundle-version}}"
+
+  LazyshMoshProtobufPrivacy:
+    type: bundle
+    platform: iOS
+    sources:
+      - path: ../../../../../packages/mosh-transport/vendor-android/protobuf/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}.privacy.protobuf
+        SKIP_INSTALL: true
+    info:
+      path: LazyshMoshProtobufPrivacy/Info.plist
+      properties:
+        CFBundleShortVersionString: {{apple.bundle-version-short}}
+        CFBundleVersion: "{{apple.bundle-version}}"
+
+  LazyshMoshAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../../apple/MoshTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}.moshapptests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: true
+        # Use the verified Tauri artifact without rebuilding the app: the
+        # always-run Rust phase requires Tauri's now-closed CLI options server.
+        # Xcode requires the host's PlugIns folder below the test product root.
+        CONFIGURATION_BUILD_DIR: "$(SRCROOT)/build/arm64-sim"
+        TEST_HOST: "$(CONFIGURATION_BUILD_DIR)/{{app.stylized-name}}.app/{{app.stylized-name}}"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    scheme:
+      buildImplicitDependencies: false
+      testTargets: [LazyshMoshAppTests]
 
   LazyshLiveActivity:
     type: app-extension
@@ -303,3 +368,22 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     scheme:
       testTargets: [LazyshPushTests]
+
+  # Standalone UI runner exercises the already built/installed production app.
+  # No app dependency: the app's Rust phase requires a live Tauri CLI server.
+  LazyshWorkspaceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.2"
+    sources:
+      - path: ../../apple/UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.lazysh.client.workspaceuitests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: ""
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
+    scheme:
+      testTargets: [LazyshWorkspaceUITests]

@@ -21,3 +21,24 @@ test('browser preview is honest, usable at phone width and keyboard navigable', 
   await page.screenshot({ path: testInfo.outputPath('workspace.png'), fullPage: true });
   expect(errors).toEqual([]);
 });
+
+test('phone menu stays below a nonzero safe area and opens a touchable drawer', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'phone', 'Phone safe-area layout');
+  const protocol = await page.context().newCDPSession(page);
+  await protocol.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 62 } });
+  await page.goto('/');
+  const header = page.locator('.workspace-header');
+  await expect(header).toHaveCSS('padding-top', '62px');
+  const menu = page.getByRole('button', { name: 'Open hosts', exact: true });
+  const menuBounds = await menu.boundingBox();
+  const headerBounds = await header.boundingBox();
+  expect(menuBounds).not.toBeNull();
+  expect(headerBounds).not.toBeNull();
+  expect(menuBounds!.y).toBeGreaterThanOrEqual(62);
+  expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(headerBounds!.y + headerBounds!.height);
+  await menu.tap();
+  const close = page.getByRole('button', { name: 'Close hosts', exact: true });
+  await expect(close).toBeInViewport();
+  await close.tap();
+  await expect(close).not.toBeInViewport();
+});
