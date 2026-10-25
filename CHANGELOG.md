@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
+  model archive validation and native exception/ownership tests. It adds no
+  dictation UI or automatic model download; real-model and device validation
+  remain pending, and Apple/Windows model loading fails closed pending native
+  ACL validation.
 - iOS app integration for the verified-SSH Mosh handoff, with original dependency
   privacy manifests embedded in separate resource bundles. Auto transport
   selection now considers Mosh on iOS, where it previously skipped it; host-key
