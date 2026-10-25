@@ -119,19 +119,8 @@ describe("terminal interactions", () => {
   });
   it('serializes two-finger Zellij actions, reports failures and permits another attempt', async () => {
     savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,left:'nextZellijPane'}});
-    let reject!: (error: Error)=>void;
-    mocks.zellijNavigate.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
-    const reportError=vi.fn();
-    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession} active reportError={reportError} />);
-    const canvas=screen.getByLabelText('Terminal for Host');
-    const swipe=()=>{
-      fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
-      fireEvent.pointerDown(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:100});
-      fireEvent.pointerMove(canvas,{pointerId:1,pointerType:'touch',clientX:0,clientY:100});
-      fireEvent.pointerMove(canvas,{pointerId:2,pointerType:'touch',clientX:100,clientY:100});
-      fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:0,clientY:100});
-      fireEvent.pointerUp(canvas,{pointerId:2,pointerType:'touch',clientX:100,clientY:100});
-    };
+    const {reject, reportError, canvas} = pendingZellijNavigation();
+    const swipe=()=>swipeTwoLeft(canvas);
     swipe(); swipe();
     expect(mocks.zellijNavigate).toHaveBeenCalledTimes(1);
     await act(async()=>reject(new Error('Fixture unavailable')));
@@ -169,11 +158,7 @@ describe("terminal interactions", () => {
   });
   it('discards old Zellij errors and starts after an access generation changes', async () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
-    let reject!: (error: unknown)=>void;
-    mocks.zellijNavigate.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
-    const reportError=vi.fn();
-    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession} active reportError={reportError} />);
-    const canvas=screen.getByLabelText('Terminal for Host');
+    const {reject, reportError, canvas} = pendingZellijNavigation();
     const swipe=()=>{
       fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
       fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
@@ -188,12 +173,7 @@ describe("terminal interactions", () => {
   });
   it('suppresses a late navigation failure after the terminal becomes inactive', async () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
-    let reject!: (error: unknown)=>void;
-    mocks.zellijNavigate.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
-    const reportError=vi.fn();
-    const session={id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession;
-    const view=render(<TerminalPane session={session} active reportError={reportError} />);
-    const canvas=screen.getByLabelText('Terminal for Host');
+    const {reject, reportError, canvas, session, view} = pendingZellijNavigation();
     fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
     fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
     view.rerender(<TerminalPane session={session} active={false} reportError={reportError} />);
@@ -237,11 +217,7 @@ describe("terminal interactions", () => {
     fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
     expect(action.mock.calls[0][0].detail).toEqual({sessionId: "ssh", action: "nextSession"});
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
-    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
-    fireEvent.pointerDown(canvas, {pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100});
-    fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
-    fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
-    fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
+    swipeTwoLeft(canvas, false);
     expect(mocks.writeSequence).toHaveBeenCalledWith("ssh", ["\x02","T"]);
     window.removeEventListener("lazysh-terminal-action", action);
   });
@@ -317,12 +293,7 @@ describe("terminal interactions", () => {
     savePreferences({...defaults, gestures: {...defaults.gestures, left: "tab"}});
     mount();
     const canvas = screen.getByLabelText("Terminal for Host");
-    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
-    fireEvent.pointerDown(canvas, {pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100});
-    fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
-    fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
-    fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
-    fireEvent.pointerUp(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
+    swipeTwoLeft(canvas);
     expect(mocks.write).toHaveBeenCalledWith("ssh", "\t");
     expect(getPreferences().fontSize).toBe(14);
     fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
@@ -423,3 +394,20 @@ describe("terminal interactions", () => {
     expect(screen.getByRole("status").textContent).toBe("Match on line 2");
   });
 });
+
+function pendingZellijNavigation() {
+  let reject!: (error: unknown) => void;
+  mocks.zellijNavigate.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  const reportError = vi.fn();
+  const session = {id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession;
+  const view = render(<TerminalPane session={session} active reportError={reportError} />);
+  return {reject: (error: unknown) => reject(error), reportError, session, view, canvas: screen.getByLabelText('Terminal for Host')};
+}
+function swipeTwoLeft(canvas: HTMLElement, releaseSecond = true) {
+  fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
+  fireEvent.pointerDown(canvas, {pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100});
+  fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
+  fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
+  fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
+  if (releaseSecond) fireEvent.pointerUp(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
+}

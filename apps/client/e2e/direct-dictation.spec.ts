@@ -1,17 +1,15 @@
+import { installNativeBridge, installSyntheticAudio } from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 
 declare global {interface Window {
   dictationFixture:{writes:{sessionId:string;data:string}[];complete?: (text:string)=>void;rejectWrite:boolean;close:()=>void;deferDisconnect?:boolean;failDisconnect?:()=>void;};
 }}
 async function fixture(page:Page){
+  await installNativeBridge(page);
+  await installSyntheticAudio(page);
   await page.addInitScript(()=>{
     window.dictationFixture={writes:[],rejectWrite:false,close:()=>{}};
-    Object.defineProperty(window,'isTauri',{value:true});
-    Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{
-      transformCallback:()=>1,unregisterCallback:()=>{},
-      invoke:async(command:string,args:Record<string,unknown>={})=>{
-        if(command==='app_lock_status')return {initialized:true,supported:false,reason:'Browser fixture',enabled:false,locked:false,generation:'0'};
-        if(command==='app_lock_ready' || command==='adopt_session')return;
+    window.nativeFixtureInvoke = async(command: string, args: Record<string, unknown> = {}) => {
         if(command==='list_hosts')return [];
         if(command==='local_capability')return {available:true,reason:'Native IO test fixture; no real shell is started.'};
         if(command==='local_connect'){
@@ -32,18 +30,7 @@ async function fixture(page:Page){
         if(command==='voice_transcribe')return new Promise<string>(resolve=>{window.dictationFixture.complete=resolve;});
         if(command.startsWith('plugin:event|'))return 1;
         throw new Error(`Unexpected fixture command: ${command}`);
-      },
-    }});
-    Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}});
-    Object.defineProperty(window,'MediaRecorder',{value:class {
-      state='inactive';mimeType='audio/webm';onstop?:()=>void;ondataavailable?:(event:{data:Blob})=>void;
-      start(){this.state='recording';}
-      stop(){this.state='inactive';this.ondataavailable?.({data:new Blob([new Uint8Array([0])])});this.onstop?.();}
-    }});
-    Object.defineProperty(window,'AudioContext',{value:class {
-      async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}
-      async close(){}
-    }});
+    };
   });
   await page.goto('/');
   const local=page.getByRole('button',{name:'Open local terminal',exact:true});

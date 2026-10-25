@@ -287,11 +287,7 @@ fn stream_child(
             read_header(&mut reader)?;
             loop {
                 let value = next_frame(&mut reader, &id, width, height)?;
-                serde_json::to_writer(&mut writer, &value)
-                    .map_err(|_| Error::Device("DeviceStreamClosed"))?;
-                writer.write_all(b"\n")?;
-                writer.flush()?;
-                if sender.send(Ok(())).is_err() {
+                if !super::write_frame(&mut writer, &value, &sender)? {
                     return Ok(());
                 }
             }
@@ -307,21 +303,13 @@ fn stream_child(
         if started.elapsed() > maximum_duration || last_frame.elapsed() > SDK_TIMEOUT {
             return Err(Error::Device("DeviceTimeout"));
         }
-        match receiver.recv_timeout(Duration::from_millis(20)) {
-            Ok(Ok(())) => last_frame = Instant::now(),
-            Ok(Err(error)) => return Err(error),
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(Error::Device("DeviceStreamClosed"))
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        if super::frame_ready(&receiver)? {
+            last_frame = Instant::now();
         }
     }
 }
 pub fn stream(id: &str, socket: &str) -> Result<()> {
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let signal = cancelled.clone();
-    ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
-        .map_err(|_| Error::Device("DeviceCancellationUnavailable"))?;
+    let cancelled = super::cancellation_signal()?;
     let eof = cancelled.clone();
     thread::spawn(move || {
         let mut data = [0; 1];

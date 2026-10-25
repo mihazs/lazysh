@@ -1,6 +1,6 @@
 use lazysh_agent::transcript::{conversation, discover, read_page, TranscriptAgent};
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, process::Command};
+use std::{fs, io::Write, process::Command};
 
 const FIXTURE: &str = include_str!("fixtures/grok-acp/records.jsonl");
 fn update(tag: &str, fields: Value) -> Value {
@@ -8,15 +8,9 @@ fn update(tag: &str, fields: Value) -> Value {
     update["sessionUpdate"] = json!(tag);
     json!({"timestamp":1,"method":"session/update","params":{"sessionId":"test","update":update}})
 }
-fn write(path: &Path, rows: &[Value]) {
-    fs::write(
-        path,
-        rows.iter()
-            .map(|row| format!("{row}\n"))
-            .collect::<String>(),
-    )
-    .unwrap();
-}
+#[path = "support/jsonl.rs"]
+mod jsonl;
+use jsonl::write;
 #[test]
 fn recorded_tool_status_only_updates_remain_distinct_and_link_to_the_tool() {
     let directory = tempfile::tempdir().unwrap();
@@ -342,50 +336,29 @@ fn amplified_tool_records_fail_instead_of_returning_a_stuck_cursor() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("updates.jsonl");
     let terminals = |count| vec![json!({"type":"terminal","terminalId":"x"}); count];
-    write(
-        &path,
-        &[update(
+    // Bound input independently from output amplification, including UTF-8 IDs.
+    for (tag, fields) in [
+        (
             "tool_call",
-            json!({
-                "toolCallId":"i".repeat(1024), "title":"tool", "content":terminals(600)
-            }),
-        )],
-    );
-    assert!(fs::metadata(&path).unwrap().len() < 256 * 1024);
-    assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 100).is_err());
-    write(
-        &path,
-        &[update(
+            json!({"toolCallId":"i".repeat(1024),"title":"tool","content":terminals(600)}),
+        ),
+        (
             "tool_call_update",
-            json!({
-                "toolCallId":"é".repeat(129), "content":terminals(1)
-            }),
-        )],
-    );
-    assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 100).is_err());
-    write(
-        &path,
-        &[update(
+            json!({"toolCallId":"é".repeat(129),"content":terminals(1)}),
+        ),
+        (
             "tool_call_update",
-            json!({
-                "toolCallId":"small", "content":terminals(1001)
-            }),
-        )],
-    );
-    assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 100).is_err());
-    // Even individually bounded identifiers can exceed a page with real input.
-    write(
-        &path,
-        &[update(
+            json!({"toolCallId":"small","content":terminals(1001)}),
+        ),
+        (
             "tool_call",
-            json!({
-                "toolCallId":"i".repeat(256), "title":"tool", "rawInput":"x".repeat(200_000),
-                "content":terminals(999)
-            }),
-        )],
-    );
-    assert!(fs::metadata(&path).unwrap().len() < 256 * 1024);
-    assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 100).is_err());
+            json!({"toolCallId":"i".repeat(256),"title":"tool","rawInput":"x".repeat(200_000),"content":terminals(999)}),
+        ),
+    ] {
+        write(&path, &[update(tag, fields)]);
+        assert!(fs::metadata(&path).unwrap().len() < 256 * 1024);
+        assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 100).is_err());
+    }
 }
 
 #[test]

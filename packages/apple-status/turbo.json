@@ -1,11 +1,22 @@
 {
-  "extends": ["//"],
+  "extends": [
+    "//"
+  ],
   "tasks": {
-    "check:rust": { "cache": false },
-    "test:rust": { "cache": false },
-    "lint": { "cache": false },
-    "format:check": { "cache": false },
-    "test:apple-status": { "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT", "APPLE_STATUS_SIMULATOR_ID"] },
-    "build:watchos": { "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT"] }
+    "test:apple-status": {
+      "cache": false,
+      "passThroughEnv": [
+        "DEVELOPER_DIR",
+        "SDKROOT",
+        "APPLE_STATUS_SIMULATOR_ID"
+      ]
+    },
+    "build:watchos": {
+      "cache": false,
+      "passThroughEnv": [
+        "DEVELOPER_DIR",
+        "SDKROOT"
+      ]
+    }
   }
 }

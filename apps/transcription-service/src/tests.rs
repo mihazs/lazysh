@@ -1,8 +1,13 @@
 #![cfg(unix)]
 use super::*;
 use axum::{body::Body, http::Request as HttpRequest};
+use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::{oneshot, Semaphore};
+use tokio::net::TcpListener;
+use tokio::{
+    sync::{oneshot, Semaphore},
+    task::JoinSet,
+};
 use tower::ServiceExt;
 
 const ADMIN: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
@@ -10,19 +15,7 @@ fn config(path: PathBuf, d: u64, g: u64) -> Config {
     Config::new(path, ADMIN, "fixture-provider-key", d, g).unwrap()
 }
 fn wav(samples: usize) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + samples as u32 * 2).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&16000u32.to_le_bytes());
-    bytes.extend_from_slice(&32000u32.to_le_bytes());
-    bytes.extend_from_slice(&2u16.to_le_bytes());
-    bytes.extend_from_slice(&16u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&(samples as u32 * 2).to_le_bytes());
+    let mut bytes = lazysh_common::audio::pcm16_mono_16khz_header(samples as u32 * 2);
     bytes.resize(44 + samples * 2, 0x51);
     bytes
 }
@@ -85,6 +78,32 @@ async fn job(service: &Service, token: &str, language: &str) -> String {
     .await;
     assert_eq!(status, StatusCode::OK, "{value}");
     value["jobId"].as_str().unwrap().into()
+}
+async fn assert_completed_quota(service: &Service, token: &str, samples: u64) {
+    assert!(service.0.jobs.lock().unwrap().is_empty());
+    assert_eq!(
+        request(service, "GET", "/v1/quota", token, "application/json", "")
+            .await
+            .1["quota"]["deviceUsedSamples"],
+        samples
+    );
+}
+async fn connect_server(
+    service: &Service,
+) -> (
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+    tokio::net::TcpStream,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = oneshot::channel();
+    let running = service.clone();
+    let server = tokio::spawn(serve(listener, running, async {
+        let _ = stopped.await;
+    }));
+    let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    (stop, server, stream)
 }
 #[test]
 fn wav_contract_rejects_wrong_formats_lengths_and_extra_chunks() {
@@ -679,13 +698,7 @@ async fn invalid_oversized_expired_or_capacity_rejected_uploads_never_reach_prov
     );
     drop(permit);
     assert_eq!(upstream.requests.load(Ordering::SeqCst), 0);
-    assert!(service.0.jobs.lock().unwrap().is_empty());
-    assert_eq!(
-        request(&service, "GET", "/v1/quota", &token, "application/json", "")
-            .await
-            .1["quota"]["deviceUsedSamples"],
-        0
-    );
+    assert_completed_quota(&service, &token, 0).await;
     task.abort();
     let _ = task.await;
 }
@@ -752,14 +765,7 @@ async fn partial_upload_cancellation_cleans_job_without_a_quota_debit() {
     let service = Service::open(config(directory.path().join("state"), 1, 2)).unwrap();
     let (_, token) = enroll_device(&service).await;
     let id = job(&service, &token, "auto").await;
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let (stop, stopped) = oneshot::channel();
-    let running = service.clone();
-    let server = tokio::spawn(serve(listener, running, async {
-        let _ = stopped.await;
-    }));
-    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let (stop, server, mut stream) = connect_server(&service).await;
     stream.write_all(format!("PUT /v1/transcriptions/{id}/audio HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: audio/wav\r\nContent-Length: 3244\r\n\r\nRIFF").as_bytes()).await.unwrap();
     timeout(Duration::from_secs(3), async {
         loop {
@@ -791,13 +797,7 @@ async fn partial_upload_cancellation_cleans_job_without_a_quota_debit() {
         .unwrap();
     assert!(String::from_utf8_lossy(&response[..count]).contains("409 Conflict"));
     assert_eq!(service.0.providers.available_permits(), 4);
-    assert!(service.0.jobs.lock().unwrap().is_empty());
-    assert_eq!(
-        request(&service, "GET", "/v1/quota", &token, "application/json", "")
-            .await
-            .1["quota"]["deviceUsedSamples"],
-        0
-    );
+    assert_completed_quota(&service, &token, 0).await;
     let _ = stop.send(());
     server.await.unwrap().unwrap();
 }
@@ -810,14 +810,7 @@ async fn real_client_disconnect_and_server_shutdown_release_upstream_resources()
         let (service, entered, closed, upstream) = stalled_upstream(directory.path(), false).await;
         let (_, token) = enroll_device(&service).await;
         let id = job(&service, &token, "auto").await;
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (stop, stopped) = oneshot::channel();
-        let running = service.clone();
-        let server = tokio::spawn(serve(listener, running, async {
-            let _ = stopped.await;
-        }));
-        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (stop, server, mut stream) = connect_server(&service).await;
         let bytes = wav(1600);
         stream.write_all(format!("PUT /v1/transcriptions/{id}/audio HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\n\r\n",bytes.len()).as_bytes()).await.unwrap();
         stream.write_all(&bytes).await.unwrap();
@@ -918,13 +911,7 @@ async fn provider_deadline_covers_header_and_body_wait_and_keeps_debited_quota()
             .unwrap();
         upstream.await.unwrap();
         assert_eq!(service.0.providers.available_permits(), 4);
-        assert!(service.0.jobs.lock().unwrap().is_empty());
-        assert_eq!(
-            request(&service, "GET", "/v1/quota", &token, "application/json", "")
-                .await
-                .1["quota"]["deviceUsedSamples"],
-            1600
-        );
+        assert_completed_quota(&service, &token, 1600).await;
     }
 }
 

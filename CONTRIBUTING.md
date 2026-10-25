@@ -29,24 +29,26 @@ Git and Bun must be available in the committing environment. See lint-staged's
 reported backup stash recovery instructions if an interrupted run needs recovery.
 
 `bun run duplicates:check` scans the current working tree without changing it;
-`bun run duplicates:staged` runs the actual index-oriented gate. New clones fail,
-including an additional copy of an already baselined clone. Detection uses mild
-mode, at least 50 tokens and five lines, with a 1 MiB per-file limit. Authored
+`bun run duplicates:staged` runs the actual index-oriented gate. Any detected
+clone fails: duplication must be zero, including pre-existing duplicates.
+Detection uses mild mode, at least 50 tokens and five lines, with the native
+`1mb` per-file limit. Authored
 code and tests, including Kotlin under `gen/android`, remain covered. Only build
-outputs, three vendored dependency trees, lockfiles and the baseline are excluded
+outputs, three vendored dependency trees and lockfiles are excluded
 explicitly; jscpd also respects Git ignore rules.
 
-The committed baseline records existing duplication rather than accepting a
-percentage threshold. Its initial inventory at main `206d7f9` contained 441
-sources and 337 clone pairs (including documentation and existing license notices).
-Hooks never update it. For an intentional reviewed baseline change, inspect the
-clone report, run `bun run duplicates:baseline`, and review the baseline diff in
-the PR. Do not baseline new accidental duplication to make a commit pass.
+Refactor duplicated code with DRY until jscpd reports zero clones. Do not bypass
+the hook, add a baseline, relax detection thresholds, or hide handwritten code
+or tests to make it pass. Preserve third-party attribution and keep vendor,
+generated-artifact and legal-notice scope explicit. The hook prints this
+instruction after both successful and failed runs, preserving its command's exit
+status. Installation alone does not print the post-run instruction.
 
 Run `bun run test:hooks` for native Bun/Git integration tests. They create and
 remove isolated repositories and linked worktrees under `~/dev/.worktrees/`,
-and exercise clean and rejected commits, third-copy detection, partial staging,
-restoration, spaced paths, authored Android coverage and hook-install conflicts.
+and exercise clean and rejected commits, existing-clone rejection even with a
+baseline present, partial staging, restoration, spaced paths, authored Android
+coverage, exact failure status, instruction output and hook-install conflicts.
 These checks run in the Linux client CI job; other committing platforms have not
 been runtime-verified by this fixture.
 
@@ -69,3 +71,9 @@ User-facing changes require an entry under `[Unreleased]` in `CHANGELOG.md`.
 Explicitly identify changed defaults. Internal refactors, dead-code removal and
 test-only changes are exempt. Pure repository workflow documentation is also
 exempt. Review and resolve findings, then merge ready changes autonomously.
+
+The code scan retains the existing vendored/build exclusions and excludes
+`packages/parakeet-runtime/licenses/**`: upstream legal text must remain verbatim.
+The unchanged upstream deep-link `xdg_commands.rs` and `xdg_unregister.rs` tests
+are also explicitly excluded; authored deep-link code and regression tests remain
+in scope. Authored source and tests have no duplication baseline or allowance.

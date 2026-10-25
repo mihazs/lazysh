@@ -1,3 +1,4 @@
+import { installNativeBridge, installSyntheticAudio } from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 
 declare global { interface Window { cloudVoiceFixture: {
@@ -5,6 +6,8 @@ declare global { interface Window { cloudVoiceFixture: {
   complete?: (text:string)=>void; begin?:()=>void; deferBegin:boolean;
 }; } }
 async function fixture(page:Page) {
+  await installNativeBridge(page);
+  await installSyntheticAudio(page);
   await page.addInitScript(()=>{
     const id='12345678-1234-4234-8234-123456789abc';
     const quota={windowStart:1792800000,windowEnd:1792886400,deviceLimitSamples:480000,deviceUsedSamples:0,deviceRemainingSamples:480000,
@@ -12,11 +15,7 @@ async function fixture(page:Page) {
     const snapshot={origin:'https://voice.example.com',checkedAt:1792900000000,quota,
       capabilities:{schemaVersion:1,model:'gpt-transcribe',languages:['auto','pt'],maxWavBytes:960044,sampleRate:16000,maxSamples:480000}};
     window.cloudVoiceFixture={calls:[],writes:[],deferBegin:false};
-    Object.defineProperty(window,'isTauri',{value:true});
-    Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},
-      invoke:async(command:string,args:Record<string,unknown>={})=>{
-        if(command==='app_lock_status')return {initialized:true,supported:false,reason:'Browser fixture',enabled:false,locked:false,generation:'0'};
-        if(command==='app_lock_ready' || command==='adopt_session')return;
+    window.nativeFixtureInvoke = async(command: string, args: Record<string, unknown> = {}) => {
         window.cloudVoiceFixture.calls.push({command,args});
         if(command==='list_hosts' || command==='voice_models' || command==='voice_model_catalog')return [];
         if(command==='local_capability')return {available:true,reason:'Synthetic Cloud fixture; no shell or remote service.'};
@@ -32,16 +31,7 @@ async function fixture(page:Page) {
         if(command==='voice_cloud_cancel')return {cancelled:true,cleanup:'confirmed'};
         if(command.startsWith('plugin:event|'))return 1;
         throw new Error(`Unexpected fixture command: ${command}`);
-      },
-    }});
-    Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}});
-    Object.defineProperty(window,'MediaRecorder',{value:class {
-      state='inactive';mimeType='audio/webm';onstop?:()=>void;ondataavailable?:(event:{data:Blob})=>void;
-      start(){this.state='recording';}stop(){this.state='inactive';this.ondataavailable?.({data:new Blob([new Uint8Array([0])])});this.onstop?.();}
-    }});
-    Object.defineProperty(window,'AudioContext',{value:class {
-      async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}async close(){}
-    }});
+    };
   });
   await page.goto('/');
   if((page.viewportSize()?.width ?? 1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();

@@ -304,11 +304,34 @@ impl Runner for SdkRunner {
     }
 }
 
-pub fn run(command: DeviceCommand) -> Result<Value> {
+fn cancellation_signal() -> Result<Arc<AtomicBool>> {
     let cancelled = Arc::new(AtomicBool::new(false));
     let signal = cancelled.clone();
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
         .map_err(|_| Error::Device("DeviceCancellationUnavailable"))?;
+    Ok(cancelled)
+}
+fn write_frame(
+    writer: &mut impl std::io::Write,
+    frame: &Value,
+    sender: &std::sync::mpsc::SyncSender<Result<()>>,
+) -> Result<bool> {
+    serde_json::to_writer(&mut *writer, frame).map_err(|_| Error::Device("DeviceStreamClosed"))?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(sender.send(Ok(())).is_ok())
+}
+fn frame_ready(receiver: &std::sync::mpsc::Receiver<Result<()>>) -> Result<bool> {
+    match receiver.recv_timeout(Duration::from_millis(20)) {
+        Ok(result) => result.map(|()| true),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(Error::Device("DeviceStreamClosed"))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(false),
+    }
+}
+pub fn run(command: DeviceCommand) -> Result<Value> {
+    let cancelled = cancellation_signal()?;
     execute(&mut SdkRunner { cancelled }, command)
 }
 fn args(values: &[&str]) -> Vec<String> {

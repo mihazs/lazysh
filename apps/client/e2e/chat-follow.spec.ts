@@ -1,3 +1,4 @@
+import { openFollowTranscript } from './fixtures/chatTranscript';
 import {expect,test,type Page} from '@playwright/test';
 import type {mountChatFollowHarness} from './fixtures/ChatFollowHarness';
 declare global {interface Window {
@@ -17,11 +18,8 @@ async function fixture(page:Page) {
       if(f.hold)return new Promise(resolve=>{f.release=()=>resolve(result);});
       return result;
     }}});
-    const {mountChatFollowHarness}=await import('/e2e/fixtures/ChatFollowHarness.tsx');window.chatFollow=mountChatFollowHarness();
   });
-  await page.getByLabel('Transcript path',{exact:true}).fill('/fixture/claude.jsonl');
-  await page.getByRole('combobox',{name:'View',exact:true}).selectOption('conversation');
-  await page.getByRole('button',{name:'Open transcript',exact:true}).click();
+  await openFollowTranscript(page);
   await expect(page.getByText('Branch 1 row 0:',{exact:false})).toBeVisible();
   await page.clock.install();
 }

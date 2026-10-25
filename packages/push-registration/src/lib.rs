@@ -74,6 +74,20 @@ fn call<R: Runtime>(
 
 pub mod commands {
     use super::*;
+    async fn change<R: Runtime>(
+        app: AppHandle<R>,
+        command: &'static str,
+        interrupted: &'static str,
+    ) -> Result<RegistrationStatus, String> {
+        let epoch = app
+            .state::<ControlSequence>()
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        tauri::async_runtime::spawn_blocking(move || call(&app, command, epoch))
+            .await
+            .map_err(|_| interrupted.to_owned())?
+    }
     #[tauri::command]
     pub fn push_registration_status<R: Runtime>(
         app: AppHandle<R>,
@@ -85,28 +99,14 @@ pub mod commands {
     pub async fn push_registration_register<R: Runtime>(
         app: AppHandle<R>,
     ) -> Result<RegistrationStatus, String> {
-        let epoch = app
-            .state::<ControlSequence>()
-            .0
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-        tauri::async_runtime::spawn_blocking(move || call(&app, "register", epoch))
-            .await
-            .map_err(|_| "Native push registration interrupted".to_string())?
+        change(app, "register", "Native push registration interrupted").await
     }
 
     #[tauri::command]
     pub async fn push_registration_disable<R: Runtime>(
         app: AppHandle<R>,
     ) -> Result<RegistrationStatus, String> {
-        let epoch = app
-            .state::<ControlSequence>()
-            .0
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-        tauri::async_runtime::spawn_blocking(move || call(&app, "disable", epoch))
-            .await
-            .map_err(|_| "Native push revocation interrupted".to_string())?
+        change(app, "disable", "Native push revocation interrupted").await
     }
 }
 pub use commands::*;

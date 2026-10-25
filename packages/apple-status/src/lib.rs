@@ -158,10 +158,7 @@ pub struct AppIconStatus {
     pub reason: String,
 }
 pub struct AppleStatus<R: Runtime> {
-    #[cfg(target_os = "ios")]
-    handle: tauri::plugin::PluginHandle<R>,
-    #[cfg(not(target_os = "ios"))]
-    runtime: std::marker::PhantomData<fn() -> R>,
+    handle: lazysh_common::IosHandle<tauri::plugin::PluginHandle<R>>,
 }
 impl<R: Runtime> AppleStatus<R> {
     pub async fn app_icon_status(&self) -> Result<AppIconStatus, String> {
@@ -311,7 +308,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let status = {
                 let _ = api;
                 AppleStatus::<R> {
-                    runtime: std::marker::PhantomData,
+                    handle: std::marker::PhantomData,
                 }
             };
             app.manage(status);

@@ -1,14 +1,10 @@
 use lazysh_agent::transcript::{discover, read_page, TranscriptAgent};
-use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path};
+use serde_json::json;
+use std::fs;
 
-fn records(path: &Path, values: &[Value]) {
-    let mut file = fs::File::create(path).unwrap();
-    for value in values {
-        serde_json::to_writer(&mut file, value).unwrap();
-        writeln!(file).unwrap();
-    }
-}
+#[path = "support/jsonl.rs"]
+mod jsonl;
+use jsonl::write as records;
 
 #[test]
 fn copilot_persisted_events_skip_deltas_hidden_context_and_subagents() {

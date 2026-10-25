@@ -162,15 +162,15 @@ pub async fn start_preview(
         .await
 }
 
-async fn relay_listener<F, Fut, S>(
+// One owner enforces the connection cap and drains all children before returning.
+async fn serve_connections<F, Fut>(
     listener: TcpListener,
     mut cancelled: watch::Receiver<bool>,
     mut stopped: watch::Receiver<bool>,
-    connect: F,
+    accept: F,
 ) where
-    F: Fn() -> Fut,
-    Fut: Future<Output = Result<S>> + Send + 'static,
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    F: Fn(tokio::net::TcpStream) -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
 {
     let slots = Arc::new(Semaphore::new(16));
     let mut connections = JoinSet::new();
@@ -183,21 +183,43 @@ async fn relay_listener<F, Fut, S>(
             _ = stopped.changed() => break,
             Some(_) = connections.join_next(), if !connections.is_empty() => {},
             accepted = listener.accept() => {
-                let Ok((mut local, _)) = accepted else { break };
+                let Ok((local, _)) = accepted else { break };
                 let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
-                let connection = connect();
-                connections.spawn(async move {
-                    let _slot = slot;
-                    let Ok(Ok(mut remote)) = timeout(Duration::from_secs(15), connection).await else { return };
-                    // Bound abandoned sockets while allowing dev-server WebSocket sessions.
-                    let _ = timeout(Duration::from_secs(3600), tokio::io::copy_bidirectional(&mut local, &mut remote)).await;
-                });
+                let connection = accept(local);
+                connections.spawn(async move { let _slot = slot; connection.await; });
             }
         }
     }
     drop(listener);
     connections.abort_all();
     while connections.join_next().await.is_some() {}
+}
+
+async fn relay_listener<F, Fut, S>(
+    listener: TcpListener,
+    cancelled: watch::Receiver<bool>,
+    stopped: watch::Receiver<bool>,
+    connect: F,
+) where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<S>> + Send + 'static,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    serve_connections(listener, cancelled, stopped, move |mut local| {
+        let connection = connect();
+        async move {
+            let Ok(Ok(mut remote)) = timeout(Duration::from_secs(15), connection).await else {
+                return;
+            };
+            // Bound abandoned sockets while allowing dev-server WebSocket sessions.
+            let _ = timeout(
+                Duration::from_secs(3600),
+                tokio::io::copy_bidirectional(&mut local, &mut remote),
+            )
+            .await;
+        }
+    })
+    .await;
 }
 
 #[tauri::command]
@@ -550,6 +572,28 @@ mod tests {
         );
     }
 
+    async fn relay_fixture(
+        remote: std::net::SocketAddr,
+    ) -> (
+        std::net::SocketAddr,
+        watch::Sender<bool>,
+        watch::Sender<bool>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (cancel, cancelled) = watch::channel(false);
+        let (stop, stopped) = watch::channel(false);
+        let relay = tokio::spawn(relay_listener(
+            listener,
+            cancelled,
+            stopped,
+            move || async move { Ok(TcpStream::connect(remote).await?) },
+        ));
+        (address, cancel, stop, relay)
+    }
     #[tokio::test]
     async fn relay_limits_connections_and_stop_closes_the_listener() {
         let remote = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -565,18 +609,7 @@ mod tests {
             }
             std::future::pending::<()>().await;
         });
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .await
-            .unwrap();
-        let address = listener.local_addr().unwrap();
-        let (_cancel, cancelled) = watch::channel(false);
-        let (stop, stopped) = watch::channel(false);
-        let relay = tokio::spawn(relay_listener(
-            listener,
-            cancelled,
-            stopped,
-            move || async move { Ok(TcpStream::connect(remote_address).await?) },
-        ));
+        let (address, _cancel, stop, relay) = relay_fixture(remote_address).await;
         let mut clients = Vec::new();
         for _ in 0..16 {
             let mut client = TcpStream::connect(address).await.unwrap();
@@ -630,19 +663,8 @@ mod tests {
                 stream.write_all(&bytes[..count]).await.unwrap();
             }
         });
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .await
-            .unwrap();
-        let address = listener.local_addr().unwrap();
+        let (address, cancel, _stop, relay) = relay_fixture(remote_address).await;
         assert!(address.ip().is_loopback());
-        let (cancel, cancelled) = watch::channel(false);
-        let (_stop, stopped) = watch::channel(false);
-        let relay = tokio::spawn(relay_listener(
-            listener,
-            cancelled,
-            stopped,
-            move || async move { Ok(TcpStream::connect(remote_address).await?) },
-        ));
         let mut client = TcpStream::connect(address).await.unwrap();
         for message in [
             b"GET / HTTP/1.1\r\nUpgrade: websocket\r\n\r\n".as_slice(),

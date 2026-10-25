@@ -70,21 +70,13 @@ impl Settings {
 }
 
 fn private(metadata: &fs::Metadata, directory: bool) -> Result<()> {
-    if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
-        return Err(Error::InvalidArgument);
+    if lazysh_common::fs::owner_only(metadata, directory) {
+        Ok(())
+    } else {
+        Err(Error::InvalidArgument)
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o077 != 0
-            || (!directory && metadata.nlink() != 1)
-        {
-            return Err(Error::InvalidArgument);
-        }
-    }
-    Ok(())
 }
+
 fn directory_exists(directory: &Path) -> Result<bool> {
     #[cfg(unix)]
     {
@@ -125,17 +117,9 @@ fn directory_exists(directory: &Path) -> Result<bool> {
     }
 }
 fn options(write: bool) -> OpenOptions {
-    let mut options = OpenOptions::new();
-    options.read(true).write(write);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    options
+    lazysh_common::fs::read_options(write)
 }
+
 fn open(path: &Path, write: bool) -> Result<File> {
     // Unix O_NOFOLLOW closes the check/open race; other hosts also refuse known links.
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
@@ -182,14 +166,7 @@ pub fn update(
         return Err(Error::InvalidArgument);
     }
     if !directory_exists(directory)? {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(directory)?;
+        lazysh_common::fs::private_directory(directory)?;
     }
     directory_exists(directory)?;
     let path = directory.join("settings.lock");

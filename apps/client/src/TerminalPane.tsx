@@ -1,4 +1,4 @@
-import { captureAccess, useProtectedApi } from './access';
+import { useMountedAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -29,9 +29,7 @@ export default function TerminalPane({ session, active, reportError }: {
   reportError: (message: string) => void;
 }) {
   const api = useProtectedApi(nativeApi);
-  const access = useRef(captureAccess()).current;
-  const mounted = useRef(true);
-  useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
+  const { access, mounted } = useMountedAccess();
   const container = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);

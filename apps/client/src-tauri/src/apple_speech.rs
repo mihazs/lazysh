@@ -24,52 +24,55 @@ async fn owned<T: Send + 'static>(
     .map_err(|_| "Apple speech worker stopped".to_owned())?
 }
 
+async fn request<T, F, Fut>(
+    access: &AccessLease,
+    app: AppHandle,
+    request_id: String,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(AppHandle, String) -> Fut,
+    Fut: Future<Output = Result<T, String>> + Send + 'static,
+{
+    let cancel_app = app.clone();
+    let cancel_id = request_id.clone();
+    owned(access.clone(), operation(app, request_id), async move {
+        cancel_app.apple_speech().cancel(cancel_id).await
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn apple_speech_capability(access: AccessLease, app: AppHandle) -> Protected<Capability> {
     access
         .run(async { app.apple_speech().capability().await })
         .await
 }
-#[tauri::command]
-pub async fn apple_speech_install(
-    access: AccessLease,
-    app: AppHandle,
-    language: String,
-    request_id: String,
-) -> Protected<()> {
-    access
-        .run(async {
-            let cancel_app = app.clone();
-            let cancel_id = request_id.clone();
-            owned(
-                access.clone(),
-                async move { app.apple_speech().install(language, request_id).await },
-                async move { cancel_app.apple_speech().cancel(cancel_id).await },
-            )
-            .await
-        })
-        .await
+// Asset commands differ only in the plugin method; generate the complete IPC
+// boundary so access admission and exact-request cancellation cannot diverge.
+macro_rules! asset_command {
+    ($command:ident, $method:ident) => {
+        #[tauri::command]
+        pub async fn $command(
+            access: AccessLease,
+            app: AppHandle,
+            language: String,
+            request_id: String,
+        ) -> Protected<()> {
+            access
+                .run(request(
+                    &access,
+                    app,
+                    request_id,
+                    move |app, id| async move { app.apple_speech().$method(language, id).await },
+                ))
+                .await
+        }
+    };
 }
-#[tauri::command]
-pub async fn apple_speech_remove(
-    access: AccessLease,
-    app: AppHandle,
-    language: String,
-    request_id: String,
-) -> Protected<()> {
-    access
-        .run(async {
-            let cancel_app = app.clone();
-            let cancel_id = request_id.clone();
-            owned(
-                access.clone(),
-                async move { app.apple_speech().remove(language, request_id).await },
-                async move { cancel_app.apple_speech().cancel(cancel_id).await },
-            )
-            .await
-        })
-        .await
-}
+asset_command!(apple_speech_install, install);
+asset_command!(apple_speech_remove, remove);
 #[tauri::command]
 pub async fn apple_speech_transcribe(
     access: AccessLease,
@@ -79,20 +82,9 @@ pub async fn apple_speech_transcribe(
     request_id: String,
 ) -> Protected<String> {
     access
-        .run(async {
-            let cancel_app = app.clone();
-            let cancel_id = request_id.clone();
-            owned(
-                access.clone(),
-                async move {
-                    app.apple_speech()
-                        .transcribe(samples, language, request_id)
-                        .await
-                },
-                async move { cancel_app.apple_speech().cancel(cancel_id).await },
-            )
-            .await
-        })
+        .run(request(&access, app, request_id, move |app, id| async move {
+            app.apple_speech().transcribe(samples, language, id).await
+        }))
         .await
 }
 #[tauri::command]
@@ -109,13 +101,18 @@ mod tests {
         Arc,
     };
 
-    #[tokio::test]
-    async fn revoked_owned_operation_cancels_without_polling_queued_native_work() {
+    fn authorized() -> (AccessState, AccessLease) {
         let state = AccessState::default();
         state.initialize(true, true, "fixture".into()).unwrap();
         state.authorize(state.generation().unwrap()).unwrap();
         let nonce = state.status().unwrap().nonce.unwrap();
         let lease = state.lease(Some(&nonce)).unwrap();
+        (state, lease)
+    }
+
+    #[tokio::test]
+    async fn revoked_owned_operation_cancels_without_polling_queued_native_work() {
+        let (state, lease) = authorized();
         state.background().unwrap();
         state.foreground().unwrap();
         state.authorize(state.generation().unwrap()).unwrap();
@@ -142,11 +139,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn native_cancel_wait_is_bounded_even_when_plugin_cancellation_never_replies() {
-        let state = AccessState::default();
-        state.initialize(true, true, "fixture".into()).unwrap();
-        state.authorize(state.generation().unwrap()).unwrap();
-        let nonce = state.status().unwrap().nonce.unwrap();
-        let lease = state.lease(Some(&nonce)).unwrap();
+        let (state, lease) = authorized();
         state.background().unwrap();
         let started = tokio::time::Instant::now();
         let result = owned::<()>(lease, std::future::pending(), std::future::pending()).await;

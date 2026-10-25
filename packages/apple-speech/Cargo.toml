@@ -6,6 +6,7 @@ edition = "2021"
 links = "tauri-plugin-lazysh-apple-speech"
 
 [dependencies]
+lazysh-common = { path = "../common" }
 tauri = { version = "2", default-features = false }
 serde = { version = "1", features = ["derive"] }
 uuid = "1"

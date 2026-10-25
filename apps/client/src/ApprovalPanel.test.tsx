@@ -1,16 +1,12 @@
 // @vitest-environment jsdom
+import { cleanupNativeMocks } from "./test/nativeCoreMock";
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import ApprovalPanel, { parseApprovals } from "./ApprovalPanel";
-vi.mock("@tauri-apps/api/core", async (original) => ({
-  ...(await original<typeof import("@tauri-apps/api/core")>()),
-  invoke: vi.fn(),
-}));
-afterEach(() => {
-  cleanup();
-  vi.clearAllMocks();
-});
+vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
+afterEach(cleanupNativeMocks);
+
 const request = {
   id: "b714333f-82b1-4ee0-a383-6fd6dc1eca01",
   expectedHash: "a".repeat(64),

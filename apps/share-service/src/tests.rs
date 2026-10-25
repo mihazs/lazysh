@@ -1,6 +1,7 @@
 use super::*;
 use axum::http::Request as HttpRequest;
 use reqwest::Client;
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower::ServiceExt;
 
@@ -60,6 +61,41 @@ impl Fixture {
             .await
             .unwrap()
     }
+    async fn history(&self) -> serde_json::Value {
+        self.client
+            .get(format!("{}/v1/shares", self.base))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+    async fn wait_for_request_capacity_to_fill(&self) {
+        timeout(Duration::from_secs(2), async {
+            while self.service.requests.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    async fn assert_history_overloaded(&self) {
+        let response = self
+            .service
+            .router()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/v1/shares")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
     async fn stop(self) -> tempfile::TempDir {
         let _ = self.stop.send(());
         self.task.await.unwrap().unwrap();
@@ -112,16 +148,7 @@ async fn authenticated_upload_history_download_and_delete_work_over_real_http() 
         downloaded.text().await.unwrap(),
         "<script>secret()</script>"
     );
-    let history: serde_json::Value = fixture
-        .client
-        .get(format!("{}/v1/shares", fixture.base))
-        .bearer_auth(TOKEN)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let history = fixture.history().await;
     assert_eq!(history["shares"][0]["id"], share.id);
     assert!(!history.to_string().contains(TOKEN));
     assert_eq!(
@@ -198,16 +225,7 @@ async fn malformed_metadata_mime_and_oversized_bodies_never_create_shares() {
             .status(),
         StatusCode::PAYLOAD_TOO_LARGE
     );
-    let history: serde_json::Value = fixture
-        .client
-        .get(format!("{}/v1/shares", fixture.base))
-        .bearer_auth(TOKEN)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let history = fixture.history().await;
     assert_eq!(history["shares"], serde_json::json!([]));
     fixture.stop().await.close().unwrap();
 }
@@ -401,26 +419,8 @@ async fn slow_authenticated_uploads_have_a_bounded_concurrency_limit() {
                 .unwrap()
         }));
     }
-    timeout(Duration::from_secs(2), async {
-        while fixture.service.requests.available_permits() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    let response = fixture
-        .service
-        .router()
-        .oneshot(
-            HttpRequest::builder()
-                .uri("/v1/shares")
-                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    fixture.wait_for_request_capacity_to_fill().await;
+    fixture.assert_history_overloaded().await;
     for task in uploads {
         task.abort();
         let _ = task.await;
@@ -458,30 +458,12 @@ async fn cancelled_http_requests_retain_quota_until_their_disk_operations_finish
                 .unwrap()
         }));
     }
-    timeout(Duration::from_secs(2), async {
-        while fixture.service.requests.available_permits() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    fixture.wait_for_request_capacity_to_fill().await;
     for upload in uploads {
         upload.abort();
         let _ = upload.await;
     }
-    let response = fixture
-        .service
-        .router()
-        .oneshot(
-            HttpRequest::builder()
-                .uri("/v1/shares")
-                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    fixture.assert_history_overloaded().await;
     release.send(()).unwrap();
     blocker.await.unwrap();
     timeout(Duration::from_secs(5), async {

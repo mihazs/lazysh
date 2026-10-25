@@ -12,17 +12,13 @@ use axum::{
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    future::Future,
-    net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
 use tokio::{
-    net::TcpListener,
     sync::{OwnedSemaphorePermit, Semaphore},
-    task::JoinSet,
     time::timeout,
 };
 use tokio_util::io::ReaderStream;
@@ -241,15 +237,7 @@ struct Upload {
 fn default_ttl() -> u64 {
     24 * 60 * 60
 }
-fn valid_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && value != "."
-        && value != ".."
-        && !value
-            .chars()
-            .any(|c| c.is_control() || c == '/' || c == '\\')
-}
+use lazysh_common::valid_name;
 fn validate_mime(headers: &HeaderMap, bytes: &[u8]) -> Result<String, ApiError> {
     let declared = headers
         .get(header::CONTENT_TYPE)
@@ -444,59 +432,38 @@ async fn download(
     Ok(response)
 }
 
-pub async fn serve(
-    listener: TcpListener,
-    service: Service,
-    shutdown: impl Future<Output = ()> + Send,
-) -> std::io::Result<()> {
-    if !listener.local_addr()?.ip().is_loopback() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Share service must bind to loopback behind an HTTPS proxy",
-        ));
+lazysh_common::relay_entrypoint!(
+    Service,
+    listener,
+    service,
+    shutdown,
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "Share service must bind to loopback behind an HTTPS proxy",
+    ),
+    {
+        let cleaner = service.clone();
+        let (stop_cleanup, mut stopped_cleanup) = tokio::sync::oneshot::channel::<()>();
+        let cleanup = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tokio::select! { _ = &mut stopped_cleanup => return, _ = interval.tick() => cleaner.cleanup().await }
+            }
+        });
+        struct AbortCleanup(tokio::task::AbortHandle);
+        impl Drop for AbortCleanup {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _cleanup_guard = AbortCleanup(cleanup.abort_handle());
+        let result =
+            lazysh_common::server::serve(listener, service.router(), shutdown, 64 * 1024, 64).await;
+        let _ = stop_cleanup.send(());
+        let _ = cleanup.await;
+        result
     }
-    let cleaner = service.clone();
-    let (stop_cleanup, mut stopped_cleanup) = tokio::sync::oneshot::channel::<()>();
-    let cleanup = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        loop {
-            tokio::select! { _ = &mut stopped_cleanup => return, _ = interval.tick() => cleaner.cleanup().await }
-        }
-    });
-    struct AbortCleanup(tokio::task::AbortHandle);
-    impl Drop for AbortCleanup {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let _cleanup_guard = AbortCleanup(cleanup.abort_handle());
-    let connections = Arc::new(Semaphore::new(16));
-    let router = service.router();
-    let mut tasks = JoinSet::new();
-    tokio::pin!(shutdown);
-    let result = loop {
-        tokio::select! {
-            _ = &mut shutdown => break Ok(()),
-            accepted = listener.accept() => {
-                let (stream, _address): (tokio::net::TcpStream, SocketAddr) = match accepted { Ok(connection) => connection, Err(error) => break Err(error) };
-                let Ok(permit) = connections.clone().try_acquire_owned() else { drop(stream); continue; };
-                let router = router.clone();
-                tasks.spawn(async move {
-                    let _permit = permit;
-                    let mut builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new()).http1_only();
-                    builder.http1().header_read_timeout(Duration::from_secs(5)).timer(hyper_util::rt::TokioTimer::new()).max_buf_size(64 * 1024).max_headers(64);
-                    let _ = timeout(Duration::from_secs(60), builder.serve_connection(hyper_util::rt::TokioIo::new(stream), hyper_util::service::TowerToHyperService::new(router))).await;
-                });
-            },
-            _ = tasks.join_next(), if !tasks.is_empty() => {},
-        }
-    };
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
-    let _ = stop_cleanup.send(());
-    let _ = cleanup.await;
-    result
-}
+);
 
 #[cfg(test)]
 mod tests;

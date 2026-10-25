@@ -218,15 +218,8 @@ mod tests {
         )
         .build()
         .unwrap();
-        let unguarded = tauri::webview::InvokeRequest {
-            cmd: "plugin:deep-link|get_current".into(),
-            callback: tauri::ipc::CallbackFn(0),
-            error: tauri::ipc::CallbackFn(1),
-            url: "http://127.0.0.1:1420".parse().unwrap(),
-            body: Default::default(),
-            headers: Default::default(),
-            invoke_key: tauri::test::INVOKE_KEY.into(),
-        };
+        let unguarded =
+            crate::app_lock::fixture_request("plugin:deep-link|get_current", Default::default());
         assert!(
             tauri::test::get_ipc_response(&window, unguarded).is_err(),
             "plugin frontend get_current must not bypass the guarded pending API"
@@ -297,13 +290,7 @@ mod tests {
     fn pending_payload_survives_lock_but_old_leases_cannot_read_or_ack_it() {
         use crate::app_lock::AccessState;
         let authority = AccessState::default();
-        authority
-            .initialize(true, true, "synthetic".into())
-            .unwrap();
-        authority
-            .authorize(authority.generation().unwrap())
-            .unwrap();
-        authority.ready(authority.generation().unwrap()).unwrap();
+        crate::app_lock::ready_fixture_authority(&authority);
         let lease = authority
             .lease(authority.status().unwrap().nonce.as_deref())
             .unwrap();

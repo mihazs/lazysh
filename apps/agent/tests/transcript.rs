@@ -1,14 +1,10 @@
 use lazysh_agent::transcript::{read_page, TranscriptAgent};
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, process::Command};
+use std::{fs, io::Write, process::Command};
 
-fn write_records(path: &Path, records: &[Value]) {
-    let mut file = fs::File::create(path).unwrap();
-    for record in records {
-        serde_json::to_writer(&mut file, record).unwrap();
-        writeln!(file).unwrap();
-    }
-}
+#[path = "support/jsonl.rs"]
+mod jsonl;
+use jsonl::write as write_records;
 fn user(text: &str) -> Value {
     json!({"type":"user","uuid":"u1","timestamp":"2026-10-24T20:00:00Z","message":{"role":"user","content":text}})
 }

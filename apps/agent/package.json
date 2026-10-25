@@ -10,5 +10,8 @@
     "lint": "cargo clippy --locked --package lazysh-agent --all-targets -- -D warnings",
     "format:check": "cargo fmt --manifest-path Cargo.toml -- --check"
   },
-  "license": "GPL-3.0-or-later"
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "@lazysh/common": "workspace:*"
+  }
 }

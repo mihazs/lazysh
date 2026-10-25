@@ -1,4 +1,6 @@
 //! Explicit native diagnostics; no production behavior or durability changes.
+#[path = "../tests/support/thread_join.rs"]
+mod thread_join;
 use super::*;
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use std::sync::{
@@ -118,10 +120,7 @@ fn probe(commit_hold: Duration) {
                 })
             })
             .collect::<Vec<_>>();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().unwrap())
-            .collect::<Vec<_>>()
+        thread_join::join_workers(workers)
     });
     let mut successes = 0;
     for (index, worker) in workers.iter().enumerate() {

@@ -35,13 +35,30 @@ impl chunked::Store for WindowsStore<'_> {
             .map_err(|_| "Cannot save to OS credential store".into())
     }
     fn remove(&self, key: &str) -> Result<(), String> {
-        match keyring::Entry::new(self.0, key)
-            .map_err(|_| "OS credential store unavailable")?
-            .delete_credential()
-        {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err("Cannot delete from OS credential store".into()),
-        }
+        delete_ordinary(self.0, key)
+    }
+}
+
+#[cfg(all(desktop, not(target_os = "macos")))]
+fn delete_ordinary(service: &str, key: &str) -> Result<(), String> {
+    match keyring::Entry::new(service, key)
+        .map_err(|_| "OS credential store unavailable")?
+        .delete_credential()
+    {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err("Cannot delete from OS credential store".into()),
+    }
+}
+
+#[cfg(all(desktop, not(target_os = "windows")))]
+fn read_ordinary(service: &str, key: &str, failure: &str) -> Result<Option<String>, String> {
+    match keyring::Entry::new(service, key)
+        .map_err(|_| "OS credential store unavailable")?
+        .get_password()
+    {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err(failure.into()),
     }
 }
 
@@ -311,12 +328,13 @@ impl<R: Runtime> Vault<R> {
     pub fn begin_cancellation(&self) -> u64 {
         self.operations.cancel()
     }
-    pub fn get_protected_for(
+    fn prepare_operation(
         &self,
         key: &str,
+        value: Option<&str>,
         biometric: bool,
         operation: &CredentialOperation,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<(), String> {
         operation.check()?;
         #[cfg(target_os = "ios")]
         if !self
@@ -327,11 +345,22 @@ impl<R: Runtime> Vault<R> {
                 "Native credential service is initializing; retry after reopening the app".into(),
             );
         }
-        validate(key, None)?;
+        validate(key, value)?;
         #[cfg(all(desktop, not(target_os = "macos")))]
         if biometric {
             return Err("Biometric credential protection is unavailable on this platform".into());
         }
+        #[cfg(not(all(desktop, not(target_os = "macos"))))]
+        let _ = biometric;
+        Ok(())
+    }
+    pub fn get_protected_for(
+        &self,
+        key: &str,
+        biometric: bool,
+        operation: &CredentialOperation,
+    ) -> Result<Option<String>, String> {
+        self.prepare_operation(key, None, biometric, operation)?;
         #[cfg(target_os = "windows")]
         let result = chunked::get(&WindowsStore(&self.service), key);
         #[cfg(target_os = "macos")]
@@ -340,18 +369,11 @@ impl<R: Runtime> Vault<R> {
                 .get(&self.service, key, biometric, operation.epoch())
         });
         #[cfg(all(desktop, not(any(target_os = "windows", target_os = "macos"))))]
-        let result = {
-            match keyring::Entry::new(&self.service, key)
-                .map_err(|_| "OS credential store unavailable")?
-                .get_password()
-            {
-                Ok(value) => Ok(Some(value)),
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(_) => Err(
-                    "Cannot read OS credential store. Unlock your keychain and try again.".into(),
-                ),
-            }
-        };
+        let result = read_ordinary(
+            &self.service,
+            key,
+            "Cannot read OS credential store. Unlock your keychain and try again.",
+        );
         #[cfg(mobile)]
         let result = {
             self.handle
@@ -389,21 +411,7 @@ impl<R: Runtime> Vault<R> {
         biometric: bool,
         operation: &CredentialOperation,
     ) -> Result<(), String> {
-        operation.check()?;
-        #[cfg(target_os = "ios")]
-        if !self
-            .lifecycle_ready
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(
-                "Native credential service is initializing; retry after reopening the app".into(),
-            );
-        }
-        validate(key, Some(value))?;
-        #[cfg(all(desktop, not(target_os = "macos")))]
-        if biometric {
-            return Err("Biometric credential protection is unavailable on this platform".into());
-        }
+        self.prepare_operation(key, Some(value), biometric, operation)?;
         #[cfg(target_os = "windows")]
         let result = chunked::set(&WindowsStore(&self.service), key, value);
         #[cfg(target_os = "macos")]
@@ -448,13 +456,7 @@ impl<R: Runtime> Vault<R> {
         }
         #[cfg(all(desktop, not(any(target_os = "windows", target_os = "macos"))))]
         {
-            match keyring::Entry::new(&self.service, key)
-                .map_err(|_| "OS credential store unavailable")?
-                .delete_credential()
-            {
-                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                Err(_) => Err("Cannot delete from OS credential store".into()),
-            }
+            delete_ordinary(&self.service, key)
         }
         #[cfg(mobile)]
         {

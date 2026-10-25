@@ -1,3 +1,4 @@
+import { observeCurrent } from "./asyncState";
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
@@ -41,11 +42,8 @@ export function MuxPanel({ sessionId, onAttach, attached }: { sessionId: string;
   useEffect(() => {
     const current = ++generation.current;
     setTree(null); setEdit(null); setPersistent({}); setHerdr(''); setZellij(''); setProjects([]); setProjectsLoaded(false); setError(''); setBusy(true);
-    void invoke<Tree>('multiplexer_tree', { sessionId }).then(value => {
-      if (generation.current === current) setTree(value);
-    }).catch(e => { if (generation.current === current) setError(errorMessage(e)); }).finally(() => {
-      if (generation.current === current) setBusy(false);
-    });
+    observeCurrent(invoke<Tree>('multiplexer_tree', { sessionId }), () => generation.current === current,
+      setTree, error => setError(errorMessage(error)), () => setBusy(false));
     return () => { generation.current++; };
   }, [sessionId]);
   useEffect(() => { try { localStorage.setItem('lazysh.multiplexer.layout', layout); } catch { /* Layout remains usable without persistence. */ } }, [layout]);
