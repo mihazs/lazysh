@@ -25,9 +25,10 @@ The asset catalog and custom Tauri iOS project template declare the alternate fo
 iPhone and iPad. The PNG is rendered from the original repository-owned vector
 [amber.svg](../apps/client/src-tauri/apple/IconArtwork/amber.svg); no vendor artwork
 is used. Bundled keys and actual native IPC readback are checked by
-`AppIconIntegrationTests` in the existing hosted iOS app test target. A separate hosted roundtrip applies Amber through native IPC, checks UIKit directly,
-restores Default and always attempts cleanup to the original icon. Unsupported
-simulators fail this acceptance test explicitly instead of passing it. State tests
+`AppIconIntegrationTests` in the existing hosted iOS app test target. The existing
+out-of-process UI runner owns valid changes and native readback: apply Amber,
+handle system confirmation, relaunch, restore Default and attempt original-icon
+cleanup. Unsupported execution fails acceptance instead of silently passing. State tests
 cover no support, missing bundle declarations, invalid names, background/busy
 requests, delayed completion, unchanged readback, rejection and restoring Default.
 Frontend tests cover pending UI, unsupported platforms, errors and native readback.
@@ -51,3 +52,21 @@ of a successful icon change until the controlled runtime checks actually pass.
 
 References: [Moshi personalization](https://getmoshi.app/docs/personalization),
 [UIKit alternate icon API](https://developer.apple.com/documentation/uikit/uiapplication/setalternateiconname(_:completionhandler:)).
+
+The second controlled run, [40208351521](https://github.com/mihazs/lazysh/actions/runs/40208351521),
+passed native status preflight (`available=true`, `current=default`) with duplicate
+mirroring absent, then the valid Amber setter failed to complete. A retained
+stackshot shows the alternate-icon LaunchServices queue waiting for synchronous
+XPC; the hosted test's later direct readback waited behind that queue. This is
+not evidence of the earlier WebPrivacy logging stall. Valid changes now run in
+the existing out-of-process UI runner, where system confirmation can be handled,
+with Amber/readback/relaunch/Default and original-icon cleanup. Hosted tests retain
+status preflight, invalid-input rejection and bundle-resource checks. Native
+success remains pending execution of this corrected test boundary.
+
+The same run found missing `CFBundleIconFiles` beneath a manually supplied icon
+dictionary. Apple's [alternate-icon configuration guide](https://developer.apple.com/documentation/xcode/configuring-your-app-to-use-alternate-app-icons)
+instructs using compiler build settings rather than manually overriding these
+icon dictionaries. The template now lets actool generate them. Resource checks
+still require both idioms' generated names/files and decodable bundled PNGs;
+removing the manual override is a packaging correction, not an assertion waiver.
