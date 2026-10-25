@@ -1568,6 +1568,7 @@ fn validate_transcript_source(agent: &str, path: &str, offset: u64) -> Result<()
             | "omo"
             | "devin-atif"
             | "amp-json"
+            | "grok-acp"
     ) || offset > 9_007_199_254_740_991
     {
         return Err(SshError::new(
@@ -1655,6 +1656,12 @@ pub async fn agent_transcripts(
     session_id: String,
     agent: String,
 ) -> Result<serde_json::Value> {
+    if agent == "grok-acp" {
+        return Err(SshError::new(
+            "invalid_input",
+            "Grok ACP requires an explicitly selected transcript file",
+        ));
+    }
     if !matches!(
         agent.as_str(),
         "claude"
@@ -2043,6 +2050,8 @@ mod tests {
 
     #[test]
     fn transcript_command_rejects_adapter_injection_and_quotes_paths() {
+        assert_eq!(transcript_command("grok-acp", "/host/updates.jsonl", 0).unwrap(), "lazysh-agent transcript --agent grok-acp --path '/host/updates.jsonl' --offset 0 --limit 50");
+        assert!(transcript_command("grok", "/host/updates.jsonl", 0).is_err());
         assert!(transcript_command("claude; touch /tmp/nope", "/a", 0).is_err());
         assert!(transcript_command("codex", "/a\0b", 0).is_err());
         assert!(transcript_command("codex", "/a", u64::MAX).is_err());
