@@ -33,6 +33,7 @@ jobs:
 
   agent:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -43,9 +44,21 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
+      - name: Install bounded storage observation tool
+        run: sudo apt-get update && sudo apt-get install -y strace
       - name: Check companion and service packages
         id: agent-checks
+        env:
+          LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
         run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service
+      - name: Upload owned concurrent hook syscall excerpts
+        if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-storage-syscalls
+          path: ${{ runner.temp }}/lazysh-storage-traces
+          if-no-files-found: warn
       - name: Measure hosted SQLite phases (diagnostic, no injected delay)
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2

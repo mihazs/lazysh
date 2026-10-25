@@ -76,6 +76,8 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Retain bounded syscall excerpts from the actual concurrent companion hook test
+  in Linux CI, without changing storage durability or its wait budget.
 - Bound native iOS CI startup and test execution, and retain raw Mosh diagnostics
   before hosted app checks, while preserving failure gates and no-retry behavior.
 - Mobile workspace navigation reserves the full top safe area, keeping the
