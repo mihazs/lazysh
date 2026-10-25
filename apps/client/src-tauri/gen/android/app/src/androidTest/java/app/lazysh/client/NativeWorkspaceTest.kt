@@ -53,15 +53,24 @@ class NativeWorkspaceTest {
     }
 
     private fun typeInto(scenario: ActivityScenario<MainActivity>, selector: String, text: String) {
-        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
-        // The DOM atom focuses the HTML input but does not grant native View
-        // focus to RustWebView. Native key injection requires both focus layers.
+        // Grant native View focus before selecting the DOM input: requesting
+        // native focus afterward can restore or blur a different DOM focus target.
         scenario.onActivity { activity ->
             val web = requireNotNull(webView(activity.window.decorView))
-            assertTrue("Native WebView focus was denied", web.requestFocus())
+            if (!web.hasFocus()) assertTrue("Native WebView focus was denied", web.requestFocus())
             assertTrue("Native WebView did not acquire focus", web.hasFocus())
         }
-        assertEquals("DOM input focus changed", "true", evaluate(scenario,
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+        scenario.onActivity { activity ->
+            assertTrue("DOM selection lost native WebView focus", requireNotNull(webView(activity.window.decorView)).hasFocus())
+        }
+        val focus = evaluate(scenario, """JSON.stringify({
+          activeTag:document.activeElement?.tagName,
+          activePlaceholder:document.activeElement?.getAttribute('placeholder'),
+          targetExists:Boolean(document.querySelector(${JSONObject.quote(selector)})),
+          documentFocused:document.hasFocus()
+        })""")
+        assertEquals("DOM input focus changed for $selector: $focus", "true", evaluate(scenario,
             "document.activeElement === document.querySelector(${JSONObject.quote(selector)})"))
         // Espresso webKeys uses JS value assignment. React tracks that setter,
         // so its later synthetic change can be ignored. Inject native keys into
