@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 use tauri::{ipc::Channel, State};
+use tauri_plugin_lazysh_vault::{CredentialOperation, VaultExt};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{mpsc, watch, Mutex, Semaphore},
@@ -24,7 +25,7 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
 const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SshError {
     kind: &'static str,
     message: String,
@@ -54,8 +55,23 @@ impl<E: std::fmt::Display> From<E> for SshError {
 }
 pub(crate) type Result<T> = std::result::Result<T, SshError>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    Auto,
+    Ssh,
+    Mosh,
+    Et,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Host {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<Transport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mosh: Option<crate::mosh::Options>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub et: Option<crate::et::Options>,
     pub id: String,
     pub name: String,
     pub hostname: String,
@@ -85,6 +101,12 @@ fn is_false(value: &bool) -> bool {
 }
 impl Host {
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(options) = &self.mosh {
+            options.validate()?;
+        }
+        if let Some(options) = &self.et {
+            options.validate()?;
+        }
         if self.id.is_empty()
             || self.id.len() > 100
             || self.name.trim().is_empty()
@@ -311,6 +333,7 @@ pub async fn save_host(
     {
         let config = state.config()?;
         crate::routing::validate(&host, &config.hosts)?;
+        validate_protection_change(&host, &config.hosts)?;
     }
     if state.host(&host.id).ok().is_some_and(|old| {
         old.credentials_stored
@@ -318,8 +341,7 @@ pub async fn save_host(
                 || old.port != host.port
                 || old.username != host.username
                 || old.jump_host_id != host.jump_host_id
-                || old.forward_agent != host.forward_agent
-                || old.biometric_unlock != host.biometric_unlock)
+                || old.forward_agent != host.forward_agent)
     }) {
         let vault_host = host.id.clone();
         tauri::async_runtime::spawn_blocking(move || crate::vault::remove(&app, &vault_host))
@@ -330,10 +352,19 @@ pub async fn save_host(
     }
     save_host_inner(&state, host)
 }
+fn validate_protection_change(host: &Host, hosts: &[Host]) -> Result<()> {
+    if hosts.iter().any(|old| {
+        old.id == host.id && old.credentials_stored && old.biometric_unlock != host.biometric_unlock
+    }) {
+        return Err(SshError::new("credential_policy_change", "Forget saved credentials before changing biometric protection. This preserves your saved identity until you explicitly remove it."));
+    }
+    Ok(())
+}
 fn save_host_inner(state: &AppState, mut host: Host) -> Result<Host> {
     host.validate()?;
     let mut config = state.config()?;
     crate::routing::validate(&host, &config.hosts)?;
+    validate_protection_change(&host, &config.hosts)?;
     host.credentials_stored = config
         .hosts
         .iter()
@@ -477,6 +508,12 @@ impl client::Handler for HostVerifier {
 pub(crate) struct SshHandle {
     handle: client::Handle<HostVerifier>,
     forward_agent: crate::forward_agent::ForwardAgent,
+    pub(crate) peer_address: Option<std::net::SocketAddr>,
+}
+impl SshHandle {
+    pub(crate) fn agent_forwarding_enabled(&self) -> bool {
+        self.forward_agent.enabled()
+    }
 }
 impl std::ops::Deref for SshHandle {
     type Target = client::Handle<HostVerifier>;
@@ -500,8 +537,9 @@ pub(crate) struct Session {
     output_credits: Semaphore,
     output_inflight: StdMutex<u32>,
     pub(crate) cancel: watch::Sender<bool>,
+    validate_size: fn(u32, u32) -> Result<()>,
 }
-enum Input {
+pub(crate) enum Input {
     Data(String),
     Resize(u32, u32),
 }
@@ -514,7 +552,7 @@ pub enum SshEvent {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connected {
-    session_id: String,
+    pub(crate) session_id: String,
 }
 
 #[cfg(test)]
@@ -549,7 +587,10 @@ pub(crate) async fn verified_connection(state: &AppState, host: &Host) -> Result
     .await
     .map_err(|_| SshError::new("timeout", "SSH connection timed out"))??;
     stream.set_nodelay(true)?;
-    verified_connection_on_stream(state, host, stream, None).await
+    let address = stream.peer_addr()?;
+    let mut handle = verified_connection_on_stream(state, host, stream, None).await?;
+    handle.peer_address = Some(address);
+    Ok(handle)
 }
 
 pub(crate) async fn verified_connection_on_stream<R>(
@@ -625,9 +666,11 @@ where
     Ok(SshHandle {
         handle,
         forward_agent,
+        peer_address: None,
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn authenticate_handle(
     mut handle: SshHandle,
     host: &Host,
@@ -635,6 +678,16 @@ pub(crate) async fn authenticate_handle(
     private_key: Option<String>,
     passphrase: Option<String>,
 ) -> Result<SshHandle> {
+    authenticate_handle_mut(&mut handle, host, password, private_key, passphrase).await?;
+    Ok(handle)
+}
+async fn authenticate_handle_mut(
+    handle: &mut SshHandle,
+    host: &Host,
+    password: Option<String>,
+    private_key: Option<String>,
+    passphrase: Option<String>,
+) -> Result<()> {
     let password = password.map(Zeroizing::new);
     let private_key = private_key.map(Zeroizing::new);
     let passphrase = passphrase.map(Zeroizing::new);
@@ -681,6 +734,54 @@ pub(crate) async fn authenticate_handle(
     if let Some(key) = selected_key {
         handle.forward_agent.enable(key);
     }
+    Ok(())
+}
+fn connection_cancelled() -> SshError {
+    SshError::new("cancelled", "Connection cancelled")
+}
+pub(crate) async fn during_connect<T>(
+    operation: &CredentialOperation,
+    future: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::select! {
+        biased;
+        _ = operation.cancelled() => Err(connection_cancelled()),
+        result = future => { operation.check().map_err(|_| connection_cancelled())?; result }
+    }
+}
+pub(crate) async fn close_failed_connect(handle: &SshHandle) {
+    handle.forward_agent.close();
+    let _ = timeout(
+        Duration::from_secs(2),
+        handle.disconnect(
+            russh::Disconnect::ByApplication,
+            "Connection cancelled or failed",
+            "en",
+        ),
+    )
+    .await;
+}
+pub(crate) async fn authenticate_for_operation(
+    mut handle: SshHandle,
+    host: &Host,
+    credentials: &crate::vault::Credentials,
+    operation: &CredentialOperation,
+) -> Result<SshHandle> {
+    let result = during_connect(operation, async {
+        authenticate_handle_mut(
+            &mut handle,
+            host,
+            credentials.password.clone(),
+            credentials.private_key.clone(),
+            credentials.passphrase.clone(),
+        )
+        .await
+    })
+    .await;
+    if let Err(error) = result {
+        close_failed_connect(&handle).await;
+        return Err(error);
+    }
     Ok(handle)
 }
 
@@ -700,35 +801,55 @@ pub async fn connect(
     rows: u32,
     events: Channel<SshEvent>,
 ) -> Result<Connected> {
+    let operation = app.vault().operation();
     let entered = crate::vault::Credentials {
         password,
         private_key,
         passphrase,
     };
-    let _guard = state.credential_guard(&host_id).await;
+    let _guard = during_connect(&operation, async {
+        Ok(state.credential_guard(&host_id).await)
+    })
+    .await?;
     check_size(cols, rows)?;
     let host = state.host(&host_id)?;
-    let handle =
-        crate::routing::verified_target(app.clone(), &state, &host, jump_credentials).await?;
+    let handle = during_connect(
+        &operation,
+        crate::routing::verified_target(app.clone(), &state, &host, jump_credentials, &operation),
+    )
+    .await?;
     let credentials = if use_saved_credentials.unwrap_or(false) {
-        crate::vault::load(app.clone(), host.clone())
-            .await
-            .map_err(|message| SshError::new("storage", message))?
+        match during_connect(&operation, async {
+            crate::vault::load_for_operation(app.clone(), host.clone(), operation.clone())
+                .await
+                .map_err(|message| SshError::new("storage", message))
+        })
+        .await
+        {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                close_failed_connect(&handle).await;
+                return Err(error);
+            }
+        }
     } else {
         entered
     };
-    let handle = Arc::new(
-        authenticate_handle(
-            handle,
-            &host,
-            credentials.password.clone(),
-            credentials.private_key.clone(),
-            credentials.passphrase.clone(),
-        )
-        .await?,
-    );
-    let (channel, initial) = open_terminal(&handle, cols, rows, None).await?;
+    let handle =
+        Arc::new(authenticate_for_operation(handle, &host, &credentials, &operation).await?);
+    let (channel, initial) =
+        match during_connect(&operation, open_terminal(&handle, cols, rows, None)).await {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                close_failed_connect(&handle).await;
+                return Err(error);
+            }
+        };
     if remember_credentials.unwrap_or(false) {
+        if operation.check().is_err() {
+            close_failed_connect(&handle).await;
+            return Err(connection_cancelled());
+        }
         if let Err(error) = state.mark_credentials(&host_id, true) {
             let _ = handle
                 .disconnect(
@@ -739,7 +860,14 @@ pub async fn connect(
                 .await;
             return Err(error);
         }
-        if let Err(message) = crate::vault::save(app.clone(), host.clone(), credentials).await {
+        if let Err(message) = crate::vault::save_for_operation(
+            app.clone(),
+            host.clone(),
+            credentials,
+            operation.clone(),
+        )
+        .await
+        {
             if !host.credentials_stored {
                 let vault_app = app.clone();
                 let vault_host = host_id.clone();
@@ -764,7 +892,16 @@ pub async fn connect(
             return Err(SshError::new("storage", message));
         }
     }
-    spawn_terminal(&state, handle, channel, initial, events).await
+    if operation.check().is_err() {
+        close_failed_connect(&handle).await;
+        return Err(connection_cancelled());
+    }
+    let connected = spawn_terminal(&state, handle, channel, initial, events).await?;
+    if operation.check().is_err() {
+        let _ = disconnect(state, connected.session_id).await;
+        return Err(connection_cancelled());
+    }
+    Ok(connected)
 }
 async fn request_ok(channel: &mut russh::Channel<client::Msg>) -> Result<Vec<u8>> {
     timeout(OP_TIMEOUT, async {
@@ -891,6 +1028,7 @@ async fn spawn_terminal(
         output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
         output_inflight: StdMutex::new(0),
         cancel,
+        validate_size: check_size,
     });
     let id = uuid::Uuid::new_v4().to_string();
     state
@@ -932,6 +1070,152 @@ async fn spawn_terminal(
     });
     Ok(Connected { session_id: id })
 }
+#[tauri::command]
+pub async fn connect_mosh(
+    state: State<'_, AppState>,
+    session_id: String,
+    options: crate::mosh::Options,
+    cols: u32,
+    rows: u32,
+    events: Channel<SshEvent>,
+) -> Result<Connected> {
+    let parent = state.session(&session_id).await?;
+    let bootstrap = crate::mosh::bootstrap(&parent, options, cols, rows).await?;
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    {
+        spawn_native_terminal(
+            &state,
+            parent,
+            events,
+            "Mosh",
+            crate::mosh::check_size,
+            move |input, cancel, initial, output, ready| {
+                tauri::async_runtime::spawn_blocking(move || {
+                    crate::mosh::run(bootstrap, cols, rows, input, cancel, initial, output, ready)
+                })
+            },
+        )
+        .await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
+    {
+        let _ = (bootstrap, events);
+        Err(SshError::new(
+            "mosh_unsupported",
+            "Mosh is not available on this platform",
+        ))
+    }
+}
+
+pub(crate) async fn spawn_native_terminal<Driver>(
+    state: &AppState,
+    parent: Arc<Session>,
+    events: Channel<SshEvent>,
+    name: &'static str,
+    validate_size: fn(u32, u32) -> Result<()>,
+    driver: Driver,
+) -> Result<Connected>
+where
+    Driver: FnOnce(
+        mpsc::Receiver<Input>,
+        watch::Receiver<bool>,
+        watch::Receiver<bool>,
+        mpsc::Sender<Vec<u8>>,
+        tokio::sync::oneshot::Sender<Result<()>>,
+    ) -> tauri::async_runtime::JoinHandle<Result<()>>,
+{
+    let (input, input_rx) = mpsc::channel(32);
+    let (cancel, cancellation) = watch::channel(false);
+    let session = Arc::new(Session {
+        handle: parent.handle.clone(),
+        input,
+        cancel,
+        validate_size,
+        output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
+        output_inflight: StdMutex::new(0),
+    });
+    let id = uuid::Uuid::new_v4().to_string();
+    state
+        .sessions
+        .lock()
+        .await
+        .insert(id.clone(), session.clone());
+    let (output, mut output_rx) = mpsc::channel(1);
+    let (ready, response) = tokio::sync::oneshot::channel();
+    let initial_cancel = parent.cancel.subscribe();
+    let worker = driver(input_rx, cancellation, initial_cancel, output, ready);
+    let sessions = state.sessions.clone();
+    let task_id = id.clone();
+    let active = session.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut cancelled = active.cancel.subscribe();
+        let delivery: Result<()> = async {
+            loop {
+                if *cancelled.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    _ = cancelled.changed() => break,
+                    item = output_rx.recv() => match item {
+                        Some(bytes) => send_output(&active, &events, &bytes).await?,
+                        None => break,
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+        let _ = active.cancel.send(true);
+        active.output_credits.close();
+        drop(output_rx);
+        let native = worker
+            .await
+            .map_err(|_| {
+                SshError::new(
+                    "terminal_worker",
+                    format!("{name} worker ended unexpectedly"),
+                )
+            })
+            .and_then(|result| result);
+        sessions.lock().await.remove(&task_id);
+        let _ = events.send(SshEvent::Closed {
+            message: delivery
+                .and(native)
+                .err()
+                .map(|error| error.message)
+                .unwrap_or_else(|| "Session closed".into()),
+        });
+    });
+    let mut parent_cancel = parent.cancel.subscribe();
+    let connected = if *parent_cancel.borrow() {
+        Err(SshError::new(
+            "cancelled",
+            format!("{name} connection was cancelled"),
+        ))
+    } else {
+        tokio::select! {
+            _ = parent_cancel.changed() => Err(SshError::new("cancelled", format!("{name} connection was cancelled"))),
+            result = response => match result { Ok(response) => response, Err(_) => Err(SshError::new("terminal_worker", format!("{name} worker did not complete the connection"))) },
+        }
+    };
+    if let Err(error) = connected {
+        let _ = session.cancel.send(true);
+        session.output_credits.close();
+        state.sessions.lock().await.remove(&id);
+        return Err(error);
+    }
+    if *parent.cancel.borrow() {
+        let _ = session.cancel.send(true);
+        session.output_credits.close();
+        state.sessions.lock().await.remove(&id);
+        return Err(SshError::new(
+            "cancelled",
+            format!("{name} connection was cancelled"),
+        ));
+    }
+    Ok(Connected { session_id: id })
+}
+
 async fn terminal_io<F, T>(session: &Session, future: F) -> Result<T>
 where
     F: std::future::Future<Output = std::result::Result<T, russh::Error>>,
@@ -966,7 +1250,7 @@ fn acknowledge(session: &Session, bytes: u32) -> Result<()> {
     Ok(())
 }
 
-fn check_size(cols: u32, rows: u32) -> Result<()> {
+pub(crate) fn check_size(cols: u32, rows: u32) -> Result<()> {
     if cols == 0 || rows == 0 || cols > 1000 || rows > 1000 {
         return Err(SshError::new(
             "invalid_size",
@@ -1008,9 +1292,9 @@ pub async fn resize(
     rows: u32,
 ) -> Result<()> {
     check_size(cols, rows)?;
-    state
-        .session(&session_id)
-        .await?
+    let session = state.session(&session_id).await?;
+    (session.validate_size)(cols, rows)?;
+    session
         .input
         .send(Input::Resize(cols, rows))
         .await
@@ -1255,7 +1539,7 @@ pub async fn agent_snapshot(
     Ok(serde_json::from_str(&text)?)
 }
 
-fn transcript_command(agent: &str, path: &str, offset: u64) -> Result<String> {
+fn validate_transcript_source(agent: &str, path: &str, offset: u64) -> Result<()> {
     check_path(path)?;
     if !matches!(
         agent,
@@ -1269,6 +1553,11 @@ fn transcript_command(agent: &str, path: &str, offset: u64) -> Result<String> {
             | "qoder-ide"
             | "kimi"
             | "jcode"
+            | "droid"
+            | "cursor"
+            | "omo"
+            | "devin-atif"
+            | "amp-json"
     ) || offset > 9_007_199_254_740_991
     {
         return Err(SshError::new(
@@ -1276,10 +1565,42 @@ fn transcript_command(agent: &str, path: &str, offset: u64) -> Result<String> {
             "Invalid transcript adapter or cursor",
         ));
     }
+    Ok(())
+}
+
+fn transcript_command(agent: &str, path: &str, offset: u64) -> Result<String> {
+    validate_transcript_source(agent, path, offset)?;
     Ok(format!(
         "lazysh-agent transcript --agent {agent} --path {} --offset {offset} --limit 50",
         quote(path)
     ))
+}
+
+#[tauri::command]
+pub async fn agent_usage(
+    state: State<'_, AppState>,
+    session_id: String,
+    agent: String,
+    path: String,
+    offset: u64,
+    transcript_session_id: Option<String>,
+) -> Result<serde_json::Value> {
+    validate_transcript_source(&agent, &path, offset)?;
+    let mut command = format!(
+        "lazysh-agent usage --agent {agent} --path={} --offset {offset}",
+        quote(&path)
+    );
+    if let Some(id) = transcript_session_id {
+        if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
+            return Err(SshError::new(
+                "invalid_input",
+                "Invalid transcript session identifier",
+            ));
+        }
+        command.push_str(&format!(" --session-id={}", quote(&id)));
+    }
+    let session = state.session(&session_id).await?;
+    Ok(serde_json::from_str(&exec(&session, command).await?)?)
 }
 
 #[tauri::command]
@@ -1336,6 +1657,11 @@ pub async fn agent_transcripts(
             | "qoder-ide"
             | "kimi"
             | "jcode"
+            | "droid"
+            | "cursor"
+            | "omo"
+            | "devin-atif"
+            | "amp-json"
     ) {
         return Err(SshError::new(
             "invalid_input",
@@ -1437,6 +1763,57 @@ mod tests {
     use super::*;
     use russh::{server, ChannelId, Pty};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[tokio::test]
+    async fn closing_during_delayed_verification_aborts_transport_before_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::new(directory.path().into()).unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted, ready) = tokio::sync::oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            accepted.send(()).unwrap();
+            // Withhold the SSH identification, so verification cannot finish.
+            let mut buffer = [0; 512];
+            while stream.read(&mut buffer).await.unwrap() != 0 {}
+        });
+        let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
+            id: "delayed".into(),
+            name: "Delayed".into(),
+            hostname: "127.0.0.1".into(),
+            port,
+            username: "user".into(),
+            fingerprint: None,
+            credentials_stored: false,
+            biometric_unlock: true,
+            jump_host_id: None,
+            forward_agent: false,
+        };
+        let operations = tauri_plugin_lazysh_vault::CredentialOperations::default();
+        let operation = operations.begin();
+        let credential_reads = Arc::new(AtomicUsize::new(0));
+        let reads = credential_reads.clone();
+        let connection = tokio::spawn(async move {
+            let handle = during_connect(&operation, verified_connection(&state, &host)).await?;
+            reads.fetch_add(1, Ordering::SeqCst);
+            close_failed_connect(&handle).await;
+            Ok::<_, SshError>(())
+        });
+        ready.await.unwrap();
+        operations.cancel();
+        assert_eq!(connection.await.unwrap().unwrap_err().kind, "cancelled");
+        assert_eq!(credential_reads.load(Ordering::SeqCst), 0);
+        timeout(Duration::from_secs(2), peer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(operations.begin().check().is_ok());
+    }
 
     #[tokio::test]
     async fn credential_operations_serialize_remember_then_forget_without_blocking_other_hosts() {
@@ -1470,10 +1847,53 @@ mod tests {
     }
 
     #[test]
+    fn transport_preferences_validate_and_survive_host_reload() {
+        let legacy = serde_json::json!({
+            "id":"transport-host", "name":"Transport", "hostname":"example.test",
+            "port":22, "username":"user"
+        });
+        let old: Host = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(old.transport, None);
+        let mut value = legacy;
+        value["transport"] = serde_json::json!("auto");
+        value["mosh"] =
+            serde_json::json!({"serverPath":"mosh-server","portMin":60000,"portMax":61000});
+        value["et"] = serde_json::json!({"serverPath":"etterminal","port":2022});
+        let host: Host = serde_json::from_value(value.clone()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        save_host_inner(&state, host).unwrap();
+        let reloaded = AppState::new(dir.path().into())
+            .unwrap()
+            .host("transport-host")
+            .unwrap();
+        assert_eq!(reloaded.transport, Some(Transport::Auto));
+        let saved = serde_json::to_value(reloaded).unwrap();
+        assert_eq!(saved["mosh"], value["mosh"]);
+        assert_eq!(saved["et"]["port"], 2022);
+        for (field, bad) in [
+            ("mosh", serde_json::json!({"portMin":0})),
+            ("mosh", serde_json::json!({"portMin":1,"portMax":65535})),
+            ("et", serde_json::json!({"port":0})),
+            ("et", serde_json::json!({"serverPath":"bad\npath"})),
+        ] {
+            let mut invalid = value.clone();
+            invalid[field] = bad;
+            let host: Host = serde_json::from_value(invalid).unwrap();
+            assert!(save_host_inner(&state, host).is_err());
+        }
+        value["transport"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<Host>(value).is_err());
+    }
+
+    #[test]
     fn credential_cleanup_metadata_is_native_owned_and_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "credential-host".into(),
             name: "Credentials".into(),
             hostname: "example.test".into(),
@@ -1503,11 +1923,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn biometric_policy_changes_preserve_saved_identities_until_explicit_forget() {
+        for initially_protected in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = AppState::new(dir.path().into()).unwrap();
+            let host = Host {
+                transport: None,
+                mosh: None,
+                et: None,
+                id: "saved-identity".into(),
+                name: "Saved identity".into(),
+                hostname: "example.test".into(),
+                port: 22,
+                username: "user".into(),
+                fingerprint: Some("SHA256:verified".into()),
+                credentials_stored: false,
+                jump_host_id: None,
+                forward_agent: false,
+                biometric_unlock: initially_protected,
+            };
+            state.config().unwrap().hosts.push(host.clone());
+            state.mark_credentials(&host.id, true).unwrap();
+            let before = fs::read(dir.path().join("hosts.json")).unwrap();
+            let mut changed = host.clone();
+            changed.biometric_unlock = !initially_protected;
+            changed.name = "Uncommitted edit".into();
+            changed.credentials_stored = false;
+            let error = save_host_inner(&state, changed.clone()).unwrap_err();
+            assert_eq!(error.kind, "credential_policy_change");
+            assert!(error.message.contains("Forget saved credentials"));
+            assert_eq!(fs::read(dir.path().join("hosts.json")).unwrap(), before);
+            let retained = AppState::new(dir.path().into())
+                .unwrap()
+                .host(&host.id)
+                .unwrap();
+            assert!(retained.credentials_stored);
+            assert_eq!(retained.biometric_unlock, initially_protected);
+            assert_eq!(retained.name, "Saved identity");
+            state.mark_credentials(&host.id, false).unwrap();
+            let saved = save_host_inner(&state, changed).unwrap();
+            assert_eq!(saved.biometric_unlock, !initially_protected);
+            assert!(!saved.credentials_stored);
+        }
+    }
+
     #[tokio::test]
     async fn deleting_bastion_rechecks_dependencies_added_while_vault_removal_is_pending() {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
         let jump = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "jump".into(),
             name: "Jump".into(),
             hostname: "jump.test".into(),
@@ -1520,6 +1988,9 @@ mod tests {
             forward_agent: false,
         };
         let mut target = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "target".into(),
             name: "Target".into(),
             hostname: "target.test".into(),
@@ -1576,6 +2047,8 @@ mod tests {
         freeze_window: bool,
         commands: Arc<StdMutex<Vec<String>>>,
         input_data: Arc<StdMutex<Vec<u8>>>,
+        executed: Arc<tokio::sync::Notify>,
+        closed: Arc<tokio::sync::Notify>,
     }
     impl server::Server for TestServer {
         type Handler = Self;
@@ -1585,6 +2058,14 @@ mod tests {
     }
     impl server::Handler for TestServer {
         type Error = russh::Error;
+        async fn channel_close(
+            &mut self,
+            _: ChannelId,
+            _: &mut server::Session,
+        ) -> std::result::Result<(), Self::Error> {
+            self.closed.notify_one();
+            Ok(())
+        }
         async fn auth_password(
             &mut self,
             user: &str,
@@ -1675,6 +2156,7 @@ mod tests {
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
             session.data(channel, b"attached\r\n".to_vec())?;
+            self.executed.notify_one();
             Ok(())
         }
         async fn window_change_request(
@@ -1694,6 +2176,79 @@ mod tests {
         server_with_window(reject_pty, false).await
     }
     #[tokio::test]
+    async fn stalled_et_bootstrap_closes_its_channel_and_preserves_ssh_control() {
+        assert_stalled_bootstrap_cleanup(true).await;
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[tokio::test]
+    async fn stalled_mosh_bootstrap_closes_its_channel_and_preserves_ssh_control() {
+        assert_stalled_bootstrap_cleanup(false).await;
+    }
+    async fn assert_stalled_bootstrap_cleanup(et: bool) {
+        let (host, server, task) = server(false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        let handle = Arc::new(
+            authenticate(&state, &host, Some("test-password".into()), None, None)
+                .await
+                .unwrap(),
+        );
+        let (input, _) = mpsc::channel(1);
+        let (cancel, _) = watch::channel(false);
+        let session = Arc::new(Session {
+            handle: handle.clone(),
+            input,
+            cancel,
+            output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
+            output_inflight: StdMutex::new(0),
+            validate_size: check_size,
+        });
+        let bootstrap = tokio::spawn(async move {
+            if et {
+                crate::et::bootstrap(&session, crate::et::Options::default(), 80, 24)
+                    .await
+                    .map(|_| ())
+            } else {
+                crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
+                    .await
+                    .map(|_| ())
+            }
+        });
+        server.executed.notified().await;
+        let clock_guard = tokio::spawn(async {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        });
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(16)).await;
+        let error = bootstrap.await.unwrap().err().unwrap();
+        assert_eq!(
+            error.kind,
+            if et { "et_bootstrap" } else { "mosh_bootstrap" }
+        );
+        assert_eq!(
+            error.message,
+            if et {
+                "ET bootstrap timed out"
+            } else {
+                "Mosh bootstrap timed out"
+            }
+        );
+        tokio::time::resume();
+        timeout(Duration::from_secs(2), server.closed.notified())
+            .await
+            .expect("timed-out bootstrap must close its SSH channel");
+        // ChannelClose must not tear down the retained verified connection.
+        let channel = timeout(Duration::from_secs(2), handle.channel_open_session())
+            .await
+            .unwrap()
+            .unwrap();
+        channel.close().await.unwrap();
+        clock_guard.abort();
+        task.abort();
+    }
+    #[tokio::test]
     async fn forwarding_with_password_authentication_fails_before_sending_credentials() {
         let (mut host, server, task) = server(false).await;
         host.forward_agent = true;
@@ -1705,6 +2260,45 @@ mod tests {
             .unwrap();
         assert_eq!(error.kind, "forwarding_requires_key");
         assert_eq!(server.auth_attempts.load(Ordering::SeqCst), 0);
+        task.abort();
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn mosh_rejects_agent_forwarding_before_bootstrap_commands() {
+        let (mut host, server, task) = server(false).await;
+        host.forward_agent = true;
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        let key =
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .unwrap();
+        let handle = Arc::new(
+            authenticate(
+                &state,
+                &host,
+                None,
+                Some(key.to_openssh(Default::default()).unwrap().to_string()),
+                None,
+            )
+            .await
+            .unwrap(),
+        );
+        let (input, _) = mpsc::channel(1);
+        let (cancel, _) = watch::channel(false);
+        let session = Session {
+            handle,
+            input,
+            cancel,
+            output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
+            output_inflight: StdMutex::new(0),
+            validate_size: check_size,
+        };
+        let error = crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, "mosh_unsupported_forwarding");
+        assert!(server.commands.lock().unwrap().is_empty());
         task.abort();
     }
     async fn server_with_window(
@@ -1725,6 +2319,9 @@ mod tests {
             ..Default::default()
         });
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "test-host".into(),
             name: "Test".into(),
             hostname: "127.0.0.1".into(),
@@ -1743,6 +2340,8 @@ mod tests {
             freeze_window,
             commands: Arc::new(StdMutex::new(Vec::new())),
             input_data: Arc::new(StdMutex::new(Vec::new())),
+            executed: Arc::new(tokio::sync::Notify::new()),
+            closed: Arc::new(tokio::sync::Notify::new()),
         };
         let mut runner = test_server.clone();
         let task = tokio::spawn(async move {
@@ -1767,6 +2366,7 @@ mod tests {
             handle,
             input,
             cancel,
+            validate_size: check_size,
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
         });
@@ -1982,6 +2582,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
         let mut host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "one".into(),
             name: "First".into(),
             hostname: "server".into(),
@@ -2207,6 +2810,25 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local OpenSSH sshd; run explicitly for interoperability"]
     async fn openssh_sftp_and_command_interoperability() {
+        openssh_interoperability(false, false).await;
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[ignore = "requires local OpenSSH sshd and official mosh-server; run explicitly for interoperability"]
+    async fn openssh_mosh_bootstrap_and_control_interoperability() {
+        openssh_interoperability(true, false).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires OpenSSH and official ET_SERVER_BIN/ET_TERMINAL_BIN; run explicitly"]
+    async fn openssh_et_bootstrap_and_control_interoperability() {
+        openssh_interoperability(false, true).await;
+    }
+
+    #[cfg(unix)]
+    async fn openssh_interoperability(mosh: bool, et: bool) {
         use std::os::unix::fs::PermissionsExt;
         use tauri::Manager;
         struct Process(std::process::Child);
@@ -2266,6 +2888,9 @@ mod tests {
         .unwrap();
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "openssh".into(),
             name: "OpenSSH fixture".into(),
             hostname: "127.0.0.1".into(),
@@ -2293,6 +2918,158 @@ mod tests {
         .await
         .unwrap();
         let id = connected.session_id;
+        #[cfg(target_os = "linux")]
+        if et {
+            let forwarding_host = Host {
+                forward_agent: true,
+                ..host.clone()
+            };
+            let handle = Arc::new(
+                authenticate(
+                    &app.state(),
+                    &forwarding_host,
+                    None,
+                    Some(user_key.to_openssh(Default::default()).unwrap().to_string()),
+                    None,
+                )
+                .await
+                .unwrap(),
+            );
+            let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+            let forwarding = spawn_terminal(
+                &app.state(),
+                handle,
+                channel,
+                initial,
+                Channel::new(|_| Ok(())),
+            )
+            .await
+            .unwrap();
+            let error = crate::et::connect_et(
+                app.state(),
+                forwarding.session_id.clone(),
+                Default::default(),
+                80,
+                24,
+                Channel::new(|_| Ok(())),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert_eq!(error.kind, "et_agent_forwarding");
+            disconnect(app.state(), forwarding.session_id)
+                .await
+                .unwrap();
+            crate::et::tests::openssh_interoperability(&app, id, dir.path()).await;
+            return;
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = et;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if mosh {
+            let version = std::process::Command::new("mosh-server")
+                .arg("--version")
+                .output()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
+            let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            let udp_port = udp.local_addr().unwrap().port();
+            drop(udp);
+            let options =
+                serde_json::from_value(serde_json::json!({"portMin":udp_port,"portMax":udp_port}))
+                    .unwrap();
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let events = Channel::new(move |body| {
+                if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                    let _ = tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap());
+                }
+                Ok(())
+            });
+            let connected = connect_mosh(app.state(), id.clone(), options, 80, 24, events)
+                .await
+                .unwrap();
+            let mosh_id = connected.session_id;
+            let native_session = app.state::<AppState>().session(&mosh_id).await.unwrap();
+            assert!((native_session.validate_size)(512, 256).is_err());
+            async fn marker(
+                rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+                session: &Session,
+                expected: &str,
+            ) {
+                timeout(Duration::from_secs(8), async {
+                    let mut output = Vec::new();
+                    loop {
+                        let event = rx.recv().await.unwrap();
+                        assert_ne!(event["type"], "closed", "{event}");
+                        if let Some(data) = event["data"].as_array() {
+                            output.extend(data.iter().map(|value| value.as_u64().unwrap() as u8));
+                            assert!(output.len() <= 1024 * 1024);
+                            acknowledge(session, data.len() as u32).unwrap();
+                        }
+                        if String::from_utf8_lossy(&output).contains(expected) {
+                            break;
+                        }
+                    }
+                })
+                .await
+                .unwrap();
+            }
+            disconnect(app.state(), id).await.unwrap();
+            write_stdin(app.state(), mosh_id.clone(), String::new())
+                .await
+                .unwrap();
+            write_stdin(
+                app.state(),
+                mosh_id.clone(),
+                "printf 'MOSH_%s_READY\\n' '世界'\r".into(),
+            )
+            .await
+            .unwrap();
+            marker(&mut rx, &native_session, "MOSH_世界_READY").await;
+            resize(app.state(), mosh_id.clone(), 120, 40).await.unwrap();
+            write_stdin(
+                app.state(),
+                mosh_id.clone(),
+                "set -- $(stty size); printf 'MOSH_SIZE_%s_%s\\n' \"$1\" \"$2\"\r".into(),
+            )
+            .await
+            .unwrap();
+            marker(&mut rx, &native_session, "MOSH_SIZE_40_120").await;
+            let file = dir
+                .path()
+                .join("mosh-control.txt")
+                .to_string_lossy()
+                .into_owned();
+            upload_file(
+                app.state(),
+                mosh_id.clone(),
+                file.clone(),
+                b"SSH control remains alive".to_vec(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                read_file(app.state(), mosh_id.clone(), file).await.unwrap(),
+                "SSH control remains alive"
+            );
+            assert!(resize(app.state(), mosh_id.clone(), 512, 256)
+                .await
+                .is_err());
+            disconnect(app.state(), mosh_id.clone()).await.unwrap();
+            timeout(Duration::from_secs(4), async {
+                loop {
+                    if rx.recv().await.unwrap()["type"] == "closed" {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert!(app.state::<AppState>().session(&mosh_id).await.is_err());
+            return;
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let _ = mosh;
         let session = app.state::<AppState>().session(&id).await.unwrap();
         assert_eq!(
             exec(

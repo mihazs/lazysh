@@ -9,6 +9,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import {
   Bot,
+  Activity,
   ChevronRight,
   Command,
   FolderOpen,
@@ -22,6 +23,8 @@ import {
   Paperclip,
   Mic,
   Cloud,
+  Share2,
+  Ellipsis,
   Bell,
   Smartphone,
   Pencil,
@@ -41,23 +44,32 @@ import {
   type Host,
   type SshError,
   type SshEvent,
+  type TransportMode,
+  type AutoOptions,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import AgentPanel from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
+import { useClientAppearance } from "./appearance";
 import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
+import {appShortcut} from './keyboard';
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
 const ChatPanel = lazy(() => import("./ChatPanel"));
+const UsagePanel = lazy(() => import("./UsagePanel"));
 const PreviewPanel = lazy(() => import("./PreviewPanel"));
 const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const AttachmentPanel = lazy(() => import("./AttachmentPanel"));
 const VoicePanel = lazy(() => import("./VoicePanel"));
 const SyncPanel = lazy(() => import("./SyncPanel"));
+const SharePanel = lazy(() => import("./SharePanel"));
+const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
+const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
+const AppleStatusPanel = lazy(() => import('./AppleStatusPanel'));
 
 async function prepareSession(
   hostId: string,
@@ -109,6 +121,71 @@ async function prepareSession(
   return { session, onEvent, establish };
 }
 
+const defaultMosh = {serverPath: 'mosh-server', portMin: 60000, portMax: 61000};
+const defaultEt = {serverPath: 'etterminal', port: 2022};
+const fallbackErrors = new Set([
+  'mosh_bootstrap', 'mosh_locale', 'mosh_udp_unreachable', 'mosh_closed',
+  'mosh_unsupported', 'mosh_unsupported_route', 'mosh_unsupported_forwarding',
+  'et_bootstrap', 'et_unreachable', 'et_closed', 'et_unsupported_handshake',
+  'et_unsupported_route', 'et_agent_forwarding',
+]);
+type Prepared = Awaited<ReturnType<typeof prepareSession>>;
+async function selectTransport(
+  shell: Prepared, host: Host, mode: TransportMode, options: AutoOptions,
+  capabilities: {mosh: boolean; et: boolean; reason?: string},
+  alive: () => boolean,
+  track: (id: string) => void = () => {},
+  untrack: (id: string) => void = () => {},
+): Promise<Prepared> {
+  const reasons: string[] = [];
+  const ensureAlive = () => { if (!alive()) throw {kind:'cancelled', message:'Connection cancelled'}; };
+  for (const kind of mode === 'auto' ? ['mosh', 'et'] as const : mode === 'ssh' ? [] : [mode]) {
+    ensureAlive();
+    const name = kind === 'mosh' ? 'Mosh' : 'Eternal Terminal';
+    if (mode === 'auto') {
+      const skip = host.jumpHostId ? 'bastion routes use SSH' : host.forwardAgent ? 'selected-identity forwarding requires SSH' : !capabilities[kind] ? capabilities.reason || 'unavailable in this app build' : '';
+      if (skip) { reasons.push(`${name}: ${skip}`); continue; }
+    }
+    const child = await prepareSession(host.id, host.name, `${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`);
+    try {
+      ensureAlive();
+      const result = kind === 'mosh'
+        ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent)
+        : await api.connectEt(shell.session.id, options.et, child.onEvent);
+      child.establish(result.sessionId);
+      track(result.sessionId);
+      ensureAlive();
+      if (!child.session.connected) throw {kind:'disconnected', message:`${name} closed before connection completed`};
+      if (kind === 'mosh') child.session.mosh = options.mosh;
+      else child.session.et = options.et;
+      if (mode === 'auto') {
+        child.session.auto = options;
+        child.session.transportNotice = `Auto selected ${name}.${reasons.length ? ` ${reasons.join('; ')}.` : ''}`;
+      }
+      await api.disconnect(shell.session.id);
+      untrack(shell.session.id);
+      shell.session.terminal.dispose();
+      return child;
+    } catch (error) {
+      if (child.session.id) {
+        await api.disconnect(child.session.id).catch(() => {});
+        untrack(child.session.id);
+      }
+      child.session.terminal.dispose();
+      ensureAlive();
+      if (mode !== 'auto' || !fallbackErrors.has((error as SshError)?.kind)) throw error;
+      reasons.push(`${name}: ${errorMessage(error)}`);
+    }
+  }
+  ensureAlive();
+  if (!shell.session.connected) throw {kind:'disconnected', message:'Verified SSH control connection has ended'};
+  if (mode === 'auto') {
+    shell.session.auto = options;
+    shell.session.transportNotice = `Auto selected SSH. ${reasons.join('; ')}.`;
+  }
+  return shell;
+}
+
 type View =
   | "terminal"
   | "agents"
@@ -116,14 +193,18 @@ type View =
   | "diff"
   | "sessions"
   | "chat"
+  | "usage"
   | "preview"
   | "attachments"
   | "voice"
-  | "devices";
+  | "devices"
+  | "apple";
 const views = [
   { id: "terminal" as const, label: "Terminal", Icon: TerminalSquare },
+  { id: "apple" as const, label: "Apple status", Icon: Activity },
   { id: "agents" as const, label: "Agents", Icon: Bot },
   { id: "chat" as const, label: "Transcript", Icon: MessageSquare },
+  { id: "usage" as const, label: "Usage", Icon: Activity },
   { id: "files" as const, label: "Files", Icon: FolderOpen },
   { id: "diff" as const, label: "Diff", Icon: GitCompareArrows },
   { id: "sessions" as const, label: "Sessions", Icon: Layers },
@@ -221,6 +302,26 @@ export function validateHost(
   return "";
 }
 
+function TransportOptions({mode, options, change, busy = false}: {mode:TransportMode; options:AutoOptions; change:(value:AutoOptions)=>void; busy?:boolean}) {
+  const {mosh, et} = options;
+  return <>
+    {(mode === 'auto' || mode === 'mosh') && <fieldset disabled={busy}>
+      <legend>Mosh over UDP</legend>
+      <p>SSH verifies the host and starts its Mosh server. Forced Mosh never falls back.</p>
+      <label>Mosh server path<input required maxLength={4096} value={mosh.serverPath} onChange={e=>change({...options,mosh:{...mosh,serverPath:e.target.value}})} /></label>
+      <label>First UDP port<input required type="number" min={1} max={65535} value={mosh.portMin} onChange={e=>change({...options,mosh:{...mosh,portMin:Number(e.target.value)}})} /></label>
+      <label>Last UDP port<input required type="number" min={mosh.portMin} max={Math.min(65535,mosh.portMin+1000)} value={mosh.portMax} onChange={e=>change({...options,mosh:{...mosh,portMax:Number(e.target.value)}})} /></label>
+    </fieldset>}
+    {(mode === 'auto' || mode === 'et') && <fieldset disabled={busy}>
+      <legend>Eternal Terminal over TCP</legend>
+      <p>The host must run etserver. Forced ET never falls back.</p>
+      <label>ET terminal path<input required maxLength={4096} value={et.serverPath} onChange={e=>change({...options,et:{...et,serverPath:e.target.value}})} /></label>
+      <label>ET server port<input required type="number" min={1} max={65535} value={et.port} onChange={e=>change({...options,et:{...et,port:Number(e.target.value)}})} /></label>
+    </fieldset>}
+    {mode === 'auto' && <p className="security-note">Auto tries Mosh, then Eternal Terminal, then SSH after verifying this host once. Unavailable transports are reported; authentication and trust failures stop the connection.</p>}
+  </>;
+}
+
 function HostEditor({
   initial,
   hosts,
@@ -239,6 +340,7 @@ function HostEditor({
       hostname: "",
       port: 22,
       username: "",
+      transport: "auto",
     },
   );
   const [error, setError] = useState("");
@@ -351,6 +453,15 @@ function HostEditor({
             spellCheck={false}
           />
         </label>
+        <label>Preferred transport
+          <select value={host.transport ?? 'ssh'} disabled={busy} onChange={event=>setHost({...host, transport:event.target.value as TransportMode})}>
+            <option value="auto">Auto · Mosh, then ET, then SSH</option>
+            <option value="ssh">SSH</option><option value="mosh">Mosh (forced)</option><option value="et">Eternal Terminal (forced)</option>
+          </select>
+        </label>
+        <TransportOptions mode={host.transport ?? 'ssh'} busy={busy}
+          options={{mosh:host.mosh ?? defaultMosh, et:host.et ?? defaultEt}}
+          change={options=>setHost({...host,...options})} />
         {initial?.fingerprint && (
           <p className="security-note">
             <ShieldCheck size={15} /> Host key is pinned. Changing the
@@ -458,11 +569,54 @@ function ConnectDialog({
   const [savedJump, setSavedJump] = useState(true);
   const [jumpPassword, setJumpPassword] = useState("");
   const [exportedIdentity, setExportedIdentity] = useState("");
+  const [transport, setTransport] = useState<TransportMode>(host.transport ?? "ssh");
+  const [moshAvailable, setMoshAvailable] = useState(false);
+  const [etAvailable, setEtAvailable] = useState(false);
+  const [capabilitiesReady, setCapabilitiesReady] = useState(false);
+  const [capabilityReason, setCapabilityReason] = useState('');
+  const [etServer, setEtServer] = useState(host.et?.serverPath ?? defaultEt.serverPath);
+  const [etPort, setEtPort] = useState(host.et?.port ?? defaultEt.port);
+  const [moshServer, setMoshServer] = useState(host.mosh?.serverPath ?? defaultMosh.serverPath);
+  const [moshPortMin, setMoshPortMin] = useState(host.mosh?.portMin ?? defaultMosh.portMin);
+  const [moshPortMax, setMoshPortMax] = useState(host.mosh?.portMax ?? defaultMosh.portMax);
+  const exportGeneration = useRef(0);
   const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
+  const connectingSessions = useRef(new Set<string>());
   const alive = useRef(true);
   useEffect(() => {
+    const hide = () => {
+      exportGeneration.current += 1;
+      setExportedIdentity("");
+      if (!connecting.current) setBusy(false);
+      void invoke("cancel_credential_auth").catch(() => {});
+    };
+    const visibility = () => {
+      if (document.visibilityState !== "visible") hide();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("pagehide", hide);
+    return () => {
+      exportGeneration.current += 1;
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("pagehide", hide);
+    };
+  }, []);
+  useEffect(() => {
     alive.current = true;
+    void invoke<{ mosh: boolean; et: boolean }>("transport_capabilities")
+      .then((value) => {
+        if (alive.current)
+          setMoshAvailable(
+            value?.mosh === true && !host.jumpHostId && !host.forwardAgent,
+          );
+        if (alive.current)
+          setEtAvailable(
+            value?.et === true && !host.jumpHostId && !host.forwardAgent,
+          );
+      })
+      .catch(() => { if (alive.current) setCapabilityReason('transport capability check failed'); })
+      .finally(() => { if (alive.current) setCapabilitiesReady(true); });
     void invoke<boolean>("has_credentials", { hostId: host.id })
       .then((saved) => {
         if (alive.current) setSavedCredentials(saved === true);
@@ -471,11 +625,14 @@ function ConnectDialog({
     return () => {
       alive.current = false;
       void invoke("cancel_credential_auth").catch(() => {});
+      for (const id of connectingSessions.current)
+        void api.disconnect(id).catch(() => {});
+      connectingSessions.current.clear();
     };
   }, []);
 
   async function connect(accept = false) {
-    if (connecting.current) return;
+    if (connecting.current || (transport === 'auto' && !capabilitiesReady)) return;
     connecting.current = true;
     setBusy(true);
     setError("");
@@ -509,16 +666,31 @@ function ConnectDialog({
             })
           : await api.connect(host.id, credentials, pending.onEvent);
       pending.establish(result.sessionId);
+      connectingSessions.current.add(result.sessionId);
       if (!alive.current) {
         await api.disconnect(result.sessionId);
+        session.terminal.dispose();
+        return;
+      }
+      const selected = await selectTransport(pending, host, transport, {
+        mosh: {serverPath: moshServer, portMin: moshPortMin, portMax: moshPortMax},
+        et: {serverPath: etServer, port: etPort},
+      }, {mosh: moshAvailable, et: etAvailable, reason:capabilityReason}, () => alive.current,
+      (id) => connectingSessions.current.add(id),
+      (id) => connectingSessions.current.delete(id));
+      session = selected.session;
+      if (!alive.current) {
+        await api.disconnect(session.id);
         session.terminal.dispose();
         return;
       }
       setPassword("");
       setPrivateKey("");
       setPassphrase("");
+      connectingSessions.current.clear();
       connected(session);
     } catch (e) {
+      if (session?.id) await api.disconnect(session.id).catch(() => {});
       session?.terminal.dispose();
       const detail = e as SshError;
       if (detail?.kind === "unknown_host_key" && detail.fingerprint) {
@@ -533,6 +705,7 @@ function ConnectDialog({
         );
       }
     } finally {
+      connectingSessions.current.clear();
       connecting.current = false;
       if (alive.current) setBusy(false);
     }
@@ -597,6 +770,29 @@ function ConnectDialog({
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
+          <label>
+            Transport
+            <select
+              value={transport}
+              disabled={busy}
+              onChange={(event) =>
+                setTransport(event.target.value as TransportMode)
+              }
+            >
+              <option value="auto">Auto · Mosh, then ET, then SSH</option>
+              <option value="ssh">SSH</option>
+              <option value="mosh" disabled={!moshAvailable}>
+                Mosh{!moshAvailable ? " — unavailable for this connection" : ""}
+              </option>
+              <option value="et" disabled={!etAvailable}>
+                Eternal Terminal
+                {!etAvailable ? " — unavailable for this connection" : ""}
+              </option>
+            </select>
+          </label>
+          <TransportOptions mode={transport} busy={busy}
+            options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
+            change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />
           {host.jumpHostId && (
             <fieldset>
               <legend>
@@ -691,17 +887,30 @@ function ConnectDialog({
                 onClick={() => {
                   setBusy(true);
                   setError("");
+                  const generation = ++exportGeneration.current;
                   void invoke<{ privateKey: string }>("export_saved_identity", {
                     hostId: host.id,
                   })
                     .then((result) => {
-                      if (alive.current) setExportedIdentity(result.privateKey);
+                      if (
+                        alive.current &&
+                        generation === exportGeneration.current
+                      )
+                        setExportedIdentity(result.privateKey);
                     })
                     .catch((error) => {
-                      if (alive.current) setError(errorMessage(error));
+                      if (
+                        alive.current &&
+                        generation === exportGeneration.current
+                      )
+                        setError(errorMessage(error));
                     })
                     .finally(() => {
-                      if (alive.current) setBusy(false);
+                      if (
+                        alive.current &&
+                        generation === exportGeneration.current
+                      )
+                        setBusy(false);
                     });
                 }}
               >
@@ -798,7 +1007,7 @@ function ConnectDialog({
             <button type="button" className="subtle-button" onClick={close}>
               Cancel
             </button>
-            <button className="primary-button" disabled={busy}>
+            <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
               {busy ? "Connecting…" : "Connect"}
               <ChevronRight size={16} />
             </button>
@@ -810,6 +1019,7 @@ function ConnectDialog({
 }
 
 export default function App() {
+  useClientAppearance();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -820,17 +1030,32 @@ export default function App() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
+  const [switcher, setSwitcher] = useState(false);
+  const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
   const [sync, setSync] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [mobileTools, setMobileTools] = useState(false);
+  const [about, setAbout] = useState(false);
   const [inbox, setInbox] = useState(false);
   const [previousWorkspace, setPreviousWorkspace] = useState(readWorkspace);
   const [restoring, setRestoring] = useState(false);
   const restoringRef = useRef(false);
+  const mounted = useRef(true);
+  const restoringSessions = useRef(new Set<string>());
   const [sidebar, setSidebar] = useState(false);
   const [loaded, setLoaded] = useState(!native);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const active = sessions.find((session) => session.id === activeId);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      for (const id of restoringSessions.current) void api.disconnect(id).catch(()=>{});
+      restoringSessions.current.clear();
+    };
+  }, []);
 
   function persistWorkspace(next: SessionIntent[]) {
     try {
@@ -848,6 +1073,7 @@ export default function App() {
     const remaining: SessionIntent[] = [];
     const failures: string[] = [];
     for (const intent of previousWorkspace) {
+      if (!mounted.current) break;
       const host = hosts.find((item) => item.id === intent.hostId);
       if (!host || intent.attached?.kind === "zellij") {
         remaining.push(intent);
@@ -865,7 +1091,15 @@ export default function App() {
           useSavedCredentials: true,
         });
         shell.establish(connected.sessionId);
-        if (intent.attached) {
+        restoringSessions.current.add(connected.sessionId);
+        if (!mounted.current) throw {kind:'cancelled',message:'Workspace restoration cancelled'};
+        if (intent.auto || intent.et || intent.mosh) {
+          const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:'transport capability check failed'}));
+          child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
+            intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, ()=>mounted.current,
+            id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id));
+          restored.push(child.session);
+        } else if (intent.attached) {
           child = await prepareSession(
             host.id,
             `${host.name} / ${intent.attached.name}`,
@@ -885,8 +1119,11 @@ export default function App() {
                   child.onEvent,
                 );
           child.establish(attached.sessionId);
+          restoringSessions.current.add(attached.sessionId);
+          if (!mounted.current) throw {kind:'cancelled',message:'Workspace restoration cancelled'};
           child.session.attached = intent.attached;
           await api.disconnect(shell.session.id);
+          restoringSessions.current.delete(shell.session.id);
           shell.session.terminal.dispose();
           restored.push(child.session);
         } else restored.push(shell.session);
@@ -895,12 +1132,22 @@ export default function App() {
           if (pending) {
             if (pending.session.id)
               await api.disconnect(pending.session.id).catch(() => {});
+            restoringSessions.current.delete(pending.session.id);
             pending.session.terminal.dispose();
           }
         remaining.push(intent);
         failures.push(`${host.name}: ${errorMessage(error)}`);
       }
     }
+    if (!mounted.current) {
+      for (const pending of restored) {
+        await api.disconnect(pending.id).catch(()=>{});
+        pending.terminal.dispose();
+      }
+      restoringSessions.current.clear();
+      return;
+    }
+    restoringSessions.current.clear();
     const next = [...sessionsRef.current, ...restored];
     setSessions(next);
     if (restored.length) {
@@ -990,23 +1237,41 @@ export default function App() {
   }, []);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setPalette((value) => !value);
+      const shortcut = appShortcut(event);
+      if (!shortcut) return;
+      if (shortcut.action === 'session') {
+        const target = sessionsRef.current[shortcut.index];
+        if (!target) return;
+        setActiveId(target.id);
+      } else if (shortcut.action === 'palette') setPalette(true);
+      else if (shortcut.action === 'switcher') setSwitcher(true);
+      else if (shortcut.action === 'newConnection') {
+        if (!native) return;
+        if (hosts.length) setPalette(true); else setEditor('new');
+      } else {
+        const current = sessionsRef.current.find(session=>session.id===activeId);
+        if (!current) return;
+        void closeSession(current);
       }
-      if (/^[1-9]$/.test(event.key)) {
-        const target = sessionsRef.current[Number(event.key) - 1];
-        if (target) {
-          event.preventDefault();
-          setActiveId(target.id);
-          setView("terminal");
-        }
-      }
+      event.preventDefault();
+    };
+    const terminalAction = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (!detail || typeof detail !== 'object' || !('sessionId' in detail) || !('action' in detail)
+        || detail.sessionId !== activeId || (detail.action !== 'nextSession' && detail.action !== 'previousSession')) return;
+      const current = sessionsRef.current.findIndex(session=>session.id===activeId && session.connected);
+      if (current < 0 || !sessionsRef.current.length) return;
+      const offset = detail.action === 'nextSession' ? 1 : -1;
+      setActiveId(sessionsRef.current[(current+offset+sessionsRef.current.length)%sessionsRef.current.length].id);
+      setView('terminal');
     };
     window.addEventListener("keydown", keyboard);
-    return () => window.removeEventListener("keydown", keyboard);
-  }, []);
+    window.addEventListener('lazysh-terminal-action', terminalAction);
+    return () => {
+      window.removeEventListener("keydown", keyboard);
+      window.removeEventListener('lazysh-terminal-action', terminalAction);
+    };
+  }, [activeId, hosts.length]);
 
   async function saveHost(host: Host) {
     await api.saveHost(host);
@@ -1189,9 +1454,15 @@ export default function App() {
             <ShieldCheck size={15} />
             <span>Direct connection. Local first.</span>
           </div>
-          <small>
-            lazysh <span>0.1.0 · alpha</span>
-          </small>
+          <button
+            className="about-button"
+            onClick={() => {
+              setAbout(true);
+              setSidebar(false);
+            }}
+          >
+            About lazysh · 0.1.0
+          </button>
         </div>
       </aside>
       {sidebar && (
@@ -1221,6 +1492,21 @@ export default function App() {
           </div>
           <div className="header-right">
             <button
+              className="icon-button mobile-tools"
+              aria-label="Workspace tools"
+              onClick={() => setMobileTools(true)}
+            >
+              <Ellipsis size={18} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Shareable uploads"
+              disabled={!native}
+              onClick={() => setSharing(true)}
+            >
+              <Share2 size={16} />
+            </button>
+            <button
               className="icon-button"
               aria-label="Notification inbox"
               disabled={!native}
@@ -1247,7 +1533,13 @@ export default function App() {
               <span
                 className={`status-dot ${active?.connected ? "" : "status-idle"}`}
               />
-              {active?.connected ? "SSH connected" : "No active connection"}
+              {active?.connected
+                ? active.mosh
+                  ? "Mosh connected"
+                  : active.et
+                    ? "ET connected"
+                    : "SSH connected"
+                : "No active connection"}
             </span>
             <button
               className="icon-button"
@@ -1299,6 +1591,7 @@ export default function App() {
             </button>
           </div>
         )}
+        {active?.transportNotice && <div className="browser-banner" role="status">{active.transportNotice}</div>}
         {sessions.length > 0 && (
           <div
             className="session-tabs"
@@ -1380,8 +1673,15 @@ export default function App() {
                 {active.connected && view === "agents" && (
                   <AgentPanel key={active.id} sessionId={active.id} />
                 )}
+                {active.connected && view === "usage" && (
+                  <UsagePanel key={active.id} sessionId={active.id} />
+                )}
                 {active.connected && view === "chat" && (
-                  <ChatPanel key={active.id} sessionId={active.id} onOpenTerminal={() => setView("terminal")} />
+                  <ChatPanel
+                    key={active.id}
+                    sessionId={active.id}
+                    onOpenTerminal={() => setView("terminal")}
+                  />
                 )}
                 {active.connected && view === "preview" && (
                   <PreviewPanel key={active.id} sessionId={active.id} />
@@ -1401,6 +1701,7 @@ export default function App() {
                 {active.connected && view === "diff" && (
                   <RepositoryPanel key={active.id} sessionId={active.id} />
                 )}
+                {active.connected && view === 'apple' && <AppleStatusPanel key={active.id} sessionId={active.id} onReview={()=>setView('agents')} />}
                 {active.connected && view === "sessions" && (
                   <MuxPanel
                     key={active.id}
@@ -1424,7 +1725,7 @@ export default function App() {
                 {active.destination}
               </span>
               <span>
-                {active.connected ? "SSH" : "Disconnected"}
+                {active.connected ? active.mosh ? "Mosh" : active.et ? "ET" : "SSH" : "Disconnected"}
                 <i />
                 UTF-8
                 <i />
@@ -1582,12 +1883,78 @@ export default function App() {
       {preferences && (
         <Dialog title="Preferences" close={() => setPreferences(false)}>
           <PreferencesPanel />
+          <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>Remote push settings</button>
         </Dialog>
       )}
+      {pushSettings && <Dialog title="Remote push settings" close={()=>setPushSettings(false)}>
+        <Suspense fallback={<p>Loading push settings…</p>}><PushSettingsPanel /></Suspense>
+      </Dialog>}
+      {switcher && <Dialog title="Switch terminal session" close={()=>setSwitcher(false)}>
+        <div className="form-stack">
+          {sessions.map(session=><button key={session.id} type="button" onClick={()=>{setActiveId(session.id);setSwitcher(false);setView('terminal');}}>{session.name} · {session.destination}</button>)}
+          {!sessions.length && <p>No terminal sessions are open.</p>}
+        </div>
+      </Dialog>}
       {native && <NotificationMonitor sessions={sessions} />}
       {inbox && (
         <Dialog title="Notification inbox" close={() => setInbox(false)}>
           <NotificationPanel sessions={sessions} />
+        </Dialog>
+      )}
+      {about && (
+        <Dialog title="About lazysh" close={() => setAbout(false)}>
+          <Suspense fallback={<p>Loading license…</p>}>
+            <AboutPanel />
+          </Suspense>
+        </Dialog>
+      )}
+      {mobileTools && (
+        <Dialog title="Workspace tools" close={() => setMobileTools(false)}>
+          <div className="form-stack">
+            <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>Remote push settings</button>
+            <button
+              disabled={!native}
+              onClick={() => {
+                setMobileTools(false);
+                setInbox(true);
+              }}
+            >
+              Open notification inbox
+            </button>
+            <button
+              disabled={!native}
+              onClick={() => {
+                setMobileTools(false);
+                setSync(true);
+              }}
+            >
+              Open encrypted sync
+            </button>
+            <button
+              disabled={!native}
+              onClick={() => {
+                setMobileTools(false);
+                setSharing(true);
+              }}
+            >
+              Open shareable uploads
+            </button>
+            <button
+              onClick={() => {
+                setMobileTools(false);
+                setPalette(true);
+              }}
+            >
+              Search saved hosts
+            </button>
+          </div>
+        </Dialog>
+      )}
+      {sharing && (
+        <Dialog title="Shareable uploads" close={() => setSharing(false)}>
+          <Suspense fallback={<p>Loading sharing…</p>}>
+            <SharePanel />
+          </Suspense>
         </Dialog>
       )}
       {sync && (

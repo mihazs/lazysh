@@ -1,0 +1,13 @@
+[package]
+name = "tauri-plugin-lazysh-push"
+license.workspace = true
+version = "0.1.0"
+edition = "2021"
+links = "tauri-plugin-lazysh-push"
+
+[dependencies]
+tauri = { version = "2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

@@ -46,11 +46,30 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
                 TranscriptAgent::QoderIde => (None, ".qoder", "projects"),
                 TranscriptAgent::Kimi => (Some("KIMI_SHARE_DIR"), ".kimi", "sessions"),
                 TranscriptAgent::Jcode => (Some("JCODE_HOME"), ".jcode", "sessions"),
+                TranscriptAgent::Droid => (None, ".factory", "sessions"),
+                TranscriptAgent::Cursor => (None, ".cursor", "projects"),
+                TranscriptAgent::Omo => (
+                    [
+                        "OMO_CODING_AGENT_DIR",
+                        "SENPI_CODING_AGENT_DIR",
+                        "PI_CODING_AGENT_DIR",
+                    ]
+                    .into_iter()
+                    .find(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty())),
+                    ".omo/agent",
+                    "sessions",
+                ),
                 _ => return Err(Error::InvalidArgument),
             };
             variable
                 .and_then(std::env::var_os)
-                .map(PathBuf::from)
+                .map(|value| {
+                    if matches!(agent, TranscriptAgent::Omo) {
+                        PathBuf::from(value.to_string_lossy().trim())
+                    } else {
+                        PathBuf::from(value)
+                    }
+                })
                 .or_else(|| dirs::home_dir().map(|home| home.join(fallback)))
                 .ok_or(Error::InvalidArgument)?
                 .join(child)
@@ -73,10 +92,11 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
     let maximum_depth = match agent {
         TranscriptAgent::Claude => 1,
         TranscriptAgent::Codex => 3,
-        TranscriptAgent::Pi | TranscriptAgent::Omp => 1,
-        TranscriptAgent::Copilot => 1,
+        TranscriptAgent::Pi | TranscriptAgent::Omp | TranscriptAgent::Omo => 1,
+        TranscriptAgent::Copilot | TranscriptAgent::Droid => 1,
         TranscriptAgent::QoderIde | TranscriptAgent::Kimi => 2,
-        TranscriptAgent::Jcode => 0,
+        TranscriptAgent::Cursor => 3,
+        TranscriptAgent::Jcode | TranscriptAgent::DevinAtif | TranscriptAgent::AmpJson => 0,
         _ => return Err(Error::InvalidArgument),
     };
     let mut pending = vec![(root, 0)];
@@ -97,7 +117,10 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
                 pending.push((entry.path(), depth + 1));
                 continue;
             }
-            let extension = if matches!(agent, TranscriptAgent::Jcode) {
+            let extension = if matches!(
+                agent,
+                TranscriptAgent::Jcode | TranscriptAgent::DevinAtif | TranscriptAgent::AmpJson
+            ) {
                 "json"
             } else {
                 "jsonl"
@@ -122,6 +145,8 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
                 TranscriptAgent::Kimi => {
                     path.file_name().is_some_and(|name| name == "context.jsonl")
                 }
+                TranscriptAgent::Droid => super::droid::session_filename(&path),
+                TranscriptAgent::Cursor => super::cursor::session_path(&path),
                 _ => true,
             };
             if !expected {

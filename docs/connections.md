@@ -8,7 +8,35 @@ The bastion and destination have separate credentials and host-key pins. The con
 
 Routing uses an SSH `direct-tcpip` channel to the destination address and port, then starts a second host-key-verified SSH connection inside that channel. The bastion must permit TCP forwarding to the destination. The destination hostname is resolved by the bastion. Files, agent snapshots, and previews use the resulting destination connection.
 
-This implementation supports SSH routing. Mosh, Eternal Terminal, and automatic transport selection remain separate parity work. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
+This implementation supports SSH routing. Bastion routes and selected-identity forwarding are SSH-terminal features. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
+
+## Transport selection
+
+Choose a host's **Preferred transport** in its editor. New hosts default to **Auto**; existing hosts without a preference keep SSH. The connection dialog starts with that preference and its saved helper paths/ports. A per-connection override does not silently change the saved host.
+
+Auto first completes normal SSH host-key verification and authentication. It then tries Mosh, Eternal Terminal and finally the existing SSH terminal, in that order. It skips transports unsupported by the app build, bastion routes or selected-identity forwarding and displays those reasons. Classified helper, locale or network availability failures can move to the next transport. Host-key, authentication, packet-authentication, cancellation and unclassified errors stop the attempt. Forced Mosh and forced ET report their failure without falling back.
+
+The session displays the chosen transport and observed fallback reasons. Workspace restoration retains the Auto intention and its public bootstrap options, then probes again after fresh verified SSH authentication. It does not save transport secrets or permanently replace Auto with its last SSH fallback.
+
+## Mosh
+
+Mosh starts the configured `mosh-server` through verified SSH and connects its authenticated UDP transport to the verified peer address. The default UDP range is 60000–61000; the configured range can contain at most 1001 ports. The host needs a UTF-8 locale and reachable UDP ports. Session keys stay in native memory and are never saved with host preferences.
+
+The official Mosh core is embedded under GPL-3.0-or-later. Linux interoperability is tested against the official server; macOS builds pass. Android ARM64 and x86_64 native executables link with target-specific dependencies, while Android runtime and roaming acceptance remain pending. iOS and Windows report Mosh unavailable. See [build and provenance notes](../packages/mosh-transport/README.md).
+
+The verified SSH control connection remains available for files and host tools. Mosh does not restore remote scrollback; use a durable multiplexer for remote history and process lifetime. Restoring after process death performs a fresh authenticated bootstrap rather than reusing session keys.
+
+## Eternal Terminal
+
+The ET transport starts the host's `etterminal` helper through the already verified SSH connection, then connects the in-process Rust client to the same server IP on the configured ET TCP port (default 2022). The host must already run a compatible `etserver`. The helper path is configurable; advanced private ET instances can specify an absolute server FIFO path. IPv6 scope information from the verified SSH peer is preserved.
+
+ET bootstrap credentials stay in zeroizing Rust buffers and are not included in errors or saved settings. A missing helper, invalid bootstrap or unreachable ET port reports an ET error when ET is selected. The native ET command does not substitute an SSH terminal. Bastion routes and selected-identity forwarding are rejected before bootstrap for this transport.
+
+Once connected, files and host tools retain their verified SSH control connection even when its initial shell tab closes. ET terminal output uses the same bounded output-credit acknowledgments as SSH. In-memory ET sessions retry interrupted TCP connections with delays increasing from one second to at most 30 seconds. After app/process death, create a fresh verified bootstrap and reattach the durable multiplexer; existing ET secrets are never restored with fresh crypto counters. Development challenge/reset handshakes remain unsupported and fail closed.
+
+ET sends keepalive probes every five seconds and treats 15 seconds without a valid peer packet as a disconnected network, even when TCP writes still succeed locally. Partial incoming frames do not postpone recovery. Bootstrap failures, timeout and cancellation close their SSH helper channel while preserving the verified control connection.
+
+The native interoperability gate uses real OpenSSH and official ET 7.0.0 to verify bootstrap, executed UTF-8 output, terminal resize, retained SSH file access, strict helper failure, forwarding rejection and cancellation. The separate transport tests verify ordered recovery after idle and mid-frame interruptions. Android/iOS device lifecycle, battery use and roaming remain acceptance work; pure-library mobile compilation does not certify them.
 
 ## Selected identity forwarding
 

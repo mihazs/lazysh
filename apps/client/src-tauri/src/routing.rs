@@ -35,6 +35,7 @@ pub(crate) async fn verified_target(
     state: &AppState,
     host: &Host,
     jump_credentials: Option<Credentials>,
+    operation: &tauri_plugin_lazysh_vault::CredentialOperation,
 ) -> Result<SshHandle> {
     let Some(jump_id) = host.jump_host_id.as_deref() else {
         if jump_credentials.is_some() {
@@ -55,7 +56,7 @@ pub(crate) async fn verified_target(
     let handle = crate::ssh::verified_connection(state, &jump).await?;
     let credentials = match jump_credentials {
         Some(credentials) => credentials,
-        None => crate::vault::load(app, jump.clone())
+        None => crate::vault::load_for_operation(app, jump.clone(), operation.clone())
             .await
             .map_err(|message| {
                 SshError::new(
@@ -65,15 +66,10 @@ pub(crate) async fn verified_target(
                 .for_host(&jump.id)
             })?,
     };
-    let jump_handle = crate::ssh::authenticate_handle(
-        handle,
-        &jump,
-        credentials.password.clone(),
-        credentials.private_key.clone(),
-        credentials.passphrase.clone(),
-    )
-    .await
-    .map_err(|error| error.for_host(&jump.id))?;
+    let jump_handle =
+        crate::ssh::authenticate_for_operation(handle, &jump, &credentials, operation)
+            .await
+            .map_err(|error| error.for_host(&jump.id))?;
     through_bastion(state, host, Arc::new(jump_handle)).await
 }
 
@@ -180,6 +176,9 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: id.into(),
             name: id.into(),
             hostname: "127.0.0.1".into(),
@@ -218,6 +217,9 @@ mod tests {
     }
     fn host(id: &str, jump: Option<&str>) -> Host {
         Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: id.into(),
             name: id.into(),
             hostname: id.into(),

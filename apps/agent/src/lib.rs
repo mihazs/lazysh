@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod approvals;
 pub mod devices;
 pub mod transcript;
+pub mod usage;
 use clap::ValueEnum;
 use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use serde::{Deserialize, Serialize};

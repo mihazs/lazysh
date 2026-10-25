@@ -11,6 +11,13 @@ test('browser preview is honest, usable at phone width and keyboard navigable', 
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  if ((page.viewportSize()?.width || 1200) <= 600) {
+    await page.getByRole('button', {name:'Workspace tools',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Open encrypted sync'})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Open shareable uploads'})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'Open notification inbox'})).toBeVisible();
+    await page.keyboard.press('Escape');
+  }
   await page.screenshot({ path: testInfo.outputPath('workspace.png'), fullPage: true });
   expect(errors).toEqual([]);
 });

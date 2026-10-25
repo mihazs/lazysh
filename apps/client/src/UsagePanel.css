@@ -1,0 +1,13 @@
+.usage-panel .tool-bar { flex-wrap: wrap; align-items: end; }
+.usage-panel label { display: grid; gap: 6px; min-width: 0; }
+.usage-panel input, .usage-panel select { min-width: 0; max-width: 100%; }
+.usage-panel > p, .usage-panel > section, .usage-table { margin: 14px 18px; }
+.usage-panel h4 { margin: 0 0 12px; }
+.usage-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; }
+.usage-values dt, .usage-table small { color: var(--muted); font-size: 12px; }
+.usage-values dd { margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.usage-table { overflow-x: auto; }
+.usage-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.usage-table caption { text-align: left; margin-bottom: 10px; color: var(--muted); }
+.usage-table th, .usage-table td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.usage-table small { display: block; margin-top: 5px; }

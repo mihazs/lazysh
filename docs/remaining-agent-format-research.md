@@ -1,0 +1,24 @@
+# Remaining agent transcript formats
+
+Read-only primary-source and shipped-artifact research, 2026-10-24. This records unresolved evidence rather than declaring Moshi parity. No target application, installer, agent CLI, actual account transcript, or database was executed/read. Native REA analysis providers were unavailable; their configuration was left unchanged. Selected JavaScript was parsed statically where available, and native strings/disassembly are treated only as bounded structural anchors.
+
+| Agent | Verified source/artifact | Supported outcome and remaining gap |
+| --- | --- | --- |
+| Amp | [Official threads/export docs](https://ampcode.com/docs/threads), [External API](https://ampcode.com/api/external), official npm distributions | `amp-json` explicitly selected export reader supports the historical pinned schema documented in companion.md. Latest native cache layout remains unverified. The current External API stabilizes message ID/version/timestamp but explicitly leaves other message fields unstable; that schema cannot establish tools/role normalization. No authenticated API request was made. |
+| Devin | [Official command reference](https://docs.devin.ai/cli/reference/commands), [official installer](https://cli.devin.ai/install.sh), checksum-matched 3000.11.205 Linux artifact | `devin-atif` explicitly selected ATIF-v1.7 export reader. Native binary contains `message_nodes(session_id,node_id,parent_node_id,chat_message,created_at)` SQL and session `main_chain_id`, but native chat-message serialization/replay semantics remain unverified. `--export` runs alongside the agent after turns, so lazysh does not invoke it. |
+| Grok Build | [CLI reference](https://docs.x.ai/build/cli/reference), [sessions](https://docs.x.ai/build/features/sessions), [official installer](https://x.ai/cli/install.sh), official stable 1.0.70 Linux artifact | `grok export <session-id> [output]` is documented as a Markdown export. Session files are documented under `~/.grok/sessions`; exact native layout and message schema remain unverified. A user-created Markdown file can be viewed through ordinary file browsing, but this is not structured transcript parity. No exporter was invoked; CLI initialization/plugin side effects were not proven absent. |
+| Antigravity | [Hooks](https://antigravity.google/docs/hooks), [download page](https://antigravity.google/download), [CLI installer](https://antigravity.google/cli/install.sh), app 2.26.0 and CLI 1.4.7 official Linux artifacts | Hooks document `.system_generated/logs/transcript.jsonl` under the conversation brain directory, but no complete record schema is established. The Electron ASAR is a thin shell around a native Go language server; CLI contains transcript decorator/writer names, which do not prove JSON layout. No adapter is claimed. |
+
+The documented Amp CLI export could be offered as an explicit operation in future, but constructing a safe subprocess wrapper requires proving startup does not run workspace plugins/hooks or agent turns. The same limitation applies to a Grok exporter wrapper. Reading an existing, explicitly selected export avoids those unresolved effects. JSON export readers do not claim native-cache discovery or continuous agent control.
+
+Artifact identities retained for reproducibility:
+
+| Artifact | Official origin | SHA-256 |
+| --- | --- | --- |
+| Amp latest Linux CLI 0.0.1792886472-ge1e052 | `registry.npmjs.org/@ampcode/cli-linux-x64` | Binary `2b391996e9a56470e5a476f0d985aa80da70805bc2bad20092a625ad85125d47`; primary application logic is bytecode-backed. |
+| Antigravity app 2.26.0 build 6546645232517120 | `storage.googleapis.com/antigravity-public/antigravity-hub` | Archive `9f79730372f685d849b935187231edea5b38c5269e855e345e68b5c6071f7884`; ASAR `8ce27ff7c2defa10ed1ed2817288a61c546690f4cae1b1a8c91d4e69e0851e4d`. |
+| Antigravity CLI 1.4.7 build 5900205422411776 | Official installer manifest at `antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json` | Publisher SHA-512 matched: `beda760587589f5827b0b516c3ec2c5bd5cd2e91eb0e2533807ba1e990a27dcd63aef0191e0b76fb60feab0d16eaa8210fb79842c34dd4809e257e1712edd152`. |
+| Grok Build 1.0.70 Linux x86-64 | `storage.googleapis.com/grok-build-public-artifacts/cli/grok-1.0.70-linux-x86_64`, official installer's fallback host | Binary `22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9`; no independent publisher checksum was obtained. |
+| Devin CLI 3000.11.205 | `static.devin.ai/cli/3000.11.205` | Archive `2e65c8b93682258fc91f5e4cead92e3698338cebf1b31dbc32a3201cb63705c4`, matching publisher manifest. |
+
+Versioned adapter fixture provenance, limits and native test commands are recorded in [companion.md](companion.md). Real exported file compatibility, authenticated provider behavior, current native-cache formats and live end-to-end runtime parity remain unverified.

@@ -1,15 +1,20 @@
+mod apple_speech;
+mod apple_status;
 mod approvals;
 mod devices;
+mod et;
 mod forward_agent;
 mod herdr;
 mod identities;
 mod links;
+mod mosh;
 mod multiplexer;
 mod notifications;
 mod previews;
 mod repository;
 mod routing;
 mod sftp_stream;
+mod share;
 mod ssh;
 mod sync;
 mod vault;
@@ -19,6 +24,9 @@ mod zellij;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_lazysh_apple_status::init())
+        .plugin(tauri_plugin_lazysh_push::init())
+        .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
             tauri_plugin_opener::Builder::default()
                 .open_js_links_on_click(false)
@@ -27,6 +35,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_lazysh_vault::init())
         .manage(previews::PreviewState::default())
+        .manage(devices::DeviceStreams::default())
+        .manage(share::ShareState::default())
         .manage(sync::SyncState::default())
         .setup(|app| {
             use tauri::Manager;
@@ -38,10 +48,40 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            apple_status::apple_status_capability,
+            apple_status::apple_status_configure,
+            apple_status::apple_status_publish,
+            tauri_plugin_lazysh_push::commands::push_registration_status,
+            tauri_plugin_lazysh_push::commands::push_registration_register,
+            tauri_plugin_lazysh_push::commands::push_registration_disable,
+            apple_speech::apple_speech_capability,
+            apple_speech::apple_speech_install,
+            apple_speech::apple_speech_remove,
+            apple_speech::apple_speech_transcribe,
+            apple_speech::apple_speech_cancel,
+            share::share_status,
+            share::share_thumbnail,
+            share::share_thumbnail_cancel,
+            share::share_configure,
+            share::share_forget,
+            share::share_list,
+            share::share_delete,
+            share::share_upload_begin,
+            share::share_upload_chunk,
+            share::share_upload_finish,
+            share::share_upload_cancel,
+            mosh::transport_capabilities,
+            ssh::connect_mosh,
+            et::connect_et,
             links::open_web_url,
             devices::list_devices,
             devices::device_frame,
             devices::device_action,
+            devices::ios_device_probe,
+            devices::ios_device_action,
+            devices::stream::device_stream_start,
+            devices::stream::device_stream_next,
+            devices::stream::device_stream_stop,
             sync::sync_status,
             sync::sync_configure,
             sync::sync_recovery_key,
@@ -101,6 +141,7 @@ pub fn run() {
             ssh::attach_tmux,
             ssh::agent_snapshot,
             ssh::agent_transcript,
+            ssh::agent_usage,
             ssh::agent_transcripts
         ])
         .run(tauri::generate_context!())

@@ -36,6 +36,11 @@ const agents: Record<string, string> = {
   "qoder-ide": "Qoder IDE",
   kimi: "Kimi CLI",
   jcode: "jcode",
+  droid: "Factory Droid",
+  cursor: "Cursor IDE",
+  omo: "OmO Native",
+  "devin-atif": "Devin ATIF export",
+  "amp-json": "Amp JSON export",
 };
 
 export function parseTranscript(value: unknown): Page {

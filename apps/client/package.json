@@ -12,19 +12,25 @@
     "dev:native": "tauri dev",
     "build:native": "tauri build --no-bundle",
     "build:android": "CMAKE_ANDROID_NDK=$NDK_HOME WHISPER_DONT_GENERATE_BINDINGS=1 tauri android build --target aarch64 --debug --apk --ci",
-    "build:ios": "tauri ios build --target aarch64-sim --debug --no-sign --ci",
+    "build:android:emulator": "CMAKE_ANDROID_NDK=$NDK_HOME WHISPER_DONT_GENERATE_BINDINGS=1 tauri android build --target x86_64 --debug --apk --ci",
+    "test:android": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug",
+    "build:ios": "cd src-tauri && tauri ios build --target aarch64-sim --debug --no-sign --ci",
     "check": "tsc -b",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
     "test:openssh": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_sftp_and_command_interoperability -- --ignored",
+    "test:mosh": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_mosh_bootstrap_and_control_interoperability -- --ignored",
+    "test:et": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_et_bootstrap_and_control_interoperability -- --ignored",
     "test:multiplexers": "cargo test --manifest-path src-tauri/Cargo.toml --locked ::tests::real_ -- --ignored",
     "test:voice": "cargo test --manifest-path src-tauri/Cargo.toml --locked local_whisper_ -- --ignored",
     "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings",
     "format:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
-    "init:ios": "tauri ios init --ci",
+    "init:ios": "cd src-tauri && tauri ios init --ci",
     "test:install-browser": "playwright install chromium"
   },
   "dependencies": {
+    "@lazysh/et-transport": "workspace:*",
+    "@lazysh/mosh-transport": "workspace:*",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-notification": "^2.7.0",
     "@xterm/addon-fit": "^0.10.0",
@@ -38,6 +44,7 @@
   },
   "devDependencies": {
     "@lazysh/credential-vault": "workspace:*",
+    "@lazysh/apple-speech": "workspace:*",
     "@playwright/test": "^1.55.1",
     "@tauri-apps/cli": "^2.8.4",
     "@testing-library/react": "^16.3.0",
@@ -49,6 +56,9 @@
     "jsdom": "^27.0.0",
     "typescript": "~5.9.2",
     "vite": "^7.1.7",
-    "vitest": "^5.0.5"
-  }
+    "vitest": "^5.0.5",
+    "@lazysh/apple-status": "workspace:*",
+    "@lazysh/push-registration": "workspace:*"
+  },
+  "license": "GPL-3.0-or-later"
 }

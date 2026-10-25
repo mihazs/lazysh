@@ -19,6 +19,7 @@ const MAX_SDK_TEXT: usize = 256 * 1024;
 const MAX_PNG: usize = 8 * 1024 * 1024;
 const MAX_FRAME: usize = 512 * 1024;
 const SDK_TIMEOUT: Duration = Duration::from_secs(10);
+pub mod idb;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -38,6 +39,15 @@ pub enum DeviceKey {
 }
 #[derive(Subcommand, Debug)]
 pub enum DeviceCommand {
+    /// Use an explicitly configured local iOS idb companion.
+    Ios {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        socket: String,
+        #[command(subcommand)]
+        action: idb::IosAction,
+    },
     List {
         #[arg(long, value_enum)]
         platform: Platform,
@@ -107,6 +117,7 @@ enum Tool {
     Adb,
     Emulator,
     Simctl,
+    Idb,
 }
 trait Runner {
     fn output(&mut self, tool: Tool, args: &[String], limit: usize) -> Result<Vec<u8>>;
@@ -122,14 +133,15 @@ impl SdkRunner {
             Tool::Adb => ("platform-tools", "adb"),
             Tool::Emulator => ("emulator", "emulator"),
             Tool::Simctl => ("", "xcrun"),
+            Tool::Idb => ("", "idb"),
         };
         let filename = if cfg!(windows) && tool != Tool::Simctl {
             format!("{name}.exe")
         } else {
             name.into()
         };
-        let program = if tool == Tool::Simctl {
-            PathBuf::from("xcrun")
+        let program = if matches!(tool, Tool::Simctl | Tool::Idb) {
+            PathBuf::from(name)
         } else {
             sdk.map(PathBuf::from)
                 .map(|root| root.join(directory).join(&filename))
@@ -465,7 +477,11 @@ fn emulator_id(id: &str) -> bool {
         .is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
+    if let DeviceCommand::Ios { id, socket, action } = command {
+        return idb::execute(runner, &id, &socket, action);
+    }
     let (platform, id, operation) = match command {
+        DeviceCommand::Ios { .. } => unreachable!("iOS companion commands are handled above"),
         DeviceCommand::List { platform } => return inventory(runner, platform),
         DeviceCommand::Screenshot { platform, ref id } => {
             if !valid_id(platform, id) {

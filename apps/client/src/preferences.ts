@@ -6,17 +6,23 @@ export const themes = {
   midnight: { background: "#101622", foreground: "#dee6f3", cursor: "#9fc6ff", selectionBackground: "#354763" },
   paper: { background: "#faf8f2", foreground: "#242822", cursor: "#375c29", selectionBackground: "#cbdac0" },
 } satisfies Record<string, ITheme>;
-export const toolbarKeys = ["esc", "ctrl", "meta", "tab", "c", "d", "enter", "backspace", "paste", "left", "up", "down", "right"] as const;
+export const toolbarKeys = ["esc", "ctrl", "meta", "tab", "c", "d", "enter", "backspace", "paste", "dpad", "left", "up", "down", "right"] as const;
 export type ToolbarKey = typeof toolbarKeys[number];
-export const gestureActions = ["none", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose"] as const;
+export const gestureActions = ["none", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "custom"] as const;
 export const gestureDirections = ["left", "right", "up", "down"] as const;
+export const bodyGestureSlots = ["tap", "doubleTap", "tripleTap", "swipeLeft", "swipeRight"] as const;
+export const gestureSlots = [...bodyGestureSlots, "twoLeft", "twoRight", "twoUp", "twoDown", "cornerLeft", "cornerRight"] as const;
+export type GestureSlot = typeof gestureSlots[number];
+export const gestureLabels: Record<GestureAction, string> = {none: "No action", left: "Arrow left", right: "Arrow right", pageUp: "Page up", pageDown: "Page down", escape: "Escape", tab: "Tab", find: "Find in history", compose: "Compose text", paste: "Paste clipboard", keyboard: "Show keyboard", hideKeyboard: "Hide keyboard", copy: "Copy selection", backspace: "Backspace", interrupt: "Interrupt (Ctrl+C)", nextSession: "Next lazysh session", previousSession: "Previous lazysh session", custom: "Custom key chord"};
 export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;
   theme: keyof typeof themes;
+  appTheme: keyof typeof themes;
   customTheme?: ITheme;
   fontSize: number;
   fontFamily: string;
+  cjkFallback: string;
   cursorStyle: "bar" | "block" | "underline";
   cursorBlink: boolean;
   scrollback: number;
@@ -27,15 +33,20 @@ export type Preferences = {
   chords: { label: string; keys: string }[];
   pinchZoom: boolean;
   gestures: Record<typeof gestureDirections[number], GestureAction>;
+  bodyGestures: Record<typeof bodyGestureSlots[number], GestureAction>;
+  gestureChords: Partial<Record<GestureSlot, string>>;
+  dpadCorners: {left: GestureAction; right: GestureAction};
   autoHideToolbar: boolean;
 };
 export const defaults: Preferences = {
-  version: 1, theme: "forest", fontSize: 14,
+  version: 1, theme: "forest", appTheme: "forest", fontSize: 14,
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
+  cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false,
   toolbar: ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "none", right: "none", up: "none", down: "none"}, autoHideToolbar: false,
+  bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };
 const key = "lazysh.preferences.v1";
 const event = "lazysh-preferences";
@@ -58,13 +69,26 @@ export function parsePreferences(value: unknown): Preferences {
   if (p.version !== 1) return { ...defaults };
   const number = (name: string, min: number, max: number, fallback: number) => typeof p[name] === "number" && Number.isInteger(p[name]) && p[name] >= min && p[name] <= max ? p[name] as number : fallback;
   let customTheme: ITheme | undefined;
+  const gestureChords: Partial<Record<GestureSlot, string>> = {};
+  if (p.gestureChords && typeof p.gestureChords === "object") {
+    for (const slot of gestureSlots) {
+      const keys = (p.gestureChords as Record<string, unknown>)[slot];
+      try {if (typeof keys === "string") {parseChord(keys); gestureChords[slot] = keys;}} catch { /* Invalid imported chords never become gesture input. */ }
+    }
+  }
+  const action = (source: unknown, slot: string, fallback: GestureAction): GestureAction => {
+    const value = source && typeof source === "object" ? (source as Record<string, unknown>)[slot] : undefined;
+    return gestureActions.includes(value as GestureAction) ? value as GestureAction : fallback;
+  };
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
   return {
     version: 1,
     theme: typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,
+    appTheme: typeof p.appTheme === "string" && Object.hasOwn(themes, p.appTheme) ? p.appTheme as Preferences["appTheme"] : defaults.appTheme,
     ...(customTheme ? { customTheme } : {}),
     fontSize: number("fontSize", 10, 32, defaults.fontSize),
     fontFamily: typeof p.fontFamily === "string" && p.fontFamily.length > 0 && p.fontFamily.length <= 256 && !/[;{}\x00-\x1f]/.test(p.fontFamily) ? p.fontFamily : defaults.fontFamily,
+    cjkFallback: typeof p.cjkFallback === "string" && p.cjkFallback.length > 0 && p.cjkFallback.length <= 256 && !/[;{}\x00-\x1f]/.test(p.cjkFallback) ? p.cjkFallback : defaults.cjkFallback,
     cursorStyle: p.cursorStyle === "bar" || p.cursorStyle === "block" || p.cursorStyle === "underline" ? p.cursorStyle : defaults.cursorStyle,
     cursorBlink: typeof p.cursorBlink === "boolean" ? p.cursorBlink : defaults.cursorBlink,
     scrollback: number("scrollback", 100, 20000, defaults.scrollback),
@@ -72,6 +96,9 @@ export function parsePreferences(value: unknown): Preferences {
     screenReader: p.screenReader === true,
     autoHideToolbar: p.autoHideToolbar === true,
     pinchZoom: p.pinchZoom !== false,
+    bodyGestures: Object.fromEntries(bodyGestureSlots.map(slot => [slot, action(p.bodyGestures, slot, defaults.bodyGestures[slot])])) as Preferences["bodyGestures"],
+    gestureChords,
+    dpadCorners: {left: action(p.dpadCorners, "left", "interrupt"), right: action(p.dpadCorners, "right", "backspace")},
     gestures: Object.fromEntries(gestureDirections.map(direction => {
       const action = p.gestures && typeof p.gestures === "object" ? (p.gestures as Record<string, unknown>)[direction] : undefined;
       return [direction, gestureActions.includes(action as GestureAction) ? action : defaults.gestures[direction]];
@@ -105,8 +132,8 @@ function subscribe(listener: () => void) {
   return () => { window.removeEventListener(event, listener); window.removeEventListener("storage", stored); };
 }
 export function usePreferences() { return useSyncExternalStore(subscribe, getPreferences, () => defaults); }
-export function terminalOptions(p: Preferences): ITerminalOptions {
-  return { fontSize: p.fontSize, fontFamily: p.fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, theme: p.customTheme ?? themes[p.theme] };
+export function terminalOptions(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): ITerminalOptions {
+  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, theme: p.customTheme ?? themes[p.theme] };
 }
 
 export function decodeClipboardRequest(data: string): string | undefined {
@@ -124,12 +151,25 @@ export function decodeClipboardRequest(data: string): string | undefined {
 
 export function parseChord(source: string): string {
   if (!source.trim() || source.length > 128) throw new Error("Enter up to 8 key steps, for example Ctrl+b n.");
-  const steps = source.trim().split(/\s+/);
+  if (source.startsWith("text:")) {
+    const text = source.slice(5);
+    if (!text || /[\x00-\x1f\x7f]/.test(text)) throw new Error("Literal shortcuts need printable text; add an Enter key separately when needed.");
+    return text;
+  }
+  if (/^\s*,|,\s*$|,\s*,/.test(source)) throw new Error("Every chord step needs a key; use text: for a literal comma.");
+  const steps = source.trim().split(/[\s,]+/);
   if (steps.length > 8) throw new Error("A chord can contain at most 8 steps.");
   return steps.map(step => {
-    const parts = step.split("+");
-    const key = parts.pop()!;
-    const modifiers = parts.map(part => part.toLowerCase());
+    let remainder = step;
+    const modifiers: string[] = [];
+    for (;;) {
+      const prefix = /^(Ctrl|Control|Alt|Opt|Option|Shift|C|M|S)[+-]/i.exec(remainder);
+      if (!prefix) break;
+      modifiers.push(/^(c|ctrl|control)$/i.test(prefix[1]) ? "ctrl" : /^(s|shift)$/i.test(prefix[1]) ? "shift" : "alt");
+      remainder = remainder.slice(prefix[0].length);
+    }
+    const aliases: Record<string, string> = {Esc: "Escape", BSpace: "Backspace", dash: "-", plus: "+", comma: ","};
+    const key = Object.hasOwn(aliases, remainder) ? aliases[remainder] : remainder;
     if (new Set(modifiers).size !== modifiers.length || modifiers.some(modifier => !["ctrl", "alt", "shift"].includes(modifier))) throw new Error(`Invalid modifiers in ${step}`);
     const ctrl = modifiers.includes("ctrl"), alt = modifiers.includes("alt"), shift = modifiers.includes("shift");
     const modifier = 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0);
@@ -150,6 +190,7 @@ export function parseChord(source: string): string {
     else if (shift && !isNamed) throw new Error(`Use the resulting character instead of Shift+${key}`);
     if (ctrl) {
       if (key === "Backspace") value = "\b";
+      else if (key === "-") value = "\x1f";
       else if (value === " " || value === "@") value = "\x00";
       else if (/^[a-z\[\\\]\^_]$/i.test(value)) value = String.fromCharCode(value.toUpperCase().charCodeAt(0) & 31);
       else if (value === "?") value = "\x7f";

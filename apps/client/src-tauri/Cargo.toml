@@ -1,5 +1,6 @@
 [package]
 name = "lazysh"
+license.workspace = true
 version = "0.1.0"
 description = "Direct SSH and agent workspace"
 edition = "2021"
@@ -12,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+lazysh-et-transport = { path = "../../../packages/et-transport" }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,9 +27,21 @@ reqwest = { version = "0.12.28", default-features = false, features = ["rustls-t
 whisper-rs = { version = "0.16", default-features = false }
 rand = "0.10"
 tauri-plugin-lazysh-vault = { path = "../../../packages/credential-vault" }
+tauri-plugin-lazysh-apple-speech = { path = "../../../packages/apple-speech" }
+tauri-plugin-lazysh-apple-status = { path = "../../../packages/apple-status" }
+tauri-plugin-lazysh-push = { path = "../../../packages/push-registration" }
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))'.dependencies]
+lazysh-mosh-transport = { path = "../../../packages/mosh-transport" }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+axum = "0.8.9"
+lazysh-share = { path = "../../share-service" }
+rcgen = "0.14"
+tokio-rustls = "0.26"
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }

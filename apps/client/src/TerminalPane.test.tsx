@@ -11,7 +11,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: () => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: () => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -27,11 +27,85 @@ beforeEach(() => {
   savePreferences({...defaults});
   terminal = createMockTerminal();
 });
-afterEach(() => {cleanup(); vi.unstubAllGlobals();});
+afterEach(() => {cleanup(); vi.useRealTimers(); vi.unstubAllGlobals();});
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
 describe("terminal interactions", () => {
+  it("distinguishes configured single, double and triple taps without firing lower-count actions", () => {
+    vi.useFakeTimers();
+    savePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, tap: "escape", doubleTap: "tab", tripleTap: "interrupt"}});
+    mount();
+    const canvas = screen.getByLabelText("Terminal for Host");
+    const tap = () => {fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 10, clientY: 10}); fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 10, clientY: 10});};
+    tap(); act(() => vi.advanceTimersByTime(100)); tap(); act(() => vi.advanceTimersByTime(100)); tap();
+    expect(mocks.write).toHaveBeenCalledTimes(1);
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x03");
+    tap(); act(() => vi.advanceTimersByTime(351));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x1b");
+    tap(); act(() => vi.advanceTimersByTime(100)); tap(); act(() => vi.advanceTimersByTime(351));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\t");
+  });
+  it("cancels delayed tap actions on selection, composition, long presses and scrolling", () => {
+    vi.useFakeTimers();
+    savePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, tap: "escape", doubleTap: "tab"}});
+    mount();
+    const canvas = screen.getByLabelText("Terminal for Host");
+    const down = () => fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 10, clientY: 10});
+    const up = () => fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 10, clientY: 10});
+    down(); up(); fireEvent.compositionStart(canvas); act(() => vi.advanceTimersByTime(400)); fireEvent.compositionEnd(canvas);
+    down(); act(() => vi.advanceTimersByTime(600)); up(); act(() => vi.advanceTimersByTime(400));
+    down(); fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: "touch", clientX: 10, clientY: 100}); up(); act(() => vi.advanceTimersByTime(400));
+    down(); up(); terminal.hasSelection.mockReturnValue(true); act(() => vi.advanceTimersByTime(400));
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it("dispatches session swipes and sends exact per-slot custom two-finger chords", () => {
+    savePreferences({...defaults, pinchZoom: false, bodyGestures: {...defaults.bodyGestures, swipeLeft: "nextSession"}, gestures: {...defaults.gestures, left: "custom"}, gestureChords: {twoLeft: "C-b, T"}});
+    const action = vi.fn(); window.addEventListener("lazysh-terminal-action", action);
+    mount();
+    const canvas = screen.getByLabelText("Terminal for Host");
+    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 200, clientY: 100});
+    fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
+    expect(action.mock.calls[0][0].detail).toEqual({sessionId: "ssh", action: "nextSession"});
+    expect(mocks.write).not.toHaveBeenCalled();
+    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
+    fireEvent.pointerDown(canvas, {pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
+    fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
+    expect(mocks.write).toHaveBeenCalledWith("ssh", "\x02T");
+    window.removeEventListener("lazysh-terminal-action", action);
+  });
+  it("supports configured D-pad corners and a Control lock released explicitly", () => {
+    savePreferences({...defaults, toolbar: [...defaults.toolbar, "dpad"], dpadCorners: {left: "custom", right: "backspace"}, gestureChords: {cornerLeft: "C-b, T"}});
+    mount();
+    fireEvent.click(screen.getByRole("button", {name: "dpad"}));
+    fireEvent.click(screen.getByRole("button", {name: "D-pad left corner"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x02T");
+    fireEvent.click(screen.getByRole("button", {name: "D-pad right corner"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x7f");
+    fireEvent.doubleClick(screen.getByRole("button", {name: "ctrl"}));
+    fireEvent.click(screen.getByRole("button", {name: "c"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x03");
+    fireEvent.click(screen.getByRole("button", {name: "d"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x04");
+    fireEvent.click(screen.getByRole("button", {name: "ctrl · lock"}));
+    fireEvent.click(screen.getByRole("button", {name: "c"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "c");
+  });
+  it("uses terminal modifier sequences for toolbar arrows and Backspace", () => {
+    savePreferences({...defaults, toolbar: [...defaults.toolbar, "meta", "backspace"]});
+    mount();
+    fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
+    fireEvent.click(screen.getByRole("button", {name: "Arrow left"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x1b[1;5D");
+    fireEvent.click(screen.getByRole("button", {name: "meta"}));
+    fireEvent.click(screen.getByRole("button", {name: "Arrow right"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x1b[1;3C");
+    fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
+    fireEvent.click(screen.getByRole("button", {name: "backspace"}));
+    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\b");
+  });
   it("stages only bounded drafts for this exact session and preserves existing text without sending", () => {
     mount();
     for (const detail of [null, {sessionId: "other", text: "wrong"}, {sessionId: "ssh", text: 42}, {sessionId: "ssh", text: "a".repeat(65537)}]) {

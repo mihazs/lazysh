@@ -1,0 +1,17 @@
+[package]
+name = "lazysh-et-transport"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Bounded in-process client transport for the released Eternal Terminal protocol"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt-multi-thread", "macros"] }
+prost = "0.14"
+xsalsa20poly1305 = { version = "0.9", default-features = false, features = ["alloc"] }
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+

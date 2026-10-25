@@ -7,11 +7,16 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::Path,
 };
+mod amp_json;
+mod atif;
 mod conversation;
+mod cursor;
 mod database;
 mod discovery;
+mod droid;
 mod event_adapters;
 mod jcode;
+mod snapshot;
 pub use conversation::conversation;
 pub use database::read_database_page;
 pub use discovery::discover;
@@ -35,6 +40,15 @@ pub enum TranscriptAgent {
     QoderIde,
     Kimi,
     Jcode,
+    Droid,
+    Cursor,
+    Omo,
+    #[value(name = "devin-atif")]
+    #[serde(rename = "devin-atif")]
+    DevinAtif,
+    #[value(name = "amp-json")]
+    #[serde(rename = "amp-json")]
+    AmpJson,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -72,6 +86,12 @@ pub fn read_page(
     offset: u64,
     limit: u8,
 ) -> Result<TranscriptPage> {
+    if matches!(agent, TranscriptAgent::DevinAtif) {
+        return atif::read_page(path, offset, limit);
+    }
+    if matches!(agent, TranscriptAgent::AmpJson) {
+        return amp_json::read_page(path, offset, limit);
+    }
     if matches!(agent, TranscriptAgent::Jcode) {
         return jcode::read_page(path, offset, limit);
     }
@@ -160,7 +180,7 @@ fn validate_message(message: &Value) -> Result<()> {
     Ok(())
 }
 
-fn open_transcript(path: &Path) -> Result<File> {
+pub(crate) fn open_transcript(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -247,10 +267,12 @@ fn normalize(record: &Value, agent: TranscriptAgent, offset: u64) -> Option<Valu
     match agent {
         TranscriptAgent::Copilot => return event_adapters::copilot(record, offset),
         TranscriptAgent::Kimi => return event_adapters::kimi(record, offset),
+        TranscriptAgent::Droid => return droid::normalize(record, offset),
+        TranscriptAgent::Cursor => return cursor::normalize(record, offset),
         _ => {}
     }
     let (role, blocks, id, usage) = match agent {
-        TranscriptAgent::Pi | TranscriptAgent::Omp => {
+        TranscriptAgent::Pi | TranscriptAgent::Omp | TranscriptAgent::Omo => {
             if record["type"] != "message" {
                 return None;
             }
@@ -365,8 +387,13 @@ fn normalize(record: &Value, agent: TranscriptAgent, offset: u64) -> Option<Valu
             };
             (role, blocks, string(payload, "id"), serde_json::Map::new())
         }
-        TranscriptAgent::Copilot | TranscriptAgent::Kimi => return None,
+        TranscriptAgent::Copilot
+        | TranscriptAgent::Kimi
+        | TranscriptAgent::Droid
+        | TranscriptAgent::Cursor => return None,
         TranscriptAgent::Jcode => return None,
+        TranscriptAgent::DevinAtif => return None,
+        TranscriptAgent::AmpJson => return None,
     };
     if blocks.is_empty() {
         return None;

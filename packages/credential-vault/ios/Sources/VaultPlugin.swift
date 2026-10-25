@@ -4,18 +4,32 @@ import Tauri
 import UIKit
 import WebKit
 
-struct VaultItem: Decodable { let key: String; let value: String?; let biometric: Bool? }
+struct VaultItem: Decodable { let key: String; let value: String?; let biometric: Bool?; let authEpoch: UInt64? }
+struct VaultCancellation: Decodable { let authEpoch: UInt64; let backgroundGeneration: UInt64? }
+struct VaultLifecycle: Decodable { let background: Channel }
 
 class VaultPlugin: Plugin {
   private let lock = NSLock()
-  private var contexts: [UUID: LAContext] = [:]
+  private var contexts: [UUID: (context: LAContext, authEpoch: UInt64)] = [:]
   private var epoch: UInt64 = 0
+  private var lifecycle: UInt64 = 0
+  private var foreground = true
+  private var applicationActive = true
+  private var acknowledgedBackground: UInt64 = 0
+  private var backgroundChannel: Channel?
   private var backgroundObserver: NSObjectProtocol?
+  private var foregroundObserver: NSObjectProtocol?
   override init() {
     super.init()
-    backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.cancelContexts() }
+    backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+      guard let owner = self else { return }; owner.lock.lock(); owner.applicationActive = false; owner.foreground = false; owner.lock.unlock(); owner.cancelContexts()
+      owner.lock.lock(); owner.backgroundChannel?.send(["generation": owner.lifecycle] as JsonObject); owner.lock.unlock()
+    }
+    foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+      guard let owner = self else { return }; owner.lock.lock(); owner.applicationActive = true; owner.foreground = owner.acknowledgedBackground >= owner.lifecycle; owner.lock.unlock()
+    }
   }
-  deinit { if let observer = backgroundObserver { NotificationCenter.default.removeObserver(observer) }; cancelContexts() }
+  deinit { if let observer = backgroundObserver { NotificationCenter.default.removeObserver(observer) }; if let observer = foregroundObserver { NotificationCenter.default.removeObserver(observer) }; cancelContexts() }
   private func query(_ key: String, _ biometric: Bool = false) -> [String: Any] {
     [kSecClass as String: kSecClassGenericPassword,
      kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "app.lazysh.client") + (biometric ? ".biometric-credentials" : ".credentials"),
@@ -34,11 +48,14 @@ class VaultPlugin: Plugin {
     guard status == errSecSuccess || status == errSecInteractionNotAllowed else { throw NSError(domain: "lazysh.vault", code: Int(status)) }
     return true
   }
-  private func cancelContexts() {
-    lock.lock(); epoch &+= 1; let pending = Array(contexts.values); lock.unlock()
+  private func cancelContexts(authEpoch: UInt64? = nil) {
+    lock.lock()
+    if let value = authEpoch { epoch = max(epoch, value) } else { lifecycle &+= 1 }
+    let pending = contexts.values.filter { authEpoch == nil || $0.authEpoch < epoch }.map { $0.context }; lock.unlock()
     pending.forEach { $0.invalidate() }
   }
-  private func currentEpoch() -> UInt64 { lock.lock(); defer { lock.unlock() }; return epoch }
+  private func begin(_ expected: UInt64) -> UInt64? { lock.lock(); defer { lock.unlock() }; return expected >= epoch && foreground ? lifecycle : nil }
+  private func valid(_ expected: UInt64, _ started: UInt64) -> Bool { lock.lock(); defer { lock.unlock() }; return expected >= epoch && started == lifecycle && foreground }
   @objc public func capability(_ invoke: Invoke) {
     let context = LAContext(); var error: NSError?
     let available = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
@@ -50,10 +67,20 @@ class VaultPlugin: Plugin {
     do { invoke.resolve(["exists": try exists(args.key, true) || exists(args.key, false)]) }
     catch { invoke.reject("Cannot inspect device credentials") }
   }
-  @objc public func cancel(_ invoke: Invoke) { cancelContexts(); invoke.resolve() }
+  @objc public func registerLifecycle(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(VaultLifecycle.self)
+    lock.lock(); backgroundChannel = args.background; args.background.send(["generation": lifecycle] as JsonObject); lock.unlock()
+    invoke.resolve()
+  }
+  @objc public func cancel(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(VaultCancellation.self); cancelContexts(authEpoch: args.authEpoch)
+    if let generation = args.backgroundGeneration { lock.lock(); acknowledgedBackground = max(acknowledgedBackground, generation); foreground = applicationActive && acknowledgedBackground >= lifecycle; lock.unlock() }
+    invoke.resolve()
+  }
   @objc public func read(_ invoke: Invoke) throws {
     let args = try item(invoke)
-    let expected = currentEpoch()
+    let expected = args.authEpoch ?? 0
+    guard let started = begin(expected) else { invoke.reject("Credential authentication cancelled"); return }
     DispatchQueue.global(qos: .userInitiated).async {
       do {
         let biometric = try self.exists(args.key, true)
@@ -65,19 +92,23 @@ class VaultPlugin: Plugin {
           context.touchIDAuthenticationAllowableReuseDuration = 0
           context.localizedReason = "Unlock lazysh credentials"
           self.lock.lock()
-          if !self.contexts.isEmpty || self.epoch != expected { self.lock.unlock(); invoke.reject("Credential authentication cancelled or another request is in progress"); return }
-          self.contexts[id] = context; self.lock.unlock()
+          if !self.contexts.isEmpty || expected < self.epoch || started != self.lifecycle || !self.foreground { self.lock.unlock(); invoke.reject("Credential authentication cancelled or another request is in progress"); return }
+          self.contexts[id] = (context, expected); self.lock.unlock()
           lookup[kSecUseAuthenticationContext as String] = context
         }
         defer { context.invalidate(); self.lock.lock(); self.contexts.removeValue(forKey: id); self.lock.unlock() }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(lookup as CFDictionary, &result)
-        if self.currentEpoch() != expected { invoke.reject("Credential authentication cancelled"); return }
+        if !self.valid(expected, started) { invoke.reject("Credential authentication cancelled"); return }
         if status == errSecItemNotFound {
           if biometric { invoke.reject("Biometric enrollment changed. Forget saved credentials and enter them again.") }
           else { invoke.resolve([:] as JsonObject) }; return
         }
-        guard status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) else { invoke.reject("Credential authentication cancelled, locked or unavailable"); return }
+        guard status == errSecSuccess, let data = result as? Data else { invoke.reject("Credential authentication cancelled, locked or unavailable"); return }
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard expected >= self.epoch && started == self.lifecycle && self.foreground else { invoke.reject("Credential authentication cancelled"); return }
+        guard let value = String(data: data, encoding: .utf8) else { invoke.reject("Invalid saved credential encoding"); return }
         invoke.resolve(["value": value])
       } catch { invoke.reject("Cannot read device credentials") }
     }
@@ -86,9 +117,12 @@ class VaultPlugin: Plugin {
     let args = try item(invoke)
     guard let data = args.value?.data(using: .utf8) else { invoke.reject("Missing credentials"); return }
     let biometric = args.biometric == true
-    let expected = currentEpoch()
+    let expected = args.authEpoch ?? 0
+    guard let started = begin(expected) else { invoke.reject("Credential authentication cancelled"); return }
     let hasProtected = try exists(args.key, true)
     if !biometric && hasProtected { invoke.reject("Forget protected credentials before disabling biometrics"); return }
+    let hasOrdinary = try exists(args.key, false)
+    if biometric && hasOrdinary { invoke.reject("Forget ordinary credentials before enabling biometric protection"); return }
     var attributes: [String: Any] = [kSecValueData as String: data]
     if biometric {
       let context = LAContext(); var error: NSError?
@@ -103,26 +137,33 @@ class VaultPlugin: Plugin {
         context.touchIDAuthenticationAllowableReuseDuration = 0
         context.localizedReason = "Protect lazysh credentials"
         self.lock.lock()
-        if !self.contexts.isEmpty || self.epoch != expected { self.lock.unlock(); invoke.reject("Credential authentication cancelled or another request is in progress"); return }
-        self.contexts[id] = context; self.lock.unlock()
+        if !self.contexts.isEmpty || expected < self.epoch || started != self.lifecycle || !self.foreground { self.lock.unlock(); invoke.reject("Credential authentication cancelled or another request is in progress"); return }
+        self.contexts[id] = (context, expected); self.lock.unlock()
         lookup[kSecUseAuthenticationContext as String] = context
       }
       defer { context.invalidate(); self.lock.lock(); self.contexts.removeValue(forKey: id); self.lock.unlock() }
-      if self.currentEpoch() != expected { invoke.reject("Credential authentication cancelled"); return }
+      if biometric && hasProtected {
+        var unlock = lookup; unlock[kSecReturnData as String] = true
+        var discarded: CFTypeRef?
+        let status = SecItemCopyMatching(unlock as CFDictionary, &discarded)
+        discarded = nil
+        guard status == errSecSuccess else { invoke.reject("Credential authentication cancelled or unavailable"); return }
+      }
+      context.interactionNotAllowed = true
+      lookup[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+      // Authentication happens before this lock. Commit cannot display UI and linearizes with cancellation.
+      self.lock.lock()
+      defer { self.lock.unlock() }
+      guard expected >= self.epoch && started == self.lifecycle && self.foreground else { invoke.reject("Credential authentication cancelled"); return }
       var update = attributes
       // Preserve an existing access-control object; protection policy changes use a separate item.
       update.removeValue(forKey: kSecAttrAccessControl as String)
       var status = SecItemUpdate(lookup as CFDictionary, update as CFDictionary)
       if status == errSecItemNotFound {
-        var insert = self.query(args.key, biometric); attributes.forEach { insert[$0.key] = $0.value }
+        var insert = lookup; attributes.forEach { insert[$0.key] = $0.value }
         status = SecItemAdd(insert as CFDictionary, nil)
       }
       guard status == errSecSuccess else { invoke.reject("Cannot save device credentials"); return }
-      if biometric {
-        let removed = SecItemDelete(self.query(args.key, false) as CFDictionary)
-        guard removed == errSecSuccess || removed == errSecItemNotFound else { invoke.reject("Protection saved but previous credentials could not be removed. Forget saved credentials and try again."); return }
-      }
-      if self.currentEpoch() != expected { invoke.reject("Credential authentication cancelled"); return }
       invoke.resolve()
     }
   }

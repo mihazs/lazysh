@@ -1,0 +1,14 @@
+{
+  "name": "@lazysh/apple-status",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "check:rust": "cargo check --manifest-path Cargo.toml --locked",
+    "test:rust": "cargo test --manifest-path Cargo.toml --locked",
+    "lint": "cargo clippy --manifest-path Cargo.toml --locked --all-targets -- -D warnings",
+    "format:check": "cargo fmt --manifest-path Cargo.toml -- --check",
+    "test:apple-status": "xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshStatusTests -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" test CODE_SIGNING_ALLOWED=NO",
+    "build:watchos": "xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWatch -destination 'generic/platform=watchOS Simulator' build CODE_SIGNING_ALLOWED=NO"
+  }
+}

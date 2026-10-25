@@ -1,5 +1,19 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 
+export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
+export type UsageFreshness = "fresh" | "stale" | "unknown";
+export type RecordedUsageContext = {
+  source: "codex_token_count"; usedTokens: number | null; limitTokens: number | null;
+  recordedAt: string | null; freshness: UsageFreshness;
+};
+export type RecordedProviderWindow = {
+  provider: "codex"; accountId: null; limitId: string | null; kind: "primary" | "secondary";
+  usedPercent: number; windowMinutes: number | null; resetsAt: string | null;
+  recordedAt: string | null; freshness: UsageFreshness;
+};
+export type MoshOptions = {serverPath: string; portMin: number; portMax: number};
+export type EtOptions = {serverPath: string; port: number};
+export type AutoOptions = {mosh: MoshOptions; et: EtOptions};
 export type Host = {
   id: string;
   name: string;
@@ -11,6 +25,9 @@ export type Host = {
   credentialsStored?: boolean;
   forwardAgent?: boolean;
   biometricUnlock?: boolean;
+  transport?: TransportMode | null;
+  mosh?: MoshOptions | null;
+  et?: EtOptions | null;
 };
 export type SshEvent =
   | { type: "data"; data: number[] }
@@ -32,6 +49,16 @@ export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
 
 export const native = isTauri();
 export const api = {
+  connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
+    const events = new Channel<SshEvent>();
+    events.onmessage = onEvent;
+    return invoke<{sessionId: string}>("connect_et", {sessionId, options, cols:100, rows:30, events});
+  },
+  connectMosh: (sessionId: string, options: {serverPath?: string; portMin?: number; portMax?: number}, onEvent: (event: SshEvent) => void) => {
+    const events = new Channel<SshEvent>();
+    events.onmessage = onEvent;
+    return invoke<{sessionId: string}>("connect_mosh", {sessionId, options, cols:100, rows:30, events});
+  },
   openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
   attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
     const events = new Channel<SshEvent>();
