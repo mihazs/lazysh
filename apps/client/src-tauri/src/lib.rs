@@ -21,6 +21,7 @@ mod sftp_stream;
 mod share;
 mod ssh;
 mod sync;
+mod terminal_input;
 mod theme_links;
 mod vault;
 mod voice;

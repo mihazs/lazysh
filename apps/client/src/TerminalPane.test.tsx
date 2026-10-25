@@ -6,8 +6,8 @@ import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {accessSnapshot,applyAccessStatus} from './access';
-const mocks = vi.hoisted(() => ({write: vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
-vi.mock("./bridge", () => ({api: {write: mocks.write, resize: mocks.resize, zellijNavigate:mocks.zellijNavigate, openWebUrl: mocks.openWebUrl}}));
+const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+vi.mock("./bridge", () => ({api: {write: mocks.write, writeSequence:mocks.writeSequence, resize: mocks.resize, zellijNavigate:mocks.zellijNavigate, openWebUrl: mocks.openWebUrl}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {} dispose() {}}}));
 vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
 let osc: (data: string) => boolean;
@@ -26,7 +26,7 @@ beforeEach(() => {
     pointerId: number; pointerType: string;
     constructor(type: string, options: MouseEventInit & {pointerId?: number; pointerType?: string} = {}) {super(type, options); this.pointerId = options.pointerId ?? 1; this.pointerType = options.pointerType ?? "touch";}
   });
-  mocks.write.mockResolvedValue(undefined); mocks.resize.mockResolvedValue(undefined);
+  mocks.write.mockResolvedValue(undefined); mocks.writeSequence.mockResolvedValue(undefined); mocks.resize.mockResolvedValue(undefined);
   mocks.openWebUrl.mockResolvedValue(undefined);
   mocks.zellijNavigate.mockResolvedValue(undefined);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -40,6 +40,22 @@ function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
 describe("terminal interactions", () => {
+  it.each(['toolbar','custom D-pad'] as const)('fences held timed %s failures and dispatch on the same stale mount after lock/unlock',async source=>{
+    savePreferences({...defaults,toolbar:[...defaults.toolbar,'dpad'],chords:[{label:'Timed',keys:'C-b T'}],dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{cornerLeft:'C-b T'}});
+    let reject!:(error:Error)=>void;
+    mocks.writeSequence.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+    const reportError=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
+    if(source==='custom D-pad')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+    const send=()=>fireEvent.click(screen.getByRole('button',{name:source==='toolbar'?'Timed':'D-pad left corner'}));
+    send();expect(mocks.writeSequence).toHaveBeenCalledTimes(1);
+    access(true);access();
+    await act(async()=>reject(new Error('old request failure')));
+    expect(reportError).not.toHaveBeenCalled();terminal.focus.mockClear();
+    send();await act(async()=>{});
+    expect(mocks.writeSequence).toHaveBeenCalledTimes(1);expect(reportError).not.toHaveBeenCalled();
+    expect(terminal.focus).not.toHaveBeenCalled();
+  });
   it('does not paste an old clipboard read into the fresh terminal handler after lock and unlock',async()=>{
     let resolve!: (text:string)=>void;
     const pending=new Promise<string>(done=>{resolve=done;});
@@ -53,7 +69,7 @@ describe("terminal interactions", () => {
     access(true);old.unmount();access();mount();
     terminal.focus.mockClear();
     await act(async()=>{resolve('stale clipboard');await pending;});
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
     expect(terminal.paste).not.toHaveBeenCalled();
     expect(terminal.focus).not.toHaveBeenCalled();
     vi.mocked(navigator.clipboard.readText).mockResolvedValueOnce('fresh clipboard');
@@ -99,7 +115,7 @@ describe("terminal interactions", () => {
     fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
     fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
     await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledWith('ssh',"literal'$(touch nope)",command));
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
   it('serializes two-finger Zellij actions, reports failures and permits another attempt', async () => {
     savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,left:'nextZellijPane'}});
@@ -122,7 +138,7 @@ describe("terminal interactions", () => {
     expect(reportError).toHaveBeenCalledWith(expect.stringContaining('Fixture unavailable'));
     swipe();
     await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledTimes(2));
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
   it('rejects Zellij navigation on plain, local and other multiplexer terminals and ignores inactive, disconnected, selected or composing views', () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
@@ -149,7 +165,7 @@ describe("terminal interactions", () => {
     terminal.hasSelection.mockReturnValue(true); swipe(); terminal.hasSelection.mockReturnValue(false);
     fireEvent.compositionStart(screen.getByLabelText('Terminal for Host')); swipe();
     expect(reportError).toHaveBeenCalledTimes(4);
-    expect(mocks.zellijNavigate).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.zellijNavigate).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
   it('discards old Zellij errors and starts after an access generation changes', async () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
@@ -210,7 +226,7 @@ describe("terminal interactions", () => {
     down(); act(() => vi.advanceTimersByTime(600)); up(); act(() => vi.advanceTimersByTime(400));
     down(); fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: "touch", clientX: 10, clientY: 100}); up(); act(() => vi.advanceTimersByTime(400));
     down(); up(); terminal.hasSelection.mockReturnValue(true); act(() => vi.advanceTimersByTime(400));
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
   it("dispatches session swipes and sends exact per-slot custom two-finger chords", () => {
     savePreferences({...defaults, pinchZoom: false, bodyGestures: {...defaults.bodyGestures, swipeLeft: "nextSession"}, gestures: {...defaults.gestures, left: "custom"}, gestureChords: {twoLeft: "C-b, T"}});
@@ -220,13 +236,13 @@ describe("terminal interactions", () => {
     fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 200, clientY: 100});
     fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
     expect(action.mock.calls[0][0].detail).toEqual({sessionId: "ssh", action: "nextSession"});
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
     fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100});
     fireEvent.pointerDown(canvas, {pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100});
     fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
     fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
     fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
-    expect(mocks.write).toHaveBeenCalledWith("ssh", "\x02T");
+    expect(mocks.writeSequence).toHaveBeenCalledWith("ssh", ["\x02","T"]);
     window.removeEventListener("lazysh-terminal-action", action);
   });
   it("supports configured D-pad corners and a Control lock released explicitly", () => {
@@ -234,7 +250,7 @@ describe("terminal interactions", () => {
     mount();
     fireEvent.click(screen.getByRole("button", {name: "dpad"}));
     fireEvent.click(screen.getByRole("button", {name: "D-pad left corner"}));
-    expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x02T");
+    expect(mocks.writeSequence).toHaveBeenLastCalledWith("ssh", ["\x02","T"]);
     fireEvent.click(screen.getByRole("button", {name: "D-pad right corner"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x7f");
     fireEvent.doubleClick(screen.getByRole("button", {name: "ctrl"}));
@@ -276,7 +292,7 @@ describe("terminal interactions", () => {
     act(() => {window.dispatchEvent(new CustomEvent("lazysh-prompt-draft", {detail: {sessionId: "ssh", text: "overflow"}}));});
     expect(input.value).toBe("x".repeat(65530));
     expect(terminal.paste).not.toHaveBeenCalled();
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
   it("preserves system touch gestures in screen-reader mode and single-touch xterm scrolling otherwise", () => {
     savePreferences({...defaults, screenReader: true});
@@ -335,9 +351,9 @@ describe("terminal interactions", () => {
     fireEvent.compositionEnd(canvas);
     fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: "touch", clientX: 100});
     fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0});
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: "Next window"}));
-    expect(mocks.write).toHaveBeenCalledWith("ssh", "\x02n");
+    expect(mocks.writeSequence).toHaveBeenCalledWith("ssh", ["\x02","n"]);
   });
   it("requires one explicit approval per remote clipboard write and ignores read requests", () => {
     mount();
@@ -375,7 +391,7 @@ describe("terminal interactions", () => {
     act(() => {mocks.link?.(new MouseEvent('click'), 'https://second.example/');});
     await act(async () => {finish?.();});
     expect(screen.getByText('https://second.example/')).toBeTruthy();
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
   it("keeps the confirmation available when the OS browser cannot open the link", async () => {
     mocks.openWebUrl.mockRejectedValue('No browser is installed.');
@@ -399,7 +415,7 @@ describe("terminal interactions", () => {
     fireEvent.change(screen.getByLabelText("Compose text"), {target: {value: "你好"}});
     fireEvent.click(screen.getByRole("button", {name: "Paste draft"}));
     expect(terminal.paste).toHaveBeenCalledWith("你好");
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", {name: "Find"}));
     fireEvent.change(screen.getByLabelText("Search terminal history"), {target: {value: "world"}});
     fireEvent.click(screen.getByRole("button", {name: "Next"}));

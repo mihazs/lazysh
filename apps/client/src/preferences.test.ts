@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaults, decodeClipboardRequest, parseChord, parsePreferences, parseTheme, terminalOptions } from "./preferences";
+import { defaults, decodeClipboardRequest, parseChord, parseChordSteps, parsePreferences, parseTheme, terminalOptions } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
+  it('preserves keystroke boundaries and treats literal Unicode/spaces as one step',()=>{
+    expect(parseChordSteps('C-b, S-t')).toEqual(['\x02','T']);
+    expect(parseChordSteps('F12, M-h Enter')).toEqual(['\x1b[24~','\x1bh','\r']);
+    expect(parseChordSteps('text: 你好,, 😀 ')).toEqual([' 你好,, 😀 ']);
+    expect(parseChord('F12, M-h Enter')).toBe(parseChordSteps('F12, M-h Enter').join(''));
+  });
   it('round-trips explicit Zellij gesture actions without changing existing defaults', () => {
     const prefs=parsePreferences(JSON.parse(JSON.stringify({...defaults,
       bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab',swipeRight:'previousZellijTab'},

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { api as nativeApi } from "./bridge";
-import { decodeClipboardRequest, parseChord, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
+import { decodeClipboardRequest, parseChord, parseChordSteps, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type { LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, useDeviceFonts } from "./fonts";
@@ -231,6 +231,15 @@ export default function TerminalPane({ session, active, reportError }: {
     }
     setSearchStatus("No match in retained history.");
   }
+  function sendChord(keys: string | undefined): boolean {
+    const current = () => mounted.current && access.current() && activeRef.current && session.connected;
+    if (!current()) return false;
+    if (!keys) {reportError("Configure and save a valid chord for this gesture first."); return false;}
+    try {
+      void api.writeSequence(session.id, parseChordSteps(keys)).catch(error => {if (current()) reportError(errorMessage(error));});
+      return true;
+    } catch (error) {if (current()) reportError(errorMessage(error)); return false;}
+  }
   function runGesture(action: GestureAction, slot?: GestureSlot) {
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
     if (Object.hasOwn(zellijActions, action)) {
@@ -250,9 +259,7 @@ export default function TerminalPane({ session, active, reportError }: {
     else if (action === "copy") {const text = session.terminal.getSelection(); if (text) void copy(text);}
     else if (action === "nextSession" || action === "previousSession") window.dispatchEvent(new CustomEvent("lazysh-terminal-action", {detail: {sessionId: session.id, action}}));
     else if (action === "custom") {
-      const keys = slot ? preferences.gestureChords[slot] : undefined;
-      if (!keys) {reportError("Configure and save a valid chord for this gesture first."); return;}
-      try {if (session.connected) void api.write(session.id, parseChord(keys)).catch(error => reportError(String(error)));} catch (error) {reportError(String(error));}
+      sendChord(slot ? preferences.gestureChords[slot] : undefined);
     }
     else {
       const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
@@ -376,7 +383,7 @@ export default function TerminalPane({ session, active, reportError }: {
         else sendKey(sequences[key] ?? key);
       }}>{labels[key] ?? key}{key === "ctrl" && ctrlLocked ? " · lock" : ""}</button>)}
       {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
-      {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {try {void api.write(session.id, parseChord(chord.keys)).catch(error => reportError(String(error))); session.terminal.focus();} catch (error) {reportError(String(error));}}}>{chord.label}</button>)}
+      {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) session.terminal.focus();}}>{chord.label}</button>)}
       <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => searchInput.current?.focus());}}>Find</button>
       <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError("Select terminal text before copying.");}}>Copy</button>
       <button onClick={() => setComposing(!composing)}>Compose</button>

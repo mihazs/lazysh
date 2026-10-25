@@ -278,7 +278,10 @@ pub(crate) fn run(
         drop(bootstrap);
         let result = (|| -> Result<()> {
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
-            let mut pending: Option<(Vec<u8>, usize, crate::app_lock::AccessLease)> = None;
+            let mut pending: Option<(
+                crate::terminal_input::InputSequence,
+                crate::app_lock::AccessLease,
+            )> = None;
             loop {
                 if *cancelled.borrow()
                     || output.is_closed()
@@ -338,26 +341,28 @@ pub(crate) fn run(
                 for _ in 0..32 {
                     if pending
                         .as_ref()
-                        .is_some_and(|(_, _, lease)| lease.check().is_err())
+                        .is_some_and(|(_, lease)| lease.check().is_err())
                     {
                         pending = None;
                     }
-                    if let Some((bytes, offset, lease)) = &mut pending {
-                        let count = (bytes.len() - *offset).min(available).min(16384);
+                    if let Some((data, lease)) = &mut pending {
+                        if !data.delay().is_zero() {
+                            break;
+                        }
+                        let count = data.bytes().len().min(available).min(16384);
                         if count == 0 {
                             break;
                         }
-                        match lease.with_current(|| client.write(&bytes[*offset..*offset + count]))
-                        {
+                        match lease.with_current(|| client.write(&data.bytes()[..count])) {
                             Ok(result) => result.map_err(|error| SshError::new("mosh", error))?,
                             Err(_) => {
                                 pending = None;
                                 continue;
                             }
                         }
-                        *offset += count;
+                        data.advance(count);
                         available -= count;
-                        if *offset == bytes.len() {
+                        if data.is_empty() {
                             pending = None;
                         } else {
                             continue;
@@ -370,7 +375,7 @@ pub(crate) fn run(
                         Ok(crate::ssh::Input::Data(data, lease))
                             if !data.is_empty() && lease.check().is_ok() =>
                         {
-                            pending = Some((data.into_bytes(), 0, lease))
+                            pending = Some((data, lease))
                         }
                         Ok(crate::ssh::Input::Data(_, _)) => {}
                         Ok(crate::ssh::Input::Resize(cols, rows, lease)) => {

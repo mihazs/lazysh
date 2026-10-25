@@ -156,12 +156,14 @@ export function decodeClipboardRequest(data: string): string | undefined {
   } catch { return; }
 }
 
-export function parseChord(source: string): string {
+export function parseChord(source: string): string { return parseChordSteps(source).join(""); }
+
+export function parseChordSteps(source: string): string[] {
   if (!source.trim() || source.length > 128) throw new Error("Enter up to 8 key steps, for example Ctrl+b n.");
   if (source.startsWith("text:")) {
     const text = source.slice(5);
     if (!text || /[\x00-\x1f\x7f]/.test(text)) throw new Error("Literal shortcuts need printable text; add an Enter key separately when needed.");
-    return text;
+    return [text];
   }
   if (/^\s*,|,\s*$|,\s*,/.test(source)) throw new Error("Every chord step needs a key; use text: for a literal comma.");
   const steps = source.trim().split(/[\s,]+/);
@@ -204,5 +206,5 @@ export function parseChord(source: string): string {
       else if (!isNamed) throw new Error(`Ctrl is unsupported for ${key}`);
     }
     return alt ? `\x1b${value}` : value;
-  }).join("");
+  });
 }
