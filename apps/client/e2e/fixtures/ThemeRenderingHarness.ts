@@ -28,6 +28,8 @@ export function mountThemeRenderingHarness() {
     async theme(bold?:string) {theme(bold);await frame();},
     async light(bold?:string) {theme(bold,'light');await frame();},
     async bundled() {applyTerminalTheme(terminal,defaults);await frame();},
+    async paper() {applyTerminalTheme(terminal,{...defaults,theme:'paper'});await frame();},
+    async legacy() {applyTerminalTheme(terminal,parsePreferences({...defaults,theme:'custom',customTheme:colors}));await frame();},
     async contrast() {terminal.options.minimumContrastRatio=4.5;await frame();},
     async select(column:number,row:number,length:number,focus=true) {if(focus)terminal.focus();else terminal.blur();terminal.select(column,row,length);await frame();},
     async clearSelection() {terminal.clearSelection();await frame();},

@@ -31,7 +31,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Reviewed v1 themes without `bold` now keep normal colors instead of implicit
   brightening; bundled themes and existing unreviewed palettes retain their
   bright-bold defaults. The adapter preserves inverse, selection and faint text;
-  vendor-specific light 256-color palette mapping remains separate.
+  vendor mobile pixel behavior remains unverified.
 
 - Reviewed whole-app custom themes with bounded JSON/share-code import and export,
   light/dark metadata, contrast-safe app chrome, and settings sync validation.
@@ -85,6 +85,15 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   integration foundations, each with its documented opt-in behavior and limits.
 - Discovery of existing Devin ATIF exports through absolute `XDG_DATA_HOME`, with
   the standard home fallback. No Devin process or exporter is launched.
+
+### Changed
+
+- Paper and explicitly light imported terminal themes now darken bright indexed
+  cube colors and reverse the indexed grayscale ramp using the pinned Moshi
+  desktop 0.5.28 palette math. This changes their default 256-color rendering;
+  base ANSI colors, literal RGB, dark themes and legacy palettes without mode
+  metadata keep their behavior. Browser rendering is verified; physical mobile
+  WebView and current Moshi mobile pixel parity remain unverified.
 
 ### Fixed
 
