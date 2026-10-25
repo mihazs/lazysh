@@ -11,6 +11,9 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   privacy manifests embedded in separate resource bundles. Auto transport
   selection now considers Mosh on iOS, where it previously skipped it; host-key
   verification and explicit fallback rules remain unchanged.
+- Explicit downloads of four pinned Whisper tiny/base models, with bounded
+  streaming, cancellation and SHA-256 verification before local publication.
+  No automatic download, audio upload or prompt-submission default changes.
 - Rust/Tauri SSH and local PTY/ConPTY workspace in the Bun/Turborepo monorepo,
   including host-key verification, session controls and bounded terminal traffic.
 - Optional agent companion, supported transcript readers, approval handling,

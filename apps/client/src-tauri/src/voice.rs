@@ -11,6 +11,7 @@ use std::{
 };
 use tauri::State;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+pub mod catalog;
 
 const MAX_MODEL: u64 = 160 * 1024 * 1024;
 const MAX_SAMPLES: usize = 16_000 * 30;
@@ -26,6 +27,7 @@ pub struct VoiceState {
     import: Mutex<Option<Import>>,
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
+    downloads: catalog::Downloads,
 }
 #[derive(Serialize)]
 pub struct VoiceModel {
@@ -45,6 +47,7 @@ impl VoiceState {
             import: Mutex::new(None),
             busy: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
+            downloads: catalog::Downloads::default(),
         })
     }
     fn path(&self, name: &str) -> Result<PathBuf> {
@@ -116,15 +119,15 @@ fn begin(state: &VoiceState, name: String, bytes: u64) -> Result<String> {
     if !(1024..=MAX_MODEL).contains(&bytes) {
         return Err("Choose a Whisper tiny/base GGML model up to 160 MiB".into());
     }
-    if destination.exists() || list(state)?.len() >= 3 {
-        return Err("Remove an existing model first (maximum three models; existing models are never overwritten)".into());
-    }
     let mut pending = state
         .import
         .lock()
         .map_err(|_| "Model import lock failed")?;
     if pending.is_some() {
         return Err("Finish or cancel the current model import".into());
+    }
+    if destination.exists() || list(state)?.len() >= 3 {
+        return Err("Remove an existing model first (maximum three models; existing models are never overwritten)".into());
     }
     let id = uuid::Uuid::new_v4().to_string();
     let path = state.dir.join(format!("{id}.part"));
@@ -209,6 +212,9 @@ fn finish(state: &VoiceState, id: &str, cancel: bool) -> Result<()> {
             != import.bytes
         {
             return Err("Model import is incomplete".into());
+        }
+        if list(state)?.len() >= 3 {
+            return Err("Remove an existing model first (maximum three models)".into());
         }
         model_header(&temporary)?;
         import.file.sync_all().map_err(|_| "Cannot save model")?;
