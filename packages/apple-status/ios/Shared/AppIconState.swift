@@ -17,6 +17,10 @@ final class AppIconController {
   private var changing = false
   init(_ app: AppIconApplication) { self.app = app }
   func status() -> AppIconStatus {
+    // LaunchServices getters can wait behind the pending icon mutation queue.
+    guard !changing else {
+      return AppIconStatus(available: false, current: "unknown", reason: "An iOS icon change is in progress. Refresh after it finishes.")
+    }
     let current = app.alternateName.map { $0 == "LazyshAmber" ? "amber" : "unknown" } ?? "default"
     let available = app.supportsIcons && app.configured
     return AppIconStatus(available: available, current: current,
@@ -25,8 +29,8 @@ final class AppIconController {
   }
   func choose(_ icon: String, completion: @escaping (Result<AppIconStatus, Error>) -> Void) {
     guard icon == "default" || icon == "amber" else { completion(.failure(IconFailure.invalid)); return }
-    guard status().available, app.active else { completion(.failure(IconFailure.unavailable)); return }
     guard !changing else { completion(.failure(IconFailure.busy)); return }
+    guard status().available, app.active else { completion(.failure(IconFailure.unavailable)); return }
     if status().current == icon { completion(.success(status())); return }
     changing = true
     app.setIcon(icon == "default" ? nil : "LazyshAmber") { error in

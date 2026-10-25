@@ -156,3 +156,13 @@ or error, assert no stale repaint/error/refresh, then verify a new mount can rea
 and change normally. Temporarily removing only the original-lease condition from
 the result guard made both regressions fail on a stale error alert; restoring it
 passed all 23 focused access/shell/icon/preferences tests. No mutation remains.
+
+A pending native mutation also needs a safe concurrent status path. The retained
+LaunchServices stack from run 40208351521 shows actual `alternateIconName` readback
+waiting behind the mutation queue. Source review found status and a second setter
+could make that same getter call while the controller already owned a mutation.
+The controller now returns unavailable/unknown with an in-progress explanation
+before querying UIKit, and rejects a concurrent valid setter before any status
+read. Completion still clears the busy state and queries actual UIKit readback;
+there is no cached or optimistic success. The native getter-count regression is
+pending execution on an Apple runner; source inspection is not a passing test.
