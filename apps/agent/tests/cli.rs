@@ -245,6 +245,31 @@ fn concurrent_hooks_preserve_every_event() {
 }
 
 #[test]
+fn opening_another_store_preserves_an_existing_sqlite_writer_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    drop(Store::open(dir.path()).unwrap());
+    let writer = rusqlite::Connection::open(dir.path().join("events.sqlite3")).unwrap();
+    // A RESERVED writer permits schema reads from another connection, but no
+    // other process may start a write until this transaction ends.
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    drop(Store::open(dir.path()).unwrap());
+    let output = ingest(dir.path(), "generic", &event("blocked", "working"));
+    writer.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        !output.status.success(),
+        "opening another Store released a live SQLite writer's OS lock"
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "lazysh-agent: StorageError: operation failed (sqlite_code=5)\n"
+    );
+    assert!(snapshot(dir.path(), "50")["sessions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn simultaneous_initialization_and_ingest_preserve_every_event() {
     for _ in 0..4 {
         let dir = tempfile::tempdir().unwrap();

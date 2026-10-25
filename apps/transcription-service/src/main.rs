@@ -1,0 +1,90 @@
+use clap::{Parser, Subcommand};
+use lazysh_transcription::{Config, Service};
+use std::{net::SocketAddr, path::PathBuf};
+
+#[derive(Parser)]
+#[command(
+    name = "lazysh-transcription",
+    about = "Optional private quota-limited transcription relay"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+#[derive(Subcommand)]
+enum Command {
+    Keygen,
+    Serve {
+        #[arg(long)]
+        admin_token_file: PathBuf,
+        #[arg(long)]
+        provider_key_file: PathBuf,
+        #[arg(long)]
+        data_dir: PathBuf,
+        #[arg(long)]
+        device_seconds_per_day: u64,
+        #[arg(long)]
+        global_seconds_per_day: u64,
+        #[arg(long, default_value = "127.0.0.1:7348")]
+        listen: SocketAddr,
+    },
+}
+async fn shutdown() {
+    #[cfg(unix)]
+    if let Ok(mut signal) =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=signal.recv()=>{}}
+        return;
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+async fn run() -> Result<(), String> {
+    match Cli::parse().command {
+        Command::Keygen => {
+            println!("{}", lazysh_transcription::secret());
+            Ok(())
+        }
+        Command::Serve {
+            admin_token_file,
+            provider_key_file,
+            data_dir,
+            device_seconds_per_day,
+            global_seconds_per_day,
+            listen,
+        } => {
+            if !listen.ip().is_loopback() {
+                return Err("Require a loopback listen address behind an HTTPS proxy".into());
+            }
+            let admin = lazysh_transcription::read_secret(&admin_token_file)?;
+            let key = lazysh_transcription::read_secret(&provider_key_file)?;
+            let config = Config::new(
+                data_dir,
+                admin.trim(),
+                key.trim(),
+                device_seconds_per_day,
+                global_seconds_per_day,
+            )?;
+            let service = Service::open(config)?;
+            let listener = tokio::net::TcpListener::bind(listen)
+                .await
+                .map_err(|_| "Cannot bind transcription listener")?;
+            println!(
+                "LISTENING {}",
+                listener
+                    .local_addr()
+                    .map_err(|_| "Cannot inspect listener")?
+            );
+            lazysh_transcription::serve(listener, service, shutdown())
+                .await
+                .map_err(|_| "Transcription listener failed".into())
+        }
+    }
+}
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("lazysh-transcription: {error}");
+        std::process::exit(1);
+    }
+}

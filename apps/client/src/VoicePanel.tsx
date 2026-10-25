@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { MAX_VOICE_SECONDS, mono16k, validModelFile } from "./voice";
 import { errorMessage } from "./SessionTools";
+import { useDictationHistory } from './voiceHistory';
+import VoiceHistoryPanel from './VoiceHistoryPanel';
+import type { DirectDictation } from './voiceDelivery';
 
 type Model = { id: string; bytes: number };
 type CatalogModel = {id:string;file:string;label:string;bytes:number;sha256:string;revision:string};
@@ -13,7 +16,10 @@ type AppleCapability = {
   installedLanguages: string[];
   reservedLanguages: string[];
 };
-export default function VoicePanel({ sessionId }: { sessionId?: string }) {
+export default function VoicePanel({ sessionId, onDirectDictation }: {
+  sessionId?: string;
+  onDirectDictation?: (request: DirectDictation) => Promise<void>;
+}) {
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [catalog, setCatalog] = useState<CatalogModel[]>([]);
@@ -34,7 +40,10 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
-  const [history, setHistory] = useState<string[]>([]);
+  const [direct, setDirect] = useState(false);
+  const [autoSend, setAutoSend] = useState(false);
+  const [deliveryStatus, setDeliveryStatus] = useState("");
+  const history = useDictationHistory();
   const [error, setError] = useState("");
   const [progress, setProgress] = useState("");
   const recorder = useRef<MediaRecorder | undefined>(undefined);
@@ -212,7 +221,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
       }
     }
   }
-  async function transcribe(blob: Blob, current: number) {
+  async function transcribe(blob: Blob, current: number, historyCapture: ReturnType<typeof history.capture>, delivery: {direct:boolean;autoSend:boolean;claimed:boolean}) {
     if (current !== generation.current) return;
     releaseMicrophone();
     setRecording(false);
@@ -250,7 +259,16 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
         throw new Error("Invalid transcription result.");
       if (current === generation.current) {
         setDraft(text);
-        if (text) setHistory((previous) => [text, ...previous].slice(0, 20));
+        void history.add(text,historyCapture);
+        if (delivery.direct && sessionId && onDirectDictation) {
+          await onDirectDictation({sessionId,text,autoSend:delivery.autoSend,claim:()=>{
+            if (current !== generation.current || delivery.claimed) return false;
+            delivery.claimed=true;
+            return true;
+          }});
+          if (current === generation.current) setDeliveryStatus(delivery.autoSend
+            ? 'Text and Enter queued to this terminal.' : 'Text queued to this terminal without Enter.');
+        }
       }
     } catch (e) {
       if (current === generation.current) setError(errorMessage(e));
@@ -265,6 +283,9 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   }
   async function start() {
     const current = ++generation.current;
+    const historyCapture = history.capture();
+    const delivery = {direct,autoSend:direct && autoSend,claimed:false};
+    setDeliveryStatus("");
     setError("");
     setBusy(true);
     try {
@@ -305,7 +326,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
         setError("Microphone recording failed.");
       };
       capture.onstop = () => {
-        void transcribe(new Blob(parts, { type: capture.mimeType }), current);
+        void transcribe(new Blob(parts, { type: capture.mimeType }), current, historyCapture, delivery);
       };
       capture.start(1000);
       setRecording(true);
@@ -321,6 +342,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   }
   function cancel() {
     generation.current++;
+    history.invalidate();
     if(downloadRequest.current) {
       const requestId=downloadRequest.current;setCancellingDownload(true);setProgress('Cancelling model download…');
       void invoke<boolean>('voice_download_cancel',{requestId}).then(cancelled=>{
@@ -372,7 +394,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
     <section className="tool-panel voice-panel" aria-label="Local dictation">
       <h3>Local dictation</h3>
       <p>
-        Record up to 30 seconds with an on-device engine, then edit the result.
+        Record up to 30 seconds with an on-device engine. Review the result by default.
         No automatic cloud fallback.
       </p>
       {error && (
@@ -512,6 +534,14 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
           </button>
         </>
       )}
+      {sessionId && onDirectDictation && <fieldset disabled={busy || recording}>
+        <legend>Dictation delivery</legend>
+        <label><input type="checkbox" checked={direct} onChange={event=>{
+          setDirect(event.target.checked);setAutoSend(false);setDeliveryStatus("");
+        }}/>Type final result directly into terminal</label>
+        <label><input type="checkbox" checked={autoSend} disabled={!direct} onChange={event=>setAutoSend(event.target.checked)}/>Auto-send: press Enter</label>
+        <p>Off by default. Direct mode sends each new result immediately; Auto-send also presses Enter and can execute commands. Cancel cannot retract input already queued.</p>
+      </fieldset>}
       <div className="tool-bar">
         <button
           disabled={
@@ -528,6 +558,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
         {(busy || recording) && <button disabled={downloading && cancellingDownload} onClick={cancel}>{downloading?(cancellingDownload?'Cancelling download…':'Cancel download'):'Cancel'}</button>}
       </div>
       {progress && <p role="status">{progress}</p>}
+      {deliveryStatus && <p role="status">{deliveryStatus}</p>}
       <label>
         Dictation draft
         <textarea
@@ -563,17 +594,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
           </button>
         )}
       </div>
-      {history.length > 0 && (
-        <details>
-          <summary>Session dictation history ({history.length})</summary>
-          <button onClick={() => setHistory([])}>Clear history</button>
-          {history.map((text, index) => (
-            <button key={index} onClick={() => setDraft(text)}>
-              {text.slice(0, 100)}
-            </button>
-          ))}
-        </details>
-      )}
+      <VoiceHistoryPanel history={history} onReuse={setDraft} disabled={busy || recording}/>
     </section>
   );
 }

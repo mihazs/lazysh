@@ -11,6 +11,20 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   privacy manifests embedded in separate resource bundles. Auto transport
   selection now considers Mosh on iOS, where it previously skipped it; host-key
   verification and explicit fallback rules remain unchanged.
+- Optional Unix-host transcription relay with administrator-issued device tokens,
+  revocation, durable audio quotas and cancellable bounded WAV uploads to a fixed
+  OpenAI transcription endpoint. No deployment, client enrollment or audio-upload
+  default changes; client integration remains separate.
+- Optional direct delivery of completed dictation to the current terminal, with
+  a separate Auto-send Enter option, bounded input and stale-session cancellation.
+  Both options start off and reset when Voice closes; editable review remains the
+  default, history reuse stays draft-only, and failed writes are never retried.
+
+- Optional device-local dictation history with explicit Remember consent,
+  seven-day availability, 20-entry/256 KiB bounds, editable reuse and Delete/Clear.
+  History remains temporary by default; saved text is not encrypted by lazysh,
+  and expired entries are pruned on use rather than while the app is closed.
+
 - Explicit downloads of four pinned Whisper tiny/base models, with bounded
   streaming, cancellation and SHA-256 verification before local publication.
   No automatic download, audio upload or prompt-submission default changes.
@@ -27,6 +41,8 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 - Mobile workspace navigation reserves the full top safe area, keeping the
   Hosts menu below the iOS status bar and its controls inside the toolbar.
+- Opening another companion event store no longer closes a separate database
+  file descriptor that could release an existing SQLite writer's POSIX lock.
 - Concurrent companion event writes preserve durable storage within bounded
   lock waits and report numeric SQLite diagnostics without database contents.
 

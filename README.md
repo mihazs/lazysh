@@ -66,6 +66,7 @@ bun run test:multiplexers
 - `apps/client`: shared React/xterm.js client and its Tauri Rust crate, desktop/mobile targets, Vitest tests, and Playwright tests.
 - `apps/agent`: optional Rust host companion, with library unit tests and CLI integration tests under `tests/`.
 - `apps/share-service`: optional authenticated expiring-upload server, with native HTTP/CLI tests. It is never deployed or contacted automatically.
+- `apps/transcription-service`: optional Unix-host [cloud dictation relay](docs/cloud-transcription.md), with device enrollment, revocation, durable audio quotas, and native fixture tests. Client integration and deployment remain separate.
 - `packages/credential-vault`: Rust Tauri plugin with Android Keystore and iOS Keychain implementations, plus desktop OS credential storage.
 - `packages/mosh-transport` and `packages/et-transport`: bounded transport libraries and official-server interoperability tests.
 - `packages/apple-speech`: native SpeechAnalyzer plugin for supported iOS versions, with explicit OS asset downloads and cancellation.

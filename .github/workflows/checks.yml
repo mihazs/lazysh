@@ -43,7 +43,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
-      - run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service
+      - run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service
 
   native-linux:
     runs-on: ubuntu-24.04
