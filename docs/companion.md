@@ -95,6 +95,42 @@ Use `lazysh-agent transcript --agent claude --view conversation --path /absolute
 
 The response uses `view: "active_branch"`, optional `branchId`, `hasMore: false`, and `truncated: true` when older selected messages exceed the requested limit or output budget. Refresh replaces the whole conversation snapshot, including when the selected branch changes. `--offset` must be zero in this mode. It accepts at most 16 MiB and 10,000 linked records; larger files return an error and remain available through record paging/the terminal. Conversation mode is supported only for Claude.
 
+After opening a Claude transcript in **Latest conversation branch**, optionally
+enable **Follow selected Claude branch**. Following is off by default, is not
+saved, and applies only to that explicitly opened source. Each read requests a
+fresh branch snapshot at offset zero; abandoned messages are replaced rather
+than appended. Existing companion input/output limits and the latest-50-message
+client request remain unchanged. This is bounded polling over the existing SSH
+companion command, not a new gateway stream or proof that the selected transcript
+belongs to the live agent pane.
+
+Only one transcript/discovery request runs in the view at a time. The next
+automatic read is scheduled two seconds after the previous request completes;
+there is no catch-up burst. Errors stop following and require explicitly enabling
+it again. Hidden pages and `pagehide` pause automatic reads and discard an
+automatic result that arrives after the pause. Returning to the visible page
+resumes only if the original access lease and source remain valid. Explicit
+manual reads/discovery retain their existing completion behavior on visibility
+changes. Already-dispatched reads are not cancelled by hiding or unchecking the
+control; their stale automatic results are ignored.
+
+Changing the agent/path/view/session, losing app access, or leaving the view
+stops following. A new mount or unlock starts with following off and cannot reuse
+the previous mount's continuation to acquire a fresh nonce. Results and errors
+check the original lease, request token and mounted view before publication.
+No discovery, agent CLI, exporter, prompt, approval or stop operation is launched
+by following. Other agents and record/export views retain manual refresh because
+their branch/rewrite semantics are not expanded here.
+
+While following, the bounded conversation region stays at the newest message.
+Scrolling up preserves the reader's position as new snapshots arrive and reveals
+**Jump to latest**; selecting it returns to the bottom and resumes automatic
+scrolling. This follows the [documented Chat View reading behavior](https://getmoshi.app/docs/chat-view)
+within the supported Claude snapshot scope, without claiming full native chat or
+physical mobile WebView parity. Vitest checks polling/lifecycle/access races;
+Playwright desktop and phone profiles check real scrolling and late results with
+synthetic snapshots and a mocked native bridge, not actual account transcripts.
+
 ### Find session files
 
 Run `lazysh-agent discover --agent claude --limit 50` (or `codex`, `pi`, `omp`) to list recent transcript paths, filenames, modification times and sizes. Discovery reads filesystem metadata, without parsing prompts or transcript content. Defaults are Claude's `~/.claude/projects`, Codex's `~/.codex/sessions`, Pi's `~/.pi/agent/sessions`, and OMP's `~/.omp/agent/sessions`. It honors `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `PI_CODING_AGENT_DIR` respectively. Supply `--root /explicit/session/directory` for alternate layouts, OMP named profiles, XDG storage, or custom agent directories.

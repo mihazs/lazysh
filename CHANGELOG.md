@@ -17,6 +17,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   multi-step and `text:` literal bindings because a prefix must be one key.
   No gesture defaults change.
 
+- Opt-in following for an explicitly opened Claude conversation branch: bounded
+  refreshes run two seconds after completion, replace abandoned branches, pause
+  on hidden pages and stop on errors/source/session/access changes. Following
+  defaults off; record/export views remain manual. Scrolling up preserves reader
+  position until Jump to latest. No new agent, provider or prompt is launched.
+
 - Opt-in native biometric resume protection for supported Android, iOS and macOS
   devices, with native privacy covers, generation-bound command/result access,
   paused terminal delivery and cancellation of pending protected work. Windows
