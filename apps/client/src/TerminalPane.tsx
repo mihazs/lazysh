@@ -3,8 +3,9 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { api as nativeApi } from "./bridge";
-import { decodeClipboardRequest, parseChord, savePreferences, terminalOptions, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
+import { decodeClipboardRequest, parseChord, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type { LiveSession } from "./terminal";
+import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, useDeviceFonts } from "./fonts";
 import "@xterm/xterm/css/xterm.css";
 
@@ -141,6 +142,7 @@ export default function TerminalPane({ session, active, reportError }: {
     });
     if (terminal.element) element.append(terminal.element);
     else terminal.open(element);
+    try {applyTerminalTheme(terminal, preferences, fontFamilyFor(preferences, fonts));} catch (error) {reportError(String(error));}
     const output = terminal.onData(data => {
       if (session.connected) void api.write(session.id, data).catch(error => reportError(String(error)));
     });
@@ -161,7 +163,7 @@ export default function TerminalPane({ session, active, reportError }: {
   }, [session.id]);
 
   useEffect(() => {
-    session.terminal.options = terminalOptions(preferences, fontFamilyFor(preferences, fonts));
+    try {applyTerminalTheme(session.terminal, preferences, fontFamilyFor(preferences, fonts));} catch (error) {reportError(String(error));}
     if (active) requestAnimationFrame(() => fit.current?.fit());
   }, [preferences, fonts, session, active]);
 
