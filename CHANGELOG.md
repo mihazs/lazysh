@@ -14,6 +14,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- English, Brazilian Portuguese and Spanish interface text for Transcript, Usage
+  and the notification inbox, including accessibility labels and validation.
+  Usage and inbox dates/numbers follow the selected interface locale. Recorded
+  messages, tool arguments, provider/agent names, IDs and remote diagnostics stay
+  verbatim. Language changes retain drafts and polling/listener lifecycles;
+  language preference defaults and native permission behavior are unchanged.
+
 - Brazilian Portuguese (`pt-BR`) and Spanish (`es`) for the existing interface
   catalogs: shell, host forms and Preferences controls. System remains the
   default and now selects these languages when available; English is the fallback.
