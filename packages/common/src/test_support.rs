@@ -1,4 +1,4 @@
-fn words(text: &str) -> Vec<String> {
+pub fn words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
         .map(str::to_ascii_uppercase)

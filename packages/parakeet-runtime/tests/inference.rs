@@ -22,7 +22,7 @@ fn speech_samples() -> Vec<f32> {
         .collect()
 }
 
-use lazysh_common::test_support::word_error_rate;
+use lazysh_common::test_support::{word_error_rate, words};
 
 #[test]
 fn licensed_speech_fixture_has_the_recorded_format_and_bounds() {
