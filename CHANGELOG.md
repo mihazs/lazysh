@@ -5,6 +5,13 @@
 This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
 
+### Fixed
+
+- Concurrent companion initialization rechecks a removed SQLite journal, WAL or
+  shared-memory entry instead of rejecting its stale zero-link metadata. Rechecks
+  are bounded, replacements must pass the original file protections, and bootstrap
+  locks still fail closed. Separate SQLite contention failures remain under review.
+
 ### Added
 
 - Repository pre-commit duplicate detection with pinned jscpd and Bun now rejects

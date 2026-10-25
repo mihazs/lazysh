@@ -281,31 +281,59 @@ fn validate_state_file(path: &Path) -> Result<()> {
 }
 
 fn validate_sidecar(path: &Path) -> Result<()> {
-    let Some(metadata) = regular_state_metadata(path, "Invalid state sidecar")? else {
-        return Ok(());
-    };
+    validate_sidecar_with(path, || {
+        regular_state_metadata(path, "Invalid state sidecar")
+    })
+}
+fn validate_sidecar_with(
+    path: &Path,
+    mut observe: impl FnMut() -> io::Result<Option<fs::Metadata>>,
+) -> Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let links = metadata.nlink();
-        let owned = metadata.uid() == unsafe { libc::geteuid() };
-        let mode = metadata.permissions().mode() & 0o777;
-        if links != 1 || !owned || mode != 0o600 {
-            let kind = match path.file_name().and_then(|name| name.to_str()) {
-                Some("events.sqlite3-journal") => "journal",
-                Some("events.sqlite3-wal") => "wal",
-                Some("events.sqlite3-shm") => "shm",
-                Some("events.sqlite3-init-lock") => "bootstrap-lock",
-                _ => "other",
+        let kind = match path.file_name().and_then(|name| name.to_str()) {
+            Some("events.sqlite3-journal") => "journal",
+            Some("events.sqlite3-wal") => "wal",
+            Some("events.sqlite3-shm") => "shm",
+            Some("events.sqlite3-init-lock") => "bootstrap-lock",
+            _ => "other",
+        };
+        let mut retries = 0;
+        loop {
+            let Some(metadata) = observe()? else {
+                return Ok(());
             };
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("Unsafe state sidecar (kind={kind}, links={links}, owned={owned}, mode={mode:03o})"),
-            )
-            .into());
+            {
+                use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                let links = metadata.nlink();
+                let owned = metadata.uid() == unsafe { libc::geteuid() };
+                let mode = metadata.permissions().mode() & 0o777;
+                // SQLite may unlink its ephemeral sidecar during stat. Never accept
+                // that removed inode: re-stat the path, validating any replacement.
+                if links == 0
+                    && owned
+                    && mode == 0o600
+                    && matches!(kind, "journal" | "wal" | "shm")
+                    && retries < 2
+                {
+                    retries += 1;
+                    continue;
+                }
+                if links != 1 || !owned || mode != 0o600 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!("Unsafe state sidecar (kind={kind}, links={links}, owned={owned}, mode={mode:03o})"),
+                    ).into());
+                }
+            }
+            return Ok(());
         }
     }
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        observe().map(|_| ()).map_err(Error::from)
+    }
 }
 
 fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File> {
@@ -491,6 +519,108 @@ mod tests {
             );
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
             validate_sidecar(&path).unwrap();
+        }
+    }
+    #[cfg(unix)]
+    fn unlinked_sidecar(mode: u32) -> (tempfile::TempDir, std::path::PathBuf, fs::Metadata) {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.sqlite3-shm");
+        // Only a synthetic ordinary file: no SQLite connection or sidecar descriptor.
+        let file = fs::File::create(&path).unwrap();
+        file.set_permissions(fs::Permissions::from_mode(mode))
+            .unwrap();
+        fs::remove_file(&path).unwrap();
+        let removed = file.metadata().unwrap();
+        assert_eq!(removed.nlink(), 0);
+        (dir, path, removed)
+    }
+    #[cfg(unix)]
+    #[test]
+    fn unlinked_sidecar_metadata_rechecks_absence_or_a_private_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+        for replace in [false, true] {
+            let (_dir, path, removed) = unlinked_sidecar(0o600);
+            if replace {
+                fs::write(&path, b"synthetic replacement").unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            let mut observations = 0;
+            validate_sidecar_with(&path, || {
+                observations += 1;
+                if observations == 1 {
+                    Ok(Some(removed.clone()))
+                } else {
+                    regular_state_metadata(&path, "Invalid state sidecar")
+                }
+            })
+            .unwrap();
+            assert_eq!(observations, 2);
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_revalidation_rejects_unsafe_replacements_and_stops_after_three_observations() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        for replacement in ["hardlink", "symlink", "mode", "directory"] {
+            let (dir, path, removed) = unlinked_sidecar(0o600);
+            let target = dir.path().join("target");
+            fs::write(&target, b"synthetic target").unwrap();
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+            match replacement {
+                "hardlink" => fs::hard_link(&target, &path).unwrap(),
+                "symlink" => symlink(&target, &path).unwrap(),
+                "mode" => {
+                    fs::rename(&target, &path).unwrap();
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+                }
+                "directory" => fs::create_dir(&path).unwrap(),
+                _ => unreachable!(),
+            }
+            let mut observations = 0;
+            assert!(
+                validate_sidecar_with(&path, || {
+                    observations += 1;
+                    if observations == 1 {
+                        Ok(Some(removed.clone()))
+                    } else {
+                        regular_state_metadata(&path, "Invalid state sidecar")
+                    }
+                })
+                .is_err(),
+                "{replacement}"
+            );
+            assert_eq!(observations, 2, "{replacement}");
+        }
+        let (_public_dir, public_path, public_removed) = unlinked_sidecar(0o644);
+        let mut observations = 0;
+        assert!(validate_sidecar_with(&public_path, || {
+            observations += 1;
+            Ok(Some(public_removed.clone()))
+        })
+        .is_err());
+        assert_eq!(
+            observations, 1,
+            "unsafe removed metadata must not be retried"
+        );
+        let (_dir, path, removed) = unlinked_sidecar(0o600);
+        for (name, expected) in [
+            ("events.sqlite3-shm", 3),
+            ("events.sqlite3-wal", 3),
+            ("events.sqlite3-journal", 3),
+            ("events.sqlite3-init-lock", 1),
+            ("other", 1),
+        ] {
+            let mut observations = 0;
+            let error = validate_sidecar_with(&path.with_file_name(name), || {
+                observations += 1;
+                Ok(Some(removed.clone()))
+            })
+            .unwrap_err();
+            assert_eq!(observations, expected, "{name}");
+            assert!(
+                matches!(error, Error::Io(ref e) if e.kind() == io::ErrorKind::PermissionDenied)
+            );
         }
     }
     #[cfg(windows)]
