@@ -20,12 +20,17 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Brazilian Portuguese and Spanish Apple permission explanations, with English
+  fallback. Apple selects permission-sheet localization through the app's OS
+  language; the in-app language override does not override system prompts. The
+  microphone purpose now describes dictation using the selected engine.
+
 - Brazilian Portuguese (`pt-BR`) and Spanish (`es`) for the existing interface
   catalogs: shell, host forms and Preferences controls. System remains the
   default and now selects these languages when available; English is the fallback.
   Explicit choices persist and sync without reconnecting live terminals or
   changing user text, commands or remote output. Other panels and native
-  permission/lock-cover text remain separate localization work.
+  lock-cover text remain separate localization work.
 
 - An English interface catalog and an App language preference for System or
   English. System is the default and uses supported English regional formatting,

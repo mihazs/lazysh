@@ -2,10 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
     <key>NSFaceIDUsageDescription</key>
     <string>Unlock saved SSH credentials with Face ID when you enable biometric protection.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Record speech for private on-device dictation.</string>
+    <string>Record speech for dictation using the engine you select.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSExceptionDomains</key>

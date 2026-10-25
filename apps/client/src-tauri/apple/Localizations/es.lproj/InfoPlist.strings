@@ -1,0 +1,2 @@
+"NSFaceIDUsageDescription" = "Desbloquea las credenciales SSH guardadas con Face ID al activar la protección biométrica.";
+"NSMicrophoneUsageDescription" = "Graba tu voz para dictado con el motor que selecciones.";
