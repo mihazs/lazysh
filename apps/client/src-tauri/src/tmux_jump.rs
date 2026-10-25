@@ -424,9 +424,11 @@ pub(crate) async fn prepare_command(
     lease: &AccessLease,
 ) -> Option<Control> {
     let deadline = tokio::time::Instant::now() + DEADLINE;
-    let channel = tokio::select! {biased; _=lease.cancelled()=>return None, result=tokio::time::timeout_at(deadline,handle.channel_open_session())=>result.ok()?.ok()?};
+    let channel = ssh::open_owned_channel(handle, lease, deadline)
+        .await
+        .ok()?;
     let mut control = Control {
-        channel: channel.into(),
+        channel,
         bytes: Vec::new(),
         identity,
         generation: uuid::Uuid::new_v4().to_string(),

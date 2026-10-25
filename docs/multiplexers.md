@@ -76,6 +76,19 @@ three-second deadlines; each response/notification allowance is at most 1 MiB,
 each line 64 KiB, and each command at most 4096 rows. Labels are delimiter-quoted,
 with control characters displayed as `?`; labels never become commands. Older
 tmux behavior is accepted only when binding and protocol validation succeed.
+
+Terminal/control channel openings retain ownership while awaiting SSH open
+confirmation, even if the caller locks or times out. Late confirmations are
+closed before PTY or command dispatch. At most four pending opens per verified
+transport hold capacity until confirmation, failure or the last local transport
+owner disappears. A live peer that never confirms can occupy all four slots;
+further terminal opens fail explicitly until the peer responds or the transport
+is disconnected. Existing SSH sessions are not torn down on a caller deadline.
+Pending workers retain only the inner client, and last-owner shutdown stops
+them; they cannot keep the outer transport owner alive themselves. This bounded
+ownership applies to the terminal/control paths, not every SFTP or forwarding
+operation in the app.
+
 Local native acceptance uses upstream tmux 3.4 and tmux 3.8; the Linux CI task also
 exercises its actual distro tmux. The retained parser accepts the official typed
 session/window-change notification; unknown events still retire navigation.
