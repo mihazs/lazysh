@@ -52,6 +52,10 @@
       "name": "@lazysh/share-service",
       "version": "0.1.0",
     },
+    "apps/transcription-service": {
+      "name": "@lazysh/transcription-service",
+      "version": "0.1.0",
+    },
     "packages/apple-speech": {
       "name": "@lazysh/apple-speech",
       "version": "0.1.0",
@@ -219,6 +223,8 @@
     "@lazysh/push-registration": ["@lazysh/push-registration@workspace:packages/push-registration"],
 
     "@lazysh/share-service": ["@lazysh/share-service@workspace:apps/share-service"],
+
+    "@lazysh/transcription-service": ["@lazysh/transcription-service@workspace:apps/transcription-service"],
 
     "@napi-rs/lzma-linux-x64-gnu": ["@napi-rs/lzma-linux-x64-gnu@1.5.1", "", { "os": "linux", "cpu": "x64" }, "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="],
 

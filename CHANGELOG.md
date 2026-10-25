@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Optional Unix-host transcription relay with administrator-issued device tokens,
+  revocation, durable audio quotas and cancellable bounded WAV uploads to a fixed
+  OpenAI transcription endpoint. No deployment, client enrollment or audio-upload
+  default changes; client integration remains separate.
 - Optional direct delivery of completed dictation to the current terminal, with
   a separate Auto-send Enter option, bounded input and stale-session cancellation.
   Both options start off and reset when Voice closes; editable review remains the
