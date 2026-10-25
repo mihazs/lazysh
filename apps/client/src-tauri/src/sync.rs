@@ -448,6 +448,7 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
         const ALLOWED: &[&str] = &[
             "version",
             "appTheme",
+            "sessionLayout",
             "cjkFallback",
             "theme",
             "customTheme",
@@ -469,7 +470,10 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "autoHideToolbar",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
-        if object.get("version").and_then(|v| v.as_u64()) != Some(1)
+        if object
+            .get("sessionLayout")
+            .is_some_and(|value| !matches!(value.as_str(), Some("list" | "cards")))
+            || object.get("version").and_then(|v| v.as_u64()) != Some(1)
             || object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
             || serde_json::to_vec(preferences)
                 .map_err(|_| "Invalid preferences")?
@@ -1156,6 +1160,24 @@ mod tests {
             credentials_etag: None,
             settings_revision: 0,
             credentials_revision: 0,
+        }
+    }
+
+    #[test]
+    fn session_layout_sync_accepts_old_settings_and_only_supported_choices() {
+        let mut bundle = settings();
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        for layout in [serde_json::json!("list"), serde_json::json!("cards")] {
+            bundle.preferences = Some(serde_json::json!({"version":1,"sessionLayout":layout}));
+            validate_bundle(&bundle, Scope::Settings).unwrap();
+        }
+        for layout in [
+            serde_json::json!("grid"),
+            serde_json::json!(null),
+            serde_json::json!(["cards"]),
+        ] {
+            bundle.preferences = Some(serde_json::json!({"version":1,"sessionLayout":layout}));
+            assert!(validate_bundle(&bundle, Scope::Settings).is_err());
         }
     }
 

@@ -53,6 +53,7 @@ import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import AgentPanel from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
+import { usePreferences } from "./preferences";
 import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
@@ -1022,6 +1023,7 @@ function ConnectDialog({
 
 export default function App() {
   useClientAppearance();
+  const {sessionLayout} = usePreferences();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState({available:false,reason:'Checking local terminal support…'});
   const [openingLocal, setOpeningLocal] = useState(false);
@@ -1567,7 +1569,7 @@ export default function App() {
             {active && (
               <>
                 <ChevronRight size={13} />
-                <strong>{active.name}</strong>
+                <button className="session-switcher-trigger" aria-label="Switch terminal session" onClick={() => setSwitcher(true)}>{active.name}</button>
               </>
             )}
           </div>
@@ -1975,8 +1977,8 @@ export default function App() {
         <Suspense fallback={<p>Loading push settings…</p>}><PushSettingsPanel /></Suspense>
       </Dialog>}
       {switcher && <Dialog title="Switch terminal session" close={()=>setSwitcher(false)}>
-        <div className="form-stack">
-          {sessions.map(session=><button key={session.id} type="button" onClick={()=>{setActiveId(session.id);setSwitcher(false);setView('terminal');}}>{session.name} · {session.destination}</button>)}
+        <div className="session-switcher" data-layout={sessionLayout}>
+          {sessions.map(session=><button className="session-choice" key={session.id} type="button" aria-current={session.id === activeId ? "true" : undefined} onClick={()=>{setActiveId(session.id);setSwitcher(false);setView('terminal');}}><span className="session-choice-name">{session.name}</span><span className="session-choice-destination">{session.destination}</span></button>)}
           {!sessions.length && <p>No terminal sessions are open.</p>}
         </div>
       </Dialog>}
