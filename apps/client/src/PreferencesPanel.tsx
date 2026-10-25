@@ -1,8 +1,8 @@
 import { useState } from "react";
 import AppIconPanel from "./AppIconPanel";
 import ThemeImportPanel from "./ThemeImportPanel";
-import { compileSimpleChord } from "./simpleChord";
-import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabels, parseChord, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
+import ChordBuilder from "./ChordBuilder";
+import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabels, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 export default function PreferencesPanel() {
@@ -13,10 +13,6 @@ export default function PreferencesPanel() {
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
   const [chordLabel, setChordLabel] = useState("");
-  const [keys, setKeys] = useState("");
-  const [chordMode, setChordMode] = useState<'advanced' | 'simple'>('advanced');
-  const [simpleText, setSimpleText] = useState('');
-  const [modifiers, setModifiers] = useState({ctrl:false, meta:false, shift:false});
   async function fontAction(action: () => Promise<unknown>) {
     if (fontBusy) return;
     setFontBusy(true); setError("");
@@ -36,7 +32,7 @@ export default function PreferencesPanel() {
   }
   function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = gestureActions) {
     return <div key={slot}><label>{label}<select value={action} onChange={event => change(event.target.value as GestureAction)}>{allowed.map(item => <option key={item} value={item}>{gestureLabels[item]}</option>)}</select></label>
-      {action === "custom" && <label>{label} chord<input key={`${slot}:${preferences.gestureChords[slot] ?? ""}`} maxLength={128} defaultValue={preferences.gestureChords[slot] ?? ""} placeholder="C-b, T" onBlur={event => {try {parseChord(event.target.value); update({gestureChords: {...preferences.gestureChords, [slot]: event.target.value}});} catch (error) {setError(String(error));}}} /></label>}
+      {action === "custom" && <ChordBuilder key={preferences.gestureChords[slot] ?? ''} label={label} binding={preferences.gestureChords[slot]} onSave={keys => update({gestureChords: {...preferences.gestureChords, [slot]: keys}})} />}
     </div>;
   }
   return <section className="preferences-panel" aria-label="Terminal preferences">
@@ -99,18 +95,10 @@ export default function PreferencesPanel() {
       <p>Send up to 8 steps: C-b, S-t or Ctrl+b Shift+t. C-/M-/S- and Ctrl+/Opt+/Shift+ modifiers, Esc, BSpace, dash, plus, arrows and F1–F12 are supported. Use text:/clear for literal text. Chords run from their toolbar button or an explicitly configured gesture.</p>
       <ul>{preferences.chords.map((chord, index) => <li key={index}><span>{chord.label}: {chord.keys}</span><button aria-label={`Remove chord ${chord.label}`} onClick={() => update({chords: preferences.chords.filter((_, i) => i !== index)})}>Remove</button></li>)}</ul>
       <label>Chord name<input maxLength={32} value={chordLabel} onChange={e => setChordLabel(e.target.value)} /></label>
-      <label>Shortcut builder<select value={chordMode} onChange={e => {setChordMode(e.target.value as 'advanced' | 'simple'); setError('');}}><option value="advanced">Advanced binding</option><option value="simple">Simple custom text</option></select></label>
-      {chordMode === 'advanced' ? <label>Key sequence<input maxLength={128} value={keys} onChange={e => setKeys(e.target.value)} /></label> : <>
-        <p>Without modifiers, send text exactly, including Unicode, commas and spaces. Up to 123 characters; some characters count twice. With modifiers, use printable ASCII: b1 modifies only b; a,b modifies both; ,, inserts a comma. Up to 8 key steps. Unsupported shortcuts show an error.</p>
-        <p>This field is literal custom text: Enter means the letters Enter. Use Advanced for named or function keys.</p>
-        {(['ctrl','meta','shift'] as const).map(modifier => <label key={modifier}><input type="checkbox" checked={modifiers[modifier]} onChange={e => setModifiers({...modifiers,[modifier]:e.target.checked})} />{modifier === 'ctrl' ? 'Control' : modifier === 'meta' ? 'Option / Alt' : 'Shift'}</label>)}
-        <label>Custom shortcut text<textarea rows={2} value={simpleText} onChange={e => setSimpleText(e.target.value)} /></label>
-      </>}
-      <button disabled={!chordLabel.trim() || (chordMode === 'simple' ? !simpleText : !keys.trim()) || preferences.chords.length >= 12} onClick={() => {try {
-        const binding = chordMode === 'simple' ? compileSimpleChord(simpleText, modifiers) : keys.startsWith('text:') ? keys : keys.trim();
-        parseChord(binding);
-        if (update({chords: [...preferences.chords, {label: chordLabel.trim(), keys: binding}]})) {setChordLabel(''); setKeys(''); setSimpleText('');}
-      } catch (e) {setError(String(e));}}}>Add chord</button>
+      <ChordBuilder disabled={!chordLabel.trim() || preferences.chords.length >= 12} clearAfterSave onSave={keys => {
+        if (!update({chords: [...preferences.chords, {label: chordLabel.trim(), keys}]})) return false;
+        setChordLabel(''); return true;
+      }} />
     </details>
     <button onClick={() => {update({...defaults, toolbar: [...defaults.toolbar], snippets: [], customTheme: undefined, customThemeInfo: undefined}); void fontAction(resetFontSelection);}}>Reset preferences</button>
   </section>;

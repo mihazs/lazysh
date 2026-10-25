@@ -259,6 +259,8 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
     scheme:
       buildImplicitDependencies: false
+      environmentVariables:
+        IDE_DISABLED_OS_ACTIVITY_DT_MODE: "1"
       testTargets: [LazyshMoshAppTests]
 
   LazyshLiveActivity:

@@ -81,9 +81,11 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
   await page.getByText('Terminal touch gestures', {exact: true}).click();
   await page.getByRole('combobox', {name: 'Double tap', exact: true}).selectOption('custom');
   await page.getByLabel('Double tap chord', {exact: true}).fill('C-b, S-t');
+  await page.getByRole('button', {name: 'Save Double tap chord', exact: true}).click();
   await page.getByRole('combobox', {name: 'Swipe left', exact: true}).selectOption('nextSession');
   await page.getByRole('combobox', {name: 'D-pad left corner', exact: true}).selectOption('custom');
   await page.getByLabel('D-pad left corner chord', {exact: true}).fill('text:/clear');
+  await page.getByRole('button', {name: 'Save D-pad left corner chord', exact: true}).click();
   await page.getByText('Keyboard chords', {exact: true}).click();
   await page.getByLabel('Chord name', {exact: true}).fill('Agent pane');
   await page.getByLabel('Key sequence', {exact: true}).fill('F12, M-h');
