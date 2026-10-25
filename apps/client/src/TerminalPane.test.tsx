@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {accessSnapshot,applyAccessStatus} from './access';
-const mocks = vi.hoisted(() => ({write: vi.fn(), resize: vi.fn(), openWebUrl: vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
-vi.mock("./bridge", () => ({api: {write: mocks.write, resize: mocks.resize, openWebUrl: mocks.openWebUrl}}));
+const mocks = vi.hoisted(() => ({write: vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+vi.mock("./bridge", () => ({api: {write: mocks.write, resize: mocks.resize, zellijNavigate:mocks.zellijNavigate, openWebUrl: mocks.openWebUrl}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {} dispose() {}}}));
 vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
 let osc: (data: string) => boolean;
@@ -27,6 +28,7 @@ beforeEach(() => {
   });
   mocks.write.mockResolvedValue(undefined); mocks.resize.mockResolvedValue(undefined);
   mocks.openWebUrl.mockResolvedValue(undefined);
+  mocks.zellijNavigate.mockResolvedValue(undefined);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("requestAnimationFrame", (callback: () => void) => {callback(); return 1;});
   Object.defineProperty(navigator, "clipboard", {value: {writeText: vi.fn().mockResolvedValue(undefined), readText: vi.fn().mockResolvedValue("paste me")}, configurable: true});
@@ -86,6 +88,83 @@ describe("terminal interactions", () => {
     await act(async()=>{rejectRead(new Error('old read'));rejectWrite(new Error('old write'));});
     expect(reportError).not.toHaveBeenCalled();
     expect(terminal.paste).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['nextZellijTab','nextTab'],['previousZellijTab','previousTab'],
+    ['nextZellijPane','nextPane'],['previousZellijPane','previousPane'],
+  ] as const)('routes %s through the attached Zellij command without writing terminal bytes', async (action, command) => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:action}});
+    render(<StrictMode><TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:"literal'$(touch nope)"},terminal} as unknown as LiveSession} active reportError={vi.fn()} /></StrictMode>);
+    const canvas=screen.getByLabelText('Terminal for Host');
+    fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
+    fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
+    await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledWith('ssh',"literal'$(touch nope)",command));
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('serializes two-finger Zellij actions, reports failures and permits another attempt', async () => {
+    savePreferences({...defaults,pinchZoom:false,gestures:{...defaults.gestures,left:'nextZellijPane'}});
+    let reject!: (error: Error)=>void;
+    mocks.zellijNavigate.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+    const reportError=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession} active reportError={reportError} />);
+    const canvas=screen.getByLabelText('Terminal for Host');
+    const swipe=()=>{
+      fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
+      fireEvent.pointerDown(canvas,{pointerId:2,pointerType:'touch',clientX:200,clientY:100});
+      fireEvent.pointerMove(canvas,{pointerId:1,pointerType:'touch',clientX:0,clientY:100});
+      fireEvent.pointerMove(canvas,{pointerId:2,pointerType:'touch',clientX:100,clientY:100});
+      fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:0,clientY:100});
+      fireEvent.pointerUp(canvas,{pointerId:2,pointerType:'touch',clientX:100,clientY:100});
+    };
+    swipe(); swipe();
+    expect(mocks.zellijNavigate).toHaveBeenCalledTimes(1);
+    await act(async()=>reject(new Error('Fixture unavailable')));
+    expect(reportError).toHaveBeenCalledWith(expect.stringContaining('Fixture unavailable'));
+    swipe();
+    await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledTimes(2));
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('rejects Zellij navigation on plain, local and other multiplexer terminals and ignores inactive, disconnected, selected or composing views', () => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
+    const reportError=vi.fn();
+    const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+    const view=render(<TerminalPane session={session} active reportError={reportError} />);
+    const swipe=()=>{
+      const canvas=screen.getByLabelText('Terminal for Host');
+      fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
+      fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
+    };
+    swipe();
+    for(const kind of ['tmux','herdr','zellij'] as const){
+      session.attached={kind,name:'test'}; session.local=kind==='zellij'?true:undefined;
+      view.rerender(<TerminalPane session={session} active reportError={reportError} />); swipe();
+    }
+    expect(reportError).toHaveBeenCalledTimes(4);
+    session.local=undefined;
+    view.rerender(<TerminalPane session={session} active={false} reportError={reportError} />); swipe();
+    session.connected=false;
+    view.rerender(<TerminalPane session={session} active reportError={reportError} />); swipe();
+    session.connected=true;
+    view.rerender(<TerminalPane session={session} active reportError={reportError} />);
+    terminal.hasSelection.mockReturnValue(true); swipe(); terminal.hasSelection.mockReturnValue(false);
+    fireEvent.compositionStart(screen.getByLabelText('Terminal for Host')); swipe();
+    expect(reportError).toHaveBeenCalledTimes(4);
+    expect(mocks.zellijNavigate).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('suppresses a late navigation failure after the terminal becomes inactive', async () => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
+    let reject!: (error: unknown)=>void;
+    mocks.zellijNavigate.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+    const reportError=vi.fn();
+    const session={id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession;
+    const view=render(<TerminalPane session={session} active reportError={reportError} />);
+    const canvas=screen.getByLabelText('Terminal for Host');
+    fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
+    fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
+    view.rerender(<TerminalPane session={session} active={false} reportError={reportError} />);
+    await act(async()=>reject({kind:'fixture',message:'Late private error'}));
+    expect(reportError).not.toHaveBeenCalled();
+    expect(mocks.zellijNavigate).toHaveBeenCalledTimes(1);
   });
   it("distinguishes configured single, double and triple taps without firing lower-count actions", () => {
     vi.useFakeTimers();

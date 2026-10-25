@@ -99,6 +99,8 @@ export const api = {
   adoptSession: (sessionId:string) => invoke<void>('adopt_session',{sessionId}),
   write: (sessionId: string, data: string) =>
     invoke<void>(sessionId.startsWith('local:') ? 'local_write' : "write_stdin", { sessionId, data }),
+  zellijNavigate: (sessionId: string, name: string, type: 'nextTab' | 'previousTab' | 'nextPane' | 'previousPane') =>
+    invoke<void>('zellij_action', {sessionId, name, action:{type}}),
   ackOutput: (sessionId: string, bytes: number) =>
     // Native permits only bounded accounting for already-delivered bytes across lock generations.
     acknowledgeInvoke<void>(sessionId.startsWith('local:') ? 'local_ack' : "ack_output", { sessionId, bytes }),

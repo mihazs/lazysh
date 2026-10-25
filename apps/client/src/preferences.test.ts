@@ -3,6 +3,18 @@ import { describe, expect, it } from "vitest";
 import { defaults, decodeClipboardRequest, parseChord, parsePreferences, parseTheme, terminalOptions } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
+  it('round-trips explicit Zellij gesture actions without changing existing defaults', () => {
+    const prefs=parsePreferences(JSON.parse(JSON.stringify({...defaults,
+      bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab',swipeRight:'previousZellijTab'},
+      gestures:{...defaults.gestures,left:'nextZellijPane',right:'previousZellijPane'},
+    })));
+    expect(prefs.bodyGestures.swipeLeft).toBe('nextZellijTab');
+    expect(prefs.bodyGestures.swipeRight).toBe('previousZellijTab');
+    expect(prefs.gestures.left).toBe('nextZellijPane');
+    expect(prefs.gestures.right).toBe('previousZellijPane');
+    expect(parsePreferences({version:1}).gestures).toEqual({left:'none',right:'none',up:'none',down:'none'});
+    expect(parsePreferences({version:1}).bodyGestures.swipeLeft).toBe('none');
+  });
   it('uses the extended light palette only for Paper or explicit light metadata', () => {
     const colors = {background:'#ffffff',foreground:'#111111',red:'#123456',brightRed:'#abcdef'};
     const legacy = parsePreferences({...defaults, customTheme:colors});
