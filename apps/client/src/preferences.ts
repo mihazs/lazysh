@@ -10,12 +10,12 @@ export const themes = {
 } satisfies Record<string, ITheme>;
 export const toolbarKeys = ["esc", "ctrl", "meta", "tab", "c", "d", "enter", "backspace", "paste", "dpad", "left", "up", "down", "right"] as const;
 export type ToolbarKey = typeof toolbarKeys[number];
-export const gestureActions = ["none", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "custom"] as const;
+export const gestureActions = ["none", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
 export const gestureDirections = ["left", "right", "up", "down"] as const;
 export const bodyGestureSlots = ["tap", "doubleTap", "tripleTap", "swipeLeft", "swipeRight"] as const;
 export const gestureSlots = [...bodyGestureSlots, "twoLeft", "twoRight", "twoUp", "twoDown", "cornerLeft", "cornerRight"] as const;
 export type GestureSlot = typeof gestureSlots[number];
-export const gestureLabels: Record<GestureAction, string> = {none: "No action", left: "Arrow left", right: "Arrow right", pageUp: "Page up", pageDown: "Page down", escape: "Escape", tab: "Tab", find: "Find in history", compose: "Compose text", paste: "Paste clipboard", keyboard: "Show keyboard", hideKeyboard: "Hide keyboard", copy: "Copy selection", backspace: "Backspace", interrupt: "Interrupt (Ctrl+C)", nextSession: "Next lazysh session", previousSession: "Previous lazysh session", custom: "Custom key chord"};
+export const gestureLabels: Record<GestureAction, string> = {none: "No action", left: "Arrow left", right: "Arrow right", pageUp: "Page up", pageDown: "Page down", escape: "Escape", tab: "Tab", find: "Find in history", compose: "Compose text", paste: "Paste clipboard", keyboard: "Show keyboard", hideKeyboard: "Hide keyboard", copy: "Copy selection", backspace: "Backspace", interrupt: "Interrupt (Ctrl+C)", nextSession: "Next lazysh session", previousSession: "Previous lazysh session", nextZellijTab: "Next Zellij tab", previousZellijTab: "Previous Zellij tab", nextZellijPane: "Next Zellij pane", previousZellijPane: "Previous Zellij pane", custom: "Custom key chord"};
 export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;
