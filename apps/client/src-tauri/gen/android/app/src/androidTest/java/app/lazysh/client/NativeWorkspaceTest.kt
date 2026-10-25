@@ -1,5 +1,12 @@
 package app.lazysh.client
 
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.util.Base64
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -19,6 +26,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -76,14 +84,34 @@ class NativeWorkspaceTest {
         })""")
         assertEquals("DOM input focus changed for $selector: $focus", "true", evaluate(scenario,
             "document.activeElement === document.querySelector(${JSONObject.quote(selector)})"))
+        // DOM focus can precede Chromium's native input connection. The hosted
+        // textarea fixture reached this point with focus=true but no connection.
+        // Wait for the exact native type action's constraints, without refocusing
+        // or attempting input, within the existing five-second typing budget.
+        val typing = typeTextIntoFocusedView(text)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (true) {
+            if (System.nanoTime() >= deadline) {
+                throw AssertionError("Native typing constraints did not become ready for $selector; native=${NativeActivityFixture.readiness(scenario)}; windows=${NativeActivityFixture.windowDiagnostics()}")
+            }
+            var ready = false
+            scenario.onActivity { activity ->
+                ready = typing.constraints.matches(requireNotNull(webView(activity.window.decorView)))
+            }
+            if (ready) break
+            Thread.sleep(25)
+        }
+        val focusRemainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+        assertEquals("DOM input focus changed while awaiting native typing for $selector", "true", evaluate(scenario,
+            "document.activeElement === document.querySelector(${JSONObject.quote(selector)})", focusRemainingMillis))
+        assertTrue("Native typing readiness exhausted the shared budget for $selector", System.nanoTime() < deadline)
         // Espresso webKeys uses JS value assignment. React tracks that setter,
-        // so its later synthetic change can be ignored. Inject native keys into
-        // the focused WebView instead, preserving normal browser input events.
-        onView(isAssignableFrom(WebView::class.java)).perform(typeTextIntoFocusedView(text))
+        // so its later synthetic change can be ignored. Inject native keys once
+        // into the focused WebView, preserving normal browser input events.
+        onView(isAssignableFrom(WebView::class.java)).perform(typing)
         // Espresso acknowledges key injection, not the separate WebView renderer.
         // Wait only for the exact result; never retype or assign the input value.
         val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         while (true) {
             if (System.nanoTime() >= deadline) {
                 val diagnostics = evaluate(scenario, """JSON.stringify((() => {
@@ -102,6 +130,89 @@ class NativeWorkspaceTest {
             if (evaluate(scenario, typed, remainingMillis) == "true") break
             Thread.sleep(50)
         }
+    }
+
+    // A dedicated first instrumentation invocation selects only this method.
+    // This exercises first-Activity/native-runtime startup, not a force-stopped
+    // external process. Closing the last Tauri Activity would kill the runner.
+    @Test fun themeLinksUseFirstActivityAndWarmIntentWithExplicitReview() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        instrumentation.runOnMainSync {
+            val lifecycle = ActivityLifecycleMonitorRegistry.getInstance()
+            assertTrue("Theme-link acceptance must run before any MainActivity", Stage.values().all { stage ->
+                lifecycle.getActivitiesInStage(stage).none { it is MainActivity }
+            })
+        }
+        fun intent(name: String): Intent {
+            val theme = JSONObject().put("v", 1).put("name", name).put("mode", "light")
+                .put("colors", JSONObject().put("background", "#fafafa").put("foreground", "#121212"))
+            val data = Base64.encodeToString(theme.toString().toByteArray(Charsets.UTF_8),
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+            // No explicit component: the actual packaged manifest must resolve
+            // this VIEW/BROWSABLE route, while restricting it to our owned APK.
+            return Intent(Intent.ACTION_VIEW, Uri.parse("lazysh://theme?data=$data"))
+                .addCategory(Intent.CATEGORY_BROWSABLE).setPackage(context.packageName)
+        }
+        fun click(label: String) {
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$label']")).perform(webClick())
+        }
+        val cold = intent("Android first activity")
+        assertEquals("Packaged APK must resolve implicit theme links to MainActivity", MainActivity::class.java.name,
+            context.packageManager.resolveActivity(cold, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.name)
+        assertTrue("The acceptance intent must not bypass manifest resolution", cold.component == null)
+        val scenario = NativeActivityFixture.launch(cold)
+        val original = AtomicReference<MainActivity>()
+        scenario.onActivity { original.set(it) }
+        val review = "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Review linked theme')"
+        val noReview = "!($review) && !document.querySelector('[aria-label=\"Linked theme preview\"]')"
+        fun appearance(expected: String) = "document.documentElement.dataset.appTheme === ${JSONObject.quote(expected)}"
+        fun warm(next: Intent) {
+            context.startActivity(next.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            awaitDocument(scenario, "warm theme link delivery", review)
+            scenario.onActivity { assertSame("Warm singleTask delivery must reuse the original Activity", original.get(), it) }
+        }
+        awaitDocument(scenario, "first-Activity theme link", review)
+        assertEquals("A received cold link must not apply itself", "true", evaluate(scenario, appearance("forest")))
+        click("Review linked theme")
+        awaitDocument(scenario, "cold explicit preview", "document.querySelector('[aria-label=\"Linked theme preview\"] h2')?.textContent==='Android first activity'")
+        assertEquals("Review must not apply the theme", "true", evaluate(scenario, appearance("forest")))
+        click("Discard theme link")
+        awaitDocument(scenario, "cold explicit discard", noReview)
+        assertEquals("Discard must preserve the theme", "true", evaluate(scenario, appearance("forest")))
+
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+        onWebView().withElement(findElement(Locator.XPATH, "//summary[text()='Import and share theme']")).perform(webClick())
+        val draftSelector = "textarea[aria-label='Theme JSON or share code']"
+        val draft = "unfinished native theme draft"
+        typeInto(scenario, draftSelector, draft)
+        closeSoftKeyboard()
+        val draftKept = "document.querySelector(${JSONObject.quote(draftSelector)})?.value === ${JSONObject.quote(draft)}"
+        val sameUrl = intent("Android first activity")
+        assertEquals("Warm reopen must use the exact same URL", cold.data, sameUrl.data)
+        warm(sameUrl)
+        assertEquals("Warm delivery must preserve the manual draft", "true", evaluate(scenario, draftKept))
+        assertEquals("Warm delivery must not apply itself", "true", evaluate(scenario, appearance("forest")))
+        click("Review linked theme")
+        awaitDocument(scenario, "warm same-URL preview", "document.querySelector('[aria-label=\"Linked theme preview\"] h2')?.textContent==='Android first activity'")
+        assertEquals("Review must preserve the manual draft", "true", evaluate(scenario, draftKept))
+        click("Apply linked theme")
+        awaitDocument(scenario, "warm explicit apply", appearance("custom") + " && " + noReview)
+        assertEquals("Apply must preserve the manual draft", "true", evaluate(scenario, draftKept))
+        assertEquals("Applied app colors must match the reviewed palette", "true", evaluate(scenario,
+            "document.querySelector('[aria-label=\"Terminal preferences\"] select') !== null && document.documentElement.style.getPropertyValue('--theme-bg') === '#fafafa'"))
+
+        warm(intent("Android replacement"))
+        click("Review linked theme")
+        awaitDocument(scenario, "replacement explicit preview", "document.querySelector('[aria-label=\"Linked theme preview\"] h2')?.textContent==='Android replacement'")
+        click("Discard theme link")
+        awaitDocument(scenario, "replacement explicit discard", noReview)
+        assertEquals("Discarding a replacement keeps the applied theme", "true", evaluate(scenario, appearance("custom")))
+        assertEquals("Replacement review/discard must preserve the manual draft", "true", evaluate(scenario, draftKept))
+        // Only this isolated acceptance's own appearance state is changed. Reset
+        // through the actual UI before the ordinary native workspace suite.
+        click("Reset preferences")
+        awaitDocument(scenario, "theme fixture reset", appearance("forest"))
     }
 
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {

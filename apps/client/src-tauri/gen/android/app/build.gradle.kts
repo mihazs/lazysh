@@ -59,6 +59,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
+    // Keep first-Activity link receipts when the ordinary instrumentation task
+    // executes afterward. Both paths use Gradle's native connected-test reports.
+    if (providers.gradleProperty("lazyshThemeLinkAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/theme-links"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/theme-links"
+        }
+    }
     buildFeatures {
         buildConfig = true
     }
