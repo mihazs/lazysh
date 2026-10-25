@@ -75,7 +75,9 @@ fn prepare(
         builder.permissions(std::fs::Permissions::from_mode(0o700));
     }
     let directory = builder.tempdir_in(&parent).map_err(|_| Error::Storage)?;
+    crate::storage::created_directory(directory.path())?;
     let mut snapshot = NamedTempFile::new_in(directory.path()).map_err(|_| Error::Storage)?;
+    crate::storage::created_file(snapshot.as_file())?;
     let mut digest = Sha256::new();
     let mut count = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -163,6 +165,7 @@ fn prepare(
         let mut file = options
             .open(directory.path().join(name))
             .map_err(|_| Error::Storage)?;
+        crate::storage::created_file(&file)?;
         let mut digest = Sha256::new();
         let mut copied = 0_u64;
         loop {
@@ -199,10 +202,10 @@ fn prepare(
     Ok(VerifiedBundle { directory })
 }
 
-#[cfg(all(test, unix, not(target_vendor = "apple")))]
+#[cfg(all(test, unix, not(target_os = "ios")))]
 mod tests;
 
-#[cfg(all(test, any(windows, target_vendor = "apple")))]
+#[cfg(all(test, any(windows, target_os = "ios")))]
 mod unsupported_acl_tests {
     use super::*;
     #[test]

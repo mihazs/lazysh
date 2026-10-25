@@ -19,6 +19,19 @@ fn cpp_exception_and_ownership_boundary() {
         .status()
         .expect("CMake native test build")
         .success());
+    #[cfg(target_os = "macos")]
+    assert!(Command::new("cmake")
+        .args([
+            "--build",
+            build,
+            "--config",
+            "Release",
+            "--target",
+            "parakeet-storage-tests"
+        ])
+        .status()
+        .expect("macOS storage test build")
+        .success());
     assert!(Command::new("ctest")
         .args(["--test-dir", build, "-C", "Release", "--output-on-failure"])
         .status()

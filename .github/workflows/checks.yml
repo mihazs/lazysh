@@ -103,6 +103,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - name: Build pinned Parakeet runtime and exercise native macOS ACL storage
+        if: runner.os == 'macOS'
+        run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
       - name: Exercise native resume policy persistence and cancellation
@@ -272,12 +275,13 @@ jobs:
           xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
           xcrun simctl install "$APPLE_STATUS_SIMULATOR_ID" apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app
       - name: Verify actual iOS Mosh IPC and privacy resources
+        id: ios-mosh-app
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
         run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Run native workspace Save, relaunch, and Delete acceptance
         timeout-minutes: 8
-        if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' && steps.ios-mosh-app.outcome == 'success' }}
         run: bun run test:ios-workspace
       - name: Upload iOS app acceptance results
         if: always()

@@ -15,6 +15,16 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Device-local durable intent preserves the lock on cold launch when its protected
   proof is missing; cancelled enrollment restores off only after confirmed cleanup.
 
+- macOS Parakeet model-storage admission checks actual Darwin ACLs and trusted
+  descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
+  preparation remain disabled; real recognition and platform acceptance stay open.
+
+- Optional Simple custom-text shortcut builder with Control/Option/Shift,
+  first-character modifiers, comma-separated groups and escaped commas. Advanced
+  remains the default; existing shortcut records are unchanged. Unicode literal
+  text and leading/trailing spaces survive save/reload. Modified text remains
+  bounded to printable ASCII and eight steps; unsupported input reports errors.
+
 - Opt-in Linux Parakeet inference acceptance with a licensed public speech
   fixture, repeat-recognizer and model-file cleanup checks, and reported timing
   and process peak memory. No client engine, automatic download or changed voice
@@ -23,7 +33,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 - Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
   model archive validation and native exception/ownership tests. It adds no
   dictation UI or automatic model download; broader model and device validation
-  remain pending, and Apple/Windows model loading fails closed pending native
+  remain pending, and iOS/Windows model loading fails closed pending native
   ACL validation.
 
 - Custom theme bold-color policies: unchanged colors, bright ANSI colors, or a
@@ -96,6 +106,9 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   WebView and current Moshi mobile pixel parity remain unverified.
 
 ### Fixed
+
+- Saving an Advanced `text:` shortcut now preserves trailing spaces instead of
+  trimming the literal payload.
 
 - Linux Parakeet runtime startup now matches each pinned static ONNX Runtime
   artifact's libstdc++ ABI. A real no-model ORT/regex regression catches the
