@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Reviewed whole-app custom themes with bounded JSON/share-code import and export,
+  light/dark metadata, contrast-safe app chrome, and settings sync validation.
+  Existing bundled choices and terminal-only palettes keep their behavior until
+  explicitly changed; QR scanning and OS theme links remain unavailable.
+
 - Remembered list or cards layout for the active-session switcher. Existing
   installations retain the list default; switching layout never reconnects sessions.
 

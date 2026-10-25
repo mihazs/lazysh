@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabels, parseChord, parseTheme, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
+import ThemeImportPanel from "./ThemeImportPanel";
+import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabels, parseChord, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 export default function PreferencesPanel() {
@@ -7,7 +8,6 @@ export default function PreferencesPanel() {
   const fonts = useDeviceFonts();
   const [fontBusy, setFontBusy] = useState(false);
   const [error, setError] = useState("");
-  const [themeJson, setThemeJson] = useState("");
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
   const [chordLabel, setChordLabel] = useState("");
@@ -18,8 +18,8 @@ export default function PreferencesPanel() {
     try {await action();} catch (error) {setError(String(error));} finally {setFontBusy(false);}
   }
   function update(patch: Partial<Preferences>) {
-    try { savePreferences({ ...preferences, ...patch }); setError(""); }
-    catch { setError("Settings could not be saved on this device."); }
+    try { savePreferences({ ...preferences, ...patch }); setError(""); return true; }
+    catch { setError("Settings could not be saved on this device."); return false; }
   }
   function move(item: ToolbarKey, delta: number) {
     const toolbar = [...preferences.toolbar];
@@ -39,8 +39,8 @@ export default function PreferencesPanel() {
     <p>Changes apply to every open terminal.</p>
     {error && <p role="alert">{error}</p>}
     <label>Session switcher layout<select value={preferences.sessionLayout} onChange={e => update({sessionLayout: e.target.value as Preferences["sessionLayout"]})}><option value="list">List</option><option value="cards">Cards</option></select></label>
-    <label>App theme<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme}>{theme}</option>)}</select></label>
-    <label>Terminal theme<select value={preferences.customTheme ? "custom" : preferences.theme} onChange={e => update({theme: e.target.value as Preferences["theme"], customTheme: undefined})}>
+    <label>App theme<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme}>{theme}</option>)}{preferences.customThemeInfo && <option value="custom">{preferences.customThemeInfo.name}</option>}</select></label>
+    <label>Terminal theme<select value={preferences.theme} onChange={e => update({theme: e.target.value as Preferences["theme"], ...(!preferences.customThemeInfo && e.target.value !== "custom" ? {customTheme: undefined} : {})})}>
       {Object.keys(themes).map(theme => <option key={theme} value={theme}>{theme}</option>)}
       {preferences.customTheme && <option value="custom">Custom</option>}
     </select></label>
@@ -77,10 +77,7 @@ export default function PreferencesPanel() {
       {(["left", "right"] as const).map(corner => binding(corner === "left" ? "cornerLeft" : "cornerRight", `D-pad ${corner} corner`, preferences.dpadCorners[corner], action => update({dpadCorners: {...preferences.dpadCorners, [corner]: action}}), ["none", "backspace", "interrupt", "custom"]))}
       <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom})}>Reset gestures</button>
     </details>
-    <details><summary>Import terminal theme</summary>
-      <label>Theme JSON<textarea maxLength={4096} value={themeJson} onChange={e => setThemeJson(e.target.value)} placeholder={'{"background":"#101311","foreground":"#d9e0d6"}'} /></label>
-      <button onClick={() => { try { update({customTheme: parseTheme(JSON.parse(themeJson))}); } catch (e) { setError(String(e)); } }}>Import theme</button>
-    </details>
+    <ThemeImportPanel preferences={preferences} apply={update} />
     <details><summary>Toolbar keys and order</summary>
       <ul>{preferences.toolbar.map((key, index) => <li key={key}><span>{key}</span><button aria-label={`Move ${key} earlier`} disabled={index === 0} onClick={() => move(key, -1)}>↑</button><button aria-label={`Move ${key} later`} disabled={index === preferences.toolbar.length - 1} onClick={() => move(key, 1)}>↓</button><button aria-label={`Remove ${key}`} onClick={() => update({toolbar: preferences.toolbar.filter(item => item !== key)})}>Remove</button></li>)}</ul>
       {toolbarKeys.filter(key => !preferences.toolbar.includes(key)).map(key => <button key={key} onClick={() => update({toolbar: [...preferences.toolbar, key]})}>Add {key}</button>)}
@@ -99,6 +96,6 @@ export default function PreferencesPanel() {
       <label>Key sequence<input maxLength={128} value={keys} onChange={e => setKeys(e.target.value)} /></label>
       <button disabled={!chordLabel.trim() || !keys.trim() || preferences.chords.length >= 12} onClick={() => {try {parseChord(keys); update({chords: [...preferences.chords, {label: chordLabel.trim(), keys: keys.trim()}]}); setChordLabel(""); setKeys("");} catch (e) {setError(String(e));}}}>Add chord</button>
     </details>
-    <button onClick={() => {update({...defaults, toolbar: [...defaults.toolbar], snippets: [], customTheme: undefined}); void fontAction(resetFontSelection);}}>Reset preferences</button>
+    <button onClick={() => {update({...defaults, toolbar: [...defaults.toolbar], snippets: [], customTheme: undefined, customThemeInfo: undefined}); void fontAction(resetFontSelection);}}>Reset preferences</button>
   </section>;
 }
