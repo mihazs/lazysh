@@ -84,14 +84,34 @@ class NativeWorkspaceTest {
         })""")
         assertEquals("DOM input focus changed for $selector: $focus", "true", evaluate(scenario,
             "document.activeElement === document.querySelector(${JSONObject.quote(selector)})"))
+        // DOM focus can precede Chromium's native input connection. The hosted
+        // textarea fixture reached this point with focus=true but no connection.
+        // Wait for the exact native type action's constraints, without refocusing
+        // or attempting input, within the existing five-second typing budget.
+        val typing = typeTextIntoFocusedView(text)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (true) {
+            if (System.nanoTime() >= deadline) {
+                throw AssertionError("Native typing constraints did not become ready for $selector; native=${NativeActivityFixture.readiness(scenario)}; windows=${NativeActivityFixture.windowDiagnostics()}")
+            }
+            var ready = false
+            scenario.onActivity { activity ->
+                ready = typing.constraints.matches(requireNotNull(webView(activity.window.decorView)))
+            }
+            if (ready) break
+            Thread.sleep(25)
+        }
+        val focusRemainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+        assertEquals("DOM input focus changed while awaiting native typing for $selector", "true", evaluate(scenario,
+            "document.activeElement === document.querySelector(${JSONObject.quote(selector)})", focusRemainingMillis))
+        assertTrue("Native typing readiness exhausted the shared budget for $selector", System.nanoTime() < deadline)
         // Espresso webKeys uses JS value assignment. React tracks that setter,
-        // so its later synthetic change can be ignored. Inject native keys into
-        // the focused WebView instead, preserving normal browser input events.
-        onView(isAssignableFrom(WebView::class.java)).perform(typeTextIntoFocusedView(text))
+        // so its later synthetic change can be ignored. Inject native keys once
+        // into the focused WebView, preserving normal browser input events.
+        onView(isAssignableFrom(WebView::class.java)).perform(typing)
         // Espresso acknowledges key injection, not the separate WebView renderer.
         // Wait only for the exact result; never retype or assign the input value.
         val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         while (true) {
             if (System.nanoTime() >= deadline) {
                 val diagnostics = evaluate(scenario, """JSON.stringify((() => {
