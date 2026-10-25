@@ -8,6 +8,11 @@
     "packages/*"
   ],
   "scripts": {
+    "hooks:install": "sh .githooks/pre-commit --install",
+    "duplicates:check": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones --fail-on-empty .",
+    "duplicates:baseline": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline --fail-on-empty .",
+    "duplicates:staged": "lint-staged --hide-all --config lint-staged.config.mjs",
+    "test:hooks": "bun test ./tests/pre-commit.test.ts",
     "dev": "turbo run dev:native --filter=@lazysh/client",
     "build": "turbo run build",
     "build:native": "turbo run build:native --filter=@lazysh/client",
@@ -32,6 +37,8 @@
     "test:ios-workspace": "turbo run test:ios-workspace --filter=@lazysh/client"
   },
   "devDependencies": {
+    "jscpd": "5.4.2",
+    "lint-staged": "17.6.0",
     "turbo": "^2.11.10"
   },
   "license": "GPL-3.0-or-later"

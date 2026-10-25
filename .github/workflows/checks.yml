@@ -26,6 +26,7 @@ jobs:
           key: turbo-client-${{ runner.os }}-${{ github.sha }}
           restore-keys: turbo-client-${{ runner.os }}-
       - run: bun install --frozen-lockfile
+      - run: bun run test:hooks
       - run: bunx turbo run build check test --filter=@lazysh/client
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
