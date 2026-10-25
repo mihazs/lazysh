@@ -25,6 +25,23 @@ fn command_output(mut command: Command, timeout: std::time::Duration) -> std::pr
             output.extend_from_slice(&buffer[..retained]);
         }
     }
+    // Inspect only the program/argv, never Command's Debug representation: its
+    // environment contains the private, ephemeral Mosh fixture keys.
+    let arguments: Vec<_> = command
+        .get_args()
+        .map(|argument| {
+            let argument = argument.to_string_lossy();
+            match argument.split_once('=') {
+                Some((name, _)) if name.ends_with("_KEY") => format!("{name}=<redacted>"),
+                _ => argument.into_owned(),
+            }
+        })
+        .collect();
+    let description = format!(
+        "{} {}",
+        command.get_program().to_string_lossy(),
+        arguments.join(" ")
+    );
     // Keep Cargo/compiler or adb children inside this fixture's process group.
     command.process_group(0);
     let mut child = command
@@ -58,10 +75,15 @@ fn command_output(mut command: Command, timeout: std::time::Duration) -> std::pr
         stdout: out.join().unwrap(),
         stderr: err.join().unwrap(),
     };
-    assert!(!timed_out, "native fixture command exceeded its deadline");
+    assert!(
+        !timed_out,
+        "native fixture command exceeded its deadline ({timeout:?}): {description}. stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout[output.stdout.len().saturating_sub(16_384)..]),
+        String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(16_384)..])
+    );
     assert!(
         output.status.success(),
-        "native fixture failed. stdout: {}\nstderr: {}",
+        "native fixture failed ({description}). stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout[output.stdout.len().saturating_sub(16_384)..]),
         String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(16_384)..])
     );
@@ -224,10 +246,13 @@ fn ios_simulator_official_server_interoperability() {
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
     );
+    println!("iOS Mosh stage: compiling simulator Cargo test executables");
     let (peer, units) = ios_artifacts();
+    println!("iOS Mosh stage: waiting for simulator boot readiness");
     let mut boot = Command::new("xcrun");
     boot.args(["simctl", "bootstatus", &simulator, "-b"]);
     command_output(boot, std::time::Duration::from_secs(180));
+    println!("iOS Mosh stage: running native library unit suite");
     let mut unit_command = Command::new("xcrun");
     unit_command.args(["simctl", "spawn", &simulator, &units, "--nocapture"]);
     let output = command_output(unit_command, std::time::Duration::from_secs(45));
@@ -237,6 +262,7 @@ fn ios_simulator_official_server_interoperability() {
         "iOS unit tests did not execute: {text}"
     );
     println!("{text}");
+    println!("iOS Mosh stage: starting official host server fixtures");
     let version = Command::new("mosh-server")
         .arg("--version")
         .output()
@@ -244,6 +270,7 @@ fn ios_simulator_official_server_interoperability() {
     assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
     let first = Server::start();
     let second = Server::start();
+    println!("iOS Mosh stage: running two-client simulator protocol suite");
     let mut protocol = Command::new("xcrun");
     protocol
         .args([
@@ -271,6 +298,36 @@ fn ios_simulator_official_server_interoperability() {
     assert!(
         text.contains("1 passed"),
         "iOS interoperability test did not execute: {text}"
+    );
+    println!("{text}");
+}
+
+#[test]
+fn timed_out_fixture_reports_captured_diagnostics() {
+    let started = std::time::Instant::now();
+    let failure = std::panic::catch_unwind(|| {
+        let mut child = Command::new("sh");
+        child.args([
+            "-c",
+            "printf 'native-fixture-ready\\n'; sleep 5",
+            "fixture-helper",
+            "LAZYSH_MOSH_TEST_ONE_KEY=private-argv-value",
+        ]);
+        child.env("PRIVATE_FIXTURE_ENV", "private-environment-value");
+        command_output(child, std::time::Duration::from_millis(100))
+    })
+    .expect_err("fixture must enforce the deadline");
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("diagnostic panic text");
+    assert!(message.contains("exceeded its deadline"));
+    assert!(message.contains("native-fixture-ready"));
+    assert!(message.contains("LAZYSH_MOSH_TEST_ONE_KEY=<redacted>"));
+    assert!(!message.contains("private-argv-value"));
+    assert!(!message.contains("private-environment-value"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "owned child group must be stopped and reaped"
     );
 }
 
