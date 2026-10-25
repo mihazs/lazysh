@@ -2,6 +2,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod approvals;
 pub mod devices;
 pub mod settings;
+mod storage_filesystem;
+mod storage_namespace;
 pub mod transcript;
 pub mod usage;
 use clap::ValueEnum;
@@ -29,16 +31,20 @@ fn wait_for_storage(attempt: i32) -> bool {
             started.get().unwrap_or(now)
         };
         started.set(Some(start));
-        let remaining = Duration::from_secs(3).saturating_sub(start.elapsed());
-        if remaining.is_zero() {
-            return false;
-        }
-        // SQLite's default timeout backs off to 100 ms. Concurrent short hook
-        // writes can then wake in lockstep, leaving it idle between waves.
-        // Poll briefly under the same wall-clock budget, without weakening syncs.
-        std::thread::sleep(remaining.min(Duration::from_millis(5)));
-        true
+        wait_for_storage_until(start + Duration::from_secs(3))
     })
+}
+
+fn wait_for_storage_until(deadline: Instant) -> bool {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return false;
+    }
+    // SQLite's default timeout backs off to 100 ms. Concurrent short hook
+    // writes can then wake in lockstep, leaving it idle between waves.
+    // Poll briefly under the same wall-clock budget, without weakening syncs.
+    std::thread::sleep(remaining.min(Duration::from_millis(5)));
+    true
 }
 
 pub const MAX_INPUT: usize = 256 * 1024;
@@ -58,6 +64,7 @@ const HOOK_EVENTS: [&str; 8] = [
 pub enum Error {
     InvalidEvent,
     InvalidArgument,
+    UnsupportedStateFilesystem,
     Device(&'static str),
     Settings(&'static str),
     Io(io::Error),
@@ -68,6 +75,7 @@ impl Error {
         match self {
             Self::InvalidEvent => "InvalidEvent",
             Self::InvalidArgument => "InvalidArgument",
+            Self::UnsupportedStateFilesystem => "UnsupportedStateFilesystem",
             Self::Device(kind) => kind,
             Self::Settings(kind) => kind,
             Self::Io(_) => "IoError",
@@ -253,7 +261,7 @@ fn validate_state_file(path: &Path) -> Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    if !metadata.is_file() {
+    if storage_namespace::is_link(&metadata) || !metadata.is_file() {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             "State must be a regular file",
@@ -262,7 +270,7 @@ fn validate_state_file(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.nlink() != 1 {
+        if metadata.nlink() != 1 || metadata.uid() != unsafe { libc::geteuid() } {
             return Err(Error::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "State must not have hard links",
@@ -273,38 +281,93 @@ fn validate_state_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn validate_sidecar(path: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if storage_namespace::is_link(&metadata) || !metadata.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid state sidecar").into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o777 != 0o600
+        {
+            return Err(
+                io::Error::new(io::ErrorKind::PermissionDenied, "Unsafe state sidecar").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File> {
+    let path = directory.join("events.sqlite3-init-lock");
+    validate_sidecar(&path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let lock = options.open(&path)?;
+    validate_sidecar(&path)?;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(fs::TryLockError::WouldBlock) if wait_for_storage_until(deadline) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                    None,
+                )
+                .into())
+            }
+            Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+}
+
 impl Store {
     pub fn open(directory: &Path) -> Result<Self> {
-        match fs::symlink_metadata(directory) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Invalid state directory",
-                )))
+        Self::open_with_admission(directory, storage_filesystem::require_local)
+    }
+    // Private native-test seam: rejection must precede every state mutation.
+    fn open_with_admission(directory: &Path, admit: fn(&Path) -> io::Result<()>) -> Result<Self> {
+        fn path_error(error: io::Error) -> Error {
+            if error.kind() == io::ErrorKind::Unsupported {
+                Error::UnsupportedStateFilesystem
+            } else if error.kind() == io::ErrorKind::InvalidInput {
+                Error::InvalidArgument
+            } else {
+                Error::Io(error)
             }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
         }
-        let mut directories = fs::DirBuilder::new();
-        directories.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            directories.mode(0o700);
-        }
-        directories.create(directory)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
-        }
+        let directory = storage_namespace::resolve(directory).map_err(path_error)?;
+        admit(&directory).map_err(path_error)?;
+        storage_namespace::create(&directory)?;
         let path = directory.join("events.sqlite3");
         // Never open/close the database outside SQLite: on POSIX, closing any
         // descriptor for this inode releases this process's SQLite locks.
         // The private directory protects newly created files until chmod, and
         // SQLite itself refuses leaf symlinks with SQLITE_OPEN_NOFOLLOW.
         validate_state_file(&path)?;
+        // SQLite owns sidecar creation, recovery and removal. Never open/close
+        // their descriptors here: POSIX locks belong to the process/inode.
+        for suffix in ["-journal", "-wal", "-shm"] {
+            validate_sidecar(&directory.join(format!("events.sqlite3{suffix}")))?;
+        }
+        // One deadline covers native bootstrap coordination and SQLite's
+        // subsequent schema/mode waits, rather than adding another wait budget.
+        let bootstrap_deadline = Instant::now() + Duration::from_secs(3);
+        let _bootstrap = lock_store_bootstrap(&directory, bootstrap_deadline)?;
         let mut connection = Connection::open_with_flags(
             &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -313,7 +376,12 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         validate_state_file(&path)?;
-        connection.busy_handler(Some(wait_for_storage))?;
+        connection.busy_handler(Some(move |_| wait_for_storage_until(bootstrap_deadline)))?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        let mode: String = connection.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        if mode != "wal" {
+            return Err(io::Error::other("WAL unavailable for companion state").into());
+        }
         connection.execute_batch(
             "PRAGMA journal_size_limit=1048576;
             CREATE TABLE IF NOT EXISTS sessions (
@@ -322,6 +390,7 @@ impl Store {
                 updated_at REAL NOT NULL, event_count INTEGER NOT NULL,
                 PRIMARY KEY (agent,session_id));",
         )?;
+        connection.busy_handler(Some(wait_for_storage))?;
         Ok(Self { connection })
     }
     pub fn ingest(&mut self, event: &Event, now: DateTime<Utc>) -> Result<()> {
@@ -397,6 +466,108 @@ pub fn claude_config() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_state_fails_before_admission_or_creation() {
+        fn must_not_admit(_: &Path) -> io::Result<()> {
+            panic!("drive-relative path reached filesystem admission");
+        }
+        // The seam ensures a regression cannot create anything in a drive's
+        // unrelated per-drive cwd: admission would panic before all mutation.
+        for path in ["C:junction/missing-state", "D:junction/missing-state", "C:"] {
+            assert!(matches!(
+                Store::open_with_admission(Path::new(path), must_not_admit),
+                Err(Error::InvalidArgument)
+            ));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_component_replaced_after_admission_is_not_followed_or_mutated() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        fn replace_component(directory: &Path) -> io::Result<()> {
+            let root = directory.parent().unwrap().parent().unwrap();
+            symlink(root.join("victim"), root.join("missing"))
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::create_dir(&victim).unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o750)).unwrap();
+        let db = victim.join("events.sqlite3");
+        fs::write(&db, b"untouched victim").unwrap();
+        assert!(
+            Store::open_with_admission(&dir.path().join("missing/state"), replace_component)
+                .is_err()
+        );
+        assert!(!victim.join("state").exists());
+        assert_eq!(
+            fs::metadata(&victim).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(fs::read(db).unwrap(), b"untouched victim");
+        assert_eq!(fs::read_dir(victim).unwrap().count(), 1);
+    }
+    #[test]
+    fn filesystem_rejection_precedes_creation_chmod_bootstrap_and_sqlite() {
+        fn reject(_: &Path) -> io::Result<()> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "fixture unsupported filesystem",
+            ))
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("not-created/state");
+        assert!(matches!(
+            Store::open_with_admission(&missing, reject),
+            Err(Error::UnsupportedStateFilesystem)
+        ));
+        assert!(!dir.path().join("not-created").exists());
+        let db = dir.path().join("events.sqlite3");
+        fs::write(&db, b"untouched synthetic legacy bytes").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o750)).unwrap();
+            fs::set_permissions(&db, fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        assert!(Store::open_with_admission(dir.path(), reject).is_err());
+        assert_eq!(fs::read(&db).unwrap(), b"untouched synthetic legacy bytes");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+                0o750
+            );
+            assert_eq!(
+                fs::metadata(db).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+        }
+    }
+    #[test]
+    fn every_store_connection_has_full_synchronization_in_wal_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = Store::open(dir.path()).unwrap();
+        let second = Store::open(dir.path()).unwrap();
+        for store in [first, second] {
+            assert_eq!(
+                store
+                    .connection
+                    .query_row("PRAGMA synchronous", [], |r| r.get::<_, i32>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                store
+                    .connection
+                    .query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
+                    .unwrap(),
+                "wal"
+            );
+        }
+    }
     #[test]
     fn retention_runs_on_ingest_and_snapshot() {
         let dir = tempfile::tempdir().unwrap();

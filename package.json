@@ -24,6 +24,7 @@
     "test:voice": "turbo run test:voice",
     "test:et": "turbo run test:et",
     "test:mosh": "turbo run test:mosh",
+    "test:storage": "turbo run test:storage --filter=@lazysh/agent",
     "lint": "turbo run lint",
     "format:check": "turbo run format:check",
     "build:ios": "turbo run build:ios --filter=@lazysh/client",

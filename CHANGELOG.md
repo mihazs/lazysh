@@ -90,6 +90,15 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Changed
 
+- Companion event storage uses WAL with explicit FULL synchronization, reducing
+  rollback-journal sync work while preserving event acknowledgements and the
+  three-second ingest wait budget. Existing databases migrate on successful open.
+  Bootstrap has one shared three-second native/SQLite wait deadline. Unix state
+  ancestors and sidecars now fail closed when unsafe; unsupported/network/FUSE
+  storage, parent-traversal paths and custom symlink/reparse routes are rejected
+  before mutation. Verified Darwin system aliases remain supported.
+  Slow-storage exhaustion remains possible and issue #36 is not declared fixed.
+
 - Paper and explicitly light imported terminal themes now darken bright indexed
   cube colors and reverse the indexed grayscale ramp using the pinned Moshi
   desktop 0.5.28 palette math. This changes their default 256-color rendering;
