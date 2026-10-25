@@ -198,3 +198,22 @@ Native wheel/menu handling, actual current readback, relaunch and restoration
 remain unchanged. No valid UIKit setter or roundtrip success is claimed yet.
 Latest main's Grok record status and Mosh recovery tests are merged normally;
 new exact-head native execution remains required.
+
+[Run 40225635475](https://github.com/mihazs/lazysh/actions/runs/40225635475),
+exact head `4ed0503`, passed the actual iPhone simulator acceptance:
+`testActualHomeScreenIconRoundtripAndRelaunch` passed in 78.764 seconds. Retained
+UI attachments record Amber native readback at 38.90 seconds, Amber after full
+terminate/relaunch at 63.86 seconds, and restored Default at 77.32 seconds.
+The first Amber and final Default screenshots visibly show the actual Current
+icon text. The post-relaunch screenshot is scrolled below that text; persistence
+is established by the native label assertion and passing test, not screenshot
+visibility. [Artifact 12612302391](https://github.com/mihazs/lazysh/actions/runs/40225635475/artifacts/12612302391)
+retains the results. All four native icon controller tests, protected hosted
+resource/status/invalid-input checks, raw Mosh and workspace Save/relaunch/Delete
+also passed. This establishes supported iPhone simulator behavior on this exact
+head. Physical iPhone/iPad Home Screen appearance and iPad UI mutation remain
+unexecuted; both compiled idiom resources are independently verified.
+
+Latest main's timed chord queue and native recovery checks are merged normally
+after retaining that successful icon run. The integrated head requires fresh
+CI; prior exact-head evidence is not relabeled as execution of the new merge.
