@@ -2,7 +2,12 @@ use crate::ssh::{quote, Result, Session, SshError};
 use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, time::Duration};
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "ios"
+))]
 use tokio::sync::watch;
 use tokio::time::timeout;
 use zeroize::Zeroizing;
@@ -69,7 +74,8 @@ pub fn transport_capabilities() -> Capabilities {
         mosh: cfg!(any(
             target_os = "linux",
             target_os = "macos",
-            target_os = "android"
+            target_os = "android",
+            target_os = "ios"
         )),
         et: true,
     }
@@ -219,11 +225,12 @@ pub(crate) async fn bootstrap(
     if !cfg!(any(
         target_os = "linux",
         target_os = "macos",
-        target_os = "android"
+        target_os = "android",
+        target_os = "ios"
     )) {
         return Err(SshError::new(
             "mosh_unsupported",
-            "Mosh is currently supported on Linux, macOS and Android builds",
+            "Mosh is currently supported on Linux, macOS, Android and iOS builds",
         ));
     }
     if session.handle.agent_forwarding_enabled() {
@@ -241,7 +248,12 @@ pub(crate) async fn bootstrap(
     parse_bootstrap(&bytes, address, &options)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "ios"
+))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     bootstrap: Bootstrap,

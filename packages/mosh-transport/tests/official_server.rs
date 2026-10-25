@@ -252,9 +252,49 @@ fn ios_simulator_official_server_interoperability() {
     let mut boot = Command::new("xcrun");
     boot.args(["simctl", "bootstatus", &simulator, "-b"]);
     command_output(boot, std::time::Duration::from_secs(180));
+    // These are command-line Cargo executables, not installed applications.
+    // Match Swift's simulator test runner by spawning directly instead of
+    // routing their lifetime through the booted simulator's launchd service.
+    // Probe the executable itself so a pre-main/dyld launch stall is reported
+    // separately from a test body that fails to finish. Never retry a stall.
+    println!("iOS Mosh stage: discovering native library tests through standalone launch");
+    let mut discovery = Command::new("xcrun");
+    discovery.args([
+        "simctl",
+        "spawn",
+        "--standalone",
+        &simulator,
+        &units,
+        "--list",
+    ]);
+    let discovered = command_output(discovery, std::time::Duration::from_secs(45));
+    let discovered = String::from_utf8(discovered.stdout).unwrap();
+    for required in [
+        "scoped_ipv6_addresses_preserve_the_interface_for_the_numeric_resolver",
+        "malformed_or_huge_remote_state_returns_errors_without_aborting",
+        "unauthenticated_oversize_datagram_is_dropped_before_valid_traffic",
+        "authenticated_fragment_bounds_and_invalid_tags_do_not_abort",
+        "hostile_reference_and_state_flood_preserve_a_bounded_recoverable_client",
+        "invalid_key_endpoint_dimensions_and_backlog_are_rejected",
+    ] {
+        assert!(
+            discovered
+                .lines()
+                .any(|line| line.ends_with(&format!("::{required}: test"))),
+            "iOS native executable did not discover {required}: {discovered}"
+        );
+    }
+    println!("{discovered}");
     println!("iOS Mosh stage: running native library unit suite");
     let mut unit_command = Command::new("xcrun");
-    unit_command.args(["simctl", "spawn", &simulator, &units, "--nocapture"]);
+    unit_command.args([
+        "simctl",
+        "spawn",
+        "--standalone",
+        &simulator,
+        &units,
+        "--nocapture",
+    ]);
     let output = command_output(unit_command, std::time::Duration::from_secs(45));
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
@@ -276,6 +316,7 @@ fn ios_simulator_official_server_interoperability() {
         .args([
             "simctl",
             "spawn",
+            "--standalone",
             &simulator,
             &peer,
             "--ignored",
