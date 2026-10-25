@@ -1642,6 +1642,7 @@ pub async fn agent_usage(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_transcript(
     state: State<'_, AppState>,
     session_id: String,
