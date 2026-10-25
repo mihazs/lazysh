@@ -295,6 +295,14 @@ fn block_id(s: &str) -> bool {
             .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
 }
 fn notification(s: &str) -> Result<()> {
+    if let Some(target) = s.strip_prefix("%session-window-changed ") {
+        let parts = target.split(' ').collect::<Vec<_>>();
+        return if parts.len() == 2 && id(parts[0], b'$') && id(parts[1], b'@') {
+            Ok(())
+        } else {
+            Err(protocol())
+        };
+    }
     // Notifications are bounded and ignored, never interpreted as responses.
     const ALLOWED: &[&str] = &[
         "%session-changed ",
@@ -449,8 +457,16 @@ impl Drop for Control {
     }
 }
 
-pub(crate) fn start(mut control: Control, mut cancellation: watch::Receiver<bool>) -> Binding {
-    let (requests, mut rx) = mpsc::channel::<Request>(4);
+pub(crate) fn start(control: Control, cancellation: watch::Receiver<bool>) -> Binding {
+    let (requests, rx) = mpsc::channel::<Request>(4);
+    spawn_actor(control, cancellation, rx);
+    Binding { requests }
+}
+fn spawn_actor(
+    mut control: Control,
+    mut cancellation: watch::Receiver<bool>,
+    mut rx: mpsc::Receiver<Request>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut idle_budget = LIMIT;
         loop {
@@ -501,7 +517,6 @@ pub(crate) fn start(mut control: Control, mut cancellation: watch::Receiver<bool
             idle_budget = LIMIT;
         }
     });
-    Binding { requests }
 }
 async fn request(
     lease: &AccessLease,
@@ -524,21 +539,6 @@ async fn request(
     binding.call(lease, &mut cancel, target).await
 }
 impl Binding {
-    #[cfg(test)]
-    pub(crate) fn queue_fixture_request(
-        &self,
-        lease: AccessLease,
-    ) -> oneshot::Receiver<Result<Snapshot>> {
-        let (reply, response) = oneshot::channel();
-        self.requests
-            .try_send(Request {
-                lease,
-                target: None,
-                reply,
-            })
-            .unwrap_or_else(|_| panic!("fixture queue unexpectedly unavailable"));
-        response
-    }
     #[cfg(test)]
     pub(crate) async fn retired(&self) {
         self.requests.closed().await;
@@ -582,6 +582,28 @@ impl Binding {
         tokio::select! {biased; _=cancel.changed()=>Err(unavailable()), _=lease.cancelled()=>Err(unavailable()), result=tokio::time::timeout(DEADLINE,response)=>result.map_err(|_|unavailable())?.map_err(|_|unavailable())? }
     }
 }
+#[cfg(test)]
+pub(crate) fn start_with_revoked_queue_fixture(
+    control: Control,
+    cancellation: watch::Receiver<bool>,
+    lease: AccessLease,
+) -> (Binding, oneshot::Receiver<Result<Snapshot>>) {
+    let (requests, rx) = mpsc::channel(4);
+    let (reply, response) = oneshot::channel();
+    requests
+        .try_send(Request {
+            lease: lease.clone(),
+            target: None,
+            reply,
+        })
+        .unwrap_or_else(|_| panic!("empty fixture queue"));
+    // Enqueue AND revoke before launching the actual actor loop. A no-await
+    // interval on the caller cannot synchronize Tauri's separate runtime.
+    lease.state().lock().unwrap();
+    spawn_actor(control, cancellation, rx);
+    (Binding { requests }, response)
+}
+
 #[cfg(test)]
 pub(crate) fn fixture_control(channel: russh::Channel<client::Msg>, identity: Identity) -> Control {
     Control {
@@ -646,6 +668,9 @@ mod tests {
         assert!(block_id("1 2 3"));
         assert!(!block_id("1 2 3 extra"));
         assert!(notification("%sessions-changed").is_ok());
+        assert!(notification("%session-window-changed $1 @2").is_ok());
+        assert!(notification("%session-window-changed $1 @2 trailing").is_err());
+        assert!(notification("%session-window-changed $1 bad").is_err());
         assert!(notification("%end 1 2 3").is_err());
         assert!(notification("%output %1 arbitrary").is_err());
     }

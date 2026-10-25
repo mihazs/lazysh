@@ -694,7 +694,16 @@ async fn product_actor_probe() {
     .await
     .unwrap();
     let (cancel, mut cancellation) = watch::channel(false);
-    let binding = crate::tmux_jump::start(control, cancellation.clone());
+    let (binding, queued) = crate::tmux_jump::start_with_revoked_queue_fixture(
+        control,
+        cancellation.clone(),
+        lease.clone(),
+    );
+    assert!(queued.await.is_err());
+    access.authorize(access.generation().unwrap()).unwrap();
+    access.ready(access.generation().unwrap()).unwrap();
+    let nonce = access.status().unwrap().nonce.unwrap();
+    let lease = access.lease(Some(&nonce)).unwrap();
     let snapshot = binding.call(&lease, &mut cancellation, None).await.unwrap();
     let json = serde_json::to_value(snapshot).unwrap();
     let target = json["sessions"]
@@ -705,12 +714,23 @@ async fn product_actor_probe() {
         .unwrap();
     assert_eq!(target["name"], expected_name);
     assert_eq!(target["windows"][0]["name"], expected_window);
+    let selected = f.local(&[
+        "new-window",
+        "-t",
+        &a,
+        "-n",
+        "window-notification",
+        "-P",
+        "-F",
+        "#{window_id}",
+    ]);
+    let notified =
+        serde_json::to_value(binding.call(&lease, &mut cancellation, None).await.unwrap()).unwrap();
+    assert_eq!(notified["current"]["windowId"], selected);
     let generation = json["generation"].as_str().unwrap().to_owned();
-    let queued = binding.queue_fixture_request(lease.clone());
-    // No await between enqueue and revocation: the actor must examine the
-    // captured lease when it dequeues, not replace it with an unlocked one.
+    // The completed snapshot leaves no outstanding I/O. An idle actor may
+    // survive locking; the separate partial-response case below must retire.
     access.lock().unwrap();
-    assert!(queued.await.is_err());
     assert!(binding
         .call(
             &lease,
