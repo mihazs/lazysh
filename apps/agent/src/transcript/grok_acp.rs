@@ -67,13 +67,17 @@ pub(super) fn normalize(record: &Value, offset: u64) -> Option<Value> {
                     .filter(|value| !value.is_null())
                     .map(Value::to_string)
                     .unwrap_or_default();
-                let mut blocks = vec![block("tool_use", arguments, Some(id.clone()), Some(title))];
-                blocks.extend(tool_output(update, &id));
+                let mut call = block("tool_use", arguments, Some(id.clone()), Some(title));
+                if let Some(status) = recorded_status(update) {
+                    call["status"] = json!(status);
+                }
+                let mut blocks = vec![call];
+                blocks.extend(tool_output(update, &id, false));
                 ("assistant", blocks)
             }
             "tool_call_update" => {
                 let id = string(update, "toolCallId").filter(|id| !id.is_empty())?;
-                ("tool", tool_output(update, &id))
+                ("tool", tool_output(update, &id, true))
             }
             "plan" => ("assistant", vec![block("text", plan(update)?, None, None)]),
             _ => return None,
@@ -115,8 +119,15 @@ fn content(value: &Value, kind: &str) -> Option<Value> {
     })
 }
 
-fn tool_output(update: &Value, id: &str) -> Vec<Value> {
-    let parts: Vec<Value> = update["content"]
+// Preserve explicit recorded values only; missing/unknown is not a live state.
+fn recorded_status(update: &Value) -> Option<&str> {
+    update["status"]
+        .as_str()
+        .filter(|status| matches!(*status, "pending" | "in_progress" | "completed" | "failed"))
+}
+
+fn tool_output(update: &Value, id: &str, status_only_card: bool) -> Vec<Value> {
+    let mut parts: Vec<Value> = update["content"]
         .as_array()
         .into_iter()
         .flatten()
@@ -148,24 +159,37 @@ fn tool_output(update: &Value, id: &str) -> Vec<Value> {
             _ => None,
         })
         .collect();
-    if !parts.is_empty() {
-        return parts;
+    if parts.is_empty() {
+        parts = update
+            .get("rawOutput")
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                vec![block(
+                    "tool_result",
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string()),
+                    Some(id.into()),
+                    None,
+                )]
+            })
+            .unwrap_or_default();
     }
-    update
-        .get("rawOutput")
-        .filter(|value| !value.is_null())
-        .map(|value| {
-            vec![block(
+    if let Some(status) = recorded_status(update) {
+        if parts.is_empty() && status_only_card {
+            parts.push(block(
                 "tool_result",
-                value
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| value.to_string()),
+                format!("Recorded tool status: {status}"),
                 Some(id.into()),
-                None,
-            )]
-        })
-        .unwrap_or_default()
+                Some("Tool status".into()),
+            ));
+        }
+        for part in &mut parts {
+            part["status"] = json!(status);
+        }
+    }
+    parts
 }
 
 fn plan(update: &Value) -> Option<String> {
