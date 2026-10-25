@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { lightExtendedAnsi } from "./terminalPalette";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
 import { themeColors, themeInfo, importedTheme, type ThemeInfo, type ThemeColors } from "./themeImport";
 
@@ -132,9 +133,10 @@ export function usePreferences() { return useSyncExternalStore(subscribe, getPre
 export function terminalOptions(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): ITerminalOptions {
   const colors: ThemeColors | undefined = p.theme === 'custom' ? p.customTheme : themes[p.theme];
   const {bold, ...theme} = colors ?? {};
+  const light = p.theme === 'paper' || (p.theme === 'custom' && p.customThemeInfo?.mode === 'light');
   // Bundled and pre-metadata palettes retain their existing bright-bold default.
   const legacy = p.theme !== 'custom' || !p.customThemeInfo;
-  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, drawBoldTextInBrightColors: bold !== undefined || legacy, theme };
+  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, drawBoldTextInBrightColors: bold !== undefined || legacy, theme: {...theme, ...(light ? {extendedAnsi: lightExtendedAnsi()} : {})} };
 }
 export function terminalBoldColor(p: Preferences): string | undefined {
   const bold = p.theme === 'custom' ? p.customTheme?.bold : undefined;
