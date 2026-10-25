@@ -278,6 +278,21 @@ button svg {
   width: 26px;
   height: 30px;
 }
+@media (hover: none), (pointer: coarse) {
+  .host-actions {
+    display: flex;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .host-actions .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+  .host-connect {
+    min-height: 52px;
+    padding-right: 104px;
+  }
+}
 .add-host-button {
   background: transparent;
   border: 1px dashed var(--theme-border, #36412f);
