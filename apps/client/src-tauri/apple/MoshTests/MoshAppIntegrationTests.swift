@@ -17,6 +17,9 @@ final class MoshAppIntegrationTests: XCTestCase {
   }
 
   func testActualNativeIPCOffersMosh() throws {
+    let mirrorPresent = ProcessInfo.processInfo.environment["OS_ACTIVITY_DT_MODE"] != nil
+    let mirrorDisabledMarker = ProcessInfo.processInfo.environment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] == "1"
+    print("lazysh.hosted logging mirrorPresent=\(mirrorPresent) mirrorDisabledMarker=\(mirrorDisabledMarker)")
     let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
       guard let view = self.appWebView(), let url = view.url else { return false }
       return url.scheme != "about" && !view.isLoading
