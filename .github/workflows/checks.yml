@@ -80,6 +80,8 @@ jobs:
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
+      - name: Check combined native voice startup and clean shutdown without models
+        run: bunx turbo run test:voice-interop:smoke --filter=@lazysh/client
       - run: bun run build:native
       - run: bun run test:mosh
 

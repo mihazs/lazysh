@@ -14,6 +14,9 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 pub mod catalog;
 pub mod cloud;
 
+#[cfg(all(test, feature = "parakeet-acceptance"))]
+mod interop_tests;
+
 const MAX_MODEL: u64 = 160 * 1024 * 1024;
 const MAX_SAMPLES: usize = 16_000 * 30;
 type Result<T> = std::result::Result<T, String>;

@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Default-off combined Whisper/Parakeet native acceptance tasks, with fixed
+  public speech inputs and separate processes for both initialization orders.
+  Linux archive-specific symbol isolation prevents private ORT protobuf symbols
+  from overriding Mosh's system protobuf library; no client engine is enabled.
+
 - Opt-in Linux Parakeet inference acceptance with a licensed public speech
   fixture, repeat-recognizer and model-file cleanup checks, and reported timing
   and process peak memory. No client engine, automatic download or changed voice
