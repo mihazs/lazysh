@@ -39,6 +39,7 @@ pub fn run() {
         .manage(previews::PreviewState::default())
         .manage(devices::DeviceStreams::default())
         .manage(share::ShareState::default())
+        .manage(voice::cloud::CloudState::default())
         .manage(sync::SyncState::default())
         .manage(local::LocalState::default())
         .setup(|app| {
@@ -46,6 +47,7 @@ pub fn run() {
             let state = ssh::AppState::new(app.path().app_config_dir()?)?;
             app.manage(state);
             local::install_cleanup(app)?;
+            voice::cloud::install_cleanup(app)?;
             app.manage(voice::VoiceState::new(
                 app.path().app_data_dir()?.join("voice-models"),
             )?);
@@ -114,6 +116,13 @@ pub fn run() {
             voice::voice_remove_model,
             voice::voice_transcribe,
             voice::voice_cancel,
+            voice::cloud::voice_cloud_status,
+            voice::cloud::voice_cloud_enroll,
+            voice::cloud::voice_cloud_refresh,
+            voice::cloud::voice_cloud_forget,
+            voice::cloud::voice_cloud_begin,
+            voice::cloud::voice_cloud_transcribe,
+            voice::cloud::voice_cloud_cancel,
             identities::generate_identity,
             identities::inspect_identity,
             vault::has_credentials,

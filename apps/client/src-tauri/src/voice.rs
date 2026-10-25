@@ -12,6 +12,7 @@ use std::{
 use tauri::State;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 pub mod catalog;
+pub mod cloud;
 
 const MAX_MODEL: u64 = 160 * 1024 * 1024;
 const MAX_SAMPLES: usize = 16_000 * 30;
