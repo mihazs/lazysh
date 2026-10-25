@@ -440,3 +440,6 @@ mod tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+mod storage_diagnostics;
