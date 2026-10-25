@@ -293,13 +293,22 @@ fn validate_sidecar(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.nlink() != 1
-            || metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.permissions().mode() & 0o777 != 0o600
-        {
-            return Err(
-                io::Error::new(io::ErrorKind::PermissionDenied, "Unsafe state sidecar").into(),
-            );
+        let links = metadata.nlink();
+        let owned = metadata.uid() == unsafe { libc::geteuid() };
+        let mode = metadata.permissions().mode() & 0o777;
+        if links != 1 || !owned || mode != 0o600 {
+            let kind = match path.file_name().and_then(|name| name.to_str()) {
+                Some("events.sqlite3-journal") => "journal",
+                Some("events.sqlite3-wal") => "wal",
+                Some("events.sqlite3-shm") => "shm",
+                Some("events.sqlite3-init-lock") => "bootstrap-lock",
+                _ => "other",
+            };
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("Unsafe state sidecar (kind={kind}, links={links}, owned={owned}, mode={mode:03o})"),
+            )
+            .into());
         }
     }
     Ok(())
@@ -466,6 +475,33 @@ pub fn claude_config() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_diagnostics_use_fixed_kinds_and_security_metadata_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        for (name, kind) in [
+            ("events.sqlite3-journal", "journal"),
+            ("events.sqlite3-wal", "wal"),
+            ("events.sqlite3-shm", "shm"),
+            ("events.sqlite3-init-lock", "bootstrap-lock"),
+            ("do-not-report-this-private-name", "other"),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, b"do not report file contents").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            let Error::Io(error) = validate_sidecar(&path).unwrap_err() else {
+                panic!("unsafe permissions must remain an I/O validation error");
+            };
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                error.to_string(),
+                format!("Unsafe state sidecar (kind={kind}, links=1, owned=true, mode=644)")
+            );
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            validate_sidecar(&path).unwrap();
+        }
+    }
     #[cfg(windows)]
     #[test]
     fn drive_relative_state_fails_before_admission_or_creation() {
