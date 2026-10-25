@@ -1,4 +1,5 @@
-use crate::ssh::{exec, quote, AppState, Result, SshError};
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::ssh::{quote, AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -222,10 +223,15 @@ pub async fn herdr_tree(
     state: State<'_, AppState>,
     session_id: String,
     name: String,
-) -> Result<HerdrTree> {
-    let command = command(&name, "api snapshot".into())?;
-    let session = state.session(&session_id).await?;
-    parse(&exec(&session, command).await?)
+    access: AccessLease,
+) -> std::result::Result<Guarded<HerdrTree>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let command = command(&name, "api snapshot".into())?;
+            let session = state.session(&session_id).await?;
+            parse(&crate::ssh::exec_for_access(&session, command, &access).await?)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn herdr_action(
@@ -233,11 +239,16 @@ pub async fn herdr_action(
     session_id: String,
     name: String,
     action: HerdrAction,
-) -> Result<()> {
-    let command = action_command(&name, &action)?;
-    let session = state.session(&session_id).await?;
-    exec(&session, command).await?;
-    Ok(())
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let command = action_command(&name, &action)?;
+            let session = state.session(&session_id).await?;
+            crate::ssh::exec_for_access(&session, command, &access).await?;
+            Ok(())
+        })
+        .await
 }
 
 #[cfg(test)]

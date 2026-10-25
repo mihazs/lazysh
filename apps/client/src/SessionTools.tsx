@@ -1,3 +1,4 @@
+import { useProtectedApi } from './access';
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -7,7 +8,7 @@ import {
   Upload,
   GitCompareArrows,
 } from "lucide-react";
-import { api, type FileEntry } from "./bridge";
+import { api as nativeApi, type FileEntry } from "./bridge";
 export { MuxPanel } from "./MultiplexerPanel";
 
 export function errorMessage(error: unknown): string {
@@ -20,6 +21,7 @@ const join = (parent: string, child: string) =>
   `${parent.replace(/\/$/, "")}/${child}`;
 
 export function FilesPanel({ sessionId }: { sessionId: string }) {
+  const api = useProtectedApi(nativeApi);
   const [path, setPath] = useState(".");
   const [draft, setDraft] = useState(".");
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -250,6 +252,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
 }
 
 export function DiffPanel({ sessionId }: { sessionId: string }) {
+  const api = useProtectedApi(nativeApi);
   const [path, setPath] = useState(".");
   const [staged, setStaged] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);

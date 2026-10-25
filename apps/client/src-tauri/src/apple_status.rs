@@ -1,3 +1,4 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use tauri::AppHandle;
 use tauri_plugin_lazysh_apple_status::{AppleStatusExt, Capability, Snapshot};
 
@@ -11,8 +12,11 @@ pub async fn apple_status_configure(
     app: AppHandle,
     subscription_id: String,
     enabled: bool,
-) -> Result<(), String> {
-    app.apple_status().configure(subscription_id, enabled).await
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<String>> {
+    access
+        .run(async { app.apple_status().configure(subscription_id, enabled).await })
+        .await
 }
 
 #[tauri::command]
@@ -20,6 +24,9 @@ pub async fn apple_status_publish(
     app: AppHandle,
     snapshot: Snapshot,
     start_activity: bool,
-) -> Result<(), String> {
-    app.apple_status().publish(snapshot, start_activity).await
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<String>> {
+    access
+        .run(async { app.apple_status().publish(snapshot, start_activity).await })
+        .await
 }

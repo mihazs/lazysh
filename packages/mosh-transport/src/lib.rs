@@ -19,3 +19,14 @@ mod native;
     target_os = "ios"
 ))]
 pub use native::{Client, Error, Update};
+
+#[cfg(all(
+    feature = "test-fixtures",
+    any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    )
+))]
+pub use native::{fixture_ack, fixture_packet};

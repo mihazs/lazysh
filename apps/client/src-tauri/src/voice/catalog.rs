@@ -1,4 +1,6 @@
 use super::{begin, chunk, finish, Result, VoiceState, MAX_MODEL};
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use reqwest::{redirect::Policy, Client, Url};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -73,6 +75,15 @@ struct Jobs {
 }
 #[derive(Default)]
 pub(super) struct Downloads(Mutex<Jobs>);
+pub(super) fn cancel_for_lock(state: &VoiceState) {
+    if let Ok(mut jobs) = state.downloads.0.lock() {
+        if let Some(job) = jobs.active.as_ref() {
+            job.cancel.send_replace(true);
+            let id = job.id.clone();
+            remember(&mut jobs.cancelled, &id);
+        }
+    }
+}
 fn remember(list: &mut VecDeque<String>, id: &str) {
     if !list.iter().any(|entry| entry == id) {
         list.push_back(id.to_owned());
@@ -352,25 +363,34 @@ async fn download(
 }
 #[tauri::command]
 pub async fn voice_download_model(
+    access: AccessLease,
     state: State<'_, VoiceState>,
     id: String,
     request_id: String,
     events: Channel<serde_json::Value>,
-) -> Result<()> {
-    let model = MODELS
-        .iter()
-        .find(|model| model.id == id)
-        .ok_or("Unknown Whisper catalog model")?;
-    let url = format!(
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/{REVISION}/{}",
-        model.file
-    );
-    download(&state, model, &request_id, client()?, &url, |event| {
-        events
-            .send(serde_json::to_value(event).map_err(|_| "Invalid model download progress")?)
-            .map_err(|_| "Model download progress channel unavailable".into())
-    })
-    .await
+) -> Protected<()> {
+    access
+        .run(async {
+            let model = MODELS
+                .iter()
+                .find(|model| model.id == id)
+                .ok_or("Unknown Whisper catalog model")?;
+            let url = format!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/{REVISION}/{}",
+                model.file
+            );
+            download(&state, model, &request_id, client()?, &url, |event| {
+                access.check()?;
+                events
+                    .send(
+                        serde_json::to_value(event)
+                            .map_err(|_| "Invalid model download progress")?,
+                    )
+                    .map_err(|_| "Model download progress channel unavailable".into())
+            })
+            .await
+        })
+        .await
 }
 
 #[cfg(test)]

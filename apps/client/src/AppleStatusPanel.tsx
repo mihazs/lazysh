@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { listen } from '@tauri-apps/api/event';
 import { parseSnapshot } from './AgentPanel';
 import { parseApprovals } from './ApprovalPanel';
@@ -12,6 +13,7 @@ type ReviewIntent = {subscriptionId:string;sessionId:string;expiresAt:number;app
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props) {
+  const invoke = useProtectedInvoke();
   const [capability, setCapability] = useState<Capability>();
   const [subscription, setSubscription] = useState<string>();
   const [error, setError] = useState('');

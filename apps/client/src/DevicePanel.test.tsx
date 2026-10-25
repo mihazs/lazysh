@@ -141,7 +141,7 @@ it("requires explicit socket verification and input enablement before iOS contro
       width: 390,
       height: 844,
       action: { type: "key", key: "home" },
-    }),
+    }, { headers: { "X-Lazysh-Access": expect.any(String) } }),
   );
 });
 it("keeps Android video view-only until a fresh screenshot follows stop", async () => {
@@ -202,7 +202,7 @@ it("keeps Android video view-only until a fresh screenshot follows stop", async 
       id: frame.id,
       socket: "",
       devicePlatform: "android",
-    }),
+    }, { headers: { "X-Lazysh-Access": expect.any(String) } }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Stop video preview" }));
   expect(screen.getByLabelText("Enable device input")).toHaveProperty(
@@ -222,5 +222,5 @@ it("keeps Android video view-only until a fresh screenshot follows stop", async 
   expect(invoke).toHaveBeenCalledWith("device_stream_stop", {
     sessionId: "ssh-video",
     streamId: "video",
-  });
+  }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });

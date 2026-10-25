@@ -62,3 +62,6 @@ rcgen = "0.14"
 tokio-rustls = "0.26"
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios"))'.dev-dependencies]
+lazysh-mosh-transport = { path = "../../../packages/mosh-transport", features = ["test-fixtures"] }

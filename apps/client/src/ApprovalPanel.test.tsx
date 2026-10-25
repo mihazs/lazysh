@@ -47,7 +47,7 @@ it("binds an explicit decision to the exact pending request without terminal inp
     agentSessionId: "agent-session",
     paneId: "%7",
     decision: "allow",
-  });
+  }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it("keeps rejected/stale decisions visible as an error instead of pretending success", async () => {
   vi.mocked(invoke).mockImplementation(async (command) => {

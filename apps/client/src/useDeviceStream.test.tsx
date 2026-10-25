@@ -28,7 +28,7 @@ it("closes a stream whose startup finishes after its panel is removed", async ()
     expect(invoke).toHaveBeenCalledWith("device_stream_stop", {
       sessionId: "ssh",
       streamId: "late",
-    }),
+    }, { headers: { "X-Lazysh-Access": expect.any(String) } }),
   );
   expect(
     vi
@@ -72,7 +72,7 @@ it("holds one pull and rejects a repeated sequence then stops the source", async
     expect(invoke).toHaveBeenCalledWith("device_stream_stop", {
       sessionId: "ssh",
       streamId: "stream",
-    }),
+    }, { headers: { "X-Lazysh-Access": expect.any(String) } }),
   );
   expect(error).toHaveBeenCalledOnce();
   expect(frame).toHaveBeenCalledOnce();
@@ -111,7 +111,7 @@ it("preserves the Android image on idle and cancels its pending poll on removal"
   expect(invoke).toHaveBeenCalledWith("device_stream_stop", {
     sessionId: "ssh",
     streamId: "android",
-  });
+  }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   await act(async () =>
     next({ sequence: 2, frame: { late: true }, idle: false }),
   );

@@ -138,12 +138,14 @@ class NativeWorkspaceTest {
 
     @Test fun cloudCommandsReachNativeValidationThroughTheBundledWebView() {
         val scenario = NativeActivityFixture.scenario
-        awaitDocument(scenario, "Cloud IPC bridge", "Boolean(window.__TAURI_INTERNALS__?.invoke)")
+        awaitDocument(scenario, "Cloud IPC bridge", """Boolean(window.__TAURI_INTERNALS__?.invoke) && Boolean(document.querySelector("button[aria-label='Add host']"))""")
         // The runtime CI job installs this app on a fresh isolated emulator.
         // Do not clear the vault or enroll a device to establish the fixture.
         assertEquals("true", evaluate(scenario, """(() => {
           window.__lazyshCloudIpcResult = undefined;
-          window.__TAURI_INTERNALS__.invoke('voice_cloud_status', {}).then(
+          window.__TAURI_INTERNALS__.invoke('app_lock_status', {}).then(access =>
+            window.__TAURI_INTERNALS__.invoke('voice_cloud_status', {}, {headers: access.nonce ? {'X-Lazysh-Access':access.nonce} : {}})
+          ).then(
             value => { window.__lazyshCloudIpcResult = {ok:true,value}; },
             () => { window.__lazyshCloudIpcResult = {ok:false}; }
           );
@@ -160,9 +162,10 @@ class NativeWorkspaceTest {
 
         assertEquals("true", evaluate(scenario, """(() => {
           window.__lazyshCloudIpcResult = undefined;
-          window.__TAURI_INTERNALS__.invoke('voice_cloud_enroll', {
+          window.__TAURI_INTERNALS__.invoke('app_lock_status', {}).then(access =>
+            window.__TAURI_INTERNALS__.invoke('voice_cloud_enroll', {
             origin:'https://cloud-ipc.instrumentation.invalid', token:'invalid-instrumentation-device-token'
-          }).then(
+          }, {headers: access.nonce ? {'X-Lazysh-Access':access.nonce} : {}})).then(
             () => { window.__lazyshCloudIpcResult = {ok:true}; },
             error => { window.__lazyshCloudIpcResult = {ok:false,error:String(error)}; }
           );

@@ -1,10 +1,12 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import { isTauri } from '@tauri-apps/api/core';
 import { isPermissionGranted, onAction, registerActionTypes, requestPermission } from '@tauri-apps/plugin-notification';
 import { collectInbox, getInbox, openInboxEvent, updateInbox, useInbox, type InboxSession } from './notificationStore';
 import { errorMessage } from './SessionTools';
 
 export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) {
+  const invoke = useProtectedInvoke();
   const state = useInbox();
   const currentSessions = useRef(sessions);
   currentSessions.current = sessions;
@@ -65,6 +67,7 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
 }
 
 export default function NotificationPanel({ sessions }: { sessions: InboxSession[] }) {
+  const invoke = useProtectedInvoke();
   const state = useInbox();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');

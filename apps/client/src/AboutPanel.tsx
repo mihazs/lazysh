@@ -1,3 +1,4 @@
+import { useProtectedApi } from './access';
 import { useState } from "react";
 import license from "../../../LICENSE?raw";
 import ptyLicense from "../../../packages/portable-pty-vendor/LICENSE.md?raw";
@@ -7,10 +8,11 @@ import utf8License from "../../../packages/mosh-transport/vendor-android/protobu
 import abseilLicense from "../../../packages/mosh-transport/vendor-android/abseil/LICENSE?raw";
 import etLicense from "../../../packages/et-transport/LICENSE-MIT?raw";
 import moshIos from "../../../packages/mosh-transport/vendor/COPYING.iOS?raw";
-import { api, native } from "./bridge";
+import { api as nativeApi, native } from "./bridge";
 import { errorMessage } from "./SessionTools";
 
 export default function AboutPanel() {
+  const api = useProtectedApi(nativeApi);
   const [error, setError] = useState("");
   const source = `https://github.com/mihazs/lazysh${__LAZYSH_SOURCE_REVISION__ ? `/tree/${__LAZYSH_SOURCE_REVISION__}` : ""}`;
   function open(url: string) {

@@ -1,4 +1,5 @@
-use crate::ssh::{AppState, Connected, Input, Result, Session, SshError, SshEvent};
+use crate::app_lock::AccessLease;
+use crate::ssh::{AccessResult, AppState, Connected, Input, Result, Session, SshError, SshEvent};
 use lazysh_et_transport::{Client, Event, SessionSecret};
 use rand::distr::{Alphanumeric, SampleString};
 use russh::ChannelMsg;
@@ -145,35 +146,42 @@ pub(crate) async fn bootstrap(
 
 #[tauri::command]
 pub async fn connect_et(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     options: Options,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
-) -> Result<Connected> {
-    let parent = state.session(&session_id).await?;
-    let bootstrap = bootstrap(&parent, options, cols, rows).await?;
-    crate::ssh::spawn_native_terminal(
-        &state,
-        parent,
-        events,
-        "ET",
-        crate::ssh::check_size,
-        move |input, cancelled, initial_cancel, output, ready| {
-            tauri::async_runtime::spawn(run(
-                bootstrap,
-                cols,
-                rows,
-                input,
-                cancelled,
-                initial_cancel,
-                output,
-                ready,
-            ))
-        },
-    )
-    .await
+) -> AccessResult<Connected> {
+    lease
+        .run(async {
+            let parent = state.session(&session_id).await?;
+            let bootstrap = bootstrap(&parent, options, cols, rows).await?;
+            crate::ssh::spawn_native_terminal(
+                &state,
+                lease.clone(),
+                parent,
+                events,
+                "ET",
+                crate::ssh::check_size,
+                move |_access, input, cancelled, initial_cancel, output, ready| {
+                    tauri::async_runtime::spawn(run(
+                        bootstrap,
+                        cols,
+                        rows,
+                        input,
+                        cancelled,
+                        initial_cancel,
+                        output,
+                        ready,
+                    ))
+                },
+            )
+            .await
+        })
+        .await
 }
 
 fn startup_error(error: lazysh_et_transport::Error) -> SshError {
@@ -214,9 +222,9 @@ async fn run(
                 let value = tokio::select! { _ = input_cancel.changed() => return Ok(()), value = input.recv() => value };
                 let Some(value) = value else { return Ok(()) };
                 let result = match value {
-                    Input::Data(data) if data.is_empty() => continue,
-                    Input::Data(data) => tokio::select! { _ = input_cancel.changed() => return Ok(()), result = control.send(data.into_bytes()) => result },
-                    Input::Resize(cols, rows) => tokio::select! { _ = input_cancel.changed() => return Ok(()), result = control.resize(cols as u16, rows as u16) => result },
+                    Input::Data(data, _) if data.is_empty() => continue,
+                    Input::Data(data, lease) => { if lease.check().is_err() { continue; } tokio::select! { biased; _ = lease.cancelled() => continue, _ = input_cancel.changed() => return Ok(()), result = control.send(data.into_bytes()) => result } },
+                    Input::Resize(cols, rows, lease) => { if lease.check().is_err() { continue; } tokio::select! { biased; _ = lease.cancelled() => continue, _ = input_cancel.changed() => return Ok(()), result = control.resize(cols as u16, rows as u16) => result } },
                 };
                 result.map_err(|error| SshError::new("et", error))?;
             }
@@ -269,6 +277,11 @@ async fn run(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    fn access_lease() -> crate::app_lock::AccessLease {
+        crate::app_lock::AccessState::disabled()
+            .lease(None)
+            .unwrap()
+    }
     use super::*;
     #[test]
     fn startup_errors_keep_authentication_and_protocol_distinct_from_unreachable_transport() {
@@ -409,6 +422,7 @@ pub(crate) mod tests {
             ..Default::default()
         };
         assert!(connect_et(
+            access_lease(),
             app.state(),
             parent.clone(),
             invalid,
@@ -430,28 +444,50 @@ pub(crate) mod tests {
             port: address.port(),
             server_fifo: Some(fifo.to_string_lossy().into_owned()),
         };
-        let connected = connect_et(app.state(), parent.clone(), options, 80, 24, events)
-            .await
-            .unwrap();
+        let connected = connect_et(
+            access_lease(),
+            app.state(),
+            parent.clone(),
+            options,
+            80,
+            24,
+            events,
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
         let id = connected.session_id;
         crate::ssh::disconnect(app.state(), parent).await.unwrap();
         let file = directory.join("et-control.txt");
         std::fs::write(&file, "retained SSH control").unwrap();
         assert_eq!(
-            crate::ssh::read_file(app.state(), id.clone(), file.to_string_lossy().into_owned())
-                .await
-                .unwrap(),
+            crate::ssh::read_file(
+                access_lease(),
+                app.state(),
+                id.clone(),
+                file.to_string_lossy().into_owned()
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
             "retained SSH control"
         );
-        crate::ssh::resize(app.state(), id.clone(), 111, 36)
+        crate::ssh::resize(access_lease(), app.state(), id.clone(), 111, 36)
             .await
+            .unwrap()
+            .into_inner()
             .unwrap();
         crate::ssh::write_stdin(
+            access_lease(),
             app.state(),
             id.clone(),
             "printf '\\n__ET_NATIVE_世界__\\n'; stty size\r".into(),
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         timeout(Duration::from_secs(8), async {
             let mut output = Vec::new();
@@ -473,8 +509,10 @@ pub(crate) mod tests {
         })
         .await
         .unwrap();
-        crate::ssh::write_stdin(app.state(), id.clone(), "exit\r".into())
+        crate::ssh::write_stdin(access_lease(), app.state(), id.clone(), "exit\r".into())
             .await
+            .unwrap()
+            .into_inner()
             .unwrap();
         crate::ssh::disconnect(app.state(), id.clone())
             .await

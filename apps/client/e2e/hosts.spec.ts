@@ -8,6 +8,8 @@ test.beforeEach(async ({ page }) => {
       transformCallback: () => 1,
       unregisterCallback: () => {},
       invoke: async (command: string) => {
+        if(command==='app_lock_status')return {initialized:true,supported:false,reason:'Browser fixture',enabled:false,locked:false,generation:'0'};
+        if(command==='app_lock_ready' || command==='adopt_session')return;
         if (command === 'list_hosts') return hosts;
         if (command === 'local_capability') return {available:false, reason:'Test fixture'};
         if (command === 'delete_host') { hosts=[]; return; }

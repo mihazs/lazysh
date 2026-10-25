@@ -72,6 +72,6 @@ it("requires explicit preview and apply, and never automatically uploads", async
   expect(
     await screen.findByText("Imported 1 hosts and 0 credential entries."),
   ).toBeTruthy();
-  expect(invoke).toHaveBeenCalledWith("sync_apply", { token: "review-one" });
+  expect(invoke).toHaveBeenCalledWith("sync_apply", { token: "review-one" }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(changed).toHaveBeenCalledOnce();
 });

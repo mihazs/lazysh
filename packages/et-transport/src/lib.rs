@@ -487,6 +487,7 @@ impl Transport {
         tokio::select! { _ = cancel.changed() => false, result = events.send(event) => result.is_ok() }
     }
     async fn output(
+        &mut self,
         events: &mpsc::Sender<Event>,
         cancel: &mut watch::Receiver<bool>,
         packet: (u8, Vec<u8>),
@@ -498,6 +499,25 @@ impl Transport {
                     .map_err(|_| Error::Protocol("Invalid ET terminal buffer"))?;
                 if let Some(output) = output.buffer {
                     for chunk in output.chunks(16384) {
+                        if self.socket.is_some() {
+                            // A hidden consumer must not leave a live TCP connection
+                            // stalled behind output instead of processing keepalives.
+                            let permit = tokio::select! {
+                                _ = cancel.changed() => return Err(Error::Closed),
+                                result = timeout(KEEPALIVE_INTERVAL, events.reserve()) => result,
+                            };
+                            match permit {
+                                Ok(Ok(permit)) => {
+                                    permit.send(Event::Output(chunk.to_vec()));
+                                    continue;
+                                }
+                                Ok(Err(_)) => return Err(Error::Closed),
+                                Err(_) => {
+                                    self.socket = None;
+                                    self.incoming.clear();
+                                }
+                            }
+                        }
                         if !Self::emit(events, cancel, Event::Output(chunk.to_vec())).await {
                             return Err(Error::Closed);
                         }
@@ -523,19 +543,24 @@ impl Transport {
         let result = async {
             loop {
                 if *cancel.borrow() { return Ok(()); }
-                if self.socket.is_some() { if let Some(packet) = self.packet()? { Self::output(&events, &mut cancel, packet).await?; last_received = tokio::time::Instant::now(); continue; } }
+                if self.socket.is_some() { if let Some(packet) = self.packet()? { self.output(&events, &mut cancel, packet).await?; last_received = tokio::time::Instant::now(); if self.socket.is_none() && !Self::emit(&events, &mut cancel, Event::Disconnected).await { return Ok(()); } continue; } }
                 tokio::select! {
                     _ = cancel.changed() => return Ok(()),
                     command = commands.recv() => {
                         let Some(command) = command else { return Ok(()) };
-                        let connected = self.socket.is_some();
+                        if match &command {
+                            Command::Input(_, reply) | Command::Resize(_, _, reply) => reply.is_closed(),
+                            Command::Reconnect(_, _) => false,
+                        } { continue; }
+                        // Recovery emits its own final connection state after catch-up.
+                        let connected = self.socket.is_some() && !matches!(&command, Command::Reconnect(_, _));
                         match command {
                             Command::Input(data, reply) => { let payload = proto::TerminalBuffer { buffer: Some(data) }.encode_to_vec(); let result = tokio::select! { _ = cancel.changed() => return Ok(()), result = self.write_packet(1, &payload) => result }; let _ = reply.send(result); },
                             Command::Resize(cols, rows, reply) => { let result = tokio::select! { _ = cancel.changed() => return Ok(()), result = self.write_resize(cols, rows) => result }; let _ = reply.send(result); },
                             Command::Reconnect(endpoint, reply) => {
                                 let recovery = tokio::select! { _ = cancel.changed() => return Ok(()), result = self.recover(endpoint) => result };
                                 match recovery {
-                                    Ok(packets) => { let _ = reply.send(Ok(())); for packet in packets { Self::output(&events, &mut cancel, packet).await?; } last_received = tokio::time::Instant::now(); if !Self::emit(&events, &mut cancel, Event::Reconnected).await { return Ok(()); } },
+                                    Ok(packets) => { let _ = reply.send(Ok(())); for packet in packets { self.output(&events, &mut cancel, packet).await?; } last_received = tokio::time::Instant::now(); let event = if self.socket.is_some() { Event::Reconnected } else { Event::Disconnected }; if !Self::emit(&events, &mut cancel, event).await { return Ok(()); } },
                                     Err(error @ (Error::Authentication | Error::UnsupportedHandshake | Error::RecoveryHistoryUnavailable | Error::Protocol(_))) => { let _ = reply.send(Err(error)); return Err(Error::Protocol("ET recovery failed; create a fresh session")); },
                                     Err(error) => { let _ = reply.send(Err(error)); },
                                 }
@@ -634,6 +659,318 @@ mod tests {
             b"IDPASSKEY:abcdefghijklmnop/01234567890123456789012345678901\n",
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn blocked_output_disconnects_then_recovers_without_losing_or_repeating_bytes() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let (socket, peer) = tokio::join!(TcpStream::connect(endpoint), listener.accept());
+        let mut peer = peer.unwrap().0;
+        let mut transport = Transport::new(secret());
+        transport.socket = Some(socket.unwrap());
+        let (commands, command_rx) = mpsc::channel(8);
+        let control = Control { commands };
+        let (events, mut event_rx) = mpsc::channel(1);
+        events
+            .send(Event::Output(b"prefix".to_vec()))
+            .await
+            .unwrap();
+        let (cancel, cancel_rx) = watch::channel(false);
+        let worker = tokio::spawn(transport.run(command_rx, events, cancel_rx));
+        let output = vec![b'x'; 3 * 16384 + 7];
+        let mut cipher = Cipher::new(&secret().key, 1);
+        let mut frame = vec![1, 1];
+        frame.extend(
+            cipher
+                .encrypt(
+                    &proto::TerminalBuffer {
+                        buffer: Some(output.clone()),
+                    }
+                    .encode_to_vec(),
+                )
+                .unwrap(),
+        );
+        peer.write_u32(frame.len() as u32).await.unwrap();
+        peer.write_all(&frame).await.unwrap();
+        // No consumer progress: close the socket before peer liveness can be
+        // misrepresented, but retain the already authenticated packet in memory.
+        timeout(KEEPALIVE_INTERVAL + Duration::from_secs(2), async {
+            let mut drained = [0; 1024];
+            while peer.read(&mut drained).await.unwrap() != 0 {}
+        })
+        .await
+        .expect("blocked output kept TCP open past the bounded delivery interval");
+        tokio::time::pause();
+        tokio::time::advance(PEER_TIMEOUT * 2).await;
+        tokio::time::resume();
+        let mut delivered = Vec::new();
+        timeout(Duration::from_secs(2), async {
+            loop {
+                match event_rx.recv().await.unwrap() {
+                    Event::Output(bytes) => delivered.extend(bytes),
+                    Event::Disconnected => break,
+                    event => panic!("unexpected event: {event:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(&delivered[..6], b"prefix");
+        assert_eq!(&delivered[6..], output);
+
+        let (release, released) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut peer, _) = listener.accept().await.unwrap();
+            let request: proto::ConnectRequest = read_proto(&mut peer).await.unwrap();
+            assert_eq!(request.version, Some(6));
+            write_proto(
+                &mut peer,
+                &proto::ConnectResponse {
+                    status: Some(2),
+                    error: None,
+                    auth_challenge: None,
+                    reset_required: None,
+                },
+            )
+            .await
+            .unwrap();
+            let sequence: proto::SequenceHeader = read_proto(&mut peer).await.unwrap();
+            assert_eq!(sequence.sequence_number, Some(1));
+            write_proto(
+                &mut peer,
+                &proto::SequenceHeader {
+                    sequence_number: Some(0),
+                    reset: None,
+                },
+            )
+            .await
+            .unwrap();
+            let catchup: proto::CatchupBuffer = read_proto(&mut peer).await.unwrap();
+            let mut input_cipher = Cipher::new(&secret().key, 0);
+            for packet in catchup.buffer {
+                assert_eq!(&packet[..2], &[1, 0]);
+                assert!(input_cipher.decrypt(&packet[2..]).unwrap().is_empty());
+            }
+            let mut packet = vec![1, 1];
+            packet.extend(
+                cipher
+                    .encrypt(
+                        &proto::TerminalBuffer {
+                            buffer: Some(b"after".to_vec()),
+                        }
+                        .encode_to_vec(),
+                    )
+                    .unwrap(),
+            );
+            write_proto(
+                &mut peer,
+                &proto::CatchupBuffer {
+                    buffer: vec![packet],
+                },
+            )
+            .await
+            .unwrap();
+            let _ = released.await;
+        });
+        control.reconnect(endpoint).await.unwrap();
+        assert!(matches!(event_rx.recv().await, Some(Event::Output(bytes)) if bytes == b"after"));
+        assert!(matches!(event_rx.recv().await, Some(Event::Reconnected)));
+        cancel.send_replace(true);
+        timeout(Duration::from_secs(1), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        release.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn active_reconnect_with_blocked_catchup_emits_one_disconnect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let (socket, original_peer) = tokio::join!(TcpStream::connect(endpoint), listener.accept());
+        let _original_peer = original_peer.unwrap().0;
+        let mut transport = Transport::new(secret());
+        transport.socket = Some(socket.unwrap());
+        let (commands, command_rx) = mpsc::channel(8);
+        let control = Control { commands };
+        let (events, mut event_rx) = mpsc::channel(1);
+        events
+            .send(Event::Output(b"prefix".to_vec()))
+            .await
+            .unwrap();
+        let (cancel, cancel_rx) = watch::channel(false);
+        let server = tokio::spawn(async move {
+            let (mut peer, _) = listener.accept().await.unwrap();
+            let _: proto::ConnectRequest = read_proto(&mut peer).await.unwrap();
+            write_proto(
+                &mut peer,
+                &proto::ConnectResponse {
+                    status: Some(2),
+                    error: None,
+                    auth_challenge: None,
+                    reset_required: None,
+                },
+            )
+            .await
+            .unwrap();
+            let sequence: proto::SequenceHeader = read_proto(&mut peer).await.unwrap();
+            assert_eq!(sequence.sequence_number, Some(0));
+            write_proto(
+                &mut peer,
+                &proto::SequenceHeader {
+                    sequence_number: Some(0),
+                    reset: None,
+                },
+            )
+            .await
+            .unwrap();
+            let _: proto::CatchupBuffer = read_proto(&mut peer).await.unwrap();
+            let mut packet = vec![1, 1];
+            packet.extend(
+                Cipher::new(&secret().key, 1)
+                    .encrypt(
+                        &proto::TerminalBuffer {
+                            buffer: Some(b"catchup".to_vec()),
+                        }
+                        .encode_to_vec(),
+                    )
+                    .unwrap(),
+            );
+            write_proto(
+                &mut peer,
+                &proto::CatchupBuffer {
+                    buffer: vec![packet],
+                },
+            )
+            .await
+            .unwrap();
+            timeout(KEEPALIVE_INTERVAL + Duration::from_secs(2), async {
+                let mut bytes = [0; 1024];
+                while peer.read(&mut bytes).await.unwrap() != 0 {}
+            })
+            .await
+            .expect("blocked recovery output must close TCP");
+        });
+        let worker = tokio::spawn(transport.run(command_rx, events, cancel_rx));
+        timeout(Duration::from_secs(2), control.reconnect(endpoint))
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        assert!(matches!(event_rx.recv().await, Some(Event::Output(bytes)) if bytes == b"prefix"));
+        assert!(matches!(event_rx.recv().await, Some(Event::Output(bytes)) if bytes == b"catchup"));
+        assert!(matches!(event_rx.recv().await, Some(Event::Disconnected)));
+        // This acknowledgement proves the reconnect arm and common command tail
+        // have both finished, so a duplicate status cannot be deferred past it.
+        timeout(Duration::from_secs(1), control.send(b"offline".to_vec()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(event_rx.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "one paused recovery must emit only one Disconnected status"
+        );
+        cancel.send_replace(true);
+        timeout(Duration::from_secs(1), worker)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_queued_input_and_resize_never_reach_the_peer() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (socket, peer) = tokio::join!(
+            TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept()
+        );
+        let mut peer = peer.unwrap().0;
+        let mut transport = Transport::new(secret());
+        transport.socket = Some(socket.unwrap());
+        let (commands, command_rx) = mpsc::channel(8);
+        let (reply, cancelled) = oneshot::channel();
+        commands
+            .send(Command::Input(b"stale".to_vec(), reply))
+            .await
+            .unwrap();
+        drop(cancelled);
+        let (reply, cancelled) = oneshot::channel();
+        commands
+            .send(Command::Resize(120, 40, reply))
+            .await
+            .unwrap();
+        drop(cancelled);
+        let (reply, accepted) = oneshot::channel();
+        commands
+            .send(Command::Input(b"current".to_vec(), reply))
+            .await
+            .unwrap();
+        let (events, _event_rx) = mpsc::channel(8);
+        let (cancel, cancel_rx) = watch::channel(false);
+        let worker = tokio::spawn(transport.run(command_rx, events, cancel_rx));
+        timeout(Duration::from_secs(1), accepted)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let mut cipher = Cipher::new(&secret().key, 0);
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let length = peer.read_u32().await.unwrap();
+                let mut packet = vec![0; length as usize];
+                peer.read_exact(&mut packet).await.unwrap();
+                let bytes = cipher.decrypt(&packet[2..]).unwrap();
+                if packet[1] == 0 {
+                    continue;
+                }
+                assert_eq!(packet[1], 1, "cancelled resize was transmitted");
+                assert_eq!(
+                    proto::TerminalBuffer::decode(bytes.as_slice())
+                        .unwrap()
+                        .buffer
+                        .unwrap(),
+                    b"current"
+                );
+                break;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.send_replace(true);
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_offline_output_does_not_wait_for_the_hidden_consumer() {
+        let mut transport = Transport::new(secret());
+        let (events, _event_rx) = mpsc::channel(1);
+        events.send(Event::Output(vec![1])).await.unwrap();
+        let (cancel, mut cancel_rx) = watch::channel(false);
+        let worker = tokio::spawn(async move {
+            transport
+                .output(
+                    &events,
+                    &mut cancel_rx,
+                    (
+                        1,
+                        proto::TerminalBuffer {
+                            buffer: Some(vec![2]),
+                        }
+                        .encode_to_vec(),
+                    ),
+                )
+                .await
+        });
+        cancel.send_replace(true);
+        assert!(matches!(
+            timeout(Duration::from_secs(1), worker)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(Error::Closed)
+        ));
     }
     #[tokio::test]
     async fn blackholed_peer_disconnects_even_when_tcp_writes_succeed() {

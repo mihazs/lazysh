@@ -15,6 +15,78 @@ use tokio_rustls::{
 };
 
 const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+#[tokio::test]
+async fn dropped_configuration_caller_cannot_release_an_admitted_blocking_write() {
+    let state = ShareState::default();
+    let guard = changing(&state).unwrap();
+    let (entered, started) = oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let task = tokio::spawn(configuration_write(guard, move || {
+        entered.send(()).unwrap();
+        wait.recv().unwrap();
+        Ok(())
+    }));
+    started.await.unwrap();
+    task.abort();
+    let _ = task.await;
+    assert!(
+        changing(&state).is_err(),
+        "the original OS write still owns configuration admission"
+    );
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while state.changing.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(changing(&state).is_ok());
+}
+#[tokio::test]
+async fn lock_invalidates_enrollment_reads_and_cancels_uploads_and_thumbnail() {
+    let state = ShareState::default();
+    let mut slots = state.uploads.lock().await;
+    let pending = insert(
+        &mut slots,
+        enrollment(),
+        "pending.txt".into(),
+        "text/plain".into(),
+        4,
+        60,
+    )
+    .unwrap();
+    let running = insert(
+        &mut slots,
+        enrollment(),
+        "running.txt".into(),
+        "text/plain".into(),
+        4,
+        60,
+    )
+    .unwrap();
+    let pending_signal = slots[&pending].cancel.subscribe();
+    let running_signal = slots[&running].cancel.subscribe();
+    slots.get_mut(&running).unwrap().pending.take();
+    drop(slots);
+    let (cancel, thumbnail_signal) = watch::channel(false);
+    *state.thumbnail.lock().await = Some(ThumbnailWork {
+        request_id: "preview".into(),
+        cancel,
+    });
+    let generation = state.generation.load(Ordering::Acquire);
+    state.cancel_for_lock().await;
+    assert!(state.generation.load(Ordering::Acquire) != generation);
+    assert!(*pending_signal.borrow());
+    assert!(*running_signal.borrow());
+    assert!(*thumbnail_signal.borrow());
+    let slots = state.uploads.lock().await;
+    assert!(!slots.contains_key(&pending));
+    assert!(
+        slots.contains_key(&running),
+        "owned in-flight cleanup retains its slot until completion"
+    );
+}
 struct Fixture {
     directory: tempfile::TempDir,
     origin: String,

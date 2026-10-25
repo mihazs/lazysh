@@ -18,7 +18,7 @@ describe('agent activity', () => {
     vi.mocked(invoke).mockResolvedValue({ schemaVersion: 1, sessions: [session] });
     render(<AgentPanel sessionId="ssh-one" />);
     expect(await screen.findByText('Permission requested')).toBeTruthy();
-    expect(invoke).toHaveBeenCalledWith('agent_snapshot', { sessionId: 'ssh-one' });
+    expect(invoke).toHaveBeenCalledWith('agent_snapshot', { sessionId: 'ssh-one' }, { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('button', { name: /allow|approve/i })).toBeNull();
   });
   it('explains setup when the host companion is unavailable', async () => {
@@ -27,7 +27,7 @@ describe('agent activity', () => {
     render(<AgentPanel sessionId="ssh-one" />);
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('Connect your agents.')).toBeTruthy();
-    expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   });
   it('verifies the new host companion before loading settings after a session change',async()=>{
@@ -37,9 +37,9 @@ describe('agent activity', () => {
       return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
     });
     const {rerender}=render(<AgentPanel sessionId="old-host"/>);
-    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('get_companion_settings',{sessionId:'old-host'}));
+    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('get_companion_settings',{sessionId:'old-host'}, { headers: { "X-Lazysh-Access": expect.any(String) } }));
     rerender(<AgentPanel sessionId="new-host"/>);
-    expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',{sessionId:'new-host'});
+    expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',{sessionId:'new-host'}, { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   });
 });

@@ -20,12 +20,12 @@ function setup() {
 it('shares only after explicit opt-in and revokes the exact subscription on close',async()=>{
   setup();const view=render(<AppleStatusPanel sessionId={id}/>);
   await waitFor(()=>expect((screen.getByRole('button',{name:'Enable Watch status'}) as HTMLButtonElement).disabled).toBe(false));
-  expect(invoke).not.toHaveBeenCalledWith('agent_snapshot',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('agent_snapshot',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
   fireEvent.click(screen.getByRole('button',{name:'Start Live Activity'}));
-  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({startActivity:true,snapshot:expect.objectContaining({sessionId:id,usage:null})})));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({startActivity:true,snapshot:expect.objectContaining({sessionId:id,usage:null})}), { headers: { "X-Lazysh-Access": expect.any(String) } }));
   const configured=vi.mocked(invoke).mock.calls.find(([command,args])=>command==='apple_status_configure' && (args as {enabled:boolean}).enabled)![1] as {subscriptionId:string};
   view.unmount();
-  expect(invoke).toHaveBeenCalledWith('apple_status_configure',{subscriptionId:configured.subscriptionId,enabled:false});
+  expect(invoke).toHaveBeenCalledWith('apple_status_configure',{subscriptionId:configured.subscriptionId,enabled:false}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='resolve_agent_approval')).toBe(false);
 });
 it('a pending enable cannot publish after the view closes',async()=>{
@@ -39,7 +39,7 @@ it('a pending enable cannot publish after the view closes',async()=>{
   await waitFor(()=>expect((screen.getByRole('button',{name:'Start Live Activity'}) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:'Start Live Activity'}));view.unmount();complete();
   await Promise.resolve();
-  expect(invoke).not.toHaveBeenCalledWith('apple_status_publish',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('apple_status_publish',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('strips remote context and retains only a bounded last snapshot when backgrounded',async()=>{
   setup();const original=vi.mocked(invoke).getMockImplementation()!;
@@ -53,7 +53,7 @@ it('strips remote context and retains only a bounded last snapshot when backgrou
   render(<AppleStatusPanel sessionId={id}/>);
   await waitFor(()=>expect((screen.getByRole('button',{name:'Start Live Activity'}) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:'Start Live Activity'}));
-  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({snapshot:expect.objectContaining({running:1,waiting:0})})));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({snapshot:expect.objectContaining({running:1,waiting:0})}), { headers: { "X-Lazysh-Access": expect.any(String) } }));
   const publish=vi.mocked(invoke).mock.calls.find(([command])=>command==='apple_status_publish')![1];
   expect(JSON.stringify(publish)).not.toMatch(/secret|project|summary/);
   vi.spyOn(document,'hidden','get').mockReturnValue(true);
@@ -81,7 +81,7 @@ it('keeps inspected counters separate and never freshens an aged report when pub
   render(<AppleStatusPanel sessionId={id} usage={usage}/>);
   await waitFor(()=>expect((screen.getByRole('button',{name:'Start Live Activity'}) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:'Start Live Activity'}));
-  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({snapshot:expect.objectContaining({usage:{inputTokens:120,outputTokens:0,cacheReadTokens:null,cacheWriteTokens:null,recordedAt:Math.floor(Date.parse(recordedAt)/1000),freshness:'stale',freshUntil:Math.floor((now-60_000)/1000)}})})));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({snapshot:expect.objectContaining({usage:{inputTokens:120,outputTokens:0,cacheReadTokens:null,cacheWriteTokens:null,recordedAt:Math.floor(Date.parse(recordedAt)/1000),freshness:'stale',freshUntil:Math.floor((now-60_000)/1000)}})}), { headers: { "X-Lazysh-Access": expect.any(String) } }));
   const payload=vi.mocked(invoke).mock.calls.find(([command])=>command==='apple_status_publish')![1];
   expect(JSON.stringify(payload)).not.toContain('totalTokens');
 });

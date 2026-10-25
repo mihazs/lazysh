@@ -1,3 +1,5 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use crate::{
     ssh::{AppState, Host},
     vault::Credentials,
@@ -15,7 +17,7 @@ use std::{
 };
 use tauri::{AppHandle, State};
 use tauri_plugin_lazysh_vault::{CredentialOperation, VaultExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
 type Result<T> = std::result::Result<T, String>;
@@ -202,8 +204,13 @@ struct Pending {
 }
 #[derive(Default)]
 pub struct SyncState {
-    operation: Mutex<()>,
+    operation: Arc<Mutex<()>>,
     pending: Arc<Mutex<HashMap<String, Pending>>>,
+}
+impl SyncState {
+    pub(crate) async fn cancel_for_lock(&self) {
+        self.pending.lock().await.clear();
+    }
 }
 #[derive(Serialize)]
 pub struct Uploaded {
@@ -392,25 +399,33 @@ async fn load_for_operation(
     .await
     .map_err(|_| "Cannot read sync enrollment")?
 }
-async fn save(app: &AppHandle, enrollment: &Enrollment) -> Result<()> {
-    save_for_operation(app, enrollment, app.vault().operation()).await
+async fn enrollment_write(
+    guard: Arc<OwnedMutexGuard<()>>,
+    write: impl FnOnce() -> Result<()> + Send + 'static,
+) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        write()
+    })
+    .await
+    .map_err(|_| "Sync enrollment worker stopped".to_owned())?
 }
 async fn save_for_operation(
     app: &AppHandle,
     enrollment: &Enrollment,
     operation: CredentialOperation,
+    guard: Arc<OwnedMutexGuard<()>>,
 ) -> Result<()> {
     operation.check()?;
     let value = Zeroizing::new(
         serde_json::to_string(enrollment).map_err(|_| "Cannot encode sync enrollment")?,
     );
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    enrollment_write(guard, move || {
         app.vault()
             .set_protected_for(ACCOUNT, &value, false, &operation)
     })
     .await
-    .map_err(|_| "Cannot save sync enrollment")?
 }
 fn ensure_enabled(enrollment: &Enrollment, scope: Scope) -> Result<()> {
     if !enrollment.enabled(scope) {
@@ -786,304 +801,353 @@ fn plan(
 }
 
 #[tauri::command]
-pub async fn sync_status(app: AppHandle) -> Result<SyncStatus> {
-    match load(&app).await? {
-        Some(enrollment) => {
-            enrollment.recovery()?;
-            Ok(SyncStatus {
-                configured: true,
-                endpoint: Some(enrollment.config.endpoint.clone()),
-                username: Some(enrollment.config.username.clone()),
-                settings_enabled: enrollment.config.settings_enabled,
-                credentials_enabled: enrollment.config.credentials_enabled,
-                recipient: None,
-            })
-        }
-        None => Ok(SyncStatus {
-            configured: false,
-            endpoint: None,
-            username: None,
-            settings_enabled: false,
-            credentials_enabled: false,
-            recipient: None,
-        }),
-    }
+pub async fn sync_status(access: AccessLease, app: AppHandle) -> Protected<SyncStatus> {
+    access
+        .run(async {
+            match load(&app).await? {
+                Some(enrollment) => {
+                    enrollment.recovery()?;
+                    Ok(SyncStatus {
+                        configured: true,
+                        endpoint: Some(enrollment.config.endpoint.clone()),
+                        username: Some(enrollment.config.username.clone()),
+                        settings_enabled: enrollment.config.settings_enabled,
+                        credentials_enabled: enrollment.config.credentials_enabled,
+                        recipient: None,
+                    })
+                }
+                None => Ok(SyncStatus {
+                    configured: false,
+                    endpoint: None,
+                    username: None,
+                    settings_enabled: false,
+                    credentials_enabled: false,
+                    recipient: None,
+                }),
+            }
+        })
+        .await
 }
 #[tauri::command]
 pub async fn sync_configure(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, SyncState>,
     mut config: SyncConfig,
     password: String,
     recovery_key: Option<String>,
-) -> Result<Configured> {
-    let _guard = state.operation.lock().await;
-    config.endpoint = endpoint(&config.endpoint)?.to_string();
-    if config.username.len() > 512
-        || config.username.contains(':')
-        || config.username.chars().any(char::is_control)
-        || password.len() > 4096
-    {
-        return Err("Invalid WebDAV account details".into());
-    }
-    let password = Zeroizing::new(password);
-    let recovery_key = recovery_key.filter(|v| !v.is_empty()).map(Zeroizing::new);
-    let old = load(&app).await?;
-    let same_endpoint = old
-        .as_ref()
-        .is_some_and(|e| e.config.endpoint == config.endpoint);
-    let same_account = old
-        .as_ref()
-        .is_some_and(|e| same_endpoint && e.config.username == config.username);
-    if old.is_some() && !same_endpoint && recovery_key.is_none() {
-        return Err("Enter the recovery key when changing the sync endpoint".into());
-    }
-    let generated = recovery_key.is_none() && old.is_none();
-    let secret = match recovery_key.as_ref() {
-        Some(key) => recovery(key)?,
-        None => match &old {
-            Some(e) => e.recovery()?,
-            None => generate_recovery(),
-        },
-    };
-    let same_key = old
-        .as_ref()
-        .is_some_and(|e| e.recovery_key == secret.as_str());
-    let password = if password.is_empty() {
-        old.as_ref()
-            .filter(|_| same_account)
-            .map(|e| e.password.clone())
-            .ok_or("Enter your WebDAV app password")?
-    } else {
-        password.to_string()
-    };
-    let enrollment = Enrollment {
-        config,
-        password,
-        recovery_key: secret.to_string(),
-        settings_etag: old
-            .as_ref()
-            .filter(|_| same_account && same_key)
-            .and_then(|e| e.settings_etag.clone()),
-        credentials_etag: old
-            .as_ref()
-            .filter(|_| same_account && same_key)
-            .and_then(|e| e.credentials_etag.clone()),
-        settings_revision: old
-            .as_ref()
-            .filter(|_| same_account && same_key)
-            .map_or(0, |e| e.settings_revision),
-        credentials_revision: old
-            .as_ref()
-            .filter(|_| same_account && same_key)
-            .map_or(0, |e| e.credentials_revision),
-    };
-    save(&app, &enrollment).await?;
-    state.pending.lock().await.clear();
-    Ok(Configured {
-        recovery_key: generated.then(|| secret.to_string()),
-        recipient: "shared-recovery-v1".into(),
-    })
-}
-#[tauri::command]
-pub async fn sync_recovery_key(app: AppHandle) -> Result<RecoveryKey> {
-    let enrollment = load(&app).await?.ok_or("Sync is not configured")?;
-    Ok(RecoveryKey {
-        recovery_key: enrollment.recovery_key.clone(),
-    })
-}
-#[tauri::command]
-pub async fn sync_forget(app: AppHandle, state: State<'_, SyncState>) -> Result<()> {
-    let _guard = state.operation.lock().await;
-    tauri::async_runtime::spawn_blocking(move || app.vault().delete(ACCOUNT))
+) -> Protected<Configured> {
+    access
+        .run(async {
+            let credential_operation = app.vault().operation();
+            let _guard = Arc::new(state.operation.clone().lock_owned().await);
+            config.endpoint = endpoint(&config.endpoint)?.to_string();
+            if config.username.len() > 512
+                || config.username.contains(':')
+                || config.username.chars().any(char::is_control)
+                || password.len() > 4096
+            {
+                return Err("Invalid WebDAV account details".into());
+            }
+            let password = Zeroizing::new(password);
+            let recovery_key = recovery_key.filter(|v| !v.is_empty()).map(Zeroizing::new);
+            let old = load(&app).await?;
+            let same_endpoint = old
+                .as_ref()
+                .is_some_and(|e| e.config.endpoint == config.endpoint);
+            let same_account = old
+                .as_ref()
+                .is_some_and(|e| same_endpoint && e.config.username == config.username);
+            if old.is_some() && !same_endpoint && recovery_key.is_none() {
+                return Err("Enter the recovery key when changing the sync endpoint".into());
+            }
+            let generated = recovery_key.is_none() && old.is_none();
+            let secret = match recovery_key.as_ref() {
+                Some(key) => recovery(key)?,
+                None => match &old {
+                    Some(e) => e.recovery()?,
+                    None => generate_recovery(),
+                },
+            };
+            let same_key = old
+                .as_ref()
+                .is_some_and(|e| e.recovery_key == secret.as_str());
+            let password = if password.is_empty() {
+                old.as_ref()
+                    .filter(|_| same_account)
+                    .map(|e| e.password.clone())
+                    .ok_or("Enter your WebDAV app password")?
+            } else {
+                password.to_string()
+            };
+            let enrollment = Enrollment {
+                config,
+                password,
+                recovery_key: secret.to_string(),
+                settings_etag: old
+                    .as_ref()
+                    .filter(|_| same_account && same_key)
+                    .and_then(|e| e.settings_etag.clone()),
+                credentials_etag: old
+                    .as_ref()
+                    .filter(|_| same_account && same_key)
+                    .and_then(|e| e.credentials_etag.clone()),
+                settings_revision: old
+                    .as_ref()
+                    .filter(|_| same_account && same_key)
+                    .map_or(0, |e| e.settings_revision),
+                credentials_revision: old
+                    .as_ref()
+                    .filter(|_| same_account && same_key)
+                    .map_or(0, |e| e.credentials_revision),
+            };
+            access.check()?;
+            save_for_operation(&app, &enrollment, credential_operation, _guard.clone()).await?;
+            state.pending.lock().await.clear();
+            Ok(Configured {
+                recovery_key: generated.then(|| secret.to_string()),
+                recipient: "shared-recovery-v1".into(),
+            })
+        })
         .await
-        .map_err(|_| "Cannot remove sync enrollment")??;
-    state.pending.lock().await.clear();
-    Ok(())
+}
+#[tauri::command]
+pub async fn sync_recovery_key(access: AccessLease, app: AppHandle) -> Protected<RecoveryKey> {
+    access
+        .run(async {
+            let enrollment = load(&app).await?.ok_or("Sync is not configured")?;
+            Ok(RecoveryKey {
+                recovery_key: enrollment.recovery_key.clone(),
+            })
+        })
+        .await
+}
+#[tauri::command]
+pub async fn sync_forget(
+    access: AccessLease,
+    app: AppHandle,
+    state: State<'_, SyncState>,
+) -> Protected<()> {
+    access
+        .run(async {
+            let _guard = Arc::new(state.operation.clone().lock_owned().await);
+            let commit_access = access.clone();
+            enrollment_write(_guard.clone(), move || {
+                commit_access.check()?;
+                app.vault().delete(ACCOUNT)
+            })
+            .await?;
+            state.pending.lock().await.clear();
+            Ok(())
+        })
+        .await
 }
 #[tauri::command]
 pub async fn sync_push(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, SyncState>,
     hosts: State<'_, AppState>,
     scope: Scope,
     preferences: Option<serde_json::Value>,
-) -> Result<Uploaded> {
-    let credential_operation = app.vault().operation();
-    let _guard = state.operation.lock().await;
-    let mut enrollment = load_for_operation(&app, credential_operation.clone())
-        .await?
-        .ok_or("Configure encrypted sync first")?;
-    ensure_enabled(&enrollment, scope)?;
-    credential_operation.check()?;
-    let remote = Remote::new(&enrollment.config.endpoint)?;
-    let current = remote.fetch(&enrollment, scope).await?;
-    if current.as_ref().map(|(_, tag)| tag.as_str()) != enrollment.etag(scope) {
-        return Err("Remote sync changed. Fetch and apply a reviewed merge before pushing.".into());
-    }
-    let mut snapshot = hosts
-        .sync_snapshot()
-        .map_err(|_| "Cannot read local hosts")?;
-    let mut credentials = Vec::new();
-    if scope == Scope::Credentials {
-        // One guard at a time avoids reversing target-then-bastion connection locking.
-        for host in &snapshot {
-            if host.credentials_stored {
-                let _guard = hosts.credential_guard(&host.id).await;
-                let current = hosts
-                    .host(&host.id)
-                    .map_err(|_| "A host changed during sync")?;
-                if !same_identity(host, &current)
-                    || host.fingerprint != current.fingerprint
-                    || host.biometric_unlock != current.biometric_unlock
-                    || !current.credentials_stored
-                {
-                    return Err("A host changed during sync; retry".into());
-                }
-                credentials.push(CredentialRecord {
-                    host_id: host.id.clone(),
-                    credentials: crate::vault::load_for_operation(
-                        app.clone(),
-                        current,
-                        credential_operation.clone(),
-                    )
-                    .await?,
-                });
+) -> Protected<Uploaded> {
+    access
+        .run(async {
+            let credential_operation = app.vault().operation();
+            let _guard = Arc::new(state.operation.clone().lock_owned().await);
+            let mut enrollment = load_for_operation(&app, credential_operation.clone())
+                .await?
+                .ok_or("Configure encrypted sync first")?;
+            ensure_enabled(&enrollment, scope)?;
+            access.check()?;
+            credential_operation.check()?;
+            access.check()?;
+            let remote = Remote::new(&enrollment.config.endpoint)?;
+            let current = remote.fetch(&enrollment, scope).await?;
+            if current.as_ref().map(|(_, tag)| tag.as_str()) != enrollment.etag(scope) {
+                return Err(
+                    "Remote sync changed. Fetch and apply a reviewed merge before pushing.".into(),
+                );
             }
-        }
-        let current = hosts
-            .sync_snapshot()
-            .map_err(|_| "Cannot read local hosts")?;
-        if serde_json::to_vec(&current).map_err(|_| "Cannot read local hosts")?
-            != serde_json::to_vec(&snapshot).map_err(|_| "Cannot read local hosts")?
-        {
-            return Err("Local hosts changed; retry sync".into());
-        }
-    } else {
-        for host in &mut snapshot {
-            host.fingerprint = None;
-            host.credentials_stored = false;
-        }
-    }
-    // Read protected source credentials first; only portable metadata goes into the snapshot.
-    for host in &mut snapshot {
-        host.biometric_unlock = false;
-    }
-    let bundle = Bundle {
-        version: 1,
-        revision: enrollment
-            .revision(scope)
-            .checked_add(1)
-            .ok_or("Sync revision is exhausted")?,
-        scope,
-        hosts: snapshot,
-        preferences: if scope == Scope::Settings {
-            Some(preferences.ok_or("Settings sync needs validated preferences")?)
-        } else {
-            None
-        },
-        credentials,
-    };
-    let key = enrollment.recovery()?;
-    let previous_revision = enrollment.revision(scope);
-    let ciphertext = tauri::async_runtime::spawn_blocking(move || {
-        let remote = current
-            .map(|(bytes, _)| decrypt(&key, &bytes, scope))
-            .transpose()?;
-        if remote
-            .as_ref()
-            .is_some_and(|bundle| bundle.revision < previous_revision)
-        {
-            return Err("Remote sync rollback detected".into());
-        }
-        encrypt(&key, &merge_remote(bundle, remote)?)
-    })
-    .await
-    .map_err(|_| "Cannot encrypt sync snapshot")??;
-    credential_operation.check()?;
-    let tag = remote
-        .put(&enrollment, scope, ciphertext, enrollment.etag(scope))
-        .await?;
-    enrollment.set_etag(scope, tag);
-    enrollment.set_revision(scope, previous_revision + 1);
-    save_for_operation(&app, &enrollment, credential_operation).await?;
-    Ok(Uploaded { uploaded: true })
+            let mut snapshot = hosts
+                .sync_snapshot()
+                .map_err(|_| "Cannot read local hosts")?;
+            let mut credentials = Vec::new();
+            if scope == Scope::Credentials {
+                // One guard at a time avoids reversing target-then-bastion connection locking.
+                for host in &snapshot {
+                    if host.credentials_stored {
+                        let _guard = hosts.credential_guard(&host.id).await;
+                        let current = hosts
+                            .host(&host.id)
+                            .map_err(|_| "A host changed during sync")?;
+                        if !same_identity(host, &current)
+                            || host.fingerprint != current.fingerprint
+                            || host.biometric_unlock != current.biometric_unlock
+                            || !current.credentials_stored
+                        {
+                            return Err("A host changed during sync; retry".into());
+                        }
+                        credentials.push(CredentialRecord {
+                            host_id: host.id.clone(),
+                            credentials: crate::vault::load_for_operation(
+                                app.clone(),
+                                current,
+                                credential_operation.clone(),
+                                _guard.clone(),
+                                access.clone(),
+                            )
+                            .await?,
+                        });
+                    }
+                }
+                let current = hosts
+                    .sync_snapshot()
+                    .map_err(|_| "Cannot read local hosts")?;
+                if serde_json::to_vec(&current).map_err(|_| "Cannot read local hosts")?
+                    != serde_json::to_vec(&snapshot).map_err(|_| "Cannot read local hosts")?
+                {
+                    return Err("Local hosts changed; retry sync".into());
+                }
+            } else {
+                for host in &mut snapshot {
+                    host.fingerprint = None;
+                    host.credentials_stored = false;
+                }
+            }
+            // Read protected source credentials first; only portable metadata goes into the snapshot.
+            for host in &mut snapshot {
+                host.biometric_unlock = false;
+            }
+            let bundle = Bundle {
+                version: 1,
+                revision: enrollment
+                    .revision(scope)
+                    .checked_add(1)
+                    .ok_or("Sync revision is exhausted")?,
+                scope,
+                hosts: snapshot,
+                preferences: if scope == Scope::Settings {
+                    Some(preferences.ok_or("Settings sync needs validated preferences")?)
+                } else {
+                    None
+                },
+                credentials,
+            };
+            let key = enrollment.recovery()?;
+            let previous_revision = enrollment.revision(scope);
+            let ciphertext = tauri::async_runtime::spawn_blocking(move || {
+                let remote = current
+                    .map(|(bytes, _)| decrypt(&key, &bytes, scope))
+                    .transpose()?;
+                if remote
+                    .as_ref()
+                    .is_some_and(|bundle| bundle.revision < previous_revision)
+                {
+                    return Err("Remote sync rollback detected".into());
+                }
+                encrypt(&key, &merge_remote(bundle, remote)?)
+            })
+            .await
+            .map_err(|_| "Cannot encrypt sync snapshot")??;
+            credential_operation.check()?;
+            access.check()?;
+            let tag = remote
+                .put(&enrollment, scope, ciphertext, enrollment.etag(scope))
+                .await?;
+            enrollment.set_etag(scope, tag);
+            enrollment.set_revision(scope, previous_revision + 1);
+            save_for_operation(&app, &enrollment, credential_operation, _guard.clone()).await?;
+            Ok(Uploaded { uploaded: true })
+        })
+        .await
 }
 #[tauri::command]
 pub async fn sync_preview(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, SyncState>,
     hosts: State<'_, AppState>,
     scope: Scope,
-) -> Result<Preview> {
-    let _guard = state.operation.lock().await;
-    let enrollment = load(&app).await?.ok_or("Configure encrypted sync first")?;
-    ensure_enabled(&enrollment, scope)?;
-    let (bytes, tag) = Remote::new(&enrollment.config.endpoint)?
-        .fetch(&enrollment, scope)
-        .await?
-        .ok_or("No remote snapshot for this category")?;
-    let key = enrollment.recovery()?;
-    let bundle = tauri::async_runtime::spawn_blocking(move || decrypt(&key, &bytes, scope))
-        .await
-        .map_err(|_| "Cannot decrypt sync snapshot")??;
-    if bundle.revision < enrollment.revision(scope) {
-        return Err("Remote sync rollback detected. Local data was preserved.".into());
-    }
-    let local = hosts
-        .sync_snapshot()
-        .map_err(|_| "Cannot read local hosts")?;
-    let (additions, credential_ids, preview_hosts, conflicts) = plan(&bundle, &local);
-    let enroll_pins = bundle
-        .hosts
-        .iter()
-        .filter(|h| {
-            preview_hosts
+) -> Protected<Preview> {
+    access
+        .run(async {
+            let _guard = Arc::new(state.operation.clone().lock_owned().await);
+            let enrollment = load(&app).await?.ok_or("Configure encrypted sync first")?;
+            ensure_enabled(&enrollment, scope)?;
+            access.check()?;
+            let (bytes, tag) = Remote::new(&enrollment.config.endpoint)?
+                .fetch(&enrollment, scope)
+                .await?
+                .ok_or("No remote snapshot for this category")?;
+            let key = enrollment.recovery()?;
+            let bundle = tauri::async_runtime::spawn_blocking(move || decrypt(&key, &bytes, scope))
+                .await
+                .map_err(|_| "Cannot decrypt sync snapshot")??;
+            if bundle.revision < enrollment.revision(scope) {
+                return Err("Remote sync rollback detected. Local data was preserved.".into());
+            }
+            let local = hosts
+                .sync_snapshot()
+                .map_err(|_| "Cannot read local hosts")?;
+            let (additions, credential_ids, preview_hosts, conflicts) = plan(&bundle, &local);
+            let enroll_pins = bundle
+                .hosts
                 .iter()
-                .any(|p| p.id == h.id && p.trust_fingerprint)
+                .filter(|h| {
+                    preview_hosts
+                        .iter()
+                        .any(|p| p.id == h.id && p.trust_fingerprint)
+                })
+                .cloned()
+                .collect();
+            let token = uuid::Uuid::new_v4().to_string();
+            let preview = Preview {
+                token: token.clone(),
+                scope,
+                hosts: preview_hosts,
+                conflicts,
+                preferences: bundle.preferences.clone(),
+            };
+            let mut pending = state.pending.lock().await;
+            pending.retain(|_, p| {
+                p.bundle.scope != scope && p.created.elapsed() < Duration::from_secs(600)
+            });
+            access.with_current(|| {
+                pending.insert(
+                    token.clone(),
+                    Pending {
+                        created: Instant::now(),
+                        bundle,
+                        etag: tag,
+                        local,
+                        additions,
+                        credential_ids,
+                        enroll_pins,
+                    },
+                );
+            })?;
+            drop(pending);
+            let cache = state.pending.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                cache.lock().await.remove(&token);
+            });
+            Ok(preview)
         })
-        .cloned()
-        .collect();
-    let token = uuid::Uuid::new_v4().to_string();
-    let preview = Preview {
-        token: token.clone(),
-        scope,
-        hosts: preview_hosts,
-        conflicts,
-        preferences: bundle.preferences.clone(),
-    };
-    let mut pending = state.pending.lock().await;
-    pending
-        .retain(|_, p| p.bundle.scope != scope && p.created.elapsed() < Duration::from_secs(600));
-    pending.insert(
-        token.clone(),
-        Pending {
-            created: Instant::now(),
-            bundle,
-            etag: tag,
-            local,
-            additions,
-            credential_ids,
-            enroll_pins,
-        },
-    );
-    drop(pending);
-    let cache = state.pending.clone();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(600)).await;
-        cache.lock().await.remove(&token);
-    });
-    Ok(preview)
+        .await
 }
 #[tauri::command]
 pub async fn sync_apply(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, SyncState>,
     hosts: State<'_, AppState>,
     token: String,
-) -> Result<Applied> {
+) -> Protected<Applied> {
+    access.run(async {
     let credential_operation = app.vault().operation();
-    let _guard = state.operation.lock().await;
+    let _guard = Arc::new(state.operation.clone().lock_owned().await);
     let pending = state
         .pending
         .lock()
@@ -1098,6 +1162,7 @@ pub async fn sync_apply(
         .await?
         .ok_or("Configure encrypted sync first")?;
     ensure_enabled(&enrollment, scope)?;
+            access.check()?;
     let current = Remote::new(&enrollment.config.endpoint)?
         .fetch(&enrollment, scope)
         .await?;
@@ -1106,6 +1171,7 @@ pub async fn sync_apply(
     }
     let hosts_added = pending.additions.len();
     credential_operation.check()?;
+            access.check()?;
     hosts
         .sync_add_hosts(&pending.local, pending.additions, &pending.enroll_pins)
         .map_err(|_| "Local hosts changed or a route conflicts. Fetch and review a new preview.")?;
@@ -1137,6 +1203,7 @@ pub async fn sync_apply(
             return Err("Local host identity or credentials changed during import. Existing data was preserved.".into());
         }
         credential_operation.check()?;
+            access.check()?;
         hosts
             .mark_credentials(&host.id, true)
             .map_err(|_| "Cannot prepare imported credential metadata")?;
@@ -1145,6 +1212,8 @@ pub async fn sync_apply(
             host.clone(),
             record.credentials,
             credential_operation.clone(),
+            _guard.clone(),
+            access.clone(),
         )
         .await
         {
@@ -1154,12 +1223,14 @@ pub async fn sync_apply(
     }
     enrollment.set_etag(scope, Some(pending.etag));
     enrollment.set_revision(scope, pending.bundle.revision);
-    save_for_operation(&app, &enrollment, credential_operation).await?;
+    save_for_operation(&app, &enrollment, credential_operation, _guard.clone()).await?;
     Ok(Applied {
         hosts_added,
         credentials_added,
         preferences: pending.bundle.preferences,
     })
+
+    }).await
 }
 fn import_failure(hosts: &AppState, host_id: &str, error: crate::vault::ImportFailure) -> String {
     if !error.keep_marker {
@@ -1174,6 +1245,28 @@ fn import_failure(hosts: &AppState, host_id: &str, error: crate::vault::ImportFa
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn dropped_sync_caller_cannot_release_an_admitted_enrollment_write() {
+        let state = SyncState::default();
+        let guard = Arc::new(state.operation.clone().lock_owned().await);
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let task = tokio::spawn(enrollment_write(guard, move || {
+            entered.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(())
+        }));
+        started.await.unwrap();
+        task.abort();
+        let _ = task.await;
+        assert!(state.operation.try_lock().is_err());
+        release.send(()).unwrap();
+        drop(
+            tokio::time::timeout(Duration::from_secs(2), state.operation.lock())
+                .await
+                .unwrap(),
+        );
+    }
     #[test]
     fn failed_import_keeps_cleanup_metadata_when_vault_recovery_is_pending() {
         let temp = tempfile::tempdir().unwrap();

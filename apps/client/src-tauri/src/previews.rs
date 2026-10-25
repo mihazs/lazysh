@@ -1,3 +1,5 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
 use crate::ssh::{AppState, Result, SshError};
 use serde::Serialize;
 use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
@@ -33,106 +35,131 @@ struct Forward {
 }
 #[derive(Clone, Default)]
 pub struct PreviewState(Arc<Mutex<HashMap<String, Forward>>>);
+impl PreviewState {
+    pub(crate) async fn cancel_for_lock(&self) {
+        let forwards = self.0.lock().await;
+        for forward in forwards.values() {
+            forward.stop.send_replace(true);
+        }
+    }
+}
 
 #[tauri::command]
 pub async fn start_preview(
+    access: AccessLease,
     state: State<'_, AppState>,
     previews: State<'_, PreviewState>,
     session_id: String,
     remote_port: u16,
     remote_address: Option<String>,
     annotations: Option<bool>,
-) -> Result<Preview> {
-    if remote_port == 0 {
-        return Err(SshError::new(
-            "invalid_port",
-            "Enter a port from 1 to 65535",
-        ));
-    }
-    let remote_address = remote_address.unwrap_or_else(|| "127.0.0.1".into());
-    if remote_address != "127.0.0.1" && remote_address != "::1" {
-        return Err(SshError::new(
-            "invalid_address",
-            "Previews can connect only to host loopback addresses",
-        ));
-    }
-    let session = state.session(&session_id).await?;
-    let mut forwards = previews.0.lock().await;
-    if forwards.len() >= MAX_FORWARDS
-        || forwards
-            .values()
-            .filter(|f| f.session_id == session_id)
-            .count()
-            >= MAX_PER_SESSION
-    {
-        return Err(SshError::new(
-            "preview_limit",
-            "Close a preview before opening another",
-        ));
-    }
-    // Keep the remote port when free, so dev-server redirects retain their port.
-    let listener = match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, remote_port)).await {
-        Ok(listener) => listener,
-        Err(_) => TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?,
-    };
-    let local_port = listener.local_addr()?.port();
-    let id = uuid::Uuid::new_v4().to_string();
-    let preview = Preview {
-        id: id.clone(),
-        remote_port,
-        remote_address: remote_address.clone(),
-        local_port,
-        url: format!("http://127.0.0.1:{local_port}/"),
-        picker_token: annotations
-            .unwrap_or(false)
-            .then(|| uuid::Uuid::new_v4().to_string()),
-    };
-    let picker_token = preview.picker_token.clone();
-    let (stop, stopped) = watch::channel(false);
-    let (finished, completion) = watch::channel(false);
-    forwards.insert(
-        id.clone(),
-        Forward {
-            session_id,
-            preview: preview.clone(),
-            stop,
-            finished: completion,
-        },
-    );
-    drop(forwards);
-    let store = previews.0.clone();
-    let handle = session.handle.clone();
-    let cancelled = session.cancel.subscribe();
-    tauri::async_runtime::spawn(async move {
-        let remote_host = if remote_address == "::1" {
-            format!("[::1]:{remote_port}")
-        } else {
-            format!("127.0.0.1:{remote_port}")
-        };
-        let connect = move || {
-            let handle = handle.clone();
-            let remote_address = remote_address.clone();
-            async move {
-                let channel = handle
-                    .channel_open_direct_tcpip(
-                        remote_address,
-                        u32::from(remote_port),
-                        "127.0.0.1",
-                        0,
-                    )
-                    .await?;
-                Ok(channel.into_stream())
+) -> Protected<Preview> {
+    access
+        .run(async {
+            if remote_port == 0 {
+                return Err(SshError::new(
+                    "invalid_port",
+                    "Enter a port from 1 to 65535",
+                ));
             }
-        };
-        if let Some(token) = picker_token {
-            proxy::listener(listener, cancelled, stopped, token, remote_host, connect).await;
-        } else {
-            relay_listener(listener, cancelled, stopped, connect).await;
-        }
-        store.lock().await.remove(&id);
-        let _ = finished.send(true);
-    });
-    Ok(preview)
+            let remote_address = remote_address.unwrap_or_else(|| "127.0.0.1".into());
+            if remote_address != "127.0.0.1" && remote_address != "::1" {
+                return Err(SshError::new(
+                    "invalid_address",
+                    "Previews can connect only to host loopback addresses",
+                ));
+            }
+            let session = state.session(&session_id).await?;
+            let mut forwards = previews.0.lock().await;
+            if forwards.len() >= MAX_FORWARDS
+                || forwards
+                    .values()
+                    .filter(|f| f.session_id == session_id)
+                    .count()
+                    >= MAX_PER_SESSION
+            {
+                return Err(SshError::new(
+                    "preview_limit",
+                    "Close a preview before opening another",
+                ));
+            }
+            // Keep the remote port when free, so dev-server redirects retain their port.
+            let listener =
+                match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, remote_port)).await {
+                    Ok(listener) => listener,
+                    Err(_) => TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?,
+                };
+            let local_port = listener.local_addr()?.port();
+            let id = uuid::Uuid::new_v4().to_string();
+            let preview = Preview {
+                id: id.clone(),
+                remote_port,
+                remote_address: remote_address.clone(),
+                local_port,
+                url: format!("http://127.0.0.1:{local_port}/"),
+                picker_token: annotations
+                    .unwrap_or(false)
+                    .then(|| uuid::Uuid::new_v4().to_string()),
+            };
+            let picker_token = preview.picker_token.clone();
+            let (stop, stopped) = watch::channel(false);
+            let (finished, completion) = watch::channel(false);
+            access.check()?;
+            access.with_current(|| {
+                forwards.insert(
+                    id.clone(),
+                    Forward {
+                        session_id,
+                        preview: preview.clone(),
+                        stop,
+                        finished: completion,
+                    },
+                );
+            })?;
+            drop(forwards);
+            let store = previews.0.clone();
+            let handle = session.handle.clone();
+            let cancelled = session.cancel.subscribe();
+            let worker_access = access.clone();
+            tauri::async_runtime::spawn(async move {
+                let remote_host = if remote_address == "::1" {
+                    format!("[::1]:{remote_port}")
+                } else {
+                    format!("127.0.0.1:{remote_port}")
+                };
+                let connect_access = worker_access.clone();
+                let connect = move || {
+                    let handle = handle.clone();
+                    let remote_address = remote_address.clone();
+                    let access = connect_access.clone();
+                    async move {
+                        access.check()?;
+                        let channel = handle
+                            .channel_open_direct_tcpip(
+                                remote_address,
+                                u32::from(remote_port),
+                                "127.0.0.1",
+                                0,
+                            )
+                            .await?;
+                        Ok(channel.into_stream())
+                    }
+                };
+                tokio::select! { biased;
+                    _ = worker_access.cancelled() => {},
+                    _ = async { if let Some(token) = picker_token {
+                    proxy::listener(listener, cancelled, stopped, token, remote_host, connect)
+                        .await;
+                } else {
+                    relay_listener(listener, cancelled, stopped, connect).await;
+                }} => {},
+                }
+                store.lock().await.remove(&id);
+                let _ = finished.send(true);
+            });
+            Ok(preview)
+        })
+        .await
 }
 
 async fn relay_listener<F, Fut, S>(
@@ -175,19 +202,24 @@ async fn relay_listener<F, Fut, S>(
 
 #[tauri::command]
 pub async fn list_previews(
+    access: AccessLease,
     state: State<'_, AppState>,
     previews: State<'_, PreviewState>,
     session_id: String,
-) -> Result<Vec<Preview>> {
-    state.session(&session_id).await?;
-    Ok(previews
-        .0
-        .lock()
+) -> Protected<Vec<Preview>> {
+    access
+        .run(async {
+            state.session(&session_id).await?;
+            Ok(previews
+                .0
+                .lock()
+                .await
+                .values()
+                .filter(|f| f.session_id == session_id)
+                .map(|f| f.preview.clone())
+                .collect())
+        })
         .await
-        .values()
-        .filter(|f| f.session_id == session_id)
-        .map(|f| f.preview.clone())
-        .collect())
 }
 
 #[tauri::command]
@@ -300,11 +332,13 @@ fn safe_process(value: &str) -> Option<String> {
 
 #[tauri::command]
 pub async fn discover_preview_ports(
+    access: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     allow_ports: Option<Vec<u16>>,
     probe_http: Option<bool>,
-) -> Result<Vec<Listener>> {
+) -> Protected<Vec<Listener>> {
+    access.run(async {
     if allow_ports
         .as_ref()
         .is_some_and(|ports| ports.len() > 1024 || ports.contains(&0))
@@ -318,7 +352,8 @@ pub async fn discover_preview_ports(
     if allow_ports.as_ref().is_some_and(Vec::is_empty) {
         return Ok(Vec::new());
     }
-    let text = crate::ssh::exec(&session, "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi".into()).await?;
+    access.check()?;
+    let text = crate::ssh::exec_for_access(&session, "if command -v ss >/dev/null 2>&1; then ss -H -ltnp; else lsof -nP -iTCP -sTCP:LISTEN -F pcn; fi".into(), &access).await?;
     let listeners: Vec<_> = parse_listeners(&text)
         .into_iter()
         .filter(|listener| {
@@ -339,17 +374,20 @@ pub async fn discover_preview_ports(
             }
         }
         let session = session.clone();
+        let worker_access = access.clone();
         tasks.spawn(async move {
             let address = if listener.address.contains(':') { "::1" } else { "127.0.0.1" };
             let mut cancel = session.cancel.subscribe();
             let port = listener.port;
             let probe = async {
+                worker_access.check()?;
                 let channel = session.handle.channel_open_direct_tcpip(address, u32::from(port), "127.0.0.1", 0).await?;
                 read_http_status(channel.into_stream(), address, port).await
             };
             listener.http = Some(if *cancel.borrow() { false } else {
                 tokio::select! {
                     _ = cancel.changed() => false,
+                    _ = worker_access.cancelled() => false,
                     result = timeout(Duration::from_millis(1500), probe) => matches!(result, Ok(Ok(true))),
                 }
             });
@@ -364,6 +402,8 @@ pub async fn discover_preview_ports(
     }
     result.sort_by_key(|row| row.port);
     Ok(result)
+
+    }).await
 }
 
 async fn read_http_status<S: AsyncRead + AsyncWrite + Unpin>(
@@ -392,6 +432,34 @@ async fn read_http_status<S: AsyncRead + AsyncWrite + Unpin>(
 mod tests {
     use super::*;
     use tokio::net::TcpStream;
+    #[tokio::test]
+    async fn lock_signals_all_preview_workers() {
+        let state = PreviewState::default();
+        let mut signals = Vec::new();
+        for index in 0..2 {
+            let (stop, stopped) = watch::channel(false);
+            let (_done, finished) = watch::channel(false);
+            signals.push(stopped);
+            state.0.lock().await.insert(
+                index.to_string(),
+                Forward {
+                    session_id: format!("session-{index}"),
+                    preview: Preview {
+                        id: index.to_string(),
+                        remote_port: 3000,
+                        remote_address: "127.0.0.1".into(),
+                        local_port: 12345,
+                        url: "http://127.0.0.1:12345".into(),
+                        picker_token: None,
+                    },
+                    stop,
+                    finished,
+                },
+            );
+        }
+        state.cancel_for_lock().await;
+        assert!(signals.iter().all(|signal| *signal.borrow()));
+    }
 
     #[tokio::test]
     async fn explicit_http_probe_uses_head_and_checks_the_status_line() {

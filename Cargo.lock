@@ -6603,9 +6603,11 @@ dependencies = [
 name = "tauri-plugin-lazysh-vault"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "core-foundation 0.10.1",
  "keyring",
  "objc2",
+ "objc2-app-kit",
  "objc2-foundation",
  "objc2-local-authentication",
  "security-framework 3.7.0",

@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { errorMessage } from './SessionTools';
 import { validateCloudSnapshot, validCloudOrigin, type CloudSnapshot } from './cloudVoice';
 
@@ -7,6 +8,7 @@ export default function CloudVoiceSettingsPanel({ snapshot, onSnapshot, disabled
   snapshot?: CloudSnapshot; onSnapshot: (snapshot: CloudSnapshot | undefined) => void;
   disabled: boolean; onBusy: (busy: boolean) => void;
 }) {
+  const invoke = useProtectedInvoke();
   const [origin, setOrigin] = useState('');
   const [token, setToken] = useState('');
   const [configured, setConfigured] = useState(false);

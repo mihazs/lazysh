@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { errorMessage } from './SessionTools';
 
 type Workspace = { workspace_id: string; label: string; focused: boolean; agent_status: string };
@@ -15,6 +16,7 @@ type Action =
 type Edit = { type: 'createWorkspace' | 'renameWorkspace' | 'createTab' | 'renameTab'; target?: string };
 
 export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: { sessionId: string; name: string; projectDirectory?: string }) {
+  const invoke = useProtectedInvoke();
   const [tree, setTree] = useState<Tree | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);

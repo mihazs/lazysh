@@ -15,7 +15,7 @@ it("saves actual host settings with the fetched revision and explicit booleans",
   render(<CompanionSettingsPanel sessionId="host-a"/>);
   const usage=await screen.findByLabelText("Recorded usage inspection");fireEvent.click(usage);fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
   await screen.findByText("Host settings saved for new operations.");
-  expect(invoke).toHaveBeenLastCalledWith("update_companion_settings",{sessionId:"host-a",settings:{expectedRevision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:false,deviceToolsEnabled:true}});
+  expect(invoke).toHaveBeenLastCalledWith("update_companion_settings",{sessionId:"host-a",settings:{expectedRevision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:false,deviceToolsEnabled:true}}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getByText(/Existing previews and streams continue until stopped/)).toBeTruthy();
   expect(screen.getByText(/Port discovery is a separate SSH feature/)).toBeTruthy();
 });
@@ -34,5 +34,5 @@ it("discards settings arriving after the selected SSH session changes",async()=>
   const {rerender}=render(<CompanionSettingsPanel sessionId="old"/>);rerender(<CompanionSettingsPanel sessionId="new"/>);
   await screen.findByLabelText("Recorded usage inspection");resolve(settings);
   await waitFor(()=>expect((screen.getByLabelText("Recorded usage inspection") as HTMLInputElement).checked).toBe(false));
-  expect(invoke).toHaveBeenLastCalledWith("get_companion_settings",{sessionId:"new"});
+  expect(invoke).toHaveBeenLastCalledWith("get_companion_settings",{sessionId:"new"}, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });

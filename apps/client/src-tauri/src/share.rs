@@ -1,3 +1,5 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -96,9 +98,14 @@ fn decode(value: &str) -> Result<Enrollment> {
     }
     Ok(enrollment)
 }
-async fn load(app: AppHandle) -> Result<Option<Enrollment>> {
+async fn load(app: AppHandle, access: AccessLease) -> Result<Option<Enrollment>> {
+    let operation = app.vault().operation();
     tauri::async_runtime::spawn_blocking(move || {
-        let value = app.vault().get(ACCOUNT)?.map(Zeroizing::new);
+        access.check()?;
+        let value = app
+            .vault()
+            .get_protected_for(ACCOUNT, false, &operation)?
+            .map(Zeroizing::new);
         value.map(|value| decode(&value)).transpose()
     })
     .await
@@ -110,17 +117,21 @@ pub struct ShareStatus {
     origin: Option<String>,
 }
 #[tauri::command]
-pub async fn share_status(app: AppHandle) -> Result<ShareStatus> {
-    Ok(match load(app).await? {
-        Some(enrollment) => ShareStatus {
-            configured: true,
-            origin: Some(enrollment.origin.clone()),
-        },
-        None => ShareStatus {
-            configured: false,
-            origin: None,
-        },
-    })
+pub async fn share_status(access: AccessLease, app: AppHandle) -> Protected<ShareStatus> {
+    access
+        .run(async {
+            Ok(match load(app, access.clone()).await? {
+                Some(enrollment) => ShareStatus {
+                    configured: true,
+                    origin: Some(enrollment.origin.clone()),
+                },
+                None => ShareStatus {
+                    configured: false,
+                    origin: None,
+                },
+            })
+        })
+        .await
 }
 
 struct Pending {
@@ -144,11 +155,28 @@ pub struct ShareState {
     changing: Arc<AtomicBool>,
     generation: AtomicU64,
 }
+impl ShareState {
+    pub(crate) async fn cancel_for_lock(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        cancel_all(self).await;
+    }
+}
 struct Changing(Arc<AtomicBool>);
 impl Drop for Changing {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
+}
+async fn configuration_write(
+    guard: Changing,
+    write: impl FnOnce() -> Result<()> + Send + 'static,
+) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        write()
+    })
+    .await
+    .map_err(|_| "Sharing configuration worker stopped".to_owned())?
 }
 fn changing(state: &ShareState) -> Result<Changing> {
     state
@@ -188,52 +216,70 @@ fn configured_token(
 }
 #[tauri::command]
 pub async fn share_configure(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, ShareState>,
     origin: String,
     token: String,
-) -> Result<ShareStatus> {
-    let token = Zeroizing::new(token);
-    let url = self::origin(&origin)?;
-    if !token.is_empty() && !valid_token(&token) {
-        return Err("Enter the service's 64-character management token".into());
-    }
-    let _changing = changing(&state)?;
-    cancel_all(&state).await;
-    let canonical_origin = url.origin().ascii_serialization();
-    let previous = if token.is_empty() {
-        load(app.clone()).await?
-    } else {
-        None
-    };
-    let token = configured_token(&canonical_origin, token, previous)?;
-    let enrollment = Enrollment {
-        version: 1,
-        origin: canonical_origin,
-        token: token.to_string(),
-    };
-    let origin = enrollment.origin.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let encoded = Zeroizing::new(
-            serde_json::to_string(&enrollment)
-                .map_err(|_| "Cannot encode sharing service configuration")?,
-        );
-        app.vault().set(ACCOUNT, &encoded)
-    })
-    .await
-    .map_err(|_| "Cannot save sharing service configuration".to_owned())??;
-    Ok(ShareStatus {
-        configured: true,
-        origin: Some(origin),
-    })
+) -> Protected<ShareStatus> {
+    access
+        .run(async {
+            let operation = app.vault().operation();
+            let token = Zeroizing::new(token);
+            let url = self::origin(&origin)?;
+            if !token.is_empty() && !valid_token(&token) {
+                return Err("Enter the service's 64-character management token".into());
+            }
+            let _changing = changing(&state)?;
+            cancel_all(&state).await;
+            let canonical_origin = url.origin().ascii_serialization();
+            let previous = if token.is_empty() {
+                load(app.clone(), access.clone()).await?
+            } else {
+                None
+            };
+            let token = configured_token(&canonical_origin, token, previous)?;
+            let enrollment = Enrollment {
+                version: 1,
+                origin: canonical_origin,
+                token: token.to_string(),
+            };
+            let origin = enrollment.origin.clone();
+            access.check()?;
+            configuration_write(_changing, move || {
+                let encoded = Zeroizing::new(
+                    serde_json::to_string(&enrollment)
+                        .map_err(|_| "Cannot encode sharing service configuration")?,
+                );
+                app.vault()
+                    .set_protected_for(ACCOUNT, &encoded, false, &operation)
+            })
+            .await?;
+            Ok(ShareStatus {
+                configured: true,
+                origin: Some(origin),
+            })
+        })
+        .await
 }
 #[tauri::command]
-pub async fn share_forget(app: AppHandle, state: State<'_, ShareState>) -> Result<()> {
-    let _changing = changing(&state)?;
-    cancel_all(&state).await;
-    tauri::async_runtime::spawn_blocking(move || app.vault().delete(ACCOUNT))
+pub async fn share_forget(
+    access: AccessLease,
+    app: AppHandle,
+    state: State<'_, ShareState>,
+) -> Protected<()> {
+    access
+        .run(async {
+            let _changing = changing(&state)?;
+            cancel_all(&state).await;
+            let commit_access = access.clone();
+            configuration_write(_changing, move || {
+                commit_access.check()?;
+                app.vault().delete(ACCOUNT)
+            })
+            .await
+        })
         .await
-        .map_err(|_| "Cannot remove sharing service credentials".to_owned())?
 }
 
 fn client() -> Result<Client> {
@@ -376,14 +422,20 @@ async fn list(
 }
 #[tauri::command]
 pub async fn share_list(
+    access: AccessLease,
     app: AppHandle,
     limit: Option<u32>,
     cursor: Option<String>,
-) -> Result<History> {
-    let enrollment = load(app)
-        .await?
-        .ok_or("Configure a sharing service first")?;
-    list(client()?, &enrollment, limit.unwrap_or(50), cursor).await
+) -> Protected<History> {
+    access
+        .run(async {
+            let enrollment = load(app, access.clone())
+                .await?
+                .ok_or("Configure a sharing service first")?;
+            access.check()?;
+            list(client()?, &enrollment, limit.unwrap_or(50), cursor).await
+        })
+        .await
 }
 async fn delete(client: Client, enrollment: &Enrollment, id: &str) -> Result<()> {
     if !valid_id(id) {
@@ -403,11 +455,16 @@ async fn delete(client: Client, enrollment: &Enrollment, id: &str) -> Result<()>
     Ok(())
 }
 #[tauri::command]
-pub async fn share_delete(app: AppHandle, id: String) -> Result<()> {
-    let enrollment = load(app)
-        .await?
-        .ok_or("Configure a sharing service first")?;
-    delete(client()?, &enrollment, &id).await
+pub async fn share_delete(access: AccessLease, app: AppHandle, id: String) -> Protected<()> {
+    access
+        .run(async {
+            let enrollment = load(app, access.clone())
+                .await?
+                .ok_or("Configure a sharing service first")?;
+            access.check()?;
+            delete(client()?, &enrollment, &id).await
+        })
+        .await
 }
 
 fn prune(uploads: &mut HashMap<String, Upload>) {
@@ -492,39 +549,48 @@ pub struct UploadStarted {
 }
 #[tauri::command]
 pub async fn share_upload_begin(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, ShareState>,
     name: String,
     mime: String,
     size: u64,
     ttl_seconds: u64,
-) -> Result<UploadStarted> {
-    if state.changing.load(Ordering::Acquire) {
-        return Err("Sharing service configuration is changing".into());
-    }
-    let generation = state.generation.load(Ordering::Acquire);
-    if size > MAX_FILE as u64 {
-        return Err("Shared files are limited to 10 MiB".into());
-    }
-    let enrollment = load(app)
-        .await?
-        .ok_or("Configure a sharing service first")?;
-    let mut uploads = state.uploads.lock().await;
-    if state.changing.load(Ordering::Acquire)
-        || generation != state.generation.load(Ordering::Acquire)
-    {
-        return Err("Sharing service changed; choose the file again".into());
-    }
-    let id = insert(
-        &mut uploads,
-        enrollment,
-        name,
-        mime,
-        size as usize,
-        ttl_seconds,
-    )?;
-    expire(Arc::downgrade(&state.uploads), id.clone());
-    Ok(UploadStarted { id })
+) -> Protected<UploadStarted> {
+    access
+        .run(async {
+            if state.changing.load(Ordering::Acquire) {
+                return Err("Sharing service configuration is changing".into());
+            }
+            let generation = state.generation.load(Ordering::Acquire);
+            if size > MAX_FILE as u64 {
+                return Err("Shared files are limited to 10 MiB".into());
+            }
+            let enrollment = load(app, access.clone())
+                .await?
+                .ok_or("Configure a sharing service first")?;
+            access.check()?;
+            let mut uploads = state.uploads.lock().await;
+            if state.changing.load(Ordering::Acquire)
+                || generation != state.generation.load(Ordering::Acquire)
+            {
+                return Err("Sharing service changed; choose the file again".into());
+            }
+            access.check()?;
+            let id = access.with_current(|| {
+                insert(
+                    &mut uploads,
+                    enrollment,
+                    name,
+                    mime,
+                    size as usize,
+                    ttl_seconds,
+                )
+            })??;
+            expire(Arc::downgrade(&state.uploads), id.clone());
+            Ok(UploadStarted { id })
+        })
+        .await
 }
 fn chunk(uploads: &mut HashMap<String, Upload>, id: &str, offset: u64, data: &[u8]) -> Result<()> {
     prune(uploads);
@@ -545,12 +611,15 @@ fn chunk(uploads: &mut HashMap<String, Upload>, id: &str, offset: u64, data: &[u
 }
 #[tauri::command]
 pub async fn share_upload_chunk(
+    access: AccessLease,
     state: State<'_, ShareState>,
     id: String,
     offset: u64,
     data: Vec<u8>,
-) -> Result<()> {
-    chunk(&mut *state.uploads.lock().await, &id, offset, &data)
+) -> Protected<()> {
+    access
+        .run(async { chunk(&mut *state.uploads.lock().await, &id, offset, &data) })
+        .await
 }
 async fn send(client: Client, mut pending: Pending) -> Result<Created> {
     let mut url = Url::parse(&format!("{}/v1/shares", pending.enrollment.origin))
@@ -617,8 +686,14 @@ async fn finish(state: &ShareState, id: String, client: Client) -> Result<Create
     result
 }
 #[tauri::command]
-pub async fn share_upload_finish(state: State<'_, ShareState>, id: String) -> Result<Created> {
-    finish(&state, id, client()?).await
+pub async fn share_upload_finish(
+    access: AccessLease,
+    state: State<'_, ShareState>,
+    id: String,
+) -> Protected<Created> {
+    access
+        .run(async { finish(&state, id, client()?).await })
+        .await
 }
 #[tauri::command]
 pub async fn share_upload_cancel(state: State<'_, ShareState>, id: String) -> Result<()> {
@@ -873,11 +948,13 @@ async fn thumbnail_bytes(client: Client, enrollment: &Enrollment, id: &str) -> R
 }
 #[tauri::command]
 pub async fn share_thumbnail(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, ShareState>,
     id: String,
     request_id: String,
-) -> Result<Thumbnail> {
+) -> Protected<Thumbnail> {
+    access.run(async {
     if !valid_id(&id) || uuid::Uuid::parse_str(&request_id).is_err() {
         return Err("Invalid image preview request".into());
     }
@@ -903,13 +980,17 @@ pub async fn share_thumbnail(
     tokio::select! {
         _ = cancelled.changed() => Err("Image preview cancelled".into()),
         result = async {
-            let enrollment = load(app).await?.ok_or("Configure a sharing service first")?;
+            let enrollment = load(app, access.clone()).await?.ok_or("Configure a sharing service first")?;
+            access.check()?;
             if state.changing.load(Ordering::Acquire) || generation != state.generation.load(Ordering::Acquire) { return Err("Sharing service changed; open the preview again".into()); }
+            access.check()?;
             let bytes = thumbnail_bytes(client()?, &enrollment, &id).await?;
             let decoding = lease.clone();
             tauri::async_runtime::spawn_blocking(move || { let _lease = decoding; thumbnail(&bytes) }).await.map_err(|_| "Image decoder stopped".to_owned())?
         } => result,
     }
+
+    }).await
 }
 #[tauri::command]
 pub async fn share_thumbnail_cancel(

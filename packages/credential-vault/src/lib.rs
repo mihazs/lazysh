@@ -1,4 +1,7 @@
 use serde::{Deserialize, Serialize};
+pub mod access;
+#[cfg(target_os = "macos")]
+mod macos_resume;
 mod operation;
 pub use operation::{CredentialOperation, CredentialOperations};
 use zeroize::Zeroize;
@@ -95,6 +98,11 @@ struct Value {
 
 pub struct Vault<R: Runtime> {
     operations: CredentialOperations,
+    access: access::AccessState,
+    #[cfg(target_os = "macos")]
+    resume: macos_resume::MacResume,
+    #[cfg(target_os = "macos")]
+    resume_app: tauri::AppHandle<R>,
     #[cfg(target_os = "ios")]
     lifecycle_ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
     #[cfg(target_os = "macos")]
@@ -118,7 +126,179 @@ fn validate(key: &str, value: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(mobile)]
+#[derive(Serialize)]
+struct ResumeRegistration {
+    events: tauri::ipc::Channel<serde_json::Value>,
+}
+#[cfg(mobile)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResumeView {
+    covered: bool,
+    enabled: bool,
+    generation: u64,
+    native_generation: u64,
+}
+
 impl<R: Runtime> Vault<R> {
+    pub fn access(&self) -> &access::AccessState {
+        &self.access
+    }
+    pub fn resume_failure(&self) -> Result<(), String> {
+        #[cfg(mobile)]
+        {
+            self.handle
+                .run_mobile_plugin("resumeFailure", ())
+                .map_err(mobile_error)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let resume = self.resume.clone();
+            self.resume_app
+                .run_on_main_thread(move || resume.failure())
+                .map_err(|_| "Cannot update native privacy cover".into())
+        }
+        #[cfg(all(desktop, not(target_os = "macos")))]
+        {
+            Ok(())
+        }
+    }
+    pub fn resume_capability(&self) -> Result<ProtectionCapability, String> {
+        #[cfg(mobile)]
+        {
+            self.handle
+                .run_mobile_plugin("resumeCapability", ())
+                .map_err(mobile_error)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut capability = self.protection_capability()?;
+            capability.available &= self.resume.ready();
+            if !self.resume.ready() {
+                capability.reason = "Native privacy cover is not ready".into();
+            }
+            Ok(capability)
+        }
+        #[cfg(all(desktop, not(target_os = "macos")))]
+        {
+            Ok(ProtectionCapability {
+                available: false,
+                reason: "Native biometric resume lock is unavailable on this platform".into(),
+            })
+        }
+    }
+    pub fn register_resume(
+        &self,
+        events: tauri::ipc::Channel<serde_json::Value>,
+    ) -> Result<(), String> {
+        #[cfg(mobile)]
+        {
+            self.handle
+                .run_mobile_plugin("registerResume", ResumeRegistration { events })
+                .map_err(mobile_error)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if objc2::MainThreadMarker::new().is_some() {
+                return Err("Register native resume protection off the UI thread".into());
+            }
+            let app = self.resume_app.clone();
+            let resume = self.resume.clone();
+            let (send, receive) = std::sync::mpsc::sync_channel(1);
+            self.resume_app
+                .run_on_main_thread(move || {
+                    let result = (|| {
+                        let window = app
+                            .get_webview_window("main")
+                            .ok_or("Native window unavailable")?;
+                        let window_ptr = window
+                            .ns_window()
+                            .map_err(|_| "Native window unavailable")?;
+                        let view_ptr = window
+                            .ns_view()
+                            .map_err(|_| "Native content view unavailable")?;
+                        resume.install(window_ptr as usize, view_ptr as usize)?;
+                        resume.register(events)
+                    })();
+                    let _ = send.send(result);
+                })
+                .map_err(|_| "Cannot install native privacy cover")?;
+            receive
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| "Native privacy cover did not become ready")?
+        }
+        #[cfg(all(desktop, not(target_os = "macos")))]
+        {
+            let _ = events;
+            Err("Native biometric resume lock is unavailable on this platform".into())
+        }
+    }
+    pub fn resume_view(
+        &self,
+        covered: bool,
+        generation: u64,
+        native_generation: u64,
+    ) -> Result<(), String> {
+        if !covered
+            && (self.access.is_locked()
+                || self.access.generation().map_err(String::from)? != generation)
+        {
+            return Err("Resume authority changed before native reveal".into());
+        }
+        let enabled = covered || self.access.policy_enabled().unwrap_or(true);
+        #[cfg(mobile)]
+        {
+            self.handle
+                .run_mobile_plugin(
+                    "resumeView",
+                    ResumeView {
+                        covered,
+                        enabled,
+                        generation,
+                        native_generation,
+                    },
+                )
+                .map_err(mobile_error)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if objc2::MainThreadMarker::new().is_some() {
+                return self
+                    .resume
+                    .apply(covered, enabled, generation, native_generation);
+            }
+            let resume = self.resume.clone();
+            let access = self.access.clone();
+            let (send, receive) = std::sync::mpsc::sync_channel(1);
+            self.resume_app
+                .run_on_main_thread(move || {
+                    if !covered
+                        && (access.is_locked() || access.generation().ok() != Some(generation))
+                    {
+                        let _ =
+                            send.send(Err("Resume authority changed before native reveal".into()));
+                        return;
+                    }
+                    let _ =
+                        send.send(resume.apply(covered, enabled, generation, native_generation));
+                })
+                .map_err(|_| "Cannot update native privacy cover")?;
+            receive
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| "Native privacy cover did not respond")?
+        }
+        #[cfg(all(desktop, not(target_os = "macos")))]
+        {
+            let _ = (enabled, generation, native_generation);
+            if covered {
+                Err("Native privacy cover is unavailable".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     pub fn get(&self, key: &str) -> Result<Option<String>, String> {
         self.get_protected(key, false)
     }
@@ -441,11 +621,13 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             #[cfg(target_os = "android")]
             let vault = Vault {
                 operations: CredentialOperations::default(),
+                access: access::AccessState::default(),
                 handle: api.register_android_plugin("app.lazysh.vault", "VaultPlugin")?,
             };
             #[cfg(target_os = "ios")]
             let vault = Vault {
                 operations: CredentialOperations::default(),
+                access: access::AccessState::default(),
                 lifecycle_ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 handle: api.register_ios_plugin(init_plugin_lazysh_vault)?,
             };
@@ -454,8 +636,13 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 let _ = api;
                 Vault::<R> {
                     operations: CredentialOperations::default(),
+                access: access::AccessState::default(),
                     #[cfg(target_os = "macos")]
                     mac: macos::MacVault::default(),
+                    #[cfg(target_os = "macos")]
+                    resume: macos_resume::MacResume::default(),
+                    #[cfg(target_os = "macos")]
+                    resume_app: app.clone(),
                     service: format!("{}.credentials", app.config().identifier),
                     _runtime: std::marker::PhantomData,
                 }
@@ -482,7 +669,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             if matches!(event, tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Suspended, .. } if label == "main") {
                 cancel_suspended_authentication(app, None);
             }
-            #[cfg(not(target_os = "android"))]
+            #[cfg(target_os="macos")]
+            if matches!(event,tauri::RunEvent::WindowEvent {label,event:tauri::WindowEvent::Destroyed,..} if label=="main") { app.vault().resume.destroy(); }
+            #[cfg(not(any(target_os = "android",target_os="macos")))]
             let _ = (app, event);
         })
         .build()
@@ -497,6 +686,7 @@ mod tests {
         let app = tauri::test::mock_builder()
             .manage(Vault::<tauri::test::MockRuntime> {
                 operations: CredentialOperations::default(),
+                access: access::AccessState::default(),
                 service: "app.lazysh.suspension-test".into(),
                 _runtime: std::marker::PhantomData,
             })
@@ -532,10 +722,19 @@ mod tests {
     fn unsupported_platforms_never_downgrade_biometric_requests_to_ordinary_storage() {
         let vault = Vault::<tauri::test::MockRuntime> {
             operations: CredentialOperations::default(),
+            access: access::AccessState::default(),
             service: "app.lazysh.biometric-policy-test".into(),
             _runtime: std::marker::PhantomData,
         };
         assert!(!vault.protection_capability().unwrap().available);
+        assert!(vault.resume_view(false, 0, 0).is_err());
+        vault
+            .access()
+            .initialize(false, false, "test".into())
+            .unwrap();
+        assert!(vault
+            .resume_view(false, vault.access().generation().unwrap(), 0)
+            .is_ok());
         assert!(vault
             .get_protected("host", true)
             .unwrap_err()

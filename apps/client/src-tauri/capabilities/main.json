@@ -6,6 +6,7 @@
     "main"
   ],
   "permissions": [
+    "allow-app-lock-status", "allow-app-lock-configure", "allow-app-lock-ready",
     "allow-local-capability", "allow-local-connect", "allow-local-write", "allow-local-resize", "allow-local-ack", "allow-local-disconnect",
     "allow-share-thumbnail", "allow-share-thumbnail-cancel",
     "allow-apple-speech-capability",
@@ -98,6 +99,7 @@
     "allow-attach-multiplexer",
     "allow-trust-host-key",
     "allow-connect",
+    "allow-adopt-session",
     "allow-write-stdin",
     "allow-ack-output",
     "allow-resize",

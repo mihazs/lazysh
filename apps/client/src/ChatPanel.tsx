@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 import Markdown from "react-markdown";
 import { errorMessage } from "./SessionTools";
 
@@ -116,6 +117,7 @@ export function parseTranscript(value: unknown): Page {
 }
 
 export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: string; onOpenTerminal?: () => void }) {
+  const invoke = useProtectedInvoke();
   const [agent, setAgent] = useState("claude");
   const [path, setPath] = useState("");
   const [view, setView] = useState("records");

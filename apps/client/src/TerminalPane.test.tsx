@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
+import {accessSnapshot,applyAccessStatus} from './access';
 const mocks = vi.hoisted(() => ({write: vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
 vi.mock("./bridge", () => ({api: {write: mocks.write, resize: mocks.resize, zellijNavigate:mocks.zellijNavigate, openWebUrl: mocks.openWebUrl}}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {} dispose() {}}}));
@@ -12,9 +13,14 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: () => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+}
+function access(locked=false) {
+  applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
+    generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),...(locked?{}:{nonce:'a'.repeat(64)})});
 }
 beforeEach(() => {
+  access();
   vi.clearAllMocks();
   vi.stubGlobal("PointerEvent", class extends MouseEvent {
     pointerId: number; pointerType: string;
@@ -34,6 +40,55 @@ function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
 describe("terminal interactions", () => {
+  it('does not paste an old clipboard read into the fresh terminal handler after lock and unlock',async()=>{
+    let resolve!: (text:string)=>void;
+    const pending=new Promise<string>(done=>{resolve=done;});
+    vi.mocked(navigator.clipboard.readText).mockReturnValueOnce(pending);
+    let receive:((data:string)=>void)|undefined;
+    terminal.onData=callback=>{receive=callback;return{dispose(){if(receive===callback)receive=undefined;}};};
+    terminal.paste.mockImplementation(text=>receive?.(text));
+    const old=mount();
+    fireEvent.click(screen.getByRole('button',{name:'paste'}));
+    expect(navigator.clipboard.readText).toHaveBeenCalledTimes(1);
+    access(true);old.unmount();access();mount();
+    terminal.focus.mockClear();
+    await act(async()=>{resolve('stale clipboard');await pending;});
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(terminal.paste).not.toHaveBeenCalled();
+    expect(terminal.focus).not.toHaveBeenCalled();
+    vi.mocked(navigator.clipboard.readText).mockResolvedValueOnce('fresh clipboard');
+    fireEvent.click(screen.getByRole('button',{name:'paste'}));
+    await waitFor(()=>expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','fresh clipboard'));
+  });
+  it('fences a deferred clipboard read when the pane remains mounted across an access change',async()=>{
+    let resolve!: (text:string)=>void;
+    const pending=new Promise<string>(done=>{resolve=done;});
+    vi.mocked(navigator.clipboard.readText).mockReturnValueOnce(pending);
+    mount();
+    fireEvent.click(screen.getByRole('button',{name:'paste'}));
+    access(true);access();terminal.focus.mockClear();
+    await act(async()=>{resolve('old lease');await pending;});
+    expect(terminal.paste).not.toHaveBeenCalled();
+    expect(terminal.focus).not.toHaveBeenCalled();
+  });
+  it('rejects stale clipboard starts and suppresses late read and write errors',async()=>{
+    let rejectRead!: (reason:Error)=>void, rejectWrite!: (reason:Error)=>void;
+    vi.mocked(navigator.clipboard.readText).mockReturnValueOnce(new Promise((_,reject)=>{rejectRead=reject;}));
+    vi.mocked(navigator.clipboard.writeText).mockReturnValueOnce(new Promise((_,reject)=>{rejectWrite=reject;}));
+    const reportError=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
+    fireEvent.click(screen.getByRole('button',{name:'paste'}));
+    fireEvent.click(screen.getByRole('button',{name:'Copy'}));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected');
+    access(true);access();
+    fireEvent.click(screen.getByRole('button',{name:'paste'}));
+    fireEvent.click(screen.getByRole('button',{name:'Copy'}));
+    expect(navigator.clipboard.readText).toHaveBeenCalledTimes(1);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+    await act(async()=>{rejectRead(new Error('old read'));rejectWrite(new Error('old write'));});
+    expect(reportError).not.toHaveBeenCalled();
+    expect(terminal.paste).not.toHaveBeenCalled();
+  });
   it.each([
     ['nextZellijTab','nextTab'],['previousZellijTab','previousTab'],
     ['nextZellijPane','nextPane'],['previousZellijPane','previousPane'],
@@ -95,6 +150,25 @@ describe("terminal interactions", () => {
     fireEvent.compositionStart(screen.getByLabelText('Terminal for Host')); swipe();
     expect(reportError).toHaveBeenCalledTimes(4);
     expect(mocks.zellijNavigate).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('discards old Zellij errors and starts after an access generation changes', async () => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
+    let reject!: (error: unknown)=>void;
+    mocks.zellijNavigate.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+    const reportError=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession} active reportError={reportError} />);
+    const canvas=screen.getByLabelText('Terminal for Host');
+    const swipe=()=>{
+      fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
+      fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
+    };
+    swipe();
+    access(true); access();
+    await act(async()=>reject(new Error('Old native navigation failure')));
+    swipe();
+    await act(async()=>{});
+    expect(mocks.zellijNavigate).toHaveBeenCalledTimes(1);
+    expect(reportError).not.toHaveBeenCalled();
   });
   it('suppresses a late navigation failure after the terminal becomes inactive', async () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});

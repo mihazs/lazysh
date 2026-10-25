@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 import { errorMessage } from "./SessionTools";
 import { imageSize } from "./attachment";
 
@@ -91,6 +92,7 @@ function parsePage(value: unknown, origin: string): Page {
 }
 
 export default function SharePanel() {
+  const invoke = useProtectedInvoke();
   const [status, setStatus] = useState<Status>({
     configured: false,
     origin: null,

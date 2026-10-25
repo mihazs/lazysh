@@ -160,6 +160,9 @@ fn main() {
         );
     }
     let mut compiler = cc::Build::new();
+    if env::var_os("CARGO_FEATURE_TEST_FIXTURES").is_some() {
+        compiler.define("LAZYSH_MOSH_TEST_FIXTURES", None);
+    }
     compiler
         .cpp(true)
         .std("c++17")
