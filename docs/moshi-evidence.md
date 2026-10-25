@@ -2,7 +2,7 @@
 
 Research date: 2026-10-24. Target: the publicly shipped Moshi SSH/agent client at [getmoshi.app](https://getmoshi.app/), including mobile and desktop surfaces. This is a behavior catalog for an independent lazysh implementation. It contains no recovered proprietary implementation or copied application assets.
 
-**Evidence levels:** `documented` means the vendor describes the behavior; `artifact-observed` means bytes or metadata were inspected; `inferred` means an implementation implication; `unknown` means no adequate observation. Documented capability is not proof that an installed build behaves that way. This catalog does not certify lazysh parity.
+**Evidence levels:** `documented` means the vendor describes the behavior; `artifact-observed` means bytes or metadata were inspected; `runtime-observed` means a bounded declared invocation was captured; `inferred` means an implementation implication; `unknown` means no adequate observation. Documented capability is not proof that an installed build behaves that way. This catalog does not certify lazysh parity.
 
 ## Shipped artifact inspection
 
@@ -21,9 +21,39 @@ The [desktop download page](https://getmoshi.app/desktop) linked Moshi Go Alpha 
 
 **Artifact-observed:** ELF amd64/little-endian, embedded `go1.27.1` version, module `moshi-go`, revision `e5f6f7f755e50d54c7d8d623b21e596052b8b6f5`, build timestamp `2026-10-24T03:58:53Z`. Recorded metadata includes `github.com/egoist/mygo` replaced by `github.com/rjyo/mygo`, `github.com/rjyo/moshi/app-hook` replaced by a local development path, Chroma, Goldmark, WebSocket, PTY, and text-layout dependencies. Package inventory additionally contains `libghostty-vt.so`, `libmygo-sqlite3.so`, launcher metadata, and icons.
 
-**Limitations:** embedded metadata can be forged; it does not prove dependency authenticity, the compiler actually used, invocation of a dependency, rendering performance, or runtime behavior. No native functions were decompiled, no target executable was launched, and no target account or private data was accessed. REA's Go inspector is target-free; no native analysis session was opened. Research downloads remain outside the repository in `/tmp/lazysh-research`.
+**Limitations:** embedded metadata can be forged; it does not prove dependency authenticity, the compiler actually used, invocation of a dependency, rendering performance, or runtime behavior. The initial metadata pass decompiled no native functions and launched no target executable. REA's Go inspector is target-free; no native analysis session was opened. Research downloads remain outside the repository in `/tmp/lazysh-research`.
 
 The latest artifact is a Go application, so assuming that current Desktop is Electron or a JavaScript bundle would be wrong. The [desktop install guide](https://getmoshi.app/docs/install-desktop) separately describes the browser UI embedded in `moshi-hook`; those are distinct delivery surfaces. Their exact equivalence to the new Go alpha remains unknown.
+
+### Bounded desktop help execution
+
+On 2026-10-25, REA `capture_process_scenario` observed the selected executable's
+`--help` invocation exiting with code 0 and emitting three launch options:
+
+| Option | Meaning reported by the executable |
+| --- | --- |
+| `-dir` | Workspace directory, defaulting to the caller's current directory. |
+| `-host` | SSH host selection for the requested multiplexer. |
+| `-mux` | A gateway-backed multiplexer target: `herdr`, `tmux` or `tmux:<server>`, instead of local shells. |
+
+Evidence ID: `ev_70fe5a8cde7fcc52e4f9402ff65ae568ee7780a6480927f388f52280f533486e`;
+provider `rea-process` v3 / REA 6.7.0. The output retained all 317 raw terminal
+bytes without truncation. A separate SHA-256 measurement of the selected target
+matches the executable identity above. The captured outer executable was
+`bwrap`, SHA-256 `a7adb079800910ff28fc05c7e1dd2441ff87fb09b369dbb7e82bcededdab079b`.
+Its declared invocation mounted the artifact and system libraries read-only,
+cleared the target environment, and used private home/tmp plus isolated network
+and PID namespaces. No host account, credential store or developer SSH host was
+passed to the target.
+
+**Observed:** help output and successful exit. **Unknown:** actual directory
+launch, gateway protocol, named-server attachment, graphical behavior and mobile
+equivalence. REA samples process trees, does not atomically attest the nested
+executable, and does not observe network syscalls or unselected filesystem
+effects. The declared wrapper restrictions are separate from those capture
+limitations. Help text is evidence of an exposed interface, not successful
+execution of its advertised workflows. Track an independent lazysh launch-intent
+implementation and acceptance in [issue #86](https://github.com/mihazs/lazysh/issues/86).
 
 ## Behavior checklist
 
@@ -61,6 +91,7 @@ Every entry below is **documented**, unless otherwise marked. Rows define accept
 | Apple surfaces | iOS Live Activities/Dynamic Island plus native watchOS inbox/approval and usage screens, complications and background freshness. Watch is a glance/action surface, without terminal, scrollback or attachments. | [Apple Watch](https://getmoshi.app/docs/apple-watch), [Live Activity](https://getmoshi.app/docs/live-activity) |
 | Host settings | Discovery, usage collection, nested-agent suppression, unlocked-Mac notification suppression, HTTP port scanning and Mata can be controlled independently; restart semantics vary by setting. | [Hook settings](https://getmoshi.app/docs/hook-settings) |
 | Desktop | Local and remote hosts, session/chat switching, workspace/agent sidebar, command palette, files with code/Markdown/media viewing, forwarded previews, and line/element comments included in the next agent prompt. Terminal ownership remains on the host. | [Desktop](https://getmoshi.app/desktop) |
+| Desktop launch interface | **Runtime-observed help only:** directory, SSH host and tmux/Herdr gateway target options. Their workflows remain unverified. | [Bounded help capture](#bounded-desktop-help-execution), [issue #86](https://github.com/mihazs/lazysh/issues/86) |
 
 ## Agent coverage
 
@@ -79,7 +110,7 @@ The exact native event schemas, transcript formats, model catalogs and per-agent
 1. **Documented direct data path:** terminals, transcripts, diffs, file browsing and previews travel between client and owned host through SSH. Inbox summaries, push and usage snapshots use the vendor backend; shareable uploads and optional cloud dictation also leave the device/host. A lazysh implementation needs explicit, separately enabled external services rather than claiming that every feature is offline. [Chat transport](https://getmoshi.app/docs/chat-view), [files](https://getmoshi.app/docs/files), [voice](https://getmoshi.app/docs/voice).
 2. **Unverified key claim:** vendor security copy mentions the Secure Enclave, while import/export of arbitrary SSH private keys is also documented. This investigation cannot establish hardware non-exportability. lazysh should describe its actual platform-keystore protection, authentication policy and export behavior precisely. [Security/sync](https://getmoshi.app/docs/security-sync).
 3. **Documentation drift:** the Jump To page disclaims pane/tab deep links, but the newer notifications reference describes them. The personalization page says nine themes while listing ten. Preserve feature intent and verify the installed version before depending on exact counts or URL grammar. [Jump To](https://getmoshi.app/docs/jump-to), [notifications](https://getmoshi.app/docs/notifications), [personalization](https://getmoshi.app/docs/personalization).
-4. **Runtime unknown:** no hands-on Moshi mobile/desktop session, SSH server handshake, roaming test, approval race, dictation engine or battery/frame-time benchmark was executed. Android/iOS parity and which documented features have reached each build remain unverified. The catalog is not a pixel-perfect or performance specification.
+4. **Runtime unknown:** the desktop help-only invocation above did not exercise an interactive Moshi mobile/desktop session, SSH server handshake, roaming test, approval race, dictation engine or battery/frame-time benchmark. Android/iOS parity and which documented features have reached each build remain unverified. The catalog is not a pixel-perfect or performance specification.
 5. **Implementation choice:** lazysh can retain the useful agent principle—one durable host session with multiple views—without copying Moshi's source, visual assets, service endpoints, licensing system or proprietary notification infrastructure. Account billing is not a prerequisite for the requested SSH/agent experience.
 
 ## Verification gates for parity
