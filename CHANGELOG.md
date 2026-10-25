@@ -13,6 +13,20 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   and Linux report this option unavailable. Physical biometric acceptance remains
   a release gate; existing per-host credential protection stays independent.
 
+- Explicit-file `antigravity-jsonl` step-record snapshots with append-safe
+  checkpoints and restart on changed snapshot bytes, literal source/type/status,
+  recorded thinking and compact truncation flags. No automatic discovery,
+  conversation reconstruction or live compatibility claim; existing defaults
+  and other adapters' cursors are unchanged.
+
+- iOS app integration for the verified-SSH Mosh handoff, with original dependency
+  privacy manifests embedded in separate resource bundles. Auto transport
+  selection now considers Mosh on iOS, where it previously skipped it; host-key
+  verification and explicit fallback rules remain unchanged.
+- Explicit-file `grok-acp` transcript records, based on a pinned official Grok
+  writer contract. Chunks, tool updates and plans remain separate records;
+  automatic discovery, active-branch replay and live Grok control are not enabled.
+  Existing defaults are unchanged.
 - Explicit Cloud dictation enrollment with origin-bound device tokens in the
   platform vault, authenticated service capabilities/language hints and quota
   totals, bounded in-memory WAV uploads, and exact-recording cancellation.
@@ -46,6 +60,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Mobile workspace navigation reserves the full top safe area, keeping the
+  Hosts menu below the iOS status bar and its controls inside the toolbar.
+- Phone dialog inputs use readable text sizing to avoid WebKit focus zoom
+  cropping the host form, while preserving user-controlled pinch zoom.
 - Opening another companion event store no longer closes a separate database
   file descriptor that could release an existing SQLite writer's POSIX lock.
 - Concurrent companion event writes preserve durable storage within bounded

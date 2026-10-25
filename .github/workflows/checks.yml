@@ -43,7 +43,13 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
-      - run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service
+      - name: Check companion and service packages
+        id: agent-checks
+        run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service
+      - name: Measure hosted SQLite phases (diagnostic, no injected delay)
+        if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
+        timeout-minutes: 2
+        run: cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture
 
   native-linux:
     runs-on: ubuntu-24.04
@@ -197,6 +203,7 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk iphonesimulator --show-sdk-version
       - run: bun run build:ios
+        id: ios-app-build
       - name: Link native Mosh tests for iOS devices
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '16.0'
@@ -204,6 +211,7 @@ jobs:
       - name: Compile watchOS companion and complications
         run: bunx turbo run build:watchos --filter=@lazysh/apple-status
       - name: Create isolated status test simulator
+        id: ios-simulator
         run: |
           APPLE_STATUS_SIMULATOR_ID="$(xcrun simctl create lazysh-status-ci com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)"
           echo "APPLE_STATUS_SIMULATOR_ID=$APPLE_STATUS_SIMULATOR_ID" >> "$GITHUB_ENV"
@@ -221,7 +229,29 @@ jobs:
           path: apps/client/src-tauri/gen/apple/resume-tests.xcresult
           if-no-files-found: warn
       - name: Run native iOS Mosh unit and protocol tests
+        id: ios-mosh-native
         run: bun run test:ios-mosh
+      - name: Install actual iOS app for native acceptance
+        id: ios-app-install
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' && steps.ios-simulator.outcome == 'success' }}
+        run: |
+          xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
+          xcrun simctl install "$APPLE_STATUS_SIMULATOR_ID" apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app
+      - name: Verify actual iOS Mosh IPC and privacy resources
+        if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
+        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
+      - name: Run native workspace Save, relaunch, and Delete acceptance
+        if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
+        run: bun run test:ios-workspace
+      - name: Upload iOS app acceptance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-app-acceptance-results
+          path: |
+            apps/client/src-tauri/gen/apple/workspace-ui.xcresult
+            apps/client/src-tauri/gen/apple/mosh-app.xcresult
+          if-no-files-found: warn
       - name: Remove status test simulator
         if: always() && env.APPLE_STATUS_SIMULATOR_ID != ''
         run: xcrun simctl delete "$APPLE_STATUS_SIMULATOR_ID"

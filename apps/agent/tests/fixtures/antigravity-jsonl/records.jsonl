@@ -1,0 +1,4 @@
+{"step_index":0,"source":"fixture","type":"USER_INPUT","status":"RECORDED","created_at":"2026-10-25T00:00:00Z","content":"Inspect this synthetic example","input_tokens":0,"cache_read_tokens":0,"output_tokens":0}
+{"step_index":1,"source":"fixture","type":"PLANNER_RESPONSE","status":"IN_PROGRESS","thinking":"Bounded recorded reasoning","content":"A compact response","tool_calls":[{"name":"fixture-inspect","args":{"path":"not-opened","flag":false}}],"truncated_fields":["content","thinking"]}
+{"step_index":1,"source":"fixture","type":"PLANNER_RESPONSE","status":"COMPLETED","exit_code":0,"error_code":0,"content":"A separate step update","input_tokens":18446744073709551615,"output_tokens":9007199254740993,"media":[{"mime_type":"image/png","uri":"file:///not-opened"}]}
+{"source":"future-source","type":"FUTURE_STEP","status":"FUTURE_STATUS","error":"A recorded diagnostic","tool_calls":[{"name":"summary-without-args"}],"media":[],"truncated_fields":[]}

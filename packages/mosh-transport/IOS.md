@@ -4,7 +4,7 @@ The package's iOS build uses the same pinned protobuf-lite, Abseil, utf8_range,
 generated messages, and OpenSSL sources as Android. Historical
 `vendor-android` paths and their checksums stay in place; there is no second
 source snapshot. Desktop system dependencies and Android NDK selection remain
-separate. The app's iOS Mosh capability remains disabled pending native proof.
+separate. The app enables the existing verified-SSH Mosh handoff on iOS; Windows remains unsupported. The native library was verified on the iOS Simulator in CI run 40166263884: six native tests and the two-client official-server protocol test passed with Xcode 26.6 / SDK 26.5.
 
 Full Xcode is required. The native build selects `iphoneos` for
 `aarch64-apple-ios`, and `iphonesimulator` for `aarch64-apple-ios-sim` or
@@ -34,12 +34,40 @@ IPHONEOS_DEPLOYMENT_TARGET=16.0 cargo test -p lazysh-mosh-transport --target aar
 `bun run test:ios-mosh` uses a native Cargo host fixture with the existing
 isolated `APPLE_STATUS_SIMULATOR_ID`. It cross-builds the library unit tests and
 `ios_peer` integration test, resolves their exact Cargo JSON artifact paths,
-and executes them through `xcrun simctl spawn`. The peer communicates only with
+and executes them through `xcrun simctl spawn --standalone`, matching
+[Swift's command-line simulator test runner](https://github.com/swiftlang/swift/blob/main/test/lit.cfg).
+A bounded `--list` preflight requires all six native security tests by name
+before executing the suite, distinguishing executable startup failures from
+test-body failures. It does not retry launches or increase suite deadlines.
+This launch path passed all six native tests and the two-client protocol test
+in CI run 40172672432. The earlier intermittent stall happened before the test
+runner's first output; its exact CoreSimulator startup cause remains unproven.
+On a stalled simulator executable, the fixture keeps the original 45-second
+failure deadline and adds at most five seconds of diagnostic observation before
+terminating its owned process group. It records executable names/PIDs without
+argv or environment, and attempts one-second stack samples of its own `simctl`
+and an identifiable direct native child in that same process group. Shared
+CoreSimulator daemons and unrelated processes are excluded. Missing diagnostic
+tools do not prevent teardown; known fixture keys are redacted before truncation.
+Diagnostic output retains up to 2 KiB of inventory status and the first 6 KiB
+of each process sample, including PID/status and its call graph before long
+Binary Images lists, within the overall 16 KiB limit. Compiler stdout/stderr
+continue to retain their last 16 KiB. This instrumentation collects evidence;
+it does not retry or establish the startup cause.
+CI run 40177092696 stalled before `--list` output and its inventory command
+was unavailable, so no stack was captured. The fixture now reports the inventory
+failure status and still samples its known owned leader independently of that
+inventory; child sampling continues to require positive ownership evidence.
+The peer communicates only with
 ephemeral official Mosh 1.4.0 host servers on shared loopback, exercising two
 parallel clients, UTF-8, remote PTY resize, and acknowledged shutdown. The host
 fixture bounds build/start/execute deadlines and terminates its server processes;
 the CI job owns simulator creation and final cleanup. No custom runner script,
 external account, provisioning profile, or background entitlement is added.
+App installation and hosted/UI acceptance run whenever the app build and
+simulator setup succeeded and the workflow was not cancelled, even if this
+independent raw-library fixture fails. Its failure still fails the job, and
+result upload and simulator cleanup remain unconditional.
 
 Native linking and simulator execution are distinct acceptance results. Physical
 device bootstrap, app session handoff, suspension/resume, network roaming, and
@@ -50,6 +78,39 @@ The original Mosh COPYING/COPYING.iOS and dependency licenses remain intact.
 Apple lists [Abseil and Protobuf as SDKs requiring privacy manifests](https://developer.apple.com/support/third-party-SDK-requirements/).
 Their exact upstream `PrivacyInfo.xcprivacy` files are preserved and hashed in
 the shared source snapshot. When enabling the app integration for distribution,
-include those manifests as SDK resources and validate the resulting Xcode archive
-privacy report; merely retaining source files does not embed them into a bundle.
+the app's XcodeGen template builds distinct `LazyshMoshAbseilPrivacy.bundle` and `LazyshMoshProtobufPrivacy.bundle` resource targets and embeds them in the application. Each target references the original vendored manifest directly, without duplicating or replacing an app-level privacy manifest. The resource bundles have distinct product names and generated bundle metadata, and contain no executable. Validate the resulting Xcode archive privacy report before distribution.
 No signed application release or App Store submission is performed here.
+
+## Actual app acceptance
+
+The `LazyshMoshAppTests` hosted XCTest target uses the already built Tauri app at
+`$(SRCROOT)/build/arm64-sim/lazysh.app/lazysh`, matching the current native build
+output. It has no application dependency, and disables implicit dependencies,
+so `xcodebuild test` cannot rerun the app's always-run Rust phase after the Tauri
+CLI options server has exited. The scheme must run after `bun run build:ios`.
+The hosted test target uses that same `build/arm64-sim` product root through
+`CONFIGURATION_BUILD_DIR`: Xcode requires the host app's `PlugIns` directory
+to be a descendant of the test target's product directory. A host path outside
+the default DerivedData products directory fails during build planning, before
+any XCTest can run.
+The invocation also sets this product directory globally: the launcher resolves
+the host app through the invocation's products root, even when the test target's
+own `CONFIGURATION_BUILD_DIR` and `TEST_HOST` point to the prebuilt app. In run
+40180208893 the test bundle compiled into the correct app, but the launcher
+searched DerivedData and neither hosted assertion ran. That run passed all six
+raw native tests, official-server interoperability and the real workspace Save,
+process relaunch and Delete test; the launcher correction still requires CI.
+
+```console
+xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$PWD/apps/client/src-tauri/gen/apple/build/arm64-sim"
+```
+
+The two tests read the actual host application's embedded SDK resource bundles,
+verify the original upstream SHA-256 bytes and privacy properties, and invoke
+`transport_capabilities` through its actual WKWebView/Tauri IPC bridge. They do
+not mock the capability, start a user SSH session, or replace the library's
+existing authenticated-UDP tests. Hosted app loading, resource bundling and
+actual iOS app IPC remain unverified until this scheme passes in macOS/Xcode CI;
+the earlier library simulator pass does not establish those app-level results.
+Physical-device SSH/Mosh handoff, network roaming, background/resume and energy
+behavior remain acceptance work.

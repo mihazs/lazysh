@@ -12,10 +12,11 @@ type Block = {
 };
 type Message = {
   id: string;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "record";
+  record?: { source: string; type: string; status: string; stepIndex?: number; exitCode?: number; errorCode?: number; truncatedFields: string[] };
   timestamp?: string;
   blocks: Block[];
-  usage?: Record<string, number>;
+  usage?: Record<string, number | string>;
 };
 type Page = {
   schemaVersion: 1;
@@ -25,6 +26,7 @@ type Page = {
   hasMore: boolean;
   view?: string;
   truncated?: boolean;
+  checkpoint?: string;
 };
 const agents: Record<string, string> = {
   claude: "Claude Code",
@@ -42,6 +44,8 @@ const agents: Record<string, string> = {
   omo: "OmO Native",
   "devin-atif": "Devin ATIF export",
   "amp-json": "Amp JSON export",
+  "grok-acp": "Grok ACP records (explicit file)",
+  "antigravity-jsonl": "Antigravity step records (explicit file)",
 };
 
 export function parseTranscript(value: unknown): Page {
@@ -51,6 +55,8 @@ export function parseTranscript(value: unknown): Page {
   if (
     page.schemaVersion !== 1 ||
     !Object.hasOwn(agents, page.agent) ||
+    (["grok-acp", "antigravity-jsonl"].includes(page.agent) && page.view !== "record_stream") ||
+    (page.agent === "antigravity-jsonl" && (typeof page.checkpoint !== "string" || !/^v1:[0-9]{1,8}:[0-9a-f]{64}$/.test(page.checkpoint))) ||
     !Array.isArray(page.messages) ||
     page.messages.length > 100 ||
     !Number.isSafeInteger(page.nextOffset) ||
@@ -58,16 +64,29 @@ export function parseTranscript(value: unknown): Page {
     typeof page.hasMore !== "boolean"
   )
     throw new Error("Unsupported transcript response.");
+  if (page.agent === "antigravity-jsonl") {
+    const bytes = Number(page.checkpoint!.split(":")[1]);
+    if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new Error("Invalid transcript snapshot checkpoint.");
+  }
   for (const message of page.messages) {
     if (
       !message ||
       typeof message.id !== "string" ||
       message.id.length > 4096 ||
-      !["user", "assistant", "tool"].includes(message.role) ||
+      !(["user", "assistant", "tool"].includes(message.role) || (page.agent === "antigravity-jsonl" && message.role === "record")) ||
       !Array.isArray(message.blocks) ||
       message.blocks.length > 1000
     )
       throw new Error("Invalid transcript message.");
+    if (page.agent === "antigravity-jsonl") {
+      const metadata = message.record;
+      if (message.role !== "record" || !metadata || [metadata.source, metadata.type, metadata.status].some(value => typeof value !== "string" || value.length > 256)
+        || !Array.isArray(metadata.truncatedFields) || metadata.truncatedFields.length > 64 || metadata.truncatedFields.some(value => typeof value !== "string" || value.length > 256)
+        || (metadata.stepIndex !== undefined && (!Number.isInteger(metadata.stepIndex) || metadata.stepIndex < 0 || metadata.stepIndex > 4294967295))
+        || (metadata.errorCode !== undefined && (!Number.isInteger(metadata.errorCode) || metadata.errorCode < 0 || metadata.errorCode > 4294967295))
+        || (metadata.exitCode !== undefined && (!Number.isInteger(metadata.exitCode) || metadata.exitCode < -2147483648 || metadata.exitCode > 2147483647)))
+        throw new Error("Invalid Antigravity record metadata.");
+    } else if (message.record !== undefined) throw new Error("Unexpected transcript record metadata.");
     for (const block of message.blocks) {
       if (
         !block ||
@@ -87,7 +106,9 @@ export function parseTranscript(value: unknown): Page {
       message.usage &&
       (typeof message.usage !== "object" ||
         Object.values(message.usage).some(
-          (n) => !Number.isSafeInteger(n) || n < 0,
+          (n) => typeof n === "string"
+            ? page.agent !== "antigravity-jsonl" || !/^(0|[1-9][0-9]{0,19})$/.test(n) || BigInt(n) > 18446744073709551615n
+            : !Number.isSafeInteger(n) || n < 0,
         ))
     )
       throw new Error("Invalid transcript usage.");
@@ -112,6 +133,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
   }>();
   const [messages, setMessages] = useState<Message[]>([]);
   const [offset, setOffset] = useState(0);
+  const [checkpoint, setCheckpoint] = useState<string>();
   const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -183,6 +205,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           sessionId,
           ...source,
           offset: cursor,
+          ...(!replace && source.agent === "antigravity-jsonl" ? { checkpoint } : {}),
         }),
       );
       if (source.view === "conversation" && page.view !== "active_branch")
@@ -198,6 +221,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
       if (request.current !== current) return;
       setOpened(source);
       setOffset(page.nextOffset);
+      setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
       setMessages((previous) => {
         const combined = replace
@@ -208,7 +232,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         ].slice(-500);
       });
     } catch (e) {
-      if (request.current === current) setError(errorMessage(e));
+      if (request.current === current) setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
+        ? "Transcript changed. Open it again to restart." : errorMessage(e));
     } finally {
       if (request.current === current) setBusy(false);
     }
@@ -264,9 +289,20 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             </select>
           </label>
         )}
-        <button type="button" disabled={busy} onClick={() => void discover()}>
+        <button type="button" disabled={busy || ["grok-acp", "antigravity-jsonl"].includes(agent)} onClick={() => void discover()}>
           Find transcripts
         </button>
+        {agent === "grok-acp" && (
+          <p>
+            Grok reads only an explicitly selected updates.jsonl file. Recorded
+            chunks and tool snapshots remain separate; rewinds are not filtered
+            into an active conversation branch.
+          </p>
+        )}
+        {agent === "antigravity-jsonl" && <p>
+          Antigravity reads only an explicitly selected JSONL file. Step records preserve literal source, type, status and compact truncation flags;
+          repeated indices remain separate. This is not a reconstructed conversation. If the file is rewritten, open it again from the start.
+        </p>}
         <label>
           Transcript path
           <input
@@ -326,13 +362,20 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           <code>{opened.path}</code> ·{" "}
           {opened.view === "conversation"
             ? "latest 50 messages from the selected branch"
-            : "showing up to 500 recorded messages"}
+            : opened.agent === "antigravity-jsonl" ? "showing up to 500 step records" : "showing up to 500 recorded messages"}
         </p>
       )}
       <div className="chat-messages">
         {messages.map((message) => (
           <article key={message.id} className="chat-message">
             <h4>{message.role}</h4>
+            {message.record && <p>
+              {message.record.stepIndex !== undefined ? `Step ${message.record.stepIndex} · ` : ""}
+              Source: {message.record.source} · Type: {message.record.type} · Status: {message.record.status}
+              {message.record.exitCode !== undefined && ` · Exit code: ${message.record.exitCode}`}
+              {message.record.errorCode !== undefined && ` · Error code: ${message.record.errorCode}`}
+              {message.record.truncatedFields.length > 0 && ` · Compact truncation: ${message.record.truncatedFields.join(", ")}`}
+            </p>}
             {message.blocks.map((block, index) =>
               block.type === "text" ? (
                 <Markdown

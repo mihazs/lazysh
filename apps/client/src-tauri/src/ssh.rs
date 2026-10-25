@@ -1432,7 +1432,12 @@ pub async fn connect_mosh(
         .run(async {
             let parent = state.session(&session_id).await?;
             let bootstrap = crate::mosh::bootstrap(&parent, options, cols, rows).await?;
-            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "android",
+                target_os = "ios"
+            ))]
             {
                 spawn_native_terminal(
                     &state,
@@ -1452,7 +1457,12 @@ pub async fn connect_mosh(
                 )
                 .await
             }
-            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
+            #[cfg(not(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "android",
+                target_os = "ios"
+            )))]
             {
                 let _ = (bootstrap, events);
                 Err(SshError::new(
@@ -2017,6 +2027,8 @@ fn validate_transcript_source(agent: &str, path: &str, offset: u64) -> Result<()
             | "omo"
             | "devin-atif"
             | "amp-json"
+            | "grok-acp"
+            | "antigravity-jsonl"
     ) || offset > 9_007_199_254_740_991
     {
         return Err(SshError::new(
@@ -2027,12 +2039,38 @@ fn validate_transcript_source(agent: &str, path: &str, offset: u64) -> Result<()
     Ok(())
 }
 
-fn transcript_command(agent: &str, path: &str, offset: u64) -> Result<String> {
+fn transcript_command(
+    agent: &str,
+    path: &str,
+    offset: u64,
+    checkpoint: Option<&str>,
+) -> Result<String> {
     validate_transcript_source(agent, path, offset)?;
-    Ok(format!(
+    let mut command = format!(
         "lazysh-agent transcript --agent {agent} --path {} --offset {offset} --limit 50",
         quote(path)
-    ))
+    );
+    if agent == "antigravity-jsonl" && offset > 0 && checkpoint.is_none() {
+        return Err(SshError::new(
+            "invalid_input",
+            "Reopen the transcript from zero with a snapshot checkpoint",
+        ));
+    }
+    if let Some(checkpoint) = checkpoint {
+        if agent != "antigravity-jsonl"
+            || checkpoint.len() > 96
+            || !checkpoint
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b':' || b == b'v')
+        {
+            return Err(SshError::new(
+                "invalid_input",
+                "Invalid transcript checkpoint",
+            ));
+        }
+        command.push_str(&format!(" --checkpoint={}", quote(checkpoint)));
+    }
+    Ok(command)
 }
 
 #[tauri::command]
@@ -2079,11 +2117,12 @@ pub async fn agent_transcript(
     path: String,
     offset: u64,
     view: Option<String>,
+    checkpoint: Option<String>,
     transcript_session_id: Option<String>,
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let mut command = transcript_command(&agent, &path, offset)?;
+            let mut command = transcript_command(&agent, &path, offset, checkpoint.as_deref())?;
             match view.as_deref() {
                 None | Some("records") => {}
                 Some("conversation") if agent == "claude" && offset == 0 => {
@@ -2121,6 +2160,12 @@ pub async fn agent_transcripts(
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
+            if matches!(agent.as_str(), "grok-acp" | "antigravity-jsonl") {
+                return Err(SshError::new(
+                    "invalid_input",
+                    "This adapter requires an explicitly selected transcript file",
+                ));
+            }
             if !matches!(
                 agent.as_str(),
                 "claude"
@@ -2552,10 +2597,28 @@ mod tests {
 
     #[test]
     fn transcript_command_rejects_adapter_injection_and_quotes_paths() {
-        assert!(transcript_command("claude; touch /tmp/nope", "/a", 0).is_err());
-        assert!(transcript_command("codex", "/a\0b", 0).is_err());
-        assert!(transcript_command("codex", "/a", u64::MAX).is_err());
-        assert_eq!(transcript_command("claude", "/a'b;$(cmd)", 17).unwrap(), "lazysh-agent transcript --agent claude --path '/a'\\''b;$(cmd)' --offset 17 --limit 50");
+        assert_eq!(transcript_command("grok-acp", "/host/updates.jsonl", 0, None).unwrap(), "lazysh-agent transcript --agent grok-acp --path '/host/updates.jsonl' --offset 0 --limit 50");
+        assert!(transcript_command("grok", "/host/updates.jsonl", 0, None).is_err());
+        let checkpoint = format!("v1:100:{}", "a".repeat(64));
+        assert_eq!(transcript_command("antigravity-jsonl", "/host/transcript.jsonl", 50, Some(&checkpoint)).unwrap(),
+            format!("lazysh-agent transcript --agent antigravity-jsonl --path '/host/transcript.jsonl' --offset 50 --limit 50 --checkpoint='{checkpoint}'"));
+        assert!(
+            transcript_command("antigravity-jsonl", "/host/transcript.jsonl", 50, None).is_err()
+        );
+        assert!(transcript_command(
+            "antigravity-jsonl",
+            "/host/transcript.jsonl",
+            50,
+            Some("v1:100:$(execute)")
+        )
+        .is_err());
+        assert!(
+            transcript_command("claude", "/host/transcript.jsonl", 0, Some(&checkpoint)).is_err()
+        );
+        assert!(transcript_command("claude; touch /tmp/nope", "/a", 0, None).is_err());
+        assert!(transcript_command("codex", "/a\0b", 0, None).is_err());
+        assert!(transcript_command("codex", "/a", u64::MAX, None).is_err());
+        assert_eq!(transcript_command("claude", "/a'b;$(cmd)", 17, None).unwrap(), "lazysh-agent transcript --agent claude --path '/a'\\''b;$(cmd)' --offset 17 --limit 50");
     }
 
     #[derive(Clone)]
@@ -2698,7 +2761,12 @@ mod tests {
     async fn stalled_et_bootstrap_closes_its_channel_and_preserves_ssh_control() {
         assert_stalled_bootstrap_cleanup(true).await;
     }
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
     #[tokio::test]
     async fn stalled_mosh_bootstrap_closes_its_channel_and_preserves_ssh_control() {
         assert_stalled_bootstrap_cleanup(false).await;

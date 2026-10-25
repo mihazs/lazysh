@@ -96,6 +96,7 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
         has_more: false,
         branch_id,
         truncated,
+        checkpoint: None,
     })
 }
 

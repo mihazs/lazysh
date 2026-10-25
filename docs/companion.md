@@ -155,4 +155,100 @@ The reader supports main-thread user/assistant text, plaintext thinking, tool ca
 
 Primary evidence: [official thread export documentation](https://ampcode.com/docs/threads) and the [versioned official npm artifact](https://registry.npmjs.org/@sourcegraph/amp/-/amp-0.0.1778732631-gc5875c.tgz), inspected as inert JavaScript on 2026-10-24. Archive SHA-256 `c64e86edecde79e659914df30dad4060c8d7dd2d91a884e2b94b4262d0f8c911`; `dist/main.js` SHA-256 `458435712c9c4e222822847fc9e70080cdf023ffb3c820e959a30425a22a5836`. The full-thread JSON export function occupies bundle byte range `[8692546,8692830)` (selected-span SHA-256 `46f08280586103e38944b2a4cfefb09b10e026002b9265ab2b9cb06b9a167470`); its message projection occupies `[2355907,2356741)` (SHA-256 `69cf3797d4147e3603ae5ce8290abb57a30a9e2b1d17b70b6fdd9327d86c5b5e`). REA parsed both selected spans with zero parse failures; relationship analysis remained partial. No Amp code was executed or copied into lazysh, and no private account data was read. Native Cargo fixtures independently recreate the observed envelope and content shapes; real exported files remain untested.
 
+### Grok ACP records
+
+`--agent grok-acp` reads an explicitly selected modern `updates.jsonl` file:
+
+```sh
+lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --limit 50
+```
+
+This is a **record stream**, not reconstructed Grok Chat View. Every normalized row has a byte-offset record ID, so chunks sharing a provider `messageId` remain distinct. Standard ACP user/assistant text, plaintext thinking, attachment placeholders, tool calls and recorded output/diffs are supported. Tool updates remain separate snapshots; their optional collections replace upstream state rather than representing append deltas. Complete ACP plan snapshots and xAI `plan_kept` content render as labeled text. Media, resource URIs, terminal references, diff paths and plan URIs are never opened or fetched. Metadata/status-only updates do not fabricate tool output.
+
+The modern disk envelope is `{timestamp, method, params: {sessionId, update}}`. `timestamp` is a provider-recorded unsigned UNIX-second value, converted to RFC 3339; missing/invalid/out-of-range values are skipped without substituting local time. Only `session/update` and `_x.ai/session/update` are accepted. Legacy raw notifications, unknown event types, usage/quota fields, turn-completion summaries and rewind markers are omitted while advancing the cursor. Malformed complete JSON fails. The existing regular-file, Unix owner/no-follow/nonblocking checks, 256 KiB record, 4 MiB scan, 100 messages/page and 512 KiB output budgets apply. An incomplete final line remains retryable from the returned cursor. Grok tool IDs are limited to 256 UTF-8 bytes and tool content to 999 blocks for a call or 1,000 for an update, checked before cloning identifiers; oversized records fail without truncating identity. A single normalized record exceeding the page budget fails explicitly instead of returning a non-progressing cursor.
+
+Automatic discovery and `--view conversation` are explicitly unsupported for this adapter. The UI labels it **Grok ACP records (explicit file)** and disables discovery. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Defaults and live terminal controls are unchanged.
+
+Evidence is official `xai-org/grok-build` commit `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` (`SOURCE_REV` `559751fdcec02d413e4c57c8832ab275e4f44980`), inspected 2026-10-25: the [disk envelope and fixtures](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L721), [actual JSONL writer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/jsonl/mod.rs#L634), and [xAI extension definitions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/extensions/notification.rs#L517). Its lockfile pins ACP 0.10.4 with schema 0.11.4. [Synthetic fixture provenance](../apps/agent/tests/fixtures/grok-acp/README.md) records checksums and type anchors. These source contracts do not prove equivalence to the previously inspected Grok 1.0.70 artifact or every installed release. No provider CLI, account data or real user transcript was executed/accessed. Full Grok conversation/runtime compatibility remains [issue #5](https://github.com/mihazs/lazysh/issues/5) work.
+
 Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx turbo run test --filter=@lazysh/agent`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
+
+
+## Diagnose companion write contention
+
+The CI `agent` job runs a separate native timing probe after the normal package checks, including when those checks fail. Its result never changes the preceding checks' failure status. The probe has a two-minute CI step limit and prints only fixed phase names, worker indices, durations and commit counts for a temporary synthetic database. It does not print SQL, event values, database paths or account data.
+
+Run the same probe locally with:
+
+```sh
+cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture
+```
+
+SQLite's statement profile records `BEGIN`, insert, retention and commit duration. The existing busy callback is wrapped only in this fixture to measure its elapsed waiting separately; `other_wall` includes all remaining work and scheduling, not a direct measurement of filesystem synchronization. SQLite profile durations have millisecond resolution. The hosted probe injects no delay and keeps the production journal, synchronization and three-second per-locking-episode budget unchanged. This follow-up probe runs after the normal checks, so it does not reproduce all concurrent load present in an earlier failure.
+
+A second ignored native probe, `storage_diagnostics::profile_storage_with_known_commit_hold`, deliberately holds each transaction for 250 ms in a test-only commit hook. It demonstrates that serialized write-held time can exhaust some wait budgets, while checking that every acknowledged commit remains in storage. It is not run by CI and is not evidence that hosted failures are caused by `fsync`. Neither probe replaces the strict concurrent-write acceptance tests or fixes [issue #36](https://github.com/mihazs/lazysh/issues/36); hosted phase evidence is needed before changing the storage algorithm.
+
+## Antigravity explicit step records
+
+`--agent antigravity-jsonl` reads only an explicitly selected JSONL file:
+
+```sh
+lazysh-agent transcript --agent antigravity-jsonl --path /absolute/path/transcript.jsonl --limit 50
+```
+
+Native SSH Chat offers **Antigravity step records (explicit file)**. Discovery and
+conversation mode are rejected. Nothing launches Antigravity, reads sibling full
+transcripts, executes tool arguments or follows media URIs. Existing adapter
+choices/defaults and cursors remain unchanged.
+
+The contract is pinned to the official **Antigravity CLI 1.4.7**, build
+**5900205422411776**, extracted binary SHA-256
+`40349135371a8ed1f1af1e9f8b741de99174ae9fce6380b96c2d1f543480af7a`.
+Read-only runtime struct descriptors/JSON tags and writer callsites establish the
+step record shape and both append and full-rewrite operations. [Independent
+fixture provenance](../apps/agent/tests/fixtures/antigravity-jsonl/README.md) records
+field types, artifact checks and the separate REA build-metadata evidence boundary.
+
+Each record displays its literal `source`, `type`, `status`, optional `step_index`,
+exit/error codes and producer `truncated_fields` flags. Available `content` and
+`thinking` use existing text/thinking blocks. Tool summaries have no invented
+invocation/result identifiers, and media become inert attachment placeholders.
+All records use the neutral `record` role; repeated indices/status updates remain
+separate physical records. Optional zero values are retained. Token counters are
+exact decimal strings, including uint64 values that JavaScript numbers cannot
+represent. Unknown string enums are retained without guessing roles. Known fields
+with invalid types/ranges fail the read; unknown extra fields are ignored.
+
+The response retains numeric byte `nextOffset` and adds an Antigravity-only
+`checkpoint`: `v1:<observed file length>:<SHA-256 of those observed bytes>`.
+Every request after the initial open must supply the returned checkpoint, even
+when `hasMore` is false and refreshing. For example, pass both
+`--offset <nextOffset> --checkpoint <checkpoint>`. Appends can continue only when
+the entire previously observed prefix still matches. Truncation, changed bytes
+(including same-size in-place or replacement rewrites), or a cursor beyond the
+previous snapshot fail with `TranscriptChanged`; reopen at offset zero without a
+checkpoint to replace the visible records. Byte-identical replacements are
+content-equivalent and accepted between requests. Incomplete final lines wait
+without advancing, and may be completed by a later append.
+
+The reader bounds the observed file/hash to **16 MiB**, each physical line to
+**256 KiB**, page scanning to **4 MiB**, output to **512 KiB** and page records to
+**100**. Arrays/block amplification and label lengths are bounded. It reuses
+regular-file, owner and no-follow admission checks, then compares size/mtime and
+Unix device/inode after reading to detect ordinary concurrent writer changes.
+This is not a lock or atomic snapshot of a hostile metadata-preserving concurrent
+rewrite. On such read errors, retry by reopening rather than mixing generations.
+Producer compact truncation flags do not mean lazysh fetched a full transcript.
+
+Focused checks:
+
+```sh
+cargo test --locked -p lazysh-agent --test antigravity_transcript
+bun run --cwd apps/client test src/ChatPanel.test.tsx
+```
+
+Synthetic fixtures and controlled rewrite tests establish this bounded contract;
+no actual Antigravity conversation/account file or provider CLI was used. Full
+enum normalization, branch/update reconstruction, tool-result associations,
+producer truncation thresholds, crash consistency, cross-version behavior and
+real-file/device acceptance remain open integration work.

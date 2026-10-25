@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('host actions remain reachable by touch and keyboard without connecting', async ({ page }, testInfo) => {
+test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, 'isTauri', {value:true});
     let hosts = [{id:'fixture-host', name:'Touch workstation', hostname:'fixture.invalid', username:'test', port:22}];
@@ -18,6 +18,9 @@ test('host actions remain reachable by touch and keyboard without connecting', a
       },
     } });
   });
+});
+
+test('host actions remain reachable by touch and keyboard without connecting', async ({ page }, testInfo) => {
   await page.goto('/');
   const phone = testInfo.project.name === 'phone';
   if (phone) await page.getByRole('button', {name:'Open hosts', exact:true}).tap();
@@ -50,4 +53,24 @@ test('host actions remain reachable by touch and keyboard without connecting', a
   await dialog.getByRole('button', {name:'Delete host', exact:true}).click();
   await expect(connect).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('phone host form stays legible and fits the viewport while focusing fields', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'phone', 'Phone form layout');
+  await page.goto('/');
+  await page.getByRole('button', {name:'Open hosts', exact:true}).tap();
+  await page.getByRole('button', {name:'Edit Touch workstation', exact:true}).tap();
+  const dialog = page.getByRole('dialog', {name:'Edit host', exact:true});
+  await dialog.getByRole('combobox', {name:'Preferred transport', exact:true}).selectOption('auto');
+  for (const placeholder of ['Home workstation', 'workstation.local', 'Your SSH username']) {
+    const field = dialog.getByPlaceholder(placeholder, {exact:true});
+    await field.tap();
+    expect(await field.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
+    const bounds = await field.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+  await dialog.getByRole('button', {name:'Save host', exact:true}).tap({trial:true});
 });
