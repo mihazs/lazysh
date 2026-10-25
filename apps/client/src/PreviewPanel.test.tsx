@@ -28,15 +28,15 @@ it('requires explicit selection and opens a sandboxed loopback frame without nav
   render(<PreviewPanel sessionId="ssh-one" />);
   await screen.findByText('Open your development server.');
   await waitFor(() => expect((screen.getByRole('button', { name: 'Open preview' }) as HTMLButtonElement).disabled).toBe(false));
-  expect(invoke).not.toHaveBeenCalledWith('start_preview', expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('start_preview', expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
   fireEvent.click(screen.getByRole('button', { name: 'Open preview' }));
   const frame = await screen.findByTitle('Host browser preview on port 5173');
   expect(frame.getAttribute('src')).toBe(preview.url);
   expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-forms allow-same-origin');
-  expect(invoke).toHaveBeenCalledWith('start_preview', { sessionId: 'ssh-one', remotePort: 5173, remoteAddress: '127.0.0.1' });
+  expect(invoke).toHaveBeenCalledWith('start_preview', { sessionId: 'ssh-one', remotePort: 5173, remoteAddress: '127.0.0.1' }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   fireEvent.click(screen.getByRole('button', { name: 'Close preview 5173' }));
   await waitFor(() => expect(screen.queryByTitle('Host browser preview on port 5173')).toBeNull());
-  expect(invoke).toHaveBeenCalledWith('stop_preview', { sessionId: 'ssh-one', previewId: preview.id });
+  expect(invoke).toHaveBeenCalledWith('stop_preview', { sessionId: 'ssh-one', previewId: preview.id }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('rejects invalid ports without invoking native forwarding', async () => {
   vi.mocked(invoke).mockResolvedValue([]);
@@ -55,8 +55,8 @@ it('shows actual listener process metadata and applies only the explicit allowli
   fireEvent.click(screen.getByRole('checkbox', { name: /Check for HTTP/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Discover listeners' }));
   expect(await screen.findByRole('button', { name: 'node (123) · 127.0.0.1:3000 · HTTP' })).toBeTruthy();
-  expect(invoke).toHaveBeenCalledWith('discover_preview_ports', { sessionId: 'ssh-one', allowPorts: [3000, 8000, 8001], probeHttp: true });
-  expect(invoke).not.toHaveBeenCalledWith('start_preview', expect.anything());
+  expect(invoke).toHaveBeenCalledWith('discover_preview_ports', { sessionId: 'ssh-one', allowPorts: [3000, 8000, 8001], probeHttp: true }, { headers: { "X-Lazysh-Access": expect.any(String) } });
+  expect(invoke).not.toHaveBeenCalledWith('start_preview', expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('stages a page note only after an explicit user action', async () => {
   vi.mocked(invoke).mockResolvedValue([preview]);
@@ -74,6 +74,6 @@ it('stages a page note only after an explicit user action', async () => {
     const detail = (staged.mock.calls[0][0] as CustomEvent).detail;
     expect(detail.sessionId).toBe('ssh-one');
     expect(detail.text).toContain('Page: /login\nElement: #submit\nComment: Increase contrast');
-    expect(invoke).not.toHaveBeenCalledWith('write_stdin', expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith('write_stdin', expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
   } finally { window.removeEventListener('lazysh-prompt-draft', staged); }
 });

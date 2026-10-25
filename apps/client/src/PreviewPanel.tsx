@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { Globe, RefreshCw, X } from 'lucide-react';
 import { errorMessage } from './SessionTools';
 import PreviewFrame from './PreviewFrame';
@@ -40,6 +41,7 @@ export function parsePreview(value: unknown): Preview {
 }
 
 export default function PreviewPanel({ sessionId }: { sessionId: string }) {
+  const invoke = useProtectedInvoke();
   const [previews, setPreviews] = useState<Preview[]>([]);
   const [selected, setSelected] = useState('');
   const [port, setPort] = useState('5173');

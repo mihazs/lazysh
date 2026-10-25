@@ -8,6 +8,12 @@ fileGroups: [{{join file-groups}}]
 configs:
   debug: debug
   release: release
+settings:
+  base:
+    CODE_SIGN_IDENTITY[sdk=iphonesimulator*]: "-"
+    CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: true
+    CODE_SIGN_IDENTITY[sdk=watchsimulator*]: "-"
+    CODE_SIGNING_ALLOWED[sdk=watchsimulator*]: true
 settingGroups:
   app:
     base:
@@ -248,9 +254,10 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
     scheme:
       buildImplicitDependencies: false
+      testTargets: [LazyshMoshAppTests]
+      # Keep unified logging enabled without LLDB's duplicate stderr mirror.
       environmentVariables:
         IDE_DISABLED_OS_ACTIVITY_DT_MODE: "1"
-      testTargets: [LazyshMoshAppTests]
 
   LazyshLiveActivity:
     type: app-extension
@@ -370,6 +377,22 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     scheme:
       testTargets: [LazyshPushTests]
+
+  LazyshResumeTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.2"
+    sources:
+      - path: ../../../../../packages/credential-vault/ios/Sources/ResumeGate.swift
+      - path: ../../../../../packages/credential-vault/ios/Sources/ResumeCover.swift
+      - path: ../../../../../packages/credential-vault/ios/Tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.lazysh.client.resumetests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: true
+    scheme:
+      testTargets: [LazyshResumeTests]
 
   # Standalone UI runner exercises the already built/installed production app.
   # No app dependency: the app's Rust phase requires a live Tauri CLI server.

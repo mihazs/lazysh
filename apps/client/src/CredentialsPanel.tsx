@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import type { Credentials } from './bridge';
 import { errorMessage } from './SessionTools';
 
@@ -7,6 +8,7 @@ type KeyInfo = { publicKey: string; fingerprint: string; algorithm: string };
 type GeneratedKey = { privateKey: string; info: KeyInfo };
 
 export default function CredentialsPanel({ onUse }: { onUse: (credentials: Credentials) => void }) {
+  const invoke = useProtectedInvoke();
   const [mode, setMode] = useState<'generate' | 'import'>('generate');
   const [privateKey, setPrivateKey] = useState('');
   const [passphrase, setPassphrase] = useState('');

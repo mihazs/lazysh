@@ -1,3 +1,4 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use tauri_plugin_opener::OpenerExt;
 
 fn web_url(value: &str) -> Result<String, String> {
@@ -29,10 +30,18 @@ fn web_url(value: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn open_web_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    app.opener()
-        .open_url(web_url(&url)?, None::<&str>)
-        .map_err(|_| "The system browser could not open this link. Copy its URL instead.".into())
+pub fn open_web_url(
+    app: tauri::AppHandle,
+    url: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<String>> {
+    access.run_sync(|| {
+        app.opener()
+            .open_url(web_url(&url)?, None::<&str>)
+            .map_err(|_| {
+                "The system browser could not open this link. Copy its URL instead.".into()
+            })
+    })
 }
 
 #[cfg(test)]

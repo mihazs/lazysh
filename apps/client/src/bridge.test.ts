@@ -2,6 +2,7 @@ import {beforeEach,expect,it,vi} from 'vitest';
 const invoke=vi.hoisted(()=>vi.fn().mockResolvedValue(undefined));
 vi.mock('@tauri-apps/api/core',()=>({invoke,isTauri:()=>true,Channel:class {onmessage?:unknown;}}));
 import {api} from './bridge';
+import { accessSnapshot, acknowledgeAccessReady, applyAccessStatus } from './access';
 beforeEach(()=>invoke.mockClear());
 it('routes local terminal IO exclusively through its native registry',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
@@ -18,4 +19,22 @@ it('rejects local sessions before invoking SSH-only file or multiplexer tools',a
     await expect(operation()).rejects.toThrow('requires an SSH connection');
   }
   expect(invoke).not.toHaveBeenCalled();
+});
+it('retains the same terminal channel and ordered output across lock and acknowledges delivered bytes safely',async()=>{
+  applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'',generation:'1',nonce:'a'.repeat(64)});
+  acknowledgeAccessReady(accessSnapshot().epoch);
+  const output: number[]=[];
+  invoke.mockResolvedValueOnce({sessionId:'same-native-session'});
+  await api.connect('host',{},event=>{if(event.type==='data')output.push(...event.data);});
+  const events=(invoke.mock.calls[0][1] as {events:{onmessage:(event:unknown)=>void}}).events;
+  events.onmessage({type:'data',data:[1]});
+  applyAccessStatus({initialized:true,supported:true,enabled:true,locked:true,reason:'',generation:'2'});
+  events.onmessage({type:'data',data:[2]});events.onmessage({type:'data',data:[3,4]});
+  await api.ackOutput('same-native-session',1);
+  expect(invoke).toHaveBeenLastCalledWith('ack_output',{sessionId:'same-native-session',bytes:1});
+  expect(output).toEqual([1]);
+  applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'',generation:'3',nonce:'b'.repeat(64)});
+  expect(output).toEqual([1]);acknowledgeAccessReady(accessSnapshot().epoch);
+  expect(output).toEqual([1,2,3,4]);
+  expect(invoke.mock.calls.filter(([command])=>command==='connect')).toHaveLength(1);
 });

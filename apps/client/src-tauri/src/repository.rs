@@ -1,3 +1,4 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::{exec, quote, sftp, AppState, Result, SshError};
 use serde::Serialize;
 use tauri::State;
@@ -73,59 +74,64 @@ pub async fn repository_image(
     path: String,
     file_path: String,
     object_id: Option<String>,
-) -> Result<Image> {
-    let session = state.session(&session_id).await?;
-    if let Some(object_id) = object_id {
-        oid(&object_id)?;
-        let prefix = git(&path)?;
-        let size = exec(&session, format!("{prefix} cat-file -s {object_id}"))
-            .await?
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| invalid("Invalid image size"))?;
-        if size > BLOB_LIMIT {
-            return Err(invalid(
-                "Historical image exceeds the 200 KiB preview limit",
-            ));
-        }
-        let encoded = exec(
-            &session,
-            format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
-        )
-        .await?;
-        let bytes = encoded
-            .split_whitespace()
-            .map(|s| {
-                s.parse::<u8>()
-                    .map_err(|_| invalid("Invalid image encoding"))
+    access: AccessLease,
+) -> std::result::Result<Guarded<Image>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            if let Some(object_id) = object_id {
+                oid(&object_id)?;
+                let prefix = git(&path)?;
+                let size = exec(&session, format!("{prefix} cat-file -s {object_id}"))
+                    .await?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| invalid("Invalid image size"))?;
+                if size > BLOB_LIMIT {
+                    return Err(invalid(
+                        "Historical image exceeds the 200 KiB preview limit",
+                    ));
+                }
+                let encoded = exec(
+                    &session,
+                    format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
+                )
+                .await?;
+                let bytes = encoded
+                    .split_whitespace()
+                    .map(|s| {
+                        s.parse::<u8>()
+                            .map_err(|_| invalid("Invalid image encoding"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if bytes.len() as u64 != size {
+                    return Err(invalid("Image changed while reading"));
+                }
+                return image(bytes);
+            }
+            check_file_path(&file_path)?;
+            git(&path)?;
+            timeout(Duration::from_secs(30), async {
+                let sftp = sftp(&session).await?;
+                let target = format!("{}/{}", path.trim_end_matches('/'), file_path);
+                let metadata = sftp.symlink_metadata(&target).await?;
+                if metadata.is_symlink() || !metadata.is_regular() {
+                    return Err(invalid("Image preview requires a regular file"));
+                }
+                let file = sftp.open(target).await?;
+                let mut bytes = Vec::new();
+                file.take(2 * 1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .await?;
+                if bytes.len() > 2 * 1024 * 1024 {
+                    return Err(invalid("Image preview is limited to 2 MiB"));
+                }
+                image(bytes)
             })
-            .collect::<Result<Vec<_>>>()?;
-        if bytes.len() as u64 != size {
-            return Err(invalid("Image changed while reading"));
-        }
-        return image(bytes);
-    }
-    check_file_path(&file_path)?;
-    git(&path)?;
-    timeout(Duration::from_secs(30), async {
-        let sftp = sftp(&session).await?;
-        let target = format!("{}/{}", path.trim_end_matches('/'), file_path);
-        let metadata = sftp.symlink_metadata(&target).await?;
-        if metadata.is_symlink() || !metadata.is_regular() {
-            return Err(invalid("Image preview requires a regular file"));
-        }
-        let file = sftp.open(target).await?;
-        let mut bytes = Vec::new();
-        file.take(2 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .await?;
-        if bytes.len() > 2 * 1024 * 1024 {
-            return Err(invalid("Image preview is limited to 2 MiB"));
-        }
-        image(bytes)
-    })
-    .await
-    .map_err(|_| SshError::new("timeout", "Reading image timed out"))?
+            .await
+            .map_err(|_| SshError::new("timeout", "Reading image timed out"))?
+        })
+        .await
 }
 
 fn invalid(message: &str) -> SshError {
@@ -250,28 +256,33 @@ pub async fn repository_status(
     state: State<'_, AppState>,
     session_id: String,
     path: String,
-) -> Result<Status> {
-    let session = state.session(&session_id).await?;
-    let root = exec(
-        &session,
-        format!("{} rev-parse --show-toplevel", git(&path)?),
-    )
-    .await?;
-    let root = root.strip_suffix('\n').unwrap_or(&root).to_owned();
-    let changes = parse_status(
-        &exec(
-            &session,
-            format!(
-                "{} status --porcelain=v1 -z --untracked-files=all --ignore-submodules=all",
-                git(&root)?
-            ),
-        )
-        .await?,
-    )?;
-    Ok(Status {
-        path: root,
-        changes,
-    })
+    access: AccessLease,
+) -> std::result::Result<Guarded<Status>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            let root = exec(
+                &session,
+                format!("{} rev-parse --show-toplevel", git(&path)?),
+            )
+            .await?;
+            let root = root.strip_suffix('\n').unwrap_or(&root).to_owned();
+            let changes = parse_status(
+                &exec(
+                    &session,
+                    format!(
+                        "{} status --porcelain=v1 -z --untracked-files=all --ignore-submodules=all",
+                        git(&root)?
+                    ),
+                )
+                .await?,
+            )?;
+            Ok(Status {
+                path: root,
+                changes,
+            })
+        })
+        .await
 }
 #[tauri::command]
 pub async fn repository_history(
@@ -280,7 +291,9 @@ pub async fn repository_history(
     path: String,
     offset: Option<u32>,
     revision: Option<String>,
-) -> Result<Vec<Commit>> {
+    access: AccessLease,
+) -> std::result::Result<Guarded<Vec<Commit>>, GuardedError<crate::ssh::SshError>> {
+    access.run(async {
     let offset = offset.unwrap_or(0);
     if offset > 100_000 {
         return Err(invalid("History cursor exceeds 100,000 commits"));
@@ -300,6 +313,7 @@ pub async fn repository_history(
         )
         .await?,
     )
+ }).await
 }
 #[tauri::command]
 pub async fn repository_tree(
@@ -308,31 +322,36 @@ pub async fn repository_tree(
     path: String,
     revision: String,
     directory: Option<String>,
-) -> Result<Vec<TreeEntry>> {
-    oid(&revision)?;
-    let directory = directory.unwrap_or_default();
-    if !directory.is_empty() {
-        check_file_path(&directory)?;
-    }
-    let tree = if directory.is_empty() {
-        revision
-    } else {
-        format!("{revision}:{directory}")
-    };
-    let session = state.session(&session_id).await?;
-    let mut entries = parse_tree(
-        &exec(
-            &session,
-            format!("{} ls-tree -l -z --full-tree {}", git(&path)?, quote(&tree)),
-        )
-        .await?,
-    )?;
-    if !directory.is_empty() {
-        for entry in &mut entries {
-            entry.path = format!("{directory}/{}", entry.path);
-        }
-    }
-    Ok(entries)
+    access: AccessLease,
+) -> std::result::Result<Guarded<Vec<TreeEntry>>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            oid(&revision)?;
+            let directory = directory.unwrap_or_default();
+            if !directory.is_empty() {
+                check_file_path(&directory)?;
+            }
+            let tree = if directory.is_empty() {
+                revision
+            } else {
+                format!("{revision}:{directory}")
+            };
+            let session = state.session(&session_id).await?;
+            let mut entries = parse_tree(
+                &exec(
+                    &session,
+                    format!("{} ls-tree -l -z --full-tree {}", git(&path)?, quote(&tree)),
+                )
+                .await?,
+            )?;
+            if !directory.is_empty() {
+                for entry in &mut entries {
+                    entry.path = format!("{directory}/{}", entry.path);
+                }
+            }
+            Ok(entries)
+        })
+        .await
 }
 fn decode_blob(text: &str, size: u64) -> Result<Blob> {
     let bytes = text
@@ -362,24 +381,29 @@ pub async fn repository_blob(
     session_id: String,
     path: String,
     object_id: String,
-) -> Result<Blob> {
-    oid(&object_id)?;
-    let prefix = git(&path)?;
-    let session = state.session(&session_id).await?;
-    let size = exec(&session, format!("{prefix} cat-file -s {object_id}"))
-        .await?
-        .trim()
-        .parse::<u64>()
-        .map_err(|_| invalid("Invalid object size"))?;
-    if size > BLOB_LIMIT {
-        return Err(invalid("Historical file exceeds the 200 KiB preview limit"));
-    }
-    let encoded = exec(
-        &session,
-        format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
-    )
-    .await?;
-    decode_blob(&encoded, size)
+    access: AccessLease,
+) -> std::result::Result<Guarded<Blob>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            oid(&object_id)?;
+            let prefix = git(&path)?;
+            let session = state.session(&session_id).await?;
+            let size = exec(&session, format!("{prefix} cat-file -s {object_id}"))
+                .await?
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| invalid("Invalid object size"))?;
+            if size > BLOB_LIMIT {
+                return Err(invalid("Historical file exceeds the 200 KiB preview limit"));
+            }
+            let encoded = exec(
+                &session,
+                format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
+            )
+            .await?;
+            decode_blob(&encoded, size)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn repository_diff(
@@ -388,7 +412,9 @@ pub async fn repository_diff(
     path: String,
     file_path: String,
     staged: bool,
-) -> Result<Diff> {
+    access: AccessLease,
+) -> std::result::Result<Guarded<Diff>, GuardedError<crate::ssh::SshError>> {
+    access.run(async {
     check_file_path(&file_path)?;
     let session = state.session(&session_id).await?;
     let prefix = git(&path)?;
@@ -409,6 +435,7 @@ pub async fn repository_diff(
         ));
     }
     Ok(Diff { patch, binary })
+ }).await
 }
 
 #[cfg(test)]

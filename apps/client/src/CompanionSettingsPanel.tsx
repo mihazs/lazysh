@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 import { errorMessage } from "./SessionTools";
 
 type Settings = { schemaVersion:1; revision:number; transcriptDiscoveryEnabled:boolean; recordedUsageEnabled:boolean; deviceToolsEnabled:boolean };
@@ -11,6 +12,7 @@ export function parseCompanionSettings(value:unknown):Settings {
   return settings;
 }
 export default function CompanionSettingsPanel({sessionId}:{sessionId:string}) {
+  const invoke = useProtectedInvoke();
   const [settings,setSettings]=useState<Settings>();
   const [draft,setDraft]=useState<Settings>();
   const [busy,setBusy]=useState(false);

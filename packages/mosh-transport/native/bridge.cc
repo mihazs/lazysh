@@ -10,6 +10,9 @@
 #include "src/util/dos_assert.h"
 
 #include "src/network/networktransport.h"
+#ifdef LAZYSH_MOSH_TEST_FIXTURES
+#include "src/network/compressor.h"
+#endif
 #include "src/network/networktransport-impl.h"
 #include "src/network/transportsender-impl.h"
 #include "src/statesync/completeterminal.h"
@@ -47,6 +50,7 @@ struct Client {
     Terminal::Framebuffer last;
     uint64_t state_num = 0;
     bool initialized = false;
+    bool output_paused = false;
     std::string output;
     Client(const char* key, const char* address, const char* port, unsigned cols, unsigned rows)
         : last(cols, rows) {
@@ -122,7 +126,7 @@ extern "C" int lazysh_mosh_step(void* pointer, size_t* length, int* finished, in
         network.tick();
         client.output.clear();
         const auto& remote = network.get_latest_remote_state();
-        if (!client.initialized || client.state_num != remote.num) {
+        if (!client.output_paused && (!client.initialized || client.state_num != remote.num)) {
             client.output = client.display.new_frame(client.initialized, client.last, remote.state.get_fb());
             if (client.output.size() > output_limit) throw std::runtime_error("Mosh display output exceeds 8 MiB");
             client.last = remote.state.get_fb();
@@ -134,6 +138,15 @@ extern "C" int lazysh_mosh_step(void* pointer, size_t* length, int* finished, in
         *connected = remote.num != 0 && remote.num != uint64_t(-1);
         *input_capacity = *finished || network.shutdown_in_progress() ? 0 : 65536 - std::min<size_t>(65536, network.get_current_state().size());
         *next_poll = std::min(200, std::max(1, network.wait_time()));
+    }, error, capacity);
+}
+extern "C" int lazysh_mosh_pause_output(void* pointer, int paused, char* error, size_t capacity) noexcept {
+    return boundary([&] {
+        auto& client = *static_cast<Client*>(pointer);
+        const bool next = paused != 0;
+        if (client.output_paused && !next) client.initialized = false;
+        client.output_paused = next;
+        client.output.clear();
     }, error, capacity);
 }
 extern "C" int lazysh_mosh_wait(void* pointer, unsigned wait_ms, char* error, size_t capacity) noexcept {
@@ -199,3 +212,22 @@ extern "C" int lazysh_mosh_test_packet(int instruction, uint64_t old_num, uint64
         *written = ciphertext.size();
     }, error, error_capacity);
 }
+
+#ifdef LAZYSH_MOSH_TEST_FIXTURES
+// Development-only authenticated ACK observer for the fixed public fixture key.
+extern "C" int lazysh_mosh_test_ack(const unsigned char* bytes, size_t length, uint64_t* ack,
+                                     char* error, size_t capacity) noexcept {
+    return boundary([&] {
+        if (length > 2048) throw std::runtime_error("Test packet is too large");
+        Crypto::Session encryption{Crypto::Base64Key("AAAAAAAAAAAAAAAAAAAAAA")};
+        Network::Packet packet(encryption.decrypt(reinterpret_cast<const char*>(bytes), length));
+        if (packet.direction != Network::TO_SERVER) throw std::runtime_error("Unexpected fixture direction");
+        Network::Fragment fragment(packet.payload);
+        if (fragment.fragment_num != 0 || !fragment.final) throw std::runtime_error("Fixture ACK must fit one fragment");
+        TransportBuffers::Instruction instruction;
+        if (!instruction.ParseFromString(Network::get_compressor().uncompress_str(fragment.contents)))
+            throw std::runtime_error("Invalid fixture instruction");
+        *ack = instruction.ack_num();
+    }, error, capacity);
+}
+#endif

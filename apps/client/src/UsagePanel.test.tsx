@@ -27,7 +27,7 @@ it("collects only after an explicit request, labels stale samples, and keeps con
   fireEvent.change(screen.getByLabelText("Usage transcript path"), { target: { value: "/host/session.jsonl" } });
   fireEvent.click(screen.getByRole("button", { name: "Inspect usage" }));
   await screen.findByText("Stale report");
-  expect(invoke).toHaveBeenCalledWith("agent_usage", { sessionId: "ssh1", agent: "claude", path: "/host/session.jsonl", offset: 0 });
+  expect(invoke).toHaveBeenCalledWith("agent_usage", { sessionId: "ssh1", agent: "claude", path: "/host/session.jsonl", offset: 0 }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getByText("Context remaining").nextElementSibling?.textContent).toBe("Unknown");
   expect(screen.queryByText("240")).toBeNull();
   expect(screen.getAllByText("Unknown").length).toBeGreaterThan(3);
@@ -50,7 +50,7 @@ it("pages using the opaque cursor and rejects mismatched source identity", async
   fireEvent.click(screen.getByRole("button", { name: "Inspect usage" }));
   fireEvent.click(await screen.findByRole("button", { name: "Inspect next records" }));
   await screen.findByRole("alert");
-  expect(invoke).toHaveBeenLastCalledWith("agent_usage", { sessionId: "ssh1", agent: "claude", path: "/host/session.jsonl", offset: 500 });
+  expect(invoke).toHaveBeenLastCalledWith("agent_usage", { sessionId: "ssh1", agent: "claude", path: "/host/session.jsonl", offset: 500 }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 
 it("renders an explicit zero counter without replacing missing metrics with zero", async () => {

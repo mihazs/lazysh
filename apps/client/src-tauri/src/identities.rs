@@ -1,3 +1,4 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use russh::keys::{decode_secret_key, ssh_key, Algorithm, HashAlg, PrivateKey};
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -44,14 +45,19 @@ fn inspect(private_key: &str, passphrase: Option<&str>) -> Result<KeyInfo, Strin
 pub async fn inspect_identity(
     private_key: String,
     passphrase: Option<String>,
-) -> Result<KeyInfo, String> {
-    let private_key = Zeroizing::new(private_key);
-    let passphrase = passphrase.map(Zeroizing::new);
-    tauri::async_runtime::spawn_blocking(move || {
-        inspect(&private_key, passphrase.as_deref().map(String::as_str))
-    })
-    .await
-    .map_err(|_| "Key inspection failed".to_string())?
+    access: AccessLease,
+) -> std::result::Result<Guarded<KeyInfo>, GuardedError<String>> {
+    access
+        .run(async {
+            let private_key = Zeroizing::new(private_key);
+            let passphrase = passphrase.map(Zeroizing::new);
+            tauri::async_runtime::spawn_blocking(move || {
+                inspect(&private_key, passphrase.as_deref().map(String::as_str))
+            })
+            .await
+            .map_err(|_| "Key inspection failed".to_string())?
+        })
+        .await
 }
 
 fn generate(passphrase: &str) -> Result<GeneratedKey, String> {
@@ -72,11 +78,18 @@ fn generate(passphrase: &str) -> Result<GeneratedKey, String> {
 }
 
 #[tauri::command]
-pub async fn generate_identity(passphrase: String) -> Result<GeneratedKey, String> {
-    let passphrase = Zeroizing::new(passphrase);
-    tauri::async_runtime::spawn_blocking(move || generate(&passphrase))
+pub async fn generate_identity(
+    passphrase: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<GeneratedKey>, GuardedError<String>> {
+    access
+        .run(async {
+            let passphrase = Zeroizing::new(passphrase);
+            tauri::async_runtime::spawn_blocking(move || generate(&passphrase))
+                .await
+                .map_err(|_| "Key generation failed".to_string())?
+        })
         .await
-        .map_err(|_| "Key generation failed".to_string())?
 }
 
 #[cfg(test)]

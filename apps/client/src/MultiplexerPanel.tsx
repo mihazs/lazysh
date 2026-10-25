@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { Layers, RefreshCw } from 'lucide-react';
 import { errorMessage } from './SessionTools';
 import type { MultiplexerKind } from './bridge';
@@ -21,6 +22,7 @@ type Action =
 type Edit = { type: 'createSession' } | { type: 'createWindow' | 'renameSession' | 'renameWindow'; target: string };
 
 export function MuxPanel({ sessionId, onAttach, attached }: { sessionId: string; onAttach: (name: string, kind?: MultiplexerKind) => Promise<void>; attached?: { kind: MultiplexerKind; name: string } }) {
+  const invoke = useProtectedInvoke();
   const [tree, setTree] = useState<Tree | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

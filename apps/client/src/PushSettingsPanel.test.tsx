@@ -13,10 +13,10 @@ it('requires explicit external-service consent and never registers during mount'
   render(<PushSettingsPanel />);
   const button = await screen.findByRole('button', { name: 'Register this device' });
   expect(button).toHaveProperty('disabled', true);
-  expect(vi.mocked(invoke).mock.calls).toEqual([['push_registration_status']]);
+  expect(vi.mocked(invoke).mock.calls).toEqual([['push_registration_status', undefined, {headers:{'X-Lazysh-Access':expect.any(String)}}]]);
   fireEvent.click(screen.getByRole('checkbox'));
   fireEvent.click(button);
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('push_registration_register'));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('push_registration_register', undefined, { headers: { "X-Lazysh-Access": expect.any(String) } }));
 });
 
 it('offers revocation retry after a native deletion failure without claiming success', async () => {
@@ -48,7 +48,7 @@ it('can pause pending registration and ignores its late completion', async () =>
   const register = await screen.findByRole('button', { name: 'Register this device' });
   fireEvent.click(screen.getByRole('checkbox')); fireEvent.click(register);
   fireEvent.click(await screen.findByRole('button', { name: 'Pause and revoke token' }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('push_registration_disable'));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('push_registration_disable', undefined, { headers: { "X-Lazysh-Access": expect.any(String) } }));
   await screen.findByText('Registration off');
   finish({ ...off, enabled: true, reason: 'Stale registration result' });
   await waitFor(() => expect(screen.queryByText('Stale registration result')).toBeNull());

@@ -36,6 +36,7 @@ impl Fixture {
         );
         let directory = tempfile::tempdir().unwrap();
         let fifo = directory.path().join("et-test.fifo");
+        let startup_log = directory.path().join("server-startup.log");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
         drop(listener);
@@ -53,7 +54,7 @@ impl Fixture {
             .env("HOME", directory.path())
             .env("LANG", "C.UTF-8")
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(std::fs::File::create(&startup_log).unwrap())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
@@ -71,7 +72,18 @@ impl Fixture {
                     "official test server exited"
                 );
                 if TcpStream::connect(endpoint).await.is_ok() {
-                    break;
+                    // ET binds TCP before its bootstrap router. The pinned server
+                    // logs this only after both listeners have been initialized.
+                    let mut log = Vec::new();
+                    let mut reader =
+                        std::io::Read::take(std::fs::File::open(&startup_log).unwrap(), 65536);
+                    std::io::Read::read_to_end(&mut reader, &mut log).unwrap();
+                    if log
+                        .windows(b"Creating server".len())
+                        .any(|window| window == b"Creating server")
+                    {
+                        break;
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -294,6 +306,54 @@ async fn official_server_utf8_resize_and_recovery_preserve_order() {
     control.send(b"exit\n".to_vec()).await.unwrap();
     client.close().await;
     proxy_task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires official ET_SERVER_BIN and ET_TERMINAL_BIN; run explicitly for interoperability"]
+async fn official_server_replays_output_after_a_long_hidden_consumer_pause() {
+    let fixture = Fixture::new().await;
+    let mut client = Client::connect(
+        fixture.endpoint,
+        SessionSecret::from_bootstrap(&fixture.bootstrap().await).unwrap(),
+        80,
+        24,
+    )
+    .await
+    .unwrap();
+    let control = client.control();
+    control.send(b"stty -echo; printf '\\n__PAUSE_BEGIN__\\n'; head -c 524288 /dev/zero | tr '\\000' x; printf '\\n__PAUSE_END__\\n'\n".to_vec()).await.unwrap();
+    // Exceeds the peer deadline while the bounded native output queue is full.
+    tokio::time::sleep(Duration::from_secs(16)).await;
+    let mut output = Vec::new();
+    timeout(Duration::from_secs(5), async {
+        loop {
+            match client.next_event().await.unwrap() {
+                Event::Output(bytes) => {
+                    output.extend(bytes);
+                    assert!(output.len() < 1024 * 1024);
+                }
+                Event::Disconnected => break,
+                event => panic!("unexpected event before replay: {event:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    control.reconnect(fixture.endpoint).await.unwrap();
+    output.extend(until(&mut client, b"\r\n__PAUSE_END__\r\n").await);
+    let text = String::from_utf8(output).unwrap();
+    assert_eq!(text.matches("\r\n__PAUSE_BEGIN__\r\n").count(), 1);
+    assert_eq!(text.matches("\r\n__PAUSE_END__\r\n").count(), 1);
+    let payload = text
+        .split_once("\r\n__PAUSE_BEGIN__\r\n")
+        .unwrap()
+        .1
+        .split_once("\r\n__PAUSE_END__\r\n")
+        .unwrap()
+        .0;
+    assert_eq!(payload.len(), 524288);
+    assert!(payload.bytes().all(|byte| byte == b'x'));
+    client.close().await;
 }
 
 #[tokio::test]

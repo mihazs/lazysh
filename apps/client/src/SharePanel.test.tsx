@@ -70,7 +70,7 @@ it("uploads only after an explicit action using ordered bounded chunks", async (
   await user.upload(screen.getByLabelText("File to share"), file);
   expect(invoke).not.toHaveBeenCalledWith(
     "share_upload_begin",
-    expect.anything(),
+    expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } }
   );
   await user.click(
     screen.getByRole("button", { name: "Upload and create link" }),
@@ -85,7 +85,7 @@ it("uploads only after an explicit action using ordered bounded chunks", async (
     [0, 256 * 1024],
     [256 * 1024, 44 * 1024],
   ]);
-  expect(invoke).toHaveBeenCalledWith("share_upload_finish", { id: "pending" });
+  expect(invoke).toHaveBeenCalledWith("share_upload_finish", { id: "pending" }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it("cancels a transfer whose begin response arrives after the panel closes", async () => {
   let begin: ((value: { id: string }) => void) | undefined;
@@ -116,14 +116,14 @@ it("cancels a transfer whose begin response arrives after the panel closes", asy
   );
   view.unmount();
   await act(async () => begin?.({ id: "late" }));
-  expect(invoke).toHaveBeenCalledWith("share_upload_cancel", { id: "late" });
+  expect(invoke).toHaveBeenCalledWith("share_upload_cancel", { id: "late" }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(invoke).not.toHaveBeenCalledWith(
     "share_upload_chunk",
-    expect.anything(),
+    expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } }
   );
   expect(invoke).not.toHaveBeenCalledWith(
     "share_upload_finish",
-    expect.anything(),
+    expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } }
   );
 });
 it("keeps the management token out of browser storage and clears it after native saving", async () => {
@@ -213,7 +213,7 @@ it('loads a sanitized image thumbnail only on explicit action and revokes its ob
   expect(view.container.querySelector('img')).toBeNull();
   await user.click(load);
   const image = await screen.findByRole('img', { name: 'Thumbnail of photo.png' });
-  expect(invoke).toHaveBeenCalledWith('share_thumbnail', { id, requestId: expect.stringMatching(/^[a-f0-9-]{36}$/) });
+  expect(invoke).toHaveBeenCalledWith('share_thumbnail', { id, requestId: expect.stringMatching(/^[a-f0-9-]{36}$/) }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(image.getAttribute('src')).toBe('blob:thumbnail');
   expect(makeObjectUrl.mock.calls[0][0]).toMatchObject({ type: 'image/png', size: png.length });
   await user.click(screen.getByRole('button', { name: 'Hide thumbnail for photo.png' }));
@@ -235,7 +235,7 @@ it('cancels an in-flight preview when closed and ignores its late response', asy
   await user.click(screen.getByRole('button', { name: 'Refresh upload history' }));
   await user.click(await screen.findByRole('button', { name: 'Load thumbnail for photo.png' }));
   const requestId = invoke.mock.calls.find(([command]) => command === 'share_thumbnail')![1].requestId;
-  view.unmount(); expect(invoke).toHaveBeenCalledWith('share_thumbnail_cancel', { requestId });
+  view.unmount(); expect(invoke).toHaveBeenCalledWith('share_thumbnail_cancel', { requestId }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   await act(async () => finish?.(thumbnail));
   expect(makeObjectUrl).not.toHaveBeenCalled();
 });

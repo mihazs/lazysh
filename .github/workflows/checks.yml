@@ -112,6 +112,8 @@ jobs:
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
+      - name: Exercise native resume policy persistence and cancellation
+        run: bunx turbo run test:resume-policy --filter=@lazysh/client
 
   native-android:
     runs-on: ubuntu-24.04
@@ -227,6 +229,51 @@ jobs:
           xcrun --sdk iphonesimulator --show-sdk-version
       - run: bun run build:ios
         id: ios-app-build
+      - name: Retain bounded simulator signing diagnostics
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          diagnostic_dir="$RUNNER_TEMP/lazysh-ios-signing"
+          app_path="apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app"
+          entitlement_path="apps/client/src-tauri/gen/apple/lazysh_iOS/lazysh_iOS.entitlements"
+          mkdir -p "$diagnostic_dir"
+          shasum -a 256 "$app_path/lazysh" > "$diagnostic_dir/host-binary.sha256"
+          if [ -f "$entitlement_path" ] && [ "$(wc -c < "$entitlement_path")" -le 65536 ]; then
+            cp "$entitlement_path" "$diagnostic_dir/app-entitlements.plist"
+          fi
+          {
+            printf 'Generated app entitlement plist (maximum 64 KiB)\n'
+            if [ -f "$diagnostic_dir/app-entitlements.plist" ]; then
+              plutil -convert xml1 -o - "$diagnostic_dir/app-entitlements.plist" 2>/dev/null || printf 'Cannot decode generated entitlements\n'
+            else
+              printf 'Generated entitlements absent or exceed diagnostic limit\n'
+            fi
+            printf '\nProject simulator settings (invocation overrides are not replayed)\n'
+            if ! xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -target lazysh_iOS -configuration debug -sdk iphonesimulator -showBuildSettings 2>/dev/null |
+              awk '$1 ~ /^(CODE_SIGNING_ALLOWED|CODE_SIGNING_REQUIRED|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|CODE_SIGN_ENTITLEMENTS|EXPANDED_CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM|SDKROOT|PRODUCT_BUNDLE_IDENTIFIER)$/ && $2 == "=" { print }'; then
+              printf 'Cannot inspect simulator build settings\n'
+            fi
+            printf '\nActual app signature metadata\n'
+            codesign -dvv "$app_path" 2>&1 |
+              awk '/^(Identifier=|Format=|CodeDirectory |Signature=|TeamIdentifier=)/ { print }' || printf 'Cannot inspect app signature metadata\n'
+            printf '\nActual app code-signature entitlements (empty is not proof of absent simulator entitlements)\n'
+            codesign -d --entitlements :- "$app_path" 2>/dev/null || printf 'Cannot inspect signature entitlements\n'
+            printf '\nActual host Mach-O entitlement section headers\n'
+            xcrun otool -l "$app_path/lazysh" 2>/dev/null |
+              awk '/sectname __entitlements|sectname __ents_der/ { remaining = 4 } remaining > 0 { print; remaining-- }' || printf 'Cannot inspect Mach-O section headers\n'
+            printf '\nSimulator XML entitlement section\n'
+            xcrun otool -s __TEXT __entitlements "$app_path/lazysh" 2>/dev/null || printf 'Cannot inspect XML entitlement section\n'
+            printf '\nSimulator DER entitlement section\n'
+            xcrun otool -s __TEXT __ents_der "$app_path/lazysh" 2>/dev/null || printf 'Cannot inspect DER entitlement section\n'
+          } | awk 'NR <= 512 { print substr($0, 1, 256) }' > "$diagnostic_dir/signing-report.txt"
+      - name: Retain simulator signing evidence before runtime checks
+        timeout-minutes: 2
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-signing
+          path: ${{ runner.temp }}/lazysh-ios-signing
+          if-no-files-found: error
       - name: Link native Mosh tests for iOS devices
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '16.0'
@@ -245,6 +292,16 @@ jobs:
       - name: Run native APNs registration state tests
         timeout-minutes: 8
         run: bunx turbo run test:apns --filter=@lazysh/push-registration
+      - name: Run native resume cover and lifecycle tests
+        timeout-minutes: 8
+        run: bunx turbo run test:resume --filter=@lazysh/credential-vault
+      - name: Upload native resume results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-resume-results
+          path: apps/client/src-tauri/gen/apple/resume-tests.xcresult
+          if-no-files-found: warn
       - name: Run native iOS Mosh unit and protocol tests
         id: ios-mosh-native
         timeout-minutes: 18
@@ -275,6 +332,10 @@ jobs:
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' && steps.ios-mosh-app.outcome == 'success' }}
         run: bun run test:ios-workspace
+      - name: Verify tests preserve the prebuilt iOS host binary
+        timeout-minutes: 1
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
+        run: shasum -a 256 -c "$RUNNER_TEMP/lazysh-ios-signing/host-binary.sha256"
       - name: Upload iOS app acceptance results
         if: always()
         uses: actions/upload-artifact@v4
@@ -283,6 +344,7 @@ jobs:
           path: |
             apps/client/src-tauri/gen/apple/workspace-ui.xcresult
             apps/client/src-tauri/gen/apple/mosh-app.xcresult
+            ${{ runner.temp }}/lazysh-ios-signing
           if-no-files-found: warn
       - name: Remove status test simulator
         timeout-minutes: 2

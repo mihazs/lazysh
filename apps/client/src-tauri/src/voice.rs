@@ -1,3 +1,5 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use serde::Serialize;
 use std::{
     fs::{self, File, OpenOptions},
@@ -25,6 +27,7 @@ struct Import {
     name: String,
     file: File,
     bytes: u64,
+    access: Option<AccessLease>,
 }
 pub struct VoiceState {
     dir: PathBuf,
@@ -39,6 +42,17 @@ pub struct VoiceModel {
     bytes: u64,
 }
 impl VoiceState {
+    pub(crate) fn cancel_for_lock(&self) {
+        self.cancel.store(true, Ordering::Release);
+        catalog::cancel_for_lock(self);
+        if let Ok(mut pending) = self.import.lock() {
+            if let Some(import) = pending.take() {
+                let temporary = self.dir.join(format!("{}.part", import.id));
+                drop(import.file);
+                let _ = fs::remove_file(temporary);
+            }
+        }
+    }
     pub fn new(dir: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(&dir)?;
         for entry in fs::read_dir(&dir)?.flatten() {
@@ -115,10 +129,21 @@ fn list(state: &VoiceState) -> Result<Vec<VoiceModel>> {
     Ok(models)
 }
 #[tauri::command]
-pub fn voice_models(state: State<'_, VoiceState>) -> Result<Vec<VoiceModel>> {
-    list(&state)
+pub fn voice_models(
+    access: AccessLease,
+    state: State<'_, VoiceState>,
+) -> Protected<Vec<VoiceModel>> {
+    access.run_sync(|| list(&state))
 }
 fn begin(state: &VoiceState, name: String, bytes: u64) -> Result<String> {
+    begin_scoped(state, name, bytes, None)
+}
+fn begin_scoped(
+    state: &VoiceState,
+    name: String,
+    bytes: u64,
+    access: Option<AccessLease>,
+) -> Result<String> {
     let destination = state.path(&name)?;
     if !(1024..=MAX_MODEL).contains(&bytes) {
         return Err("Choose a Whisper tiny/base GGML model up to 160 MiB".into());
@@ -146,16 +171,70 @@ fn begin(state: &VoiceState, name: String, bytes: u64) -> Result<String> {
         name,
         file,
         bytes,
+        access,
     });
     Ok(id)
 }
+fn begin_for_access(
+    state: &VoiceState,
+    name: String,
+    bytes: u64,
+    access: &AccessLease,
+) -> Result<String> {
+    access.check()?;
+    // Policy changes revoke replies without necessarily backgrounding the app.
+    // Inspect authority outside the slot lock; cleanup must target only that UUID.
+    let previous = state
+        .import
+        .lock()
+        .map_err(|_| "Model import lock failed")?
+        .as_ref()
+        .and_then(|import| {
+            import
+                .access
+                .clone()
+                .map(|lease| (import.id.clone(), lease))
+        });
+    if let Some((id, lease)) = previous {
+        if lease.check().is_err() {
+            let _ = finish(state, &id, true);
+        }
+    }
+    access.with_current(|| begin_scoped(state, name, bytes, Some(access.clone())))?
+}
+fn with_import_access<T>(
+    state: &VoiceState,
+    id: &str,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let access = state
+        .import
+        .lock()
+        .map_err(|_| "Model import lock failed")?
+        .as_ref()
+        .filter(|import| import.id == id)
+        .map(|import| import.access.clone())
+        .ok_or("Model import expired")?;
+    match access {
+        Some(access) => access.with_current(action)?,
+        None => action(),
+    }
+}
 #[tauri::command]
 pub fn voice_import_begin(
+    access: AccessLease,
     state: State<'_, VoiceState>,
     name: String,
     bytes: u64,
-) -> Result<String> {
-    begin(&state, name, bytes)
+) -> Protected<String> {
+    access.run_sync(|| {
+        let id = begin_for_access(&state, name, bytes, &access)?;
+        if let Err(error) = access.check() {
+            let _ = finish(&state, &id, true);
+            return Err(error.into());
+        }
+        Ok(id)
+    })
 }
 fn chunk(state: &VoiceState, id: &str, offset: u64, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() || bytes.len() > 1024 * 1024 {
@@ -187,12 +266,13 @@ fn chunk(state: &VoiceState, id: &str, offset: u64, bytes: &[u8]) -> Result<()> 
 }
 #[tauri::command]
 pub fn voice_import_chunk(
+    access: AccessLease,
     state: State<'_, VoiceState>,
     id: String,
     offset: u64,
     bytes: Vec<u8>,
-) -> Result<()> {
-    chunk(&state, &id, offset, &bytes)
+) -> Protected<()> {
+    access.run_sync(|| with_import_access(&state, &id, || chunk(&state, &id, offset, &bytes)))
 }
 fn finish(state: &VoiceState, id: &str, cancel: bool) -> Result<()> {
     let mut pending = state
@@ -232,15 +312,26 @@ fn finish(state: &VoiceState, id: &str, cancel: bool) -> Result<()> {
     result
 }
 #[tauri::command]
-pub fn voice_import_finish(state: State<'_, VoiceState>, id: String, cancel: bool) -> Result<()> {
-    finish(&state, &id, cancel)
+pub fn voice_import_finish(
+    access: AccessLease,
+    state: State<'_, VoiceState>,
+    id: String,
+    cancel: bool,
+) -> Protected<()> {
+    access.run_sync(|| with_import_access(&state, &id, || finish(&state, &id, cancel)))
 }
 #[tauri::command]
-pub fn voice_remove_model(state: State<'_, VoiceState>, id: String) -> Result<()> {
-    if state.busy.load(Ordering::Acquire) {
-        return Err("Wait for transcription to finish before removing models".into());
-    }
-    fs::remove_file(state.path(&id)?).map_err(|_| "Cannot remove model".to_owned())
+pub fn voice_remove_model(
+    access: AccessLease,
+    state: State<'_, VoiceState>,
+    id: String,
+) -> Protected<()> {
+    access.run_sync(|| {
+        if state.busy.load(Ordering::Acquire) {
+            return Err("Wait for transcription to finish before removing models".into());
+        }
+        fs::remove_file(state.path(&id)?).map_err(|_| "Cannot remove model".to_owned())
+    })
 }
 fn validate_audio(samples: &[f32], language: &str) -> Result<()> {
     // No logging backend is enabled: suppress native diagnostics that may include dictated text.
@@ -258,6 +349,7 @@ fn validate_audio(samples: &[f32], language: &str) -> Result<()> {
 }
 struct Abort {
     cancelled: Arc<AtomicBool>,
+    access: Option<AccessLease>,
     started: Instant,
 }
 struct InferenceGuard(Arc<AtomicBool>);
@@ -268,9 +360,27 @@ impl Drop for InferenceGuard {
 }
 unsafe extern "C" fn abort_inference(data: *mut std::ffi::c_void) -> bool {
     let state = unsafe { &*(data as *const Abort) };
-    state.cancelled.load(Ordering::Acquire) || state.started.elapsed() > Duration::from_secs(120)
+    state.cancelled.load(Ordering::Acquire)
+        || state
+            .access
+            .as_ref()
+            .is_some_and(|lease| lease.check().is_err())
+        || state.started.elapsed() > Duration::from_secs(120)
 }
+#[cfg(test)]
 fn infer(path: &Path, samples: &[f32], language: &str, cancel: Arc<AtomicBool>) -> Result<String> {
+    infer_guarded(path, samples, language, cancel, None)
+}
+fn infer_guarded(
+    path: &Path,
+    samples: &[f32],
+    language: &str,
+    cancel: Arc<AtomicBool>,
+    access: Option<AccessLease>,
+) -> Result<String> {
+    if let Some(lease) = access.as_ref() {
+        lease.check()?;
+    }
     validate_audio(samples, language)?;
     let metadata = fs::symlink_metadata(path).map_err(|_| "Model is unavailable")?;
     if !metadata.is_file() || metadata.len() > MAX_MODEL {
@@ -304,6 +414,7 @@ fn infer(path: &Path, samples: &[f32], language: &str, cancel: Arc<AtomicBool>) 
     params.set_print_special(false);
     let mut abort = Box::new(Abort {
         cancelled: cancel.clone(),
+        access,
         started: Instant::now(),
     });
     // The boxed callback state outlives the synchronous full() call and is never mutated by Rust.
@@ -332,25 +443,34 @@ fn infer(path: &Path, samples: &[f32], language: &str, cancel: Arc<AtomicBool>) 
 }
 #[tauri::command]
 pub async fn voice_transcribe(
+    access: AccessLease,
     state: State<'_, VoiceState>,
     id: String,
     samples: Vec<f32>,
     language: String,
-) -> Result<String> {
-    validate_audio(&samples, &language)?;
-    let path = state.path(&id)?;
-    if state.busy.swap(true, Ordering::AcqRel) {
-        return Err("A transcription is already running".into());
-    }
-    state.cancel.store(false, Ordering::Release);
-    let cancel = state.cancel.clone();
-    let busy = state.busy.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = InferenceGuard(busy);
-        infer(&path, &samples, &language, cancel)
-    })
-    .await;
-    result.map_err(|_| "Transcription worker failed".to_string())?
+) -> Protected<String> {
+    access
+        .run(async {
+            validate_audio(&samples, &language)?;
+            let path = state.path(&id)?;
+            access.with_current(|| {
+                if state.busy.swap(true, Ordering::AcqRel) {
+                    return Err("A transcription is already running".into());
+                }
+                state.cancel.store(false, Ordering::Release);
+                Ok::<(), String>(())
+            })??;
+            let cancel = state.cancel.clone();
+            let busy = state.busy.clone();
+            let worker_access = access.clone();
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                let _guard = InferenceGuard(busy);
+                infer_guarded(&path, &samples, &language, cancel, Some(worker_access))
+            })
+            .await;
+            result.map_err(|_| "Transcription worker failed".to_string())?
+        })
+        .await
 }
 #[tauri::command]
 pub fn voice_cancel(state: State<'_, VoiceState>) {
@@ -360,6 +480,62 @@ pub fn voice_cancel(state: State<'_, VoiceState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn policy_change_discards_revoked_manual_import_without_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = VoiceState::new(dir.path().to_owned()).unwrap();
+        let authority = crate::app_lock::AccessState::default();
+        authority.initialize(true, false, "fixture".into()).unwrap();
+        for enabled in [true, false] {
+            let nonce = authority.status().unwrap().nonce;
+            let old = authority.lease(nonce.as_deref()).unwrap();
+            let first = begin_for_access(&state, "base.bin".into(), 1024, &old).unwrap();
+            let temporary = dir.path().join(format!("{first}.part"));
+            chunk(&state, &first, 0, b"lmgg").unwrap();
+            authority
+                .configure_after_proof(authority.generation().unwrap(), enabled)
+                .unwrap();
+            assert!(old.check().is_err());
+            assert!(
+                with_import_access(&state, &first, || chunk(&state, &first, 4, b"more")).is_err()
+            );
+            assert!(with_import_access(&state, &first, || finish(&state, &first, true)).is_err());
+            assert_eq!(fs::metadata(&temporary).unwrap().len(), 4);
+            let nonce = authority.status().unwrap().nonce;
+            let fresh = authority.lease(nonce.as_deref()).unwrap();
+            let replacement = begin_for_access(&state, "base.bin".into(), 1024, &fresh)
+                .expect("a revoked manual import must not occupy the next view's slot");
+            assert!(!temporary.exists());
+            assert_ne!(first, replacement);
+            let replacement_path = dir.path().join(format!("{replacement}.part"));
+            assert!(replacement_path.exists());
+            assert!(begin_for_access(&state, "other.bin".into(), 1024, &old).is_err());
+            // A delayed cleanup from the old view must never take its replacement.
+            assert!(finish(&state, &first, true).is_err());
+            assert!(replacement_path.exists());
+            assert_eq!(
+                state.import.lock().unwrap().as_ref().unwrap().id,
+                replacement
+            );
+            with_import_access(&state, &replacement, || finish(&state, &replacement, true))
+                .unwrap();
+            assert!(!replacement_path.exists());
+        }
+        assert!(list(&state).unwrap().is_empty());
+    }
+    #[test]
+    fn lock_discards_partial_import_and_cancels_inference() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = VoiceState::new(dir.path().to_owned()).unwrap();
+        let id = begin(&state, "base.bin".into(), 1024).unwrap();
+        let path = dir.path().join(format!("{id}.part"));
+        assert!(path.exists());
+        state.cancel_for_lock();
+        assert!(state.cancel.load(Ordering::Acquire));
+        assert!(!path.exists());
+        assert!(finish(&state, &id, false).is_err());
+        assert!(begin(&state, "base.bin".into(), 1024).is_ok());
+    }
     #[test]
     fn model_import_is_bounded_ordered_exclusive_and_removable() {
         let dir = tempfile::tempdir().unwrap();

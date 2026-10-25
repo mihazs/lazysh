@@ -1,11 +1,13 @@
+import { useProtectedApi } from './access';
 import { useEffect, useRef, useState } from 'react';
-import { api } from './bridge';
+import { api as nativeApi } from './bridge';
 import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageSize, shellPath, validateCrop, type Crop, type ImageSize, type Point } from './attachment';
 
 type Selected = { file: File; bytes: Uint8Array; size: ImageSize | null };
 type Stroke = { points: Point[]; color: string; width: number };
 
 export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
+  const api = useProtectedApi(nativeApi);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [destination, setDestination] = useState('');
   const [crop, setCrop] = useState<Crop>({ x: 0, y: 0, width: 1, height: 1 });

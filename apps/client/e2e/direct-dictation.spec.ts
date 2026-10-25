@@ -10,6 +10,8 @@ async function fixture(page:Page){
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{
       transformCallback:()=>1,unregisterCallback:()=>{},
       invoke:async(command:string,args:Record<string,unknown>={})=>{
+        if(command==='app_lock_status')return {initialized:true,supported:false,reason:'Browser fixture',enabled:false,locked:false,generation:'0'};
+        if(command==='app_lock_ready' || command==='adopt_session')return;
         if(command==='list_hosts')return [];
         if(command==='local_capability')return {available:true,reason:'Native IO test fixture; no real shell is started.'};
         if(command==='local_connect'){

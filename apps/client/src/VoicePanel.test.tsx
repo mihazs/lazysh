@@ -17,7 +17,7 @@ it('requires a local model and explicit recording and handles microphone denial'
   expect(getUserMedia).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
   expect(await screen.findByText('Microphone permission denied')).toHaveProperty('textContent','Microphone permission denied');
-  expect(invoke).not.toHaveBeenCalledWith('voice_transcribe',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('voice_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 
 it('stages an edited draft only on explicit request and never sends terminal input', async () => {
@@ -48,7 +48,7 @@ function downloadFixture(installed:{id:string;bytes:number}[]=[]) {
 it('downloads only on explicit click, shows bounded progress and selects the installed model',async()=>{
   const fixture=downloadFixture();render(<VoicePanel sessionId="ssh1"/>);
   const button=await screen.findByRole('button',{name:'Download selected model'});
-  expect(invoke).not.toHaveBeenCalledWith('voice_download_model',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('voice_download_model',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
   fireEvent.click(button);
   const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_download_model')![1] as DownloadCall;
   expect(request.id).toBe('tiny.en');expect(request.requestId).toMatch(/^[0-9a-f-]{36}$/);
@@ -63,14 +63,14 @@ it('downloads only on explicit click, shows bounded progress and selects the ins
   await act(async()=>{fixture.complete();});
   await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe(catalogEntry.file));
   expect((button as HTMLButtonElement).disabled).toBe(true);
-  expect(invoke).not.toHaveBeenCalledWith('voice_transcribe',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('voice_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('waits for cancellation cleanup and ignores stale download progress without installing',async()=>{
   const fixture=downloadFixture();render(<VoicePanel/>);
   fireEvent.click(await screen.findByRole('button',{name:'Download selected model'}));
   const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_download_model')![1] as DownloadCall;
   fireEvent.click(screen.getByRole('button',{name:'Cancel download'}));
-  expect(invoke).toHaveBeenCalledWith('voice_download_cancel',{requestId:request.requestId});
+  expect(invoke).toHaveBeenCalledWith('voice_download_cancel',{requestId:request.requestId}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect((screen.getByRole('button',{name:'Cancelling download…'}) as HTMLButtonElement).disabled).toBe(true);
   await act(async()=>{request.events.onmessage({requestId:request.requestId,received:catalogEntry.bytes,total:catalogEntry.bytes,stage:'installed'});});
   expect(screen.getByRole('status').textContent).toContain('Cancelling');
@@ -89,7 +89,7 @@ it('reports verification failure and cancels an in-flight download on unmount',a
   const calls=vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_download_model');
   const request=calls.at(-1)![1] as DownloadCall;
   view.unmount();
-  expect(invoke).toHaveBeenCalledWith('voice_download_cancel',{requestId:request.requestId});
+  expect(invoke).toHaveBeenCalledWith('voice_download_cancel',{requestId:request.requestId}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   await act(async()=>{fixture.fail('Model download cancelled');});
 });
 it('disables downloads for an existing file and at the three-model quota',async()=>{
@@ -101,7 +101,7 @@ it('disables downloads for an existing file and at the three-model quota',async(
   render(<VoicePanel/>);
   expect((await screen.findByRole('button',{name:'Download selected model'}) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText(/maximum three/)).toBeTruthy();
-  expect(invoke).not.toHaveBeenCalledWith('voice_download_model',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('voice_download_model',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 
 it('releases a microphone granted after the dictation view has closed', async () => {
@@ -132,15 +132,15 @@ it('requires explicit Apple asset installation and cancels the exact pending req
   await waitFor(()=>expect((screen.getByRole('option',{name:'Apple SpeechAnalyzer'}) as HTMLOptionElement).disabled).toBe(false));
   fireEvent.change(screen.getByLabelText('Speech engine'),{target:{value:'apple'}});
   expect((screen.getByRole('button',{name:'Record speech'}) as HTMLButtonElement).disabled).toBe(true);
-  expect(invoke).not.toHaveBeenCalledWith('apple_speech_install',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('apple_speech_install',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
   fireEvent.click(screen.getByRole('button',{name:'Download Apple speech language'}));
   const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='apple_speech_install')?.[1];
   expect(request).toEqual({language:'en-US',requestId:expect.stringMatching(/^[0-9a-f-]{36}$/)});
   fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
-  expect(invoke).toHaveBeenCalledWith('apple_speech_cancel',{requestId:(request as {requestId:string}).requestId});
+  expect(invoke).toHaveBeenCalledWith('apple_speech_cancel',{requestId:(request as {requestId:string}).requestId}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   complete?.();
   await waitFor(()=>expect(screen.queryByText('Downloading Apple speech assets…')).toBeNull());
-  expect(invoke).not.toHaveBeenCalledWith('apple_speech_transcribe',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('apple_speech_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('preserves current-view dictation and cannot refill cleared history from late inference',async()=>{
   let complete!:(text:string)=>void;
@@ -166,7 +166,7 @@ it('preserves current-view dictation and cannot refill cleared history from late
   await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('tiny.bin'));
   fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
   fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
-  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('voice_transcribe',expect.anything()));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('voice_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } }));
   await act(async()=>{complete('first private prompt');});
   expect(localStorage.length).toBe(0);
   fireEvent.change(screen.getByLabelText('Dictation draft'),{target:{value:'edited draft'}});

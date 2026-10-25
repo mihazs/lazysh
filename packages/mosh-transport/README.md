@@ -62,3 +62,9 @@ Original vendored files remain unchanged. `build.rs` applies the following dated
 - Use `OPENSSL_cleanse` on native raw key copies and fixed xterm display initialization.
 
 Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS native/app acceptance, Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.
+
+Native application regression peers enable the development-only `test-fixtures`
+feature through their Cargo dev dependency. It exposes bounded packet/ACK helpers
+for a fixed public test key, serialized by the same native core mutex as clients.
+The ACK decoder's C symbol and Rust helpers are absent from default builds; this
+feature adds no production IPC or network service.

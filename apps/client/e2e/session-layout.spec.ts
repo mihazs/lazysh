@@ -21,6 +21,8 @@ test.beforeEach(async ({page}) => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', {value: {
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (command: string) => {
+        if (command === 'app_lock_status') return {initialized: true, supported: false, reason: 'Synthetic native access fixture.', enabled: false, locked: false, generation: '1'};
+        if (['app_lock_ready', 'adopt_session'].includes(command)) return;
         if (command === 'list_hosts') return [];
         if (command === 'local_capability') return {available: true, reason: 'Synthetic terminal fixture; no shell starts.'};
         if (command === 'local_connect') return {sessionId: `local:fixture-${++connections}`};

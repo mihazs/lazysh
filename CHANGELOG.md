@@ -7,6 +7,14 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Opt-in native biometric resume protection for supported Android, iOS and macOS
+  devices, with native privacy covers, generation-bound command/result access,
+  paused terminal delivery and cancellation of pending protected work. Windows
+  and Linux report this option unavailable. Physical biometric acceptance remains
+  a release gate; existing per-host credential protection stays independent.
+  Device-local durable intent preserves the lock on cold launch when its protected
+  proof is missing; cancelled enrollment restores off only after confirmed cleanup.
+
 - Four opt-in touch actions for next/previous Zellij tabs and panes. They use
   the existing named-session command interface for terminals attached through
   lazysh; plain, local and other multiplexer terminals are rejected. Existing
@@ -41,7 +49,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 - Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
   model archive validation and native exception/ownership tests. It adds no
   dictation UI or automatic model download; broader model and device validation
-  remain pending, and Apple/Windows model loading fails closed pending native
+  remain pending, and iOS/Windows model loading fails closed pending native
   ACL validation.
 
 - Custom theme bold-color policies: unchanged colors, bright ANSI colors, or a

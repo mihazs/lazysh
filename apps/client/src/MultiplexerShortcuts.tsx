@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react';
-import { api } from './bridge';
+import { api as nativeApi } from './bridge';
+import { useProtectedApi } from './access';
 import { parseChord } from './preferences';
 import { errorMessage } from './SessionTools';
 
 type Kind = 'tmux' | 'herdr';
 export default function MultiplexerShortcuts({ sessionId, kind }: { sessionId: string; kind: Kind }) {
+  const api = useProtectedApi(nativeApi);
   const key = `lazysh.multiplexer.prefix.${kind}`;
   const [prefix, setPrefix] = useState(() => { try { return localStorage.getItem(key) || 'Ctrl+b'; } catch { return 'Ctrl+b'; } });
   const [error, setError] = useState('');

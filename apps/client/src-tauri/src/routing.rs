@@ -36,6 +36,7 @@ pub(crate) async fn verified_target(
     host: &Host,
     jump_credentials: Option<Credentials>,
     operation: &tauri_plugin_lazysh_vault::CredentialOperation,
+    access: &crate::app_lock::AccessLease,
 ) -> Result<SshHandle> {
     let Some(jump_id) = host.jump_host_id.as_deref() else {
         if jump_credentials.is_some() {
@@ -56,15 +57,21 @@ pub(crate) async fn verified_target(
     let handle = crate::ssh::verified_connection(state, &jump).await?;
     let credentials = match jump_credentials {
         Some(credentials) => credentials,
-        None => crate::vault::load_for_operation(app, jump.clone(), operation.clone())
-            .await
-            .map_err(|message| {
-                SshError::new(
-                    "jump_credentials_required",
-                    format!("Bastion {}: {message}", jump.name),
-                )
-                .for_host(&jump.id)
-            })?,
+        None => crate::vault::load_for_operation(
+            app,
+            jump.clone(),
+            operation.clone(),
+            _jump_guard.clone(),
+            access.clone(),
+        )
+        .await
+        .map_err(|message| {
+            SshError::new(
+                "jump_credentials_required",
+                format!("Bastion {}: {message}", jump.name),
+            )
+            .for_host(&jump.id)
+        })?,
     };
     let jump_handle =
         crate::ssh::authenticate_for_operation(handle, &jump, &credentials, operation)
@@ -77,7 +84,7 @@ async fn locked_jump(
     state: &AppState,
     host: &Host,
     jump_id: &str,
-) -> Result<(Host, tokio::sync::OwnedMutexGuard<()>)> {
+) -> Result<(Host, crate::vault::CredentialGuard)> {
     if jump_id == host.id {
         return Err(SshError::new(
             "invalid_route",

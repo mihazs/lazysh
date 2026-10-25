@@ -70,6 +70,12 @@ unsafe extern "C" {
         error: *mut c_char,
         capacity: usize,
     ) -> c_int;
+    fn lazysh_mosh_pause_output(
+        client: *mut c_void,
+        paused: c_int,
+        error: *mut c_char,
+        capacity: usize,
+    ) -> c_int;
     fn lazysh_mosh_wait(
         client: *mut c_void,
         wait_ms: u32,
@@ -86,7 +92,7 @@ unsafe extern "C" {
         error: *mut c_char,
         capacity: usize,
     ) -> c_int;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn lazysh_mosh_test_packet(
         instruction: c_int,
         old_num: u64,
@@ -99,6 +105,14 @@ unsafe extern "C" {
         written: *mut usize,
         error: *mut c_char,
         error_capacity: usize,
+    ) -> c_int;
+    #[cfg(feature = "test-fixtures")]
+    fn lazysh_mosh_test_ack(
+        bytes: *const u8,
+        length: usize,
+        ack: *mut u64,
+        error: *mut c_char,
+        capacity: usize,
     ) -> c_int;
     #[cfg(test)]
     fn lazysh_mosh_test_state_num(client: *mut c_void) -> u64;
@@ -203,6 +217,17 @@ impl Client {
             }
         })
     }
+    /// Keep receiving authenticated UDP state while suppressing display deltas.
+    /// Resuming forces a full redraw of the latest bounded framebuffer.
+    pub fn pause_output(&mut self, paused: bool) -> Result<()> {
+        let _guard = locked()?;
+        operation(|error, capacity| {
+            // SAFETY: this live client is exclusively borrowed and native exceptions are contained.
+            unsafe {
+                lazysh_mosh_pause_output(self.pointer.as_ptr(), i32::from(paused), error, capacity)
+            }
+        })
+    }
     /// Poll without blocking while holding the shared core lock. Use socket readiness or next_poll outside this call.
     pub fn poll(&mut self) -> Result<Update> {
         let _guard = locked()?;
@@ -262,6 +287,47 @@ impl Drop for Client {
         // SAFETY: this is the unique owner, and destruction is serialized with all other native operations.
         unsafe { lazysh_mosh_free(self.pointer.as_ptr()) };
     }
+}
+
+/// Fixed-key encrypted peers for native integration tests, opt-in development builds only.
+#[cfg(feature = "test-fixtures")]
+pub fn fixture_packet(old: u64, new: u64, bytes: &[u8]) -> Result<Vec<u8>> {
+    let _guard = locked()?;
+    let mut output = vec![0; 2048];
+    let mut written = 0;
+    operation(|error, capacity| {
+        // SAFETY: all slices/capacities are live and bounded; the C++ boundary contains exceptions.
+        unsafe {
+            lazysh_mosh_test_packet(
+                1,
+                old,
+                new,
+                0,
+                bytes.as_ptr(),
+                bytes.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+                error,
+                capacity,
+            )
+        }
+    })?;
+    if written > output.len() {
+        return Err(Error("Invalid fixture packet length".into()));
+    }
+    output.truncate(written);
+    Ok(output)
+}
+#[cfg(feature = "test-fixtures")]
+pub fn fixture_ack(bytes: &[u8]) -> Result<u64> {
+    let _guard = locked()?;
+    let mut ack = 0;
+    operation(|error, capacity| {
+        // SAFETY: the fixed-key test decoder receives exact input length and a live output pointer.
+        unsafe { lazysh_mosh_test_ack(bytes.as_ptr(), bytes.len(), &mut ack, error, capacity) }
+    })?;
+    Ok(ack)
 }
 
 #[cfg(test)]
@@ -356,6 +422,36 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn paused_output_keeps_authenticated_state_and_resumes_with_full_redraw() {
+        let (mut client, socket, address) = fake_server();
+        client.pause_output(true).unwrap();
+        socket
+            .send_to(
+                &packet(true, 0, 1, 0, &host_bytes("LATEST_LOCKED")),
+                address,
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let update = client.poll().unwrap();
+            assert!(update.bytes.is_empty());
+            if update.connected {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        client.pause_output(false).unwrap();
+        let update = client.poll().unwrap();
+        assert!(String::from_utf8_lossy(&update.bytes).contains("LATEST_LOCKED"));
+        assert!(update.bytes.len() <= OUTPUT_LIMIT);
+        assert!(client.poll().unwrap().bytes.is_empty());
+        client.pause_output(true).unwrap();
+        assert!(client.poll().unwrap().bytes.is_empty());
+        client.pause_output(false).unwrap();
+        assert!(String::from_utf8_lossy(&client.poll().unwrap().bytes).contains("LATEST_LOCKED"));
     }
     #[test]
     fn unauthenticated_oversize_datagram_is_dropped_before_valid_traffic() {
@@ -453,5 +549,13 @@ mod tests {
         assert!(client.resize(80, 0).is_err());
         client.write(b"hello").unwrap();
         assert!(client.poll().unwrap().bytes.len() <= OUTPUT_LIMIT);
+    }
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn fixture_codec_enforces_bounds_and_direction_without_bypassing_core_lock() {
+        assert!(fixture_packet(0, 1, &[0; 513]).is_err());
+        let to_client = fixture_packet(0, 1, &[]).unwrap();
+        assert!(fixture_ack(&to_client).is_err());
+        assert!(fixture_ack(&[]).is_err());
     }
 }

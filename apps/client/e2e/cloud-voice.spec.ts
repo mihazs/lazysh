@@ -15,6 +15,8 @@ async function fixture(page:Page) {
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},
       invoke:async(command:string,args:Record<string,unknown>={})=>{
+        if(command==='app_lock_status')return {initialized:true,supported:false,reason:'Browser fixture',enabled:false,locked:false,generation:'0'};
+        if(command==='app_lock_ready' || command==='adopt_session')return;
         window.cloudVoiceFixture.calls.push({command,args});
         if(command==='list_hosts' || command==='voice_models' || command==='voice_model_catalog')return [];
         if(command==='local_capability')return {available:true,reason:'Synthetic Cloud fixture; no shell or remote service.'};

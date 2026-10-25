@@ -35,7 +35,24 @@ Xcode project during `build:ios`. The UI runner deliberately has no app-build
 dependency: the app's Rust build phase needs a live Tauri CLI. Instead it launches
 the already built and installed `app.lazysh.client` by bundle identifier.
 
-The command requests unsigned simulator testing (`CODE_SIGNING_ALLOWED=NO`).
+`build:ios` requests ad-hoc signing for the simulator app and its embedded targets.
+The simulator-only identity is `-`; device signing and development teams are not
+configured by this test workflow. Do not add `--no-sign` to this build: Tauri's
+unsigned path clears `CODE_SIGN_ENTITLEMENTS`, and the resulting host failed the
+noninteractive Keychain probe with `errSecMissingEntitlement`. CI retains the
+generated plist and actual signature/Mach-O entitlement sections; project settings
+alone do not prove that the built app has usable grants. The signed-build probe and
+bootstrap checks must pass before treating this configuration as verified.
+
+The test commands still request unsigned test bundles (`CODE_SIGNING_ALLOWED=NO`)
+and use the already built app without rebuilding or signing its target.
+The workspace test also passes `IDE_DISABLED_OS_ACTIVITY_DT_MODE=1` to its
+separately launched app. The hosted-test scheme's environment does not cover this
+launch: run 40215178597 passed Keychain/bootstrap checks, then its UI launch had
+`OS_ACTIVITY_DT_MODE=YES` and timed out taking an accessibility snapshot of the
+Open hosts button. Applying the same logging control is a targeted experiment;
+that run did not retain a stack proving the timeout's cause. The original touch,
+persistence and deletion assertions and deadlines remain unchanged.
 Standalone-runner compilation and the real WKWebView accessibility queries still
 require macOS CI acceptance; Linux configuration checks do not establish either.
 These tests cover local workspace persistence, not device signing, SSH sessions,

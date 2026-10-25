@@ -53,7 +53,7 @@ async function selectCloud() {
 async function record() {
   fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
   fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
-  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('voice_cloud_transcribe',expect.anything()));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('voice_cloud_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } }));
 }
 it('keeps default local without Cloud IPC and verifies metadata only when Cloud is selected',async()=>{
   fixture();render(<VoicePanel sessionId="one"/>);
@@ -63,14 +63,14 @@ it('keeps default local without Cloud IPC and verifies metadata only when Cloud 
   expect(screen.getByLabelText('Cloud speech language')).toHaveProperty('value','auto');
   expect(Array.from((screen.getByLabelText('Cloud speech language') as HTMLSelectElement).options).map(option=>option.value)).toEqual(['auto','pt']);
   expect(screen.getByText(/Service audio quota remaining/).textContent).toContain('device 30.0 seconds; shared 60.0 seconds');
-  expect(invoke).not.toHaveBeenCalledWith('voice_cloud_begin',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('voice_cloud_begin',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('sends decoded mono PCM using the reserved ID, independent Cloud language, and review by default',async()=>{
   const f=fixture(); const direct=vi.fn();render(<VoicePanel sessionId="one" onDirectDictation={direct}/>);await selectCloud();
   fireEvent.change(screen.getByLabelText('Cloud speech language'),{target:{value:'pt'}});
   await record();
-  expect(invoke).toHaveBeenCalledWith('voice_cloud_begin',{sessionId:'one'});
-  expect(invoke).toHaveBeenCalledWith('voice_cloud_transcribe',{requestId:id,sessionId:'one',samples:Array(1600).fill(0),language:'pt'});
+  expect(invoke).toHaveBeenCalledWith('voice_cloud_begin',{sessionId:'one'}, { headers: { "X-Lazysh-Access": expect.any(String) } });
+  expect(invoke).toHaveBeenCalledWith('voice_cloud_transcribe',{requestId:id,sessionId:'one',samples:Array(1600).fill(0),language:'pt'}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   await f.complete('Cloud draft');
   expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','Cloud draft');
   expect(direct).not.toHaveBeenCalled();expect(localStorage.length).toBe(0);
@@ -87,9 +87,9 @@ for (const action of ['cancel','unmount','session','hide'] as const) {
     if(action==='session')view.rerender(<VoicePanel sessionId="two"/>);
     if(action==='hide')fireEvent(window,new Event('pagehide'));
     await act(async()=>begin.resolve(id));
-    expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id});
+    expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id}, { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(f.microphone).not.toHaveBeenCalled();
-    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_transcribe',expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
   });
 }
 for (const action of ['cancel','unmount','session','hide'] as const) {
@@ -103,7 +103,7 @@ for (const action of ['cancel','unmount','session','hide'] as const) {
     if(action==='session')view.rerender(<VoicePanel sessionId="two" onDirectDictation={direct}/>);
     if(action==='hide')fireEvent(window,new Event('pagehide'));
     await f.complete('stale command');
-    expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id});
+    expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id}, { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(direct).not.toHaveBeenCalled();
     if(action!=='unmount')expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','');
   });
@@ -114,8 +114,8 @@ it('cancels the reservation when cancellation beats PCM decoding',async()=>{
   fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
   fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
   await act(async()=>decode.resolve(f.audio));
-  expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id});
-  expect(invoke).not.toHaveBeenCalledWith('voice_cloud_transcribe',expect.anything());
+  expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id}, { headers: { "X-Lazysh-Access": expect.any(String) } });
+  expect(invoke).not.toHaveBeenCalledWith('voice_cloud_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('releases a late microphone grant and cancels its reservation',async()=>{
   const f=fixture();const media=deferred<unknown>();f.microphone.mockReturnValue(media.promise);
@@ -123,14 +123,14 @@ it('releases a late microphone grant and cancels its reservation',async()=>{
   await waitFor(()=>expect(f.microphone).toHaveBeenCalledOnce());
   fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
   await act(async()=>media.resolve({getTracks:()=>[{stop:f.stop}]}));
-  expect(f.stop).toHaveBeenCalledOnce();expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id});
+  expect(f.stop).toHaveBeenCalledOnce();expect(invoke).toHaveBeenCalledWith('voice_cloud_cancel',{requestId:id}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.queryByRole('button',{name:'Stop and transcribe'})).toBeNull();
 });
 it('does not cancel on window blur from a permission dialog',async()=>{
   const f=fixture();render(<VoicePanel/>);await selectCloud();
   fireEvent.click(screen.getByRole('button',{name:'Record speech'}));await screen.findByRole('button',{name:'Stop and transcribe'});
   fireEvent(window,new Event('blur'));
-  expect(invoke).not.toHaveBeenCalledWith('voice_cloud_cancel',expect.anything());expect(f.stop).not.toHaveBeenCalled();
+  expect(invoke).not.toHaveBeenCalledWith('voice_cloud_cancel',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });expect(f.stop).not.toHaveBeenCalled();
 });
 it('keeps direct delivery opt-in and protects a deferred claim after cancellation',async()=>{
   const f=fixture();const claim=deferred<void>();const requests: {claim:()=>boolean;autoSend:boolean}[]=[];
@@ -167,7 +167,7 @@ it('does not fall back to local after service failure and reports unconfirmed cl
   vi.mocked(invoke).mockImplementation(command=>command==='voice_cloud_cancel'?Promise.resolve({cancelled:true,cleanup:'unconfirmed'}) as never:Promise.resolve() as never);
   await act(async()=>f.result.reject(new Error('Cloud provider denied request')));
   expect(await screen.findByText(/cleanup could not be confirmed/)).toBeTruthy();
-  expect(invoke).not.toHaveBeenCalledWith('voice_transcribe',expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('voice_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('requires a verified snapshot and both quota balances to record',async()=>{
   const value=snapshot();value.quota.globalLimitSamples=1000;value.quota.globalRemainingSamples=1000;
@@ -185,14 +185,14 @@ it('requires a new explicit token on origin change and clears tokens after faile
   vi.mocked(invoke).mockRejectedValueOnce(new Error('Cloud service denied device'));
   fireEvent.click(screen.getByRole('button',{name:'Verify and save Cloud device'}));
   expect(await screen.findByText('Cloud service denied device')).toBeTruthy();
-  expect(invoke).toHaveBeenCalledWith('voice_cloud_enroll',{origin:'https://new.example.com',token:'b'.repeat(64)});
+  expect(invoke).toHaveBeenCalledWith('voice_cloud_enroll',{origin:'https://new.example.com',token:'b'.repeat(64)}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getByLabelText('Device token')).toHaveProperty('value','');
 });
 it('forgets configured credentials and disables recording until verified enrollment',async()=>{
   fixture();render(<VoicePanel/>);await selectCloud();
   fireEvent.click(screen.getByRole('button',{name:'Forget Cloud device'}));
   await waitFor(()=>expect(screen.getByLabelText('Cloud service origin')).toHaveProperty('value',''));
-  expect(invoke).toHaveBeenCalledWith('voice_cloud_forget');
+  expect(invoke).toHaveBeenCalledWith('voice_cloud_forget', undefined, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect((screen.getByRole('button',{name:'Record speech'}) as HTMLButtonElement).disabled).toBe(true);
 });
 it('accepts lowered limits with saturated balances and global limits below device limits',()=>{
@@ -247,8 +247,8 @@ for (const event of ['hidden','pagehide'] as const) {
     expect(screen.getByLabelText('Device token')).toHaveProperty('value','a'.repeat(64));
     hideCloudSettings();
     expect(screen.getByLabelText('Device token')).toHaveProperty('value','');
-    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_enroll',expect.anything());
-    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_forget');
+    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_enroll',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
+    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_forget', undefined, { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect((screen.getByRole('button',{name:'Record speech'}) as HTMLButtonElement).disabled).toBe(true);
   });
   it(`does not refill a cleared token when submitted enrollment finishes after ${event}`,async()=>{
@@ -258,10 +258,10 @@ for (const event of ['hidden','pagehide'] as const) {
     render(<VoicePanel/>);await selectCloud();
     fireEvent.change(screen.getByLabelText('Device token'),{target:{value:'b'.repeat(64)}});
     fireEvent.click(screen.getByRole('button',{name:'Verify and save Cloud device'}));
-    expect(invoke).toHaveBeenCalledWith('voice_cloud_enroll',{origin:f.value.origin,token:'b'.repeat(64)});
+    expect(invoke).toHaveBeenCalledWith('voice_cloud_enroll',{origin:f.value.origin,token:'b'.repeat(64)}, { headers: { "X-Lazysh-Access": expect.any(String) } });
     hideCloudSettings();
     expect(screen.getByLabelText('Device token')).toHaveProperty('value','');
-    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_forget');
+    expect(invoke).not.toHaveBeenCalledWith('voice_cloud_forget', undefined, { headers: { "X-Lazysh-Access": expect.any(String) } });
     await act(async()=>enrollment.resolve(f.value));
     expect(screen.getByLabelText('Device token')).toHaveProperty('value','');
     expect(screen.getByText(/Service audio quota remaining/)).toBeTruthy();

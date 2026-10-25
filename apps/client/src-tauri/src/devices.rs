@@ -1,4 +1,6 @@
-use crate::ssh::{exec, quote, AppState, Result, SshError};
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
+use crate::ssh::{exec_for_access, quote, AppState, Result, SshError};
 use tauri::State;
 pub mod stream;
 pub use stream::DeviceStreams;
@@ -47,27 +49,45 @@ fn android_command(id: &str, action: &str) -> Result<String> {
 }
 #[tauri::command]
 pub async fn android_device_probe(
+    access: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     id: String,
-) -> Result<serde_json::Value> {
-    let command = android_command(&id, "probe")?;
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+) -> Protected<serde_json::Value> {
+    access
+        .run(async {
+            let command = android_command(&id, "probe")?;
+            let session = state.session(&session_id).await?;
+            access.check()?;
+            Ok(serde_json::from_str(
+                &exec_for_access(&session, command, &access).await?,
+            )?)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn ios_device_probe(
+    access: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     id: String,
     socket: String,
-) -> Result<serde_json::Value> {
-    let command = companion_command(&id, &socket, "probe")?;
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+) -> Protected<serde_json::Value> {
+    access
+        .run(async {
+            let command = companion_command(&id, &socket, "probe")?;
+            let session = state.session(&session_id).await?;
+            access.check()?;
+            Ok(serde_json::from_str(
+                &exec_for_access(&session, command, &access).await?,
+            )?)
+        })
+        .await
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease plus the existing typed IPC fields.
 pub async fn ios_device_action(
+    access: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     id: String,
@@ -75,7 +95,8 @@ pub async fn ios_device_action(
     width: u32,
     height: u32,
     action: DeviceAction,
-) -> Result<serde_json::Value> {
+) -> Protected<serde_json::Value> {
+    access.run(async {
     let (subcommand,arguments)=match action {
         DeviceAction::Tap{x,y} if x<width && y<height => ("tap",format!("--x {x} --y {y} --width {width} --height {height}")),
         DeviceAction::Swipe{x,y,to_x,to_y,duration_ms} if x<width && y<height && to_x<width && to_y<height && (1..=10000).contains(&duration_ms)=>("swipe",format!("--x {x} --y {y} --to-x {to_x} --to-y {to_y} --duration-ms {duration_ms} --width {width} --height {height}")),
@@ -90,44 +111,61 @@ pub async fn ios_device_action(
     }
     let command = companion_command(&id, &socket, &format!("{subcommand} {arguments}"))?;
     let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+            access.check()?;
+    Ok(serde_json::from_str(&exec_for_access(&session, command, &access).await?)?)
+
+    }).await
 }
 #[tauri::command]
 pub async fn list_devices(
+    access: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     device_platform: String,
-) -> Result<serde_json::Value> {
-    platform(&device_platform)?;
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(
-        &exec(
-            &session,
-            format!("lazysh-agent devices list --platform {device_platform}"),
-        )
-        .await?,
-    )?)
+) -> Protected<serde_json::Value> {
+    access
+        .run(async {
+            platform(&device_platform)?;
+            let session = state.session(&session_id).await?;
+            access.check()?;
+            Ok(serde_json::from_str(
+                &exec_for_access(
+                    &session,
+                    format!("lazysh-agent devices list --platform {device_platform}"),
+                    &access,
+                )
+                .await?,
+            )?)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn device_frame(
+    access: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     device_platform: String,
     id: String,
-) -> Result<serde_json::Value> {
-    platform(&device_platform)?;
-    identifier(&id)?;
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(
-        &exec(
-            &session,
-            format!(
-                "lazysh-agent devices screenshot --platform {device_platform} --id={}",
-                quote(&id)
-            ),
-        )
-        .await?,
-    )?)
+) -> Protected<serde_json::Value> {
+    access
+        .run(async {
+            platform(&device_platform)?;
+            identifier(&id)?;
+            let session = state.session(&session_id).await?;
+            access.check()?;
+            Ok(serde_json::from_str(
+                &exec_for_access(
+                    &session,
+                    format!(
+                        "lazysh-agent devices screenshot --platform {device_platform} --id={}",
+                        quote(&id)
+                    ),
+                    &access,
+                )
+                .await?,
+            )?)
+        })
+        .await
 }
 #[derive(serde::Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -189,15 +227,23 @@ fn action_command(device_platform: &str, id: &str, action: DeviceAction) -> Resu
 }
 #[tauri::command]
 pub async fn device_action(
+    access: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     device_platform: String,
     id: String,
     action: DeviceAction,
-) -> Result<serde_json::Value> {
-    let command = action_command(&device_platform, &id, action)?;
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+) -> Protected<serde_json::Value> {
+    access
+        .run(async {
+            let command = action_command(&device_platform, &id, action)?;
+            let session = state.session(&session_id).await?;
+            access.check()?;
+            Ok(serde_json::from_str(
+                &exec_for_access(&session, command, &access).await?,
+            )?)
+        })
+        .await
 }
 #[cfg(test)]
 mod tests {

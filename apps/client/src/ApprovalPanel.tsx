@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 import { errorMessage } from "./SessionTools";
 
 type Approval = {
@@ -50,6 +51,7 @@ export function parseApprovals(value: unknown): Approval[] {
   });
 }
 export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
+  const invoke = useProtectedInvoke();
   const [requests, setRequests] = useState<Approval[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);

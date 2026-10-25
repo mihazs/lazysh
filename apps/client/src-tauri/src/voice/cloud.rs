@@ -1,3 +1,5 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -77,9 +79,18 @@ fn decode(value: &str) -> Result<Enrollment> {
     }
     Ok(enrollment)
 }
-async fn load(app: AppHandle, state: &CloudState) -> Result<Option<Enrollment>> {
+async fn load(
+    app: AppHandle,
+    state: &CloudState,
+    access: AccessLease,
+) -> Result<Option<Enrollment>> {
+    let operation = app.vault().operation();
     vault(state, move || {
-        let stored = app.vault().get(ACCOUNT)?.map(Zeroizing::new);
+        access.check()?;
+        let stored = app
+            .vault()
+            .get_protected_for(ACCOUNT, false, &operation)?
+            .map(Zeroizing::new);
         stored.map(|value| decode(&value)).transpose()
     })
     .await
@@ -281,6 +292,7 @@ struct Slot {
     running: bool,
     cancel: watch::Sender<bool>,
     finished: watch::Receiver<Option<Cancelled>>,
+    access: Option<AccessLease>,
 }
 #[derive(Default)]
 struct Inner {
@@ -322,6 +334,10 @@ async fn vault<T: Send + 'static>(
     .map_err(|_| "Cloud vault operation failed".to_owned())?
 }
 impl CloudState {
+    /// Invalidate recordings on lock without permanently closing their window.
+    pub(crate) fn cancel_for_lock(&self) {
+        let _ = self.changed();
+    }
     fn changed(&self) -> Result<u64> {
         let mut inner = self
             .inner
@@ -337,7 +353,16 @@ impl CloudState {
         }
         Ok(inner.epoch)
     }
+    #[cfg(test)]
     fn begin(&self, owner: &str, session_id: Option<String>) -> Result<String> {
+        self.begin_scoped(owner, session_id, None)
+    }
+    fn begin_scoped(
+        &self,
+        owner: &str,
+        session_id: Option<String>,
+        access: Option<AccessLease>,
+    ) -> Result<String> {
         let _configuration = self
             .changing
             .try_lock()
@@ -377,8 +402,34 @@ impl CloudState {
             running: false,
             cancel,
             finished,
+            access,
         });
         Ok(id)
+    }
+    fn begin_for_access(
+        &self,
+        owner: &str,
+        session_id: Option<String>,
+        access: &AccessLease,
+    ) -> Result<String> {
+        access.check()?;
+        // A policy change can revoke a begin reply without a background event.
+        // Inspect its lease outside both locks, then cancel by immutable UUID.
+        let previous = self
+            .inner
+            .lock()
+            .map_err(|_| "Cloud transcription lock failed")?
+            .active
+            .as_ref()
+            .and_then(|slot| slot.access.clone().map(|lease| (slot.id.clone(), lease)));
+        if let Some((id, lease)) = previous {
+            if lease.check().is_err() {
+                // signal removes only unclaimed reservations; owned workers
+                // retain their slot until their existing cleanup finishes.
+                self.signal(&id, None)?;
+            }
+        }
+        access.with_current(|| self.begin_scoped(owner, session_id, Some(access.clone())))?
     }
     fn signal(
         &self,
@@ -472,94 +523,134 @@ pub struct Status {
     origin: Option<String>,
 }
 #[tauri::command]
-pub async fn voice_cloud_status(app: AppHandle, state: State<'_, CloudState>) -> Result<Status> {
-    Ok(match load(app, &state).await? {
-        Some(enrollment) => Status {
-            configured: true,
-            origin: Some(enrollment.origin.clone()),
-        },
-        None => Status {
-            configured: false,
-            origin: None,
-        },
-    })
+pub async fn voice_cloud_status(
+    access: AccessLease,
+    app: AppHandle,
+    state: State<'_, CloudState>,
+) -> Protected<Status> {
+    access
+        .run(async {
+            Ok(match load(app, &state, access.clone()).await? {
+                Some(enrollment) => Status {
+                    configured: true,
+                    origin: Some(enrollment.origin.clone()),
+                },
+                None => Status {
+                    configured: false,
+                    origin: None,
+                },
+            })
+        })
+        .await
 }
 #[tauri::command]
 pub async fn voice_cloud_enroll(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, CloudState>,
     origin: String,
     token: String,
-) -> Result<Snapshot> {
-    let token = Zeroizing::new(token);
-    if !self::token(&token) {
-        return Err("Enter the service's 64-character device token".into());
-    }
-    let enrollment = Enrollment {
-        version: 1,
-        origin: self::origin(&origin)?,
-        token: token.to_string(),
-    };
-    let guard = state.changing.clone().lock_owned().await;
-    let epoch = state.changed()?;
-    let snapshot = verify(&enrollment, &client()?).await?;
-    let encoded = Zeroizing::new(
-        serde_json::to_string(&enrollment).map_err(|_| "Cannot encode cloud enrollment")?,
-    );
-    commit(
-        state.inner().clone(),
-        guard,
-        epoch,
-        Some(snapshot.clone()),
-        move || app.vault().set(ACCOUNT, &encoded),
-    )
-    .await?;
-    Ok(snapshot)
+) -> Protected<Snapshot> {
+    access
+        .run(async {
+            let operation = app.vault().operation();
+            let token = Zeroizing::new(token);
+            if !self::token(&token) {
+                return Err("Enter the service's 64-character device token".into());
+            }
+            let enrollment = Enrollment {
+                version: 1,
+                origin: self::origin(&origin)?,
+                token: token.to_string(),
+            };
+            let guard = state.changing.clone().lock_owned().await;
+            let epoch = state.changed()?;
+            let snapshot = verify(&enrollment, &client()?).await?;
+            let encoded = Zeroizing::new(
+                serde_json::to_string(&enrollment).map_err(|_| "Cannot encode cloud enrollment")?,
+            );
+            commit(
+                state.inner().clone(),
+                guard,
+                epoch,
+                Some(snapshot.clone()),
+                move || {
+                    app.vault()
+                        .set_protected_for(ACCOUNT, &encoded, false, &operation)
+                },
+            )
+            .await?;
+            Ok(snapshot)
+        })
+        .await
 }
 #[tauri::command]
-pub async fn voice_cloud_refresh(app: AppHandle, state: State<'_, CloudState>) -> Result<Snapshot> {
-    let _configuration = state.changing.lock().await;
-    let epoch = state
-        .inner
-        .lock()
-        .map_err(|_| "Cloud transcription lock failed")?
-        .epoch;
-    let enrollment = load(app, &state)
-        .await?
-        .ok_or("Enroll a transcription service first")?;
-    let snapshot = verify(&enrollment, &client()?).await?;
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| "Cloud transcription lock failed")?;
-    if inner.epoch != epoch {
-        return Err("Cloud enrollment changed".into());
-    }
-    inner.verified = Some(snapshot.clone());
-    Ok(snapshot)
+pub async fn voice_cloud_refresh(
+    access: AccessLease,
+    app: AppHandle,
+    state: State<'_, CloudState>,
+) -> Protected<Snapshot> {
+    access
+        .run(async {
+            let _configuration = state.changing.lock().await;
+            let epoch = state
+                .inner
+                .lock()
+                .map_err(|_| "Cloud transcription lock failed")?
+                .epoch;
+            let enrollment = load(app, &state, access.clone())
+                .await?
+                .ok_or("Enroll a transcription service first")?;
+            let snapshot = verify(&enrollment, &client()?).await?;
+            access.with_current(|| {
+                let mut inner = state
+                    .inner
+                    .lock()
+                    .map_err(|_| "Cloud transcription lock failed")?;
+                if inner.epoch != epoch {
+                    return Err("Cloud enrollment changed".into());
+                }
+                inner.verified = Some(snapshot.clone());
+                Ok(snapshot)
+            })?
+        })
+        .await
 }
 #[tauri::command]
-pub async fn voice_cloud_forget(app: AppHandle, state: State<'_, CloudState>) -> Result<()> {
-    let guard = state.changing.clone().lock_owned().await;
-    let epoch = state.changed()?;
-    commit(state.inner().clone(), guard, epoch, None, move || {
-        app.vault().delete(ACCOUNT)
-    })
-    .await
+pub async fn voice_cloud_forget(
+    access: AccessLease,
+    app: AppHandle,
+    state: State<'_, CloudState>,
+) -> Protected<()> {
+    access
+        .run(async {
+            let operation = app.vault().operation();
+            let guard = state.changing.clone().lock_owned().await;
+            let epoch = state.changed()?;
+            commit(state.inner().clone(), guard, epoch, None, move || {
+                operation.check()?;
+                app.vault().delete(ACCOUNT)
+            })
+            .await
+        })
+        .await
 }
 #[tauri::command]
 pub fn voice_cloud_begin(
+    access: AccessLease,
     state: State<'_, CloudState>,
     window: WebviewWindow,
     session_id: Option<String>,
-) -> Result<String> {
-    if session_id
-        .as_ref()
-        .is_some_and(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
-    {
-        return Err("Invalid recording session".into());
-    }
-    state.begin(window.label(), session_id)
+) -> Protected<String> {
+    access.run_sync(|| {
+        if session_id
+            .as_ref()
+            .is_some_and(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+        {
+            return Err("Invalid recording session".into());
+        }
+        state.begin_for_access(window.label(), session_id, &access)
+    })
 }
 #[tauri::command]
 pub async fn voice_cloud_cancel(
@@ -621,6 +712,7 @@ struct Work {
     epoch: u64,
     cancel: watch::Receiver<bool>,
     finished: watch::Sender<Option<Cancelled>>,
+    access: Option<AccessLease>,
 }
 impl Work {
     fn claim(
@@ -630,6 +722,19 @@ impl Work {
         session_id: Option<&str>,
         language: &str,
     ) -> Result<Self> {
+        // Check the reservation's immutable lease without holding the recording
+        // mutex; begin_scoped is admitted under the authority in the opposite order.
+        let reservation_access = state
+            .inner
+            .lock()
+            .map_err(|_| "Cloud transcription lock failed")?
+            .active
+            .as_ref()
+            .filter(|slot| slot.id == id)
+            .and_then(|slot| slot.access.clone());
+        if let Some(access) = reservation_access.as_ref() {
+            access.check()?;
+        }
         let mut inner = state
             .inner
             .lock()
@@ -661,6 +766,7 @@ impl Work {
         {
             return Err("Cloud recording expired or cancelled".into());
         }
+        let access = slot.access.clone();
         let (finished, receiver) = watch::channel(None);
         slot.finished = receiver;
         slot.running = true;
@@ -672,9 +778,26 @@ impl Work {
             epoch,
             cancel,
             finished,
+            access,
         })
     }
+    fn bind_access(&mut self, access: AccessLease) {
+        self.access = Some(access.clone());
+        let state = self.state.clone();
+        let id = self.id.clone();
+        let mut finished = self.finished.subscribe();
+        // One watcher per owned recording, terminated by its finalization.
+        tokio::spawn(async move {
+            tokio::select! { biased;
+                _ = access.cancelled() => { let _ = state.signal(&id, None); },
+                _ = finished.changed() => {},
+            }
+        });
+    }
     fn check(&self) -> Result<()> {
+        if let Some(access) = self.access.as_ref() {
+            access.check()?;
+        }
         let inner = self
             .state
             .inner
@@ -689,12 +812,17 @@ impl Work {
         Ok(())
     }
     fn finish(&mut self, result: Result<Completed>, cleanup: Cleanup) -> Result<Completed> {
+        let access_valid = self
+            .access
+            .as_ref()
+            .is_none_or(|lease| lease.check().is_ok());
         let mut inner = self
             .state
             .inner
             .lock()
             .map_err(|_| "Cloud transcription lock failed")?;
-        let valid = inner.epoch == self.epoch
+        let valid = access_valid
+            && inner.epoch == self.epoch
             && !*self.cancel.borrow()
             && inner.active.as_ref().is_some_and(|slot| slot.id == self.id);
         let response = if valid {
@@ -818,7 +946,9 @@ async fn run(
     (result, cleanup)
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease plus the existing recording contract.
 pub async fn voice_cloud_transcribe(
+    access: AccessLease,
     app: AppHandle,
     state: State<'_, CloudState>,
     window: WebviewWindow,
@@ -826,38 +956,45 @@ pub async fn voice_cloud_transcribe(
     samples: Vec<f32>,
     language: String,
     session_id: Option<String>,
-) -> Result<Completed> {
-    let samples = Zeroizing::new(samples);
-    let mut work = Work::claim(
-        state.inner().clone(),
-        &request_id,
-        window.label(),
-        session_id.as_deref(),
-        &language,
-    )?;
-    let audio = match wav(&samples) {
-        Ok(audio) => audio,
-        Err(error) => return work.finish(Err(error), Cleanup::NotNeeded),
-    };
-    drop(samples);
-    // This one bounded worker owns cleanup even when its IPC caller disappears.
-    tokio::spawn(async move {
-        let scope = work.state.clone();
-        let (result, cleanup) = match credential(&mut work.cancel, load(app, &scope)).await {
-            Ok(Some(enrollment)) => match client() {
-                Ok(client) => run(&mut work, enrollment, client, audio, language).await,
-                Err(error) => (Err(error), Cleanup::NotNeeded),
-            },
-            Ok(None) => (
-                Err("Enroll a transcription service first".into()),
-                Cleanup::NotNeeded,
-            ),
-            Err(error) => (Err(error), Cleanup::NotNeeded),
-        };
-        work.finish(result, cleanup)
-    })
-    .await
-    .map_err(|_| "Cloud transcription stopped unexpectedly".to_owned())?
+) -> Protected<Completed> {
+    access
+        .run(async {
+            let samples = Zeroizing::new(samples);
+            let mut work = Work::claim(
+                state.inner().clone(),
+                &request_id,
+                window.label(),
+                session_id.as_deref(),
+                &language,
+            )?;
+            work.bind_access(access.clone());
+            let audio = match wav(&samples) {
+                Ok(audio) => audio,
+                Err(error) => return work.finish(Err(error), Cleanup::NotNeeded),
+            };
+            drop(samples);
+            let worker_access = access.clone();
+            // This one bounded worker owns cleanup even when its IPC caller disappears.
+            tokio::spawn(async move {
+                let scope = work.state.clone();
+                let (result, cleanup) =
+                    match credential(&mut work.cancel, load(app, &scope, worker_access)).await {
+                        Ok(Some(enrollment)) => match client() {
+                            Ok(client) => run(&mut work, enrollment, client, audio, language).await,
+                            Err(error) => (Err(error), Cleanup::NotNeeded),
+                        },
+                        Ok(None) => (
+                            Err("Enroll a transcription service first".into()),
+                            Cleanup::NotNeeded,
+                        ),
+                        Err(error) => (Err(error), Cleanup::NotNeeded),
+                    };
+                work.finish(result, cleanup)
+            })
+            .await
+            .map_err(|_| "Cloud transcription stopped unexpectedly".to_owned())?
+        })
+        .await
 }
 pub fn install_cleanup(app: &tauri::App) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = app.state::<CloudState>().inner().clone();

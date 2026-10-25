@@ -1,5 +1,6 @@
+import { useProtectedCallback, useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
 import { MAX_VOICE_SECONDS, mono16k, validModelFile } from "./voice";
 import { errorMessage } from "./SessionTools";
 import { useDictationHistory } from './voiceHistory';
@@ -22,6 +23,8 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
   sessionId?: string;
   onDirectDictation?: (request: DirectDictation) => Promise<void>;
 }) {
+  const invoke = useProtectedInvoke();
+  const guardCallback = useProtectedCallback();
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [catalog, setCatalog] = useState<CatalogModel[]>([]);
@@ -181,13 +184,13 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
     downloadRequest.current=requestId;setBusy(true);setDownloading(true);setCancellingDownload(false);setDownloadBytes(0);setError('');setProgress('Connecting to the model publisher…');
     try {
       const events=new Channel<DownloadProgress>();
-      events.onmessage=event=>{
+      events.onmessage=guardCallback((event: DownloadProgress)=>{
       if(current!==generation.current || downloadRequest.current!==requestId || event?.requestId!==requestId || event.total!==selected.bytes
         || !Number.isSafeInteger(event.received) || event.received<0 || event.received>event.total
         || !['downloading','verifying','installed'].includes(event.stage))return;
       setDownloadBytes(event.received);
       setProgress(event.stage==='verifying'?'Verifying model SHA-256…':event.stage==='installed'?'Model installed.':`Downloading model ${Math.floor(event.received/event.total*100)}%`);
-      };
+      });
       await invoke('voice_download_model',{id:selected.id,requestId,events});
       if(downloadRequest.current===requestId) {
         await refresh();

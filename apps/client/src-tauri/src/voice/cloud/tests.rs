@@ -61,6 +61,95 @@ fn ready(origin: &str) -> CloudState {
     state.inner.lock().unwrap().verified = Some(snapshot(origin));
     state
 }
+#[tokio::test]
+async fn lock_cancels_recording_without_permanently_closing_the_window() {
+    let state = ready("https://voice.example");
+    let id = state.begin("main", None).unwrap();
+    let mut work = Work::claim(state.clone(), &id, "main", None, "auto").unwrap();
+    state.cancel_for_lock();
+    assert!(*work.cancel.borrow());
+    assert!(work.check().is_err());
+    assert!(work
+        .finish(Err("cancelled".into()), Cleanup::NotNeeded)
+        .is_err());
+    assert!(
+        state.begin("main", None).is_err(),
+        "refresh required after lock"
+    );
+    state.inner.lock().unwrap().verified = Some(snapshot("https://voice.example"));
+    assert!(state.begin("main", None).is_ok(), "same window can resume");
+}
+#[test]
+fn reservation_cannot_be_claimed_with_a_fresh_lease_after_its_original_unlock_expires() {
+    let authority = crate::app_lock::AccessState::default();
+    authority.initialize(true, true, "fixture".into()).unwrap();
+    authority
+        .authorize(authority.generation().unwrap())
+        .unwrap();
+    let nonce = authority.status().unwrap().nonce.unwrap();
+    let access = authority.lease(Some(&nonce)).unwrap();
+    let state = ready("https://voice.example");
+    let id = state.begin_scoped("main", None, Some(access)).unwrap();
+    authority.background().unwrap();
+    authority.foreground().unwrap();
+    authority
+        .authorize(authority.generation().unwrap())
+        .unwrap();
+    let nonce = authority.status().unwrap().nonce.unwrap();
+    assert!(authority.lease(Some(&nonce)).is_ok());
+    assert!(Work::claim(state, &id, "main", None, "en").is_err());
+}
+#[test]
+fn policy_nonce_change_replaces_stale_local_reservation_without_background_or_audio() {
+    let authority = crate::app_lock::AccessState::default();
+    authority.initialize(true, false, "fixture".into()).unwrap();
+    let state = ready("https://voice.example");
+    for enabled in [true, false] {
+        let nonce = authority.status().unwrap().nonce;
+        let old = authority.lease(nonce.as_deref()).unwrap();
+        let first = state.begin_for_access("main", None, &old).unwrap();
+        authority
+            .configure_after_proof(authority.generation().unwrap(), enabled)
+            .unwrap();
+        assert!(old.check().is_err());
+        let nonce = authority.status().unwrap().nonce;
+        let fresh = authority.lease(nonce.as_deref()).unwrap();
+        let replacement = state
+            .begin_for_access("main", None, &fresh)
+            .expect("a revoked empty reservation must not block a fresh recording");
+        assert_ne!(first, replacement);
+        let inner = state.inner.lock().unwrap();
+        let slot = inner.active.as_ref().unwrap();
+        assert_eq!(slot.id, replacement);
+        assert!(
+            !slot.running,
+            "local begin has not claimed or uploaded audio"
+        );
+        drop(inner);
+        state.signal(&replacement, Some("main")).unwrap();
+    }
+}
+#[test]
+fn policy_nonce_change_retains_running_worker_capacity_until_cleanup_finishes() {
+    let authority = crate::app_lock::AccessState::default();
+    authority.initialize(true, false, "fixture".into()).unwrap();
+    let old = authority.lease(None).unwrap();
+    let state = ready("https://voice.example");
+    let id = state.begin_for_access("main", None, &old).unwrap();
+    let mut work = Work::claim(state.clone(), &id, "main", None, "auto").unwrap();
+    authority
+        .configure_after_proof(authority.generation().unwrap(), true)
+        .unwrap();
+    let nonce = authority.status().unwrap().nonce.unwrap();
+    let fresh = authority.lease(Some(&nonce)).unwrap();
+    assert!(state.begin_for_access("main", None, &fresh).is_err());
+    assert!(*work.cancel.borrow());
+    assert_eq!(state.inner.lock().unwrap().active.as_ref().unwrap().id, id);
+    assert!(work
+        .finish(Err("fixture cleanup completed".into()), Cleanup::NotNeeded)
+        .is_err());
+    assert!(state.begin_for_access("main", None, &fresh).is_ok());
+}
 #[test]
 fn strict_origin_enrollment_and_quota_contract_allow_reduced_limits_without_cross_authority() {
     for invalid in [
@@ -553,6 +642,67 @@ async fn cancellation_with_unknown_registration_never_uploads_and_known_job_dele
             fixture.state.deletes.load(Ordering::SeqCst),
             if mode == 2 { 0 } else { 1 }
         );
+        assert!(state.inner.lock().unwrap().active.is_none());
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn native_lease_revocation_cancels_owned_cloud_worker_across_immediate_reunlock() {
+    for mode in [2, 4] {
+        let fixture = Fixture::new().await;
+        fixture.state.mode.store(mode, Ordering::SeqCst);
+        let authority = crate::app_lock::AccessState::default();
+        authority.initialize(true, true, "fixture".into()).unwrap();
+        authority
+            .authorize(authority.generation().unwrap())
+            .unwrap();
+        let nonce = authority.status().unwrap().nonce.unwrap();
+        let access = authority.lease(Some(&nonce)).unwrap();
+        let state = ready(&fixture.origin);
+        let id = state.begin("main", None).unwrap();
+        let mut work = Work::claim(state.clone(), &id, "main", None, "en").unwrap();
+        work.bind_access(access.clone());
+        let enrollment = fixture.enrollment.clone();
+        let client = fixture.client.clone();
+        let task = tokio::spawn(async move {
+            let (result, cleanup) = run(
+                &mut work,
+                enrollment,
+                client,
+                wav(&vec![0.0; 1600]).unwrap(),
+                "en".into(),
+            )
+            .await;
+            work.finish(result, cleanup)
+        });
+        let _ = tokio::time::timeout(Duration::from_secs(3), fixture.state.entered.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        // No JS callback or state-specific cancellation hook: the immutable
+        // lease alone must stop this detached worker, even after another unlock.
+        authority.background().unwrap();
+        authority.foreground().unwrap();
+        authority
+            .authorize(authority.generation().unwrap())
+            .unwrap();
+        assert!(access.check().is_err());
+        assert!(tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        assert_eq!(
+            fixture.state.puts.load(Ordering::SeqCst),
+            usize::from(mode == 4)
+        );
+        assert_eq!(
+            fixture.state.deletes.load(Ordering::SeqCst),
+            usize::from(mode == 4)
+        );
+        let last = state.inner.lock().unwrap().last.as_ref().unwrap().1;
+        assert!(matches!(last.cleanup, Cleanup::Unconfirmed) == (mode == 2));
         assert!(state.inner.lock().unwrap().active.is_none());
         fixture.stop().await;
     }

@@ -3,6 +3,11 @@ package app.lazysh.vault
 import android.app.Activity
 import android.content.Context
 import android.os.Build
+import android.webkit.WebView
+import android.view.View
+import android.view.WindowManager
+import java.lang.ref.WeakReference
+import app.tauri.plugin.Channel
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.KeyPermanentlyInvalidatedException
@@ -11,6 +16,8 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.appcompat.app.AppCompatActivity
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -18,6 +25,7 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import app.tauri.plugin.PluginManager
 import java.security.KeyStore
 import java.util.UUID
 import javax.crypto.Cipher
@@ -27,13 +35,65 @@ import javax.crypto.spec.GCMParameterSpec
 
 @InvokeArg class VaultItem { lateinit var key: String; var value: String? = null; var biometric: Boolean = false; var authEpoch: Long = 0 }
 @InvokeArg class VaultCancellation { var authEpoch: Long = 0 }
+@InvokeArg class VaultResumeRegistration { lateinit var events: Channel }
+@InvokeArg class VaultResumeView { var covered: Boolean = true; var enabled: Boolean = true; var generation: Long = -1; var nativeGeneration: Long = -1 }
 @TauriPlugin
-class VaultPlugin(private val activity: Activity) : Plugin(activity) {
+class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
+    private var activity: Activity = initialActivity
+    companion object {
+        private var current = WeakReference<VaultPlugin>(null)
+        // Wry calls this canonical Activity hook before loading the new document.
+        @JvmStatic fun onWebViewCreated(activity: Activity, webView: WebView) {
+            webView.visibility = View.INVISIBLE
+            activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            val previous = current.get() ?: return
+            val handle = previous.handle
+            if (previous.activity !== activity && handle != null) {
+                previous.epochs.background(); previous.cancelPending?.invoke()
+                val replacement = VaultPlugin(activity)
+                replacement.epochs = previous.epochs
+                replacement.resumeCover = previous.resumeCover
+                if ((activity as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true) replacement.epochs.resume()
+                // Replace the SDK base object too: its private constructor Activity cannot be rebound.
+                PluginManager.load(webView, handle.name, replacement, handle.config)
+                replacement.handle?.loaded = true
+            } else previous.bind(activity, webView)
+        }
+    }
     private val alias get() = "${activity.packageName}.credentials"
     private val prefs get() = activity.getSharedPreferences("lazysh-credentials", Context.MODE_PRIVATE)
     private var cancelPending: (() -> Unit)? = null
     private var pendingAuthEpoch: Long? = null
-    private val epochs = CredentialEpoch()
+    private var epochs = CredentialEpoch()
+    private var resumeCover = ResumeCover(activity)
+    private fun bind(owner: Activity, webView: WebView) {
+        if (activity !== owner) {
+            epochs.background(); cancelPending?.invoke(); activity = owner
+            if ((owner as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true) epochs.resume()
+        }
+        resumeCover.load(webView, owner)
+    }
+    override fun load(webView: WebView) {
+        if (handle != null) current = WeakReference(this)
+        bind(activity, webView)
+    }
+    override fun onPause(activity: AppCompatActivity) { if (activity === this.activity) resumeCover.pause() }
+    @Command fun resumeFailure(invoke: Invoke) = activity.runOnUiThread { resumeCover.failure(); invoke.resolve() }
+    @Command fun resumeCapability(invoke: Invoke) = activity.runOnUiThread {
+        val result = JSObject(); val supported = available() && resumeCover.ready
+        result.put("available", supported); result.put("reason", if (supported) "Native biometric privacy cover is ready" else "Strong enrolled biometrics and a native privacy cover are required")
+        invoke.resolve(result)
+    }
+    @Command fun registerResume(invoke: Invoke) = activity.runOnUiThread {
+        try { resumeCover.register(invoke.parseArgs(VaultResumeRegistration::class.java).events); invoke.resolve() }
+        catch (_: Exception) { invoke.reject("Cannot register native privacy cover") }
+    }
+    @Command fun resumeView(invoke: Invoke) = activity.runOnUiThread {
+        try { val args = invoke.parseArgs(VaultResumeView::class.java)
+            if (resumeCover.apply(args.covered, args.enabled, args.generation, args.nativeGeneration)) invoke.resolve()
+            else invoke.reject("Native privacy cover generation changed")
+        } catch (_: Exception) { invoke.reject("Cannot update native privacy cover") }
+    }
     private fun store() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     @Synchronized private fun key(name: String, create: Boolean, biometric: Boolean): SecretKey? {
         (store().getKey(name, null) as? SecretKey)?.let { return it }
@@ -88,9 +148,9 @@ class VaultPlugin(private val activity: Activity) : Plugin(activity) {
         }
         catch (_: Exception) { invoke.reject("Cannot cancel credential authentication") }
     }
-    override fun onResume(activity: AppCompatActivity) { activity.runOnUiThread { epochs.resume() } }
-    override fun onStop(activity: AppCompatActivity) { activity.runOnUiThread { epochs.background(); cancelPending?.invoke() } }
-    override fun onDestroy(activity: AppCompatActivity) { activity.runOnUiThread { epochs.background(); cancelPending?.invoke() } }
+    override fun onResume(activity: AppCompatActivity) { activity.runOnUiThread { if (activity === this.activity) { epochs.resume(); resumeCover.resume() } } }
+    override fun onStop(activity: AppCompatActivity) { activity.runOnUiThread { if (activity === this.activity) { epochs.background(); cancelPending?.invoke(); resumeCover.background() } } }
+    override fun onDestroy(activity: AppCompatActivity) { activity.runOnUiThread { if (activity === this.activity) { epochs.background(); cancelPending?.invoke(); resumeCover.background() } } }
     @Command fun read(invoke: Invoke) = activity.runOnUiThread {
         try {
             val item = parse(invoke); val blob = prefs.getString(item.key, null)
