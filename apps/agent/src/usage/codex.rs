@@ -230,6 +230,7 @@ pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<
             has_more: !pending_tail && cursor < before.len(),
             branch_id: None,
             truncated: false,
+            checkpoint: None,
         },
         context,
         windows: limits

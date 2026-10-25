@@ -187,3 +187,68 @@ cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_st
 SQLite's statement profile records `BEGIN`, insert, retention and commit duration. The existing busy callback is wrapped only in this fixture to measure its elapsed waiting separately; `other_wall` includes all remaining work and scheduling, not a direct measurement of filesystem synchronization. SQLite profile durations have millisecond resolution. The hosted probe injects no delay and keeps the production journal, synchronization and three-second per-locking-episode budget unchanged. This follow-up probe runs after the normal checks, so it does not reproduce all concurrent load present in an earlier failure.
 
 A second ignored native probe, `storage_diagnostics::profile_storage_with_known_commit_hold`, deliberately holds each transaction for 250 ms in a test-only commit hook. It demonstrates that serialized write-held time can exhaust some wait budgets, while checking that every acknowledged commit remains in storage. It is not run by CI and is not evidence that hosted failures are caused by `fsync`. Neither probe replaces the strict concurrent-write acceptance tests or fixes [issue #36](https://github.com/mihazs/lazysh/issues/36); hosted phase evidence is needed before changing the storage algorithm.
+
+## Antigravity explicit step records
+
+`--agent antigravity-jsonl` reads only an explicitly selected JSONL file:
+
+```sh
+lazysh-agent transcript --agent antigravity-jsonl --path /absolute/path/transcript.jsonl --limit 50
+```
+
+Native SSH Chat offers **Antigravity step records (explicit file)**. Discovery and
+conversation mode are rejected. Nothing launches Antigravity, reads sibling full
+transcripts, executes tool arguments or follows media URIs. Existing adapter
+choices/defaults and cursors remain unchanged.
+
+The contract is pinned to the official **Antigravity CLI 1.4.7**, build
+**5900205422411776**, extracted binary SHA-256
+`40349135371a8ed1f1af1e9f8b741de99174ae9fce6380b96c2d1f543480af7a`.
+Read-only runtime struct descriptors/JSON tags and writer callsites establish the
+step record shape and both append and full-rewrite operations. [Independent
+fixture provenance](../apps/agent/tests/fixtures/antigravity-jsonl/README.md) records
+field types, artifact checks and the separate REA build-metadata evidence boundary.
+
+Each record displays its literal `source`, `type`, `status`, optional `step_index`,
+exit/error codes and producer `truncated_fields` flags. Available `content` and
+`thinking` use existing text/thinking blocks. Tool summaries have no invented
+invocation/result identifiers, and media become inert attachment placeholders.
+All records use the neutral `record` role; repeated indices/status updates remain
+separate physical records. Optional zero values are retained. Token counters are
+exact decimal strings, including uint64 values that JavaScript numbers cannot
+represent. Unknown string enums are retained without guessing roles. Known fields
+with invalid types/ranges fail the read; unknown extra fields are ignored.
+
+The response retains numeric byte `nextOffset` and adds an Antigravity-only
+`checkpoint`: `v1:<observed file length>:<SHA-256 of those observed bytes>`.
+Every request after the initial open must supply the returned checkpoint, even
+when `hasMore` is false and refreshing. For example, pass both
+`--offset <nextOffset> --checkpoint <checkpoint>`. Appends can continue only when
+the entire previously observed prefix still matches. Truncation, changed bytes
+(including same-size in-place or replacement rewrites), or a cursor beyond the
+previous snapshot fail with `TranscriptChanged`; reopen at offset zero without a
+checkpoint to replace the visible records. Byte-identical replacements are
+content-equivalent and accepted between requests. Incomplete final lines wait
+without advancing, and may be completed by a later append.
+
+The reader bounds the observed file/hash to **16 MiB**, each physical line to
+**256 KiB**, page scanning to **4 MiB**, output to **512 KiB** and page records to
+**100**. Arrays/block amplification and label lengths are bounded. It reuses
+regular-file, owner and no-follow admission checks, then compares size/mtime and
+Unix device/inode after reading to detect ordinary concurrent writer changes.
+This is not a lock or atomic snapshot of a hostile metadata-preserving concurrent
+rewrite. On such read errors, retry by reopening rather than mixing generations.
+Producer compact truncation flags do not mean lazysh fetched a full transcript.
+
+Focused checks:
+
+```sh
+cargo test --locked -p lazysh-agent --test antigravity_transcript
+bun run --cwd apps/client test src/ChatPanel.test.tsx
+```
+
+Synthetic fixtures and controlled rewrite tests establish this bounded contract;
+no actual Antigravity conversation/account file or provider CLI was used. Full
+enum normalization, branch/update reconstruction, tool-result associations,
+producer truncation thresholds, crash consistency, cross-version behavior and
+real-file/device acceptance remain open integration work.

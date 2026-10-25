@@ -10,6 +10,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 - Remembered list or cards layout for the active-session switcher. Existing
   installations retain the list default; switching layout never reconnects sessions.
 
+- Explicit-file `antigravity-jsonl` step-record snapshots with append-safe
+  checkpoints and restart on changed snapshot bytes, literal source/type/status,
+  recorded thinking and compact truncation flags. No automatic discovery,
+  conversation reconstruction or live compatibility claim; existing defaults
+  and other adapters' cursors are unchanged.
+
 - iOS app integration for the verified-SSH Mosh handoff, with original dependency
   privacy manifests embedded in separate resource bundles. Auto transport
   selection now considers Mosh on iOS, where it previously skipped it; host-key
