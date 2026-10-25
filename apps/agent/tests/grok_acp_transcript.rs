@@ -18,6 +18,141 @@ fn write(path: &Path, rows: &[Value]) {
     .unwrap();
 }
 #[test]
+fn recorded_tool_status_only_updates_remain_distinct_and_link_to_the_tool() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("updates.jsonl");
+    let statuses = ["pending", "in_progress", "completed", "failed"];
+    write(
+        &path,
+        &statuses.map(|status| {
+            update(
+                "tool_call_update",
+                json!({"toolCallId":"call-one","status":status}),
+            )
+        }),
+    );
+    let page = read_page(&path, TranscriptAgent::GrokAcp, 0, 100).unwrap();
+    assert_eq!(page.messages.len(), 4);
+    for (message, status) in page.messages.iter().zip(statuses) {
+        assert_eq!(message["role"], "tool");
+        assert_eq!(message["blocks"][0]["id"], "call-one");
+        assert_eq!(message["blocks"][0]["name"], "Tool status");
+        assert_eq!(message["blocks"][0]["status"], status);
+        assert_eq!(
+            message["blocks"][0]["text"],
+            format!("Recorded tool status: {status}")
+        );
+    }
+    assert_ne!(page.messages[0]["id"], page.messages[1]["id"]);
+    let first = read_page(&path, TranscriptAgent::GrokAcp, 0, 2).unwrap();
+    let second = read_page(&path, TranscriptAgent::GrokAcp, first.next_offset, 2).unwrap();
+    assert!(first.has_more);
+    assert!(!second.has_more);
+    assert_eq!(first.messages, page.messages[..2]);
+    assert_eq!(second.messages, page.messages[2..]);
+}
+#[test]
+fn explicit_status_preserves_outputs_and_unknown_or_missing_status_stays_unassigned() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("updates.jsonl");
+    write(
+        &path,
+        &[
+            update(
+                "tool_call",
+                json!({"toolCallId":"call","title":"Inspect source","rawInput":{"path":"not-read"},"status":"in_progress"}),
+            ),
+            update(
+                "tool_call_update",
+                json!({"toolCallId":"call","rawOutput":"Original failure output","status":"failed"}),
+            ),
+            update(
+                "tool_call_update",
+                json!({"toolCallId":"other","rawOutput":"Unknown status output","status":"future_status"}),
+            ),
+            update(
+                "tool_call_update",
+                json!({"toolCallId":"other","rawOutput":"No status output"}),
+            ),
+            update(
+                "tool_call_update",
+                json!({"toolCallId":"other","status":"future_status"}),
+            ),
+            update("tool_call_update", json!({"toolCallId":"other"})),
+            update(
+                "tool_call_update",
+                json!({"toolCallId":"other","status":null}),
+            ),
+            update(
+                "tool_call",
+                json!({"toolCallId":"missing","title":"No recorded status"}),
+            ),
+        ],
+    );
+    let page = read_page(&path, TranscriptAgent::GrokAcp, 0, 100).unwrap();
+    assert_eq!(page.messages.len(), 5);
+    assert_eq!(page.messages[0]["blocks"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        page.messages[0]["blocks"][0]["text"],
+        r#"{"path":"not-read"}"#
+    );
+    assert_eq!(page.messages[0]["blocks"][0]["status"], "in_progress");
+    assert_eq!(
+        page.messages[1]["blocks"][0]["text"],
+        "Original failure output"
+    );
+    assert_eq!(page.messages[1]["blocks"][0]["status"], "failed");
+    for index in [2, 3] {
+        assert!(page.messages[index]["blocks"][0].get("status").is_none());
+    }
+    assert_eq!(
+        page.messages[2]["blocks"][0]["text"],
+        "Unknown status output"
+    );
+    assert_eq!(page.messages[3]["blocks"][0]["text"], "No status output");
+    assert!(page.messages[4]["blocks"][0].get("status").is_none());
+    assert_eq!(page.next_offset, fs::metadata(&path).unwrap().len());
+}
+#[test]
+fn recorded_status_preserves_maximum_block_counts_and_tool_attachment_linkage() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("updates.jsonl");
+    let part = json!({"type":"content","content":{"type":"image","data":"not-decoded","mimeType":"image/png"}});
+    write(
+        &path,
+        &[update(
+            "tool_call_update",
+            json!({"toolCallId":"call","status":"completed","content":vec![part.clone();1000]}),
+        )],
+    );
+    let page = read_page(&path, TranscriptAgent::GrokAcp, 0, 1).unwrap();
+    let blocks = page.messages[0]["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 1000);
+    for block in blocks {
+        assert_eq!(block["type"], "image");
+        assert_eq!(block["id"], "call");
+        assert_eq!(block["status"], "completed");
+        assert!(!block["text"].as_str().unwrap().contains("not-decoded"));
+    }
+    write(
+        &path,
+        &[update(
+            "tool_call",
+            json!({"toolCallId":"call","title":"Inspect","status":"pending","content":vec![part.clone();999]}),
+        )],
+    );
+    let page = read_page(&path, TranscriptAgent::GrokAcp, 0, 1).unwrap();
+    assert_eq!(page.messages[0]["blocks"].as_array().unwrap().len(), 1000);
+    write(
+        &path,
+        &[update(
+            "tool_call_update",
+            json!({"toolCallId":"call","status":"completed","content":vec![part;1001]}),
+        )],
+    );
+    assert!(read_page(&path, TranscriptAgent::GrokAcp, 0, 1).is_err());
+}
+#[test]
 fn pinned_records_keep_chunk_identity_roles_tools_plans_and_provider_time() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("updates.jsonl");
@@ -86,8 +221,9 @@ fn exact_envelopes_skip_unknown_metadata_without_inventing_messages_or_time() {
         ],
     );
     let page = read_page(&path, TranscriptAgent::GrokAcp, 0, 100).unwrap();
-    assert_eq!(page.messages.len(), 1);
-    assert_eq!(page.messages[0]["blocks"][0]["text"], "kept");
+    assert_eq!(page.messages.len(), 2);
+    assert_eq!(page.messages[0]["blocks"][0]["status"], "completed");
+    assert_eq!(page.messages[1]["blocks"][0]["text"], "kept");
     assert_eq!(page.next_offset, fs::metadata(&path).unwrap().len());
 }
 #[test]

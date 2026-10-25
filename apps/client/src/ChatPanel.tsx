@@ -9,6 +9,7 @@ type Block = {
   text?: string;
   id?: string;
   name?: string;
+  status?: 'pending' | 'in_progress' | 'completed' | 'failed';
 };
 type Message = {
   id: string;
@@ -101,6 +102,11 @@ export function parseTranscript(value: unknown): Page {
           (typeof block[field] !== "string" || block[field].length > 262144)
         )
           throw new Error("Invalid transcript content.");
+      if (block.status !== undefined && (page.agent !== 'grok-acp'
+        || !['tool_use','tool_result','image'].includes(block.type)
+        || !['pending','in_progress','completed','failed'].includes(block.status)
+        || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
+        throw new Error('Invalid recorded tool status.');
     }
     if (
       message.usage &&
@@ -466,6 +472,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
                 <details key={index}>
                   <summary>
                     {block.name || block.type.replaceAll("_", " ")}
+                    {block.status && ` · Recorded status: ${block.status} · Tool ID: ${block.id}`}
                   </summary>
                   <pre>
                     {block.text || "View this content in the terminal."}

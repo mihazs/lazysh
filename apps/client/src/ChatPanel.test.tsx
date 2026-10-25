@@ -30,6 +30,33 @@ const page = {
   nextOffset: 80,
   hasMore: false,
 };
+it('renders Grok statuses as recorded tool metadata without claiming live state or inventing output',async()=>{
+  const blocks=[{type:'tool_use',id:'call',name:'Inspect source',text:'{"path":"not-read"}',status:'in_progress'},
+    {type:'tool_result',id:'call',name:'Tool status',text:'Recorded tool status: failed',status:'failed'},
+    {type:'tool_result',id:'call',text:'Original output',status:'completed'},
+    {type:'image',id:'call',text:'Attachment: view in terminal',status:'pending'}];
+  vi.mocked(invoke).mockResolvedValue({...page,agent:'grok-acp',view:'record_stream',messages:[{...message,blocks}]});
+  render(<ChatPanel sessionId="grok-host"/>);
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'grok-acp'}});
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/updates.jsonl'}});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  for(const status of ['pending','in_progress','completed','failed'])expect(await screen.findByText(new RegExp(`Recorded status: ${status}`))).toBeTruthy();
+  expect(screen.getByText('Original output')).toBeTruthy();
+  expect(screen.getByText('Recorded tool status: failed')).toBeTruthy();
+  expect(screen.getByText('{"path":"not-read"}')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:/approve|deny|stop|send/i})).toBeNull();
+  expect(screen.queryByLabelText('Follow selected Claude branch')).toBeNull();
+});
+it('rejects unrecognized or unlinked status metadata and accepts old blocks without status',()=>{
+  const block={type:'tool_result',id:'call',text:'Output',status:'failed'};
+  const response={...page,agent:'grok-acp',view:'record_stream',messages:[{...message,blocks:[block]}]};
+  expect(parseTranscript(response)).toEqual(response);
+  for(const invalid of [null,42,'working','',{},'x'.repeat(300)])expect(()=>parseTranscript({...response,messages:[{...message,blocks:[{...block,status:invalid}]}]})).toThrow('Invalid recorded tool status');
+  for(const invalid of [{...block,id:undefined},{...block,id:''},{...block,id:'x'.repeat(257)},{...block,id:'😀'.repeat(65)},{...block,type:'text'},{...block,type:'thinking'}])expect(()=>parseTranscript({...response,messages:[{...message,blocks:[invalid]}]})).toThrow();
+  expect(()=>parseTranscript({...response,messages:[{...message,blocks:[{...block,id:'😀'.repeat(64)}]}]})).not.toThrow();
+  expect(()=>parseTranscript({...response,agent:'claude'})).toThrow();
+  expect(parseTranscript(page)).toEqual(page);
+});
 
 it("rejects invalid transcript boundaries and executable host content remains inert", () => {
   for (const value of [
