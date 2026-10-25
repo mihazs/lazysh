@@ -3,7 +3,8 @@ name: checks
 on:
   pull_request:
   push:
-    branches: [main]
+    # Temporary PR #68 crash diagnostics; remove this branch and job filters before merge.
+    branches: [main, feat/parakeet-local]
 
 permissions:
   contents: read
@@ -14,6 +15,7 @@ concurrency:
 
 jobs:
   client:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/feat/parakeet-local' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +34,7 @@ jobs:
       - run: bun run test:e2e
 
   agent:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/feat/parakeet-local' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -147,6 +150,7 @@ jobs:
       - run: bun run test:mosh
 
   native-desktop:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/feat/parakeet-local' }}
     strategy:
       fail-fast: false
       matrix:
@@ -177,6 +181,7 @@ jobs:
         run: bunx turbo run test:resume-policy --filter=@lazysh/client
 
   native-android:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/feat/parakeet-local' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -206,6 +211,7 @@ jobs:
           path: apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
 
   native-android-runtime:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/feat/parakeet-local' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -265,6 +271,7 @@ jobs:
           if-no-files-found: warn
 
   native-ios-simulator:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/feat/parakeet-local' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
