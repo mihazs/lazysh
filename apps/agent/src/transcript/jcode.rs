@@ -146,6 +146,7 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
         has_more: next_offset < messages.len() as u64,
         branch_id: None,
         truncated: false,
+        checkpoint: None,
     })
 }
 

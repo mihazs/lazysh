@@ -8,6 +8,7 @@ use std::{
     path::Path,
 };
 mod amp_json;
+mod antigravity;
 mod atif;
 mod conversation;
 mod cursor;
@@ -53,6 +54,9 @@ pub enum TranscriptAgent {
     #[value(name = "grok-acp")]
     #[serde(rename = "grok-acp")]
     GrokAcp,
+    #[value(name = "antigravity-jsonl")]
+    #[serde(rename = "antigravity-jsonl")]
+    AntigravityJsonl,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -81,6 +85,8 @@ pub struct TranscriptPage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_id: Option<String>,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<String>,
 }
 
 /// Read record boundaries from an explicitly selected file; never follow image/tool paths.
@@ -90,6 +96,22 @@ pub fn read_page(
     offset: u64,
     limit: u8,
 ) -> Result<TranscriptPage> {
+    read_page_with_checkpoint(path, agent, offset, limit, None)
+}
+
+pub fn read_page_with_checkpoint(
+    path: &Path,
+    agent: TranscriptAgent,
+    offset: u64,
+    limit: u8,
+    checkpoint: Option<&str>,
+) -> Result<TranscriptPage> {
+    if matches!(agent, TranscriptAgent::AntigravityJsonl) {
+        return antigravity::read_page(path, offset, limit, checkpoint);
+    }
+    if checkpoint.is_some() {
+        return Err(Error::InvalidArgument);
+    }
     if matches!(agent, TranscriptAgent::DevinAtif) {
         return atif::read_page(path, offset, limit);
     }
@@ -177,6 +199,7 @@ pub fn read_page(
         has_more: !pending_tail && next_offset < metadata.len(),
         branch_id: None,
         truncated: false,
+        checkpoint: None,
     })
 }
 
@@ -405,7 +428,7 @@ fn normalize(record: &Value, agent: TranscriptAgent, offset: u64) -> Option<Valu
         TranscriptAgent::Jcode => return None,
         TranscriptAgent::DevinAtif => return None,
         TranscriptAgent::AmpJson => return None,
-        TranscriptAgent::GrokAcp => return None,
+        TranscriptAgent::GrokAcp | TranscriptAgent::AntigravityJsonl => return None,
     };
     if blocks.is_empty() {
         return None;

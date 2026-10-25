@@ -7,6 +7,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Explicit-file `antigravity-jsonl` step-record snapshots with append-safe
+  checkpoints and restart on changed snapshot bytes, literal source/type/status,
+  recorded thinking and compact truncation flags. No automatic discovery,
+  conversation reconstruction or live compatibility claim; existing defaults
+  and other adapters' cursors are unchanged.
+
 - Explicit-file `grok-acp` transcript records, based on a pinned official Grok
   writer contract. Chunks, tool updates and plans remain separate records;
   automatic discovery, active-branch replay and live Grok control are not enabled.
