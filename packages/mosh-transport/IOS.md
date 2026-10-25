@@ -39,8 +39,9 @@ and executes them through `xcrun simctl spawn --standalone`, matching
 A bounded `--list` preflight requires all six native security tests by name
 before executing the suite, distinguishing executable startup failures from
 test-body failures. It does not retry launches or increase suite deadlines.
-This launch change addresses an intermittent CI stall before the test runner's
-first output; its effectiveness remains unverified until macOS CI executes it.
+This launch path passed all six native tests and the two-client protocol test
+in CI run 40172672432. The earlier intermittent stall happened before the test
+runner's first output; its exact CoreSimulator startup cause remains unproven.
 The peer communicates only with
 ephemeral official Mosh 1.4.0 host servers on shared loopback, exercising two
 parallel clients, UTF-8, remote PTY resize, and acknowledged shutdown. The host
@@ -67,6 +68,11 @@ The `LazyshMoshAppTests` hosted XCTest target uses the already built Tauri app a
 output. It has no application dependency, and disables implicit dependencies,
 so `xcodebuild test` cannot rerun the app's always-run Rust phase after the Tauri
 CLI options server has exited. The scheme must run after `bun run build:ios`.
+The hosted test target uses that same `build/arm64-sim` product root through
+`CONFIGURATION_BUILD_DIR`: Xcode requires the host app's `PlugIns` directory
+to be a descendant of the test target's product directory. A host path outside
+the default DerivedData products directory fails during build planning, before
+any XCTest can run.
 
 ```console
 xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" test CODE_SIGNING_ALLOWED=NO

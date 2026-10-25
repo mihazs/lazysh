@@ -14,6 +14,7 @@ final class WorkspaceUITests: XCTestCase {
         let add = app.webViews.buttons["Add host"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 30), "Native workspace must offer Add host")
         XCTAssertTrue(add.isEnabled, "Add host must be backed by the native application")
+        XCTAssertTrue(add.isHittable, "Add host must be reachable in the opened drawer")
         add.tap()
 
         enter(name, label: "Name", placeholder: "Home workstation", in: app)
@@ -47,7 +48,18 @@ final class WorkspaceUITests: XCTestCase {
         XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 30), "Bundled WKWebView must launch")
         let open = app.webViews.buttons["Open hosts"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 30), "Workspace must expose the Hosts navigation")
+        XCTAssertTrue(open.isHittable, "Hosts navigation must accept touch below the safe area")
         open.tap()
+        let close = app.webViews.buttons["Close hosts"].firstMatch
+        let drawer = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: close
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [drawer], timeout: 10), .completed,
+                       "The drawer must finish opening before interacting with its controls")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Opened native host drawer"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     @MainActor

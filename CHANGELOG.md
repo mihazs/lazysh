@@ -25,6 +25,8 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Mobile workspace navigation reserves the full top safe area, keeping the
+  Hosts menu below the iOS status bar and its controls inside the toolbar.
 - Concurrent companion event writes preserve durable storage within bounded
   lock waits and report numeric SQLite diagnostics without database contents.
 

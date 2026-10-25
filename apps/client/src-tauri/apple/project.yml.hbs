@@ -242,7 +242,9 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         # Use the verified Tauri artifact without rebuilding the app: the
         # always-run Rust phase requires Tauri's now-closed CLI options server.
-        TEST_HOST: "$(SRCROOT)/build/arm64-sim/{{app.stylized-name}}.app/{{app.stylized-name}}"
+        # Xcode requires the host's PlugIns folder below the test product root.
+        CONFIGURATION_BUILD_DIR: "$(SRCROOT)/build/arm64-sim"
+        TEST_HOST: "$(CONFIGURATION_BUILD_DIR)/{{app.stylized-name}}.app/{{app.stylized-name}}"
         BUNDLE_LOADER: "$(TEST_HOST)"
     scheme:
       buildImplicitDependencies: false
