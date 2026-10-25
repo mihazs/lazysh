@@ -234,11 +234,11 @@ export default function TerminalPane({ session, active, reportError }: {
   function runGesture(action: GestureAction, slot?: GestureSlot) {
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
     if (Object.hasOwn(zellijActions, action)) {
-      if (!activeRef.current || !session.connected || zellijBusy.current || imeComposing.current || session.terminal.hasSelection()) return;
+      if (!mounted.current || !access.current() || !activeRef.current || !session.connected || zellijBusy.current || imeComposing.current || session.terminal.hasSelection()) return;
       if (session.local || session.attached?.kind !== 'zellij') {reportError('This gesture requires a terminal attached to Zellij through lazysh.'); return;}
       zellijBusy.current = true;
       void api.zellijNavigate(session.id, session.attached.name, zellijActions[action as keyof typeof zellijActions])
-        .catch(error => {if (activeRef.current && session.connected) reportError(errorMessage(error));})
+        .catch(error => {if (mounted.current && access.current() && activeRef.current && session.connected) reportError(errorMessage(error));})
         .finally(() => {zellijBusy.current = false;});
       return;
     }

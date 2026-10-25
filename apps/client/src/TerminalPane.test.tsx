@@ -151,6 +151,25 @@ describe("terminal interactions", () => {
     expect(reportError).toHaveBeenCalledTimes(4);
     expect(mocks.zellijNavigate).not.toHaveBeenCalled(); expect(mocks.write).not.toHaveBeenCalled();
   });
+  it('discards old Zellij errors and starts after an access generation changes', async () => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
+    let reject!: (error: unknown)=>void;
+    mocks.zellijNavigate.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+    const reportError=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,attached:{kind:'zellij',name:'test'},terminal} as unknown as LiveSession} active reportError={reportError} />);
+    const canvas=screen.getByLabelText('Terminal for Host');
+    const swipe=()=>{
+      fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
+      fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
+    };
+    swipe();
+    access(true); access();
+    await act(async()=>reject(new Error('Old native navigation failure')));
+    swipe();
+    await act(async()=>{});
+    expect(mocks.zellijNavigate).toHaveBeenCalledTimes(1);
+    expect(reportError).not.toHaveBeenCalled();
+  });
   it('suppresses a late navigation failure after the terminal becomes inactive', async () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
     let reject!: (error: unknown)=>void;
