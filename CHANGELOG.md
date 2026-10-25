@@ -11,6 +11,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   new Amber artwork, UIKit support checks and actual selection readback. The
   default icon is unchanged; desktop, Android and browser builds report this
   feature unavailable. Icon selection does not sync or affect terminal themes.
+
+- Opt-in following for an explicitly opened Claude conversation branch: bounded
+  refreshes run two seconds after completion, replace abandoned branches, pause
+  on hidden pages and stop on errors/source/session/access changes. Following
+  defaults off; record/export views remain manual. Scrolling up preserves reader
+  position until Jump to latest. No new agent, provider or prompt is launched.
+
 - Opt-in native biometric resume protection for supported Android, iOS and macOS
   devices, with native privacy covers, generation-bound command/result access,
   paused terminal delivery and cancellation of pending protected work. Windows
