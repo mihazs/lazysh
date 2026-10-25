@@ -1654,3 +1654,7 @@ button svg {
 .session-switcher[data-layout="cards"] .session-choice-destination { display: block; margin-top: 6px; color: var(--muted); }
 
 .session-switcher-trigger { min-width: 44px; min-height: 44px; background: transparent; color: var(--theme-text, #c6d0bd); font-weight: 500; text-align: left; overflow-wrap: anywhere; }
+
+.theme-preview { background: var(--theme-panel); color: var(--theme-text); border: 1px solid var(--theme-border); padding: 16px; overflow-wrap: anywhere; }
+.preferences-panel .theme-preview p { color: var(--theme-text); }
+.theme-preview pre { padding: 12px; overflow: auto; }

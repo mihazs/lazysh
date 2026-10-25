@@ -28,7 +28,7 @@
     "format:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "init:ios": "cd src-tauri && tauri ios init --ci",
     "test:install-browser": "playwright install chromium",
-    "test:ios-workspace": "xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWorkspaceUITests -configuration debug -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/workspace-ui.xcresult test CODE_SIGNING_ALLOWED=NO"
+    "test:ios-workspace": "xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWorkspaceUITests -configuration debug -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/workspace-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO"
   },
   "dependencies": {
     "@lazysh/et-transport": "workspace:*",
