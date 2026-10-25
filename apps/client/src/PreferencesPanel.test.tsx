@@ -16,9 +16,9 @@ describe("terminal settings", () => {
     expect(getPreferences().theme).toBe("paper");
     fireEvent.click(screen.getByRole("button", {name: "Move ctrl earlier"}));
     expect(getPreferences().toolbar.slice(0, 2)).toEqual(["ctrl", "esc"]);
-    fireEvent.change(screen.getByLabelText("Theme JSON"), {target: {value: '{"background":"url(https://bad)","foreground":"#ffffff"}'}});
-    fireEvent.click(screen.getByRole("button", {name: "Import theme"}));
-    expect(screen.getByRole("alert").textContent).toContain("Invalid theme color");
+    fireEvent.change(screen.getByLabelText("Theme JSON or share code"), {target: {value: '{"background":"url(https://bad)","foreground":"#ffffff"}'}});
+    fireEvent.click(screen.getByRole("button", {name: "Preview theme"}));
+    expect(screen.getByRole("status").textContent).toContain("Invalid theme color");
     expect(getPreferences().customTheme).toBeUndefined();
     fireEvent.click(screen.getByRole("button", {name: "Reset preferences"}));
     expect(getPreferences()).toEqual(defaults);

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
+import { themeColors, themeInfo, importedTheme, type ThemeInfo } from "./themeImport";
 
 export const themes = {
   forest: { background: "#101311", foreground: "#d9e0d6", cursor: "#c4eb89", selectionBackground: "#40543a", black: "#1d231f", red: "#f48781", green: "#b9df83", yellow: "#e4ce8b", blue: "#8caee4", magenta: "#c4a1dd", cyan: "#8ccfc1", white: "#d9e0d6", brightBlack: "#788478", brightRed: "#ffb0a6", brightGreen: "#d0f0a6", brightYellow: "#f3e0ac", brightBlue: "#b1caf0", brightMagenta: "#dfc3ef", brightCyan: "#b0e8de", brightWhite: "#f3f5ee" },
@@ -17,8 +18,9 @@ export const gestureLabels: Record<GestureAction, string> = {none: "No action", 
 export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;
-  theme: keyof typeof themes;
-  appTheme: keyof typeof themes;
+  theme: keyof typeof themes | "custom";
+  appTheme: keyof typeof themes | "custom";
+  customThemeInfo?: ThemeInfo;
   sessionLayout: "list" | "cards";
   customTheme?: ITheme;
   fontSize: number;
@@ -52,17 +54,7 @@ export const defaults: Preferences = {
 const key = "lazysh.preferences.v1";
 const event = "lazysh-preferences";
 
-export function parseTheme(value: unknown): ITheme {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A theme must be a JSON object of hexadecimal colors.");
-  const result: Record<string, string> = {};
-  const allowed = new Set([...Object.keys(themes.forest), "selectionForeground", "cursorAccent", "selectionInactiveBackground"]);
-  for (const [name, color] of Object.entries(value)) {
-    if (!allowed.has(name) || typeof color !== "string" || !/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(color)) throw new Error(`Invalid theme color: ${name}`);
-    result[name] = color;
-  }
-  if (!result.background || !result.foreground) throw new Error("Theme needs background and foreground colors.");
-  return result;
-}
+export const parseTheme = themeColors;
 
 export function parsePreferences(value: unknown): Preferences {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaults };
@@ -70,6 +62,7 @@ export function parsePreferences(value: unknown): Preferences {
   if (p.version !== 1) return { ...defaults };
   const number = (name: string, min: number, max: number, fallback: number) => typeof p[name] === "number" && Number.isInteger(p[name]) && p[name] >= min && p[name] <= max ? p[name] as number : fallback;
   let customTheme: ITheme | undefined;
+  let customThemeInfo: ThemeInfo | undefined;
   const gestureChords: Partial<Record<GestureSlot, string>> = {};
   if (p.gestureChords && typeof p.gestureChords === "object") {
     for (const slot of gestureSlots) {
@@ -82,12 +75,14 @@ export function parsePreferences(value: unknown): Preferences {
     return gestureActions.includes(value as GestureAction) ? value as GestureAction : fallback;
   };
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
+  try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
   return {
     version: 1,
     sessionLayout: p.sessionLayout === "cards" ? "cards" : "list",
-    theme: typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,
-    appTheme: typeof p.appTheme === "string" && Object.hasOwn(themes, p.appTheme) ? p.appTheme as Preferences["appTheme"] : defaults.appTheme,
+    theme: customTheme && (p.customThemeInfo === undefined || p.theme === "custom") ? "custom" : typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,
+    appTheme: p.appTheme === "custom" && customTheme && customThemeInfo ? "custom" : typeof p.appTheme === "string" && Object.hasOwn(themes, p.appTheme) ? p.appTheme as Preferences["appTheme"] : defaults.appTheme,
     ...(customTheme ? { customTheme } : {}),
+    ...(customThemeInfo ? { customThemeInfo } : {}),
     fontSize: number("fontSize", 10, 32, defaults.fontSize),
     fontFamily: typeof p.fontFamily === "string" && p.fontFamily.length > 0 && p.fontFamily.length <= 256 && !/[;{}\x00-\x1f]/.test(p.fontFamily) ? p.fontFamily : defaults.fontFamily,
     cjkFallback: typeof p.cjkFallback === "string" && p.cjkFallback.length > 0 && p.cjkFallback.length <= 256 && !/[;{}\x00-\x1f]/.test(p.cjkFallback) ? p.cjkFallback : defaults.cjkFallback,
@@ -135,7 +130,7 @@ function subscribe(listener: () => void) {
 }
 export function usePreferences() { return useSyncExternalStore(subscribe, getPreferences, () => defaults); }
 export function terminalOptions(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): ITerminalOptions {
-  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, theme: p.customTheme ?? themes[p.theme] };
+  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, theme: p.theme === "custom" ? p.customTheme : themes[p.theme] };
 }
 
 export function decodeClipboardRequest(data: string): string | undefined {
