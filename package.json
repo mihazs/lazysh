@@ -1,0 +1,36 @@
+{
+  "name": "lazysh",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev:native --filter=@lazysh/client",
+    "build": "turbo run build",
+    "build:native": "turbo run build:native --filter=@lazysh/client",
+    "build:android": "turbo run build:android --filter=@lazysh/client",
+    "build:android:emulator": "turbo run build:android:emulator --filter=@lazysh/client",
+    "test:android": "turbo run test:android --filter=@lazysh/client",
+    "test:android-mosh": "turbo run test:android-mosh --filter=@lazysh/mosh-transport",
+    "test:ios-mosh": "turbo run test:ios-mosh --filter=@lazysh/mosh-transport",
+    "check": "turbo run check check:rust",
+    "test": "turbo run test test:rust",
+    "test:e2e": "turbo run test:e2e",
+    "test:openssh": "turbo run test:openssh",
+    "test:multiplexers": "turbo run test:multiplexers",
+    "test:voice": "turbo run test:voice",
+    "test:et": "turbo run test:et",
+    "test:mosh": "turbo run test:mosh",
+    "lint": "turbo run lint",
+    "format:check": "turbo run format:check",
+    "build:ios": "turbo run build:ios --filter=@lazysh/client",
+    "test:install-browser": "turbo run test:install-browser"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.10"
+  },
+  "license": "GPL-3.0-or-later"
+}

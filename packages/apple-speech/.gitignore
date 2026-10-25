@@ -1,0 +1,4 @@
+/ios/.build/
+/ios/.swiftpm/
+/ios/.tauri/
+/.tauri/

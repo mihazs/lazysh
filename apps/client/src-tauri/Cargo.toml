@@ -1,0 +1,56 @@
+[package]
+name = "lazysh"
+license.workspace = true
+version = "0.1.0"
+description = "Direct SSH and agent workspace"
+edition = "2021"
+
+[lib]
+name = "lazysh_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+lazysh-et-transport = { path = "../../../packages/et-transport" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "2.1"
+tokio = { version = "1", features = ["sync", "time", "io-util", "net", "rt-multi-thread", "macros"] }
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+age = { version = "0.11.5", default-features = false }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots"] }
+hyper = { version = "1", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+whisper-rs = { version = "0.16", default-features = false }
+rand = "0.10"
+tauri-plugin-lazysh-vault = { path = "../../../packages/credential-vault" }
+tauri-plugin-lazysh-apple-speech = { path = "../../../packages/apple-speech" }
+tauri-plugin-lazysh-apple-status = { path = "../../../packages/apple-status" }
+tauri-plugin-lazysh-push = { path = "../../../packages/push-registration" }
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))'.dependencies]
+lazysh-mosh-transport = { path = "../../../packages/mosh-transport" }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+portable-pty = { version = "0.9", path = "../../../packages/portable-pty-vendor", default-features = false }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+axum = "0.8.9"
+lazysh-share = { path = "../../share-service" }
+rcgen = "0.14"
+tokio-rustls = "0.26"
+tempfile = "3"
+tauri = { version = "2", features = ["test"] }

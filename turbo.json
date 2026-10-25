@@ -1,0 +1,31 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "globalPassThroughEnv": ["PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR", "PKG_CONFIG_SYSROOT_DIR", "PROTOC"],
+  "tasks": {
+    "build": { "dependsOn": ["^build"], "outputs": ["dist/**"] },
+    "check": { "dependsOn": ["^check"] },
+    "test": { "dependsOn": ["^build"] },
+    "lint": { "cache": false },
+    "format:check": { "cache": false },
+    "check:rust": { "cache": false },
+    "test:rust": { "cache": false },
+    "test:openssh": { "cache": false, "passThroughEnv": ["USER"] },
+    "test:local": { "cache": false, "passThroughEnv": ["HOME", "USERPROFILE", "SHELL", "ComSpec", "COMSPEC", "SystemRoot", "SYSTEMROOT", "WINDIR"] },
+    "test:multiplexers": { "cache": false, "passThroughEnv": ["PATH"] },
+    "test:voice": { "cache": false, "passThroughEnv": ["LAZYSH_WHISPER_TEST_MODEL", "LAZYSH_WHISPER_TEST_WAV"] },
+    "test:mosh": { "cache": false, "passThroughEnv": ["USER"] },
+    "test:android-mosh": { "cache": false, "passThroughEnv": ["USER", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME", "LAZYSH_ANDROID_ADB", "LAZYSH_ANDROID_TEST_BINARY", "LAZYSH_ANDROID_CXX_RUNTIME", "LAZYSH_ANDROID_UNIT_BINARY"] },
+    "test:ios-mosh": { "cache": false, "passThroughEnv": ["USER", "DEVELOPER_DIR", "APPLE_STATUS_SIMULATOR_ID"] },
+    "test:et": { "cache": false, "passThroughEnv": ["USER", "ET_SERVER_BIN", "ET_TERMINAL_BIN"] },
+    "test:e2e": { "cache": false },
+    "test:install-browser": { "cache": false },
+    "dev": { "cache": false, "persistent": true },
+    "dev:native": { "cache": false, "persistent": true, "passThroughEnv": ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_TYPE"] },
+    "build:native": { "cache": false },
+    "build:android": { "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "NDK_HOME", "ANDROID_NDK_HOME"] },
+    "build:android:emulator": { "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "NDK_HOME", "ANDROID_NDK_HOME"] },
+    "test:android": { "dependsOn": ["build:android:emulator"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME"] },
+    "init:ios": { "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT"] },
+    "build:ios": { "dependsOn": ["init:ios"], "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT"] }
+  }
+}
