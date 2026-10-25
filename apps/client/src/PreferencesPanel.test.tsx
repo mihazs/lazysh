@@ -1,11 +1,74 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import PreferencesPanel from "./PreferencesPanel";
 import { defaults, getPreferences, savePreferences, parseChord } from "./preferences";
 afterEach(() => cleanup());
 
 describe("terminal settings", () => {
+  it('keeps gesture and D-pad drafts isolated and saves only explicitly compiled bindings', () => {
+    savePreferences({...defaults, bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'}, dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'}});
+    render(<PreferencesPanel />);
+    fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'simple'}});
+    fireEvent.change(screen.getByLabelText('Single tap custom shortcut text'),{target:{value:' 你好,, 😀 '}});
+    fireEvent.change(screen.getByLabelText('D-pad left corner shortcut builder'),{target:{value:'simple'}});
+    fireEvent.click(screen.getByLabelText('D-pad left corner Control'));
+    fireEvent.change(screen.getByLabelText('D-pad left corner custom shortcut text'),{target:{value:'a,b'}});
+    expect(getPreferences().gestureChords).toEqual({tap:'F12, M-h',doubleTap:'C-b, T',cornerLeft:'S-Tab'});
+    fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'advanced'}});
+    expect(screen.getByLabelText<HTMLInputElement>('Single tap chord').value).toBe('F12, M-h');
+    fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'simple'}});
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Single tap custom shortcut text').value).toBe(' 你好,, 😀 ');
+    fireEvent.click(screen.getByRole('button',{name:'Save Single tap chord'}));
+    expect(getPreferences().gestureChords.tap).toBe('text: 你好,, 😀 ');
+    expect(screen.getByLabelText<HTMLSelectElement>('Single tap shortcut builder').value).toBe('advanced');
+    expect(screen.getByLabelText<HTMLTextAreaElement>('D-pad left corner custom shortcut text').value).toBe('a,b');
+    fireEvent.click(screen.getByRole('button',{name:'Save D-pad left corner chord'}));
+    expect(parseChord(getPreferences().gestureChords.cornerLeft!)).toBe('\x01\x02');
+    expect(getPreferences().gestureChords.doubleTap).toBe('C-b, T');
+    fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'advanced'}});
+    expect(screen.getByLabelText<HTMLInputElement>('Single tap chord').value).toBe('text: 你好,, 😀 ');
+    fireEvent.change(screen.getByLabelText('Double tap chord'),{target:{value:'text: trailing '}});
+    fireEvent.blur(screen.getByLabelText('Double tap chord'));
+    expect(getPreferences().gestureChords.doubleTap).toBe('C-b, T');
+    fireEvent.click(screen.getByRole('button',{name:'Save Double tap chord'}));
+    expect(getPreferences().gestureChords.doubleTap).toBe('text: trailing ');
+  });
+  it('refreshes only the externally changed slot and discards its stale drafts', () => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,tap:'custom',doubleTap:'custom'},gestureChords:{tap:'F12',doubleTap:'C-b'}});
+    render(<PreferencesPanel />);
+    for (const label of ['Single tap','Double tap']) {
+      fireEvent.change(screen.getByLabelText(`${label} shortcut builder`),{target:{value:'simple'}});
+      fireEvent.change(screen.getByLabelText(`${label} custom shortcut text`),{target:{value:'unsaved'}});
+    }
+    act(() => savePreferences({...getPreferences(),gestureChords:{tap:'M-h',doubleTap:'C-b'}}));
+    expect(screen.getByLabelText<HTMLSelectElement>('Single tap shortcut builder').value).toBe('advanced');
+    expect(screen.getByLabelText<HTMLInputElement>('Single tap chord').value).toBe('M-h');
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Double tap custom shortcut text').value).toBe('unsaved');
+    fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'simple'}});
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Single tap custom shortcut text').value).toBe('');
+    expect(getPreferences().gestureChords).toEqual({tap:'M-h',doubleTap:'C-b'});
+  });
+  it('retains per-slot validation errors and complete invalid drafts without altering saved bindings', () => {
+    savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,tap:'custom'},dpadCorners:{...defaults.dpadCorners,right:'custom'},gestureChords:{tap:'F12',cornerRight:'C-c'}});
+    render(<PreferencesPanel />);
+    fireEvent.change(screen.getByLabelText('Single tap shortcut builder'),{target:{value:'simple'}});
+    fireEvent.click(screen.getByLabelText('Single tap Control'));
+    fireEvent.change(screen.getByLabelText('Single tap custom shortcut text'),{target:{value:'a,'}});
+    fireEvent.click(screen.getByRole('button',{name:'Save Single tap chord'}));
+    expect(screen.getByRole('alert').textContent).toContain('comma-separated');
+    fireEvent.change(screen.getByLabelText('D-pad right corner chord'),{target:{value:'M-h'}});
+    fireEvent.click(screen.getByRole('button',{name:'Save D-pad right corner chord'}));
+    expect(screen.getByRole('alert').textContent).toContain('comma-separated');
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Single tap custom shortcut text').value).toBe('a,');
+    expect(getPreferences().gestureChords).toEqual({tap:'F12',cornerRight:'M-h'});
+    fireEvent.click(screen.getByLabelText('Single tap Control'));
+    const oversized='x'.repeat(200);
+    fireEvent.change(screen.getByLabelText('Single tap custom shortcut text'),{target:{value:oversized}});
+    fireEvent.click(screen.getByRole('button',{name:'Save Single tap chord'}));
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Single tap custom shortcut text').value).toBe(oversized);
+    expect(getPreferences().gestureChords.tap).toBe('F12');
+  });
   it('keeps Advanced default and existing records, while saving Simple text verbatim', () => {
     savePreferences({...defaults,chords:[{label:'Existing',keys:'F12, M-h'}]});
     render(<PreferencesPanel />);

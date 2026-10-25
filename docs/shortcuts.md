@@ -6,6 +6,19 @@ and gesture bindings keep their original strings and behavior; switching builder
 does not rewrite them. Nothing is sent while building or saving a shortcut. Press
 its toolbar button explicitly to send it to the active terminal.
 
+Under Terminal touch gestures, choose Custom key chord for a body gesture,
+two-finger swipe or D-pad corner. The same Advanced / Simple custom-text builder
+is available for each slot. Press that slot's **Save … chord** button to save;
+Advanced edits now also require Save instead of saving when the field loses
+focus. Changing builders does not convert or save the existing binding. Each
+slot keeps separate Advanced and Simple drafts, modifiers and validation errors
+while its editor is open; drafts are not persisted across reload or leaving the
+custom action. When a slot's saved binding changes, including after saving or a
+settings import/sync, its editor returns to Advanced showing the saved string and
+discards that slot's old drafts. Other slots' drafts remain untouched. Only
+performing the configured gesture or pressing its D-pad corner sends input to a
+connected terminal.
+
 Choose Simple custom text for the bounded text-and-modifiers builder. With no
 modifiers, text is literal: Unicode, commas, and leading/trailing spaces survive
 save and reload. `Enter` means the five letters, not the Enter key. Plain text
@@ -44,11 +57,12 @@ comma behavior under “Key sequences (simple builder)”; its named-key table i
 under Advanced bindings. Simple named/function-key pickers and arbitrary Unicode
 tails after modified keys are not implemented. Use Advanced for named keys,
 function keys or modifiers that differ between steps. The current sender writes
-the compiled bytes together; documented per-step advanced-binding delays and
-Simple builders inside gesture/D-pad editors remain separate parity work.
+the compiled bytes together; documented per-step advanced-binding delays remain
+separate parity work.
 
 Vitest verifies compilation, rejection boundaries, persisted text and panel
 behavior. Playwright desktop and phone profiles verify actual builder controls,
-reload and exact terminal-toolbar IPC payloads against a synthetic local-terminal
-bridge; no real shell or native OS keyboard is used. Physical IME and hardware
-keyboard behavior are separate acceptance gates.
+reload, exact stored per-slot bindings, and terminal-toolbar/D-pad/body-gesture
+IPC payloads against a synthetic local-terminal bridge. Body gestures use
+synthetic browser pointer events; no real shell or native OS keyboard is used.
+Physical touch, IME and hardware keyboard behavior are separate acceptance gates.
