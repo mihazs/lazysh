@@ -31,6 +31,9 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
+    if matches!(agent, TranscriptAgent::GrokAcp) {
+        return Err(Error::InvalidArgument);
+    }
     if matches!(agent, TranscriptAgent::Hermes | TranscriptAgent::Opencode) {
         return super::database::discover_database(agent, root, limit);
     }

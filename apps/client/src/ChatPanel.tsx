@@ -41,6 +41,7 @@ const agents: Record<string, string> = {
   omo: "OmO Native",
   "devin-atif": "Devin ATIF export",
   "amp-json": "Amp JSON export",
+  "grok-acp": "Grok ACP records (explicit file)",
 };
 
 export function parseTranscript(value: unknown): Page {
@@ -50,6 +51,7 @@ export function parseTranscript(value: unknown): Page {
   if (
     page.schemaVersion !== 1 ||
     !Object.hasOwn(agents, page.agent) ||
+    (page.agent === "grok-acp" && page.view !== "record_stream") ||
     !Array.isArray(page.messages) ||
     page.messages.length > 100 ||
     !Number.isSafeInteger(page.nextOffset) ||
@@ -262,9 +264,16 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             </select>
           </label>
         )}
-        <button type="button" disabled={busy} onClick={() => void discover()}>
+        <button type="button" disabled={busy || agent === "grok-acp"} onClick={() => void discover()}>
           Find transcripts
         </button>
+        {agent === "grok-acp" && (
+          <p>
+            Grok reads only an explicitly selected updates.jsonl file. Recorded
+            chunks and tool snapshots remain separate; rewinds are not filtered
+            into an active conversation branch.
+          </p>
+        )}
         <label>
           Transcript path
           <input

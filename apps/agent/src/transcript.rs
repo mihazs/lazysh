@@ -15,6 +15,7 @@ mod database;
 mod discovery;
 mod droid;
 mod event_adapters;
+mod grok_acp;
 mod jcode;
 mod snapshot;
 pub use conversation::conversation;
@@ -49,6 +50,9 @@ pub enum TranscriptAgent {
     #[value(name = "amp-json")]
     #[serde(rename = "amp-json")]
     AmpJson,
+    #[value(name = "grok-acp")]
+    #[serde(rename = "grok-acp")]
+    GrokAcp,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -145,11 +149,17 @@ pub fn read_page(
         if !record.is_object() {
             return Err(Error::InvalidEvent);
         }
+        if matches!(agent, TranscriptAgent::GrokAcp) {
+            grok_acp::validate_bounds(&record)?;
+        }
         if let Some(message) = normalize(&record, agent, next_offset) {
             validate_message(&message)?;
             let size = serde_json::to_vec(&message)
                 .map_err(|_| Error::InvalidEvent)?
                 .len();
+            if size > MAX_PAGE {
+                return Err(Error::InvalidEvent);
+            }
             if output_bytes + size > MAX_PAGE {
                 break;
             }
@@ -269,6 +279,7 @@ fn normalize(record: &Value, agent: TranscriptAgent, offset: u64) -> Option<Valu
         TranscriptAgent::Kimi => return event_adapters::kimi(record, offset),
         TranscriptAgent::Droid => return droid::normalize(record, offset),
         TranscriptAgent::Cursor => return cursor::normalize(record, offset),
+        TranscriptAgent::GrokAcp => return grok_acp::normalize(record, offset),
         _ => {}
     }
     let (role, blocks, id, usage) = match agent {
@@ -394,6 +405,7 @@ fn normalize(record: &Value, agent: TranscriptAgent, offset: u64) -> Option<Valu
         TranscriptAgent::Jcode => return None,
         TranscriptAgent::DevinAtif => return None,
         TranscriptAgent::AmpJson => return None,
+        TranscriptAgent::GrokAcp => return None,
     };
     if blocks.is_empty() {
         return None;

@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Explicit-file `grok-acp` transcript records, based on a pinned official Grok
+  writer contract. Chunks, tool updates and plans remain separate records;
+  automatic discovery, active-branch replay and live Grok control are not enabled.
+  Existing defaults are unchanged.
 - Optional Unix-host transcription relay with administrator-issued device tokens,
   revocation, durable audio quotas and cancellable bounded WAV uploads to a fixed
   OpenAI transcription endpoint. No deployment, client enrollment or audio-upload
