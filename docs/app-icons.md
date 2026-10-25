@@ -73,15 +73,37 @@ dictionaries were removed. The manual-overwrite cause is therefore retracted.
 Apple's current [alternate-icon configuration guide](https://developer.apple.com/documentation/xcode/configuring-your-app-to-use-alternate-app-icons)
 requires compiler build settings rather than manual icon dictionary overrides,
 and its [asset catalog guide](https://developer.apple.com/documentation/xcode/configuring-your-app-icon)
-supports generated variants from one 1024-pixel source. These justify keeping the
-compiler-owned configuration, but do not prove which rendition representation
-this installed Xcode produces. The archived alternate-key reference describes
-file arrays; it is not sufficient to assume every modern catalog emits external
-PNGs. The existing Files/resource assertion remains until native `assetutil`
-output establishes the actual compiled catalog contract. CI collects only this
-app's fixed `Assets.car` and iPhone/iPad icon dictionaries and retains that scoped
-metadata immediately after build, before runtime checks. No resource assertion
-is waived merely because a catalog file exists.
+supports generated variants from one 1024-pixel source. The archived alternate-key
+reference describes file arrays, so actual compiled rendition evidence was needed
+before changing the universal external-PNG assumption.
+
+[Diagnostic run 40214525104](https://github.com/mihazs/lazysh/actions/runs/40214525104),
+head `f048def`, retained [artifact 12606494985](https://github.com/mihazs/lazysh/actions/runs/40214525104/artifacts/12606494985)
+immediately after build. Native `assetutil` identified the following actual
+`Assets.car` renditions, not merely source filenames or plist declarations:
+
+| Name | Asset type | Idiom | Pixels | Opaque | Rendition |
+| --- | --- | --- | --- | --- | --- |
+| LazyshAmber | Icon Image | phone | 1024 × 1024 | true | amber.png |
+| LazyshAmber | Icon Image | pad | 1024 × 1024 | true | amber.png |
+
+The catalog also has matching phone/pad MultiSized Image entries. Both compiled
+icon dictionaries reference `CFBundleIconName=LazyshAmber` without an alternate
+Files array; primary icon dictionaries do contain file arrays. The tool header
+scopes this observation to Xcode 26.6 (17F113), CoreUI 975, schema 2, iOS deployment
+16.0. Raw catalog JSON SHA-256:
+`c700a5523906be7bb80164b8f87e6027fd8d669e17335311aa71561b5fef0213`.
+This establishes the observed catalog-backed representation, not a claim about
+all past or future SDKs.
+
+Hosted tests retain exact name assertions for both icon dictionaries. Declared
+external file arrays must be nonempty, resolve to bundled PNGs and decode. A
+Name-only reference instead requires the actual nonempty bundled `Assets.car`.
+CI retains native catalog diagnostics at fixed app paths with step deadlines;
+there is no arbitrary output-byte cap. Catalog existence alone is not icon
+acceptance: the real out-of-process UIKit roundtrip, native current readback,
+relaunch persistence and Default restoration remain hard gates. No ad-hoc
+rendition-parser script or parallel test framework is added.
 
 Run 40211520800 also failed the separate Mosh hosted navigation readiness check,
 then attempted IPC despite that failure and saw an undefined JavaScript bridge.
