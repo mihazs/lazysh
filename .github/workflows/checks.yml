@@ -136,10 +136,19 @@ jobs:
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;29.0.14206865'
       - &android-ndk
         run: echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+      - &android-cache-identity
+        name: Fingerprint Android native build tools
+        run: |
+          cmake_identity=$(cmake --version)
+          clang_identity=$("$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version)
+          toolchain_digest=$(printf '%s\n' "$NDK_HOME" "$cmake_identity" "$clang_identity" | sha256sum)
+          printf 'LAZYSH_ANDROID_TOOLCHAIN=%s\n' "${toolchain_digest%% *}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
+        with: &android-cache-environment
+          env-vars: LAZYSH_ANDROID_TOOLCHAIN
       - run: bun install --frozen-lockfile
       - run: bun run build:android
       - run: ./gradlew :tauri-plugin-lazysh-vault:testDebugUnitTest --no-daemon
@@ -169,11 +178,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-linux-android
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
       - name: Install native Mosh fixture dependencies
         run: sudo apt-get update && sudo apt-get install -y mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
+      - *android-cache-identity
+      - uses: Swatinem/rust-cache@v2
+        with: *android-cache-environment
       - run: bun install --frozen-lockfile
       - name: Grant this runner access to KVM
         run: |
