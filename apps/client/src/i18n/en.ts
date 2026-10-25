@@ -1,4 +1,4 @@
-/** English is the supported interface language; keys stay stable when wording changes. */
+/** English fallback; keys stay stable when wording changes. */
 export const english = {
   appUnsupportedTmuxRestoreName: "This tmux destination cannot be restored automatically because its exact name is unsupported. The live terminal and Jump To remain available.",
   appJumpTo: "Jump To",
@@ -8,6 +8,8 @@ export const english = {
   "language": "App language",
   "languageSystem": "System",
   "languageEnglish": "English",
+  languagePortugueseBrazil: "Português (Brasil)",
+  languageSpanish: "Español",
   "unavailable": "Unavailable.",
   "appTerminal": "Terminal",
   "appAppleStatus": "Apple status",
@@ -374,6 +376,8 @@ export const english = {
   "appTheLinkedThemeIsAlreadyAppliedButItsPending": "The linked theme is already applied, but its pending link could not be acknowledged. Retry or discard the link when ready.",
   "appThemeLinkCouldNotBeUpdatedYourCurrentTheme": "Theme link could not be updated. Your current theme was kept. Retry when ready.",
   "sessionCount": "{{count}} sessions",
+  sessionCount_zero: "{{count}} sessions",
+  sessionCount_many: "{{count}} sessions",
   "sessionCount_one": "{{count}} session",
   "sessionCount_other": "{{count}} sessions",
   "shortcutBuilderForLabel": "{{label}} shortcut builder",

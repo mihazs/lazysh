@@ -1,4 +1,4 @@
-import {t, type UiLanguage} from './i18n/core';
+import {t, isUiLanguage, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
@@ -81,7 +81,7 @@ export function parsePreferences(value: unknown): Preferences {
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
   return {
     version: 1,
-    uiLanguage: p.uiLanguage === "en" ? "en" : "system",
+    uiLanguage: isUiLanguage(p.uiLanguage) ? p.uiLanguage : "system",
     sessionLayout: p.sessionLayout === "cards" ? "cards" : "list",
     theme: customTheme && (p.customThemeInfo === undefined || p.theme === "custom") ? "custom" : typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,
     appTheme: p.appTheme === "custom" && customTheme && customThemeInfo ? "custom" : typeof p.appTheme === "string" && Object.hasOwn(themes, p.appTheme) ? p.appTheme as Preferences["appTheme"] : defaults.appTheme,

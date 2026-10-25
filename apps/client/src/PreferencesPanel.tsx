@@ -43,6 +43,7 @@ export default function PreferencesPanel() {
     {error && <p role="alert">{error}</p>}
     <label>{t('language')}<select value={preferences.uiLanguage} onChange={event => update({uiLanguage:event.target.value as Preferences['uiLanguage']})}>
       <option value="system">{t('languageSystem')}</option><option value="en">{t('languageEnglish')}</option>
+      <option value="pt-BR">{t('languagePortugueseBrazil')}</option><option value="es">{t('languageSpanish')}</option>
     </select></label>
     <AppIconPanel />
     <label>{t("preferencesSessionSwitcherLayout")}<select value={preferences.sessionLayout} onChange={e => update({sessionLayout: e.target.value as Preferences["sessionLayout"]})}><option value="list">{t("preferencesList")}</option><option value="cards">{t("preferencesCards")}</option></select></label>

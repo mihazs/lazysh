@@ -1,6 +1,7 @@
 import {createInstance} from 'i18next';
 import {initReactI18next, useTranslation} from 'react-i18next';
 import {english} from './en';
+import {brazilianPortuguese, spanish} from './translations';
 
 declare module 'i18next' {
   interface CustomTypeOptions {
@@ -10,22 +11,27 @@ declare module 'i18next' {
     strictKeyChecks: true;
   }
 }
-export type UiLanguage = 'system' | 'en';
+export const uiLanguages = ['system', 'en', 'pt-BR', 'es'] as const;
+export type UiLanguage = typeof uiLanguages[number];
+export function isUiLanguage(value: unknown): value is UiLanguage {
+  return uiLanguages.some(language => language === value);
+}
 export function resolveUiLocale(language: UiLanguage, requested: readonly string[]): string {
-  if (language === 'en') return 'en';
+  if (language !== 'system') return language;
   for (const candidate of requested.slice(0, 16)) {
     if (typeof candidate !== 'string' || candidate.length > 80) continue;
     try {
       const [locale] = Intl.getCanonicalLocales(candidate);
-      if (locale === 'en' || locale?.startsWith('en-')) return locale;
-    } catch { /* Invalid or unsupported system language falls back to English. */ }
+      if (locale === 'pt' || locale?.startsWith('pt-')) return 'pt-BR';
+      if (locale === 'en' || locale?.startsWith('en-') || locale === 'es' || locale?.startsWith('es-')) return locale;
+    } catch { /* Invalid system tags do not select resources or trigger network requests. */ }
   }
   return 'en';
 }
 export function createUiInstance() {
   const instance = createInstance();
   void instance.use(initReactI18next).init({
-    lng:'en', fallbackLng:'en', resources:{en:{translation:english}},
+    lng:'en', fallbackLng:'en', resources:{en:{translation:english}, 'pt-BR':{translation:brazilianPortuguese}, es:{translation:spanish}},
     initAsync:false, enableSelector:false, keySeparator:false,
     interpolation:{escapeValue:false}, returnNull:false,
     parseMissingKeyHandler:()=>english.unavailable, react:{useSuspense:false},
