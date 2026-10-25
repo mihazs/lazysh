@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { MAX_VOICE_SECONDS, mono16k, validModelFile } from "./voice";
 import { errorMessage } from "./SessionTools";
 
 type Model = { id: string; bytes: number };
+type CatalogModel = {id:string;file:string;label:string;bytes:number;sha256:string;revision:string};
+type DownloadProgress = {requestId:string;received:number;total:number;stage:'downloading'|'verifying'|'installed'};
 type AppleCapability = {
   available: boolean;
   reason: string;
@@ -14,6 +16,11 @@ type AppleCapability = {
 export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
+  const [catalog, setCatalog] = useState<CatalogModel[]>([]);
+  const [catalogId, setCatalogId] = useState('tiny.en');
+  const [downloading, setDownloading] = useState(false);
+  const [cancellingDownload, setCancellingDownload] = useState(false);
+  const [downloadBytes, setDownloadBytes] = useState(0);
   const [language, setLanguage] = useState("auto");
   const [engine, setEngine] = useState<"whisper" | "apple">("whisper");
   const [apple, setApple] = useState<AppleCapability>({
@@ -36,6 +43,17 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   const generation = useRef(0);
   const importId = useRef("");
   const appleRequest = useRef("");
+  const downloadRequest = useRef("");
+  async function refreshCatalog() {
+    const entries = await invoke<CatalogModel[]>('voice_model_catalog');
+    if(!Array.isArray(entries) || entries.length>4 || entries.some(entry=>!entry || !['tiny','tiny.en','base','base.en'].includes(entry.id)
+      || entry.file!==`ggml-${entry.id}.bin` || typeof entry.label!=='string' || entry.label.length>80
+      || !Number.isSafeInteger(entry.bytes) || entry.bytes<1024 || entry.bytes>160*1024*1024
+      || !/^[0-9a-f]{64}$/.test(entry.sha256) || !/^[0-9a-f]{40}$/.test(entry.revision))
+      || new Set(entries.map(entry=>entry.id)).size!==entries.length)throw new Error('Invalid Whisper catalog.');
+    setCatalog(entries);
+    setCatalogId(previous=>entries.some(entry=>entry.id===previous)?previous:entries[0]?.id ?? '');
+  }
   async function refreshApple() {
     const value = await invoke<AppleCapability>("apple_speech_capability");
     if (
@@ -99,6 +117,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   useEffect(() => {
     void refresh().catch((e) => setError(errorMessage(e)));
     void refreshApple().catch(() => {});
+    void refreshCatalog().catch(() => {});
     const hidden = () => {
       if (document.visibilityState !== "visible") cancel();
     };
@@ -120,8 +139,33 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
           id: importId.current,
           cancel: true,
         }).catch(() => {});
+      const requestId=downloadRequest.current;downloadRequest.current='';
+      if(requestId)void invoke('voice_download_cancel',{requestId}).catch(()=>{});
     };
   }, []);
+  async function downloadModel() {
+    const selected=catalog.find(entry=>entry.id===catalogId);if(!selected || downloadRequest.current || busy || recording)return;
+    const requestId=crypto.randomUUID();const current=++generation.current;
+    downloadRequest.current=requestId;setBusy(true);setDownloading(true);setCancellingDownload(false);setDownloadBytes(0);setError('');setProgress('Connecting to the model publisher…');
+    try {
+      const events=new Channel<DownloadProgress>();
+      events.onmessage=event=>{
+      if(current!==generation.current || downloadRequest.current!==requestId || event?.requestId!==requestId || event.total!==selected.bytes
+        || !Number.isSafeInteger(event.received) || event.received<0 || event.received>event.total
+        || !['downloading','verifying','installed'].includes(event.stage))return;
+      setDownloadBytes(event.received);
+      setProgress(event.stage==='verifying'?'Verifying model SHA-256…':event.stage==='installed'?'Model installed.':`Downloading model ${Math.floor(event.received/event.total*100)}%`);
+      };
+      await invoke('voice_download_model',{id:selected.id,requestId,events});
+      if(downloadRequest.current===requestId) {
+        await refresh();
+        if(current===generation.current)setModel(selected.file);
+      }
+    }catch(e){if(current===generation.current && downloadRequest.current===requestId)setError(errorMessage(e));}
+    finally {
+      if(downloadRequest.current===requestId){downloadRequest.current='';setDownloading(false);setCancellingDownload(false);setBusy(false);setProgress('');}
+    }
+  }
   async function importModel(file?: File) {
     if (!file) return;
     const current = ++generation.current;
@@ -277,6 +321,13 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   }
   function cancel() {
     generation.current++;
+    if(downloadRequest.current) {
+      const requestId=downloadRequest.current;setCancellingDownload(true);setProgress('Cancelling model download…');
+      void invoke<boolean>('voice_download_cancel',{requestId}).then(cancelled=>{
+        if(!cancelled && downloadRequest.current===requestId){setProgress('The model was already installed.');void refresh().catch(()=>{});}
+      }).catch(e=>{if(downloadRequest.current===requestId){setCancellingDownload(false);setError(errorMessage(e));}});
+      return;
+    }
     if (recorder.current?.state === "recording") recorder.current.stop();
     releaseMicrophone();
     setRecording(false);
@@ -347,8 +398,16 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
       {engine === "whisper" ? (
         <>
           <p>
-            Whisper runs on this device. Import a trusted tiny/base GGML model.
+            Whisper runs on this device. Choose a pinned whisper.cpp model or import a trusted tiny/base GGML file. Downloads use Hugging Face and verify the publisher's SHA-256 before installing. Audio stays on this device.
           </p>
+          {catalog.length>0 && <>
+            <label>Downloadable model<select value={catalogId} disabled={busy || recording} onChange={event=>setCatalogId(event.target.value)}>
+              {catalog.map(entry=><option key={entry.id} value={entry.id}>{entry.label} ({(entry.bytes/1024/1024).toFixed(1)} MiB){models.some(item=>item.id===entry.file)?' · installed':''}</option>)}
+            </select></label>
+            <button disabled={busy || recording || !catalog.some(entry=>entry.id===catalogId) || models.length>=3 || models.some(item=>item.id===catalog.find(entry=>entry.id===catalogId)?.file)} onClick={()=>void downloadModel()}>Download selected model</button>
+            {models.length>=3 && <p>Remove a model before installing another (maximum three).</p>}
+            {downloading && <progress aria-label="Model download" value={downloadBytes} max={catalog.find(entry=>entry.id===catalogId)?.bytes ?? 1}/>}
+          </>}
           <label>
             Import model
             <input
@@ -466,7 +525,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
         >
           {recording ? "Stop and transcribe" : "Record speech"}
         </button>
-        {(busy || recording) && <button onClick={cancel}>Cancel</button>}
+        {(busy || recording) && <button disabled={downloading && cancellingDownload} onClick={cancel}>{downloading?(cancellingDownload?'Cancelling download…':'Cancel download'):'Cancel'}</button>}
       </div>
       {progress && <p role="status">{progress}</p>}
       <label>

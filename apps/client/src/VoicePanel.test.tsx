@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import VoicePanel from './VoicePanel';
-vi.mock('@tauri-apps/api/core', async original => ({ ...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/core', async original => ({ ...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn(), Channel:class {onmessage:((event:unknown)=>void)|undefined;} }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
 
 it('requires a local model and explicit recording and handles microphone denial', async () => {
@@ -27,8 +27,80 @@ it('stages an edited draft only on explicit request and never sends terminal inp
   expect(listener).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Stage in terminal composer'}));
   expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh1',text:'review this code'});
-  expect(vi.mocked(invoke).mock.calls.every(([name]) => name === 'voice_models' || name === 'apple_speech_capability')).toBe(true);
+  expect(vi.mocked(invoke).mock.calls.every(([name]) => name === 'voice_models' || name === 'apple_speech_capability' || name==='voice_model_catalog')).toBe(true);
   window.removeEventListener('lazysh-prompt-draft',listener);
+});
+
+const catalogEntry={id:'tiny.en',file:'ggml-tiny.en.bin',label:'Tiny · English',bytes:77704715,sha256:'921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f',revision:'5359861c739e955e79d9a303bcbc70fb988958b1'};
+type DownloadCall={id:string;requestId:string;events:{onmessage:(event:unknown)=>void}};
+function downloadFixture(installed:{id:string;bytes:number}[]=[]) {
+  let complete!:()=>void;let fail!:(error:Error)=>void;
+  vi.mocked(invoke).mockImplementation(command=>{
+    if(command==='voice_models')return Promise.resolve(installed) as never;
+    if(command==='voice_model_catalog')return Promise.resolve([catalogEntry]) as never;
+    if(command==='voice_download_model')return new Promise<void>((resolve,reject)=>{complete=resolve;fail=reject;}) as never;
+    if(command==='voice_download_cancel')return Promise.resolve(true) as never;
+    return Promise.resolve() as never;
+  });
+  return {installed,complete:()=>complete(),fail:(message:string)=>fail(new Error(message))};
+}
+it('downloads only on explicit click, shows bounded progress and selects the installed model',async()=>{
+  const fixture=downloadFixture();render(<VoicePanel sessionId="ssh1"/>);
+  const button=await screen.findByRole('button',{name:'Download selected model'});
+  expect(invoke).not.toHaveBeenCalledWith('voice_download_model',expect.anything());
+  fireEvent.click(button);
+  const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_download_model')![1] as DownloadCall;
+  expect(request.id).toBe('tiny.en');expect(request.requestId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(request).not.toHaveProperty('url');expect(request).not.toHaveProperty('sha256');
+  expect((screen.getByLabelText('Import model') as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole('button',{name:'Record speech'}) as HTMLButtonElement).disabled).toBe(true);
+  await act(async()=>{request.events.onmessage({requestId:request.requestId,received:100,total:catalogEntry.bytes,stage:'downloading'});});
+  expect(screen.getByRole('progressbar',{name:'Model download'}).getAttribute('value')).toBe('100');
+  await act(async()=>{request.events.onmessage({requestId:request.requestId,received:catalogEntry.bytes,total:catalogEntry.bytes,stage:'verifying'});});
+  expect(screen.getByRole('status').textContent).toContain('SHA-256');
+  fixture.installed.push({id:catalogEntry.file,bytes:catalogEntry.bytes});
+  await act(async()=>{fixture.complete();});
+  await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe(catalogEntry.file));
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(invoke).not.toHaveBeenCalledWith('voice_transcribe',expect.anything());
+});
+it('waits for cancellation cleanup and ignores stale download progress without installing',async()=>{
+  const fixture=downloadFixture();render(<VoicePanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Download selected model'}));
+  const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_download_model')![1] as DownloadCall;
+  fireEvent.click(screen.getByRole('button',{name:'Cancel download'}));
+  expect(invoke).toHaveBeenCalledWith('voice_download_cancel',{requestId:request.requestId});
+  expect((screen.getByRole('button',{name:'Cancelling download…'}) as HTMLButtonElement).disabled).toBe(true);
+  await act(async()=>{request.events.onmessage({requestId:request.requestId,received:catalogEntry.bytes,total:catalogEntry.bytes,stage:'installed'});});
+  expect(screen.getByRole('status').textContent).toContain('Cancelling');
+  await act(async()=>{fixture.fail('Model download cancelled');});
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Download selected model'}) as HTMLButtonElement).disabled).toBe(false));
+  expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('');
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+it('reports verification failure and cancels an in-flight download on unmount',async()=>{
+  const fixture=downloadFixture();const view=render(<VoicePanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Download selected model'}));
+  await act(async()=>{fixture.fail('Model SHA-256 verification failed; no model was installed');});
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Model SHA-256 verification failed; no model was installed');
+  expect((screen.getByRole('button',{name:'Download selected model'}) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button',{name:'Download selected model'}));
+  const calls=vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_download_model');
+  const request=calls.at(-1)![1] as DownloadCall;
+  view.unmount();
+  expect(invoke).toHaveBeenCalledWith('voice_download_cancel',{requestId:request.requestId});
+  await act(async()=>{fixture.fail('Model download cancelled');});
+});
+it('disables downloads for an existing file and at the three-model quota',async()=>{
+  const fixture=downloadFixture([{id:catalogEntry.file,bytes:catalogEntry.bytes}]);
+  const view=render(<VoicePanel/>);
+  expect((await screen.findByRole('button',{name:'Download selected model'}) as HTMLButtonElement).disabled).toBe(true);
+  view.unmount();
+  fixture.installed.splice(0,1,{id:'one.bin',bytes:1024},{id:'two.bin',bytes:1024},{id:'three.bin',bytes:1024});
+  render(<VoicePanel/>);
+  expect((await screen.findByRole('button',{name:'Download selected model'}) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/maximum three/)).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalledWith('voice_download_model',expect.anything());
 });
 
 it('releases a microphone granted after the dictation view has closed', async () => {
