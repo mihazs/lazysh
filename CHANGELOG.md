@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Device-local iOS Home Screen icon selection with the original Default and
+  new Amber artwork, UIKit support checks and actual selection readback. The
+  default icon is unchanged; desktop, Android and browser builds report this
+  feature unavailable. Icon selection does not sync or affect terminal themes.
+
 - macOS Parakeet model-storage admission checks actual Darwin ACLs and trusted
   descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
   preparation remain disabled; real recognition and platform acceptance stay open.

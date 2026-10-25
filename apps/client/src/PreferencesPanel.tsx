@@ -1,4 +1,5 @@
 import { useState } from "react";
+import AppIconPanel from "./AppIconPanel";
 import ThemeImportPanel from "./ThemeImportPanel";
 import { compileSimpleChord } from "./simpleChord";
 import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabels, parseChord, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
@@ -42,6 +43,7 @@ export default function PreferencesPanel() {
     <h2>Terminal preferences</h2>
     <p>Changes apply to every open terminal.</p>
     {error && <p role="alert">{error}</p>}
+    <AppIconPanel />
     <label>Session switcher layout<select value={preferences.sessionLayout} onChange={e => update({sessionLayout: e.target.value as Preferences["sessionLayout"]})}><option value="list">List</option><option value="cards">Cards</option></select></label>
     <label>App theme<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme}>{theme}</option>)}{preferences.customThemeInfo && <option value="custom">{preferences.customThemeInfo.name}</option>}</select></label>
     <label>Terminal theme<select value={preferences.theme} onChange={e => update({theme: e.target.value as Preferences["theme"], ...(!preferences.customThemeInfo && e.target.value !== "custom" ? {customTheme: undefined} : {})})}>

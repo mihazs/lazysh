@@ -1,3 +1,4 @@
+mod app_icons;
 mod apple_speech;
 mod apple_status;
 mod approvals;
@@ -60,6 +61,8 @@ pub fn run() {
             local::local_resize,
             local::local_ack,
             local::local_disconnect,
+            app_icons::app_icon_status,
+            app_icons::set_app_icon,
             apple_status::apple_status_capability,
             apple_status::apple_status_configure,
             apple_status::apple_status_publish,
