@@ -1,4 +1,6 @@
+#[cfg(not(target_os = "macos"))]
 use crate::Error;
+#[cfg(not(target_os = "macos"))]
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
@@ -58,6 +60,15 @@ fn validate_canonical(parent: &Path, current: u32, android: bool) -> Result<(), 
             return Err(Error::Storage);
         }
     }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn created_directory(_: &Path) -> Result<(), Error> {
+    Ok(())
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn created_file(_: &std::fs::File) -> Result<(), Error> {
     Ok(())
 }
 
@@ -135,13 +146,4 @@ mod tests {
         assert!(untrusted_write(0o771, 10124, true));
         assert!(untrusted_write(0o777, 1000, true));
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn created_directory(_: &Path) -> Result<(), Error> {
-    Ok(())
-}
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn created_file(_: &std::fs::File) -> Result<(), Error> {
-    Ok(())
 }
