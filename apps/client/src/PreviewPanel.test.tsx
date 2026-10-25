@@ -27,6 +27,7 @@ it('requires explicit selection and opens a sandboxed loopback frame without nav
   vi.mocked(invoke).mockImplementation(async command => command === 'list_previews' ? [] : command === 'start_preview' ? preview : undefined);
   render(<PreviewPanel sessionId="ssh-one" />);
   await screen.findByText('Open your development server.');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Open preview' }) as HTMLButtonElement).disabled).toBe(false));
   expect(invoke).not.toHaveBeenCalledWith('start_preview', expect.anything());
   fireEvent.click(screen.getByRole('button', { name: 'Open preview' }));
   const frame = await screen.findByTitle('Host browser preview on port 5173');
