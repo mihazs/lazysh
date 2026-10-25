@@ -12,6 +12,14 @@ final class AppIconIntegrationTests: XCTestCase {
     UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
       .flatMap(\.windows).lazy.compactMap { self.webView($0) }.first
   }
+  private func readyAppView() throws -> WKWebView {
+    let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      guard let view = self.appWebView(), let url = view.url else { return false }
+      return UIApplication.shared.applicationState == .active && url.scheme != "about" && !view.isLoading
+    }, object: nil)
+    wait(for: [ready], timeout: 30)
+    return try XCTUnwrap(appWebView())
+  }
   private func icon(_ choice: String, in view: WKWebView) -> [String: Any]? {
     let replied = expectation(description: "Actual native icon change: " + choice)
     var status: [String: Any]?
@@ -27,11 +35,7 @@ final class AppIconIntegrationTests: XCTestCase {
     return status
   }
   func testActualUIKitAmberRoundtripAndRestore() throws {
-    let active = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-      UIApplication.shared.applicationState == .active && self.appWebView()?.isLoading == false
-    }, object: nil)
-    wait(for: [active], timeout: 30)
-    let view = try XCTUnwrap(appWebView())
+    let view = try readyAppView()
     guard UIApplication.shared.supportsAlternateIcons else {
       XCTFail("This simulator does not support alternate icons; valid-change acceptance remains unverified."); return
     }
@@ -69,12 +73,7 @@ final class AppIconIntegrationTests: XCTestCase {
       let files = try XCTUnwrap(amber["CFBundleIconFiles"] as? [String])
       XCTAssertFalse(files.isEmpty, "actool must emit real icon resources for each idiom")
     }
-    let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-      guard let view = self.appWebView(), let url = view.url else { return false }
-      return url.scheme != "about" && !view.isLoading
-    }, object: nil)
-    wait(for: [ready], timeout: 30)
-    let view = try XCTUnwrap(appWebView())
+    let view = try readyAppView()
     let replied = expectation(description: "Real icon IPC and invalid selection")
     view.callAsyncJavaScript("""
       const status = await window.__TAURI_INTERNALS__.invoke('app_icon_status');
