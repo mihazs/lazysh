@@ -1,3 +1,4 @@
+import {t} from './i18n/core';
 import { useEffect, useSyncExternalStore } from "react";
 import type { Preferences } from "./preferences";
 
@@ -19,28 +20,28 @@ function publish(next: FontState) {state = next; for (const listener of listener
 function family(id: string, role = "primary") {return `lazysh-font-${id}-${role}`;}
 function validId(id: unknown): id is string {return typeof id === "string" && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id);}
 export function validateFont(bytes: ArrayBuffer) {
-  if (bytes.byteLength < 12 || bytes.byteLength > FONT_LIMIT) throw new Error("Choose a font file between 12 bytes and 24 MiB.");
+  if (bytes.byteLength < 12 || bytes.byteLength > FONT_LIMIT) throw new Error(t("validationChooseAFontFileBetween12BytesAnd24"));
   const signature = new DataView(bytes).getUint32(0);
-  if (![0x00010000, 0x4f54544f, 0x774f4646, 0x774f4632, 0x74746366].includes(signature)) throw new Error("Choose a TrueType, OpenType, WOFF, WOFF2 or font collection file.");
+  if (![0x00010000, 0x4f54544f, 0x774f4646, 0x774f4632, 0x74746366].includes(signature)) throw new Error(t("validationChooseATrueTypeOpenTypeWOFFWOFF2OrFontCollection"));
 }
 export function assertFontBudget(sizes: number[]) {
-  if (sizes.length > FONT_COUNT_LIMIT || sizes.some(size => !Number.isInteger(size) || size < 12 || size > FONT_LIMIT) || sizes.reduce((total, size) => total + size, 0) > FONT_TOTAL_LIMIT) throw new Error("Keep at most 4 imported fonts and 48 MiB total. Delete a font before importing another.");
+  if (sizes.length > FONT_COUNT_LIMIT || sizes.some(size => !Number.isInteger(size) || size < 12 || size > FONT_LIMIT) || sizes.reduce((total, size) => total + size, 0) > FONT_TOTAL_LIMIT) throw new Error(t("validationKeepAtMost4ImportedFontsAnd48MiB"));
 }
 function validateRecord(value: unknown): FontRecord {
-  if (!value || typeof value !== "object") throw new Error("A saved font is invalid.");
+  if (!value || typeof value !== "object") throw new Error(t("validationASavedFontIsInvalid"));
   const font = value as FontRecord;
-  if (!validId(font.id) || typeof font.name !== "string" || !font.name || font.name.length > 128 || !(font.bytes instanceof ArrayBuffer) || font.size !== font.bytes.byteLength) throw new Error("A saved font is invalid.");
+  if (!validId(font.id) || typeof font.name !== "string" || !font.name || font.name.length > 128 || !(font.bytes instanceof ArrayBuffer) || font.size !== font.bytes.byteLength) throw new Error(t("validationASavedFontIsInvalid"));
   validateFont(font.bytes);
   return font;
 }
 function open(): Promise<IDBDatabase> {
-  if (!globalThis.indexedDB) return Promise.reject(new Error("This device does not provide local font storage."));
+  if (!globalThis.indexedDB) return Promise.reject(new Error(t("validationThisDeviceDoesNotProvideLocalFontStorage")));
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(databaseName, 1);
     let blocked = false;
     request.onupgradeneeded = () => {if (!request.result.objectStoreNames.contains("fonts")) request.result.createObjectStore("fonts", {keyPath: "id"});};
-    request.onerror = () => reject(new Error("Local font storage is unavailable."));
-    request.onblocked = () => {blocked = true; reject(new Error("Close other lazysh windows before changing font storage."));};
+    request.onerror = () => reject(new Error(t("validationLocalFontStorageIsUnavailable")));
+    request.onblocked = () => {blocked = true; reject(new Error(t("validationCloseOtherLazyshWindowsBeforeChangingFontStorage")));};
     request.onsuccess = () => {if (blocked) request.result.close(); else resolve(request.result);};
   });
 }
@@ -50,7 +51,7 @@ async function records(): Promise<FontRecord[]> {
     return await new Promise((resolve, reject) => {
       const transaction = db.transaction("fonts", "readonly");
       const request = transaction.objectStore("fonts").getAll();
-      request.onerror = () => reject(new Error("Cannot read saved fonts."));
+      request.onerror = () => reject(new Error(t("validationCannotReadSavedFonts")));
       request.onsuccess = () => {
         try {
           const fonts = request.result.map(validateRecord);
@@ -79,7 +80,7 @@ async function refresh() {
       const id = selection[role];
       if (!id) continue;
       const record = fonts.find(font => font.id === id);
-      if (!record) {warnings.push(`The selected ${role === "cjk" ? "CJK fallback" : "terminal"} font is missing on this device. Using the fallback font stack.`); continue;}
+      if (!record) {warnings.push(t("fontTheSelectedValue1FontIsMissingOnThisDevice", {value1: role === "cjk" ? t("fontRoleCjk") : t("fontRoleTerminal")})); continue;}
       try {
         const faceKey = `${role}:${id}`;
         let face = faces.get(faceKey);
@@ -87,7 +88,7 @@ async function refresh() {
         if (current !== generation) return;
         document.fonts.add(face); faces.set(faceKey, face);
         loaded[role === "primary" ? "primaryFamily" : "cjkFamily"] = `"${family(id, role)}"`;
-      } catch {warnings.push(`Cannot load ${record.name}. Using the fallback font stack.`);}
+      } catch {warnings.push(t("fontCannotLoadValue1UsingTheFallbackFontStack", {value1: record.name}));}
     }
     if (current !== generation) return;
     for (const [faceKey, face] of faces) {
@@ -108,19 +109,19 @@ export function fontFamilyFor(preferences: Preferences, fonts = state) {
   return [fonts.primaryFamily, fonts.cjkFamily, preferences.fontFamily, preferences.cjkFallback].filter(Boolean).join(", ");
 }
 export async function importFont(file: File): Promise<string> {
-  if (file.size > FONT_LIMIT || file.size < 12) throw new Error("Choose a font file no larger than 24 MiB.");
-  if (!globalThis.FontFace || !document.fonts) throw new Error("This device cannot load imported fonts.");
+  if (file.size > FONT_LIMIT || file.size < 12) throw new Error(t("validationChooseAFontFileNoLargerThan24MiB"));
+  if (!globalThis.FontFace || !document.fonts) throw new Error(t("validationThisDeviceCannotLoadImportedFonts"));
   const bytes = await file.arrayBuffer();
   validateFont(bytes);
   const id = crypto.randomUUID();
-  const name = file.name.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 128) || "Imported font";
-  try {await new FontFace(family(id), bytes).load();} catch {throw new Error("The browser rejected this font. Choose a valid, supported font file.");}
+  const name = file.name.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 128) || t("fontImported");
+  try {await new FontFace(family(id), bytes).load();} catch {throw new Error(t("validationTheBrowserRejectedThisFontChooseAValidSupported"));}
   const db = await open();
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction("fonts", "readwrite");
       const store = transaction.objectStore("fonts");
-      let failure = "The font could not be saved. Check available device storage.";
+      let failure = t("fontSaveFailed");
       const request = store.getAll();
       request.onsuccess = () => {
         try {
@@ -138,19 +139,19 @@ export async function importFont(file: File): Promise<string> {
 }
 export async function selectFont(role: keyof Selection, id: string | undefined) {
   const selection = readSelection();
-  if (id && !state.fonts.some(font => font.id === id)) throw new Error("That font is unavailable on this device.");
+  if (id && !state.fonts.some(font => font.id === id)) throw new Error(t("validationThatFontIsUnavailableOnThisDevice"));
   localStorage.setItem(selectionKey, JSON.stringify({...selection, [role]: id}));
   await refresh();
 }
 export async function deleteFont(id: string) {
-  if (!validId(id)) throw new Error("Invalid local font identity.");
+  if (!validId(id)) throw new Error(t("validationInvalidLocalFontIdentity"));
   const db = await open();
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction("fonts", "readwrite");
       transaction.objectStore("fonts").delete(id);
       transaction.oncomplete = () => resolve();
-      transaction.onerror = transaction.onabort = () => reject(new Error("The font could not be deleted."));
+      transaction.onerror = transaction.onabort = () => reject(new Error(t("validationTheFontCouldNotBeDeleted")));
     });
   } finally {db.close();}
   const selection = readSelection();
@@ -165,7 +166,7 @@ export async function deleteAllFonts() {
       const transaction = db.transaction("fonts", "readwrite");
       transaction.objectStore("fonts").clear();
       transaction.oncomplete = () => resolve();
-      transaction.onerror = transaction.onabort = () => reject(new Error("Imported fonts could not be deleted."));
+      transaction.onerror = transaction.onabort = () => reject(new Error(t("validationImportedFontsCouldNotBeDeleted")));
     });
   } finally {db.close();}
   localStorage.removeItem(selectionKey);

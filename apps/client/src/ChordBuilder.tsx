@@ -1,3 +1,4 @@
+import {t, useUi} from './i18n/core';
 import { useId, useState } from 'react';
 import { parseChord } from './preferences';
 import { compileSimpleChord } from './simpleChord';
@@ -9,13 +10,14 @@ export default function ChordBuilder({ label, binding = '', onSave, disabled = f
   disabled?: boolean;
   clearAfterSave?: boolean;
 }) {
+  useUi();
   const id = useId();
   const [mode, setMode] = useState<'advanced' | 'simple'>('advanced');
   const [keys, setKeys] = useState(binding);
   const [text, setText] = useState('');
   const [modifiers, setModifiers] = useState({ctrl:false, meta:false, shift:false});
   const [error, setError] = useState('');
-  const name = (field: string) => label ? `${label} ${field.toLowerCase()}` : field;
+  const name = (field: 'builder' | 'text') => label ? t(field === 'builder' ? 'shortcutBuilderForLabel' : 'shortcutTextForLabel', {label}) : t(field === 'builder' ? 'shortcutShortcutBuilder' : 'shortcutCustomShortcutText');
   function save() {
     try {
       const compiled = mode === 'simple' ? compileSimpleChord(text, modifiers) : keys.startsWith('text:') ? keys : keys.trim();
@@ -27,14 +29,17 @@ export default function ChordBuilder({ label, binding = '', onSave, disabled = f
     } catch (error) { setError(String(error)); }
   }
   return <div>
-    <label htmlFor={`${id}-builder`}>{name('Shortcut builder')}</label><select id={`${id}-builder`} value={mode} onChange={event => {setMode(event.target.value as 'advanced' | 'simple'); setError('');}}><option value="advanced">Advanced binding</option><option value="simple">Simple custom text</option></select>
-    {mode === 'advanced' ? <><label htmlFor={`${id}-keys`}>{label ? `${label} chord` : 'Key sequence'}</label><input id={`${id}-keys`} maxLength={128} value={keys} placeholder="C-b, T" onChange={event => setKeys(event.target.value)} /></> : <>
-      <p>Without modifiers, send text exactly, including Unicode, commas and spaces. Up to 123 characters; some characters count twice. With modifiers, use printable ASCII: b1 modifies only b; a,b modifies both; ,, inserts a comma. Up to 8 key steps. Unsupported shortcuts show an error.</p>
-      <p>This field is literal custom text: Enter means the letters Enter. Use Advanced for named or function keys.</p>
-      {(['ctrl','meta','shift'] as const).map(modifier => <label key={modifier}><input type="checkbox" checked={modifiers[modifier]} onChange={event => setModifiers({...modifiers,[modifier]:event.target.checked})} />{label ? `${label} ` : ''}{modifier === 'ctrl' ? 'Control' : modifier === 'meta' ? 'Option / Alt' : 'Shift'}</label>)}
-      <label htmlFor={`${id}-text`}>{name('Custom shortcut text')}</label><textarea id={`${id}-text`} rows={2} value={text} onChange={event => setText(event.target.value)} />
+    <label htmlFor={`${id}-builder`}>{name('builder')}</label><select id={`${id}-builder`} value={mode} onChange={event => {setMode(event.target.value as 'advanced' | 'simple'); setError('');}}><option value="advanced">{t("shortcutAdvancedBinding")}</option><option value="simple">{t("shortcutSimpleCustomText")}</option></select>
+    {mode === 'advanced' ? <><label htmlFor={`${id}-keys`}>{label ? t("shortcutValue1Chord", {value1: label}) : t("shortcutKeySequence")}</label><input id={`${id}-keys`} maxLength={128} value={keys} placeholder="C-b, T" onChange={event => setKeys(event.target.value)} /></> : <>
+      <p>{t("shortcutWithoutModifiersSendTextExactlyIncludingUnicodeCommasAnd")}</p>
+      <p>{t("shortcutThisFieldIsLiteralCustomTextEnterMeansThe")}</p>
+      {(['ctrl','meta','shift'] as const).map(modifier => {
+        const modifierName = t(({ctrl:'shortcutControl',meta:'shortcutOptionAlt',shift:'shortcutShift'} as const)[modifier]);
+        return <label key={modifier}><input type="checkbox" checked={modifiers[modifier]} onChange={event => setModifiers({...modifiers,[modifier]:event.target.checked})} />{label ? t('shortcutModifierForLabel', {label, modifier:modifierName}) : modifierName}</label>;
+      })}
+      <label htmlFor={`${id}-text`}>{name('text')}</label><textarea id={`${id}-text`} rows={2} value={text} onChange={event => setText(event.target.value)} />
     </>}
     {error && <p role="alert">{error}</p>}
-    <button disabled={disabled || !(mode === 'simple' ? text : keys.trim())} onClick={save}>{label ? `Save ${label} chord` : 'Add chord'}</button>
+    <button disabled={disabled || !(mode === 'simple' ? text : keys.trim())} onClick={save}>{label ? t("shortcutSaveValue1Chord", {value1: label}) : t("shortcutAddChord")}</button>
   </div>;
 }

@@ -1609,10 +1609,10 @@ button svg {
 :root[data-app-theme] .primary-button { color: var(--theme-on-accent, #203116); }
 .font-sample { padding: 16px; border: 1px solid var(--border); overflow-wrap: anywhere; }
 @media (max-width: 760px) {
-  .header-right > .icon-button[aria-label="Preferences"] { display: flex; }
+  .header-right > .preferences-button { display: flex; }
 }
 :root[data-theme-changing] *, :root[data-theme-changing] *::before, :root[data-theme-changing] *::after { transition: none !important; }
-.preferences-panel input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 auto; accent-color: var(--accent); }
+.preferences-panel input[type="checkbox"], .access-lock-toggle input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 auto; accent-color: var(--accent); }
 .preferences-panel > label { min-height: 44px; }
 .mobile-tools { display: none; }
 .about-button { border: 0; background: transparent; color: var(--theme-muted, #8f9a87); padding: 12px 0; text-align: left; min-height: 44px; cursor: pointer; }
@@ -1659,3 +1659,5 @@ button svg {
 .theme-preview { background: var(--theme-panel); color: var(--theme-text); border: 1px solid var(--theme-border); padding: 16px; overflow-wrap: anywhere; }
 .preferences-panel .theme-preview p { color: var(--theme-text); }
 .theme-preview pre { padding: 12px; overflow: auto; }
+
+.access-lock-toggle { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }

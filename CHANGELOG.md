@@ -14,6 +14,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- An English interface catalog and an App language preference for System or
+  English. System is the default and uses supported English regional formatting,
+  falling back to English for other system languages. Shell, host forms and
+  Preferences update without reconnecting live terminals; remote output and user
+  text remain unchanged. Other panels, native permission text and translated
+  languages remain follow-up work.
+
 - Repository pre-commit duplicate detection with pinned jscpd and Bun now rejects
   every detected clone, including pre-existing duplication; the previous baseline
   allowance is removed. Refactor with DRY until the scan reports zero clones.

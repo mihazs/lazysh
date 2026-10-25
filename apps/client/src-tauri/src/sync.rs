@@ -459,6 +459,7 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "version",
             "appTheme",
             "sessionLayout",
+            "uiLanguage",
             "cjkFallback",
             "theme",
             "customTheme",
@@ -485,6 +486,9 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
         if object
             .get("sessionLayout")
             .is_some_and(|value| !matches!(value.as_str(), Some("list" | "cards")))
+            || object
+                .get("uiLanguage")
+                .is_some_and(|value| !matches!(value.as_str(), Some("system" | "en")))
             || object.get("version").and_then(|v| v.as_u64()) != Some(1)
             || object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
             || serde_json::to_vec(preferences)
@@ -1407,20 +1411,26 @@ mod tests {
     }
 
     #[test]
-    fn session_layout_sync_accepts_old_settings_and_only_supported_choices() {
+    fn display_preferences_sync_accept_old_settings_and_only_supported_choices() {
         let mut bundle = settings();
         validate_bundle(&bundle, Scope::Settings).unwrap();
-        for layout in [serde_json::json!("list"), serde_json::json!("cards")] {
-            bundle.preferences = Some(serde_json::json!({"version":1,"sessionLayout":layout}));
-            validate_bundle(&bundle, Scope::Settings).unwrap();
-        }
-        for layout in [
-            serde_json::json!("grid"),
-            serde_json::json!(null),
-            serde_json::json!(["cards"]),
+        for (field, valid, unsupported) in [
+            ("sessionLayout", ["list", "cards"], "grid"),
+            ("uiLanguage", ["system", "en"], "pt-BR"),
         ] {
-            bundle.preferences = Some(serde_json::json!({"version":1,"sessionLayout":layout}));
-            assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+            for value in valid {
+                bundle.preferences = Some(serde_json::json!({"version":1,(field):value}));
+                validate_bundle(&bundle, Scope::Settings).unwrap();
+            }
+            for invalid in [
+                serde_json::json!(unsupported),
+                serde_json::json!(null),
+                serde_json::json!([valid[0]]),
+                serde_json::json!(true),
+            ] {
+                bundle.preferences = Some(serde_json::json!({"version":1,(field):invalid}));
+                assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+            }
         }
     }
 
