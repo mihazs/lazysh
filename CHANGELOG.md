@@ -7,6 +7,16 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Advanced chords, compiled modified Simple shortcuts and multiplexer prefix
+  shortcuts dispatch as one bounded native queue item with 50 ms between steps.
+  The first step is immediate, literal text stays one write, and later input
+  cannot interleave. Unsent steps retain their original access lease and are
+  discarded on revocation or disconnect; ET also discards timed remainders and
+  queued chords after observed connection loss. The interval is a lazysh choice,
+  not a verified Moshi timing value. Prefix settings now reject comma-separated
+  multi-step and `text:` literal bindings because a prefix must be one key.
+  No gesture defaults change.
+
 - Opt-in native biometric resume protection for supported Android, iOS and macOS
   devices, with native privacy covers, generation-bound command/result access,
   paused terminal delivery and cancellation of pending protected work. Windows

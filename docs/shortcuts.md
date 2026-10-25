@@ -56,13 +56,45 @@ within lazysh's current bounds. That source describes the simple modifier and
 comma behavior under “Key sequences (simple builder)”; its named-key table is
 under Advanced bindings. Simple named/function-key pickers and arbitrary Unicode
 tails after modified keys are not implemented. Use Advanced for named keys,
-function keys or modifiers that differ between steps. The current sender writes
-the compiled bytes together; documented per-step advanced-binding delays remain
-separate parity work.
+function keys or modifiers that differ between steps.
+
+Advanced chords and modified Simple shortcuts now preserve their compiled key
+boundaries through the native input queue. Once an item reaches its transport
+driver, the first step dispatches immediately;
+subsequent steps wait at least 50 ms after the preceding step finishes its native
+dispatch. This conservative fixed interval is lazysh's choice: Moshi documents a
+small delay but does not publish a numeric value. It is not a guarantee about
+packet spacing or remote execution time. There is no trailing delay. Literal
+`text:` bindings remain one write, including Unicode, commas and trailing spaces.
+
+Toolbar chords, custom gestures/D-pad bindings and tmux/Herdr prefix shortcuts
+all use this path. Multiplexer prefixes must be one parsed key, such as Ctrl+b or
+F12; comma-separated multi-step and `text:` literal prefixes are rejected. An
+entire sequence consumes one existing
+queue slot; later terminal input and resizes wait until it completes or is
+discarded. Frontend grammar limits stay unchanged. Native requests allow at most
+eight nonempty steps and 64 KiB total, preserving the existing input byte budget.
+No new native command or persisted settings version is introduced.
+
+Every step uses the request's original access lease. Locking, renderer replacement
+or terminal disconnection discards unsent steps; unlocking never resumes an old
+chord. ET additionally discards unsent remainders and queued timed chords when it
+observes connection loss, without treating ordinary reconnect-status updates as
+another loss. Ordinary one-write input keeps its existing ET behavior. Already
+dispatched data cannot be recalled and ET may replay it during recovery. SSH
+output and Mosh polling continue between steps; local PTY pacing runs in its
+input worker. An RPC success acknowledges queue admission, not remote execution.
+Late acknowledgements cannot update or redispatch from an old shortcut view
+after its original access generation has changed.
 
 Vitest verifies compilation, rejection boundaries, persisted text and panel
 behavior. Playwright desktop and phone profiles verify actual builder controls,
 reload, exact stored per-slot bindings, and terminal-toolbar/D-pad/body-gesture
-IPC payloads against a synthetic local-terminal bridge. Body gestures use
+IPC payloads and exact step arrays against a synthetic local-terminal bridge. Body gestures use
 synthetic browser pointer events; no real shell or native OS keyboard is used.
 Physical touch, IME and hardware keyboard behavior are separate acceptance gates.
+
+Native Cargo tests use paused time for step boundaries and ET loss handling,
+real SSH with a frozen input window for revocation/output progress, an owned PTY
+for queue ordering, and explicit OpenSSH/Mosh/ET protocol interoperability fixtures.
+These checks do not establish physical mobile timing parity.

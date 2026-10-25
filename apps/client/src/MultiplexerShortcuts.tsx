@@ -1,30 +1,34 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api as nativeApi } from './bridge';
-import { useProtectedApi } from './access';
-import { parseChord } from './preferences';
+import { captureAccess, useProtectedApi } from './access';
+import { parseChordSteps } from './preferences';
 import { errorMessage } from './SessionTools';
 
 type Kind = 'tmux' | 'herdr';
 export default function MultiplexerShortcuts({ sessionId, kind }: { sessionId: string; kind: Kind }) {
   const api = useProtectedApi(nativeApi);
+  const access = useRef(captureAccess()).current;
+  const mounted = useRef(true);
+  useEffect(() => {mounted.current=true; return()=>{mounted.current=false;};},[]);
   const key = `lazysh.multiplexer.prefix.${kind}`;
   const [prefix, setPrefix] = useState(() => { try { return localStorage.getItem(key) || 'Ctrl+b'; } catch { return 'Ctrl+b'; } });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
   let valid = false;
-  try { if (!/\s/.test(prefix.trim())) { parseChord(prefix); valid = true; } } catch { /* Invalid prefixes keep controls disabled. */ }
+  try { if (!prefix.startsWith('text:') && !/\s/.test(prefix.trim())) { valid = parseChordSteps(prefix).length === 1; } } catch { /* Invalid prefixes keep controls disabled. */ }
   const controls = kind === 'tmux'
     ? [['New window', 'c'], ['Previous window', 'p'], ['Next window', 'n'], ['Next pane', 'o'], ['Split left/right', '%'], ['Split top/bottom', '"'], ['Zoom pane', 'z'], ['Copy mode', '['], ['Detach', 'd']]
     : [['New tab', 'c'], ['Previous tab', 'p'], ['Next tab', 'n'], ['Pane left', 'h'], ['Pane down', 'j'], ['Pane up', 'k'], ['Pane right', 'l'], ['Split right', 'v'], ['Split down', '-'], ['Zoom pane', 'z'], ['Detach', 'q']];
   async function send(step: string) {
-    if (!valid || locked.current) return;
+    if (!valid || locked.current || !mounted.current || !access.current()) return;
     locked.current = true; setBusy(true); setError('');
-    try { await api.write(sessionId, parseChord(`${prefix} ${step}`)); }
-    catch (e) { setError(errorMessage(e)); }
-    finally { locked.current = false; setBusy(false); }
+    try { await api.writeSequence(sessionId, [...parseChordSteps(prefix), ...parseChordSteps(step)]); }
+    catch (e) { if (mounted.current && access.current()) setError(errorMessage(e)); }
+    finally { if (mounted.current && access.current()) {locked.current = false; setBusy(false);} }
   }
   function save() {
+    if (!mounted.current || !access.current()) return;
     if (!valid) { setError('Enter one valid prefix key, for example Ctrl+b or F12.'); return; }
     try { localStorage.setItem(key, prefix); setError(''); }
     catch { setError('Prefix works for this session, but could not be saved.'); }
