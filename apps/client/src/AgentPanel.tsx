@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Bot, RefreshCw } from 'lucide-react';
+import ApprovalPanel from './ApprovalPanel';
 
 type AgentState = 'working' | 'needs_attention' | 'done';
 type AgentSession = {
@@ -54,6 +55,7 @@ export function AgentPanel({ sessionId }: { sessionId: string }) {
   useEffect(() => { setSessions([]); setLoaded(false); void refresh(); return () => { request.current++; }; }, [sessionId]);
 
   return <section className="tool-panel" aria-label="Agent activity">
+    <ApprovalPanel sessionId={sessionId} />
     <div className="tool-bar"><h3>Agent activity</h3><button className="subtle-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />{busy ? 'Refreshing…' : 'Refresh'}</button></div>
     <p className="agent-note">Last reported events from this host. Respond to agent prompts in the terminal.</p>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{error}</p><h3>Connect your agents.</h3><p>Install the optional <code>lazysh-agent</code> companion on this host and enable its lifecycle hooks. Your terminal works independently.</p><p>See <code>docs/companion.md</code> in the lazysh repository for setup.</p></div>}

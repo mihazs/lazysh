@@ -4,6 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { AgentPanel, parseSnapshot } from './AgentPanel';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+vi.mock('./ApprovalPanel', () => ({default: () => null}));
 const session = { sessionId: 'a', agent: 'Claude Code', project: '/work', state: 'needs_attention', updatedAt: '2026-10-24T19:30:00Z', summary: 'Permission requested', paneId: '%1', eventCount: 2 };
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 

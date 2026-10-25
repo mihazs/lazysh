@@ -4,11 +4,12 @@ The user-selected stack is **Tauri 2 + Rust + React/TypeScript + Bun/Turborepo**
 
 ## Components
 
-- `apps/client/src/`: accessible host/session workspace, xterm.js terminal, SFTP and diff views, and companion event board. Terminal models live outside React render cycles and remain mounted across view changes. Only connection metadata and native-owned pins persist; credentials are prompted per connection.
+- `apps/client/src/`: host/session workspace, xterm.js terminal, agent transcripts, repository review, attachments, previews and editable dictation. Terminal models live outside React render cycles and remain mounted across view changes. Heavy panels and syntax highlighting load on demand. Connection intentions and preferences persist without credentials or terminal output.
 - `apps/client/src-tauri/`: direct Rust SSH transport (`russh`), local host metadata, strict SHA-256 host verification before authentication, PTY streaming/resize, bounded SFTP reads/uploads, explicit Git diffs and multiplexer discovery. All native commands are restricted to the bundled main window. Remote file content is text, never executable HTML.
-- `apps/agent/`: optional Rust CLI that accepts lifecycle events and emits a bounded local SQLite snapshot. It does not own agent processes, run an HTTP server, or grant approvals. The authenticated SSH connection carries snapshots.
+- `apps/agent/`: optional Rust CLI accepting lifecycle events and emitting bounded snapshots, transcript discovery and normalized records. Claude has an explicit active-branch snapshot; other adapters expose recorded messages. Hermes/OpenCode readers use read-only SQLite with query/row budgets. Optional Claude permission hooks await exact, expiring user decisions through a private queue. SDK commands provide bounded remote device controls. The authenticated SSH connection carries results.
+- `packages/credential-vault`: native-only Tauri plugin using platform credential stores. Host identity and route bind saved secrets; the frontend receives presence only. Per-host operation guards serialize save, forget, host edits and deletion. Windows uses journaled Credential Manager chunks because a single item cannot hold common private keys.
 
-The Bun workspace has two package-owned task sets, coordinated by Turbo; the Cargo workspace has both Rust crates and one root lockfile. No empty shared packages or duplicate configuration packages are introduced. The client owns its TypeScript/Vite/Vitest/Playwright configuration. Rust tests use Cargo's unit/integration conventions. Native tasks use Cargo's compilation cache and bypass Turbo artifact/test caching, avoiding cross-platform artifact reuse or cached integration results. Frontend outputs use an explicit `dist/**` cache boundary. There is no custom test runner or `scripts/` directory.
+The Bun workspace has app- and package-owned tasks coordinated by Turbo; Cargo owns the native crates and one root lockfile. The client declares its vault package dependency in both graphs. The client owns TypeScript/Vite/Vitest/Playwright configuration. Rust tests use Cargo's unit/integration conventions. Native tasks use Cargo's compilation cache and bypass Turbo artifact/test caching. Frontend outputs use an explicit `dist/**` cache boundary. There is no custom test runner or `scripts/` directory.
 
 ```mermaid
 flowchart LR
@@ -24,7 +25,11 @@ flowchart LR
 
 The empty repository offered no existing application patterns. Tauri follows the user's explicit stack choice; Flutter was considered before that preference and is not part of the project. A native SSH library avoids a local websocket relay and works on mobile where a desktop `ssh` subprocess is unavailable. xterm.js provides tested terminal parsing/IME/scrollback behavior rather than a new terminal emulator. An optional local event CLI gives agent visibility without owning, replacing or restarting an agent runtime.
 
-Credentials stay in memory in this first slice. Platform vault/biometrics are tracked separately; there is no plaintext password setting or pretend secure store. Native chat and approvals remain gated on real agent adapters and exact pending-prompt validation. Missing usage data stays unknown. The first iteration manually refreshes bounded snapshots; background polling is not implied.
+Credentials stay in memory unless explicitly saved to the native vault. Android/iOS biometric protection is optional and device-local; secure storage alone is not biometric authentication. Explicit private-key export requires fresh native authentication. Optional sync uses authenticated age encryption and HTTPS conditional writes, with separate settings and credential actions. Transcript views never send approvals. Review comments, attachments and dictation stage text in a matching terminal's editable composer, with explicit user sending. Missing usage data stays unknown.
+
+One-hop bastions use independent credentials and pins for each handshake. A rejected destination key receives no destination credentials. Workspace restoration uses saved vault entries and exact tmux/Herdr names; Zellij remains an explicit attach. Closing a temporary parent shell preserves independently attached multiplexer PTYs.
+
+Browser previews bind only device loopback and connect through existing SSH. Their sandboxed remote origin has no Tauri command permissions. Limits apply per session, application and active socket; disconnect cancels listeners and connections. Other local applications can reach loopback forwards. Voice inference is local Whisper with bounded model imports, audio and execution, no automatic model download, and suppressed native speech logs. Platform microphone/preview behavior still needs real-device checks.
 
 ## Acceptance and delivery
 
@@ -36,4 +41,4 @@ Rollback is removal of the client/optional hooks. Multiplexer sessions remain ow
 
 ## Unresolved delivery work
 
-This is an initial direct-SSH implementation, **not full Moshi parity**. Mosh/ET, bastions, native agent chat/adapters, race-safe approvals, complete Herdr/Zellij controls, vault/biometrics, previews, voice, annotations, push, sync, Apple extensions, simulator streaming, historical/media browsing and full native release/performance gates remain open. See issues #5–#20 for the bounded work and acceptance conditions.
+This remains **not full Moshi parity**. Mosh/ET app integration, remaining transcript adapters and live verification, broader same-pane chat/approvals, desktop biometric gating and resume locks, remaining gesture/appearance controls, additional voice engines, visual DOM annotations, background push delivery, Apple extensions, continuous simulator video and iOS touch, and full native release/performance gates remain open. Encrypted sync and mobile biometrics still require real-service/device acceptance. Implemented subsets do not close their broader issues; see #5–#20 for acceptance conditions.

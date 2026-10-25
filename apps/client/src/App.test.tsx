@@ -19,7 +19,9 @@ const mocks = vi.hoisted(() => ({
     attachTmux: vi.fn(),
   },
   terminal: { write: vi.fn(), dispose: vi.fn() },
+  invoke: vi.fn(),
 }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.terminal }));
 vi.mock("./TerminalPane", () => ({
@@ -52,6 +54,7 @@ beforeEach(() => {
     length: 0,
   });
   mocks.api.listHosts.mockResolvedValue([host]);
+  mocks.invoke.mockResolvedValue(false);
   mocks.api.disconnect.mockResolvedValue(undefined);
   mocks.api.trustHostKey.mockResolvedValue(undefined);
   mocks.api.ackOutput.mockResolvedValue(undefined);
@@ -85,6 +88,97 @@ describe("host validation", () => {
 });
 
 describe("connection flow", () => {
+  it("trusts the bastion identity separately and never substitutes the destination password", async () => {
+    const jump = {
+      ...host,
+      id: "jump",
+      name: "Gateway",
+      hostname: "gateway.local",
+    };
+    mocks.api.listHosts.mockResolvedValue([
+      { ...host, jumpHostId: "jump" },
+      jump,
+    ]);
+    mocks.api.connect
+      .mockRejectedValueOnce({
+        kind: "unknown_host_key",
+        hostId: "jump",
+        fingerprint: "SHA256:jump",
+        message: "Verify gateway",
+      })
+      .mockResolvedValueOnce({ sessionId: "routed" });
+    const user = await openConnection();
+    await user.click(screen.getByLabelText("Use bastion’s saved credentials"));
+    await user.type(
+      screen.getByLabelText("Bastion password"),
+      "gateway-secret",
+    );
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByText("gateway.local:22")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Trust key and connect" }),
+    );
+    expect(await screen.findByText("Live SSH terminal")).toBeTruthy();
+    expect(mocks.api.trustHostKey).toHaveBeenCalledWith("jump", "SHA256:jump");
+    expect(mocks.api.connect).toHaveBeenLastCalledWith(
+      "home",
+      { password: "temporary-secret" },
+      expect.any(Function),
+      {
+        rememberCredentials: false,
+        useSavedCredentials: false,
+        jumpCredentials: { password: "gateway-secret" },
+      },
+    );
+  });
+
+  it("uses saved native credentials only after explicit selection without exposing their values", async () => {
+    mocks.invoke.mockImplementation(
+      async (command) => command === "has_credentials",
+    );
+    mocks.api.connect.mockResolvedValue({ sessionId: "saved" });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(
+      await screen.findByRole("button", { name: "Connect to Home" }),
+    );
+    await user.click(await screen.findByLabelText("Use saved credentials"));
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByText("Live SSH terminal")).toBeTruthy();
+    expect(mocks.api.connect).toHaveBeenCalledWith(
+      "home",
+      {},
+      expect.any(Function),
+      { rememberCredentials: false, useSavedCredentials: true },
+    );
+    expect(window.localStorage.setItem).toHaveBeenCalledExactlyOnceWith(
+      "lazysh.workspace.v1",
+      '[{"hostId":"home"}]',
+    );
+    expect(window.sessionStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("forgets saved credentials before removing the saved-login option", async () => {
+    mocks.invoke.mockImplementation(
+      async (command) => command === "has_credentials",
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(
+      await screen.findByRole("button", { name: "Connect to Home" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Forget saved credentials" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Use saved credentials")).toBeNull(),
+    );
+    expect(mocks.invoke).toHaveBeenCalledWith("forget_credentials", {
+      hostId: "home",
+    });
+  });
+
   async function openConnection() {
     const user = userEvent.setup();
     render(<App />);
@@ -122,7 +216,10 @@ describe("connection flow", () => {
       expect.any(Function),
     );
     expect(screen.queryByLabelText("Password")).toBeNull();
-    expect(window.localStorage.setItem).not.toHaveBeenCalled();
+    expect(window.localStorage.setItem).toHaveBeenCalledExactlyOnceWith(
+      "lazysh.workspace.v1",
+      '[{"hostId":"home"}]',
+    );
     expect(window.sessionStorage.setItem).not.toHaveBeenCalled();
   });
 
@@ -187,15 +284,20 @@ describe("connection flow", () => {
 
   it("attaches tmux in a separate terminal without injecting input or replacing the original tab", async () => {
     mocks.api.connect.mockResolvedValue({ sessionId: "one" });
-    mocks.api.muxSessions.mockResolvedValue([
-      { id: "$1", name: "work", windows: 2, attached: false },
-    ]);
+    mocks.invoke.mockResolvedValue({
+      tmuxAvailable: true,
+      herdrAvailable: false,
+      zellijAvailable: false,
+      sessions: [{ id: "$1", name: "work", windows: [] }],
+    });
     mocks.api.attachTmux.mockResolvedValue({ sessionId: "two" });
     const user = await openConnection();
     await user.click(screen.getByRole("button", { name: "Connect" }));
     await screen.findByText("Live SSH terminal");
     await user.click(screen.getByRole("button", { name: "Sessions" }));
-    await user.click(await screen.findByRole("button", { name: "Attach" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Attach work" }),
+    );
     await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
     expect(mocks.api.attachTmux).toHaveBeenCalledWith(
       "one",
@@ -278,4 +380,108 @@ it("focuses host search when opened with the command palette shortcut", async ()
       "No matching hosts. Add one to start a connection.",
     ),
   ).toBeTruthy();
+});
+
+it("restores an exact tmux workspace through saved credentials without sending shell text", async () => {
+  vi.mocked(localStorage.getItem).mockReturnValue(
+    JSON.stringify([
+      { hostId: "home", attached: { kind: "tmux", name: "durable-agent" } },
+    ]),
+  );
+  mocks.api.connect.mockResolvedValue({ sessionId: "temporary-shell" });
+  mocks.api.attachTmux.mockResolvedValue({ sessionId: "restored-agent" });
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("button", { name: "Connect to Home" });
+  await user.click(
+    screen.getByRole("button", { name: "Restore previous workspace" }),
+  );
+  expect(await screen.findByText("Live SSH terminal")).toBeTruthy();
+  expect(mocks.api.connect).toHaveBeenCalledWith(
+    "home",
+    {},
+    expect.any(Function),
+    { useSavedCredentials: true },
+  );
+  expect(mocks.api.attachTmux).toHaveBeenCalledWith(
+    "temporary-shell",
+    "durable-agent",
+    expect.any(Function),
+  );
+  expect(mocks.api.disconnect).toHaveBeenCalledWith("temporary-shell");
+  expect(mocks.api.write).not.toHaveBeenCalled();
+  expect(localStorage.setItem).toHaveBeenLastCalledWith(
+    "lazysh.workspace.v1",
+    JSON.stringify([
+      { hostId: "home", attached: { kind: "tmux", name: "durable-agent" } },
+    ]),
+  );
+});
+
+it("exports a protected key only on explicit request and clears it when forgotten", async () => {
+  mocks.api.listHosts.mockResolvedValue([
+    { ...host, biometricUnlock: true, credentialsStored: true },
+  ]);
+  mocks.invoke.mockImplementation(async (command: string) =>
+    command === "has_credentials"
+      ? true
+      : command === "export_saved_identity"
+        ? { privateKey: "test-private-key" }
+        : undefined,
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(
+    await screen.findByRole("button", { name: "Connect to Home" }),
+  );
+  expect(mocks.invoke).not.toHaveBeenCalledWith(
+    "export_saved_identity",
+    expect.anything(),
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Export private key with biometrics" }),
+  );
+  expect(
+    (
+      (await screen.findByLabelText(
+        "Exported private key",
+      )) as HTMLTextAreaElement
+    ).value,
+  ).toBe("test-private-key");
+  await user.click(
+    screen.getByRole("button", { name: "Forget saved credentials" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByLabelText("Exported private key")).toBeNull(),
+  );
+  expect(localStorage.setItem).not.toHaveBeenCalledWith(
+    expect.anything(),
+    expect.stringContaining("test-private-key"),
+  );
+});
+
+it("allows cancellation while private key authentication is pending", async () => {
+  mocks.api.listHosts.mockResolvedValue([
+    { ...host, biometricUnlock: true, credentialsStored: true },
+  ]);
+  mocks.invoke.mockImplementation((command: string) =>
+    command === "export_saved_identity"
+      ? new Promise(() => {})
+      : Promise.resolve(command === "has_credentials"),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(
+    await screen.findByRole("button", { name: "Connect to Home" }),
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Export private key with biometrics" }),
+  );
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(mocks.invoke).toHaveBeenCalledWith("cancel_credential_auth");
+  expect(
+    screen.queryByRole("button", {
+      name: "Export private key with biometrics",
+    }),
+  ).toBeNull();
 });

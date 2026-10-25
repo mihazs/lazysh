@@ -4,7 +4,8 @@
   "private": true,
   "packageManager": "bun@1.3.14",
   "workspaces": [
-    "apps/*"
+    "apps/*",
+    "packages/*"
   ],
   "scripts": {
     "dev": "turbo run dev:native --filter=@lazysh/client",
@@ -15,6 +16,8 @@
     "test": "turbo run test test:rust",
     "test:e2e": "turbo run test:e2e",
     "test:openssh": "turbo run test:openssh",
+    "test:multiplexers": "turbo run test:multiplexers",
+    "test:voice": "turbo run test:voice",
     "lint": "turbo run lint",
     "format:check": "turbo run format:check",
     "build:ios": "turbo run build:ios --filter=@lazysh/client",

@@ -9,6 +9,8 @@
     "check:rust": { "cache": false },
     "test:rust": { "cache": false },
     "test:openssh": { "cache": false, "passThroughEnv": ["USER"] },
+    "test:multiplexers": { "cache": false, "passThroughEnv": ["PATH"] },
+    "test:voice": { "cache": false, "passThroughEnv": ["LAZYSH_WHISPER_TEST_MODEL", "LAZYSH_WHISPER_TEST_WAV"] },
     "test:e2e": { "cache": false },
     "test:install-browser": { "cache": false },
     "dev": { "cache": false, "persistent": true },

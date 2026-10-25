@@ -4,13 +4,13 @@ A direct SSH terminal and agent workspace for Android, iOS, macOS, Linux, and Wi
 
 Implementation is in progress. Moshi parity is a release objective, not a claim about this initial repository. Track delivery in the [Project](https://github.com/users/mihazs/projects/2), [parity epic](https://github.com/mihazs/lazysh/issues/1), and [feature evidence](docs/moshi-evidence.md).
 
-The first implementation includes password/private-key SSH, explicit server fingerprint verification, concurrent terminal tabs, bounded output with backpressure, SFTP browsing/text reads/new-file uploads, staged/unstaged Git diffs, independent tmux attachments, and an optional [local agent-event companion](docs/companion.md). Credentials are prompted per connection and stay in memory.
+The implementation includes password/private-key SSH, explicit server fingerprint verification, concurrent terminal tabs, output backpressure, and an optional [local agent companion](docs/companion.md). The workspace adds transcript readers, tmux/Herdr/Zellij controls, historical Git browsing and review comments, SFTP transfers, image attachments, SSH-forwarded previews, terminal preferences, and local Whisper dictation. These features have individual limits and verification gates; their presence does not establish full Moshi parity.
 
-Mosh/ET, complete multiplexer controls, vault/biometrics, native agent chat/approvals, voice, previews, notifications, sync and Apple extensions remain open issues. Mobile source compatibility does not establish a tested native release.
+Credentials remain in memory by default. Explicit saving uses the device's [native credential store](docs/credentials.md), with optional Android/iOS biometric protection. Optional [encrypted sync](docs/sync.md), [Claude hook approvals](docs/approvals.md), [local notifications](docs/notifications.md), and [remote device controls](docs/devices.md) have separate setup and limits. Full agent coverage, Mosh/ET integration, additional voice engines, background push and Apple extensions remain open. Mobile source compatibility does not establish a tested native release.
 
 ## Development
 
-Requires Bun, Rust stable, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform.
+Requires Bun, Rust stable, the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, CMake and libclang for the local Whisper engine.
 
 ```sh
 bun install --frozen-lockfile
@@ -30,14 +30,16 @@ bun run check
 bun run lint
 bun run format:check
 bun run test:openssh
+bun run test:multiplexers
 ```
 
-`test` runs the client Vitest suite and both Rust suites through Cargo. `test:openssh` additionally requires a local `sshd` executable. Browser tests check responsive UI and keyboard behavior, not native SSH. Platform/toolchain and release results are recorded in the implementation PR.
+`test` runs Vitest and the Rust workspace packages through Cargo. `test:openssh` additionally requires local `sshd`; `test:multiplexers` requires tmux, Herdr and Zellij on PATH and uses isolated temporary sessions. `test:voice` requires explicitly supplied `LAZYSH_WHISPER_TEST_MODEL` and `LAZYSH_WHISPER_TEST_WAV` fixtures. Browser tests check responsive UI and keyboard behavior, not native SSH. Platform/toolchain and release results are recorded in the implementation PR.
 
 ## Monorepo
 
 - `apps/client`: shared React/xterm.js client and its Tauri Rust crate, desktop/mobile targets, Vitest tests, and Playwright tests.
 - `apps/agent`: optional Rust host companion, with library unit tests and CLI integration tests under `tests/`.
+- `packages/credential-vault`: Rust Tauri plugin with Android Keystore and iOS Keychain implementations, plus desktop OS credential storage.
 - Root `Cargo.toml`/`Cargo.lock`: Rust workspace and dependency lock. Root `package.json`/`bun.lock`: Bun workspace and dependency lock. `turbo.json`: package task orchestration.
 
 Dependencies belong to their owning app. Root commands delegate to Turbo package tasks. Frontend build outputs are cached; native builds and integration tests run freshly and use Cargo's compilation cache. There is no `scripts/` directory or custom test runner.
@@ -52,7 +54,7 @@ See [architecture and current limits](docs/architecture.md) for the component bo
 
 Desktop: `bun run build:native` creates the native release executable. To create platform bundles, run `bun run --cwd apps/client tauri build`.
 
-Android (API 24+, current Android System WebView): install JDK 21, SDK platform 36, build tools 36.0.0 and NDK 29.0.14206865. Set `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME`, then run `bun run --cwd apps/client tauri android dev`. The Android project is checked in; do not reinitialize it. `bun run build:android` builds a debug ARM64 APK. For an optimized unsigned APK: `bun run --cwd apps/client tauri android build --target aarch64 --apk --ci`.
+Android (API 24+, current Android System WebView): install JDK 21, SDK platform 36, build tools 36.0.0 and NDK 29.0.14206865. Set `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME`, then run `bun run --cwd apps/client tauri android dev`. The Android project is checked in; do not reinitialize it. `bun run build:android` builds a debug ARM64 APK. For an optimized unsigned APK: `CMAKE_ANDROID_NDK=$NDK_HOME WHISPER_DONT_GENERATE_BINDINGS=1 bun run --cwd apps/client tauri android build --target aarch64 --apk --ci`.
 
 iOS (16+): on macOS with Xcode, `bun run build:ios` initializes and builds an unsigned ARM64 simulator app. Distribution requires your own Apple signing identity. macOS desktop requires version 13+.
 

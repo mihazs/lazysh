@@ -6,9 +6,9 @@ import {
   RefreshCw,
   Upload,
   GitCompareArrows,
-  Layers,
 } from "lucide-react";
-import { api, type FileEntry, type MuxSession } from "./bridge";
+import { api, type FileEntry } from "./bridge";
+export { MuxPanel } from "./MultiplexerPanel";
 
 export function errorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error)
@@ -343,100 +343,6 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
           </p>
         </div>
       )}
-    </section>
-  );
-}
-
-export function MuxPanel({
-  sessionId,
-  onAttach,
-}: {
-  sessionId: string;
-  onAttach: (name: string) => Promise<void>;
-}) {
-  const [sessions, setSessions] = useState<MuxSession[]>([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function load() {
-    setBusy(true);
-    setError("");
-    try {
-      setSessions(await api.muxSessions(sessionId));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, [sessionId]);
-  async function attach(name: string) {
-    setBusy(true);
-    setError("");
-    try {
-      await onAttach(name);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <section className="tool-panel">
-      <div className="tool-bar">
-        <h3>tmux sessions</h3>
-        <button
-          className="subtle-button"
-          onClick={() => void load()}
-          disabled={busy}
-        >
-          <RefreshCw size={15} /> Refresh
-        </button>
-      </div>
-      {error && (
-        <p className="inline-error" role="alert">
-          {error}
-        </p>
-      )}
-      {busy && (
-        <p className="loading" role="status">
-          Reading sessions…
-        </p>
-      )}
-      {!busy && !error && sessions.length === 0 && (
-        <div className="panel-empty">
-          <Layers size={28} />
-          <h3>No tmux sessions found.</h3>
-          <p>
-            Start tmux on this host to keep agents running
-            <br />
-            when you disconnect.
-          </p>
-          <code>tmux new -s work</code>
-        </div>
-      )}
-      <div className="mux-list">
-        {sessions.map((session) => (
-          <div className="mux-row" key={session.id}>
-            <Layers size={18} />
-            <div>
-              <strong>{session.name}</strong>
-              <small>
-                {session.windows} windows ·{" "}
-                {session.attached ? "attached elsewhere" : "detached"}
-              </small>
-            </div>
-            <button
-              className="subtle-button"
-              disabled={busy}
-              onClick={() => void attach(session.name)}
-            >
-              Attach
-            </button>
-          </div>
-        ))}
-      </div>
     </section>
   );
 }

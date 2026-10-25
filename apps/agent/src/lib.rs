@@ -1,4 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
+pub mod approvals;
+pub mod devices;
+pub mod transcript;
 use clap::ValueEnum;
 use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -27,6 +30,7 @@ const HOOK_EVENTS: [&str; 8] = [
 pub enum Error {
     InvalidEvent,
     InvalidArgument,
+    Device(&'static str),
     Io(io::Error),
     Storage(rusqlite::Error),
 }
@@ -35,6 +39,7 @@ impl Error {
         match self {
             Self::InvalidEvent => "InvalidEvent",
             Self::InvalidArgument => "InvalidArgument",
+            Self::Device(kind) => kind,
             Self::Io(_) => "IoError",
             Self::Storage(_) => "StorageError",
         }

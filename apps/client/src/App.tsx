@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Bot,
   ChevronRight,
@@ -15,6 +16,14 @@ import {
   KeyRound,
   Layers,
   Menu,
+  MessageSquare,
+  Settings,
+  Globe,
+  Paperclip,
+  Mic,
+  Cloud,
+  Bell,
+  Smartphone,
   Pencil,
   Plus,
   Search,
@@ -34,10 +43,21 @@ import {
   type SshEvent,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
-import { FilesPanel, DiffPanel, MuxPanel, errorMessage } from "./SessionTools";
+import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import AgentPanel from "./AgentPanel";
+import PreferencesPanel from "./PreferencesPanel";
+import CredentialsPanel from "./CredentialsPanel";
+import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
+import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
+const ChatPanel = lazy(() => import("./ChatPanel"));
+const PreviewPanel = lazy(() => import("./PreviewPanel"));
+const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
+const AttachmentPanel = lazy(() => import("./AttachmentPanel"));
+const VoicePanel = lazy(() => import("./VoicePanel"));
+const SyncPanel = lazy(() => import("./SyncPanel"));
+const DevicePanel = lazy(() => import("./DevicePanel"));
 
 async function prepareSession(
   hostId: string,
@@ -89,13 +109,28 @@ async function prepareSession(
   return { session, onEvent, establish };
 }
 
-type View = "terminal" | "agents" | "files" | "diff" | "sessions";
+type View =
+  | "terminal"
+  | "agents"
+  | "files"
+  | "diff"
+  | "sessions"
+  | "chat"
+  | "preview"
+  | "attachments"
+  | "voice"
+  | "devices";
 const views = [
   { id: "terminal" as const, label: "Terminal", Icon: TerminalSquare },
   { id: "agents" as const, label: "Agents", Icon: Bot },
+  { id: "chat" as const, label: "Transcript", Icon: MessageSquare },
   { id: "files" as const, label: "Files", Icon: FolderOpen },
   { id: "diff" as const, label: "Diff", Icon: GitCompareArrows },
   { id: "sessions" as const, label: "Sessions", Icon: Layers },
+  { id: "preview" as const, label: "Preview", Icon: Globe },
+  { id: "attachments" as const, label: "Attach", Icon: Paperclip },
+  { id: "voice" as const, label: "Dictate", Icon: Mic },
+  { id: "devices" as const, label: "Devices", Icon: Smartphone },
 ];
 
 function Dialog({
@@ -188,10 +223,12 @@ export function validateHost(
 
 function HostEditor({
   initial,
+  hosts,
   save,
   close,
 }: {
   initial: Host | null;
+  hosts: Host[];
   save: (host: Host) => Promise<void>;
   close: () => void;
 }) {
@@ -206,6 +243,31 @@ function HostEditor({
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [protection, setProtection] = useState({
+    available: false,
+    reason: "Checking device support…",
+  });
+  useEffect(() => {
+    let alive = true;
+    void invoke<{ available: boolean; reason: string }>("credential_protection")
+      .then((value) => {
+        if (alive)
+          setProtection({
+            available: value.available === true,
+            reason: value.reason,
+          });
+      })
+      .catch(() => {
+        if (alive)
+          setProtection({
+            available: false,
+            reason: "Biometric protection is unavailable on this device.",
+          });
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const next = {
@@ -295,6 +357,56 @@ function HostEditor({
             destination requires verification again.
           </p>
         )}
+        <label>
+          SSH bastion
+          <select
+            value={host.jumpHostId || ""}
+            onChange={(event) =>
+              setHost({ ...host, jumpHostId: event.target.value || null })
+            }
+          >
+            <option value="">Connect directly</option>
+            {hosts
+              .filter(
+                (candidate) =>
+                  candidate.id !== host.id && !candidate.jumpHostId,
+              )
+              .map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.name} ({candidate.username}@{candidate.hostname})
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={host.forwardAgent === true}
+            onChange={(event) =>
+              setHost({ ...host, forwardAgent: event.target.checked })
+            }
+          />
+          Forward this connection’s private-key identity
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={host.biometricUnlock === true}
+            disabled={!protection.available && !host.biometricUnlock}
+            onChange={(event) =>
+              setHost({ ...host, biometricUnlock: event.target.checked })
+            }
+          />
+          Require biometrics for saved credentials
+        </label>
+        <p className="security-note">{protection.reason}</p>
+        {host.forwardAgent && (
+          <p className="security-note">
+            Programs on this host can request signatures with your selected
+            identity while connected. Your other keys and local SSH agent are
+            not exposed. Requires private-key authentication.
+          </p>
+        )}
         {error && (
           <p className="inline-error" role="alert">
             {error}
@@ -320,10 +432,12 @@ function HostEditor({
 
 function ConnectDialog({
   host,
+  hosts,
   connected,
   close,
 }: {
   host: Host;
+  hosts: Host[];
   connected: (session: LiveSession) => void;
   close: () => void;
 }) {
@@ -331,15 +445,32 @@ function ConnectDialog({
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [rememberCredentials, setRememberCredentials] = useState(false);
+  const [savedCredentials, setSavedCredentials] = useState(false);
+  const [storedCredentials, setStoredCredentials] = useState(
+    host.credentialsStored === true,
+  );
+  const [useSavedCredentials, setUseSavedCredentials] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [trust, setTrust] = useState<string | null>(null);
+  const [trustHostId, setTrustHostId] = useState(host.id);
+  const [savedJump, setSavedJump] = useState(true);
+  const [jumpPassword, setJumpPassword] = useState("");
+  const [exportedIdentity, setExportedIdentity] = useState("");
+  const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
+    void invoke<boolean>("has_credentials", { hostId: host.id })
+      .then((saved) => {
+        if (alive.current) setSavedCredentials(saved === true);
+      })
+      .catch(() => {});
     return () => {
       alive.current = false;
+      void invoke("cancel_credential_auth").catch(() => {});
     };
   }, []);
 
@@ -351,11 +482,12 @@ function ConnectDialog({
     let session: LiveSession | undefined;
     try {
       if (accept && trust) {
-        await api.trustHostKey(host.id, trust);
+        await api.trustHostKey(trustHostId, trust);
         setTrust(null);
       }
-      const credentials: Credentials =
-        method === "password"
+      const credentials: Credentials = useSavedCredentials
+        ? {}
+        : method === "password"
           ? { password }
           : { privateKey, ...(passphrase ? { passphrase } : {}) };
       const pending = await prepareSession(
@@ -364,7 +496,18 @@ function ConnectDialog({
         `${host.username}@${host.hostname}`,
       );
       session = pending.session;
-      const result = await api.connect(host.id, credentials, pending.onEvent);
+      const result =
+        rememberCredentials ||
+        useSavedCredentials ||
+        (host.jumpHostId && !savedJump)
+          ? await api.connect(host.id, credentials, pending.onEvent, {
+              rememberCredentials,
+              useSavedCredentials,
+              ...(host.jumpHostId && !savedJump
+                ? { jumpCredentials: { password: jumpPassword } }
+                : {}),
+            })
+          : await api.connect(host.id, credentials, pending.onEvent);
       pending.establish(result.sessionId);
       if (!alive.current) {
         await api.disconnect(result.sessionId);
@@ -378,9 +521,10 @@ function ConnectDialog({
     } catch (e) {
       session?.terminal.dispose();
       const detail = e as SshError;
-      if (detail?.kind === "unknown_host_key" && detail.fingerprint)
+      if (detail?.kind === "unknown_host_key" && detail.fingerprint) {
+        setTrustHostId(detail.hostId || host.id);
         setTrust(detail.fingerprint);
-      else {
+      } else {
         setTrust(null);
         setError(
           detail?.kind === "host_key_changed"
@@ -398,7 +542,8 @@ function ConnectDialog({
     <Dialog
       title={trust ? "Verify this host" : `Connect to ${host.name}`}
       close={() => {
-        if (!busy) close();
+        void invoke("cancel_credential_auth").catch(() => {});
+        close();
       }}
     >
       {trust ? (
@@ -409,7 +554,7 @@ function ConnectDialog({
           <p>
             This is your first connection to{" "}
             <strong>
-              {host.hostname}:{host.port}
+              {trustHost.hostname}:{trustHost.port}
             </strong>
             . Check this fingerprint against the server through a trusted
             channel.
@@ -420,7 +565,7 @@ function ConnectDialog({
           </div>
           <p className="muted">
             lazysh will pin this key and reject future connections if it
-            changes. Your credentials have not been sent.
+            changes. Credentials for this server have not been sent.
           </p>
           {error && (
             <p className="inline-error" role="alert">
@@ -452,6 +597,40 @@ function ConnectDialog({
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
+          {host.jumpHostId && (
+            <fieldset>
+              <legend>
+                Bastion:{" "}
+                {hosts.find((item) => item.id === host.jumpHostId)?.name ||
+                  host.jumpHostId}
+              </legend>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={savedJump}
+                  onChange={(event) => setSavedJump(event.target.checked)}
+                />
+                Use bastion’s saved credentials
+              </label>
+              {savedJump ? (
+                <p>
+                  Connect to the bastion directly and save its credentials
+                  first.
+                </p>
+              ) : (
+                <label>
+                  Bastion password
+                  <input
+                    type="password"
+                    required
+                    autoComplete="off"
+                    value={jumpPassword}
+                    onChange={(event) => setJumpPassword(event.target.value)}
+                  />
+                </label>
+              )}
+            </fieldset>
+          )}
           <div
             className="segmented"
             role="group"
@@ -472,7 +651,83 @@ function ConnectDialog({
               Private key
             </button>
           </div>
-          {method === "password" ? (
+          {(savedCredentials || storedCredentials) && (
+            <div>
+              {savedCredentials && (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={useSavedCredentials}
+                    onChange={(event) =>
+                      setUseSavedCredentials(event.target.checked)
+                    }
+                  />
+                  Use saved credentials
+                </label>
+              )}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  void invoke("forget_credentials", { hostId: host.id })
+                    .then(() => {
+                      setSavedCredentials(false);
+                      setStoredCredentials(false);
+                      setUseSavedCredentials(false);
+                      setExportedIdentity("");
+                    })
+                    .catch((e) => setError(errorMessage(e)));
+                }}
+              >
+                Forget saved credentials
+              </button>
+            </div>
+          )}
+          {host.biometricUnlock && storedCredentials && (
+            <div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setError("");
+                  void invoke<{ privateKey: string }>("export_saved_identity", {
+                    hostId: host.id,
+                  })
+                    .then((result) => {
+                      if (alive.current) setExportedIdentity(result.privateKey);
+                    })
+                    .catch((error) => {
+                      if (alive.current) setError(errorMessage(error));
+                    })
+                    .finally(() => {
+                      if (alive.current) setBusy(false);
+                    });
+                }}
+              >
+                Export private key with biometrics
+              </button>
+              {exportedIdentity && (
+                <>
+                  <label>
+                    Exported private key
+                    <textarea
+                      readOnly
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={exportedIdentity}
+                    />
+                  </label>
+                  <button type="button" onClick={() => setExportedIdentity("")}>
+                    Hide exported key
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {useSavedCredentials ? (
+            <p>Credentials will be read from this device’s secure store.</p>
+          ) : method === "password" ? (
             <label>
               Password
               <input
@@ -506,24 +761,41 @@ function ConnectDialog({
                   autoComplete="off"
                 />
               </label>
+              <details>
+                <summary>Generate or inspect an identity</summary>
+                <CredentialsPanel
+                  onUse={(credentials) => {
+                    setPrivateKey(credentials.privateKey || "");
+                    setPassphrase(credentials.passphrase || "");
+                    setMethod("key");
+                  }}
+                />
+              </details>
             </>
           )}
           <p className="security-note">
-            <KeyRound size={15} /> Credentials stay in memory and are cleared
-            after connection.
+            <KeyRound size={15} /> Credentials stay in memory unless you choose
+            to save them in this device’s secure store.
           </p>
+          {!useSavedCredentials && (
+            <label>
+              <input
+                type="checkbox"
+                checked={rememberCredentials}
+                onChange={(event) =>
+                  setRememberCredentials(event.target.checked)
+                }
+              />
+              Save credentials on this device after connecting
+            </label>
+          )}
           {error && (
             <p className="inline-error" role="alert">
               {error}
             </p>
           )}
           <div className="dialog-actions">
-            <button
-              type="button"
-              className="subtle-button"
-              disabled={busy}
-              onClick={close}
-            >
+            <button type="button" className="subtle-button" onClick={close}>
               Cancel
             </button>
             <button className="primary-button" disabled={busy}>
@@ -548,11 +820,149 @@ export default function App() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
+  const [preferences, setPreferences] = useState(false);
+  const [sync, setSync] = useState(false);
+  const [inbox, setInbox] = useState(false);
+  const [previousWorkspace, setPreviousWorkspace] = useState(readWorkspace);
+  const [restoring, setRestoring] = useState(false);
+  const restoringRef = useRef(false);
   const [sidebar, setSidebar] = useState(false);
   const [loaded, setLoaded] = useState(!native);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const active = sessions.find((session) => session.id === activeId);
+
+  function persistWorkspace(next: SessionIntent[]) {
+    try {
+      saveWorkspace(next);
+    } catch {
+      setError("Workspace restoration could not be saved on this device.");
+    }
+  }
+  async function restoreWorkspace() {
+    if (restoringRef.current) return;
+    restoringRef.current = true;
+    setRestoring(true);
+    setError("");
+    const restored: LiveSession[] = [];
+    const remaining: SessionIntent[] = [];
+    const failures: string[] = [];
+    for (const intent of previousWorkspace) {
+      const host = hosts.find((item) => item.id === intent.hostId);
+      if (!host || intent.attached?.kind === "zellij") {
+        remaining.push(intent);
+        continue;
+      }
+      let shell: Awaited<ReturnType<typeof prepareSession>> | undefined;
+      let child: Awaited<ReturnType<typeof prepareSession>> | undefined;
+      try {
+        shell = await prepareSession(
+          host.id,
+          host.name,
+          `${host.username}@${host.hostname}`,
+        );
+        const connected = await api.connect(host.id, {}, shell.onEvent, {
+          useSavedCredentials: true,
+        });
+        shell.establish(connected.sessionId);
+        if (intent.attached) {
+          child = await prepareSession(
+            host.id,
+            `${host.name} / ${intent.attached.name}`,
+            shell.session.destination,
+          );
+          const attached =
+            intent.attached.kind === "tmux"
+              ? await api.attachTmux(
+                  shell.session.id,
+                  intent.attached.name,
+                  child.onEvent,
+                )
+              : await api.attachMultiplexer(
+                  shell.session.id,
+                  intent.attached.kind,
+                  intent.attached.name,
+                  child.onEvent,
+                );
+          child.establish(attached.sessionId);
+          child.session.attached = intent.attached;
+          await api.disconnect(shell.session.id);
+          shell.session.terminal.dispose();
+          restored.push(child.session);
+        } else restored.push(shell.session);
+      } catch (error) {
+        for (const pending of [child, shell])
+          if (pending) {
+            if (pending.session.id)
+              await api.disconnect(pending.session.id).catch(() => {});
+            pending.session.terminal.dispose();
+          }
+        remaining.push(intent);
+        failures.push(`${host.name}: ${errorMessage(error)}`);
+      }
+    }
+    const next = [...sessionsRef.current, ...restored];
+    setSessions(next);
+    if (restored.length) {
+      setActiveId(restored[0].id);
+      setView("terminal");
+    }
+    setPreviousWorkspace(remaining);
+    setRestoring(false);
+    restoringRef.current = false;
+    if (restored.length) persistWorkspace([...next, ...remaining]);
+    if (failures.length) setError(failures.join("\n"));
+  }
+
+  useEffect(() => {
+    const stage = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (
+        !detail ||
+        typeof detail !== "object" ||
+        !("sessionId" in detail) ||
+        !("text" in detail) ||
+        typeof detail.sessionId !== "string" ||
+        typeof detail.text !== "string" ||
+        detail.text.length > 65536 ||
+        !detail.text.trim()
+      )
+        return;
+      if (
+        !sessionsRef.current.some(
+          (session) => session.id === detail.sessionId && session.connected,
+        )
+      )
+        return;
+      setActiveId(detail.sessionId);
+      setView("terminal");
+    };
+    window.addEventListener("lazysh-prompt-draft", stage);
+    const openInbox = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (
+        !detail ||
+        typeof detail !== "object" ||
+        !("sessionId" in detail) ||
+        typeof detail.sessionId !== "string"
+      )
+        return;
+      if (
+        !sessionsRef.current.some(
+          (session) => session.id === detail.sessionId && session.connected,
+        )
+      )
+        return;
+      setActiveId(detail.sessionId);
+      setView("agents");
+      setInbox(false);
+    };
+    window.addEventListener("lazysh-inbox-open", openInbox);
+    return () => {
+      window.removeEventListener("lazysh-prompt-draft", stage);
+      window.removeEventListener("lazysh-inbox-open", openInbox);
+    };
+  }, []);
 
   async function loadHosts() {
     if (!native) return;
@@ -617,6 +1027,9 @@ export default function App() {
     try {
       await api.disconnect(session.id);
       session.terminal.dispose();
+      persistWorkspace(
+        sessionsRef.current.filter((item) => item.id !== session.id),
+      );
       setSessions((previous) =>
         previous.filter((item) => item.id !== session.id),
       );
@@ -634,21 +1047,30 @@ export default function App() {
     setSidebar(false);
   }
   function sessionConnected(session: LiveSession) {
+    persistWorkspace([...sessionsRef.current, session]);
     setSessions((previous) => [...previous, session]);
     setActiveId(session.id);
     setView("terminal");
     setConnectingHost(null);
     void loadHosts();
   }
-  async function attachTmux(source: LiveSession, name: string) {
+  async function attachTmux(
+    source: LiveSession,
+    name: string,
+    kind: "tmux" | "herdr" | "zellij" = "tmux",
+  ) {
     const pending = await prepareSession(
       source.hostId,
       `${source.name} / ${name}`,
       source.destination,
     );
     try {
-      const result = await api.attachTmux(source.id, name, pending.onEvent);
+      const result =
+        kind === "tmux"
+          ? await api.attachTmux(source.id, name, pending.onEvent)
+          : await api.attachMultiplexer(source.id, kind, name, pending.onEvent);
       pending.establish(result.sessionId);
+      pending.session.attached = { kind, name };
       sessionConnected(pending.session);
     } catch (error) {
       pending.session.terminal.dispose();
@@ -798,6 +1220,29 @@ export default function App() {
             )}
           </div>
           <div className="header-right">
+            <button
+              className="icon-button"
+              aria-label="Notification inbox"
+              disabled={!native}
+              onClick={() => setInbox(true)}
+            >
+              <Bell size={16} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Encrypted sync"
+              disabled={!native}
+              onClick={() => setSync(true)}
+            >
+              <Cloud size={16} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Preferences"
+              onClick={() => setPreferences(true)}
+            >
+              <Settings size={16} />
+            </button>
             <span className="connection-label">
               <span
                 className={`status-dot ${active?.connected ? "" : "status-idle"}`}
@@ -817,6 +1262,29 @@ export default function App() {
           <div className="browser-banner" role="status">
             Browser preview · SSH connections require the native lazysh app. Run{" "}
             <code>bun run dev</code> to connect.
+          </div>
+        )}
+        {native && previousWorkspace.length > 0 && (
+          <div className="browser-banner">
+            <button
+              disabled={restoring || !loaded}
+              onClick={() => void restoreWorkspace()}
+            >
+              {restoring ? "Restoring…" : "Restore previous workspace"}
+            </button>
+            <span>
+              Uses saved credentials; tmux and Herdr reattach. Open Zellij
+              sessions from Sessions.
+            </span>
+            <button
+              disabled={restoring}
+              onClick={() => {
+                setPreviousWorkspace([]);
+                persistWorkspace(sessionsRef.current);
+              }}
+            >
+              Dismiss
+            </button>
           </div>
         )}
         {error && (
@@ -909,30 +1377,46 @@ export default function App() {
                     reportError={setError}
                   />
                 ))}
+                {active.connected && view === "agents" && (
+                  <AgentPanel key={active.id} sessionId={active.id} />
+                )}
+                {active.connected && view === "chat" && (
+                  <ChatPanel key={active.id} sessionId={active.id} onOpenTerminal={() => setView("terminal")} />
+                )}
+                {active.connected && view === "preview" && (
+                  <PreviewPanel key={active.id} sessionId={active.id} />
+                )}
+                {active.connected && view === "attachments" && (
+                  <AttachmentPanel key={active.id} sessionId={active.id} />
+                )}
+                {active.connected && view === "voice" && (
+                  <VoicePanel key={active.id} sessionId={active.id} />
+                )}
+                {active.connected && view === "devices" && (
+                  <DevicePanel key={active.id} sessionId={active.id} />
+                )}
+                {active.connected && view === "files" && (
+                  <FilesPanel key={active.id} sessionId={active.id} />
+                )}
+                {active.connected && view === "diff" && (
+                  <RepositoryPanel key={active.id} sessionId={active.id} />
+                )}
+                {active.connected && view === "sessions" && (
+                  <MuxPanel
+                    key={active.id}
+                    sessionId={active.id}
+                    attached={active.attached}
+                    onAttach={(name, kind) => attachTmux(active, name, kind)}
+                  />
+                )}
+                {!active.connected && view !== "terminal" && (
+                  <div className="panel-empty">
+                    <Unplug size={28} />
+                    <h3>This connection has ended.</h3>
+                    <p>Connect again from Hosts to read live data.</p>
+                  </div>
+                )}
               </Suspense>
-              {active.connected && view === "agents" && (
-                <AgentPanel key={active.id} sessionId={active.id} />
-              )}
-              {active.connected && view === "files" && (
-                <FilesPanel key={active.id} sessionId={active.id} />
-              )}
-              {active.connected && view === "diff" && (
-                <DiffPanel key={active.id} sessionId={active.id} />
-              )}
-              {active.connected && view === "sessions" && (
-                <MuxPanel
-                  key={active.id}
-                  sessionId={active.id}
-                  onAttach={(name) => attachTmux(active, name)}
-                />
-              )}
-              {!active.connected && view !== "terminal" && (
-                <div className="panel-empty">
-                  <Unplug size={28} />
-                  <h3>This connection has ended.</h3>
-                  <p>Connect again from Hosts to read live data.</p>
-                </div>
-              )}
             </div>
             <footer className="workspace-footer">
               <span>
@@ -1006,6 +1490,7 @@ export default function App() {
       </main>
       {editor && (
         <HostEditor
+          hosts={hosts}
           initial={editor === "new" ? null : editor}
           save={saveHost}
           close={() => setEditor(null)}
@@ -1013,6 +1498,7 @@ export default function App() {
       )}
       {connectingHost && (
         <ConnectDialog
+          hosts={hosts}
           host={connectingHost}
           connected={sessionConnected}
           close={() => setConnectingHost(null)}
@@ -1091,6 +1577,24 @@ export default function App() {
           >
             <Plus size={16} /> Add a new host
           </button>
+        </Dialog>
+      )}
+      {preferences && (
+        <Dialog title="Preferences" close={() => setPreferences(false)}>
+          <PreferencesPanel />
+        </Dialog>
+      )}
+      {native && <NotificationMonitor sessions={sessions} />}
+      {inbox && (
+        <Dialog title="Notification inbox" close={() => setInbox(false)}>
+          <NotificationPanel sessions={sessions} />
+        </Dialog>
+      )}
+      {sync && (
+        <Dialog title="Encrypted sync" close={() => setSync(false)}>
+          <Suspense fallback={<p>Opening sync…</p>}>
+            <SyncPanel onHostsChanged={() => void loadHosts()} />
+          </Suspense>
         </Dialog>
       )}
     </div>

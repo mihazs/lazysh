@@ -1,0 +1,181 @@
+use super::{Error, Result, TranscriptAgent};
+use serde::Serialize;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Discovery {
+    pub(super) schema_version: u8,
+    pub(super) agent: TranscriptAgent,
+    pub(super) sessions: Vec<DiscoveredSession>,
+    pub(super) truncated: bool,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DiscoveredSession {
+    pub(super) path: String,
+    pub(super) name: String,
+    pub(super) modified_at: String,
+    pub(super) bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) session_id: Option<String>,
+    #[serde(skip)]
+    pub(super) modified: SystemTime,
+}
+
+pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Result<Discovery> {
+    if !(1..=100).contains(&limit) {
+        return Err(Error::InvalidArgument);
+    }
+    if matches!(agent, TranscriptAgent::Hermes | TranscriptAgent::Opencode) {
+        return super::database::discover_database(agent, root, limit);
+    }
+    let root = match root {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let (variable, fallback, child) = match agent {
+                TranscriptAgent::Claude => (Some("CLAUDE_CONFIG_DIR"), ".claude", "projects"),
+                TranscriptAgent::Codex => (Some("CODEX_HOME"), ".codex", "sessions"),
+                TranscriptAgent::Pi => (Some("PI_CODING_AGENT_DIR"), ".pi/agent", "sessions"),
+                TranscriptAgent::Omp => (Some("PI_CODING_AGENT_DIR"), ".omp/agent", "sessions"),
+                TranscriptAgent::Copilot => (None, ".copilot", "session-state"),
+                TranscriptAgent::QoderIde => (None, ".qoder", "projects"),
+                TranscriptAgent::Kimi => (Some("KIMI_SHARE_DIR"), ".kimi", "sessions"),
+                TranscriptAgent::Jcode => (Some("JCODE_HOME"), ".jcode", "sessions"),
+                _ => return Err(Error::InvalidArgument),
+            };
+            variable
+                .and_then(std::env::var_os)
+                .map(PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|home| home.join(fallback)))
+                .ok_or(Error::InvalidArgument)?
+                .join(child)
+        }
+    };
+    let mut discovery = Discovery {
+        schema_version: 1,
+        agent,
+        sessions: Vec::new(),
+        truncated: false,
+    };
+    match fs::symlink_metadata(&root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(discovery),
+        Err(error) => return Err(error.into()),
+        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+            return Err(Error::InvalidArgument)
+        }
+        Ok(_) => {}
+    }
+    let maximum_depth = match agent {
+        TranscriptAgent::Claude => 1,
+        TranscriptAgent::Codex => 3,
+        TranscriptAgent::Pi | TranscriptAgent::Omp => 1,
+        TranscriptAgent::Copilot => 1,
+        TranscriptAgent::QoderIde | TranscriptAgent::Kimi => 2,
+        TranscriptAgent::Jcode => 0,
+        _ => return Err(Error::InvalidArgument),
+    };
+    let mut pending = vec![(root, 0)];
+    let mut examined = 0;
+    while let Some((directory, depth)) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            if examined == 10_000 {
+                discovery.truncated = true;
+                break;
+            }
+            examined += 1;
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() && depth < maximum_depth {
+                pending.push((entry.path(), depth + 1));
+                continue;
+            }
+            let extension = if matches!(agent, TranscriptAgent::Jcode) {
+                "json"
+            } else {
+                "jsonl"
+            };
+            if !kind.is_file()
+                || entry
+                    .path()
+                    .extension()
+                    .is_none_or(|value| value != extension)
+            {
+                continue;
+            }
+            let path = entry.path();
+            let expected = match agent {
+                TranscriptAgent::Copilot => {
+                    path.file_name().is_some_and(|name| name == "events.jsonl")
+                }
+                TranscriptAgent::QoderIde => path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|name| name == "transcript"),
+                TranscriptAgent::Kimi => {
+                    path.file_name().is_some_and(|name| name == "context.jsonl")
+                }
+                _ => true,
+            };
+            if !expected {
+                continue;
+            }
+            let Some(path) = path.to_str() else {
+                continue;
+            };
+            if path.len() > 4096 {
+                continue;
+            }
+            let metadata = entry.metadata()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if metadata.uid() != unsafe { libc::geteuid() } {
+                    continue;
+                }
+            }
+            let modified = metadata.modified()?;
+            let modified_at = chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339();
+            discovery.sessions.push(DiscoveredSession {
+                path: path.into(),
+                name: if matches!(agent, TranscriptAgent::Copilot | TranscriptAgent::Kimi) {
+                    entry
+                        .path()
+                        .parent()
+                        .and_then(Path::file_name)
+                        .unwrap_or(&entry.file_name())
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    entry.file_name().to_string_lossy().into_owned()
+                },
+                modified_at,
+                bytes: metadata.len(),
+                modified,
+                session_id: None,
+            });
+            discovery.sessions.sort_unstable_by(|left, right| {
+                right
+                    .modified
+                    .cmp(&left.modified)
+                    .then_with(|| left.path.cmp(&right.path))
+            });
+            if discovery.sessions.len() > usize::from(limit) {
+                discovery.sessions.pop();
+                discovery.truncated = true;
+            }
+        }
+        if examined == 10_000 {
+            discovery.truncated = true;
+            break;
+        }
+    }
+    Ok(discovery)
+}

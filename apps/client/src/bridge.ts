@@ -7,11 +7,15 @@ export type Host = {
   port: number;
   username: string;
   fingerprint?: string | null;
+  jumpHostId?: string | null;
+  credentialsStored?: boolean;
+  forwardAgent?: boolean;
+  biometricUnlock?: boolean;
 };
 export type SshEvent =
   | { type: "data"; data: number[] }
   | { type: "closed"; message?: string };
-export type SshError = { kind: string; message: string; fingerprint?: string };
+export type SshError = { kind: string; message: string; fingerprint?: string; hostId?: string };
 export type FileEntry = { name: string; isDir: boolean; size: number };
 export type MuxSession = {
   id: string;
@@ -24,9 +28,16 @@ export type Credentials = {
   privateKey?: string;
   passphrase?: string;
 };
+export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
 
 export const native = isTauri();
 export const api = {
+  openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
+  attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
+    const events = new Channel<SshEvent>();
+    events.onmessage = onEvent;
+    return invoke<{ sessionId: string }>('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30, events });
+  },
   listHosts: () => invoke<Host[]>("list_hosts"),
   saveHost: (host: Host) => invoke<Host>("save_host", { host }),
   deleteHost: (hostId: string) => invoke<void>("delete_host", { hostId }),
@@ -36,12 +47,14 @@ export const api = {
     hostId: string,
     credentials: Credentials,
     onEvent: (event: SshEvent) => void,
+    options: { rememberCredentials?: boolean; useSavedCredentials?: boolean; jumpCredentials?: Credentials } = {},
   ) => {
     const events = new Channel<SshEvent>();
     events.onmessage = onEvent;
     return invoke<{ sessionId: string }>("connect", {
       hostId,
       ...credentials,
+      ...options,
       cols: 100,
       rows: 30,
       events,

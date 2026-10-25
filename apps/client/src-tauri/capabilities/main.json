@@ -4,10 +4,26 @@
   "description": "Local lazysh window only; remote pages never receive native permissions.",
   "windows": ["main"],
   "permissions": [
-    "core:default", "allow-list-hosts", "allow-save-host", "allow-delete-host",
+    "allow-open-web-url",
+    "allow-list-devices", "allow-device-frame", "allow-device-action",
+    "allow-sync-status", "allow-sync-configure", "allow-sync-recovery-key", "allow-sync-forget", "allow-sync-push", "allow-sync-preview", "allow-sync-apply",
+    "allow-agent-approvals", "allow-resolve-agent-approval",
+    "allow-notify-agent-attention", "allow-notification-test",
+    "notification:allow-is-permission-granted", "notification:allow-request-permission",
+    "notification:allow-register-action-types",
+    "notification:allow-register-listener", "notification:allow-remove-listener",
+    "allow-voice-models", "allow-voice-import-begin", "allow-voice-import-chunk",
+    "allow-voice-import-finish", "allow-voice-remove-model", "allow-voice-transcribe", "allow-voice-cancel",
+    "allow-herdr-tree", "allow-herdr-action", "allow-zellij-action",
+    "allow-generate-identity", "allow-inspect-identity",
+    "allow-has-credentials", "allow-forget-credentials",
+    "allow-credential-protection", "allow-cancel-credential-auth", "allow-export-saved-identity",
+    "allow-repository-status", "allow-repository-history", "allow-repository-tree", "allow-repository-blob", "allow-repository-image", "allow-repository-diff",
+    "allow-start-preview", "allow-stop-preview", "allow-list-previews", "allow-discover-preview-ports",
+    "core:default", "allow-list-hosts", "allow-save-host", "allow-delete-host", "allow-multiplexer-tree", "allow-tmux-action", "allow-multiplexer-sessions", "allow-attach-multiplexer",
     "allow-trust-host-key", "allow-connect", "allow-write-stdin", "allow-ack-output",
     "allow-resize", "allow-disconnect", "allow-list-directory", "allow-read-file",
     "allow-upload-file", "allow-get-diff", "allow-list-multiplexer-sessions",
-    "allow-attach-tmux", "allow-agent-snapshot"
+    "allow-attach-tmux", "allow-agent-snapshot", "allow-agent-transcript", "allow-agent-transcripts"
   ]
 }
