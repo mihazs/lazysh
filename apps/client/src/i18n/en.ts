@@ -1,5 +1,8 @@
 /** English is the supported interface language; keys stay stable when wording changes. */
 export const english = {
+  appUnsupportedTmuxRestoreName: "This tmux destination cannot be restored automatically because its exact name is unsupported. The live terminal and Jump To remain available.",
+  appJumpTo: "Jump To",
+  appReadingTmuxDestinations: "Reading tmux destinations…",
   fontRoleCjk: "CJK fallback",
   fontRoleTerminal: "terminal",
   "language": "App language",

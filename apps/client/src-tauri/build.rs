@@ -104,6 +104,8 @@ fn main() {
         "repository_image",
         "repository_diff",
         "multiplexer_tree",
+        "tmux_jump_snapshot",
+        "tmux_jump",
         "herdr_tree",
         "herdr_action",
         "zellij_action",

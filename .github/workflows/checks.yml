@@ -75,7 +75,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
@@ -85,6 +85,8 @@ jobs:
         run: bunx turbo run test:voice-interop:smoke --filter=@lazysh/client
       - run: bun run build:native
       - run: bun run test:mosh
+      - name: Exercise retained tmux display navigation and hostile control streams
+        run: bunx turbo run test:tmux --filter=@lazysh/client
 
   native-desktop:
     strategy:

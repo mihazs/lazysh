@@ -25,5 +25,5 @@ export type LiveSession = {
   auto?: import('./bridge').AutoOptions;
   transportNotice?: string;
   message?: string;
-  attached?: {kind: 'tmux' | 'herdr' | 'zellij'; name: string};
+  attached?: import('./workspace').SessionAttachment;
 };

@@ -24,6 +24,7 @@ mod ssh;
 mod sync;
 mod terminal_input;
 mod theme_links;
+mod tmux_jump;
 mod vault;
 mod voice;
 mod zellij;
@@ -168,6 +169,8 @@ pub fn run() {
                 repository::repository_image,
                 repository::repository_diff,
                 multiplexer::multiplexer_tree,
+                tmux_jump::tmux_jump_snapshot,
+                tmux_jump::tmux_jump,
                 herdr::herdr_tree,
                 herdr::herdr_action,
                 zellij::zellij_action,

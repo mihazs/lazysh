@@ -1,11 +1,12 @@
-import type {AutoOptions, EtOptions, MoshOptions} from "./bridge";
+import type {AutoOptions, EtOptions, MoshOptions, MultiplexerKind} from "./bridge";
+export type SessionAttachment = {kind: MultiplexerKind; name: string; restoreName?: string | null};
 export type SessionIntent = {
   hostId?: string;
   local?: true;
   auto?: AutoOptions;
   et?: { serverPath: string; port: number };
   mosh?: { serverPath: string; portMin: number; portMax: number };
-  attached?: { kind: "tmux" | "herdr" | "zellij"; name: string };
+  attached?: Pick<SessionAttachment, 'kind' | 'name'>;
 };
 function validMosh(value: MoshOptions) {
   return !!value && typeof value.serverPath === 'string' && value.serverPath.length > 0 && value.serverPath.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value.serverPath)
@@ -18,6 +19,9 @@ function validEt(value: EtOptions) {
 function publicMosh(value:MoshOptions):MoshOptions { return {serverPath:value.serverPath,portMin:value.portMin,portMax:value.portMax}; }
 function publicEt(value:EtOptions):EtOptions { return {serverPath:value.serverPath,port:value.port}; }
 const key = "lazysh.workspace.v1";
+function validTmuxName(name: string) {
+  return name.length > 0 && new TextEncoder().encode(name).length <= 200 && !/[\x00-\x1f\x7f-\x9f]/.test(name);
+}
 export function readWorkspace(): SessionIntent[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key) || "[]");
@@ -41,18 +45,21 @@ export function readWorkspace(): SessionIntent[] {
           (["tmux", "herdr", "zellij"].includes(item.attached.kind) &&
             typeof item.attached.name === "string" &&
             item.attached.name.length > 0 &&
-            item.attached.name.length <= 200))),
+            item.attached.name.length <= 200 &&
+            (item.attached.kind !== 'tmux' || validTmuxName(item.attached.name))))),
     );
   } catch {
     return [];
   }
 }
-export function saveWorkspace(sessions: SessionIntent[]) {
+export function saveWorkspace(sessions: (SessionIntent & {attached?: SessionAttachment})[]) {
   // Persist only connection intentions; terminal content and credentials never enter browser storage.
   localStorage.setItem(
     key,
     JSON.stringify(
-      sessions.slice(0, 20).map(({ hostId, attached, mosh, et, auto, local }) => local ? {local:true} : ({
+      sessions.filter(({attached}) => !attached || (attached.restoreName !== null &&
+        (attached.kind !== 'tmux' || validTmuxName(attached.restoreName ?? attached.name))))
+        .slice(0, 20).map(({ hostId, attached, mosh, et, auto, local }) => local ? {local:true} : ({
         hostId,
         ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
         ...(!auto && et ? { et: publicEt(et) } : {}),
@@ -66,7 +73,7 @@ export function saveWorkspace(sessions: SessionIntent[]) {
             }
           : {}),
         ...(!auto && attached
-          ? { attached: { kind: attached.kind, name: attached.name } }
+          ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name } }
           : {}),
       })),
     ),
