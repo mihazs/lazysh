@@ -10,6 +10,7 @@
     "check:rust": { "cache": false },
     "test:rust": { "cache": false },
     "test:resume-policy": { "cache": false },
+    "test:storage": { "cache": false },
     "test:openssh": { "cache": false, "passThroughEnv": ["USER"] },
     "test:local": { "cache": false, "passThroughEnv": ["HOME", "USERPROFILE", "SHELL", "ComSpec", "COMSPEC", "SystemRoot", "SYSTEMROOT", "WINDIR"] },
     "test:multiplexers": { "cache": false, "passThroughEnv": ["PATH"] },

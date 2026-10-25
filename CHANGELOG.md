@@ -15,6 +15,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Device-local durable intent preserves the lock on cold launch when its protected
   proof is missing; cancelled enrollment restores off only after confirmed cleanup.
 
+- Default-off combined Whisper/Parakeet native acceptance tasks, with fixed
+  public speech inputs and separate processes for both initialization orders.
+  Linux archive-specific symbol isolation prevents private ORT protobuf symbols
+  from overriding Mosh's system protobuf library; no client engine is enabled.
+
 - macOS Parakeet model-storage admission checks actual Darwin ACLs and trusted
   descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
   preparation remain disabled; real recognition and platform acceptance stay open.
@@ -97,6 +102,15 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   the standard home fallback. No Devin process or exporter is launched.
 
 ### Changed
+
+- Companion event storage uses WAL with explicit FULL synchronization, reducing
+  rollback-journal sync work while preserving event acknowledgements and the
+  three-second ingest wait budget. Existing databases migrate on successful open.
+  Bootstrap has one shared three-second native/SQLite wait deadline. Unix state
+  ancestors and sidecars now fail closed when unsafe; unsupported/network/FUSE
+  storage, parent-traversal paths and custom symlink/reparse routes are rejected
+  before mutation. Verified Darwin system aliases remain supported.
+  Slow-storage exhaustion remains possible and issue #36 is not declared fixed.
 
 - Paper and explicitly light imported terminal themes now darken bright indexed
   cube colors and reverse the indexed grayscale ramp using the pinned Moshi

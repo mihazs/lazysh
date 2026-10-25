@@ -1,4 +1,11 @@
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && std::env::var_os("CARGO_FEATURE_PARAKEET_ACCEPTANCE").is_some()
+    {
+        // ORT embeds protobuf; Mosh links the system protobuf-lite DSO.
+        // Do not let the private static copy preempt that DSO's globals.
+        println!("cargo:rustc-link-arg=-Wl,--exclude-libs,libonnxruntime.a");
+    }
     let app = tauri_build::AppManifest::new().commands(&[
         "app_lock_status",
         "app_lock_configure",
