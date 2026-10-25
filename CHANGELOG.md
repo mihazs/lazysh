@@ -7,6 +7,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Opt-in native biometric resume protection for supported Android, iOS and macOS
+  devices, with native privacy covers, generation-bound command/result access,
+  paused terminal delivery and cancellation of pending protected work. Windows
+  and Linux report this option unavailable. Physical biometric acceptance remains
+  a release gate; existing per-host credential protection stays independent.
+
 - Explicit Cloud dictation enrollment with origin-bound device tokens in the
   platform vault, authenticated service capabilities/language hints and quota
   totals, bounded in-memory WAV uploads, and exact-recording cancellation.

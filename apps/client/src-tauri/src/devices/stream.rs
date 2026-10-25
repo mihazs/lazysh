@@ -1,4 +1,6 @@
 use super::*;
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
 use russh::ChannelMsg;
 use serde::Serialize;
 use serde_json::Value;
@@ -8,6 +10,18 @@ use tokio::sync::{watch, Mutex};
 const MAX_RECORD: usize = 720_000;
 #[derive(Default)]
 pub struct DeviceStreams(Mutex<HashMap<String, Stream>>);
+impl DeviceStreams {
+    pub(crate) async fn cancel_for_lock(&self) {
+        let mut streams = self.0.lock().await;
+        for stream in streams.values_mut() {
+            stream.cancel.send_replace(true);
+            stream.output = watch::channel(Packet::default()).1;
+        }
+        // Keep capacity reserved until the owned SSH worker confirms cleanup;
+        // fresh unlocks must not accumulate detached sources behind an empty map.
+        streams.retain(|_, stream| !*stream.done.borrow() && stream.done.has_changed().is_ok());
+    }
+}
 struct Stream {
     session_id: String,
     cancel: watch::Sender<bool>,
@@ -65,6 +79,7 @@ fn record(bytes: &[u8], id: &str, platform: &str) -> Result<Value> {
     Ok(frame)
 }
 async fn receive(
+    access: AccessLease,
     session: Arc<crate::ssh::Session>,
     command: String,
     id: String,
@@ -72,11 +87,13 @@ async fn receive(
     mut cancel: watch::Receiver<bool>,
     output: watch::Sender<Packet>,
 ) -> Result<()> {
+    access.check()?;
     let mut disconnected = session.cancel.subscribe();
     if *cancel.borrow() || *disconnected.borrow() {
         return Ok(());
     }
     let mut channel = tokio::select! { biased;
+        _=access.cancelled()=>return Ok(()),
         _=cancel.changed()=>return Ok(()),
         _=disconnected.changed()=>return Ok(()),
         result=tokio::time::timeout(Duration::from_secs(10),session.handle.channel_open_session())=>result.map_err(|_|SshError::new("timeout","Device channel timed out"))??,
@@ -84,9 +101,10 @@ async fn receive(
     let maximum = Duration::from_secs(if platform == "android" { 180 } else { 900 });
     let result=tokio::time::timeout(maximum,async {
         tokio::select! {biased;
+            _=access.cancelled()=>return Ok(()),
             _=cancel.changed()=>return Ok(()),
             _=disconnected.changed()=>return Ok(()),
-            result=tokio::time::timeout(Duration::from_secs(10),channel.exec(true,command))=>result.map_err(|_|SshError::new("timeout","Starting device stream timed out"))??,
+            result=async {access.check()?;tokio::time::timeout(Duration::from_secs(10),channel.exec(true,command)).await.map_err(|_|SshError::new("timeout","Starting device stream timed out"))?.map_err(SshError::from)}=>result?,
         }
         let mut buffer=Vec::new();let mut sequence=0;
         let startup_deadline=tokio::time::Instant::now()+Duration::from_secs(12);
@@ -94,7 +112,8 @@ async fn receive(
             let read_timeout=if sequence==0 {startup_deadline.saturating_duration_since(tokio::time::Instant::now())} else {Duration::from_secs(12)};
             if sequence==0 && read_timeout.is_zero() {return Err(SshError::new("timeout","Device stream did not produce its first frame"));}
             let msg=tokio::select! {biased;
-                _=cancel.changed()=>return Ok(()),
+                _=access.cancelled()=>return Ok(()),
+            _=cancel.changed()=>return Ok(()),
                 _=disconnected.changed()=>return Ok(()),
                 msg=tokio::time::timeout(read_timeout,channel.wait())=>match msg {
                     Ok(msg)=>msg,
@@ -106,7 +125,7 @@ async fn receive(
                 Some(ChannelMsg::Data{data})=>{
                     for byte in data.iter().copied() {
                         if byte==b'\n' {
-                            let frame=record(&buffer,&id,&platform)?;buffer.clear();sequence+=1;
+                            access.check()?;let frame=record(&buffer,&id,&platform)?;buffer.clear();sequence+=1;
                             output.send_replace(Packet{sequence,frame:Some(frame),error:None,idle:false});
                         } else {if buffer.len()>=MAX_RECORD {return Err(SshError::new("output_too_large","Device stream frame exceeds limit"));}buffer.push(byte);}
                     }
@@ -127,70 +146,94 @@ async fn receive(
 }
 #[tauri::command]
 pub async fn device_stream_start(
+    access: AccessLease,
     state: State<'_, AppState>,
     streams: State<'_, DeviceStreams>,
     session_id: String,
     id: String,
     socket: Option<String>,
     device_platform: Option<String>,
-) -> Result<String> {
-    let platform = device_platform.unwrap_or_else(|| "ios".into());
-    let command = match platform.as_str() {
-        "android" => android_command(&id, "stream")?,
-        "ios" => companion_command(&id, socket.as_deref().unwrap_or(""), "stream")?,
-        _ => {
-            return Err(SshError::new(
-                "invalid_input",
-                "Unsupported device platform",
-            ))
-        }
-    };
-    let session = state.session(&session_id).await?;
-    let mut entries = streams.0.lock().await;
-    ensure_capacity(&mut entries, &session_id)?;
-    let token = uuid::Uuid::new_v4().to_string();
-    let (cancel, request) = watch::channel(false);
-    let (output, latest) = watch::channel(Packet::default());
-    let (done, completion) = watch::channel(false);
-    entries.insert(
-        token.clone(),
-        Stream {
-            session_id,
-            cancel,
-            output: latest,
-            done: completion,
-        },
-    );
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = receive(session, command, id, platform, request, output.clone()).await {
-            let sequence = output.borrow().sequence + 1;
-            output.send_replace(Packet {
-                sequence,
-                frame: None,
-                error: Some(error),
-                idle: false,
+) -> Protected<String> {
+    access
+        .run(async {
+            let platform = device_platform.unwrap_or_else(|| "ios".into());
+            let command = match platform.as_str() {
+                "android" => android_command(&id, "stream")?,
+                "ios" => companion_command(&id, socket.as_deref().unwrap_or(""), "stream")?,
+                _ => {
+                    return Err(SshError::new(
+                        "invalid_input",
+                        "Unsupported device platform",
+                    ))
+                }
+            };
+            let session = state.session(&session_id).await?;
+            let mut entries = streams.0.lock().await;
+            ensure_capacity(&mut entries, &session_id)?;
+            let token = uuid::Uuid::new_v4().to_string();
+            let (cancel, request) = watch::channel(false);
+            let (output, latest) = watch::channel(Packet::default());
+            let (done, completion) = watch::channel(false);
+            access.check()?;
+            access.with_current(|| {
+                entries.insert(
+                    token.clone(),
+                    Stream {
+                        session_id,
+                        cancel,
+                        output: latest,
+                        done: completion,
+                    },
+                );
+            })?;
+            let source_access = access.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = receive(
+                    source_access,
+                    session,
+                    command,
+                    id,
+                    platform,
+                    request,
+                    output.clone(),
+                )
+                .await
+                {
+                    let sequence = output.borrow().sequence + 1;
+                    output.send_replace(Packet {
+                        sequence,
+                        frame: None,
+                        error: Some(error),
+                        idle: false,
+                    });
+                }
+                done.send_replace(true);
             });
-        }
-        done.send_replace(true);
-    });
-    Ok(token)
+            Ok(token)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn device_stream_next(
+    access: AccessLease,
     streams: State<'_, DeviceStreams>,
     session_id: String,
     stream_id: String,
     after: u64,
-) -> Result<Packet> {
-    let output = {
-        let entries = streams.0.lock().await;
-        let stream = entries
-            .get(&stream_id)
-            .filter(|s| s.session_id == session_id)
-            .ok_or_else(|| SshError::new("invalid_input", "Unknown device stream"))?;
-        stream.output.clone()
-    };
-    next_packet(output, after).await
+) -> Protected<Packet> {
+    access
+        .run(async {
+            let output = {
+                let entries = streams.0.lock().await;
+                let stream = entries
+                    .get(&stream_id)
+                    .filter(|s| s.session_id == session_id)
+                    .ok_or_else(|| SshError::new("invalid_input", "Unknown device stream"))?;
+                stream.output.clone()
+            };
+            next_packet(output, after).await
+        })
+        .await
 }
 async fn next_packet(mut output: watch::Receiver<Packet>, after: u64) -> Result<Packet> {
     match tokio::time::timeout(Duration::from_secs(15), async {
@@ -221,7 +264,7 @@ pub async fn device_stream_stop(
     session_id: String,
     stream_id: String,
 ) -> Result<()> {
-    let mut entries = streams.0.lock().await;
+    let entries = streams.0.lock().await;
     if entries
         .get(&stream_id)
         .is_some_and(|s| s.session_id != session_id)
@@ -231,22 +274,50 @@ pub async fn device_stream_stop(
             "Device stream belongs to another session",
         ));
     }
-    let stream = entries.remove(&stream_id);
+    let stream = entries
+        .get(&stream_id)
+        .map(|stream| (stream.cancel.clone(), stream.done.clone()));
     drop(entries);
-    if let Some(mut stream) = stream {
-        stream.cancel.send_replace(true);
-        if !*stream.done.borrow() {
-            tokio::time::timeout(Duration::from_secs(5), stream.done.changed())
+    if let Some((cancel, mut done)) = stream {
+        cancel.send_replace(true);
+        if !*done.borrow() {
+            tokio::time::timeout(Duration::from_secs(5), done.changed())
                 .await
                 .map_err(|_| SshError::new("timeout", "Device stream cleanup timed out"))?
                 .map_err(|_| SshError::new("disconnected", "Device cleanup stopped"))?;
         }
+        streams.0.lock().await.remove(&stream_id);
     }
     Ok(())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn lock_cancels_every_source_and_discards_retained_frames() {
+        let streams = DeviceStreams::default();
+        let (cancel, cancelled) = watch::channel(false);
+        let (_output, output) = watch::channel(Packet {
+            sequence: 1,
+            frame: Some(serde_json::json!({"private": "frame"})),
+            ..Packet::default()
+        });
+        let (_done, done) = watch::channel(false);
+        streams.0.lock().await.insert(
+            "token".into(),
+            Stream {
+                session_id: "session".into(),
+                cancel,
+                output,
+                done,
+            },
+        );
+        streams.cancel_for_lock().await;
+        assert!(*cancelled.borrow());
+        let mut entries = streams.0.lock().await;
+        assert!(entries["token"].output.borrow().frame.is_none());
+        assert!(ensure_capacity(&mut entries, "session").is_err());
+    }
     #[test]
     fn streamed_records_bind_identity_and_bound_payloads() {
         let frame = serde_json::json!({"schemaVersion":1,"id":"test","platform":"ios","mime":"image/jpeg","base64":"/9j/2Q==","width":390,"height":844,"imageWidth":195,"imageHeight":422});

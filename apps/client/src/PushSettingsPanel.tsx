@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import { isTauri } from '@tauri-apps/api/core';
 
 type RegistrationStatus = {
   provider: 'apns' | 'fcm' | 'none';
@@ -12,6 +13,7 @@ type RegistrationStatus = {
 };
 
 export default function PushSettingsPanel() {
+  const invoke = useProtectedInvoke();
   const [status, setStatus] = useState<RegistrationStatus>();
   const [pending, setPending] = useState(false);
   const [activeCommand, setActiveCommand] = useState('');

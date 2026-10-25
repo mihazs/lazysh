@@ -247,6 +247,7 @@ pub(crate) fn run(
     bootstrap: Bootstrap,
     cols: u32,
     rows: u32,
+    access: crate::app_lock::AccessState,
     mut input: tokio::sync::mpsc::Receiver<crate::ssh::Input>,
     cancelled: watch::Receiver<bool>,
     initial_cancel: watch::Receiver<bool>,
@@ -265,11 +266,14 @@ pub(crate) fn run(
         drop(bootstrap);
         let result = (|| -> Result<()> {
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
-            let mut pending: Option<(Vec<u8>, usize)> = None;
+            let mut pending: Option<(Vec<u8>, usize, crate::app_lock::AccessLease)> = None;
             loop {
                 if *cancelled.borrow() || (ready.is_some() && *initial_cancel.borrow()) {
                     return Ok(());
                 }
+                client
+                    .pause_output(access.is_locked() || output.capacity() == 0)
+                    .map_err(|error| SshError::new("mosh", error))?;
                 let update = client
                     .poll()
                     .map_err(|error| SshError::new("mosh", error))?;
@@ -288,22 +292,42 @@ pub(crate) fn run(
                         return Err(SshError::new("mosh_udp_unreachable", "Mosh did not receive an authenticated UDP reply. Allow the configured UDP range to this SSH host."));
                     }
                 }
-                if !update.bytes.is_empty() && output.blocking_send(update.bytes).is_err() {
-                    return Ok(());
+                if !update.bytes.is_empty() {
+                    match output.try_send(update.bytes) {
+                        Ok(()) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return Ok(()),
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            // No UDP-loop blocking: next accepted output is a full redraw.
+                            client
+                                .pause_output(true)
+                                .map_err(|error| SshError::new("mosh", error))?;
+                        }
+                    }
                 }
                 if update.finished {
                     return Ok(());
                 }
                 let mut available = update.input_capacity;
                 for _ in 0..32 {
-                    if let Some((bytes, offset)) = &mut pending {
+                    if pending
+                        .as_ref()
+                        .is_some_and(|(_, _, lease)| lease.check().is_err())
+                    {
+                        pending = None;
+                    }
+                    if let Some((bytes, offset, lease)) = &mut pending {
                         let count = (bytes.len() - *offset).min(available).min(16384);
                         if count == 0 {
                             break;
                         }
-                        client
-                            .write(&bytes[*offset..*offset + count])
-                            .map_err(|error| SshError::new("mosh", error))?;
+                        match lease.with_current(|| client.write(&bytes[*offset..*offset + count]))
+                        {
+                            Ok(result) => result.map_err(|error| SshError::new("mosh", error))?,
+                            Err(_) => {
+                                pending = None;
+                                continue;
+                            }
+                        }
                         *offset += count;
                         available -= count;
                         if *offset == bytes.len() {
@@ -316,14 +340,18 @@ pub(crate) fn run(
                         break;
                     }
                     match input.try_recv() {
-                        Ok(crate::ssh::Input::Data(data)) if !data.is_empty() => {
-                            pending = Some((data.into_bytes(), 0))
+                        Ok(crate::ssh::Input::Data(data, lease))
+                            if !data.is_empty() && lease.check().is_ok() =>
+                        {
+                            pending = Some((data.into_bytes(), 0, lease))
                         }
-                        Ok(crate::ssh::Input::Data(_)) => {}
-                        Ok(crate::ssh::Input::Resize(cols, rows)) => {
-                            client
-                                .resize(cols as u16, rows as u16)
-                                .map_err(|error| SshError::new("mosh", error))?;
+                        Ok(crate::ssh::Input::Data(_, _)) => {}
+                        Ok(crate::ssh::Input::Resize(cols, rows, lease)) => {
+                            if let Ok(result) =
+                                lease.with_current(|| client.resize(cols as u16, rows as u16))
+                            {
+                                result.map_err(|error| SshError::new("mosh", error))?;
+                            }
                             available -= 1;
                         }
                         Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,

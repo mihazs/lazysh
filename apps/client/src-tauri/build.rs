@@ -1,5 +1,8 @@
 fn main() {
     let app = tauri_build::AppManifest::new().commands(&[
+        "app_lock_status",
+        "app_lock_configure",
+        "app_lock_ready",
         "local_capability",
         "local_connect",
         "local_write",
@@ -98,6 +101,7 @@ fn main() {
         "delete_host",
         "trust_host_key",
         "connect",
+        "adopt_session",
         "write_stdin",
         "ack_output",
         "resize",

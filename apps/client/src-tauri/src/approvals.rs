@@ -1,15 +1,26 @@
-use crate::ssh::{exec, quote, AppState, Result, SshError};
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::ssh::{quote, AppState, Result, SshError};
 use tauri::State;
 
 #[tauri::command]
 pub async fn agent_approvals(
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<serde_json::Value> {
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(
-        &exec(&session, "lazysh-agent approval-list --limit 20".into()).await?,
-    )?)
+    access: AccessLease,
+) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            Ok(serde_json::from_str(
+                &crate::ssh::exec_for_access(
+                    &session,
+                    "lazysh-agent approval-list --limit 20".into(),
+                    &access,
+                )
+                .await?,
+            )?)
+        })
+        .await
 }
 
 fn resolve_command(
@@ -44,6 +55,7 @@ fn resolve_command(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn resolve_agent_approval(
     state: State<'_, AppState>,
     session_id: String,
@@ -52,16 +64,23 @@ pub async fn resolve_agent_approval(
     agent_session_id: String,
     pane_id: Option<String>,
     decision: String,
-) -> Result<serde_json::Value> {
-    let command = resolve_command(
-        &id,
-        &expected_hash,
-        &agent_session_id,
-        pane_id.as_deref(),
-        &decision,
-    )?;
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+    access: AccessLease,
+) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let command = resolve_command(
+                &id,
+                &expected_hash,
+                &agent_session_id,
+                pane_id.as_deref(),
+                &decision,
+            )?;
+            let session = state.session(&session_id).await?;
+            Ok(serde_json::from_str(
+                &crate::ssh::exec_for_access(&session, command, &access).await?,
+            )?)
+        })
+        .await
 }
 
 #[cfg(test)]

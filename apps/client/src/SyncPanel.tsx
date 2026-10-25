@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 import {
   getPreferences,
   parsePreferences,
@@ -86,6 +87,7 @@ export default function SyncPanel({
 }: {
   onHostsChanged: () => void;
 }) {
+  const invoke = useProtectedInvoke();
   const [endpoint, setEndpoint] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

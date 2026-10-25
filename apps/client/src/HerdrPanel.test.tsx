@@ -10,6 +10,6 @@ it('keeps Herdr session, workspace, tab and pane identity in each command', asyn
   vi.mocked(invoke).mockResolvedValue(tree);
   render(<HerdrPanel sessionId="ssh1" name="builds" />);
   fireEvent.click(await screen.findByRole('button', { name: 'Focus agent w2:p9' }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('herdr_action', { sessionId: 'ssh1', name: 'builds', action: { type: 'focusAgent', target: 'w2:p9' } }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('herdr_action', { sessionId: 'ssh1', name: 'builds', action: { type: 'focusAgent', target: 'w2:p9' } }, { headers: { "X-Lazysh-Access": expect.any(String) } }));
   expect(screen.getByText(/w2:p9 · blocked/)).toBeTruthy();
 });

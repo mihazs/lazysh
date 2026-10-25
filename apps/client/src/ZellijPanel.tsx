@@ -1,9 +1,11 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { errorMessage } from './SessionTools';
 
 type Action = { type: 'newTab'; name: string; directory: string } | { type: 'goToTab'; index: number } | { type: 'nextTab' | 'previousTab' | 'zoomPane' } | { type: 'newPane'; horizontal: boolean; directory: string };
 export default function ZellijPanel({ sessionId, name, projectDirectory = '.' }: { sessionId: string; name: string; projectDirectory?: string }) {
+  const invoke = useProtectedInvoke();
   const [title, setTitle] = useState('');
   const [directory, setDirectory] = useState('.');
   const [tab, setTab] = useState(1);

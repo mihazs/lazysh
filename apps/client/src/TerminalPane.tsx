@@ -1,7 +1,8 @@
+import { useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { api } from "./bridge";
+import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, parseChord, savePreferences, terminalOptions, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type { LiveSession } from "./terminal";
 import { fontFamilyFor, useDeviceFonts } from "./fonts";
@@ -25,6 +26,7 @@ export default function TerminalPane({ session, active, reportError }: {
   active: boolean;
   reportError: (message: string) => void;
 }) {
+  const api = useProtectedApi(nativeApi);
   const container = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);

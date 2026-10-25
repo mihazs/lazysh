@@ -303,3 +303,19 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     scheme:
       testTargets: [LazyshPushTests]
+
+  LazyshResumeTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.2"
+    sources:
+      - path: ../../../../../packages/credential-vault/ios/Sources/ResumeGate.swift
+      - path: ../../../../../packages/credential-vault/ios/Sources/ResumeCover.swift
+      - path: ../../../../../packages/credential-vault/ios/Tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.lazysh.client.resumetests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: true
+    scheme:
+      testTargets: [LazyshResumeTests]

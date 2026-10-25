@@ -41,7 +41,7 @@ it('uses canonical root for untracked reads and reviews binary changes explicitl
   expect(api.readFile).toHaveBeenCalledWith('ssh1', '/root/repo/new.txt');
   fireEvent.click(screen.getByRole('button', { name: 'Unstaged diff' }));
   expect(await screen.findByText('Binary file changed. Text diff unavailable.')).toBeTruthy();
-  expect(invoke).toHaveBeenLastCalledWith('repository_diff', { sessionId: 'ssh1', path: '/root/repo', filePath: 'binary.dat', staged: false });
+  expect(invoke).toHaveBeenLastCalledWith('repository_diff', { sessionId: 'ssh1', path: '/root/repo', filePath: 'binary.dat', staged: false }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 
 it('renders historical Markdown without active HTML or remote image requests', async () => {
@@ -78,7 +78,7 @@ it('stages editable line comments without sending them to the remote shell', asy
   fireEvent.click(screen.getByRole('button', { name: 'Use in next prompt' }));
   expect(staged).toHaveBeenCalledOnce();
   expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({ sessionId: 'ssh1', text: '/repo/new.txt:2 (working tree)\nPlease explain this line.' });
-  expect(invoke).not.toHaveBeenCalledWith('write_stdin', expect.anything());
+  expect(invoke).not.toHaveBeenCalledWith('write_stdin', expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(JSON.parse(sessionStorage.getItem('lazysh-review:ssh1')!)).toMatchObject({ path: '/repo', file: 'new.txt' });
   window.removeEventListener('lazysh-prompt-draft', staged);
 });
@@ -95,7 +95,7 @@ it('restores remembered selection and renders image bytes through a local data U
   render(<RepositoryPanel sessionId="ssh1" />);
   const image = await screen.findByRole('img', { name: 'Preview of image.png' });
   expect(image.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=');
-  expect(invoke).toHaveBeenCalledWith('repository_image', { sessionId: 'ssh1', path: '/repo', filePath: 'image.png', objectId: hash });
+  expect(invoke).toHaveBeenCalledWith('repository_image', { sessionId: 'ssh1', path: '/repo', filePath: 'image.png', objectId: hash }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 
 it('pages stable history and browses directories without loading the complete repository tree', async () => {
@@ -109,11 +109,11 @@ it('pages stable history and browses directories without loading the complete re
   render(<RepositoryPanel sessionId="ssh1" />);
   fireEvent.click(screen.getByRole('button', { name: 'Open repository' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Load older commits' }));
-  expect(invoke).toHaveBeenLastCalledWith('repository_history', { sessionId: 'ssh1', path: '/repo', offset: 50, revision: commits[0].oid });
+  expect(invoke).toHaveBeenLastCalledWith('repository_history', { sessionId: 'ssh1', path: '/repo', offset: 50, revision: commits[0].oid }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   await screen.findByRole('option', { name: /commit 0$/ });
   fireEvent.change(screen.getByLabelText('Repository revision'), { target: { value: commits[0].oid } });
   fireEvent.click(await screen.findByRole('button', { name: /^src\s*tree$/ }));
   expect(await screen.findByRole('button', { name: /src\/app.ts/ })).toBeTruthy();
-  expect(invoke).toHaveBeenLastCalledWith('repository_tree', { sessionId: 'ssh1', path: '/repo', revision: commits[0].oid, directory: 'src' });
+  expect(invoke).toHaveBeenLastCalledWith('repository_tree', { sessionId: 'ssh1', path: '/repo', revision: commits[0].oid, directory: 'src' }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getByRole('button', { name: 'Parent directory' })).toBeTruthy();
 });

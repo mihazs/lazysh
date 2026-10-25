@@ -70,6 +70,12 @@ unsafe extern "C" {
         error: *mut c_char,
         capacity: usize,
     ) -> c_int;
+    fn lazysh_mosh_pause_output(
+        client: *mut c_void,
+        paused: c_int,
+        error: *mut c_char,
+        capacity: usize,
+    ) -> c_int;
     fn lazysh_mosh_wait(
         client: *mut c_void,
         wait_ms: u32,
@@ -200,6 +206,17 @@ impl Client {
                     error,
                     capacity,
                 )
+            }
+        })
+    }
+    /// Keep receiving authenticated UDP state while suppressing display deltas.
+    /// Resuming forces a full redraw of the latest bounded framebuffer.
+    pub fn pause_output(&mut self, paused: bool) -> Result<()> {
+        let _guard = locked()?;
+        operation(|error, capacity| {
+            // SAFETY: this live client is exclusively borrowed and native exceptions are contained.
+            unsafe {
+                lazysh_mosh_pause_output(self.pointer.as_ptr(), i32::from(paused), error, capacity)
             }
         })
     }
@@ -356,6 +373,36 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn paused_output_keeps_authenticated_state_and_resumes_with_full_redraw() {
+        let (mut client, socket, address) = fake_server();
+        client.pause_output(true).unwrap();
+        socket
+            .send_to(
+                &packet(true, 0, 1, 0, &host_bytes("LATEST_LOCKED")),
+                address,
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let update = client.poll().unwrap();
+            assert!(update.bytes.is_empty());
+            if update.connected {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        client.pause_output(false).unwrap();
+        let update = client.poll().unwrap();
+        assert!(String::from_utf8_lossy(&update.bytes).contains("LATEST_LOCKED"));
+        assert!(update.bytes.len() <= OUTPUT_LIMIT);
+        assert!(client.poll().unwrap().bytes.is_empty());
+        client.pause_output(true).unwrap();
+        assert!(client.poll().unwrap().bytes.is_empty());
+        client.pause_output(false).unwrap();
+        assert!(String::from_utf8_lossy(&client.poll().unwrap().bytes).contains("LATEST_LOCKED"));
     }
     #[test]
     fn unauthenticated_oversize_datagram_is_dropped_before_valid_traffic() {

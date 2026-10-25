@@ -1,4 +1,5 @@
-use crate::ssh::{exec, quote, AppState, Result, SshError};
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::ssh::{quote, AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -87,19 +88,27 @@ pub async fn multiplexer_sessions(
     state: State<'_, AppState>,
     session_id: String,
     kind: MultiplexerKind,
-) -> Result<Vec<PersistentSession>> {
-    let session = state.session(&session_id).await?;
-    let command = match kind {
-        MultiplexerKind::Herdr => "herdr session list --json",
-        MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
-        MultiplexerKind::Tmux => {
-            return Err(SshError::new(
-                "invalid_target",
-                "Use the tmux workspace tree",
-            ))
-        }
-    };
-    persistent_sessions(kind, &exec(&session, command.into()).await?)
+    access: AccessLease,
+) -> std::result::Result<Guarded<Vec<PersistentSession>>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            let command = match kind {
+                MultiplexerKind::Herdr => "herdr session list --json",
+                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
+                MultiplexerKind::Tmux => {
+                    return Err(SshError::new(
+                        "invalid_target",
+                        "Use the tmux workspace tree",
+                    ))
+                }
+            };
+            persistent_sessions(
+                kind,
+                &crate::ssh::exec_for_access(&session, command.into(), &access).await?,
+            )
+        })
+        .await
 }
 
 const PANE_FORMAT: &str = "#{session_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}";
@@ -377,20 +386,30 @@ fn action_command(action: &TmuxAction) -> Result<String> {
 pub async fn multiplexer_tree(
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<MultiplexerTree> {
-    let session = state.session(&session_id).await?;
-    parse_tree(&exec(&session, discovery_command()).await?)
+    access: AccessLease,
+) -> std::result::Result<Guarded<MultiplexerTree>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            parse_tree(&crate::ssh::exec_for_access(&session, discovery_command(), &access).await?)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn tmux_action(
     state: State<'_, AppState>,
     session_id: String,
     action: TmuxAction,
-) -> Result<()> {
-    let command = action_command(&action)?;
-    let session = state.session(&session_id).await?;
-    exec(&session, command).await?;
-    Ok(())
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let command = action_command(&action)?;
+            let session = state.session(&session_id).await?;
+            crate::ssh::exec_for_access(&session, command, &access).await?;
+            Ok(())
+        })
+        .await
 }
 
 #[cfg(test)]

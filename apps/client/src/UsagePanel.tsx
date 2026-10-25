@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 import { errorMessage } from "./SessionTools";
 import type { RecordedProviderWindow, RecordedUsageContext } from "./bridge";
 import "./UsagePanel.css";
@@ -83,6 +84,7 @@ const freshnessLabel = { fresh: "Recently recorded", stale: "Stale record", unkn
 const count = (value: number | null) => value === null ? "Unknown" : value.toLocaleString();
 
 export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId: string; onShareAppleUsage?: (report: AppleUsageReport) => void }) {
+  const invoke = useProtectedInvoke();
   const [agent, setAgent] = useState("claude");
   const [path, setPath] = useState("");
   const [transcriptSessionId, setTranscriptSessionId] = useState("");

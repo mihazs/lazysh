@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { Bot, RefreshCw } from 'lucide-react';
 import ApprovalPanel from './ApprovalPanel';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
@@ -36,6 +37,7 @@ export function parseSnapshot(value: unknown): AgentSession[] {
 }
 
 export function AgentPanel({ sessionId }: { sessionId: string }) {
+  const invoke = useProtectedInvoke();
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);

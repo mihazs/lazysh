@@ -1,4 +1,5 @@
-use crate::ssh::{exec, quote, AppState, Result, SshError};
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::ssh::{quote, AppState, Result, SshError};
 use serde::Deserialize;
 use tauri::State;
 
@@ -58,11 +59,16 @@ pub async fn zellij_action(
     session_id: String,
     name: String,
     action: ZellijAction,
-) -> Result<()> {
-    let command = command(&name, &action)?;
-    let session = state.session(&session_id).await?;
-    exec(&session, command).await?;
-    Ok(())
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let command = command(&name, &action)?;
+            let session = state.session(&session_id).await?;
+            crate::ssh::exec_for_access(&session, command, &access).await?;
+            Ok(())
+        })
+        .await
 }
 
 #[cfg(test)]

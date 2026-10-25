@@ -1,3 +1,4 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::{AppState, Result, SshError};
 use tauri::{AppHandle, State};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -28,46 +29,56 @@ pub async fn notify_agent_attention(
     agent: String,
     project: String,
     event_id: String,
-) -> Result<()> {
-    let _session = state.session(&session_id).await?;
-    if event_id.len() != 64 || !event_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(SshError::new(
-            "invalid_notification",
-            "Invalid inbox event identifier",
-        ));
-    }
-    let body = summary(&agent, &project)?;
-    if app.notification().permission_state()? != PermissionState::Granted {
-        return Err(SshError::new(
-            "notification_permission",
-            "Enable notification permission from the inbox first",
-        ));
-    }
-    app.notification()
-        .builder()
-        .title("lazysh · Needs you")
-        .body(body)
-        .action_type_id("lazysh-agent")
-        .extra("lazyshEventId", event_id)
-        .extra("lazyshSessionId", session_id)
-        .show()?;
-    Ok(())
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let _session = state.session(&session_id).await?;
+            if event_id.len() != 64 || !event_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(SshError::new(
+                    "invalid_notification",
+                    "Invalid inbox event identifier",
+                ));
+            }
+            let body = summary(&agent, &project)?;
+            if app.notification().permission_state()? != PermissionState::Granted {
+                return Err(SshError::new(
+                    "notification_permission",
+                    "Enable notification permission from the inbox first",
+                ));
+            }
+            app.notification()
+                .builder()
+                .title("lazysh · Needs you")
+                .body(body)
+                .action_type_id("lazysh-agent")
+                .extra("lazyshEventId", event_id)
+                .extra("lazyshSessionId", session_id)
+                .show()?;
+            Ok(())
+        })
+        .await
 }
 
 #[tauri::command]
-pub fn notification_test(app: AppHandle) -> Result<()> {
-    if app.notification().permission_state()? != PermissionState::Granted {
-        return Err(SshError::new(
-            "notification_permission",
-            "Enable notification permission from the inbox first",
-        ));
-    }
-    app.notification()
-        .builder()
-        .title("lazysh notifications")
-        .body("Local notifications are enabled on this device.")
-        .show()?;
-    Ok(())
+pub fn notification_test(
+    app: AppHandle,
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+    access.run_sync(|| {
+        if app.notification().permission_state()? != PermissionState::Granted {
+            return Err(SshError::new(
+                "notification_permission",
+                "Enable notification permission from the inbox first",
+            ));
+        }
+        app.notification()
+            .builder()
+            .title("lazysh notifications")
+            .body("Local notifications are enabled on this device.")
+            .show()?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]

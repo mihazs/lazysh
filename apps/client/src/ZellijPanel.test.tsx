@@ -10,6 +10,6 @@ it('sends session-scoped actions and reports host errors', async () => {
   render(<ZellijPanel sessionId="ssh1" name="builds" />);
   fireEvent.change(screen.getByLabelText('Tab number'), { target: { value: '3' } });
   fireEvent.click(screen.getByRole('button', { name: 'Select Zellij tab' }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('zellij_action', { sessionId: 'ssh1', name: 'builds', action: { type: 'goToTab', index: 3 } }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('zellij_action', { sessionId: 'ssh1', name: 'builds', action: { type: 'goToTab', index: 3 } }, { headers: { "X-Lazysh-Access": expect.any(String) } }));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Session disappeared');
 });

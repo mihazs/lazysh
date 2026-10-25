@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     write: vi.fn(),
     resize: vi.fn(),
     ackOutput: vi.fn(),
+    adoptSession: vi.fn(),
     muxSessions: vi.fn(),
     attachTmux: vi.fn(),
   },
@@ -25,8 +26,19 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
+  lockEvent: undefined as undefined | ((event: { payload: unknown }) => void),
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+let generationBase=0;
+const unlockedStatus = () => ({initialized:true,supported:true,reason:'',enabled:false,locked:false,generation:String(generationBase),nonce:'a'.repeat(64)});
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...request:[string,unknown?,unknown?]) => {
+  const [command]=request;
+  if(command==='app_lock_status')return Promise.resolve(unlockedStatus());
+  if(command==='app_lock_ready')return Promise.resolve();
+  return mocks.invoke(...request);
+} }));
+vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (_name:string,callback:(event:{payload:unknown})=>void)=>{
+  mocks.lockEvent=callback;return()=>{mocks.lockEvent=undefined;};
+})}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.terminal }));
 vi.mock("./TerminalPane", () => ({
@@ -55,6 +67,7 @@ const host: Host = {
 };
 
 beforeEach(() => {
+  generationBase+=10;
   vi.clearAllMocks();
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
@@ -71,6 +84,7 @@ beforeEach(() => {
   mocks.api.listHosts.mockResolvedValue([host]);
   mocks.invoke.mockResolvedValue(false);
   mocks.api.disconnect.mockResolvedValue(undefined);
+  mocks.api.adoptSession.mockResolvedValue(undefined);
   mocks.api.trustHostKey.mockResolvedValue(undefined);
   mocks.api.ackOutput.mockResolvedValue(undefined);
   mocks.terminal.write.mockImplementation(
@@ -91,6 +105,66 @@ async function openConnection() {
   await user.type(screen.getByLabelText("Password"), "temporary-secret");
   return user;
 }
+
+it('keeps the existing terminal session while clearing tool views across native lock', async () => {
+  mocks.api.connect.mockResolvedValue({sessionId:'retained-ssh'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Transcript'}));
+  await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generationBase+1)}}));
+  expect(screen.queryByText('Live SSH terminal')).toBeNull();expect(screen.queryByRole('tab')).toBeNull();
+  await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(generationBase+2),nonce:'b'.repeat(64)}}));
+  await screen.findByText('Live SSH terminal');
+  expect(screen.getAllByRole('tab')).toHaveLength(1);expect(mocks.api.connect).toHaveBeenCalledOnce();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.terminal.dispose).not.toHaveBeenCalled();
+});
+
+it('does not register a late pre-lock connection into the retained session registry', async () => {
+  let finish!:(value:{sessionId:string})=>void;
+  mocks.api.connect.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generationBase+1)}}));
+  await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(generationBase+2),nonce:'b'.repeat(64)}}));
+  await act(async()=>finish({sessionId:'stale-ssh'}));
+  await screen.findByRole('button',{name:'Connect to Home'});
+  expect(screen.queryByRole('tab')).toBeNull();expect(screen.queryByText('Live SSH terminal')).toBeNull();
+});
+
+it('tears down known pending bootstrap IDs on lock while retaining an adopted terminal and suppressing disposed replay',async()=>{
+  enableTransports();
+  mocks.api.connect.mockResolvedValueOnce({sessionId:'adopted-live-lock-test'}).mockResolvedValueOnce({sessionId:'pending-bootstrap-lock-test'});
+  let finish!:(value:{sessionId:string})=>void;let replay!:(event:unknown)=>void;
+  mocks.api.connectMosh.mockImplementation((_parent,_options,onEvent)=>{replay=onEvent;return new Promise(resolve=>{finish=resolve;});});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');await waitFor(()=>expect(mocks.api.adoptSession).toHaveBeenCalledWith('adopted-live-lock-test'));
+  await user.click(screen.getByRole('button',{name:'Connect to Home'}));
+  await user.type(screen.getByLabelText('Password'),'second-secret');await user.selectOptions(screen.getByLabelText('Transport'),'auto');
+  await user.click(screen.getByRole('button',{name:'Connect'}));await waitFor(()=>expect(mocks.api.connectMosh).toHaveBeenCalled());
+  await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generationBase+1)}}));
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'pending-bootstrap-lock-test'});
+  expect(mocks.invoke).not.toHaveBeenCalledWith('disconnect',{sessionId:'adopted-live-lock-test'});
+  await act(async()=>finish({sessionId:'late-pending-lock-test'}));
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'late-pending-lock-test'}));
+  mocks.terminal.write.mockClear();replay({type:'data',data:[115,101,99,114,101,116]});expect(mocks.terminal.write).not.toHaveBeenCalled();
+  await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(generationBase+2),nonce:'b'.repeat(64)}}));
+  await screen.findByText('Live SSH terminal');expect(screen.getAllByRole('tab')).toHaveLength(1);
+  expect(mocks.api.adoptSession).toHaveBeenCalledTimes(1);
+});
+
+it('closes known pending restoration IDs when lock revokes the old mount',async()=>{
+  enableTransports();
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'home',mosh:{serverPath:'mosh-server',portMin:60000,portMax:61000}}]):null);
+  mocks.api.connect.mockResolvedValue({sessionId:'restoration-pending-lock-test'});
+  let finish!:(value:{sessionId:string})=>void;
+  mocks.api.connectMosh.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+  const user=userEvent.setup();render(<App/>);await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));await waitFor(()=>expect(mocks.api.connectMosh).toHaveBeenCalled());
+  await act(async()=>mocks.lockEvent!({payload:{initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generationBase+1)}}));
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'restoration-pending-lock-test'});
+  await act(async()=>finish({sessionId:'restoration-late-lock-test'}));
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'restoration-late-lock-test'}));
+  expect(mocks.api.adoptSession).not.toHaveBeenCalled();
+});
 
 describe("host validation", () => {
   it("accepts direct IPv4, IPv6, and tailnet destinations and rejects ambiguous SSH strings", () => {
@@ -201,7 +275,7 @@ describe("connection flow", () => {
     );
     expect(mocks.invoke).toHaveBeenCalledWith("forget_credentials", {
       hostId: "home",
-    });
+    }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   });
 
   it("requires explicit host-key acceptance before retrying and keeps credentials out of storage", async () => {
@@ -356,7 +430,7 @@ it("saves only host metadata through the native API", async () => {
   mocks.api.saveHost.mockResolvedValue(host);
   const user = userEvent.setup();
   render(<App />);
-  await user.click(screen.getByRole("button", { name: "Add your first host" }));
+  await user.click(await screen.findByRole("button", { name: "Add your first host" }));
   await user.type(screen.getByLabelText("Name"), "Home");
   await user.type(screen.getByLabelText("Hostname or IP"), "home.local");
   await user.type(screen.getByLabelText("Username"), "dev");
@@ -424,7 +498,7 @@ it("restores an exact tmux workspace through saved credentials without sending s
     "durable-agent",
     expect.any(Function),
   );
-  expect(mocks.api.disconnect).toHaveBeenCalledWith("temporary-shell");
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"temporary-shell"});
   expect(mocks.api.write).not.toHaveBeenCalled();
   expect(localStorage.setItem).toHaveBeenLastCalledWith(
     "lazysh.workspace.v1",
@@ -452,7 +526,7 @@ it("exports a protected key only on explicit request and clears it when forgotte
   );
   expect(mocks.invoke).not.toHaveBeenCalledWith(
     "export_saved_identity",
-    expect.anything(),
+    expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } }
   );
   await user.click(
     screen.getByRole("button", { name: "Export private key with biometrics" }),
@@ -494,7 +568,7 @@ it("allows cancellation while private key authentication is pending", async () =
     screen.getByRole("button", { name: "Export private key with biometrics" }),
   );
   await user.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(mocks.invoke).toHaveBeenCalledWith("cancel_credential_auth");
+  expect(mocks.invoke).toHaveBeenCalledWith("cancel_credential_auth", undefined, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(
     screen.queryByRole("button", {
       name: "Export private key with biometrics",
@@ -532,7 +606,7 @@ it("clears exported keys on background and rejects a late authentication result"
   expect(screen.getByLabelText("Exported private key")).toBeTruthy();
   act(() => window.dispatchEvent(new Event("pagehide")));
   expect(screen.queryByLabelText("Exported private key")).toBeNull();
-  expect(mocks.invoke).toHaveBeenCalledWith("cancel_credential_auth");
+  expect(mocks.invoke).toHaveBeenCalledWith("cancel_credential_auth", undefined, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 
 it("hands a verified SSH connection to Mosh before exposing terminal input", async () => {
@@ -550,7 +624,7 @@ it("hands a verified SSH connection to Mosh before exposing terminal input", asy
     { serverPath: "mosh-server", portMin: 60000, portMax: 61000 },
     expect.any(Function),
   );
-  expect(mocks.api.disconnect).toHaveBeenCalledWith("ssh-control");
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"ssh-control"});
   expect(localStorage.setItem).toHaveBeenCalledWith(
     "lazysh.workspace.v1",
     JSON.stringify([
@@ -575,7 +649,7 @@ it("closes the SSH bootstrap when forced Mosh fails without falling back", async
   await user.click(screen.getByRole("button", { name: "Connect" }));
   expect(await screen.findByText("Mosh UDP connection failed")).toBeTruthy();
   expect(screen.queryByText("Live SSH terminal")).toBeNull();
-  expect(mocks.api.disconnect).toHaveBeenCalledWith("ssh-control");
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"ssh-control"});
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);
 });
 
@@ -596,9 +670,9 @@ it("cancels the SSH control session during Mosh bootstrap and closes a late resu
   await user.click(screen.getByRole("button", { name: "Connect" }));
   await waitFor(() => expect(mocks.api.connectMosh).toHaveBeenCalled());
   await user.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(mocks.api.disconnect).toHaveBeenCalledWith("ssh-control");
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"ssh-control"});
   await act(async () => finish?.({ sessionId: "late-mosh" }));
-  expect(mocks.api.disconnect).toHaveBeenCalledWith("late-mosh");
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"late-mosh"});
   expect(screen.queryByText("Live SSH terminal")).toBeNull();
 });
 
@@ -611,7 +685,7 @@ it("opens a fresh ET transport through verified SSH and preserves only reconnect
   await user.click(screen.getByRole('button',{name:'Connect'}));
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
   expect(mocks.api.connectEt).toHaveBeenCalledWith('ssh-control',{serverPath:'etterminal',port:2022},expect.any(Function));
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('ssh-control');
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"ssh-control"});
   expect(mocks.api.connectMosh).not.toHaveBeenCalled();
   expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home',et:{serverPath:'etterminal',port:2022}}]));
 });
@@ -637,7 +711,7 @@ it('Auto selects authenticated Mosh first and persists the Auto intention',async
   expect(await screen.findByText('Auto selected Mosh.')).toBeTruthy();
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);
   expect(mocks.api.connectEt).not.toHaveBeenCalled();
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('verified-control');
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"verified-control"});
   expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home',auto:autoOptions}]));
 });
 it('Auto reports Mosh UDP failure and tries ET on the same verified SSH connection',async()=>{
@@ -672,7 +746,7 @@ it.each(['authentication_failed','host_key_changed','cancelled','unclassified'])
   enableTransports();
   mocks.api.connectMosh.mockRejectedValue({kind,message:'Connection blocked'});
   await connectAuto();
-  await waitFor(()=>expect(mocks.api.disconnect).toHaveBeenCalledWith('verified-control'));
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"verified-control"}));
   expect(mocks.api.connectEt).not.toHaveBeenCalled();
   expect(screen.queryByText('Live SSH terminal')).toBeNull();
 });
@@ -683,7 +757,7 @@ it('Auto never falls back from ET packet authentication failure',async()=>{
   await connectAuto();
   expect(await screen.findByText('ET packet authentication failed')).toBeTruthy();
   expect(screen.queryByText('Live SSH terminal')).toBeNull();
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('verified-control');
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"verified-control"});
 });
 it('closing Auto during Mosh prevents a late failed attempt from starting ET',async()=>{
   enableTransports();
@@ -693,7 +767,7 @@ it('closing Auto during Mosh prevents a late failed attempt from starting ET',as
   await waitFor(()=>expect(mocks.api.connectMosh).toHaveBeenCalled());
   await user.click(screen.getByRole('button',{name:'Cancel'}));
   await act(async()=>reject?.({kind:'mosh_udp_unreachable',message:'Late UDP timeout'}));
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('verified-control');
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"verified-control"});
   expect(mocks.api.connectEt).not.toHaveBeenCalled();
   expect(screen.queryByText('Live SSH terminal')).toBeNull();
 });
@@ -727,7 +801,7 @@ it('forced ET fails visibly without falling back to SSH',async()=>{
   expect(await screen.findByText('ET port unreachable')).toBeTruthy();
   expect(screen.queryByText('Live SSH terminal')).toBeNull();
   expect(mocks.api.connectMosh).not.toHaveBeenCalled();
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('verified-control');
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"verified-control"});
 });
 it('edits the named host transport and helper options through the native host API',async()=>{
   mocks.api.saveHost.mockResolvedValue(host);
@@ -759,7 +833,7 @@ it('restores Auto by probing transports again rather than restoring its last SSH
 it('exposes remote push settings from Workspace tools',async()=>{
   const user=userEvent.setup();
   render(<App/>);
-  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(await screen.findByRole('button',{name:'Workspace tools'}));
   await user.click(screen.getByRole('button',{name:'Remote push settings'}));
   expect(await screen.findByText('Native push registration controls')).toBeTruthy();
 });
@@ -820,9 +894,9 @@ it('closes late Auto restoration results when the app unmounts',async()=>{
   await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
   await waitFor(()=>expect(mocks.api.connectMosh).toHaveBeenCalled());
   rendered.unmount();
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('verified-control');
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"verified-control"});
   await act(async()=>complete?.({sessionId:'late-restore'}));
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('late-restore');
+  expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"late-restore"});
   expect(mocks.api.connectEt).not.toHaveBeenCalled();
 });
 
@@ -881,7 +955,7 @@ it('disconnects a late local startup when the app closes',async()=>{
   await user.click(await screen.findByRole('button',{name:'Open local terminal'}));
   await waitFor(()=>expect(mocks.api.connectLocal).toHaveBeenCalled());view.unmount();
   await act(async()=>finish?.({sessionId:'local:late'}));
-  expect(mocks.api.disconnect).toHaveBeenCalledWith('local:late');
+  expect(mocks.invoke).toHaveBeenCalledWith("local_disconnect", {sessionId:"local:late"});
 });
 
 it('keeps explicit Apple sharing mounted across tool navigation and binds the selected usage to its SSH session',async()=>{
@@ -949,7 +1023,7 @@ it('invalidates direct delivery synchronously on disconnect intent and never rev
   await user.click(screen.getByRole('button',{name:'Disconnect Home'}));
   await expect(deliver(request)).rejects.toThrow('no longer active');expect(request.claim).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button',{name:'Disconnect Home'}));expect(mocks.api.disconnect).toHaveBeenCalledOnce();
-  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(await screen.findByRole('button',{name:'Workspace tools'}));
   const during=mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation;
   await user.keyboard('{Escape}');
   await act(async()=>reject(new Error('disconnect failed')));

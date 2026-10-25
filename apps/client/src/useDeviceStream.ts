@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 
 /** One outstanding pull; native keeps only its newest frame. */
 export function useDeviceStream(
@@ -11,6 +12,7 @@ export function useDeviceStream(
   onError: (error: unknown) => void,
   platform = "ios",
 ) {
+  const invoke = useProtectedInvoke();
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;

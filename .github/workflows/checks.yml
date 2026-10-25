@@ -211,6 +211,15 @@ jobs:
         run: bunx turbo run test:apple-status --filter=@lazysh/apple-status
       - name: Run native APNs registration state tests
         run: bunx turbo run test:apns --filter=@lazysh/push-registration
+      - name: Run native resume cover and lifecycle tests
+        run: bunx turbo run test:resume --filter=@lazysh/credential-vault
+      - name: Upload native resume results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-resume-results
+          path: apps/client/src-tauri/gen/apple/resume-tests.xcresult
+          if-no-files-found: warn
       - name: Run native iOS Mosh unit and protocol tests
         run: bun run test:ios-mosh
       - name: Remove status test simulator

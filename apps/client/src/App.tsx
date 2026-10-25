@@ -6,7 +6,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { bindProtectedApi, captureAccess, useProtectedApi, useProtectedInvoke } from './access';
+import AccessShell, { type SessionRegistry } from './AccessShell';
+import AccessPanel from './AccessPanel';
+import { forgetSession, PendingSessions, retainSession } from './pendingSessions';
 import {
   Bot,
   Activity,
@@ -38,7 +41,7 @@ import {
   X,
 } from "lucide-react";
 import {
-  api,
+  api as nativeApi,
   native,
   type Credentials,
   type Host,
@@ -73,12 +76,19 @@ const DevicePanel = lazy(() => import("./DevicePanel"));
 const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
 const AppleStatusPanel = lazy(() => import('./AppleStatusPanel'));
 
+function disposeTerminal(session?: LiveSession) {
+  if (!session || session.disposed) return;
+  session.disposed = true; session.connected = false; forgetSession(session.id); session.terminal.dispose();
+}
+
 async function prepareSession(
   hostId: string,
   name: string,
   destination: string,
 ) {
+  const lease = captureAccess();
   const { createTerminal } = await import("./terminal");
+  lease.assert();
   const session: LiveSession = {
     id: "",
     hostId,
@@ -94,15 +104,16 @@ async function prepareSession(
       pendingBytes += bytes;
       return;
     }
-    void api
+    void nativeApi
       .ackOutput(session.id, bytes)
-      .catch((error) =>
-        window.dispatchEvent(
+      .catch((error) => {
+        if (!session.disposed) window.dispatchEvent(
           new CustomEvent("lazysh-error", { detail: errorMessage(error) }),
-        ),
-      );
+        );
+      });
   };
   const onEvent = (event: SshEvent) => {
+    if (session.disposed) return;
     if (event.type === "data")
       session.terminal.write(new Uint8Array(event.data), () =>
         acknowledge(event.data.length),
@@ -139,6 +150,8 @@ async function selectTransport(
   track: (id: string) => void = () => {},
   untrack: (id: string) => void = () => {},
 ): Promise<Prepared> {
+  const api = bindProtectedApi(nativeApi, captureAccess());
+  const pending = new PendingSessions(); pending.add(shell.session.id);
   const reasons: string[] = [];
   const ensureAlive = () => { if (!alive()) throw {kind:'cancelled', message:'Connection cancelled'}; };
   for (const kind of mode === 'auto' ? ['mosh', 'et'] as const : mode === 'ssh' ? [] : [mode]) {
@@ -155,6 +168,7 @@ async function selectTransport(
         ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent)
         : await api.connectEt(shell.session.id, options.et, child.onEvent);
       child.establish(result.sessionId);
+      pending.add(result.sessionId);
       track(result.sessionId);
       ensureAlive();
       if (!child.session.connected) throw {kind:'disconnected', message:`${name} closed before connection completed`};
@@ -164,16 +178,17 @@ async function selectTransport(
         child.session.auto = options;
         child.session.transportNotice = `Auto selected ${name}.${reasons.length ? ` ${reasons.join('; ')}.` : ''}`;
       }
-      await api.disconnect(shell.session.id);
+      await pending.close(shell.session.id);
       untrack(shell.session.id);
-      shell.session.terminal.dispose();
+      disposeTerminal(shell.session);
+      pending.delete(child.session.id);
       return child;
     } catch (error) {
       if (child.session.id) {
-        await api.disconnect(child.session.id).catch(() => {});
+        await pending.close(child.session.id).catch(() => {});
         untrack(child.session.id);
       }
-      child.session.terminal.dispose();
+      disposeTerminal(child.session);
       ensureAlive();
       if (mode !== 'auto' || !fallbackErrors.has((error as SshError)?.kind)) throw error;
       reasons.push(`${name}: ${errorMessage(error)}`);
@@ -335,6 +350,7 @@ function HostEditor({
   save: (host: Host) => Promise<void>;
   close: () => void;
 }) {
+  const invoke = useProtectedInvoke();
   const [host, setHost] = useState<Host>(
     initial ?? {
       id: crypto.randomUUID(),
@@ -554,6 +570,8 @@ function ConnectDialog({
   connected: (session: LiveSession) => void;
   close: () => void;
 }) {
+  const invoke = useProtectedInvoke();
+  const api = useProtectedApi(nativeApi);
   const [method, setMethod] = useState<"password" | "key">("password");
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
@@ -584,7 +602,7 @@ function ConnectDialog({
   const exportGeneration = useRef(0);
   const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
-  const connectingSessions = useRef(new Set<string>());
+  const connectingSessions = useRef(new PendingSessions());
   const alive = useRef(true);
   useEffect(() => {
     const hide = () => {
@@ -628,7 +646,7 @@ function ConnectDialog({
       alive.current = false;
       void invoke("cancel_credential_auth").catch(() => {});
       for (const id of connectingSessions.current)
-        void api.disconnect(id).catch(() => {});
+        void connectingSessions.current.close(id).catch(() => {});
       connectingSessions.current.clear();
     };
   }, []);
@@ -670,8 +688,8 @@ function ConnectDialog({
       pending.establish(result.sessionId);
       connectingSessions.current.add(result.sessionId);
       if (!alive.current) {
-        await api.disconnect(result.sessionId);
-        session.terminal.dispose();
+        await connectingSessions.current.close(result.sessionId);
+        disposeTerminal(session);
         return;
       }
       const selected = await selectTransport(pending, host, transport, {
@@ -682,8 +700,8 @@ function ConnectDialog({
       (id) => connectingSessions.current.delete(id));
       session = selected.session;
       if (!alive.current) {
-        await api.disconnect(session.id);
-        session.terminal.dispose();
+        await connectingSessions.current.close(session.id);
+        disposeTerminal(session);
         return;
       }
       setPassword("");
@@ -692,8 +710,8 @@ function ConnectDialog({
       connectingSessions.current.clear();
       connected(session);
     } catch (e) {
-      if (session?.id) await api.disconnect(session.id).catch(() => {});
-      session?.terminal.dispose();
+      await connectingSessions.current.closeAll().catch(() => {});
+      disposeTerminal(session);
       const detail = e as SshError;
       if (detail?.kind === "unknown_host_key" && detail.fingerprint) {
         setTrustHostId(detail.hostId || host.id);
@@ -1021,14 +1039,25 @@ function ConnectDialog({
 }
 
 export default function App() {
+  return <AccessShell native={native}>{registry => <WorkspaceApp registry={registry} />}</AccessShell>;
+}
+
+function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
+  const invoke = useProtectedInvoke();
+  const api = useProtectedApi(nativeApi);
   useClientAppearance();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [localCapability, setLocalCapability] = useState({available:false,reason:'Checking local terminal support…'});
   const [openingLocal, setOpeningLocal] = useState(false);
   const localOpening = useRef(false);
   const [appleUsage, setAppleUsage] = useState<Record<string,AppleUsageReport>>({});
-  const [sessions, setSessions] = useState<LiveSession[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [sessions, updateSessions] = useState<LiveSession[]>(() => registry.sessions);
+  const [activeId, updateActiveId] = useState<string | null>(() => registry.activeId);
+  function setSessions(value: LiveSession[] | ((current: LiveSession[]) => LiveSession[])) {
+    registry.sessions = typeof value === 'function' ? value(registry.sessions) : value;
+    updateSessions(registry.sessions);
+  }
+  function setActiveId(value: string | null) { registry.activeId = value; updateActiveId(value); }
   const [view, setView] = useState<View>("terminal");
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
@@ -1044,11 +1073,11 @@ export default function App() {
   const [mobileTools, setMobileTools] = useState(false);
   const [about, setAbout] = useState(false);
   const [inbox, setInbox] = useState(false);
-  const [previousWorkspace, setPreviousWorkspace] = useState(readWorkspace);
+  const [previousWorkspace, setPreviousWorkspace] = useState(() => registry.sessions.length ? [] : readWorkspace());
   const [restoring, setRestoring] = useState(false);
   const restoringRef = useRef(false);
   const mounted = useRef(true);
-  const restoringSessions = useRef(new Set<string>());
+  const restoringSessions = useRef(new PendingSessions());
   const [sidebar, setSidebar] = useState(false);
   const [loaded, setLoaded] = useState(!native);
   const sessionsRef = useRef(sessions);
@@ -1077,7 +1106,7 @@ export default function App() {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      for (const id of restoringSessions.current) void api.disconnect(id).catch(()=>{});
+      void restoringSessions.current.closeAll().catch(()=>{});
       restoringSessions.current.clear();
     };
   }, []);
@@ -1095,16 +1124,19 @@ export default function App() {
     if(localOpening.current || !localCapability.available)return;
     localOpening.current=true;setOpeningLocal(true);setError('');
     let pending:Prepared|undefined;
+    const ownership = new PendingSessions();
     try {
       pending=await prepareSession('', 'Local terminal', 'This device · local shell');
       pending.session.local=true;
       const result=await api.connectLocal(pending.onEvent);
       pending.establish(result.sessionId);
-      if(!mounted.current){await api.disconnect(result.sessionId);pending.session.terminal.dispose();return;}
+      ownership.add(result.sessionId);
+      if(!mounted.current){await ownership.close(result.sessionId);disposeTerminal(pending.session);return;}
       sessionConnected(pending.session);setPalette(false);setSidebar(false);
+      ownership.delete(result.sessionId);
     }catch(error){
-      if(pending?.session.id)await api.disconnect(pending.session.id).catch(()=>{});
-      pending?.session.terminal.dispose();
+      await ownership.closeAll().catch(()=>{});
+      disposeTerminal(pending?.session);
       if(mounted.current)setError(errorMessage(error));
     }finally{localOpening.current=false;if(mounted.current)setOpeningLocal(false);}
   }
@@ -1136,8 +1168,8 @@ export default function App() {
           if(!mounted.current)throw new Error('Local restoration cancelled');
           restored.push(pending.session);
         }catch(error){
-          if(pending?.session.id){await api.disconnect(pending.session.id).catch(()=>{});restoringSessions.current.delete(pending.session.id);}
-          pending?.session.terminal.dispose();remaining.push(intent);failures.push(`Local terminal: ${errorMessage(error)}`);
+          if(pending?.session.id){await restoringSessions.current.close(pending.session.id).catch(()=>{});}
+          disposeTerminal(pending?.session);remaining.push(intent);failures.push(`Local terminal: ${errorMessage(error)}`);
         }
         continue;
       }
@@ -1189,18 +1221,18 @@ export default function App() {
           restoringSessions.current.add(attached.sessionId);
           if (!mounted.current) throw {kind:'cancelled',message:'Workspace restoration cancelled'};
           child.session.attached = intent.attached;
-          await api.disconnect(shell.session.id);
+          await restoringSessions.current.close(shell.session.id);
           restoringSessions.current.delete(shell.session.id);
-          shell.session.terminal.dispose();
+          disposeTerminal(shell.session);
           restored.push(child.session);
         } else restored.push(shell.session);
       } catch (error) {
         for (const pending of [child, shell])
           if (pending) {
             if (pending.session.id)
-              await api.disconnect(pending.session.id).catch(() => {});
+              await restoringSessions.current.close(pending.session.id).catch(() => {});
             restoringSessions.current.delete(pending.session.id);
-            pending.session.terminal.dispose();
+            disposeTerminal(pending.session);
           }
         remaining.push(intent);
         failures.push(`${host.name}: ${errorMessage(error)}`);
@@ -1208,8 +1240,8 @@ export default function App() {
     }
     if (!mounted.current) {
       for (const pending of restored) {
-        await api.disconnect(pending.id).catch(()=>{});
-        pending.terminal.dispose();
+        await restoringSessions.current.close(pending.id).catch(()=>{});
+        disposeTerminal(pending);
       }
       restoringSessions.current.clear();
       return;
@@ -1217,6 +1249,7 @@ export default function App() {
     restoringSessions.current.clear();
     const next = [...sessionsRef.current, ...restored];
     setSessions(next);
+    for (const session of restored) adoptRetained(session);
     if (restored.length) {
       setActiveId(restored[0].id);
       setView("terminal");
@@ -1364,7 +1397,7 @@ export default function App() {
     try {
       await api.disconnect(session.id);
       session.connected=false;
-      session.terminal.dispose();
+      disposeTerminal(session);
       setAppleUsage(previous=>{const next={...previous};delete next[session.id];return next;});
       persistWorkspace(
         sessionsRef.current.filter((item) => item.id !== session.id),
@@ -1391,10 +1424,19 @@ export default function App() {
   function sessionConnected(session: LiveSession) {
     persistWorkspace([...sessionsRef.current, session]);
     setSessions((previous) => [...previous, session]);
+    adoptRetained(session);
     setActiveId(session.id);
     setView("terminal");
     setConnectingHost(null);
     if(!session.local)void loadHosts();
+  }
+  function adoptRetained(session: LiveSession) {
+    // The persistent registry owns the terminal before native adoption can succeed or become stale.
+    retainSession(session.id);
+    void api.adoptSession(session.id).catch(() => {
+      // Native revokes pending sessions itself. Never tear down an already-adopted terminal on a stale acknowledgement.
+      if (mounted.current) setError('Could not confirm the connection. Check this terminal before reconnecting.');
+    });
   }
   async function attachTmux(
     source: LiveSession,
@@ -1406,16 +1448,20 @@ export default function App() {
       `${source.name} / ${name}`,
       source.destination,
     );
+    const ownership = new PendingSessions();
     try {
       const result =
         kind === "tmux"
           ? await api.attachTmux(source.id, name, pending.onEvent)
           : await api.attachMultiplexer(source.id, kind, name, pending.onEvent);
       pending.establish(result.sessionId);
+      ownership.add(result.sessionId);
       pending.session.attached = { kind, name };
       sessionConnected(pending.session);
+      ownership.delete(result.sessionId);
     } catch (error) {
-      pending.session.terminal.dispose();
+      await ownership.closeAll().catch(()=>{});
+      disposeTerminal(pending.session);
       throw error;
     }
   }
@@ -1968,6 +2014,7 @@ export default function App() {
       {preferences && (
         <Dialog title="Preferences" close={() => setPreferences(false)}>
           <PreferencesPanel />
+          <AccessPanel />
           <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>Remote push settings</button>
         </Dialog>
       )}

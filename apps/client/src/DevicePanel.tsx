@@ -1,5 +1,6 @@
+import { useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
 import { errorMessage } from "./SessionTools";
 import { useDeviceStream } from "./useDeviceStream";
 type Device = {
@@ -69,6 +70,7 @@ export function framePoint(
   };
 }
 export default function DevicePanel({ sessionId }: { sessionId: string }) {
+  const invoke = useProtectedInvoke();
   const [platform, setPlatform] = useState("android");
   const [devices, setDevices] = useState<Device[]>([]);
   const [avds, setAvds] = useState<{ id: string; name: string }[]>([]);

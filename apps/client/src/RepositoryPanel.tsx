@@ -1,7 +1,9 @@
+import { useProtectedApi } from './access';
+import { useProtectedInvoke } from './access';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+
 import Markdown from 'react-markdown';
-import { api } from './bridge';
+import { api as nativeApi } from './bridge';
 import { errorMessage } from './SessionTools';
 import CodePreview from './CodePreview';
 
@@ -77,6 +79,8 @@ export function diffLines(patch: string): Line[] {
 }
 
 export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
+  const api = useProtectedApi(nativeApi);
+  const invoke = useProtectedInvoke();
   const [path, setPath] = useState('.');
   const [draft, setDraft] = useState('.');
   const [changes, setChanges] = useState<Change[]>([]);

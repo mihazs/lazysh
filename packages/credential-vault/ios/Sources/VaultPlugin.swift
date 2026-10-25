@@ -7,9 +7,34 @@ import WebKit
 struct VaultItem: Decodable { let key: String; let value: String?; let biometric: Bool?; let authEpoch: UInt64? }
 struct VaultCancellation: Decodable { let authEpoch: UInt64; let backgroundGeneration: UInt64? }
 struct VaultLifecycle: Decodable { let background: Channel }
+struct ResumeRegistration: Decodable { let events: Channel }
 
 class VaultPlugin: Plugin {
   private let lock = NSLock()
+  private let resumeCover = ResumeCover()
+  override func load(webview: WKWebView) { resumeCover.load(webview: webview, host: manager.viewController?.view) }
+  @objc public func resumeFailure(_ invoke: Invoke) { DispatchQueue.main.async { self.resumeCover.failure(); invoke.resolve() } }
+  @objc public func resumeCapability(_ invoke: Invoke) {
+    DispatchQueue.main.async {
+      let context = LAContext(); var error: NSError?
+      let available = self.resumeCover.ready && context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+      context.invalidate()
+      invoke.resolve(["available": available, "reason": available ? "Native biometric privacy cover is ready" : "Enrolled biometrics and a native privacy cover are required"])
+    }
+  }
+  @objc public func registerResume(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(ResumeRegistration.self)
+    DispatchQueue.main.async {
+      self.resumeCover.register { kind, generation in args.events.send(["kind": kind, "nativeGeneration": generation] as JsonObject) }
+      invoke.resolve()
+    }
+  }
+  @objc public func resumeView(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(ResumeView.self)
+    DispatchQueue.main.async {
+      if self.resumeCover.apply(args) { invoke.resolve() } else { invoke.reject("Native privacy cover generation changed") }
+    }
+  }
   private var contexts: [UUID: (context: LAContext, authEpoch: UInt64)] = [:]
   private var epoch: UInt64 = 0
   private var lifecycle: UInt64 = 0

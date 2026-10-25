@@ -1,0 +1,5 @@
+{
+  "app": {
+    "windows": [{ "label": "main", "title": "lazysh", "width": 1200, "height": 800, "minWidth": 360, "minHeight": 480, "visible": false }]
+  }
+}

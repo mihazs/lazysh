@@ -76,7 +76,7 @@ it("reads selected host transcript, pages by returned cursor, and does not fetch
     agent: "claude",
     path: "/host/session.jsonl",
     offset: 0,
-  });
+  }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   fireEvent.click(screen.getByRole("button", { name: "Refresh new messages" }));
   await waitFor(() =>
     expect(invoke).toHaveBeenLastCalledWith("agent_transcript", {
@@ -84,7 +84,7 @@ it("reads selected host transcript, pages by returned cursor, and does not fetch
       agent: "claude",
       path: "/host/session.jsonl",
       offset: 80,
-    }),
+    }, { headers: { "X-Lazysh-Access": expect.any(String) } }),
   );
   expect(await screen.findByText("world")).toBeTruthy();
 });
@@ -144,7 +144,7 @@ it("replaces the visible branch on conversation refresh instead of retaining aba
     path: "/host/session.jsonl",
     view: "conversation",
     offset: 0,
-  });
+  }, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 
 it("stages the edited text for exactly the existing terminal without issuing a remote command", () => {

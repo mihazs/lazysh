@@ -1,3 +1,4 @@
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::{AppState, Host};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
@@ -205,14 +206,19 @@ pub async fn has_credentials(
     app: AppHandle,
     state: State<'_, AppState>,
     host_id: String,
-) -> Result<bool, String> {
-    let host = state.host(&host_id).map_err(|_| "Host no longer exists")?;
-    if host.fingerprint.is_none() || !host.credentials_stored {
-        return Ok(false);
-    }
-    tauri::async_runtime::spawn_blocking(move || app.vault().exists(&key(&host.id)))
+    access: AccessLease,
+) -> std::result::Result<Guarded<bool>, GuardedError<String>> {
+    access
+        .run(async {
+            let host = state.host(&host_id).map_err(|_| "Host no longer exists")?;
+            if host.fingerprint.is_none() || !host.credentials_stored {
+                return Ok(false);
+            }
+            tauri::async_runtime::spawn_blocking(move || app.vault().exists(&key(&host.id)))
+                .await
+                .map_err(|_| "Could not inspect saved credentials".to_string())?
+        })
         .await
-        .map_err(|_| "Could not inspect saved credentials".to_string())?
 }
 
 #[tauri::command]
@@ -220,19 +226,24 @@ pub async fn forget_credentials(
     app: AppHandle,
     state: State<'_, AppState>,
     host_id: String,
-) -> Result<(), String> {
-    let _guard = state.credential_guard(&host_id).await;
-    let host = state.host(&host_id).map_err(|_| "Host no longer exists")?;
-    if !host.credentials_stored {
-        return Ok(());
-    }
-    let key_host = host_id.clone();
-    tauri::async_runtime::spawn_blocking(move || remove(&app, &key_host))
+    access: AccessLease,
+) -> std::result::Result<Guarded<()>, GuardedError<String>> {
+    access
+        .run(async {
+            let _guard = state.credential_guard(&host_id).await;
+            let host = state.host(&host_id).map_err(|_| "Host no longer exists")?;
+            if !host.credentials_stored {
+                return Ok(());
+            }
+            let key_host = host_id.clone();
+            tauri::async_runtime::spawn_blocking(move || remove(&app, &key_host))
+                .await
+                .map_err(|_| "Could not delete credentials".to_string())??;
+            state
+                .mark_credentials(&host_id, false)
+                .map_err(|_| "Could not update credential metadata".into())
+        })
         .await
-        .map_err(|_| "Could not delete credentials".to_string())??;
-    state
-        .mark_credentials(&host_id, false)
-        .map_err(|_| "Could not update credential metadata".into())
 }
 
 #[tauri::command]
@@ -263,27 +274,33 @@ pub async fn export_saved_identity(
     app: AppHandle,
     state: State<'_, AppState>,
     host_id: String,
-) -> Result<ExportedIdentity, String> {
-    let operation = app.vault().operation();
-    let _guard = crate::ssh::during_connect(&operation, async {
-        Ok(state.credential_guard(&host_id).await)
-    })
-    .await
-    .map_err(|_| "Credential operation cancelled")?;
-    let host = state.host(&host_id).map_err(|_| "Host no longer exists")?;
-    if !host.biometric_unlock || !host.credentials_stored {
-        return Err(
-            "Private-key export requires saved credentials protected with biometrics".into(),
-        );
-    }
-    let credentials = load_for_operation(app, host, operation.clone()).await?;
-    operation.check()?;
-    Ok(ExportedIdentity {
-        private_key: credentials
-            .private_key
-            .clone()
-            .ok_or("This host has no saved private key")?,
-    })
+    access: AccessLease,
+) -> std::result::Result<Guarded<ExportedIdentity>, GuardedError<String>> {
+    access
+        .run(async {
+            let operation = app.vault().operation();
+            let _guard = crate::ssh::during_connect(&operation, async {
+                Ok(state.credential_guard(&host_id).await)
+            })
+            .await
+            .map_err(|_| "Credential operation cancelled")?;
+            let host = state.host(&host_id).map_err(|_| "Host no longer exists")?;
+            if !host.biometric_unlock || !host.credentials_stored {
+                return Err(
+                    "Private-key export requires saved credentials protected with biometrics"
+                        .into(),
+                );
+            }
+            let credentials = load_for_operation(app, host, operation.clone()).await?;
+            operation.check()?;
+            Ok(ExportedIdentity {
+                private_key: credentials
+                    .private_key
+                    .clone()
+                    .ok_or("This host has no saved private key")?,
+            })
+        })
+        .await
 }
 
 #[cfg(test)]

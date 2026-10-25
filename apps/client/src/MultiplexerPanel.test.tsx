@@ -38,7 +38,7 @@ it('targets the stable pane ID and leaves attachment on its own terminal', async
   const attach = vi.fn().mockResolvedValue(undefined);
   render(<MuxPanel sessionId="ssh1" onAttach={attach} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Select %9' }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('tmux_action', { sessionId: 'ssh1', action: { type: 'selectPane', target: '%9' } }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('tmux_action', { sessionId: 'ssh1', action: { type: 'selectPane', target: '%9' } }, { headers: { "X-Lazysh-Access": expect.any(String) } }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Attach work' }).hasAttribute('disabled')).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Attach work' }));
   await waitFor(() => expect(attach).toHaveBeenCalledWith('work'));
@@ -50,7 +50,7 @@ it('creates a named workspace in the explicit project directory', async () => {
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'project' } });
   fireEvent.change(screen.getByLabelText('Project directory'), { target: { value: '/work/project' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save workspace' }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('tmux_action', { sessionId: 'ssh1', action: { type: 'createSession', name: 'project', directory: '/work/project' } }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('tmux_action', { sessionId: 'ssh1', action: { type: 'createSession', name: 'project', directory: '/work/project' } }, { headers: { "X-Lazysh-Access": expect.any(String) } }));
 });
 it('discloses unsupported controls and host command failures', async () => {
   vi.mocked(invoke).mockResolvedValueOnce({ ...tree, herdrAvailable: true }).mockRejectedValue({ message: 'Pane no longer exists' });

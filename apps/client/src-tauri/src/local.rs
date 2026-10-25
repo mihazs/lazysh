@@ -1,5 +1,9 @@
 //! Desktop-only terminal sessions. These never own an SSH identity or transport.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+use crate::app_lock::AccessState;
+use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::SshEvent;
+type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
 use serde::Serialize;
 use tauri::{ipc::Channel, State};
 
@@ -34,56 +38,78 @@ pub use desktop::LocalState;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 #[derive(Default)]
 pub struct LocalState;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+impl LocalState {
+    pub(crate) fn cancel_for_renderer_rebind(&self) {}
+}
 
 #[tauri::command]
 pub async fn local_connect(
+    lease: AccessLease,
+
     state: State<'_, LocalState>,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
-) -> Result<Connected, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    {
-        desktop::connect(&state, cols, rows, events).await
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = (state, cols, rows, events);
-        Err("Local terminals require the desktop app".into())
-    }
+) -> AccessResult<Connected> {
+    lease
+        .run(async {
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            {
+                desktop::connect(&state, lease.clone(), cols, rows, events).await
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            {
+                let _ = (state, cols, rows, events);
+                Err("Local terminals require the desktop app".into())
+            }
+        })
+        .await
 }
 #[tauri::command]
 pub async fn local_write(
+    lease: AccessLease,
+
     state: State<'_, LocalState>,
     session_id: String,
     data: String,
-) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    {
-        desktop::write(&state, &session_id, data)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = (state, session_id, data);
-        Err("Local terminals require the desktop app".into())
-    }
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            {
+                desktop::write(&state, &session_id, data, lease.clone())
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            {
+                let _ = (state, session_id, data);
+                Err("Local terminals require the desktop app".into())
+            }
+        })
+        .await
 }
 #[tauri::command]
 pub async fn local_resize(
+    lease: AccessLease,
+
     state: State<'_, LocalState>,
     session_id: String,
     cols: u32,
     rows: u32,
-) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    {
-        desktop::resize(&state, &session_id, cols, rows)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = (state, session_id, cols, rows);
-        Err("Local terminals require the desktop app".into())
-    }
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            {
+                desktop::resize(&state, &session_id, cols, rows, lease.clone())
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            {
+                let _ = (state, session_id, cols, rows);
+                Err("Local terminals require the desktop app".into())
+            }
+        })
+        .await
 }
 #[tauri::command]
 pub fn local_ack(
@@ -112,6 +138,17 @@ pub fn local_disconnect(state: State<'_, LocalState>, session_id: String) -> Res
     {
         let _ = (state, session_id);
         Ok(())
+    }
+}
+pub(crate) fn adopt(state: &LocalState, id: &str, request: &AccessLease) -> Result<bool, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        desktop::adopt(state, id, request)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (state, id, request);
+        Ok(false)
     }
 }
 pub fn install_cleanup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -197,8 +234,8 @@ mod desktop {
     }
     const WINDOW: usize = 256 * 1024;
     enum Input {
-        Data(String),
-        Resize(u32, u32),
+        Data(String, AccessLease),
+        Resize(u32, u32, AccessLease),
         Close,
     }
     struct Session {
@@ -206,11 +243,16 @@ mod desktop {
         cancel: watch::Sender<bool>,
         credits: Semaphore,
         inflight: Mutex<u32>,
+        access: AccessState,
+        creation: AccessLease,
+        adopted: AtomicBool,
+        adoption: tokio::sync::Notify,
         process: Arc<Mutex<Option<Process>>>,
         stopped: Arc<AtomicBool>,
         #[cfg(unix)]
         wake: UnixStream,
-        _slot: OwnedSemaphorePermit,
+        _slot: Mutex<Option<OwnedSemaphorePermit>>,
+        renderer_gone: watch::Sender<bool>,
     }
     impl Session {
         fn stop(&self) {
@@ -226,17 +268,28 @@ mod desktop {
     }
     pub struct Inner {
         sessions: Mutex<HashMap<String, Arc<Session>>>,
+        retiring: Mutex<HashMap<String, Arc<Session>>>,
         slots: Arc<Semaphore>,
         stopped: AtomicBool,
     }
     impl Inner {
         pub fn stop_all(&self) {
             self.stopped.store(true, Ordering::SeqCst);
-            let sessions = self
-                .sessions
-                .lock()
-                .map(|sessions| sessions.values().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
+            let sessions = {
+                let active = self
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let retiring = self
+                    .retiring
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                active
+                    .values()
+                    .chain(retiring.values())
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
             for session in &sessions {
                 session.stop();
             }
@@ -263,12 +316,63 @@ mod desktop {
         fn default() -> Self {
             Self(Arc::new(Inner {
                 sessions: Mutex::new(HashMap::new()),
+                retiring: Mutex::new(HashMap::new()),
                 slots: Arc::new(Semaphore::new(20)),
                 stopped: AtomicBool::new(false),
             }))
         }
     }
     impl LocalState {
+        pub(crate) fn cancel_for_renderer_rebind(&self) {
+            let sessions = {
+                let mut active = self
+                    .0
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let mut retiring = self
+                    .0
+                    .retiring
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                active
+                    .drain()
+                    .chain(retiring.drain())
+                    .map(|(_, session)| session)
+                    .collect::<Vec<_>>()
+            };
+            for session in &sessions {
+                session.renderer_gone.send_replace(true);
+                session.stop();
+            }
+            // The caller runs this hook on a blocking worker. Reap every old PID
+            // before releasing its startup slot; do not set permanent shutdown.
+            for session in sessions {
+                drop(
+                    session
+                        .process
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take(),
+                );
+                drop(
+                    session
+                        ._slot
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take(),
+                );
+            }
+            self.0
+                .retiring
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .retain(|_, session| !*session.renderer_gone.borrow());
+        }
+        #[cfg(test)]
+        pub(super) fn available_slots(&self) -> usize {
+            self.0.slots.available_permits()
+        }
         pub(super) fn clone_inner(&self) -> Arc<Inner> {
             self.0.clone()
         }
@@ -419,6 +523,7 @@ mod desktop {
     }
     pub async fn connect(
         state: &LocalState,
+        creation: AccessLease,
         cols: u32,
         rows: u32,
         events: Channel<SshEvent>,
@@ -430,10 +535,29 @@ mod desktop {
         {
             command.cwd(home);
         }
-        start(state, command, cols, rows, events).await
+        start_with_access(state, creation, command, cols, rows, events).await
     }
+    #[cfg(test)]
     pub(super) async fn start(
         state: &LocalState,
+        command: CommandBuilder,
+        cols: u32,
+        rows: u32,
+        events: Channel<SshEvent>,
+    ) -> Result<Connected, String> {
+        start_with_access(
+            state,
+            AccessState::disabled().lease(None).unwrap(),
+            command,
+            cols,
+            rows,
+            events,
+        )
+        .await
+    }
+    pub(super) async fn start_with_access(
+        state: &LocalState,
+        creation: AccessLease,
         command: CommandBuilder,
         cols: u32,
         rows: u32,
@@ -477,28 +601,37 @@ mod desktop {
         let session = Arc::new(Session {
             input,
             cancel,
+            access: creation.state(),
+            creation,
+            adopted: AtomicBool::new(false),
+            adoption: tokio::sync::Notify::new(),
             credits: Semaphore::new(WINDOW),
             inflight: Mutex::new(0),
             process: process.clone(),
             stopped: stopped.clone(),
             #[cfg(unix)]
             wake,
-            _slot: slot,
+            _slot: Mutex::new(Some(slot)),
+            renderer_gone: watch::channel(false).0,
         });
         let id = format!("local:{}", uuid::Uuid::new_v4());
-        let registration = {
-            let mut sessions = state
-                .0
-                .sessions
-                .lock()
-                .map_err(|_| "Local terminal lock failed")?;
-            if state.0.stopped.load(Ordering::SeqCst) {
-                Err("Local terminals are shutting down".to_string())
-            } else {
-                sessions.insert(id.clone(), session.clone());
-                Ok(())
-            }
-        };
+        let registration = session
+            .creation
+            .with_current(|| -> Result<(), String> {
+                let mut sessions = state
+                    .0
+                    .sessions
+                    .lock()
+                    .map_err(|_| "Local terminal lock failed")?;
+                if state.0.stopped.load(Ordering::SeqCst) {
+                    Err("Local terminals are shutting down".to_string())
+                } else {
+                    sessions.insert(id.clone(), session.clone());
+                    Ok(())
+                }
+            })
+            .map_err(String::from)
+            .and_then(|result| result);
         if let Err(error) = registration {
             drop(reader);
             drop(writer);
@@ -510,6 +643,7 @@ mod desktop {
             });
             return Err(error);
         }
+        watch_adoption(state, &id, &session);
         let (output, mut output_rx) = mpsc::channel(1);
         let read_stop = stopped.clone();
         #[cfg(unix)]
@@ -571,7 +705,10 @@ mod desktop {
                         };
                         match value {
                             Input::Close => break,
-                            Input::Resize(cols, rows) => {
+                            Input::Resize(cols, rows, lease) => {
+                                if lease.check().is_err() {
+                                    continue;
+                                }
                                 if let Some(process) = write_process
                                     .lock()
                                     .map_err(|_| "Local process lock failed")?
@@ -585,9 +722,15 @@ mod desktop {
                                         .map_err(|e| e.to_string())?;
                                 }
                             }
-                            Input::Data(data) => {
+                            Input::Data(data, lease) => {
+                                if lease.check().is_err() {
+                                    continue;
+                                }
                                 let mut bytes = data.as_bytes();
                                 while !bytes.is_empty() && !write_stop.load(Ordering::SeqCst) {
+                                    if lease.check().is_err() {
+                                        break;
+                                    }
                                     match writer.write(bytes) {
                                         Ok(0) => return Err("Local terminal input closed".into()),
                                         Ok(length) => bytes = &bytes[length..],
@@ -636,10 +779,9 @@ mod desktop {
                         result=&mut input_done=>return result.map_err(|_|"Local input worker stopped")?,
                         bytes=output_rx.recv()=>match bytes {
                             Some(Ok(bytes))=>{
-                                let permit=tokio::select! {_=cancellation.changed()=>return Ok(()), result=tokio::time::timeout(Duration::from_secs(15),session.credits.acquire_many(bytes.len() as u32))=>result.map_err(|_|"Local terminal stopped consuming output")?.map_err(|_|"Local terminal closed")?};
-                                permit.forget();
-                                *session.inflight.lock().map_err(|_|"Local output lock failed")?+=bytes.len() as u32;
-                                events.send(SshEvent::Data{data:bytes}).map_err(|_|"Local terminal output closed")?;
+                                crate::ssh::deliver_output(&session.access, &session.credits, &session.inflight,
+                                    &mut cancellation, &events, &bytes,
+                                    Some((&session.creation, &session.adopted, &session.renderer_gone))).await?;
                             },
                             Some(Err(error))=>return Err(error),None=>return Ok(()),
                         }
@@ -659,16 +801,92 @@ mod desktop {
                 }),
             )
             .await;
-            if let Ok(mut active) = sessions.sessions.lock() {
-                active.remove(&task_id);
-            }
-            let _ = events.send(SshEvent::Closed {
-                message: result.err().unwrap_or_else(|| "Local shell exited".into()),
-            });
+            retire_session(&sessions, &task_id, &session);
+            crate::ssh::close_output(
+                &session.access,
+                Some((&session.creation, &session.adopted, &session.renderer_gone)),
+                &events,
+                result.err().unwrap_or_else(|| "Local shell exited".into()),
+            )
+            .await;
+            sessions
+                .retiring
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&task_id);
         });
         Ok(Connected { session_id: id })
     }
-    pub fn write(state: &LocalState, id: &str, data: String) -> Result<(), String> {
+    fn retire_session(inner: &Inner, id: &str, session: &Arc<Session>) {
+        let mut active = inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut retiring = inner
+            .retiring
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        active.remove(id);
+        if !*session.renderer_gone.borrow() {
+            retiring.insert(id.to_owned(), session.clone());
+        }
+    }
+    fn watch_adoption(state: &LocalState, id: &str, session: &Arc<Session>) {
+        let inner = state.0.clone();
+        let id = id.to_owned();
+        let session = session.clone();
+        tauri::async_runtime::spawn(async move {
+            if session.adopted.load(Ordering::SeqCst) {
+                return;
+            }
+            let mut cancellation = session.cancel.subscribe();
+            if *cancellation.borrow() {
+                return;
+            }
+            tokio::select! {
+                biased;
+                _ = session.adoption.notified() => {},
+                _ = cancellation.changed() => {},
+                _ = session.creation.cancelled() => {
+                    if !session.adopted.load(Ordering::SeqCst) {
+                        session.stop();
+                        retire_session(&inner, &id, &session);
+                    }
+                }
+            }
+        });
+    }
+    pub(super) fn adopt(
+        state: &LocalState,
+        id: &str,
+        request: &AccessLease,
+    ) -> Result<bool, String> {
+        request.check()?;
+        let session = state
+            .0
+            .sessions
+            .lock()
+            .map_err(|_| "Local session lock failed")?
+            .get(id)
+            .cloned();
+        let Some(session) = session else {
+            return Ok(false);
+        };
+        if session.stopped.load(Ordering::SeqCst) {
+            return Err("Local terminal is disconnected".into());
+        }
+        session.creation.with_current(|| {
+            session.adopted.store(true, Ordering::SeqCst);
+            session.adoption.notify_one();
+        })?;
+        Ok(true)
+    }
+    pub fn write(
+        state: &LocalState,
+        id: &str,
+        data: String,
+        lease: AccessLease,
+    ) -> Result<(), String> {
         if data.len() > 65536 {
             return Err("Paste at most 64 KiB at once".into());
         }
@@ -676,16 +894,22 @@ mod desktop {
             .0
             .session(id)?
             .input
-            .try_send(Input::Data(data))
+            .try_send(Input::Data(data, lease))
             .map_err(|_| "Local terminal input queue is full or disconnected".into())
     }
-    pub fn resize(state: &LocalState, id: &str, cols: u32, rows: u32) -> Result<(), String> {
+    pub fn resize(
+        state: &LocalState,
+        id: &str,
+        cols: u32,
+        rows: u32,
+        lease: AccessLease,
+    ) -> Result<(), String> {
         size(cols, rows)?;
         state
             .0
             .session(id)?
             .input
-            .try_send(Input::Resize(cols, rows))
+            .try_send(Input::Resize(cols, rows, lease))
             .map_err(|_| "Local terminal input queue is full or disconnected".into())
     }
     pub fn ack(state: &LocalState, id: &str, bytes: u32) -> Result<(), String> {
@@ -732,6 +956,11 @@ mod desktop {
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 mod tests {
+    fn access_lease() -> crate::app_lock::AccessLease {
+        crate::app_lock::AccessState::disabled()
+            .lease(None)
+            .unwrap()
+    }
     use super::*;
     use std::time::Duration;
     use tokio::sync::mpsc;
@@ -824,15 +1053,29 @@ mod tests {
         )
         .await
         .unwrap();
-        desktop::resize(&state, &first.session_id, 111, 36).unwrap();
-        desktop::write(&state, &first.session_id, "hello世界\n".into()).unwrap();
+        desktop::resize(&state, &first.session_id, 111, 36, access_lease()).unwrap();
+        desktop::write(
+            &state,
+            &first.session_id,
+            "hello世界\n".into(),
+            access_lease(),
+        )
+        .unwrap();
         let output = until(&mut rx, "36 111").await;
         assert!(output.contains("INPUT:hello世界"));
-        assert!(desktop::write(&state, &first.session_id, "x".repeat(65537)).is_err());
-        assert!(desktop::resize(&state, &first.session_id, 0, 24).is_err());
+        assert!(
+            desktop::write(&state, &first.session_id, "x".repeat(65537), access_lease()).is_err()
+        );
+        assert!(desktop::resize(&state, &first.session_id, 0, 24, access_lease()).is_err());
         desktop::disconnect(&state, &first.session_id);
         closed(&mut rx).await;
-        desktop::write(&state, &second.session_id, "still alive\n".into()).unwrap();
+        desktop::write(
+            &state,
+            &second.session_id,
+            "still alive\n".into(),
+            access_lease(),
+        )
+        .unwrap();
         assert!(until(&mut second_rx, "SECOND:still alive")
             .await
             .contains("SECOND:still alive"));
@@ -892,7 +1135,13 @@ mod tests {
                 desktop::disconnect(&state, &connected.session_id);
             }
             closed(&mut rx).await;
-            assert!(desktop::write(&state, &connected.session_id, "after close".into()).is_err());
+            assert!(desktop::write(
+                &state,
+                &connected.session_id,
+                "after close".into(),
+                access_lease()
+            )
+            .is_err());
         }
     }
 
@@ -980,11 +1229,12 @@ mod tests {
             .await
             .expect("ConPTY startup failed on this Windows runner");
         let pid = desktop::process_id(&state, &connected.session_id);
-        desktop::resize(&state, &connected.session_id, 111, 36).unwrap();
+        desktop::resize(&state, &connected.session_id, 111, 36, access_lease()).unwrap();
         desktop::write(
             &state,
             &connected.session_id,
             "chcp 65001 >nul\r\necho __LOCAL_世界__\r\n".into(),
+            access_lease(),
         )
         .unwrap();
         assert!(until(&mut rx, "__LOCAL_世界__")
@@ -1005,5 +1255,151 @@ mod tests {
             !String::from_utf8_lossy(&processes.stdout).contains(&format!(",\"{pid}\",")),
             "owned ConPTY shell survived disconnect"
         );
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unadopted_local_pid_is_reaped_after_serialization_while_adopted_process_survives_lock()
+    {
+        use tauri::ipc::IpcResponse;
+        for retained in [false, true] {
+            let state = LocalState::default();
+            let access = AccessState::default();
+            access.initialize(true, true, "test".into()).unwrap();
+            access.authorize(access.generation().unwrap()).unwrap();
+            access.ready(access.generation().unwrap()).unwrap();
+            let nonce = access.status().unwrap().nonce.unwrap();
+            let creation = access.lease(Some(&nonce)).unwrap();
+            let (events, mut rx) = events();
+            let connected = desktop::start_with_access(
+                &state,
+                creation.clone(),
+                shell("printf '__PID_%s__\\n' \"$$\"; exec sleep 120"),
+                80,
+                24,
+                events,
+            )
+            .await
+            .unwrap();
+            let id = connected.session_id.clone();
+            let output = until(&mut rx, "__\r\n").await;
+            let pid = output
+                .split("__PID_")
+                .nth(1)
+                .unwrap()
+                .split("__")
+                .next()
+                .unwrap()
+                .parse::<i32>()
+                .unwrap();
+            assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+            if retained {
+                assert!(desktop::adopt(&state, &id, &creation).unwrap());
+            }
+            creation.guard(connected).unwrap().body().unwrap();
+            access.lock().unwrap();
+            assert!(desktop::adopt(&state, &id, &creation).is_err());
+            if !retained {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while unsafe { libc::kill(pid, 0) } == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("unadopted local child must be reaped while locked");
+            }
+            access.authorize(access.generation().unwrap()).unwrap();
+            access.ready(access.generation().unwrap()).unwrap();
+            if retained {
+                assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+                desktop::disconnect(&state, &id);
+            }
+            closed(&mut rx).await;
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn renderer_rebind_reaps_old_local_pids_without_permanently_stopping_new_terminals() {
+        use std::sync::Arc;
+        use tauri::ipc::IpcResponse;
+        let state = Arc::new(LocalState::default());
+        let access = AccessState::disabled();
+        let creation = access.lease(None).unwrap();
+        let mut pids = Vec::new();
+        let mut old_events = Vec::new();
+        assert_eq!(state.available_slots(), 20);
+        for adopted in [false, true] {
+            let (events, mut rx) = events();
+            let connected = desktop::start_with_access(
+                &state,
+                creation.clone(),
+                shell("printf '__PID_%s__\\n' \"$$\"; exec sleep 120"),
+                80,
+                24,
+                events,
+            )
+            .await
+            .unwrap();
+            let output = until(&mut rx, "__\r\n").await;
+            let pid = output
+                .split("__PID_")
+                .nth(1)
+                .unwrap()
+                .split("__")
+                .next()
+                .unwrap()
+                .parse::<i32>()
+                .unwrap();
+            if adopted {
+                assert!(desktop::adopt(&state, &connected.session_id, &creation).unwrap());
+            }
+            creation.guard(connected).unwrap().body().unwrap();
+            pids.push(pid);
+            old_events.push(rx);
+        }
+        assert_eq!(state.available_slots(), 18);
+        access.replace_renderer().unwrap();
+        assert!(creation.check().is_err());
+        let retiring = state.clone();
+        tokio::task::spawn_blocking(move || retiring.cancel_for_renderer_rebind())
+            .await
+            .unwrap();
+        for pid in pids {
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "old local child must be reaped before replacement ACK"
+            );
+        }
+        assert_eq!(state.available_slots(), 20);
+        state.cancel_for_renderer_rebind(); // Idempotent cleanup cannot stop a future renderer.
+        assert!(access.finish_renderer_replacement().unwrap());
+        access.foreground().unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        assert!(access.lease(None).is_err());
+        let fresh = access
+            .lease(access.status().unwrap().nonce.as_deref())
+            .unwrap();
+        let (events, mut rx) = events();
+        let connected = desktop::start_with_access(
+            &state,
+            fresh.clone(),
+            shell("printf 'FRESH_RENDERER_READY\\n'; exec sleep 120"),
+            80,
+            24,
+            events,
+        )
+        .await
+        .unwrap();
+        assert!(desktop::adopt(&state, &connected.session_id, &fresh).unwrap());
+        until(&mut rx, "FRESH_RENDERER_READY").await;
+        for events in &mut old_events {
+            assert!(
+                events.try_recv().is_err(),
+                "old callback namespace received replacement output"
+            );
+        }
+        desktop::disconnect(&state, &connected.session_id);
+        closed(&mut rx).await;
     }
 }

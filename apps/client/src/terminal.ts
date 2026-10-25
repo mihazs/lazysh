@@ -17,6 +17,7 @@ export type LiveSession = {
   destination: string;
   terminal: Terminal;
   connected: boolean;
+  disposed?: true;
   local?: true;
   mosh?: {serverPath: string; portMin: number; portMax: number};
   et?: {serverPath: string; port: number};

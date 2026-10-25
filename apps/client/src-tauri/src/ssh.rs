@@ -1,3 +1,4 @@
+use crate::app_lock::{AccessLease, AccessState, Guarded, GuardedError};
 use russh::{
     client,
     keys::{decode_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate},
@@ -54,6 +55,7 @@ impl<E: std::fmt::Display> From<E> for SshError {
     }
 }
 pub(crate) type Result<T> = std::result::Result<T, SshError>;
+pub(crate) type AccessResult<T> = std::result::Result<Guarded<T>, GuardedError<SshError>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -175,6 +177,7 @@ impl Config {
 pub struct AppState {
     config: Arc<StdMutex<Config>>,
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
+    retiring: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     credential_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 impl AppState {
@@ -193,8 +196,56 @@ impl AppState {
                 pending: HashMap::new(),
             })),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            retiring: Arc::new(Mutex::new(HashMap::new())),
             credential_locks: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+    pub(crate) async fn cancel_for_renderer_rebind(&self) {
+        let sessions = {
+            let mut active = self.sessions.lock().await;
+            let mut retiring = self.retiring.lock().await;
+            active
+                .drain()
+                .chain(retiring.drain())
+                .map(|(_, session)| session)
+                .collect::<Vec<_>>()
+        };
+        for session in &sessions {
+            session.renderer_gone.send_replace(true);
+            session.cancel.send_replace(true);
+            session.output_credits.close();
+            session.handle.forward_agent.close();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut disconnects = tokio::task::JoinSet::new();
+        for session in &sessions {
+            let handle = session.handle.clone();
+            if seen.insert(Arc::as_ptr(&handle) as usize) {
+                disconnects.spawn(async move {
+                    let _ = timeout(
+                        Duration::from_secs(2),
+                        handle.disconnect(
+                            russh::Disconnect::ByApplication,
+                            "Renderer replaced",
+                            "en",
+                        ),
+                    )
+                    .await;
+                });
+            }
+        }
+        while disconnects.join_next().await.is_some() {}
+        for session in sessions {
+            let mut finished = session.finished.subscribe();
+            let done = *finished.borrow();
+            if !done {
+                let _ = finished.wait_for(|done| *done).await;
+            }
+        }
+        self.retiring
+            .lock()
+            .await
+            .retain(|_, session| !*session.renderer_gone.borrow());
     }
     fn config(&self) -> Result<std::sync::MutexGuard<'_, Config>> {
         self.config
@@ -314,43 +365,52 @@ impl AppState {
             .await
             .get(id)
             .cloned()
+            .filter(|session| !*session.cancel.borrow())
             .ok_or_else(|| SshError::new("disconnected", "Session is disconnected"))
     }
 }
 
 #[tauri::command]
-pub fn list_hosts(state: State<'_, AppState>) -> Result<Vec<Host>> {
-    Ok(state.config()?.hosts.clone())
+pub fn list_hosts(lease: AccessLease, state: State<'_, AppState>) -> AccessResult<Vec<Host>> {
+    lease.run_sync(|| Ok(state.config()?.hosts.clone()))
 }
 #[tauri::command]
 pub async fn save_host(
+    lease: AccessLease,
+
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     host: Host,
-) -> Result<Host> {
-    let _guard = state.credential_guard(&host.id).await;
-    host.validate()?;
-    {
-        let config = state.config()?;
-        crate::routing::validate(&host, &config.hosts)?;
-        validate_protection_change(&host, &config.hosts)?;
-    }
-    if state.host(&host.id).ok().is_some_and(|old| {
-        old.credentials_stored
-            && (old.hostname != host.hostname
-                || old.port != host.port
-                || old.username != host.username
-                || old.jump_host_id != host.jump_host_id
-                || old.forward_agent != host.forward_agent)
-    }) {
-        let vault_host = host.id.clone();
-        tauri::async_runtime::spawn_blocking(move || crate::vault::remove(&app, &vault_host))
-            .await
-            .map_err(|_| SshError::new("storage", "Credential deletion failed"))?
-            .map_err(|message| SshError::new("storage", message))?;
-        state.mark_credentials(&host.id, false)?;
-    }
-    save_host_inner(&state, host)
+) -> AccessResult<Host> {
+    lease
+        .run(async {
+            let _guard = state.credential_guard(&host.id).await;
+            host.validate()?;
+            {
+                let config = state.config()?;
+                crate::routing::validate(&host, &config.hosts)?;
+                validate_protection_change(&host, &config.hosts)?;
+            }
+            if state.host(&host.id).ok().is_some_and(|old| {
+                old.credentials_stored
+                    && (old.hostname != host.hostname
+                        || old.port != host.port
+                        || old.username != host.username
+                        || old.jump_host_id != host.jump_host_id
+                        || old.forward_agent != host.forward_agent)
+            }) {
+                let vault_host = host.id.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    crate::vault::remove(&app, &vault_host)
+                })
+                .await
+                .map_err(|_| SshError::new("storage", "Credential deletion failed"))?
+                .map_err(|message| SshError::new("storage", message))?;
+                state.mark_credentials(&host.id, false)?;
+            }
+            save_host_inner(&state, host)
+        })
+        .await
 }
 fn validate_protection_change(host: &Host, hosts: &[Host]) -> Result<()> {
     if hosts.iter().any(|old| {
@@ -389,31 +449,39 @@ fn save_host_inner(state: &AppState, mut host: Host) -> Result<Host> {
 }
 #[tauri::command]
 pub async fn delete_host(
+    lease: AccessLease,
+
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     host_id: String,
-) -> Result<()> {
-    let _guard = state.credential_guard(&host_id).await;
-    if state
-        .config()?
-        .hosts
-        .iter()
-        .any(|host| host.jump_host_id.as_deref() == Some(&host_id))
-    {
-        return Err(SshError::new(
-            "host_in_use",
-            "Remove routes using this bastion before deleting it",
-        ));
-    }
-    if state.host(&host_id)?.credentials_stored {
-        let vault_app = app.clone();
-        let vault_host = host_id.clone();
-        tauri::async_runtime::spawn_blocking(move || crate::vault::remove(&vault_app, &vault_host))
-            .await
-            .map_err(|_| SshError::new("storage", "Credential deletion failed"))?
-            .map_err(|message| SshError::new("storage", message))?;
-    }
-    remove_host_metadata(&state, &host_id)
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            let _guard = state.credential_guard(&host_id).await;
+            if state
+                .config()?
+                .hosts
+                .iter()
+                .any(|host| host.jump_host_id.as_deref() == Some(&host_id))
+            {
+                return Err(SshError::new(
+                    "host_in_use",
+                    "Remove routes using this bastion before deleting it",
+                ));
+            }
+            if state.host(&host_id)?.credentials_stored {
+                let vault_app = app.clone();
+                let vault_host = host_id.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    crate::vault::remove(&vault_app, &vault_host)
+                })
+                .await
+                .map_err(|_| SshError::new("storage", "Credential deletion failed"))?
+                .map_err(|message| SshError::new("storage", message))?;
+            }
+            remove_host_metadata(&state, &host_id)
+        })
+        .await
 }
 fn remove_host_metadata(state: &AppState, host_id: &str) -> Result<()> {
     let mut config = state.config()?;
@@ -437,11 +505,13 @@ fn remove_host_metadata(state: &AppState, host_id: &str) -> Result<()> {
 }
 #[tauri::command]
 pub fn trust_host_key(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     host_id: String,
     fingerprint: String,
-) -> Result<()> {
-    trust_host_key_inner(&state, host_id, fingerprint)
+) -> AccessResult<()> {
+    lease.run_sync(|| trust_host_key_inner(&state, host_id, fingerprint))
 }
 fn trust_host_key_inner(state: &AppState, host_id: String, fingerprint: String) -> Result<()> {
     let mut config = state.config()?;
@@ -533,15 +603,130 @@ impl Drop for SshHandle {
 }
 pub(crate) struct Session {
     pub(crate) handle: Arc<SshHandle>,
+    pub(crate) access: AccessState,
+    creation: AccessLease,
+    adopted: std::sync::atomic::AtomicBool,
+    adoption: tokio::sync::Notify,
     input: mpsc::Sender<Input>,
     output_credits: Semaphore,
     output_inflight: StdMutex<u32>,
+    renderer_gone: watch::Sender<bool>,
+    finished: watch::Sender<bool>,
     pub(crate) cancel: watch::Sender<bool>,
     validate_size: fn(u32, u32) -> Result<()>,
 }
+async fn retire_session(
+    active: &Mutex<HashMap<String, Arc<Session>>>,
+    retiring: &Mutex<HashMap<String, Arc<Session>>>,
+    id: &str,
+    session: &Arc<Session>,
+) {
+    let mut active = active.lock().await;
+    let mut retired = retiring.lock().await;
+    active.remove(id);
+    if !*session.renderer_gone.borrow() {
+        retired.insert(id.to_owned(), session.clone());
+    }
+}
+fn watch_adoption(state: &AppState, id: &str, session: &Arc<Session>) {
+    let session = session.clone();
+    let sessions = state.sessions.clone();
+    let retiring = state.retiring.clone();
+    let id = id.to_owned();
+    tauri::async_runtime::spawn(async move {
+        if session.adopted.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let mut cancellation = session.cancel.subscribe();
+        if *cancellation.borrow() {
+            return;
+        }
+        tokio::select! {
+            biased;
+            _ = session.adoption.notified() => {},
+            _ = cancellation.changed() => {},
+            _ = session.creation.cancelled() => {
+                if !session.adopted.load(std::sync::atomic::Ordering::SeqCst) {
+                    session.cancel.send_replace(true);
+                    session.output_credits.close();
+                    retire_session(&sessions, &retiring, &id, &session).await;
+                }
+            }
+        }
+    });
+}
+fn mark_adopted(session: &Session, request: &AccessLease) -> Result<()> {
+    request.check()?;
+    if *session.cancel.borrow() {
+        return Err(SshError::new("disconnected", "Session closed"));
+    }
+    session.creation.with_current(|| {
+        session
+            .adopted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        session.adoption.notify_one();
+    })?;
+    Ok(())
+}
+#[tauri::command]
+pub async fn adopt_session(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    local_state: State<'_, crate::local::LocalState>,
+    session_id: String,
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            let session = state.sessions.lock().await.get(&session_id).cloned();
+            if let Some(session) = session {
+                mark_adopted(&session, &lease)
+            } else if crate::local::adopt(&local_state, &session_id, &lease)? {
+                Ok(())
+            } else {
+                Err(SshError::new("disconnected", "Session is disconnected"))
+            }
+        })
+        .await
+}
+struct SessionCompletion {
+    finished: watch::Sender<bool>,
+    armed: bool,
+}
+impl SessionCompletion {
+    fn new(finished: watch::Sender<bool>) -> Self {
+        Self {
+            finished,
+            armed: true,
+        }
+    }
+    fn finish(mut self) {
+        self.finished.send_replace(true);
+        self.armed = false;
+    }
+}
+impl Drop for SessionCompletion {
+    fn drop(&mut self) {
+        if self.armed {
+            self.finished.send_replace(true);
+        }
+    }
+}
+// A cancelled native-start future must not leave its readiness worker running.
+struct PendingTerminal {
+    session: Arc<Session>,
+    armed: bool,
+}
+impl Drop for PendingTerminal {
+    fn drop(&mut self) {
+        if self.armed {
+            self.session.cancel.send_replace(true);
+            self.session.output_credits.close();
+        }
+    }
+}
 pub(crate) enum Input {
-    Data(String),
-    Resize(u32, u32),
+    Data(String, AccessLease),
+    Resize(u32, u32, AccessLease),
 }
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -788,6 +973,8 @@ pub(crate) async fn authenticate_for_operation(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn connect(
+    lease: AccessLease,
+
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     host_id: String,
@@ -800,108 +987,120 @@ pub async fn connect(
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
-) -> Result<Connected> {
-    let operation = app.vault().operation();
-    let entered = crate::vault::Credentials {
-        password,
-        private_key,
-        passphrase,
-    };
-    let _guard = during_connect(&operation, async {
-        Ok(state.credential_guard(&host_id).await)
-    })
-    .await?;
-    check_size(cols, rows)?;
-    let host = state.host(&host_id)?;
-    let handle = during_connect(
-        &operation,
-        crate::routing::verified_target(app.clone(), &state, &host, jump_credentials, &operation),
-    )
-    .await?;
-    let credentials = if use_saved_credentials.unwrap_or(false) {
-        match during_connect(&operation, async {
-            crate::vault::load_for_operation(app.clone(), host.clone(), operation.clone())
+) -> AccessResult<Connected> {
+    lease
+        .run(async {
+            let operation = app.vault().operation();
+            let entered = crate::vault::Credentials {
+                password,
+                private_key,
+                passphrase,
+            };
+            let _guard = during_connect(&operation, async {
+                Ok(state.credential_guard(&host_id).await)
+            })
+            .await?;
+            check_size(cols, rows)?;
+            let host = state.host(&host_id)?;
+            let handle = during_connect(
+                &operation,
+                crate::routing::verified_target(
+                    app.clone(),
+                    &state,
+                    &host,
+                    jump_credentials,
+                    &operation,
+                ),
+            )
+            .await?;
+            let credentials = if use_saved_credentials.unwrap_or(false) {
+                match during_connect(&operation, async {
+                    crate::vault::load_for_operation(app.clone(), host.clone(), operation.clone())
+                        .await
+                        .map_err(|message| SshError::new("storage", message))
+                })
                 .await
-                .map_err(|message| SshError::new("storage", message))
-        })
-        .await
-        {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                close_failed_connect(&handle).await;
-                return Err(error);
-            }
-        }
-    } else {
-        entered
-    };
-    let handle =
-        Arc::new(authenticate_for_operation(handle, &host, &credentials, &operation).await?);
-    let (channel, initial) =
-        match during_connect(&operation, open_terminal(&handle, cols, rows, None)).await {
-            Ok(terminal) => terminal,
-            Err(error) => {
-                close_failed_connect(&handle).await;
-                return Err(error);
-            }
-        };
-    if remember_credentials.unwrap_or(false) {
-        if operation.check().is_err() {
-            close_failed_connect(&handle).await;
-            return Err(connection_cancelled());
-        }
-        if let Err(error) = state.mark_credentials(&host_id, true) {
-            let _ = handle
-                .disconnect(
-                    russh::Disconnect::ByApplication,
-                    "Credential metadata failed",
-                    "en",
+                {
+                    Ok(credentials) => credentials,
+                    Err(error) => {
+                        close_failed_connect(&handle).await;
+                        return Err(error);
+                    }
+                }
+            } else {
+                entered
+            };
+            let handle = Arc::new(
+                authenticate_for_operation(handle, &host, &credentials, &operation).await?,
+            );
+            let (channel, initial) =
+                match during_connect(&operation, open_terminal(&handle, cols, rows, None)).await {
+                    Ok(terminal) => terminal,
+                    Err(error) => {
+                        close_failed_connect(&handle).await;
+                        return Err(error);
+                    }
+                };
+            if remember_credentials.unwrap_or(false) {
+                if operation.check().is_err() {
+                    close_failed_connect(&handle).await;
+                    return Err(connection_cancelled());
+                }
+                if let Err(error) = state.mark_credentials(&host_id, true) {
+                    let _ = handle
+                        .disconnect(
+                            russh::Disconnect::ByApplication,
+                            "Credential metadata failed",
+                            "en",
+                        )
+                        .await;
+                    return Err(error);
+                }
+                if let Err(message) = crate::vault::save_for_operation(
+                    app.clone(),
+                    host.clone(),
+                    credentials,
+                    operation.clone(),
                 )
-                .await;
-            return Err(error);
-        }
-        if let Err(message) = crate::vault::save_for_operation(
-            app.clone(),
-            host.clone(),
-            credentials,
-            operation.clone(),
-        )
-        .await
-        {
-            if !host.credentials_stored {
-                let vault_app = app.clone();
-                let vault_host = host_id.clone();
-                if matches!(
-                    tauri::async_runtime::spawn_blocking(move || crate::vault::remove(
-                        &vault_app,
-                        &vault_host
-                    ))
-                    .await,
-                    Ok(Ok(()))
-                ) {
-                    let _ = state.mark_credentials(&host_id, false);
+                .await
+                {
+                    if !host.credentials_stored {
+                        let vault_app = app.clone();
+                        let vault_host = host_id.clone();
+                        if matches!(
+                            tauri::async_runtime::spawn_blocking(move || crate::vault::remove(
+                                &vault_app,
+                                &vault_host
+                            ))
+                            .await,
+                            Ok(Ok(()))
+                        ) {
+                            let _ = state.mark_credentials(&host_id, false);
+                        }
+                    }
+                    let _ = handle
+                        .disconnect(
+                            russh::Disconnect::ByApplication,
+                            "Credential storage failed",
+                            "en",
+                        )
+                        .await;
+                    return Err(SshError::new("storage", message));
                 }
             }
-            let _ = handle
-                .disconnect(
-                    russh::Disconnect::ByApplication,
-                    "Credential storage failed",
-                    "en",
-                )
-                .await;
-            return Err(SshError::new("storage", message));
-        }
-    }
-    if operation.check().is_err() {
-        close_failed_connect(&handle).await;
-        return Err(connection_cancelled());
-    }
-    let connected = spawn_terminal(&state, handle, channel, initial, events).await?;
-    if operation.check().is_err() {
-        let _ = disconnect(state, connected.session_id).await;
-        return Err(connection_cancelled());
-    }
-    Ok(connected)
+            if operation.check().is_err() {
+                close_failed_connect(&handle).await;
+                return Err(connection_cancelled());
+            }
+            let connected =
+                spawn_terminal(&state, lease.clone(), handle, channel, initial, events).await?;
+            if operation.check().is_err() {
+                let _ = disconnect_inner(&state, connected.session_id).await;
+                return Err(connection_cancelled());
+            }
+            Ok(connected)
+        })
+        .await
 }
 async fn request_ok(channel: &mut russh::Channel<client::Msg>) -> Result<Vec<u8>> {
     timeout(OP_TIMEOUT, async {
@@ -950,7 +1149,15 @@ async fn start_session(
     let host = state.host(&host_id)?;
     let handle = Arc::new(authenticate(state, &host, password, private_key, passphrase).await?);
     let (channel, initial) = open_terminal(&handle, cols, rows, None).await?;
-    spawn_terminal(state, handle, channel, initial, events).await
+    spawn_terminal(
+        state,
+        AccessState::disabled().lease(None).unwrap(),
+        handle,
+        channel,
+        initial,
+        events,
+    )
+    .await
 }
 const OUTPUT_WINDOW: u32 = 256 * 1024;
 async fn open_terminal(
@@ -992,29 +1199,153 @@ async fn open_terminal(
         }
     }
 }
+pub(crate) async fn deliver_output(
+    access: &AccessState,
+    credits: &Semaphore,
+    inflight: &StdMutex<u32>,
+    cancellation: &mut watch::Receiver<bool>,
+    events: &Channel<SshEvent>,
+    data: &[u8],
+    owner: Option<(
+        &AccessLease,
+        &std::sync::atomic::AtomicBool,
+        &watch::Sender<bool>,
+    )>,
+) -> std::result::Result<(), String> {
+    let mut remaining = OP_TIMEOUT;
+    let mut changes = access.subscribe();
+    loop {
+        if *cancellation.borrow() {
+            return Err("Terminal closed".into());
+        }
+        tokio::select! {
+            biased;
+            _ = cancellation.changed() => return Err("Terminal closed".into()),
+            result = access.wait_unlocked() => { result.map_err(String::from)?; }
+        }
+        let began = tokio::time::Instant::now();
+        let permit = tokio::select! {
+            biased;
+            _ = cancellation.changed() => return Err("Terminal closed".into()),
+            _ = changes.changed() => {
+                remaining = remaining.saturating_sub(began.elapsed());
+                continue;
+            },
+            permit = credits.acquire_many(data.len() as u32) => permit.map_err(|_| "Terminal closed")?,
+            _ = tokio::time::sleep(remaining) => return Err("Terminal stopped consuming output".into()),
+        };
+        remaining = remaining.saturating_sub(began.elapsed());
+        // Same authority mutex as lock: no Channel index is created while locked.
+        let send = || -> std::result::Result<(), String> {
+            if owner.is_some_and(|(_, _, gone)| *gone.borrow()) {
+                return Err("Renderer replaced".into());
+            }
+            *inflight.lock().map_err(|_| "Output accounting failed")? += data.len() as u32;
+            events
+                .send(SshEvent::Data {
+                    data: data.to_vec(),
+                })
+                .map_err(|_| "Terminal output closed")?;
+            Ok(())
+        };
+        let sent = match owner {
+            Some((creation, adopted, _)) => creation.with_transport_output(adopted, send),
+            None => access.with_unlocked(send),
+        };
+        match sent {
+            Ok(result) => {
+                result?;
+                permit.forget();
+                return Ok(());
+            }
+            Err(_) => {
+                drop(permit);
+                if owner.is_some_and(|(creation, adopted, _)| {
+                    creation.check().is_err() && !adopted.load(std::sync::atomic::Ordering::SeqCst)
+                }) {
+                    return Err("Session cancelled before adoption".into());
+                }
+            }
+        }
+    }
+}
+pub(crate) async fn close_output(
+    access: &AccessState,
+    owner: Option<(
+        &AccessLease,
+        &std::sync::atomic::AtomicBool,
+        &watch::Sender<bool>,
+    )>,
+    events: &Channel<SshEvent>,
+    message: String,
+) {
+    let mut retired = owner.map(|(_, _, gone)| gone.subscribe());
+    loop {
+        if retired.as_ref().is_some_and(|gone| *gone.borrow()) {
+            return;
+        }
+        tokio::select! {
+            biased;
+            _ = async { if let Some(gone) = retired.as_mut() { let _ = gone.changed().await; } else { std::future::pending::<()>().await; } } => return,
+            result = access.wait_unlocked() => if result.is_err() { return; },
+        }
+        let send = || {
+            if owner.is_some_and(|(_, _, gone)| *gone.borrow()) {
+                return Ok(());
+            }
+            events.send(SshEvent::Closed {
+                message: message.clone(),
+            })
+        };
+        let sent = match owner {
+            Some((creation, adopted, gone)) => {
+                if *gone.borrow() {
+                    return;
+                }
+                if creation.check().is_err() && !adopted.load(std::sync::atomic::Ordering::SeqCst) {
+                    // The renderer retained this id before an ACK that may have been lost.
+                    // Retire the known tab after unlock without replaying an old private error.
+                    access.with_unlocked(|| {
+                        if *gone.borrow() {
+                            return Ok(());
+                        }
+                        events.send(SshEvent::Closed {
+                            message: "Session cancelled before adoption".into(),
+                        })
+                    })
+                } else {
+                    creation.with_transport_output(adopted, send)
+                }
+            }
+            None => access.with_unlocked(send),
+        };
+        if sent.is_ok() {
+            return;
+        }
+    }
+}
+
 async fn send_output(session: &Session, events: &Channel<SshEvent>, data: &[u8]) -> Result<()> {
+    let mut cancellation = session.cancel.subscribe();
     for chunk in data.chunks(16384) {
-        let permit = timeout(
-            OP_TIMEOUT,
-            session.output_credits.acquire_many(chunk.len() as u32),
+        deliver_output(
+            &session.access,
+            &session.output_credits,
+            &session.output_inflight,
+            &mut cancellation,
+            events,
+            chunk,
+            Some((&session.creation, &session.adopted, &session.renderer_gone)),
         )
         .await
-        .map_err(|_| SshError::new("consumer_stalled", "Terminal stopped consuming output"))?
-        .map_err(|_| SshError::new("disconnected", "Terminal closed"))?;
-        permit.forget();
-        *session
-            .output_inflight
-            .lock()
-            .map_err(|_| SshError::new("ssh_error", "Output accounting failed"))? +=
-            chunk.len() as u32;
-        events.send(SshEvent::Data {
-            data: chunk.to_vec(),
-        })?;
+        .map_err(|error| SshError::new("terminal_output", error))?;
     }
     Ok(())
 }
+
 async fn spawn_terminal(
     state: &AppState,
+    creation: AccessLease,
     handle: Arc<SshHandle>,
     mut channel: russh::Channel<client::Msg>,
     initial: Vec<u8>,
@@ -1027,18 +1358,28 @@ async fn spawn_terminal(
         input,
         output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
         output_inflight: StdMutex::new(0),
+        renderer_gone: watch::channel(false).0,
+        finished: watch::channel(false).0,
+        access: creation.state(),
+        creation,
+        adopted: std::sync::atomic::AtomicBool::new(false),
+        adoption: tokio::sync::Notify::new(),
         cancel,
         validate_size: check_size,
     });
     let id = uuid::Uuid::new_v4().to_string();
-    state
-        .sessions
-        .lock()
-        .await
-        .insert(id.clone(), session.clone());
+    {
+        let mut active = state.sessions.lock().await;
+        session
+            .creation
+            .with_current(|| active.insert(id.clone(), session.clone()))?;
+    }
+    watch_adoption(state, &id, &session);
     let sessions = state.sessions.clone();
+    let retiring = state.retiring.clone();
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
+        let completion = SessionCompletion::new(session.finished.clone());
         let result:Result<()> = async {
             send_output(&session, &events, &initial).await?;
             loop {
@@ -1050,8 +1391,8 @@ async fn spawn_terminal(
                         _=>{}
                     },
                     input=rx.recv()=>match input {
-                        Some(Input::Data(data))=>terminal_io(&session,channel.data(data.as_bytes())).await?,
-                        Some(Input::Resize(cols,rows))=>terminal_io(&session,channel.window_change(cols,rows,0,0)).await?,
+                        Some(Input::Data(data, lease))=>{ if lease.check().is_ok() { tokio::select! { biased; _ = lease.cancelled() => {}, result = terminal_io(&session,channel.data(data.as_bytes())) => {result?;} } } },
+                        Some(Input::Resize(cols,rows, lease))=>{ if lease.check().is_ok() { tokio::select! { biased; _ = lease.cancelled() => {}, result = terminal_io(&session,channel.window_change(cols,rows,0,0)) => {result?;} } } },
                         None=>break
                     }
                 }
@@ -1060,55 +1401,72 @@ async fn spawn_terminal(
         }.await;
         let _ = session.cancel.send(true);
         let _ = timeout(Duration::from_secs(2), channel.close()).await;
-        sessions.lock().await.remove(&task_id);
-        let _ = events.send(SshEvent::Closed {
-            message: result
+        retire_session(&sessions, &retiring, &task_id, &session).await;
+        completion.finish();
+        close_output(
+            &session.access,
+            Some((&session.creation, &session.adopted, &session.renderer_gone)),
+            &events,
+            result
                 .err()
-                .map(|e| e.message)
+                .map(|error| error.message)
                 .unwrap_or_else(|| "Session closed".into()),
-        });
+        )
+        .await;
+        retiring.lock().await.remove(&task_id);
     });
     Ok(Connected { session_id: id })
 }
 #[tauri::command]
 pub async fn connect_mosh(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     options: crate::mosh::Options,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
-) -> Result<Connected> {
-    let parent = state.session(&session_id).await?;
-    let bootstrap = crate::mosh::bootstrap(&parent, options, cols, rows).await?;
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
-    {
-        spawn_native_terminal(
-            &state,
-            parent,
-            events,
-            "Mosh",
-            crate::mosh::check_size,
-            move |input, cancel, initial, output, ready| {
-                tauri::async_runtime::spawn_blocking(move || {
-                    crate::mosh::run(bootstrap, cols, rows, input, cancel, initial, output, ready)
-                })
-            },
-        )
+) -> AccessResult<Connected> {
+    lease
+        .run(async {
+            let parent = state.session(&session_id).await?;
+            let bootstrap = crate::mosh::bootstrap(&parent, options, cols, rows).await?;
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+            {
+                spawn_native_terminal(
+                    &state,
+                    lease.clone(),
+                    parent,
+                    events,
+                    "Mosh",
+                    crate::mosh::check_size,
+                    move |access, input, cancel, initial, output, ready| {
+                        tauri::async_runtime::spawn_blocking(move || {
+                            crate::mosh::run(
+                                bootstrap, cols, rows, access, input, cancel, initial, output,
+                                ready,
+                            )
+                        })
+                    },
+                )
+                .await
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
+            {
+                let _ = (bootstrap, events);
+                Err(SshError::new(
+                    "mosh_unsupported",
+                    "Mosh is not available on this platform",
+                ))
+            }
+        })
         .await
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
-    {
-        let _ = (bootstrap, events);
-        Err(SshError::new(
-            "mosh_unsupported",
-            "Mosh is not available on this platform",
-        ))
-    }
 }
 
 pub(crate) async fn spawn_native_terminal<Driver>(
     state: &AppState,
+    creation: AccessLease,
     parent: Arc<Session>,
     events: Channel<SshEvent>,
     name: &'static str,
@@ -1117,6 +1475,7 @@ pub(crate) async fn spawn_native_terminal<Driver>(
 ) -> Result<Connected>
 where
     Driver: FnOnce(
+        AccessState,
         mpsc::Receiver<Input>,
         watch::Receiver<bool>,
         watch::Receiver<bool>,
@@ -1133,21 +1492,42 @@ where
         validate_size,
         output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
         output_inflight: StdMutex::new(0),
+        renderer_gone: watch::channel(false).0,
+        finished: watch::channel(false).0,
+        access: creation.state(),
+        creation,
+        adopted: std::sync::atomic::AtomicBool::new(false),
+        adoption: tokio::sync::Notify::new(),
     });
+    let mut pending = PendingTerminal {
+        session: session.clone(),
+        armed: true,
+    };
     let id = uuid::Uuid::new_v4().to_string();
-    state
-        .sessions
-        .lock()
-        .await
-        .insert(id.clone(), session.clone());
+    {
+        let mut active = state.sessions.lock().await;
+        session
+            .creation
+            .with_current(|| active.insert(id.clone(), session.clone()))?;
+    }
+    watch_adoption(state, &id, &session);
     let (output, mut output_rx) = mpsc::channel(1);
     let (ready, response) = tokio::sync::oneshot::channel();
     let initial_cancel = parent.cancel.subscribe();
-    let worker = driver(input_rx, cancellation, initial_cancel, output, ready);
+    let worker = driver(
+        session.access.clone(),
+        input_rx,
+        cancellation,
+        initial_cancel,
+        output,
+        ready,
+    );
     let sessions = state.sessions.clone();
+    let retiring = state.retiring.clone();
     let task_id = id.clone();
     let active = session.clone();
     tauri::async_runtime::spawn(async move {
+        let completion = SessionCompletion::new(active.finished.clone());
         let mut cancelled = active.cancel.subscribe();
         let delivery: Result<()> = async {
             loop {
@@ -1177,14 +1557,20 @@ where
                 )
             })
             .and_then(|result| result);
-        sessions.lock().await.remove(&task_id);
-        let _ = events.send(SshEvent::Closed {
-            message: delivery
+        retire_session(&sessions, &retiring, &task_id, &active).await;
+        completion.finish();
+        close_output(
+            &active.access,
+            Some((&active.creation, &active.adopted, &active.renderer_gone)),
+            &events,
+            delivery
                 .and(native)
                 .err()
                 .map(|error| error.message)
                 .unwrap_or_else(|| "Session closed".into()),
-        });
+        )
+        .await;
+        retiring.lock().await.remove(&task_id);
     });
     let mut parent_cancel = parent.cancel.subscribe();
     let connected = if *parent_cancel.borrow() {
@@ -1213,6 +1599,7 @@ where
             format!("{name} connection was cancelled"),
         ));
     }
+    pending.armed = false;
     Ok(Connected { session_id: id })
 }
 
@@ -1261,48 +1648,63 @@ pub(crate) fn check_size(cols: u32, rows: u32) -> Result<()> {
 }
 #[tauri::command]
 pub async fn write_stdin(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     data: String,
-) -> Result<()> {
-    if data.len() > 65536 {
-        return Err(SshError::new(
-            "input_too_large",
-            "Paste at most 64 KiB at once",
-        ));
-    }
-    state
-        .session(&session_id)
-        .await?
-        .input
-        .try_send(Input::Data(data))
-        .map_err(|_| {
-            SshError::new(
-                "backpressure",
-                "Terminal input queue is full or disconnected",
-            )
-        })?;
-    Ok(())
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            if data.len() > 65536 {
+                return Err(SshError::new(
+                    "input_too_large",
+                    "Paste at most 64 KiB at once",
+                ));
+            }
+            state
+                .session(&session_id)
+                .await?
+                .input
+                .try_send(Input::Data(data, lease.clone()))
+                .map_err(|_| {
+                    SshError::new(
+                        "backpressure",
+                        "Terminal input queue is full or disconnected",
+                    )
+                })?;
+            Ok(())
+        })
+        .await
 }
 #[tauri::command]
 pub async fn resize(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     cols: u32,
     rows: u32,
-) -> Result<()> {
-    check_size(cols, rows)?;
-    let session = state.session(&session_id).await?;
-    (session.validate_size)(cols, rows)?;
-    session
-        .input
-        .send(Input::Resize(cols, rows))
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            check_size(cols, rows)?;
+            let session = state.session(&session_id).await?;
+            (session.validate_size)(cols, rows)?;
+            session
+                .input
+                .send(Input::Resize(cols, rows, lease.clone()))
+                .await
+                .map_err(|_| SshError::new("disconnected", "Session is disconnected"))?;
+            Ok(())
+        })
         .await
-        .map_err(|_| SshError::new("disconnected", "Session is disconnected"))?;
-    Ok(())
 }
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>, session_id: String) -> Result<()> {
+    disconnect_inner(&state, session_id).await
+}
+async fn disconnect_inner(state: &AppState, session_id: String) -> Result<()> {
     let session = { state.sessions.lock().await.remove(&session_id) };
     if let Some(session) = session {
         let _ = session.cancel.send(true);
@@ -1331,148 +1733,193 @@ pub struct FileEntry {
 }
 #[tauri::command]
 pub async fn list_directory(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     path: String,
-) -> Result<Vec<FileEntry>> {
-    check_path(&path)?;
-    let session = state.session(&session_id).await?;
-    let raw = timeout(OP_TIMEOUT, async {
-        let channel = session.handle.channel_open_session().await?;
-        channel.request_subsystem(true, "sftp").await?;
-        let raw = russh_sftp::client::RawSftpSession::new(crate::sftp_stream::SftpStream::new(
-            channel.into_stream(),
-        ));
-        raw.init().await?;
-        Ok::<_, SshError>(raw)
-    })
-    .await
-    .map_err(|_| SshError::new("timeout", "Opening SFTP timed out"))??;
-    let handle = raw.opendir(path).await?.handle;
-    let result = match timeout(OP_TIMEOUT, async {
-        let mut entries = Vec::new();
-        let mut name_bytes = 0usize;
-        loop {
-            match raw.readdir(handle.clone()).await {
-                Ok(batch) => {
-                    for entry in batch.files {
-                        if entry.filename == "." || entry.filename == ".." {
-                            continue;
-                        }
-                        name_bytes += entry.filename.len();
-                        if entries.len() >= 10000 || name_bytes > 2 * 1024 * 1024 {
-                            return Err(SshError::new(
+) -> AccessResult<Vec<FileEntry>> {
+    lease
+        .run(async {
+            check_path(&path)?;
+            let session = state.session(&session_id).await?;
+            let raw = timeout(OP_TIMEOUT, async {
+                let channel = session.handle.channel_open_session().await?;
+                channel.request_subsystem(true, "sftp").await?;
+                let raw = russh_sftp::client::RawSftpSession::new(
+                    crate::sftp_stream::SftpStream::new(channel.into_stream()),
+                );
+                raw.init().await?;
+                Ok::<_, SshError>(raw)
+            })
+            .await
+            .map_err(|_| SshError::new("timeout", "Opening SFTP timed out"))??;
+            let handle = raw.opendir(path).await?.handle;
+            let result = match timeout(OP_TIMEOUT, async {
+                let mut entries = Vec::new();
+                let mut name_bytes = 0usize;
+                loop {
+                    match raw.readdir(handle.clone()).await {
+                        Ok(batch) => {
+                            for entry in batch.files {
+                                if entry.filename == "." || entry.filename == ".." {
+                                    continue;
+                                }
+                                name_bytes += entry.filename.len();
+                                if entries.len() >= 10000 || name_bytes > 2 * 1024 * 1024 {
+                                    return Err(SshError::new(
                                 "directory_too_large",
                                 "Directory preview is limited to 10000 entries or 2 MiB of names",
                             ));
+                                }
+                                entries.push(FileEntry {
+                                    name: entry.filename,
+                                    is_dir: entry.attrs.is_dir(),
+                                    size: entry.attrs.size.unwrap_or(0),
+                                });
+                            }
                         }
-                        entries.push(FileEntry {
-                            name: entry.filename,
-                            is_dir: entry.attrs.is_dir(),
-                            size: entry.attrs.size.unwrap_or(0),
-                        });
+                        Err(russh_sftp::client::error::Error::Status(status))
+                            if status.status_code == russh_sftp::protocol::StatusCode::Eof =>
+                        {
+                            break
+                        }
+                        Err(error) => return Err(error.into()),
                     }
                 }
-                Err(russh_sftp::client::error::Error::Status(status))
-                    if status.status_code == russh_sftp::protocol::StatusCode::Eof =>
-                {
-                    break
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        entries.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-        Ok(entries)
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(SshError::new("timeout", "Directory listing timed out")),
-    };
-    let _ = timeout(Duration::from_secs(2), raw.close(handle)).await;
-    let _ = raw.close_session();
-    result
+                entries.sort_by(|a, b| {
+                    b.is_dir
+                        .cmp(&a.is_dir)
+                        .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                });
+                Ok(entries)
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(SshError::new("timeout", "Directory listing timed out")),
+            };
+            let _ = timeout(Duration::from_secs(2), raw.close(handle)).await;
+            let _ = raw.close_session();
+            result
+        })
+        .await
 }
 
 #[tauri::command]
 pub async fn read_file(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     path: String,
-) -> Result<String> {
-    check_path(&path)?;
-    let session = state.session(&session_id).await?;
-    timeout(OP_TIMEOUT, async {
-        let sftp = sftp(&session).await?;
-        let file = sftp.open(path).await?;
-        let mut bytes = Vec::new();
-        file.take(FILE_LIMIT + 1).read_to_end(&mut bytes).await?;
-        if bytes.len() as u64 > FILE_LIMIT {
-            return Err(SshError::new(
-                "file_too_large",
-                "Text preview is limited to 1 MiB",
-            ));
-        }
-        String::from_utf8(bytes)
-            .map_err(|_| SshError::new("binary_file", "This file is not UTF-8 text"))
-    })
-    .await
-    .map_err(|_| SshError::new("timeout", "Reading file timed out"))?
+) -> AccessResult<String> {
+    lease
+        .run(async {
+            check_path(&path)?;
+            let session = state.session(&session_id).await?;
+            timeout(OP_TIMEOUT, async {
+                let sftp = sftp(&session).await?;
+                let file = sftp.open(path).await?;
+                let mut bytes = Vec::new();
+                file.take(FILE_LIMIT + 1).read_to_end(&mut bytes).await?;
+                if bytes.len() as u64 > FILE_LIMIT {
+                    return Err(SshError::new(
+                        "file_too_large",
+                        "Text preview is limited to 1 MiB",
+                    ));
+                }
+                String::from_utf8(bytes)
+                    .map_err(|_| SshError::new("binary_file", "This file is not UTF-8 text"))
+            })
+            .await
+            .map_err(|_| SshError::new("timeout", "Reading file timed out"))?
+        })
+        .await
 }
 #[tauri::command]
 pub async fn upload_file(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     path: String,
     data: Vec<u8>,
-) -> Result<()> {
-    check_path(&path)?;
-    if data.len() > UPLOAD_LIMIT {
-        return Err(SshError::new(
-            "file_too_large",
-            "Upload is limited to 10 MiB",
-        ));
-    }
-    let session = state.session(&session_id).await?;
-    timeout(OP_TIMEOUT, async {
-        let sftp = sftp(&session).await?;
-        let mut file = sftp
-            .open_with_flags(
-                path.clone(),
-                OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
-            )
-            .await?;
-        let result = file.write_all(&data).await;
-        if let Err(e) = result {
-            let _ = file.shutdown().await;
-            return Err(SshError::new(
-                "upload_failed",
-                format!("{e}. A partial new file may remain at {path}."),
-            ));
-        }
-        file.shutdown().await?;
-        Ok(())
-    })
-    .await
-    .map_err(|_| {
-        SshError::new(
-            "timeout",
-            "Upload timed out; check for a partial remote file",
-        )
-    })?
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            check_path(&path)?;
+            if data.len() > UPLOAD_LIMIT {
+                return Err(SshError::new(
+                    "file_too_large",
+                    "Upload is limited to 10 MiB",
+                ));
+            }
+            let session = state.session(&session_id).await?;
+            timeout(OP_TIMEOUT, async {
+                let sftp = sftp(&session).await?;
+                let mut file = sftp
+                    .open_with_flags(
+                        path.clone(),
+                        OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+                    )
+                    .await?;
+                let result = file.write_all(&data).await;
+                if let Err(e) = result {
+                    let _ = file.shutdown().await;
+                    return Err(SshError::new(
+                        "upload_failed",
+                        format!("{e}. A partial new file may remain at {path}."),
+                    ));
+                }
+                file.shutdown().await?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| {
+                SshError::new(
+                    "timeout",
+                    "Upload timed out; check for a partial remote file",
+                )
+            })?
+        })
+        .await
 }
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 pub(crate) async fn exec(session: &Session, command: String) -> Result<String> {
+    exec_inner(session, command, None).await
+}
+pub(crate) async fn exec_for_access(
+    session: &Session,
+    command: String,
+    lease: &AccessLease,
+) -> Result<String> {
+    lease.check()?;
+    let mut cancellation = session.cancel.subscribe();
+    if *cancellation.borrow() {
+        return Err(SshError::new("disconnected", "Session closed"));
+    }
+    tokio::select! {
+        biased;
+        _ = lease.cancelled() => Err(SshError::new("app_locked", "App access changed")),
+        _ = cancellation.changed() => Err(SshError::new("disconnected", "Session closed")),
+        result = exec_inner(session, command, Some(lease)) => result,
+    }
+}
+async fn exec_inner(
+    session: &Session,
+    command: String,
+    lease: Option<&AccessLease>,
+) -> Result<String> {
     let mut channel = timeout(OP_TIMEOUT, session.handle.channel_open_session())
         .await
         .map_err(|_| SshError::new("timeout", "Opening command channel timed out"))??;
     let result = timeout(OP_TIMEOUT, async {
+        if let Some(lease) = lease {
+            lease.check()?;
+        }
         channel.exec(true, command).await?;
         let mut bytes = Vec::new();
         let mut error = Vec::new();
@@ -1512,31 +1959,43 @@ pub(crate) async fn exec(session: &Session, command: String) -> Result<String> {
 }
 #[tauri::command]
 pub async fn get_diff(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     path: String,
     staged: bool,
-) -> Result<String> {
-    check_path(&path)?;
-    let session = state.session(&session_id).await?;
-    exec(
-        &session,
-        format!(
-            "git --no-pager -C {} diff --no-ext-diff --no-textconv {} --",
-            quote(&path),
-            if staged { "--cached" } else { "" }
-        ),
-    )
-    .await
+) -> AccessResult<String> {
+    lease
+        .run(async {
+            check_path(&path)?;
+            let session = state.session(&session_id).await?;
+            exec(
+                &session,
+                format!(
+                    "git --no-pager -C {} diff --no-ext-diff --no-textconv {} --",
+                    quote(&path),
+                    if staged { "--cached" } else { "" }
+                ),
+            )
+            .await
+        })
+        .await
 }
 #[tauri::command]
 pub async fn agent_snapshot(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<serde_json::Value> {
-    let session = state.session(&session_id).await?;
-    let text = exec(&session, "lazysh-agent snapshot --limit 50".into()).await?;
-    Ok(serde_json::from_str(&text)?)
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            let session = state.session(&session_id).await?;
+            let text = exec(&session, "lazysh-agent snapshot --limit 50".into()).await?;
+            Ok(serde_json::from_str(&text)?)
+        })
+        .await
 }
 
 fn validate_transcript_source(agent: &str, path: &str, offset: u64) -> Result<()> {
@@ -1578,33 +2037,42 @@ fn transcript_command(agent: &str, path: &str, offset: u64) -> Result<String> {
 
 #[tauri::command]
 pub async fn agent_usage(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     agent: String,
     path: String,
     offset: u64,
     transcript_session_id: Option<String>,
-) -> Result<serde_json::Value> {
-    validate_transcript_source(&agent, &path, offset)?;
-    let mut command = format!(
-        "lazysh-agent usage --agent {agent} --path={} --offset {offset}",
-        quote(&path)
-    );
-    if let Some(id) = transcript_session_id {
-        if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
-            return Err(SshError::new(
-                "invalid_input",
-                "Invalid transcript session identifier",
-            ));
-        }
-        command.push_str(&format!(" --session-id={}", quote(&id)));
-    }
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            validate_transcript_source(&agent, &path, offset)?;
+            let mut command = format!(
+                "lazysh-agent usage --agent {agent} --path={} --offset {offset}",
+                quote(&path)
+            );
+            if let Some(id) = transcript_session_id {
+                if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
+                    return Err(SshError::new(
+                        "invalid_input",
+                        "Invalid transcript session identifier",
+                    ));
+                }
+                command.push_str(&format!(" --session-id={}", quote(&id)));
+            }
+            let session = state.session(&session_id).await?;
+            Ok(serde_json::from_str(&exec(&session, command).await?)?)
+        })
+        .await
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_transcript(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     agent: String,
@@ -1612,70 +2080,80 @@ pub async fn agent_transcript(
     offset: u64,
     view: Option<String>,
     transcript_session_id: Option<String>,
-) -> Result<serde_json::Value> {
-    let mut command = transcript_command(&agent, &path, offset)?;
-    match view.as_deref() {
-        None | Some("records") => {}
-        Some("conversation") if agent == "claude" && offset == 0 => {
-            command.push_str(" --view conversation")
-        }
-        _ => {
-            return Err(SshError::new(
-                "invalid_input",
-                "Unsupported transcript view",
-            ))
-        }
-    }
-    if let Some(id) = transcript_session_id {
-        if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
-            return Err(SshError::new(
-                "invalid_input",
-                "Invalid transcript session identifier",
-            ));
-        }
-        command.push_str(&format!(" --session-id={}", quote(&id)));
-    }
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            let mut command = transcript_command(&agent, &path, offset)?;
+            match view.as_deref() {
+                None | Some("records") => {}
+                Some("conversation") if agent == "claude" && offset == 0 => {
+                    command.push_str(" --view conversation")
+                }
+                _ => {
+                    return Err(SshError::new(
+                        "invalid_input",
+                        "Unsupported transcript view",
+                    ))
+                }
+            }
+            if let Some(id) = transcript_session_id {
+                if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
+                    return Err(SshError::new(
+                        "invalid_input",
+                        "Invalid transcript session identifier",
+                    ));
+                }
+                command.push_str(&format!(" --session-id={}", quote(&id)));
+            }
+            let session = state.session(&session_id).await?;
+            Ok(serde_json::from_str(&exec(&session, command).await?)?)
+        })
+        .await
 }
 
 #[tauri::command]
 pub async fn agent_transcripts(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     agent: String,
-) -> Result<serde_json::Value> {
-    if !matches!(
-        agent.as_str(),
-        "claude"
-            | "codex"
-            | "pi"
-            | "omp"
-            | "hermes"
-            | "opencode"
-            | "copilot"
-            | "qoder-ide"
-            | "kimi"
-            | "jcode"
-            | "droid"
-            | "cursor"
-            | "omo"
-            | "devin-atif"
-            | "amp-json"
-    ) {
-        return Err(SshError::new(
-            "invalid_input",
-            "Unsupported transcript adapter",
-        ));
-    }
-    let session = state.session(&session_id).await?;
-    Ok(serde_json::from_str(
-        &exec(
-            &session,
-            format!("lazysh-agent discover --agent {agent} --limit 50"),
-        )
-        .await?,
-    )?)
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            if !matches!(
+                agent.as_str(),
+                "claude"
+                    | "codex"
+                    | "pi"
+                    | "omp"
+                    | "hermes"
+                    | "opencode"
+                    | "copilot"
+                    | "qoder-ide"
+                    | "kimi"
+                    | "jcode"
+                    | "droid"
+                    | "cursor"
+                    | "omo"
+                    | "devin-atif"
+                    | "amp-json"
+            ) {
+                return Err(SshError::new(
+                    "invalid_input",
+                    "Unsupported transcript adapter",
+                ));
+            }
+            let session = state.session(&session_id).await?;
+            Ok(serde_json::from_str(
+                &exec(
+                    &session,
+                    format!("lazysh-agent discover --agent {agent} --limit 50"),
+                )
+                .await?,
+            )?)
+        })
+        .await
 }
 #[derive(Serialize)]
 pub struct MuxSession {
@@ -1686,9 +2164,13 @@ pub struct MuxSession {
 }
 #[tauri::command]
 pub async fn list_multiplexer_sessions(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<Vec<MuxSession>> {
+) -> AccessResult<Vec<MuxSession>> {
+    lease.run(async {
+
     let session = state.session(&session_id).await?;
     let text=exec(&session,"tmux list-sessions -F '#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}'".into()).await?;
     Ok(text
@@ -1706,20 +2188,30 @@ pub async fn list_multiplexer_sessions(
             })
         })
         .collect())
+    }).await
 }
 #[tauri::command]
 pub async fn attach_tmux(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     name: String,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
-) -> Result<Connected> {
-    attach_tmux_inner(&state, session_id, name, cols, rows, events).await
+) -> AccessResult<Connected> {
+    lease
+        .run(async {
+            attach_tmux_inner(&state, lease.clone(), session_id, name, cols, rows, events).await
+        })
+        .await
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn attach_multiplexer(
+    lease: AccessLease,
+
     state: State<'_, AppState>,
     session_id: String,
     kind: crate::multiplexer::MultiplexerKind,
@@ -1727,15 +2219,29 @@ pub async fn attach_multiplexer(
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
-) -> Result<Connected> {
-    check_size(cols, rows)?;
-    let command = crate::multiplexer::attach_command(kind, &name)?;
-    let parent = state.session(&session_id).await?;
-    let (channel, initial) = open_terminal(&parent.handle, cols, rows, Some(command)).await?;
-    spawn_terminal(&state, parent.handle.clone(), channel, initial, events).await
+) -> AccessResult<Connected> {
+    lease
+        .run(async {
+            check_size(cols, rows)?;
+            let command = crate::multiplexer::attach_command(kind, &name)?;
+            let parent = state.session(&session_id).await?;
+            let (channel, initial) =
+                open_terminal(&parent.handle, cols, rows, Some(command)).await?;
+            spawn_terminal(
+                &state,
+                lease.clone(),
+                parent.handle.clone(),
+                channel,
+                initial,
+                events,
+            )
+            .await
+        })
+        .await
 }
 async fn attach_tmux_inner(
     state: &AppState,
+    creation: AccessLease,
     session_id: String,
     name: String,
     cols: u32,
@@ -1755,11 +2261,24 @@ async fn attach_tmux_inner(
         crate::multiplexer::tmux_arg(&format!("={name}"))
     );
     let (channel, initial) = open_terminal(&parent.handle, cols, rows, Some(command)).await?;
-    spawn_terminal(state, parent.handle.clone(), channel, initial, events).await
+    spawn_terminal(
+        state,
+        creation,
+        parent.handle.clone(),
+        channel,
+        initial,
+        events,
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
+    fn access_lease() -> crate::app_lock::AccessLease {
+        crate::app_lock::AccessState::disabled()
+            .lease(None)
+            .unwrap()
+    }
     use super::*;
     use russh::{server, ChannelId, Pty};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2201,6 +2720,12 @@ mod tests {
             cancel,
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
+            renderer_gone: watch::channel(false).0,
+            finished: watch::channel(true).0,
+            access: AccessState::disabled(),
+            creation: access_lease(),
+            adopted: std::sync::atomic::AtomicBool::new(true),
+            adoption: tokio::sync::Notify::new(),
             validate_size: check_size,
         });
         let bootstrap = tokio::spawn(async move {
@@ -2291,6 +2816,12 @@ mod tests {
             cancel,
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
+            renderer_gone: watch::channel(false).0,
+            finished: watch::channel(true).0,
+            access: AccessState::disabled(),
+            creation: access_lease(),
+            adopted: std::sync::atomic::AtomicBool::new(true),
+            adoption: tokio::sync::Notify::new(),
             validate_size: check_size,
         };
         let error = crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
@@ -2369,6 +2900,12 @@ mod tests {
             validate_size: check_size,
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
+            renderer_gone: watch::channel(false).0,
+            finished: watch::channel(true).0,
+            access: AccessState::disabled(),
+            creation: access_lease(),
+            adopted: std::sync::atomic::AtomicBool::new(true),
+            adoption: tokio::sync::Notify::new(),
         });
         let received = Arc::new(AtomicUsize::new(0));
         let observed = received.clone();
@@ -2435,6 +2972,7 @@ mod tests {
         .unwrap();
         let child = attach_tmux_inner(
             &state,
+            access_lease(),
             parent.session_id.clone(),
             "safe'name;touch /tmp/nope".into(),
             80,
@@ -2463,7 +3001,7 @@ mod tests {
         let parent_session = state.session(&parent.session_id).await.unwrap();
         parent_session
             .input
-            .send(Input::Data("parent-alive".into()))
+            .send(Input::Data("parent-alive".into(), access_lease()))
             .await
             .unwrap();
         timeout(Duration::from_secs(3), async {
@@ -2518,9 +3056,16 @@ mod tests {
         )
         .await
         .unwrap();
-        write_stdin(app.state(), connected.session_id.clone(), "x".repeat(65536))
-            .await
-            .unwrap();
+        write_stdin(
+            access_lease(),
+            app.state(),
+            connected.session_id.clone(),
+            "x".repeat(65536),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
         disconnect(app.state(), connected.session_id).await.unwrap();
         timeout(Duration::from_secs(3), async {
@@ -2670,10 +3215,14 @@ mod tests {
         let session = state.session(&result.session_id).await.unwrap();
         session
             .input
-            .send(Input::Data("你好🌍".into()))
+            .send(Input::Data("你好🌍".into(), access_lease()))
             .await
             .unwrap();
-        session.input.send(Input::Resize(120, 40)).await.unwrap();
+        session
+            .input
+            .send(Input::Resize(120, 40, access_lease()))
+            .await
+            .unwrap();
         let mut bytes = Vec::new();
         timeout(Duration::from_secs(3), async {
             loop {
@@ -2767,10 +3316,15 @@ mod tests {
         use tauri::Manager;
         let dir = tempfile::tempdir().unwrap();
         let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_lazysh_vault::init())
             .invoke_handler(tauri::generate_handler![list_hosts])
             .build(tauri::generate_context!(test = true))
             .unwrap();
         app.manage(AppState::new(dir.path().into()).unwrap());
+        app.vault()
+            .access()
+            .initialize(false, false, "test".into())
+            .unwrap();
         let main = tauri::WebviewWindowBuilder::new(
             &app,
             "main",
@@ -2938,6 +3492,7 @@ mod tests {
             let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
             let forwarding = spawn_terminal(
                 &app.state(),
+                AccessState::disabled().lease(None).unwrap(),
                 handle,
                 channel,
                 initial,
@@ -2946,6 +3501,7 @@ mod tests {
             .await
             .unwrap();
             let error = crate::et::connect_et(
+                access_lease(),
                 app.state(),
                 forwarding.session_id.clone(),
                 Default::default(),
@@ -2955,6 +3511,8 @@ mod tests {
             )
             .await
             .err()
+            .unwrap()
+            .into_inner()
             .unwrap();
             assert_eq!(error.kind, "et_agent_forwarding");
             disconnect(app.state(), forwarding.session_id)
@@ -2985,9 +3543,19 @@ mod tests {
                 }
                 Ok(())
             });
-            let connected = connect_mosh(app.state(), id.clone(), options, 80, 24, events)
-                .await
-                .unwrap();
+            let connected = connect_mosh(
+                access_lease(),
+                app.state(),
+                id.clone(),
+                options,
+                80,
+                24,
+                events,
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
             let mosh_id = connected.session_id;
             let native_session = app.state::<AppState>().session(&mosh_id).await.unwrap();
             assert!((native_session.validate_size)(512, 256).is_err());
@@ -3015,24 +3583,36 @@ mod tests {
                 .unwrap();
             }
             disconnect(app.state(), id).await.unwrap();
-            write_stdin(app.state(), mosh_id.clone(), String::new())
+            write_stdin(access_lease(), app.state(), mosh_id.clone(), String::new())
                 .await
+                .unwrap()
+                .into_inner()
                 .unwrap();
             write_stdin(
+                access_lease(),
                 app.state(),
                 mosh_id.clone(),
                 "printf 'MOSH_%s_READY\\n' '世界'\r".into(),
             )
             .await
+            .unwrap()
+            .into_inner()
             .unwrap();
             marker(&mut rx, &native_session, "MOSH_世界_READY").await;
-            resize(app.state(), mosh_id.clone(), 120, 40).await.unwrap();
+            resize(access_lease(), app.state(), mosh_id.clone(), 120, 40)
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap();
             write_stdin(
+                access_lease(),
                 app.state(),
                 mosh_id.clone(),
                 "set -- $(stty size); printf 'MOSH_SIZE_%s_%s\\n' \"$1\" \"$2\"\r".into(),
             )
             .await
+            .unwrap()
+            .into_inner()
             .unwrap();
             marker(&mut rx, &native_session, "MOSH_SIZE_40_120").await;
             let file = dir
@@ -3041,20 +3621,29 @@ mod tests {
                 .to_string_lossy()
                 .into_owned();
             upload_file(
+                access_lease(),
                 app.state(),
                 mosh_id.clone(),
                 file.clone(),
                 b"SSH control remains alive".to_vec(),
             )
             .await
+            .unwrap()
+            .into_inner()
             .unwrap();
             assert_eq!(
-                read_file(app.state(), mosh_id.clone(), file).await.unwrap(),
+                read_file(access_lease(), app.state(), mosh_id.clone(), file)
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .unwrap(),
                 "SSH control remains alive"
             );
-            assert!(resize(app.state(), mosh_id.clone(), 512, 256)
-                .await
-                .is_err());
+            assert!(
+                resize(access_lease(), app.state(), mosh_id.clone(), 512, 256)
+                    .await
+                    .is_err()
+            );
             disconnect(app.state(), mosh_id.clone()).await.unwrap();
             timeout(Duration::from_secs(4), async {
                 loop {
@@ -3143,20 +3732,26 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         upload_file(
+            access_lease(),
             app.state(),
             id.clone(),
             upload.clone(),
             "hello 世界".as_bytes().to_vec(),
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         assert_eq!(
-            read_file(app.state(), id.clone(), upload.clone())
+            read_file(access_lease(), app.state(), id.clone(), upload.clone())
                 .await
+                .unwrap()
+                .into_inner()
                 .unwrap(),
             "hello 世界"
         );
         assert!(upload_file(
+            access_lease(),
             app.state(),
             id.clone(),
             upload.clone(),
@@ -3166,11 +3761,14 @@ mod tests {
         .is_err());
         assert_eq!(fs::read(&upload).unwrap(), "hello 世界".as_bytes());
         let entries = list_directory(
+            access_lease(),
             app.state(),
             id.clone(),
             dir.path().to_string_lossy().into_owned(),
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         assert!(entries
             .iter()
@@ -3179,12 +3777,16 @@ mod tests {
         fs::write(&large, vec![0u8; FILE_LIMIT as usize + 1]).unwrap();
         assert_eq!(
             read_file(
+                access_lease(),
                 app.state(),
                 id.clone(),
                 large.to_string_lossy().into_owned()
             )
             .await
-            .unwrap_err()
+            .err()
+            .unwrap()
+            .into_inner()
+            .unwrap()
             .kind,
             "file_too_large"
         );
@@ -3192,12 +3794,16 @@ mod tests {
         fs::write(&binary, [0xffu8, 0xfe]).unwrap();
         assert_eq!(
             read_file(
+                access_lease(),
                 app.state(),
                 id.clone(),
                 binary.to_string_lossy().into_owned()
             )
             .await
-            .unwrap_err()
+            .err()
+            .unwrap()
+            .into_inner()
+            .unwrap()
             .kind,
             "binary_file"
         );
@@ -3208,6 +3814,7 @@ mod tests {
         }
         assert_eq!(
             list_directory(
+                access_lease(),
                 app.state(),
                 id.clone(),
                 crowded.to_string_lossy().into_owned()
@@ -3215,12 +3822,15 @@ mod tests {
             .await
             .err()
             .unwrap()
+            .into_inner()
+            .unwrap()
             .kind,
             "directory_too_large"
         );
         let rejected = dir.path().join("rejected-upload");
         assert_eq!(
             upload_file(
+                access_lease(),
                 app.state(),
                 id.clone(),
                 rejected.to_string_lossy().into_owned(),
@@ -3228,6 +3838,8 @@ mod tests {
             )
             .await
             .err()
+            .unwrap()
+            .into_inner()
             .unwrap()
             .kind,
             "file_too_large"
@@ -3250,22 +3862,28 @@ mod tests {
             .success());
         fs::write(repo.join("file.txt"), "after\n").unwrap();
         let diff = get_diff(
+            access_lease(),
             app.state(),
             id.clone(),
             repo.to_string_lossy().into_owned(),
             false,
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         assert!(diff.contains("-before"));
         assert!(diff.contains("+after"));
         let staged = get_diff(
+            access_lease(),
             app.state(),
             id.clone(),
             repo.to_string_lossy().into_owned(),
             true,
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         assert!(staged.contains("+before"));
         app.manage(crate::previews::PreviewState::default());
@@ -3286,6 +3904,7 @@ mod tests {
             socket.write_all(&[0x81, 2, b'H', b'i']).await.unwrap();
         });
         let preview = crate::previews::start_preview(
+            access_lease(),
             app.state(),
             app.state(),
             id.clone(),
@@ -3294,6 +3913,8 @@ mod tests {
             None,
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         let preview = serde_json::to_value(preview).unwrap();
         let local_port = preview["localPort"].as_u64().unwrap() as u16;
@@ -3319,13 +3940,20 @@ mod tests {
             .unwrap();
         assert_eq!(frame, [0x81, 2, b'H', b'i']);
         web_server.await.unwrap();
-        resize(app.state(), id.clone(), 110, 35).await.unwrap();
+        resize(access_lease(), app.state(), id.clone(), 110, 35)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
         write_stdin(
+            access_lease(),
             app.state(),
             id.clone(),
             "printf lazysh-interoperability\\n\r".into(),
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         disconnect(app.state(), id).await.unwrap();
         timeout(Duration::from_secs(2), async {
@@ -3338,5 +3966,451 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+    #[tokio::test(start_paused = true)]
+    async fn locked_terminal_delivery_pauses_deadline_and_resumes_without_dropped_indices() {
+        let access = AccessState::default();
+        access.initialize(true, true, "test".into()).unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        let credits = Semaphore::new(0);
+        let inflight = StdMutex::new(0);
+        let (cancel, mut cancellation) = watch::channel(false);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        let events = Channel::new(move |_| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        let delivery = deliver_output(
+            &access,
+            &credits,
+            &inflight,
+            &mut cancellation,
+            &events,
+            b"abc",
+            None,
+        );
+        tokio::pin!(delivery);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        access.lock().unwrap();
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        tokio::time::advance(OP_TIMEOUT * 2).await;
+        credits.add_permits(3);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(*inflight.lock().unwrap(), 0);
+        access.authorize(access.generation().unwrap()).unwrap();
+        // Native authentication alone does not resume delivery before UI reset ACK.
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        access.ready(access.generation().unwrap()).unwrap();
+        delivery.await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(*inflight.lock().unwrap(), 3);
+        access.lock().unwrap();
+        let mut cancellation = cancel.subscribe();
+        let pending = deliver_output(
+            &access,
+            &credits,
+            &inflight,
+            &mut cancellation,
+            &events,
+            b"x",
+            None,
+        );
+        tokio::pin!(pending);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(pending.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        cancel.send_replace(true);
+        assert!(pending.await.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn ssh_errors_keep_fingerprints_only_for_the_original_unlocked_generation() {
+        let access = AccessState::default();
+        access.initialize(true, true, "test".into()).unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        let nonce = access.status().unwrap().nonce.unwrap();
+        let lease = access.lease(Some(&nonce)).unwrap();
+        let mut source = SshError::new("host_key_required", "REMOTE_PRIVATE_STDERR");
+        source.fingerprint = Some("SHA256:TEST_PRIVATE_HOST".into());
+        source.host_id = Some("private-host".into());
+        let error = lease.error(source);
+        let current = serde_json::to_value(&error).unwrap();
+        assert_eq!(current["kind"], "host_key_required");
+        assert_eq!(current["fingerprint"], "SHA256:TEST_PRIVATE_HOST");
+        assert_eq!(current["hostId"], "private-host");
+        access.lock().unwrap();
+        for step in 0..2 {
+            let stale = serde_json::to_string(&error).unwrap();
+            for private in ["REMOTE_PRIVATE_STDERR", "TEST_PRIVATE_HOST", "private-host"] {
+                assert!(!stale.contains(private));
+            }
+            if step == 0 {
+                access.authorize(access.generation().unwrap()).unwrap();
+                access.ready(access.generation().unwrap()).unwrap();
+            }
+        }
+    }
+    #[tokio::test]
+    async fn cancelled_native_start_reaps_unpublished_worker_and_preserves_parent() {
+        let (host, _, server_task) = server(false).await;
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::new(directory.path().into()).unwrap();
+        state.config().unwrap().hosts.push(host.clone());
+        let connected = start_session(
+            &state,
+            host.id,
+            Some("test-password".into()),
+            None,
+            None,
+            80,
+            24,
+            Channel::new(|_| Ok(())),
+        )
+        .await
+        .unwrap();
+        let parent = state.session(&connected.session_id).await.unwrap();
+        let (began, started) = tokio::sync::oneshot::channel();
+        let (done, stopped) = tokio::sync::oneshot::channel();
+        let worker_state = state.clone();
+        let attempt = tokio::spawn(async move {
+            spawn_native_terminal(
+                &worker_state,
+                access_lease(),
+                parent,
+                Channel::new(|_| Ok(())),
+                "fixture",
+                check_size,
+                move |_access, _input, mut cancellation, _initial, _output, ready| {
+                    tauri::async_runtime::spawn(async move {
+                        let _ready = ready;
+                        let _ = began.send(());
+                        cancellation.changed().await.unwrap();
+                        assert!(*cancellation.borrow());
+                        let _ = done.send(());
+                        Ok(())
+                    })
+                },
+            )
+            .await
+        });
+        started.await.unwrap();
+        attempt.abort();
+        assert!(attempt.await.err().unwrap().is_cancelled());
+        timeout(Duration::from_secs(2), stopped)
+            .await
+            .unwrap()
+            .unwrap();
+        timeout(Duration::from_secs(2), async {
+            while state.sessions.lock().await.len() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.session(&connected.session_id).await.is_ok());
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn native_adoption_revokes_unknown_ids_after_response_serialization_but_keeps_owned_sessions(
+    ) {
+        use tauri::ipc::IpcResponse;
+        async fn register(
+            state: &AppState,
+            handle: Arc<SshHandle>,
+            creation: AccessLease,
+        ) -> (String, Arc<Session>) {
+            let (input, _) = mpsc::channel(1);
+            let (cancel, _) = watch::channel(false);
+            let session = Arc::new(Session {
+                handle,
+                access: creation.state(),
+                creation,
+                adopted: std::sync::atomic::AtomicBool::new(false),
+                adoption: tokio::sync::Notify::new(),
+                input,
+                cancel,
+                output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
+                output_inflight: StdMutex::new(0),
+                renderer_gone: watch::channel(false).0,
+                finished: watch::channel(true).0,
+                validate_size: check_size,
+            });
+            let id = uuid::Uuid::new_v4().to_string();
+            state
+                .sessions
+                .lock()
+                .await
+                .insert(id.clone(), session.clone());
+            watch_adoption(state, &id, &session);
+            (id, session)
+        }
+        let (host, _, server_task) = server(false).await;
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::new(directory.path().into()).unwrap();
+        state.config().unwrap().hosts.push(host.clone());
+        let handle = Arc::new(
+            authenticate(&state, &host, Some("test-password".into()), None, None)
+                .await
+                .unwrap(),
+        );
+        let access = AccessState::default();
+        access.initialize(true, true, "test".into()).unwrap();
+        for serialized in [false, true] {
+            access.authorize(access.generation().unwrap()).unwrap();
+            access.ready(access.generation().unwrap()).unwrap();
+            let nonce = access.status().unwrap().nonce.unwrap();
+            let creation = access.lease(Some(&nonce)).unwrap();
+            let (id, session) = register(&state, handle.clone(), creation.clone()).await;
+            let response = creation
+                .guard(Connected {
+                    session_id: id.clone(),
+                })
+                .unwrap();
+            if serialized {
+                response.body().unwrap();
+            } else {
+                access.lock().unwrap();
+                assert!(response.body().is_err());
+            }
+            if serialized {
+                access.lock().unwrap();
+            }
+            assert!(mark_adopted(&session, &creation).is_err());
+            timeout(Duration::from_secs(2), async {
+                while state.sessions.lock().await.contains_key(&id) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(*session.cancel.borrow());
+            access.authorize(access.generation().unwrap()).unwrap();
+            access.ready(access.generation().unwrap()).unwrap();
+            let fresh = access
+                .lease(access.status().unwrap().nonce.as_deref())
+                .unwrap();
+            assert!(mark_adopted(&session, &fresh).is_err());
+        }
+        let creation = access
+            .lease(access.status().unwrap().nonce.as_deref())
+            .unwrap();
+        let (id, session) = register(&state, handle, creation.clone()).await;
+        mark_adopted(&session, &creation).unwrap();
+        creation
+            .guard(Connected {
+                session_id: id.clone(),
+            })
+            .unwrap()
+            .body()
+            .unwrap();
+        access.lock().unwrap();
+        tokio::task::yield_now().await;
+        assert!(state.session(&id).await.is_ok());
+        assert!(!*session.cancel.borrow());
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = count.clone();
+        let events = Channel::new(move |_| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        let delivery = send_output(&session, &events, b"owned");
+        tokio::pin!(delivery);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        delivery.await.unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        server_task.abort();
+    }
+    #[tokio::test]
+    async fn revoked_unadopted_output_cannot_freshen_before_cleanup_watcher_runs() {
+        let access = AccessState::default();
+        access.initialize(true, true, "test".into()).unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        let nonce = access.status().unwrap().nonce.unwrap();
+        let creation = access.lease(Some(&nonce)).unwrap();
+        let adopted = std::sync::atomic::AtomicBool::new(false);
+        let renderer_gone = watch::channel(false).0;
+        // Deliberately no cleanup watcher: privacy must hold independently of its scheduling.
+        access.lock().unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        let credits = Semaphore::new(16384);
+        let inflight = StdMutex::new(0);
+        let (_cancel, mut cancellation) = watch::channel(false);
+        let (send, mut events_rx) = mpsc::unbounded_channel();
+        let events = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(body) = body {
+                let _ = send.send(body);
+            }
+            Ok(())
+        });
+        assert!(deliver_output(
+            &access,
+            &credits,
+            &inflight,
+            &mut cancellation,
+            &events,
+            b"OLD_PRIVATE_BYTES",
+            Some((&creation, &adopted, &renderer_gone))
+        )
+        .await
+        .is_err());
+        assert!(events_rx.try_recv().is_err());
+        assert_eq!(*inflight.lock().unwrap(), 0);
+        assert_eq!(credits.available_permits(), 16384);
+        close_output(
+            &access,
+            Some((&creation, &adopted, &renderer_gone)),
+            &events,
+            "OLD_PRIVATE_STDERR".into(),
+        )
+        .await;
+        let body = events_rx.recv().await.unwrap();
+        assert!(!body.contains("PRIVATE"));
+        let closed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(closed["type"], "closed");
+        assert_eq!(closed["message"], "Session cancelled before adoption");
+    }
+    #[tokio::test]
+    async fn renderer_rebind_without_biometric_policy_retires_all_old_transports_and_allows_fresh_session(
+    ) {
+        use tauri::ipc::IpcResponse;
+        let (host, _, server_task) = server(false).await;
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::new(directory.path().into()).unwrap();
+        state.config().unwrap().hosts.push(host.clone());
+        let access = AccessState::disabled();
+        let creation = access.lease(None).unwrap();
+        let old_events = Arc::new(AtomicUsize::new(0));
+        let observed = old_events.clone();
+        let handle = Arc::new(
+            authenticate(&state, &host, Some("test-password".into()), None, None)
+                .await
+                .unwrap(),
+        );
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let parent = spawn_terminal(
+            &state,
+            creation.clone(),
+            handle,
+            channel,
+            initial,
+            Channel::new(move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+        let parent_session = state.session(&parent.session_id).await.unwrap();
+        mark_adopted(&parent_session, &creation).unwrap();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let stopped = shutdowns.clone();
+        let observed = old_events.clone();
+        let pending = spawn_native_terminal(
+            &state,
+            creation.clone(),
+            parent_session.clone(),
+            Channel::new(move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }),
+            "fixture",
+            check_size,
+            move |_access, input, mut cancellation, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    let _output = output;
+                    let _ = ready.send(Ok(()));
+                    if !*cancellation.borrow() {
+                        let _ = cancellation.changed().await;
+                    }
+                    stopped.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        let pending_session = state.session(&pending.session_id).await.unwrap();
+        creation.guard(pending).unwrap().body().unwrap(); // ACK can be lost in the replaced renderer.
+        access.replace_renderer().unwrap();
+        assert!(creation.check().is_err());
+        let before = old_events.load(Ordering::SeqCst);
+        timeout(Duration::from_secs(5), state.cancel_for_renderer_rebind())
+            .await
+            .unwrap();
+        assert!(state.sessions.lock().await.is_empty());
+        assert!(state.retiring.lock().await.is_empty());
+        for session in [&parent_session, &pending_session] {
+            assert!(*session.renderer_gone.borrow());
+            assert!(*session.cancel.borrow());
+            assert!(*session.finished.borrow());
+        }
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+        state.cancel_for_renderer_rebind().await;
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(old_events.load(Ordering::SeqCst), before);
+        assert!(access.finish_renderer_replacement().unwrap());
+        access.foreground().unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        assert!(access.lease(None).is_err());
+        let fresh = access
+            .lease(access.status().unwrap().nonce.as_deref())
+            .unwrap();
+        let handle = Arc::new(
+            authenticate(&state, &host, Some("test-password".into()), None, None)
+                .await
+                .unwrap(),
+        );
+        let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
+        let connected = spawn_terminal(
+            &state,
+            fresh.clone(),
+            handle,
+            channel,
+            initial,
+            Channel::new(|_| Ok(())),
+        )
+        .await
+        .unwrap();
+        let live = state.session(&connected.session_id).await.unwrap();
+        mark_adopted(&live, &fresh).unwrap();
+        assert!(!*live.cancel.borrow());
+        assert!(state.session(&connected.session_id).await.is_ok());
+        assert_eq!(old_events.load(Ordering::SeqCst), before);
+        disconnect_inner(&state, connected.session_id)
+            .await
+            .unwrap();
+        server_task.abort();
     }
 }
