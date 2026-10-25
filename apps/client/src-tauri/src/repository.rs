@@ -82,11 +82,15 @@ pub async fn repository_image(
             if let Some(object_id) = object_id {
                 oid(&object_id)?;
                 let prefix = git(&path)?;
-                let size = exec(&session, format!("{prefix} cat-file -s {object_id}"))
-                    .await?
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| invalid("Invalid image size"))?;
+                let size = exec(
+                    &session,
+                    &access,
+                    format!("{prefix} cat-file -s {object_id}"),
+                )
+                .await?
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| invalid("Invalid image size"))?;
                 if size > BLOB_LIMIT {
                     return Err(invalid(
                         "Historical image exceeds the 200 KiB preview limit",
@@ -94,6 +98,7 @@ pub async fn repository_image(
                 }
                 let encoded = exec(
                     &session,
+                    &access,
                     format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
                 )
                 .await?;
@@ -112,7 +117,7 @@ pub async fn repository_image(
             check_file_path(&file_path)?;
             git(&path)?;
             timeout(Duration::from_secs(30), async {
-                let sftp = sftp(&session).await?;
+                let sftp = sftp(&session, &access).await?;
                 let target = format!("{}/{}", path.trim_end_matches('/'), file_path);
                 let metadata = sftp.symlink_metadata(&target).await?;
                 if metadata.is_symlink() || !metadata.is_regular() {
@@ -263,6 +268,7 @@ pub async fn repository_status(
             let session = state.session(&session_id).await?;
             let root = exec(
                 &session,
+                &access,
                 format!("{} rev-parse --show-toplevel", git(&path)?),
             )
             .await?;
@@ -270,6 +276,7 @@ pub async fn repository_status(
             let changes = parse_status(
                 &exec(
                     &session,
+                    &access,
                     format!(
                         "{} status --porcelain=v1 -z --untracked-files=all --ignore-submodules=all",
                         git(&root)?
@@ -304,8 +311,7 @@ pub async fn repository_history(
     }
     let session = state.session(&session_id).await?;
     parse_history(
-        &exec(
-            &session,
+        &exec(&session, &access,
             format!(
                 "{} log -z --skip={offset} --max-count=50 --format='%H%x00%s' --no-show-signature {revision}",
                 git(&path)?
@@ -340,6 +346,7 @@ pub async fn repository_tree(
             let mut entries = parse_tree(
                 &exec(
                     &session,
+                    &access,
                     format!("{} ls-tree -l -z --full-tree {}", git(&path)?, quote(&tree)),
                 )
                 .await?,
@@ -388,16 +395,21 @@ pub async fn repository_blob(
             oid(&object_id)?;
             let prefix = git(&path)?;
             let session = state.session(&session_id).await?;
-            let size = exec(&session, format!("{prefix} cat-file -s {object_id}"))
-                .await?
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| invalid("Invalid object size"))?;
+            let size = exec(
+                &session,
+                &access,
+                format!("{prefix} cat-file -s {object_id}"),
+            )
+            .await?
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| invalid("Invalid object size"))?;
             if size > BLOB_LIMIT {
                 return Err(invalid("Historical file exceeds the 200 KiB preview limit"));
             }
             let encoded = exec(
                 &session,
+                &access,
                 format!("{prefix} cat-file blob {object_id} | od -An -v -tu1"),
             )
             .await?;
@@ -420,15 +432,14 @@ pub async fn repository_diff(
     let prefix = git(&path)?;
     let cached = if staged { "--cached" } else { "" };
     let pathspec = quote(&file_path);
-    let stats = exec(
-        &session,
+    let stats = exec(&session, &access,
         format!("{prefix} diff --no-ext-diff --no-textconv --numstat -z {cached} -- {pathspec}"),
     )
     .await?;
     let binary = stats
         .split_terminator('\0')
         .any(|row| row.starts_with("-\t-\t"));
-    let patch = exec(&session, format!("{prefix} diff --no-ext-diff --no-textconv --no-color --no-renames {cached} -- {pathspec}")).await?;
+    let patch = exec(&session, &access, format!("{prefix} diff --no-ext-diff --no-textconv --no-color --no-renames {cached} -- {pathspec}")).await?;
     if patch.lines().count() > 10_000 {
         return Err(invalid(
             "Diff preview exceeds 10,000 lines; review a smaller change in the terminal",

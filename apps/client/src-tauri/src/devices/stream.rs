@@ -78,7 +78,7 @@ fn record(bytes: &[u8], id: &str, platform: &str) -> Result<Value> {
     }
     Ok(frame)
 }
-async fn receive(
+pub(crate) async fn receive(
     access: AccessLease,
     session: Arc<crate::ssh::Session>,
     command: String,
@@ -96,7 +96,7 @@ async fn receive(
         _=access.cancelled()=>return Ok(()),
         _=cancel.changed()=>return Ok(()),
         _=disconnected.changed()=>return Ok(()),
-        result=tokio::time::timeout(Duration::from_secs(10),session.handle.channel_open_session())=>result.map_err(|_|SshError::new("timeout","Device channel timed out"))??,
+        result=crate::ssh::open_owned_channel(&session.handle, &access, tokio::time::Instant::now()+Duration::from_secs(10))=>result?,
     };
     let maximum = Duration::from_secs(if platform == "android" { 180 } else { 900 });
     let result=tokio::time::timeout(maximum,async {
