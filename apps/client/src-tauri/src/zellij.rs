@@ -9,6 +9,8 @@ pub enum ZellijAction {
     GoToTab { index: u32 },
     NextTab,
     PreviousTab,
+    NextPane,
+    PreviousPane,
     NewPane { horizontal: bool, directory: String },
     ZoomPane,
 }
@@ -40,6 +42,8 @@ fn command(session: &str, action: &ZellijAction) -> Result<String> {
         }
         ZellijAction::NextTab => "go-to-next-tab".into(),
         ZellijAction::PreviousTab => "go-to-previous-tab".into(),
+        ZellijAction::NextPane => "focus-next-pane".into(),
+        ZellijAction::PreviousPane => "focus-previous-pane".into(),
         ZellijAction::NewPane {
             horizontal,
             directory,
@@ -75,13 +79,30 @@ mod tests {
         assert_eq!(command("a'$(echo x)", &ZellijAction::NewTab { name: "title;$(echo no)".into(), directory: "/a b".into() }).unwrap(), "zellij --session='a'\\''$(echo x)' action new-tab --name='title;$(echo no)' --cwd='/a b'");
     }
     #[test]
+    fn navigation_is_fixed_and_keeps_hostile_session_names_literal() {
+        for (action, verb) in [
+            (ZellijAction::NextTab, "go-to-next-tab"),
+            (ZellijAction::PreviousTab, "go-to-previous-tab"),
+            (ZellijAction::NextPane, "focus-next-pane"),
+            (ZellijAction::PreviousPane, "focus-previous-pane"),
+        ] {
+            assert_eq!(
+                command("a'$(touch nope);x", &action).unwrap(),
+                format!("zellij --session='a'\\''$(touch nope);x' action {verb}")
+            );
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[test]
     #[ignore = "requires zellij on PATH; runs an isolated temporary session"]
     fn real_zellij_lifecycle_and_actions() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::Read;
         use std::process::Command;
         let temp = tempfile::tempdir().unwrap();
         let name = format!("ls-{}", uuid::Uuid::new_v4().simple());
-        let run = |text: String| {
-            let output = Command::new("sh")
+        let execute = |text: String| {
+            Command::new("sh")
                 .arg("-c")
                 .arg(text)
                 .env("XDG_RUNTIME_DIR", temp.path())
@@ -91,7 +112,10 @@ mod tests {
                 .env_remove("ZELLIJ_SESSION_NAME")
                 .env("TERM", "xterm-256color")
                 .output()
-                .unwrap();
+                .unwrap()
+        };
+        let run = |text: String| {
+            let output = execute(text);
             assert!(
                 output.status.success(),
                 "{}",
@@ -110,14 +134,73 @@ mod tests {
                     .output();
             }
         }
-        let _server = Server(name.clone(), temp.path().to_path_buf());
-        run(format!(
-            "zellij attach --create-background {}",
-            quote(&name)
-        ));
+        let server = Server(name.clone(), temp.path().to_path_buf());
+        let layout = temp.path().join("test-layout.kdl");
+        std::fs::write(&layout, "layout { pane; }\n").unwrap();
+        let config = temp.path().join("config.kdl");
+        std::fs::write(
+            &config,
+            "show_release_notes false\nshow_startup_tips false\n",
+        )
+        .unwrap();
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut builder = CommandBuilder::new("zellij");
+        builder.args([
+            "--config",
+            config.to_str().unwrap(),
+            "--layout",
+            layout.to_str().unwrap(),
+            "attach",
+            "--create",
+            &name,
+        ]);
+        for key in ["XDG_RUNTIME_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"] {
+            builder.env(key, temp.path());
+        }
+        builder.env_remove("ZELLIJ");
+        builder.env_remove("ZELLIJ_SESSION_NAME");
+        builder.env("TERM", "xterm-256color");
+        builder.env("SHELL", "/bin/sh");
+        builder.cwd(temp.path());
+        struct Client(
+            Box<dyn portable_pty::Child + Send + Sync>,
+            Option<std::thread::JoinHandle<()>>,
+            Option<Server>,
+        );
+        impl Drop for Client {
+            fn drop(&mut self) {
+                // Tear down the server before joining its PTY drain, including on panic.
+                drop(self.2.take());
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+                if let Some(drain) = self.1.take() {
+                    let _ = drain.join();
+                }
+            }
+        }
+        let mut reader = pty.master.try_clone_reader().unwrap();
+        let child = pty.slave.spawn_command(builder).unwrap();
+        drop(pty.slave);
+        let drain = std::thread::spawn(move || {
+            let mut bytes = [0u8; 8192];
+            while let Ok(count) = reader.read(&mut bytes) {
+                if count == 0 {
+                    break;
+                }
+            }
+        });
+        let _client = Client(child, Some(drain), Some(server));
         let mut names = String::new();
         for _ in 0..100 {
-            names = run("zellij list-sessions --short --no-formatting".into());
+            let output = execute("zellij list-sessions --short --no-formatting".into());
+            names = String::from_utf8(output.stdout).unwrap();
             if names.lines().any(|line| line == name) {
                 break;
             }
@@ -134,8 +217,61 @@ mod tests {
         )
         .unwrap());
         run(command(&name, &ZellijAction::GoToTab { index: 1 }).unwrap());
+        let active_tab = || {
+            let tabs: serde_json::Value = serde_json::from_str(&run(format!(
+                "zellij --session={} action list-tabs --json",
+                quote(&name)
+            )))
+            .unwrap();
+            tabs.as_array()
+                .unwrap()
+                .iter()
+                .find(|tab| tab["active"] == true)
+                .expect("attached client has an active tab")["position"]
+                .as_u64()
+                .unwrap()
+        };
+        assert_eq!(active_tab(), 0);
         run(command(&name, &ZellijAction::NextTab).unwrap());
+        assert_eq!(active_tab(), 1);
         run(command(&name, &ZellijAction::PreviousTab).unwrap());
+        assert_eq!(active_tab(), 0);
+        let focused_pane = || {
+            let panes: serde_json::Value = serde_json::from_str(&run(format!(
+                "zellij --session={} action list-panes --json",
+                quote(&name)
+            )))
+            .unwrap();
+            panes
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|pane| {
+                    pane["is_focused"] == true
+                        && pane["is_plugin"] == false
+                        && pane["tab_position"] == 0
+                })
+                .expect("active tab has a focused terminal pane")["id"]
+                .as_u64()
+                .unwrap()
+        };
+        let wait_focus = |description: &str, matches: &dyn Fn(u64) -> bool| {
+            for _ in 0..100 {
+                let id = focused_pane();
+                if matches(id) {
+                    return id;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!(
+                "Attached Zellij client did not reach {description}: {}",
+                run(format!(
+                    "zellij --session={} action list-panes --json",
+                    quote(&name)
+                ))
+            );
+        };
+        let first = focused_pane();
         run(command(
             &name,
             &ZellijAction::NewPane {
@@ -144,6 +280,12 @@ mod tests {
             },
         )
         .unwrap());
+        // Pane startup is asynchronous; observe its focus before testing navigation.
+        let second = wait_focus("new pane focus", &|id| id != first);
+        run(command(&name, &ZellijAction::NextPane).unwrap());
+        wait_focus("next pane focus", &|id| id == first);
+        run(command(&name, &ZellijAction::PreviousPane).unwrap());
+        wait_focus("previous pane focus", &|id| id == second);
         run(command(&name, &ZellijAction::ZoomPane).unwrap());
         let tabs = run(format!(
             "zellij --session={} action list-tabs --json",

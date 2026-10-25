@@ -6,6 +6,7 @@ import { decodeClipboardRequest, parseChord, savePreferences, usePreferences, ty
 import type { LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, useDeviceFonts } from "./fonts";
+import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
@@ -32,6 +33,8 @@ export default function TerminalPane({ session, active, reportError }: {
   const fit = useRef<FitAddon | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
+  const zellijBusy = useRef(false);
+  useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
   const preferences = usePreferences();
   const fonts = useDeviceFonts();
   const [ctrl, setCtrl] = useState(false);
@@ -217,6 +220,16 @@ export default function TerminalPane({ session, active, reportError }: {
     setSearchStatus("No match in retained history.");
   }
   function runGesture(action: GestureAction, slot?: GestureSlot) {
+    const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
+    if (Object.hasOwn(zellijActions, action)) {
+      if (!activeRef.current || !session.connected || zellijBusy.current || imeComposing.current || session.terminal.hasSelection()) return;
+      if (session.local || session.attached?.kind !== 'zellij') {reportError('This gesture requires a terminal attached to Zellij through lazysh.'); return;}
+      zellijBusy.current = true;
+      void api.zellijNavigate(session.id, session.attached.name, zellijActions[action as keyof typeof zellijActions])
+        .catch(error => {if (activeRef.current && session.connected) reportError(errorMessage(error));})
+        .finally(() => {zellijBusy.current = false;});
+      return;
+    }
     if (action === "find") {setSearching(true); requestAnimationFrame(() => searchInput.current?.focus());}
     else if (action === "compose") setComposing(true);
     else if (action === "keyboard") session.terminal.focus();
@@ -230,7 +243,7 @@ export default function TerminalPane({ session, active, reportError }: {
       try {if (session.connected) void api.write(session.id, parseChord(keys)).catch(error => reportError(String(error)));} catch (error) {reportError(String(error));}
     }
     else {
-      const keys = {left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""}[action];
+      const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
       if (keys && session.connected) void api.write(session.id, keys).catch(error => reportError(String(error)));
     }
   }

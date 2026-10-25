@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Four opt-in touch actions for next/previous Zellij tabs and panes. They use
+  the existing named-session command interface for terminals attached through
+  lazysh; plain, local and other multiplexer terminals are rejected. Existing
+  gesture defaults remain unchanged. No session switching or timed key input.
+
 - Simple custom-text builders in custom gesture and D-pad bindings, using the
   existing bounded shortcut compiler. Each editor keeps its own unsaved drafts
   and errors. Advanced remains the default; existing bindings are unchanged.

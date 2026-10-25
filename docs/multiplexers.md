@@ -1,5 +1,31 @@
 # Durable workspaces
 
+In Preferences → Terminal touch gestures, body and two-finger gestures can be
+assigned **Next Zellij tab**, **Previous Zellij tab**, **Next Zellij pane** or
+**Previous Zellij pane**. No defaults change. The terminal must be connected and
+known to be attached to Zellij through lazysh. Plain shells, local terminals,
+tmux and Herdr are rejected rather than receiving terminal key sequences.
+Selection, IME composition and inactive terminal views take priority; a second
+navigation gesture is ignored while the first command is pending.
+
+These actions use Zellij's named-session focused view, matching its existing
+shortcut panel; they do not identify a separate client in a shared session.
+They reuse `go-to-next-tab` / `go-to-previous-tab` and the documented
+`focus-next-pane` / `focus-previous-pane` commands from the
+[official CLI interface](https://zellij.dev/documentation/cli-actions).
+An isolated native Cargo fixture with an attached PTY client checks actual tab
+and pane focus (verified with installed Zellij 0.45.1). Its temporary config
+disables Zellij's first-run tips and release-note overlays so focus is observable;
+this does not establish gesture behavior while those popups are open. Frontend
+tests check gesture routing, rejection and settings
+round-trips. Physical touch and mobile lifecycle acceptance remain open.
+
+This is the bounded Zellij tab/pane part of Moshi's documented
+[hierarchy-aware gestures](https://getmoshi.app/docs/gestures). Tmux and Herdr
+navigation, workspace/session-level gestures and pane-zoom pinch bindings remain
+separate work. Current Zellij exposes `switch-session`, but lazysh does not yet
+use it or reconcile remembered attachment names after a host-side session switch.
+
 Open **Sessions** on an SSH connection. lazysh discovers tmux, Herdr and Zellij independently. Attaching opens a separate PTY on the verified SSH transport, preserving the original shell. Closing an attached terminal detaches that client; the remote multiplexer owns its processes.
 
 ## tmux
