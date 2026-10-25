@@ -156,3 +156,18 @@ The reader supports main-thread user/assistant text, plaintext thinking, tool ca
 Primary evidence: [official thread export documentation](https://ampcode.com/docs/threads) and the [versioned official npm artifact](https://registry.npmjs.org/@sourcegraph/amp/-/amp-0.0.1778732631-gc5875c.tgz), inspected as inert JavaScript on 2026-10-24. Archive SHA-256 `c64e86edecde79e659914df30dad4060c8d7dd2d91a884e2b94b4262d0f8c911`; `dist/main.js` SHA-256 `458435712c9c4e222822847fc9e70080cdf023ffb3c820e959a30425a22a5836`. The full-thread JSON export function occupies bundle byte range `[8692546,8692830)` (selected-span SHA-256 `46f08280586103e38944b2a4cfefb09b10e026002b9265ab2b9cb06b9a167470`); its message projection occupies `[2355907,2356741)` (SHA-256 `69cf3797d4147e3603ae5ce8290abb57a30a9e2b1d17b70b6fdd9327d86c5b5e`). REA parsed both selected spans with zero parse failures; relationship analysis remained partial. No Amp code was executed or copied into lazysh, and no private account data was read. Native Cargo fixtures independently recreate the observed envelope and content shapes; real exported files remain untested.
 
 Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx turbo run test --filter=@lazysh/agent`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
+
+
+## Diagnose companion write contention
+
+The CI `agent` job runs a separate native timing probe after the normal package checks, including when those checks fail. Its result never changes the preceding checks' failure status. The probe has a two-minute CI step limit and prints only fixed phase names, worker indices, durations and commit counts for a temporary synthetic database. It does not print SQL, event values, database paths or account data.
+
+Run the same probe locally with:
+
+```sh
+cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture
+```
+
+SQLite's statement profile records `BEGIN`, insert, retention and commit duration. The existing busy callback is wrapped only in this fixture to measure its elapsed waiting separately; `other_wall` includes all remaining work and scheduling, not a direct measurement of filesystem synchronization. SQLite profile durations have millisecond resolution. The hosted probe injects no delay and keeps the production journal, synchronization and three-second per-locking-episode budget unchanged. This follow-up probe runs after the normal checks, so it does not reproduce all concurrent load present in an earlier failure.
+
+A second ignored native probe, `storage_diagnostics::profile_storage_with_known_commit_hold`, deliberately holds each transaction for 250 ms in a test-only commit hook. It demonstrates that serialized write-held time can exhaust some wait budgets, while checking that every acknowledged commit remains in storage. It is not run by CI and is not evidence that hosted failures are caused by `fsync`. Neither probe replaces the strict concurrent-write acceptance tests or fixes [issue #36](https://github.com/mihazs/lazysh/issues/36); hosted phase evidence is needed before changing the storage algorithm.

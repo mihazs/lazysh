@@ -21,3 +21,6 @@ tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+rusqlite = { version = "0.41", features = ["trace"] }

@@ -43,7 +43,13 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
-      - run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service
+      - name: Check companion and service packages
+        id: agent-checks
+        run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service
+      - name: Measure hosted SQLite phases (diagnostic, no injected delay)
+        if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
+        timeout-minutes: 2
+        run: cargo test --locked --package lazysh-agent --lib storage_diagnostics::profile_storage_commit_phases -- --ignored --exact --nocapture
 
   native-linux:
     runs-on: ubuntu-24.04
