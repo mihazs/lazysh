@@ -172,18 +172,23 @@ fn utf8_locale(bytes: &[u8]) -> Result<String> {
             )
         })
 }
-async fn bootstrap_exec(session: &Session, command: String) -> Result<Zeroizing<Vec<u8>>> {
+async fn bootstrap_exec(
+    session: &Session,
+    lease: &crate::app_lock::AccessLease,
+    command: String,
+) -> Result<Zeroizing<Vec<u8>>> {
     let mut cancelled = session.cancel.subscribe();
     if *cancelled.borrow() {
         return Err(SshError::new("cancelled", "Mosh connection was cancelled"));
     }
     let mut channel = tokio::select! {
         _ = cancelled.changed() => return Err(SshError::new("cancelled", "Mosh connection was cancelled")),
-        result = timeout(Duration::from_secs(15), session.handle.channel_open_session()) => result.map_err(|_| SshError::new("mosh_bootstrap", "Opening Mosh bootstrap channel timed out"))??,
+        result = crate::ssh::open_owned_channel(&session.handle, lease, tokio::time::Instant::now() + Duration::from_secs(15)) => result?,
     };
     let result = tokio::select! {
         _ = cancelled.changed() => Err(SshError::new("cancelled", "Mosh connection was cancelled")),
         result = timeout(Duration::from_secs(15), async {
+            lease.check()?;
             channel.exec(true, command).await?;
             let (bytes, status) = crate::et::read_bootstrap(&mut channel, 8192, "mosh_bootstrap", "Mosh bootstrap output exceeds 8 KiB").await?;
             if status != Some(0) { return Err(SshError::new("mosh_bootstrap", "Mosh server failed to start. Check its executable path and UTF-8 locales.")); }
@@ -195,12 +200,10 @@ async fn bootstrap_exec(session: &Session, command: String) -> Result<Zeroizing<
 }
 pub(crate) async fn bootstrap(
     session: &Session,
+    lease: &crate::app_lock::AccessLease,
     options: Options,
-    cols: u32,
-    rows: u32,
 ) -> Result<Bootstrap> {
     options.validate()?;
-    check_size(cols, rows)?;
     if !cfg!(any(
         target_os = "linux",
         target_os = "macos",
@@ -221,9 +224,9 @@ pub(crate) async fn bootstrap(
             "Mosh requires a direct SSH connection; bastion routes currently support SSH terminals",
         )
     })?;
-    let locales = bootstrap_exec(session, "locale -a".into()).await?;
+    let locales = bootstrap_exec(session, lease, "locale -a".into()).await?;
     let locale = utf8_locale(&locales)?;
-    let bytes = bootstrap_exec(session, options.command(&locale)).await?;
+    let bytes = bootstrap_exec(session, lease, options.command(&locale)).await?;
     parse_bootstrap(&bytes, address, &options)
 }
 

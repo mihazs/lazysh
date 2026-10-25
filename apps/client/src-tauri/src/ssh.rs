@@ -1265,6 +1265,10 @@ impl std::ops::DerefMut for OwnedChannel {
     }
 }
 impl OwnedChannel {
+    pub(crate) fn into_stream(mut self) -> russh::ChannelStream<client::Msg> {
+        // russh transfers this confirmed channel to ChannelCloseOnDrop.
+        self.channel.take().unwrap().into_stream()
+    }
     pub(crate) async fn close(&self) -> std::result::Result<(), russh::Error> {
         if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(());
@@ -1285,6 +1289,25 @@ impl Drop for OwnedChannel {
         }
     }
 }
+pub(crate) enum ChannelRequest {
+    Session,
+    DirectTcp { host: String, port: u32 },
+}
+impl ChannelRequest {
+    async fn open(
+        self,
+        transport: &client::Handle<HostVerifier>,
+    ) -> std::result::Result<russh::Channel<client::Msg>, russh::Error> {
+        match self {
+            Self::Session => transport.channel_open_session().await,
+            Self::DirectTcp { host, port } => {
+                transport
+                    .channel_open_direct_tcpip(host, port, "127.0.0.1", 0)
+                    .await
+            }
+        }
+    }
+}
 /// Retain the underlying open until confirmation, even after the caller's
 /// deadline. Otherwise russh drops its receiver and ignores a late confirmation.
 /// Workers own only the core transport; last SshHandle Drop stops them all.
@@ -1293,7 +1316,18 @@ pub(crate) async fn open_owned_channel(
     lease: &AccessLease,
     deadline: tokio::time::Instant,
 ) -> Result<OwnedChannel> {
+    open_owned(handle, lease, deadline, ChannelRequest::Session).await
+}
+pub(crate) async fn open_owned(
+    handle: &SshHandle,
+    lease: &AccessLease,
+    deadline: tokio::time::Instant,
+    request: ChannelRequest,
+) -> Result<OwnedChannel> {
     lease.check()?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(SshError::new("timeout", "Opening SSH channel timed out"));
+    }
     let permit=handle.open_slots.clone().try_acquire_owned().map_err(|_|SshError::new("ssh_open_busy","SSH channel openings await peer confirmation; reconnect if the peer remains unresponsive"))?;
     let transport = handle.handle.clone();
     let mut owner_gone = handle.open_owner_gone.subscribe();
@@ -1301,20 +1335,39 @@ pub(crate) async fn open_owned_channel(
     let (reply, response) = tokio::sync::oneshot::channel();
     tauri::async_runtime::spawn(async move {
         let _permit = permit;
-        if *owner_gone.borrow() || original.check().is_err() || reply.is_closed() {
+        if *owner_gone.borrow()
+            || original.check().is_err()
+            || reply.is_closed()
+            || tokio::time::Instant::now() >= deadline
+        {
             return;
         }
         let result = tokio::select! {biased;
             _=owner_gone.changed()=>return,
-            result=transport.channel_open_session()=>result.map(OwnedChannel::from).map_err(SshError::from),
+            result=request.open(&transport)=>result.map(OwnedChannel::from).map_err(SshError::from),
         };
-        // A rejected/stale result drops its already-close-owned channel here.
-        let _ = original.with_current(|| reply.send(result));
+        // A rejected/stale/late result drops its already-close-owned channel here.
+        let _ = original.with_current(|| {
+            let result = if tokio::time::Instant::now() >= deadline {
+                drop(result);
+                Err(SshError::new("timeout", "Opening SSH channel timed out"))
+            } else {
+                result
+            };
+            reply.send(result)
+        });
     });
-    tokio::select! {biased;
+    let channel = tokio::select! {biased;
         _=lease.cancelled()=>Err(SshError::new("cancelled","SSH channel opening cancelled")),
-        result=tokio::time::timeout_at(deadline,response)=>result.map_err(|_|SshError::new("timeout","Opening terminal timed out"))?.map_err(|_|SshError::new("disconnected","SSH channel opening retired"))?,
+        result=tokio::time::timeout_at(deadline,response)=>result.map_err(|_|SshError::new("timeout","Opening SSH channel timed out"))?.map_err(|_|SshError::new("disconnected","SSH channel opening retired"))?,
+    }?;
+    // timeout_at polls a ready inner future first. Even a timely confirmation
+    // must not permit setup when this caller only resumes after its deadline.
+    lease.check()?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(SshError::new("timeout", "Opening SSH channel timed out"));
     }
+    Ok(channel)
 }
 #[cfg(test)]
 async fn open_terminal(
@@ -1596,7 +1649,8 @@ pub async fn connect_mosh(
     lease
         .run(async {
             let parent = state.session(&session_id).await?;
-            let bootstrap = crate::mosh::bootstrap(&parent, options, cols, rows).await?;
+            crate::mosh::check_size(cols, rows)?;
+            let bootstrap = crate::mosh::bootstrap(&parent, &lease, options).await?;
             #[cfg(any(
                 target_os = "linux",
                 target_os = "macos",
@@ -1877,10 +1931,25 @@ fn check_path(path: &str) -> Result<()> {
     }
     Ok(())
 }
-pub(crate) async fn sftp(session: &Session) -> Result<SftpSession> {
-    let channel = session.handle.channel_open_session().await?;
+async fn sftp_channel(
+    session: &Session,
+    lease: &AccessLease,
+) -> Result<russh::ChannelStream<client::Msg>> {
+    let channel = open_owned_channel(
+        &session.handle,
+        lease,
+        tokio::time::Instant::now() + OP_TIMEOUT,
+    )
+    .await?;
+    lease.check()?;
     channel.request_subsystem(true, "sftp").await?;
-    Ok(SftpSession::new(crate::sftp_stream::SftpStream::new(channel.into_stream())).await?)
+    Ok(channel.into_stream())
+}
+pub(crate) async fn sftp(session: &Session, lease: &AccessLease) -> Result<SftpSession> {
+    Ok(SftpSession::new(crate::sftp_stream::SftpStream::new(
+        sftp_channel(session, lease).await?,
+    ))
+    .await?)
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1902,10 +1971,8 @@ pub async fn list_directory(
             check_path(&path)?;
             let session = state.session(&session_id).await?;
             let raw = timeout(OP_TIMEOUT, async {
-                let channel = session.handle.channel_open_session().await?;
-                channel.request_subsystem(true, "sftp").await?;
                 let raw = russh_sftp::client::RawSftpSession::new(
-                    crate::sftp_stream::SftpStream::new(channel.into_stream()),
+                    crate::sftp_stream::SftpStream::new(sftp_channel(&session, &lease).await?),
                 );
                 raw.init().await?;
                 Ok::<_, SshError>(raw)
@@ -1977,7 +2044,7 @@ pub async fn read_file(
             check_path(&path)?;
             let session = state.session(&session_id).await?;
             timeout(OP_TIMEOUT, async {
-                let sftp = sftp(&session).await?;
+                let sftp = sftp(&session, &lease).await?;
                 let file = sftp.open(path).await?;
                 let mut bytes = Vec::new();
                 file.take(FILE_LIMIT + 1).read_to_end(&mut bytes).await?;
@@ -2015,7 +2082,7 @@ pub async fn upload_file(
             }
             let session = state.session(&session_id).await?;
             timeout(OP_TIMEOUT, async {
-                let sftp = sftp(&session).await?;
+                let sftp = sftp(&session, &lease).await?;
                 let mut file = sftp
                     .open_with_flags(
                         path.clone(),
@@ -2046,8 +2113,12 @@ pub async fn upload_file(
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
-pub(crate) async fn exec(session: &Session, command: String) -> Result<String> {
-    exec_inner(session, command, None).await
+pub(crate) async fn exec(
+    session: &Session,
+    lease: &AccessLease,
+    command: String,
+) -> Result<String> {
+    exec_for_access(session, command, lease).await
 }
 pub(crate) async fn exec_for_access(
     session: &Session,
@@ -2063,21 +2134,18 @@ pub(crate) async fn exec_for_access(
         biased;
         _ = lease.cancelled() => Err(SshError::new("app_locked", "App access changed")),
         _ = cancellation.changed() => Err(SshError::new("disconnected", "Session closed")),
-        result = exec_inner(session, command, Some(lease)) => result,
+        result = exec_inner(session, command, lease) => result,
     }
 }
-async fn exec_inner(
-    session: &Session,
-    command: String,
-    lease: Option<&AccessLease>,
-) -> Result<String> {
-    let mut channel = timeout(OP_TIMEOUT, session.handle.channel_open_session())
-        .await
-        .map_err(|_| SshError::new("timeout", "Opening command channel timed out"))??;
+async fn exec_inner(session: &Session, command: String, lease: &AccessLease) -> Result<String> {
+    let mut channel = open_owned_channel(
+        &session.handle,
+        lease,
+        tokio::time::Instant::now() + OP_TIMEOUT,
+    )
+    .await?;
     let result = timeout(OP_TIMEOUT, async {
-        if let Some(lease) = lease {
-            lease.check()?;
-        }
+        lease.check()?;
         channel.exec(true, command).await?;
         let mut bytes = Vec::new();
         let mut error = Vec::new();
@@ -2130,6 +2198,7 @@ pub async fn get_diff(
             let session = state.session(&session_id).await?;
             exec(
                 &session,
+                &lease,
                 format!(
                     "git --no-pager -C {} diff --no-ext-diff --no-textconv {} --",
                     quote(&path),
@@ -2150,7 +2219,7 @@ pub async fn agent_snapshot(
     lease
         .run(async {
             let session = state.session(&session_id).await?;
-            let text = exec(&session, "lazysh-agent snapshot --limit 50".into()).await?;
+            let text = exec(&session, &lease, "lazysh-agent snapshot --limit 50".into()).await?;
             Ok(serde_json::from_str(&text)?)
         })
         .await
@@ -2222,6 +2291,7 @@ fn transcript_command(
 }
 
 async fn transcript_result(
+    lease: &AccessLease,
     state: &AppState,
     session_id: &str,
     mut command: String,
@@ -2237,7 +2307,9 @@ async fn transcript_result(
         command.push_str(&format!(" --session-id={}", quote(&id)));
     }
     let session = state.session(session_id).await?;
-    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+    Ok(serde_json::from_str(
+        &exec(&session, lease, command).await?,
+    )?)
 }
 
 #[tauri::command]
@@ -2258,7 +2330,7 @@ pub async fn agent_usage(
                 "lazysh-agent usage --agent {agent} --path={} --offset {offset}",
                 quote(&path)
             );
-            transcript_result(&state, &session_id, command, transcript_session_id).await
+            transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
         .await
 }
@@ -2292,7 +2364,7 @@ pub async fn agent_transcript(
                     ))
                 }
             }
-            transcript_result(&state, &session_id, command, transcript_session_id).await
+            transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
         .await
 }
@@ -2340,6 +2412,7 @@ pub async fn agent_transcripts(
             Ok(serde_json::from_str(
                 &exec(
                     &session,
+                    &lease,
                     format!("lazysh-agent discover --agent {agent} --limit 50"),
                 )
                 .await?,
@@ -2364,7 +2437,7 @@ pub async fn list_multiplexer_sessions(
     lease.run(async {
 
     let session = state.session(&session_id).await?;
-    let text=exec(&session,"tmux list-sessions -F '#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}'".into()).await?;
+    let text=exec(&session, &lease,"tmux list-sessions -F '#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}'".into()).await?;
     Ok(text
         .lines()
         .filter_map(|line| {
@@ -2947,6 +3020,18 @@ mod tests {
             }
             Ok(())
         }
+        async fn channel_open_direct_tcpip(
+            &mut self,
+            channel: russh::Channel<server::Msg>,
+            _: &str,
+            _: u32,
+            _: &str,
+            _: u32,
+            reply: server::ChannelOpenHandle,
+            session: &mut server::Session,
+        ) -> std::result::Result<(), Self::Error> {
+            self.channel_open_session(channel, reply, session).await
+        }
         async fn pty_request(
             &mut self,
             channel: ChannelId,
@@ -3062,20 +3147,58 @@ mod tests {
         session.finished.send_replace(true);
         session
     }
-    async fn assert_stalled_bootstrap_cleanup(et: bool) {
+    async fn auxiliary_fixture(
+        lease: AccessLease,
+    ) -> (
+        AppState,
+        tempfile::TempDir,
+        Host,
+        TestServer,
+        tokio::task::JoinHandle<()>,
+        Arc<Session>,
+    ) {
         let (host, server, task) = server(false).await;
-        let (_dir, state) = fixture_state();
+        let (directory, state) = fixture_state();
         let handle = password_handle(&state, &host).await;
         let (input, _) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
-        let session = Arc::new(adopted_fixture_session(handle.clone(), input, cancel));
+        let session = Arc::new(Session::new(handle, input, cancel, lease, check_size));
+        (state, directory, host, server, task, session)
+    }
+    async fn release_held_opens(server: &TestServer) {
+        server.hold_opens.store(false, Ordering::SeqCst);
+        let held = std::mem::take(&mut *server.held_opens.lock().unwrap());
+        for (_, reply) in held {
+            reply.accept().await;
+        }
+    }
+    async fn observe_channel_close(server: &TestServer, channel: ChannelId) -> bool {
+        timeout(Duration::from_secs(3), async {
+            while !server.closed_channels.lock().unwrap().contains(&channel) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+    async fn revoke_pending<T>(
+        access: &AccessState,
+        pending: tokio::task::JoinHandle<std::result::Result<T, GuardedError<SshError>>>,
+    ) {
+        access.lock().unwrap();
+        assert!(pending.await.unwrap().is_err());
+        access.authorize(access.generation().unwrap()).unwrap();
+    }
+    async fn assert_stalled_bootstrap_cleanup(et: bool) {
+        let (_state, _dir, _host, server, task, session) = auxiliary_fixture(access_lease()).await;
+        let handle = session.handle.clone();
         let bootstrap = tokio::spawn(async move {
             if et {
-                crate::et::bootstrap(&session, crate::et::Options::default(), 80, 24)
+                crate::et::bootstrap(&session, &access_lease(), crate::et::Options::default())
                     .await
                     .map(|_| ())
             } else {
-                crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
+                crate::mosh::bootstrap(&session, &access_lease(), crate::mosh::Options::default())
                     .await
                     .map(|_| ())
             }
@@ -3135,10 +3258,11 @@ mod tests {
         let (input, _) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
         let session = adopted_fixture_session(handle, input, cancel);
-        let error = crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
-            .await
-            .err()
-            .unwrap();
+        let error =
+            crate::mosh::bootstrap(&session, &access_lease(), crate::mosh::Options::default())
+                .await
+                .err()
+                .unwrap();
         assert_eq!(error.kind, "mosh_unsupported_forwarding");
         assert!(server.commands.lock().unwrap().is_empty());
         task.abort();
@@ -3322,19 +3446,9 @@ mod tests {
             .expect("fixture must reach selected attach stage");
             server.command_channels.lock().unwrap()[0]
         };
-        access.lock().unwrap();
-        assert!(pending.await.unwrap().is_err());
-        server.hold_opens.store(false, Ordering::SeqCst);
-        let held = std::mem::take(&mut *server.held_opens.lock().unwrap());
-        for (_, reply) in held {
-            reply.accept().await;
-        }
-        let closed = timeout(Duration::from_secs(3), async {
-            while !server.closed_channels.lock().unwrap().contains(&display) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
+        revoke_pending(&access, pending).await;
+        release_held_opens(&server).await;
+        let closed = observe_channel_close(&server, display).await;
         let only_parent = state.sessions.lock().await.len() == 1;
         let parent = state.session(&parent.session_id).await.unwrap();
         let probe = parent.handle.channel_open_session().await;
@@ -3344,7 +3458,7 @@ mod tests {
         parent.cancel.send_replace(true);
         task.abort();
         assert!(
-            closed.is_ok(),
+            closed,
             "cancelled unpublished tmux display must request remote close"
         );
         assert!(
@@ -3355,6 +3469,250 @@ mod tests {
             probe.is_ok(),
             "cleanup must preserve the verified parent SSH transport"
         );
+    }
+    #[tokio::test]
+    async fn cancelled_exec_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Exec).await;
+    }
+    #[tokio::test]
+    async fn cancelled_sftp_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Sftp).await;
+    }
+    #[derive(Clone, Copy)]
+    enum Auxiliary {
+        Exec,
+        Sftp,
+        Preview,
+        Probe,
+        Bastion,
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "android",
+            target_os = "ios"
+        ))]
+        Mosh,
+        Et,
+        Device,
+    }
+    #[tokio::test]
+    async fn cancelled_preview_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Preview).await;
+    }
+    #[tokio::test]
+    async fn cancelled_probe_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Probe).await;
+    }
+    #[tokio::test]
+    async fn cancelled_bastion_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Bastion).await;
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    #[tokio::test]
+    async fn cancelled_mosh_open_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Mosh).await;
+    }
+    #[tokio::test]
+    async fn cancelled_et_open_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Et).await;
+    }
+    #[tokio::test]
+    async fn cancelled_device_open_closes_late_confirmation() {
+        cancelled_auxiliary_open(Auxiliary::Device).await;
+    }
+    async fn cancelled_auxiliary_open(kind: Auxiliary) {
+        let access = unlocked_access();
+        let lease = ready_lease(&access);
+        let (state, _dir, host, server, task, session) = auxiliary_fixture(lease.clone()).await;
+        let handle = session.handle.clone();
+        server.hold_opens.store(true, Ordering::SeqCst);
+        let original = lease.clone();
+        let pending = tokio::spawn(async move {
+            original
+                .run(async {
+                    match kind {
+                        Auxiliary::Exec => exec_for_access(&session, "fixture".into(), &original)
+                            .await
+                            .map(|_| ()),
+                        Auxiliary::Sftp => sftp(&session, &original).await.map(|_| ()),
+                        Auxiliary::Preview | Auxiliary::Probe => crate::previews::remote_stream(
+                            &session.handle,
+                            &original,
+                            "127.0.0.1",
+                            4321,
+                            tokio::time::Instant::now()
+                                + if matches!(kind, Auxiliary::Probe) {
+                                    Duration::from_millis(1500)
+                                } else {
+                                    Duration::from_secs(15)
+                                },
+                        )
+                        .await
+                        .map(|_| ()),
+                        Auxiliary::Bastion => crate::routing::through_bastion(
+                            &state,
+                            &host,
+                            session.handle.clone(),
+                            &original,
+                        )
+                        .await
+                        .map(|_| ()),
+                        #[cfg(any(
+                            target_os = "linux",
+                            target_os = "macos",
+                            target_os = "android",
+                            target_os = "ios"
+                        ))]
+                        Auxiliary::Mosh => crate::mosh::bootstrap(
+                            &session,
+                            &original,
+                            crate::mosh::Options::default(),
+                        )
+                        .await
+                        .map(|_| ()),
+                        Auxiliary::Et => {
+                            crate::et::bootstrap(&session, &original, crate::et::Options::default())
+                                .await
+                                .map(|_| ())
+                        }
+                        Auxiliary::Device => {
+                            let (_stop, stopped) = watch::channel(false);
+                            let (output, _) =
+                                watch::channel(crate::devices::stream::Packet::default());
+                            crate::devices::stream::receive(
+                                original.clone(),
+                                session.clone(),
+                                "fixture".into(),
+                                "fixture".into(),
+                                "android".into(),
+                                stopped,
+                                output,
+                            )
+                            .await
+                        }
+                    }
+                })
+                .await
+        });
+        timeout(Duration::from_secs(3), server.open_started.notified())
+            .await
+            .unwrap();
+        let opened = server.opening_channel.lock().unwrap().unwrap();
+        revoke_pending(&access, pending).await;
+        release_held_opens(&server).await;
+        let closed = observe_channel_close(&server, opened).await;
+        assert!(
+            server.commands.lock().unwrap().is_empty(),
+            "a revoked invocation must never dispatch its command after reauthorization"
+        );
+        let probe = handle.channel_open_session().await.unwrap();
+        probe.close().await.unwrap();
+        task.abort();
+        assert!(
+            closed,
+            "abandoned auxiliary open must close late peer confirmation while preserving parent"
+        );
+    }
+    #[tokio::test]
+    async fn confirmation_after_deadline_cannot_win_a_delayed_caller_poll() {
+        delayed_open_poll(true).await;
+    }
+    #[tokio::test]
+    async fn ready_confirmation_cannot_win_a_caller_poll_after_deadline() {
+        delayed_open_poll(false).await;
+    }
+    async fn delayed_open_poll(late_confirmation: bool) {
+        use std::{future::Future, task::Poll};
+        let (host, server, task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let lease = access_lease();
+        server.hold_opens.store(true, Ordering::SeqCst);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut opening = Box::pin(open_owned(
+            &handle,
+            &lease,
+            deadline,
+            ChannelRequest::DirectTcp {
+                host: "127.0.0.1".into(),
+                port: 4321,
+            },
+        ));
+        std::future::poll_fn(|cx| {
+            assert!(opening.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        timeout(Duration::from_secs(3), server.open_started.notified())
+            .await
+            .unwrap();
+        let channel = server.opening_channel.lock().unwrap().unwrap();
+        // Leave the caller unpolled through its deadline, then let the owned
+        // worker receive confirmation. This isolates ready-inner timeout ordering.
+        if late_confirmation {
+            tokio::time::sleep_until(deadline).await;
+        }
+        release_held_opens(&server).await;
+        timeout(Duration::from_secs(3), async {
+            while handle.open_slots.available_permits() != 4 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if !late_confirmation {
+            tokio::time::sleep_until(deadline).await;
+        }
+        let worker_closed = !late_confirmation || observe_channel_close(&server, channel).await;
+        let result = opening.await;
+        let expired = matches!(result, Err(ref error) if error.kind == "timeout");
+        drop(result);
+        let closed = observe_channel_close(&server, channel).await;
+        task.abort();
+        assert!(
+            expired,
+            "a ready confirmation cannot override the original absolute deadline"
+        );
+        assert!(
+            worker_closed,
+            "worker must close late confirmation before caller is polled again"
+        );
+        assert!(closed, "deadline rejection must close the channel");
+    }
+    #[tokio::test]
+    async fn expired_or_revoked_opens_never_reach_the_peer() {
+        let access = unlocked_access();
+        let original = ready_lease(&access);
+        let (_state, _dir, _host, server, task, session) =
+            auxiliary_fixture(original.clone()).await;
+        let handle = session.handle.clone();
+        for direct in [false, true] {
+            let request = if direct {
+                ChannelRequest::DirectTcp {
+                    host: "127.0.0.1".into(),
+                    port: 4321,
+                }
+            } else {
+                ChannelRequest::Session
+            };
+            let result = open_owned(&handle, &original, tokio::time::Instant::now(), request).await;
+            assert!(matches!(result, Err(error) if error.kind == "timeout"));
+        }
+        access.lock().unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        assert!(
+            open_owned_channel(&handle, &original, tokio::time::Instant::now() + OP_TIMEOUT)
+                .await
+                .is_err()
+        );
+        assert_eq!(handle.open_slots.available_permits(), 4);
+        assert!(server.opening_channel.lock().unwrap().is_none());
+        task.abort();
     }
     #[tokio::test]
     async fn unconfirmed_channel_capacity_is_quarantined_until_last_owner_drops() {
@@ -3376,7 +3734,21 @@ mod tests {
                 OP_TIMEOUT
             };
             callers.spawn(async move {
-                open_owned_channel(&handle, &lease, tokio::time::Instant::now() + allowance).await
+                let request = if index % 2 == 0 {
+                    ChannelRequest::Session
+                } else {
+                    ChannelRequest::DirectTcp {
+                        host: "127.0.0.1".into(),
+                        port: 4321,
+                    }
+                };
+                open_owned(
+                    &handle,
+                    &lease,
+                    tokio::time::Instant::now() + allowance,
+                    request,
+                )
+                .await
             });
         }
         timeout(Duration::from_secs(3), async {
@@ -4204,6 +4576,7 @@ mod tests {
         assert_eq!(
             exec(
                 &session,
+                &access_lease(),
                 "if [ -z \"${SSH_AUTH_SOCK-}\" ]; then printf forwarding-disabled; else exit 1; fi"
                     .into()
             )
