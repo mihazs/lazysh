@@ -561,14 +561,21 @@ fn validate_theme_preferences(object: &serde_json::Map<String, serde_json::Value
             "brightMagenta",
             "brightCyan",
             "brightWhite",
+            "bold",
         ];
         if !colors.contains_key("background")
             || !colors.contains_key("foreground")
             || colors.iter().any(|(key, value)| {
                 !COLORS.contains(&key.as_str())
                     || !value.as_str().is_some_and(|color| {
-                        matches!(color.len(), 4 | 7 | 9)
-                            && color.starts_with('#')
+                        if key == "bold" && color == "bright" {
+                            return true;
+                        }
+                        (if key == "bold" {
+                            matches!(color.len(), 4 | 7)
+                        } else {
+                            matches!(color.len(), 4 | 7 | 9)
+                        }) && color.starts_with('#')
                             && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
                     })
             })
@@ -1256,6 +1263,24 @@ mod tests {
         let valid = serde_json::json!({"version":1,"theme":"custom","appTheme":"custom","customTheme":colors,"customThemeInfo":{"name":"日光","mode":"light"}});
         bundle.preferences = Some(valid.clone());
         validate_bundle(&bundle, Scope::Settings).unwrap();
+        for bold in ["bright", "#abc", "#A1B2C3"] {
+            let mut value = valid.clone();
+            value["customTheme"]["bold"] = bold.into();
+            bundle.preferences = Some(value);
+            validate_bundle(&bundle, Scope::Settings).unwrap();
+        }
+        for bold in [
+            serde_json::json!(null),
+            serde_json::json!(false),
+            serde_json::json!("Bright"),
+            serde_json::json!("#aabbccff"),
+            serde_json::json!("url(evil)"),
+        ] {
+            let mut value = valid.clone();
+            value["customTheme"]["bold"] = bold;
+            bundle.preferences = Some(value);
+            assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+        }
         for bad in [
             serde_json::json!({"name":"bad","mode":"system"}),
             serde_json::json!({"name":" ","mode":"dark"}),
@@ -1270,7 +1295,7 @@ mod tests {
         for bad in [
             serde_json::json!({"background":"url(evil)","foreground":"#fff"}),
             serde_json::json!({"background":"#ffffff00","foreground":"#fff"}),
-            serde_json::json!({"background":"#fff","foreground":"#111","bold":"#fff"}),
+            serde_json::json!({"background":"#fff","foreground":"#111","bold":"#ffffffff"}),
         ] {
             let mut value = valid.clone();
             value["customTheme"] = bad;

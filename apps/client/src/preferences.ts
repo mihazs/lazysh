@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
-import { themeColors, themeInfo, importedTheme, type ThemeInfo } from "./themeImport";
+import { themeColors, themeInfo, importedTheme, type ThemeInfo, type ThemeColors } from "./themeImport";
 
 export const themes = {
   forest: { background: "#101311", foreground: "#d9e0d6", cursor: "#c4eb89", selectionBackground: "#40543a", black: "#1d231f", red: "#f48781", green: "#b9df83", yellow: "#e4ce8b", blue: "#8caee4", magenta: "#c4a1dd", cyan: "#8ccfc1", white: "#d9e0d6", brightBlack: "#788478", brightRed: "#ffb0a6", brightGreen: "#d0f0a6", brightYellow: "#f3e0ac", brightBlue: "#b1caf0", brightMagenta: "#dfc3ef", brightCyan: "#b0e8de", brightWhite: "#f3f5ee" },
@@ -22,7 +22,7 @@ export type Preferences = {
   appTheme: keyof typeof themes | "custom";
   customThemeInfo?: ThemeInfo;
   sessionLayout: "list" | "cards";
-  customTheme?: ITheme;
+  customTheme?: ThemeColors;
   fontSize: number;
   fontFamily: string;
   cjkFallback: string;
@@ -61,7 +61,7 @@ export function parsePreferences(value: unknown): Preferences {
   const p = value as Record<string, unknown>;
   if (p.version !== 1) return { ...defaults };
   const number = (name: string, min: number, max: number, fallback: number) => typeof p[name] === "number" && Number.isInteger(p[name]) && p[name] >= min && p[name] <= max ? p[name] as number : fallback;
-  let customTheme: ITheme | undefined;
+  let customTheme: ThemeColors | undefined;
   let customThemeInfo: ThemeInfo | undefined;
   const gestureChords: Partial<Record<GestureSlot, string>> = {};
   if (p.gestureChords && typeof p.gestureChords === "object") {
@@ -130,7 +130,15 @@ function subscribe(listener: () => void) {
 }
 export function usePreferences() { return useSyncExternalStore(subscribe, getPreferences, () => defaults); }
 export function terminalOptions(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): ITerminalOptions {
-  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, theme: p.theme === "custom" ? p.customTheme : themes[p.theme] };
+  const colors: ThemeColors | undefined = p.theme === 'custom' ? p.customTheme : themes[p.theme];
+  const {bold, ...theme} = colors ?? {};
+  // Bundled and pre-metadata palettes retain their existing bright-bold default.
+  const legacy = p.theme !== 'custom' || !p.customThemeInfo;
+  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, drawBoldTextInBrightColors: bold !== undefined || legacy, theme };
+}
+export function terminalBoldColor(p: Preferences): string | undefined {
+  const bold = p.theme === 'custom' ? p.customTheme?.bold : undefined;
+  return bold?.startsWith('#') ? bold : undefined;
 }
 
 export function decodeClipboardRequest(data: string): string | undefined {

@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { getPreferences, terminalOptions } from "./preferences";
 import { fontFamilyFor } from "./fonts";
+export { applyTerminalTheme } from "./terminalBold";
 
 export function createTerminal() {
   return new Terminal({
