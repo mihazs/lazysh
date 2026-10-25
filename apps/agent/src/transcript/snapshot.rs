@@ -74,5 +74,6 @@ pub(super) fn page(
         has_more: next_offset < values.len() as u64,
         branch_id: None,
         truncated: false,
+        checkpoint: None,
     })
 }

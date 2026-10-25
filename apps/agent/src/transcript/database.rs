@@ -111,6 +111,7 @@ pub fn read_database_page(
         has_more,
         branch_id: None,
         truncated: false,
+        checkpoint: None,
     })
 }
 

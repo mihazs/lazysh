@@ -13,6 +13,7 @@ fn page(messages: Vec<Value>) -> TranscriptPage {
         has_more: false,
         branch_id: None,
         truncated: false,
+        checkpoint: None,
     }
 }
 fn now() -> chrono::DateTime<Utc> {

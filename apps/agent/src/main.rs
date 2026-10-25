@@ -89,6 +89,8 @@ enum Command {
         #[arg(long)]
         path: std::path::PathBuf,
         #[arg(long)]
+        checkpoint: Option<String>,
+        #[arg(long)]
         session_id: Option<String>,
         #[arg(long, default_value_t = 0)]
         offset: u64,
@@ -217,34 +219,51 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::Transcript {
             agent,
             path,
+            checkpoint,
             session_id,
             offset,
             limit,
             view,
-        } => Some(
-            serde_json::to_value(match view {
-                lazysh_agent::transcript::TranscriptView::Records => match agent {
-                    lazysh_agent::transcript::TranscriptAgent::Hermes
-                    | lazysh_agent::transcript::TranscriptAgent::Opencode => {
-                        lazysh_agent::transcript::read_database_page(
+        } => {
+            if checkpoint.is_some()
+                && !matches!(
+                    agent,
+                    lazysh_agent::transcript::TranscriptAgent::AntigravityJsonl
+                )
+            {
+                return Err(Error::InvalidArgument);
+            }
+            Some(
+                serde_json::to_value(match view {
+                    lazysh_agent::transcript::TranscriptView::Records => match agent {
+                        lazysh_agent::transcript::TranscriptAgent::Hermes
+                        | lazysh_agent::transcript::TranscriptAgent::Opencode => {
+                            lazysh_agent::transcript::read_database_page(
+                                &path,
+                                agent,
+                                session_id.as_deref().ok_or(Error::InvalidArgument)?,
+                                offset,
+                                limit,
+                            )?
+                        }
+                        _ => lazysh_agent::transcript::read_page_with_checkpoint(
                             &path,
                             agent,
-                            session_id.as_deref().ok_or(Error::InvalidArgument)?,
                             offset,
                             limit,
-                        )?
+                            checkpoint.as_deref(),
+                        )?,
+                    },
+                    lazysh_agent::transcript::TranscriptView::Conversation => {
+                        if offset != 0 || checkpoint.is_some() {
+                            return Err(Error::InvalidArgument);
+                        }
+                        lazysh_agent::transcript::conversation(&path, agent, limit)?
                     }
-                    _ => lazysh_agent::transcript::read_page(&path, agent, offset, limit)?,
-                },
-                lazysh_agent::transcript::TranscriptView::Conversation => {
-                    if offset != 0 {
-                        return Err(Error::InvalidArgument);
-                    }
-                    lazysh_agent::transcript::conversation(&path, agent, limit)?
-                }
-            })
-            .map_err(|_| Error::InvalidEvent)?,
-        ),
+                })
+                .map_err(|_| Error::InvalidEvent)?,
+            )
+        }
         Command::Ingest { agent } => {
             let pane = std::env::var("TMUX_PANE").ok();
             if let Some(event) =
