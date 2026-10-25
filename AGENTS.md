@@ -9,3 +9,7 @@ Use trunk-based development.
 - Keep branches short-lived. Track work with GitHub issues, the project board, and pull requests.
 - Review changes, address findings, and run relevant checks. Once ready, merge autonomously; do not leave a ready pull request open awaiting user confirmation.
 - Create every Git worktree under `~/dev/.worktrees/`.
+
+# Issues and pull requests
+
+Use the issue and PR templates in `.github/`, adapted from `akitaonrails/ai-memory`. Keep every required section, state checks accurately, and mark inapplicable checks with a reason. User-facing changes require a `CHANGELOG.md` entry under `[Unreleased]`; call out changed defaults. The templates do not override the trunk-based workflow above.
