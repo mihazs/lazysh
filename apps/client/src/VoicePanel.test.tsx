@@ -183,3 +183,73 @@ it('preserves current-view dictation and cannot refill cleared history from late
   expect(stage).not.toHaveBeenCalled();
   view.unmount();window.removeEventListener('lazysh-prompt-draft',stage);
 });
+
+function speechFixture(){
+  let complete!:(text:string)=>void;
+  vi.mocked(invoke).mockImplementation(command=>{
+    if(command==='voice_models')return Promise.resolve([{id:'tiny.bin',bytes:1024}]) as never;
+    if(command==='voice_model_catalog')return Promise.resolve([]) as never;
+    if(command==='voice_transcribe')return new Promise<string>(resolve=>{complete=resolve;}) as never;
+    return Promise.resolve() as never;
+  });
+  class Capture {state='inactive';mimeType='audio/webm';onstop:(()=>void)|undefined;start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}}
+  vi.stubGlobal('MediaRecorder',Capture);
+  vi.stubGlobal('Blob',class {async arrayBuffer(){return new ArrayBuffer(0);}});
+  vi.stubGlobal('AudioContext',class {async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}async close(){}});
+  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:vi.fn().mockResolvedValue({getTracks:()=>[{stop:vi.fn()}]})}});
+  return {complete:(text:string)=>complete(text),record:async()=>{
+    await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('tiny.bin'));
+    const before=vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_transcribe').length;
+    fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
+    fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+    await waitFor(()=>expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_transcribe')).toHaveLength(before+1));
+  }};
+}
+it('keeps review as default, captures opt-in delivery choices and leaves history reuse draft-only',async()=>{
+  const speech=speechFixture(),deliver=vi.fn(async(request:import('./voiceDelivery').DirectDictation)=>{expect(request.claim()).toBe(true);expect(request.claim()).toBe(false);});
+  render(<VoicePanel sessionId="ssh-current" onDirectDictation={deliver}/>);
+  expect(screen.getByLabelText('Type final result directly into terminal')).toHaveProperty('checked',false);
+  expect(screen.getByLabelText('Auto-send: press Enter')).toHaveProperty('disabled',true);
+  await speech.record();await act(async()=>speech.complete('review me'));expect(deliver).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByLabelText('Type final result directly into terminal'));
+  await speech.record();
+  expect(screen.getByRole('group',{name:'Dictation delivery'})).toHaveProperty('disabled',true);
+  await act(async()=>speech.complete('type me'));
+  expect(deliver).toHaveBeenLastCalledWith(expect.objectContaining({sessionId:'ssh-current',text:'type me',autoSend:false}));
+  fireEvent.click(screen.getByLabelText('Auto-send: press Enter'));await speech.record();await act(async()=>speech.complete('send me'));
+  expect(deliver).toHaveBeenLastCalledWith(expect.objectContaining({text:'send me',autoSend:true}));
+  const count=deliver.mock.calls.length;fireEvent.click(screen.getByRole('button',{name:'Reuse dictation 1'}));expect(deliver).toHaveBeenCalledTimes(count);
+  fireEvent.click(screen.getByLabelText('Type final result directly into terminal'));expect(screen.getByLabelText('Auto-send: press Enter')).toHaveProperty('checked',false);
+});
+for(const action of ['cancel','background','unmount'] as const){
+  it(`does not deliver a late result after ${action}`,async()=>{
+    const speech=speechFixture(),deliver=vi.fn().mockResolvedValue(undefined);
+    const view=render(<VoicePanel sessionId="old-session" onDirectDictation={deliver}/>);
+    fireEvent.click(screen.getByLabelText('Type final result directly into terminal'));
+    fireEvent.click(screen.getByLabelText('Auto-send: press Enter'));await speech.record();
+    if(action==='cancel')fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+    else if(action==='unmount')view.unmount();
+    else {Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});fireEvent(document,new Event('visibilitychange'));}
+    await act(async()=>speech.complete('late command'));
+    expect(deliver).not.toHaveBeenCalled();
+    if(action==='background')Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});
+  });
+}
+it('keeps the draft after a failed direct write and never automatically retries',async()=>{
+  const speech=speechFixture(),deliver=vi.fn(async(request:import('./voiceDelivery').DirectDictation)=>{request.claim();throw new Error('Terminal input queue is full or disconnected');});
+  render(<VoicePanel sessionId="ssh-current" onDirectDictation={deliver}/>);
+  fireEvent.click(screen.getByLabelText('Type final result directly into terminal'));
+  fireEvent.click(screen.getByLabelText('Auto-send: press Enter'));await speech.record();await act(async()=>speech.complete('keep this command'));
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','keep this command');
+  expect(await screen.findByText('Terminal input queue is full or disconnected')).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Dictation draft'),{target:{value:'edited'}});
+  expect(deliver).toHaveBeenCalledOnce();expect(deliver.mock.calls[0][0].claim()).toBe(false);
+});
+it('resets direct input and Enter when Voice is closed and reopened for another session',()=>{
+  speechFixture();const callback=vi.fn().mockResolvedValue(undefined);
+  const view=render(<VoicePanel key="first" sessionId="first" onDirectDictation={callback}/>);
+  fireEvent.click(screen.getByLabelText('Type final result directly into terminal'));fireEvent.click(screen.getByLabelText('Auto-send: press Enter'));
+  view.rerender(<VoicePanel key="second" sessionId="second" onDirectDictation={callback}/>);
+  expect(screen.getByLabelText('Type final result directly into terminal')).toHaveProperty('checked',false);
+  expect(screen.getByLabelText('Auto-send: press Enter')).toHaveProperty('checked',false);
+});

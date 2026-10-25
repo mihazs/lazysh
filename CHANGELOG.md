@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Optional direct delivery of completed dictation to the current terminal, with
+  a separate Auto-send Enter option, bounded input and stale-session cancellation.
+  Both options start off and reset when Voice closes; editable review remains the
+  default, history reuse stays draft-only, and failed writes are never retried.
+
 - Optional device-local dictation history with explicit Remember consent,
   seven-day availability, 20-entry/256 KiB bounds, editable reuse and Delete/Clear.
   History remains temporary by default; saved text is not encrypted by lazysh,
