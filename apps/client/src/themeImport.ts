@@ -64,10 +64,10 @@ export function parseThemeImport(source: string, legacyInfo: ThemeInfo): Importe
   if (value && typeof value === 'object' && 'v' in value) return importedTheme(value);
   return importedTheme({v:1,...themeInfo(legacyInfo),colors:value});
 }
-export function exportTheme(value: ImportedTheme): {json: string; code: string} {
+export function exportTheme(value: ImportedTheme): {json: string; code: string; link: string} {
   const json = JSON.stringify(importedTheme(value));
   const code = 'lazysh-theme:' + btoa(String.fromCharCode(...bytes(json))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-  return {json,code};
+  return {json,code,link:'lazysh://theme?data='+code.slice('lazysh-theme:'.length)};
 }
 function rgb(value: string): number[] {return [1,3,5].map(index => parseInt(value.slice(index,index+2),16));}
 function mix(a: string,b: string,amount: number): string {const other=rgb(b);return '#'+rgb(a).map((c,i)=>Math.round(c*(1-amount)+other[i]*amount).toString(16).padStart(2,'0')).join('');}

@@ -10,7 +10,7 @@ export default function ThemeImportPanel({preferences,apply}: Props) {
     setPreview(undefined);setMessage('');
     try {setPreview(parseThemeImport(input,{name,mode}));} catch(error) {setMessage(String(error));}
   }
-  function share(format:'json'|'code') {
+  function share(format:'json'|'code'|'link') {
     try {
       const palette=preferences.customTheme ?? undefined;
       if (!palette) throw new Error('Import a theme before exporting it.');
@@ -38,7 +38,8 @@ export default function ThemeImportPanel({preferences,apply}: Props) {
     {message && <p role="status">{message}</p>}
     <button type="button" disabled={!preferences.customTheme} onClick={()=>share('json')}>Export theme JSON</button>
     <button type="button" disabled={!preferences.customTheme} onClick={()=>share('code')}>Export theme share code</button>
+    <button type="button" disabled={!preferences.customTheme} onClick={()=>share('link')}>Export theme link</button>
     {output && <label>Exported theme<textarea aria-label="Exported theme" readOnly value={output} onFocus={event=>event.currentTarget.select()} /></label>}
-    <p>JSON is limited to 8 KiB. App chrome uses readable derived colors; terminal colors stay as supplied. QR scanning and OS theme links are not available yet.</p>
+    <p>JSON is limited to 8 KiB. App chrome uses readable derived colors; terminal colors stay as supplied. Theme links open in the installed native app for review. QR scanning is not available yet.</p>
   </details>;
 }

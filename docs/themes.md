@@ -120,8 +120,48 @@ the stored palette/metadata and removes custom app CSS overrides. Settings sync
 validates metadata and palette fields; older binaries may reject newer settings
 fields rather than silently interpreting them.
 
-QR scanning and OS deep-link delivery are separate remaining issue #16 tasks.
-No camera permission, native URI handler or outbound opener permission is added.
+## Installed-app theme links
+
+Export theme link produces selectable `lazysh://theme?data=BASE64URL` text. It
+contains the same bounded UTF-8 theme document as a share code; no service is
+contacted, URL fetched or clipboard changed. The unpadded base64url alphabet is
+required, and the canonical URI is limited to 16 KiB. Actual credentials, ports,
+fragments, extra paths, duplicate `data` keys and unknown authorities are rejected.
+CLI and Android string ingress also enforce a 16 KiB raw input bound. Apple OS
+callbacks already contain parsed URLs: equivalent spelling such as empty userinfo
+or outer whitespace may have normalized away before lazysh receives the URI.
+
+An installed native app receives cold and warm OS opens. A second desktop
+invocation delivers to the existing app instance. Native storage retains one
+pending candidate in memory while locked; the latest syntactically valid link replaces an
+unreviewed candidate. URLs and theme data are never broadcast to webviews.
+After the native access-ready acknowledgement, a metadata notice offers Review
+linked theme. Reviewing does not apply or acknowledge the candidate. Apply linked
+theme saves the reviewed app/terminal theme; Discard theme link keeps the current
+theme. If another link arrives during review, acknowledging the old receipt
+cannot discard the new candidate. Manual import drafts stay in their existing
+form, including while Preferences is open. Resume locking still clears transient
+renderer drafts as documented for app protection.
+
+The official deep-link plugin is pinned with a small, licensed
+[native-event patch](../packages/deep-link-vendor/LAZYSH_PATCH.md). Rust owns its
+current URL cache and per-listener generations; forged metadata events cannot
+replay an acknowledged URL, while a genuine second OS open of the same URL is
+delivered. Three application commands require the original native access lease
+and guarded serialization. The review panel retains its original mount's lease
+through dispatch, completion and cleanup; an obsolete renderer cannot freshen
+that lease after a lock/unlock. No deep-link plugin JavaScript permission is granted.
+The existing `lazysh://agents/...` iOS status route remains independent.
+
+OS registration is installed-bundle behavior. Browser tests use a synthetic native
+bridge and cannot establish desktop OS association, Android intent, iOS URL-open
+or physical resume behavior. Native Cargo tests exercise the actual patched
+plugin's CLI delivery, `get_current`, `on_open_url`, unlisten, metadata replay and
+same-URL reopening, plus route bounds and stale lease/read/ack behavior. Mobile
+and packaged desktop cold/warm OS delivery remain platform acceptance checks.
+
+QR scanning remains a separate issue #16 task. No camera permission or barcode
+scanner is added by this change.
 
 Validation uses project Vitest tests for input bounds, Unicode round trips,
 legacy preference migration, preview consent and contrast; Playwright exercises

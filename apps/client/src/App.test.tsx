@@ -36,8 +36,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...request:[string,unknown?,un
   if(command==='app_lock_ready')return Promise.resolve();
   return mocks.invoke(...request);
 } }));
-vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (_name:string,callback:(event:{payload:unknown})=>void)=>{
-  mocks.lockEvent=callback;return()=>{mocks.lockEvent=undefined;};
+vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(event:{payload:unknown})=>void)=>{
+  if(name==='lazysh-app-lock')mocks.lockEvent=callback;
+  return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.terminal }));

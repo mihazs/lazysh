@@ -50,7 +50,7 @@ class NativeWorkspaceTest {
             val error = evaluate(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
             assertTrue("Native workspace failed at $stage: $error", error == "\"\"")
             if (System.nanoTime() >= deadline) {
-                throw AssertionError("Native workspace not ready at $stage: $native; activeWindowPackage=${NativeActivityFixture.activeWindowPackage()}")
+                throw AssertionError("Native workspace not ready at $stage: $native; windows=${NativeActivityFixture.windowDiagnostics()}")
             }
             Thread.sleep(200)
         }
