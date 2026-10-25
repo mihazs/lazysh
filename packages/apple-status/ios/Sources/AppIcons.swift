@@ -8,14 +8,13 @@ private final class UIKitIcons: AppIconApplication {
   var active: Bool { UIApplication.shared.applicationState == .active }
   var alternateName: String? { UIApplication.shared.alternateIconName }
   var configured: Bool {
-    let keys = UIDevice.current.userInterfaceIdiom == .pad ? ["CFBundleIcons", "CFBundleIcons~ipad"] : ["CFBundleIcons"]
-    return keys.allSatisfy { key in
-      guard let icons = Bundle.main.object(forInfoDictionaryKey: key) as? [String: Any],
-        let alternates = icons["CFBundleAlternateIcons"] as? [String: Any],
-        let amber = alternates["LazyshAmber"] as? [String: Any] else { return false }
-      return amber["CFBundleIconName"] as? String == "LazyshAmber"
-    }
+    // Bundle resolves device-qualified declarations to the effective base key.
+    guard let icons = Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any],
+      let alternates = icons["CFBundleAlternateIcons"] as? [String: Any],
+      let amber = alternates["LazyshAmber"] as? [String: Any] else { return false }
+    return amber["CFBundleIconName"] as? String == "LazyshAmber"
   }
+
   func setIcon(_ name: String?, completion: @escaping (Error?) -> Void) {
     UIApplication.shared.setAlternateIconName(name) { error in
       DispatchQueue.main.async { completion(error) }

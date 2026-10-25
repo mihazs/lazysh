@@ -112,3 +112,19 @@ hosted tests now record only native view-presence/loading/visibility and a bound
 URL scheme, then stop on failed readiness before invoking. The existing 30-second
 readiness deadline is unchanged. No valid UI icon roundtrip ran in that workflow;
 it remains a separate pending gate.
+
+[Run 40215610334](https://github.com/mihazs/lazysh/actions/runs/40215610334),
+head `3ffe16a`, reproduced the compiled phone/pad opaque catalog renditions in
+[artifact 12608285803](https://github.com/mihazs/lazysh/actions/runs/40215610334/artifacts/12608285803)
+and passed raw native Mosh unit/protocol interoperability. Hosted icon acceptance
+failed before status preflight: the first effective `CFBundleIcons` declaration
+passed, but requesting the literal `CFBundleIcons~ipad` through Bundle returned
+nil. The raw compiled plist retained both declarations. UI acceptance was skipped.
+
+Apple documents [device-qualified key selection](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/AboutInformationPropertyListFiles.html#//apple_ref/doc/uid/20001431-111453):
+Bundle chooses the value for the current device. Production now queries the
+effective base icon key once, preserving actual UIKit support/current readback.
+The native resource test instead reads the fixed bundled `Info.plist` with a
+256 KiB bound and validates both literal phone and pad declarations independently.
+This corrects API usage without dropping either declaration assertion. Actual
+phone UIKit roundtrip remains pending; no iPad UI execution is claimed.

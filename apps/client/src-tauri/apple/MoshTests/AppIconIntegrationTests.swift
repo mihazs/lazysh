@@ -63,8 +63,16 @@ final class AppIconIntegrationTests: XCTestCase {
     XCTAssertEqual(actual["current"] as? String, current)
   }
   func testBundledPhoneAndPadIconsAndRealIPCReadback() throws {
+    // Inspect literal compiled declarations, before Bundle applies device qualifiers.
+    let plist = Bundle.main.bundleURL.appendingPathComponent("Info.plist")
+    let file = try FileHandle(forReadingFrom: plist)
+    defer { try? file.close() }
+    let data = try XCTUnwrap(try file.read(upToCount: 256 * 1024 + 1))
+    XCTAssertLessThanOrEqual(data.count, 256 * 1024, "Compiled Info.plist exceeds the inspection bound")
+    guard data.count <= 256 * 1024 else { return }
+    let declarations = try XCTUnwrap(try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any])
     for key in ["CFBundleIcons", "CFBundleIcons~ipad"] {
-      let icons = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: key) as? [String: Any])
+      let icons = try XCTUnwrap(declarations[key] as? [String: Any])
       let alternates = try XCTUnwrap(icons["CFBundleAlternateIcons"] as? [String: Any])
       let amber = try XCTUnwrap(alternates["LazyshAmber"] as? [String: Any])
       XCTAssertEqual(amber["CFBundleIconName"] as? String, "LazyshAmber")
