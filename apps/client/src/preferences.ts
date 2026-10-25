@@ -1,3 +1,4 @@
+import {t, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
@@ -15,13 +16,14 @@ export const gestureDirections = ["left", "right", "up", "down"] as const;
 export const bodyGestureSlots = ["tap", "doubleTap", "tripleTap", "swipeLeft", "swipeRight"] as const;
 export const gestureSlots = [...bodyGestureSlots, "twoLeft", "twoRight", "twoUp", "twoDown", "cornerLeft", "cornerRight"] as const;
 export type GestureSlot = typeof gestureSlots[number];
-export const gestureLabels: Record<GestureAction, string> = {none: "No action", left: "Arrow left", right: "Arrow right", pageUp: "Page up", pageDown: "Page down", escape: "Escape", tab: "Tab", find: "Find in history", compose: "Compose text", paste: "Paste clipboard", keyboard: "Show keyboard", hideKeyboard: "Hide keyboard", copy: "Copy selection", backspace: "Backspace", interrupt: "Interrupt (Ctrl+C)", nextSession: "Next lazysh session", previousSession: "Previous lazysh session", nextZellijTab: "Next Zellij tab", previousZellijTab: "Previous Zellij tab", nextZellijPane: "Next Zellij pane", previousZellijPane: "Previous Zellij pane", custom: "Custom key chord"};
+export const gestureLabelKeys = {"none":"gestureNoAction","left":"gestureArrowLeft","right":"gestureArrowRight","pageUp":"gesturePageUp","pageDown":"gesturePageDown","escape":"gestureEscape","tab":"gestureTab","find":"gestureFindInHistory","compose":"gestureComposeText","paste":"gesturePasteClipboard","keyboard":"gestureShowKeyboard","hideKeyboard":"gestureHideKeyboard","copy":"gestureCopySelection","backspace":"gestureBackspace","interrupt":"gestureInterruptCtrlC","nextSession":"gestureNextLazyshSession","previousSession":"gesturePreviousLazyshSession","nextZellijTab":"gestureNextZellijTab","previousZellijTab":"gesturePreviousZellijTab","nextZellijPane":"gestureNextZellijPane","previousZellijPane":"gesturePreviousZellijPane","custom":"gestureCustomKeyChord"} as const satisfies Record<GestureAction, import('./i18n/core').UiKey>;
 export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;
   theme: keyof typeof themes | "custom";
   appTheme: keyof typeof themes | "custom";
   customThemeInfo?: ThemeInfo;
+  uiLanguage: UiLanguage;
   sessionLayout: "list" | "cards";
   customTheme?: ThemeColors;
   fontSize: number;
@@ -43,7 +45,7 @@ export type Preferences = {
   autoHideToolbar: boolean;
 };
 export const defaults: Preferences = {
-  version: 1, theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
+  version: 1, uiLanguage: "system", theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
@@ -79,6 +81,7 @@ export function parsePreferences(value: unknown): Preferences {
   try { if (customTheme && p.customThemeInfo) {customThemeInfo = themeInfo(p.customThemeInfo); customTheme = importedTheme({v:1,...customThemeInfo,colors:customTheme}).colors;} } catch {customThemeInfo = undefined;}
   return {
     version: 1,
+    uiLanguage: p.uiLanguage === "en" ? "en" : "system",
     sessionLayout: p.sessionLayout === "cards" ? "cards" : "list",
     theme: customTheme && (p.customThemeInfo === undefined || p.theme === "custom") ? "custom" : typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,
     appTheme: p.appTheme === "custom" && customTheme && customThemeInfo ? "custom" : typeof p.appTheme === "string" && Object.hasOwn(themes, p.appTheme) ? p.appTheme as Preferences["appTheme"] : defaults.appTheme,
@@ -159,15 +162,15 @@ export function decodeClipboardRequest(data: string): string | undefined {
 export function parseChord(source: string): string { return parseChordSteps(source).join(""); }
 
 export function parseChordSteps(source: string): string[] {
-  if (!source.trim() || source.length > 128) throw new Error("Enter up to 8 key steps, for example Ctrl+b n.");
+  if (!source.trim() || source.length > 128) throw new Error(t("validationEnterUpTo8KeyStepsForExampleCtrl"));
   if (source.startsWith("text:")) {
     const text = source.slice(5);
-    if (!text || /[\x00-\x1f\x7f]/.test(text)) throw new Error("Literal shortcuts need printable text; add an Enter key separately when needed.");
+    if (!text || /[\x00-\x1f\x7f]/.test(text)) throw new Error(t("validationLiteralShortcutsNeedPrintableTextAddAnEnterKey"));
     return [text];
   }
-  if (/^\s*,|,\s*$|,\s*,/.test(source)) throw new Error("Every chord step needs a key; use text: for a literal comma.");
+  if (/^\s*,|,\s*$|,\s*,/.test(source)) throw new Error(t("validationEveryChordStepNeedsAKeyUseTextFor"));
   const steps = source.trim().split(/[\s,]+/);
-  if (steps.length > 8) throw new Error("A chord can contain at most 8 steps.");
+  if (steps.length > 8) throw new Error(t("validationAChordCanContainAtMost8Steps"));
   return steps.map(step => {
     let remainder = step;
     const modifiers: string[] = [];
@@ -179,7 +182,7 @@ export function parseChordSteps(source: string): string[] {
     }
     const aliases: Record<string, string> = {Esc: "Escape", BSpace: "Backspace", dash: "-", plus: "+", comma: ","};
     const key = Object.hasOwn(aliases, remainder) ? aliases[remainder] : remainder;
-    if (new Set(modifiers).size !== modifiers.length || modifiers.some(modifier => !["ctrl", "alt", "shift"].includes(modifier))) throw new Error(`Invalid modifiers in ${step}`);
+    if (new Set(modifiers).size !== modifiers.length || modifiers.some(modifier => !["ctrl", "alt", "shift"].includes(modifier))) throw new Error(t("validationInvalidModifiersInValue1", {value1: step}));
     const ctrl = modifiers.includes("ctrl"), alt = modifiers.includes("alt"), shift = modifiers.includes("shift");
     const modifier = 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0);
     const arrows: Record<string, string> = {Left: "D", Right: "C", Up: "A", Down: "B", Home: "H", End: "F"};
@@ -193,17 +196,17 @@ export function parseChordSteps(source: string): string[] {
     const named: Record<string, string> = {Enter: "\r", Escape: "\x1b", Tab: "\t", Backspace: "\x7f", Space: " "};
     const isNamed = Object.hasOwn(named, key);
     let value = isNamed ? named[key] : key;
-    if (!isNamed && (key.length !== 1 || !/^[!-~]$/.test(key))) throw new Error(`Unknown key: ${key}`);
+    if (!isNamed && (key.length !== 1 || !/^[!-~]$/.test(key))) throw new Error(t("validationUnknownKeyValue1", {value1: key}));
     if (shift && key === "Tab") return alt ? "\x1b\x1b[Z" : "\x1b[Z";
     if (shift && /^[a-z]$/i.test(value)) value = value.toUpperCase();
-    else if (shift && !isNamed) throw new Error(`Use the resulting character instead of Shift+${key}`);
+    else if (shift && !isNamed) throw new Error(t("validationUseTheResultingCharacterInsteadOfShiftValue1", {value1: key}));
     if (ctrl) {
       if (key === "Backspace") value = "\b";
       else if (key === "-") value = "\x1f";
       else if (value === " " || value === "@") value = "\x00";
       else if (/^[a-z\[\\\]\^_]$/i.test(value)) value = String.fromCharCode(value.toUpperCase().charCodeAt(0) & 31);
       else if (value === "?") value = "\x7f";
-      else if (!isNamed) throw new Error(`Ctrl is unsupported for ${key}`);
+      else if (!isNamed) throw new Error(t("validationCtrlIsUnsupportedForValue1", {value1: key}));
     }
     return alt ? `\x1b${value}` : value;
   });

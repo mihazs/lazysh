@@ -38,6 +38,7 @@
     "test:android-theme-links": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshThemeLinkAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview"
   },
   "dependencies": {
+    "@lazysh/common": "workspace:*",
     "@lazysh/et-transport": "workspace:*",
     "@lazysh/mosh-transport": "workspace:*",
     "@tauri-apps/api": "^2.8.0",
@@ -45,12 +46,13 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "5.5.0",
+    "i18next": "26.5.11",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-markdown": "^10.1.0",
-    "@lazysh/common": "workspace:*"
+    "react-i18next": "17.1.9",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@lazysh/credential-vault": "workspace:*",

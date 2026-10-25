@@ -1,18 +1,20 @@
+import {t, useUi} from './i18n/core';
 import { useEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { captureAccess, useProtectedInvoke } from './access';
 
 type Icon = 'default' | 'amber';
 type IconStatus = { available: boolean; current: Icon | 'unknown'; reason: string };
-const unavailable: IconStatus = { available: false, current: 'unknown', reason: 'Alternate Home Screen icons require the iOS app.' };
+const unavailable: IconStatus = { available: false, current: 'unknown', reason: '' };
 function parseStatus(value: unknown): IconStatus {
-  if (!value || typeof value !== 'object') throw new Error('Cannot read the current app icon.');
+  if (!value || typeof value !== 'object') throw new Error(t("iconsCannotReadTheCurrentAppIcon"));
   const row = value as Record<string, unknown>;
   if (typeof row.available !== 'boolean' || typeof row.current !== 'string' || !['default', 'amber', 'unknown'].includes(String(row.current))
-    || typeof row.reason !== 'string' || row.reason.length > 512) throw new Error('Cannot read the current app icon.');
+    || typeof row.reason !== 'string' || row.reason.length > 512) throw new Error(t("iconsCannotReadTheCurrentAppIcon"));
   return row as IconStatus;
 }
 export default function AppIconPanel() {
+  useUi();
   const invoke = useProtectedInvoke();
   const lease = useRef(captureAccess()).current;
   const alive = useRef(true);
@@ -29,7 +31,7 @@ export default function AppIconPanel() {
     try {
       const actual = isTauri() ? parseStatus(await invoke('app_icon_status')) : unavailable;
       if (currentRequest(current)) { setStatus(actual); if (actual.current !== 'unknown') setChoice(actual.current); }
-    } catch { if (currentRequest(current)) { setStatus(undefined); setError('Cannot read the current app icon. Try refreshing.'); } }
+    } catch { if (currentRequest(current)) { setStatus(undefined); setError(t("iconsCannotReadTheCurrentAppIconTryRefreshing")); } }
   }
   useEffect(() => {
     alive.current = true;
@@ -48,20 +50,20 @@ export default function AppIconPanel() {
       if (currentRequest(current)) { setStatus(actual); if (actual.current !== 'unknown') setChoice(actual.current); }
     } catch (error) {
       if (currentRequest(current)) {
-        setError(error instanceof Error ? error.message : typeof error === 'string' ? error : 'iOS could not change the app icon.');
+        setError(error instanceof Error ? error.message : typeof error === 'string' ? error : t("appIOSCouldNotChangeTheAppIcon"));
         await read();
       }
     } finally { if (alive.current && lease.current()) { changing.current = false; setBusy(false); } }
   }
-  return <fieldset><legend>App icon</legend>
-    <p>{status?.reason ?? 'Reading the current iOS icon…'}</p>
+  return <fieldset><legend>{t("iconsAppIcon")}</legend>
+    <p>{!isTauri() ? t("iconsAlternateHomeScreenIconsRequireTheIOSApp") : status?.reason ?? t("iconsReadingTheCurrentIOSIcon")}</p>
     {error && <p role="alert">{error}</p>}
-    <p role="status">{`Current icon: ${status ? {default: 'Default', amber: 'Amber', unknown: 'Unknown — refresh before changing'}[status.current] : 'Unknown'}`}</p>
-    <label>Home Screen icon<select value={choice} disabled={!status?.available || busy} onChange={event => setChoice(event.target.value as Icon)}>
-      <option value="default">Default</option><option value="amber">Amber</option>
+    <p role="status">{t("iconsCurrentIconValue1", {value1: status ? {default: t("iconsDefault"), amber: t("iconsAmber"), unknown: t("appUnknownRefreshBeforeChanging")}[status.current] : t("appUnknown")})}</p>
+    <label>{t("iconsHomeScreenIcon")}<select value={choice} disabled={!status?.available || busy} onChange={event => setChoice(event.target.value as Icon)}>
+      <option value="default">{t("iconsDefault")}</option><option value="amber">{t("iconsAmber")}</option>
     </select></label>
-    <button disabled={!status?.available || busy || status.current === choice} onClick={() => void apply()}>{busy ? 'Changing icon…' : 'Apply app icon'}</button>
-    <button disabled={busy} onClick={() => { setError(''); void read(); }}>Refresh app icon</button>
-    <p>Device-local iOS setting. It does not change terminal themes or sync to other devices.</p>
+    <button disabled={!status?.available || busy || status.current === choice} onClick={() => void apply()}>{busy ? t("iconsChangingIcon") : t("iconsApplyAppIcon")}</button>
+    <button disabled={busy} onClick={() => { setError(''); void read(); }}>{t("iconsRefreshAppIcon")}</button>
+    <p>{t("iconsDeviceLocalIOSSettingItDoesNotChangeTerminal")}</p>
   </fieldset>;
 }

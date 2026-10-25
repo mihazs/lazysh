@@ -1,7 +1,9 @@
+import {t, useUi} from './i18n/core';
 import { useState } from 'react';
 import { accessControl, accessSnapshot, applyAccessStatus, useAccessSnapshot } from './access';
 
 export default function AccessPanel() {
+  useUi();
   const { status } = useAccessSnapshot();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -14,16 +16,16 @@ export default function AccessPanel() {
       // A later native lock event wins over any older configure response.
       if (accessSnapshot().epoch === epoch) applyAccessStatus(value);
     } catch {
-      if (accessSnapshot().epoch === epoch) setError('Device authentication did not complete. App lock settings were not changed.');
+      if (accessSnapshot().epoch === epoch) setError(t("accessDeviceAuthenticationDidNotCompleteAppLockSettingsWere"));
     } finally { if (accessSnapshot().epoch === epoch) setBusy(false); }
   }
-  return <section aria-label="App lock settings"><h3>App lock</h3>
-    <p>Require device authentication when returning to lazysh. Native device security protects access; changing this setting requires fresh authentication.</p>
-    {status?.supported && <p>Disable app lock before changing enrolled biometrics. This preview has no recovery option if the device proof becomes invalid, and the app can remain locked.</p>}
-    <label><input type="checkbox" checked={status?.enabled ?? false} disabled={!status?.supported || busy}
-      onChange={event => void configure(event.target.checked)} />Lock when returning to the app</label>
-    {!status?.supported && <p>{status?.reason || 'App lock is unavailable on this platform.'}</p>}
-    {busy && <p role="status">Waiting for device authentication…</p>}
+  return <section aria-label={t("accessAppLockSettings")}><h3>{t("accessAppLock")}</h3>
+    <p>{t("accessRequireDeviceAuthenticationWhenReturningToLazyshNativeDevice")}</p>
+    {status?.supported && <p>{t("accessDisableAppLockBeforeChangingEnrolledBiometricsThisPreview")}</p>}
+    <label className="access-lock-toggle"><input type="checkbox" checked={status?.enabled ?? false} disabled={!status?.supported || busy}
+      onChange={event => void configure(event.target.checked)} />{t("accessLockWhenReturningToTheApp")}</label>
+    {!status?.supported && <p>{status?.reason || t("accessAppLockIsUnavailableOnThisPlatform")}</p>}
+    {busy && <p role="status">{t("accessWaitingForDeviceAuthentication")}</p>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }

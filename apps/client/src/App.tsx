@@ -1,3 +1,5 @@
+import {t, useUi} from './i18n/core';
+import {useClientLocale} from './i18n/useClientLocale';
 import {
   Suspense,
   lazy,
@@ -123,7 +125,7 @@ async function prepareSession(
       );
     else {
       session.connected = false;
-      session.message = event.message || "Connection closed";
+      session.message = event.message || t("appConnectionClosed");
       window.dispatchEvent(new Event("lazysh-session-change"));
     }
   };
@@ -156,12 +158,12 @@ async function selectTransport(
   const api = bindProtectedApi(nativeApi, captureAccess());
   const pending = new PendingSessions(); pending.add(shell.session.id);
   const reasons: string[] = [];
-  const ensureAlive = () => { if (!alive()) throw {kind:'cancelled', message:'Connection cancelled'}; };
+  const ensureAlive = () => { if (!alive()) throw {kind:'cancelled', message:t("appConnectionCancelled")}; };
   for (const kind of mode === 'auto' ? ['mosh', 'et'] as const : mode === 'ssh' ? [] : [mode]) {
     ensureAlive();
     const name = kind === 'mosh' ? 'Mosh' : 'Eternal Terminal';
     if (mode === 'auto') {
-      const skip = host.jumpHostId ? 'bastion routes use SSH' : host.forwardAgent ? 'selected-identity forwarding requires SSH' : !capabilities[kind] ? capabilities.reason || 'unavailable in this app build' : '';
+      const skip = host.jumpHostId ? t("appBastionRoutesUseSSH") : host.forwardAgent ? t("appSelectedIdentityForwardingRequiresSSH") : !capabilities[kind] ? capabilities.reason || t("appUnavailableInThisAppBuild") : '';
       if (skip) { reasons.push(`${name}: ${skip}`); continue; }
     }
     const child = await prepareSession(host.id, host.name, `${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`);
@@ -174,12 +176,12 @@ async function selectTransport(
       pending.add(result.sessionId);
       track(result.sessionId);
       ensureAlive();
-      if (!child.session.connected) throw {kind:'disconnected', message:`${name} closed before connection completed`};
+      if (!child.session.connected) throw {kind:'disconnected', message:t("appClosedBeforeConnection", {name})};
       if (kind === 'mosh') child.session.mosh = options.mosh;
       else child.session.et = options.et;
       if (mode === 'auto') {
         child.session.auto = options;
-        child.session.transportNotice = `Auto selected ${name}.${reasons.length ? ` ${reasons.join('; ')}.` : ''}`;
+        child.session.transportNotice = t('appAutoSelected', {name, details: reasons.length ? ` ${reasons.join('; ')}.` : ''});
       }
       await pending.close(shell.session.id);
       untrack(shell.session.id);
@@ -198,10 +200,10 @@ async function selectTransport(
     }
   }
   ensureAlive();
-  if (!shell.session.connected) throw {kind:'disconnected', message:'Verified SSH control connection has ended'};
+  if (!shell.session.connected) throw {kind:'disconnected', message:t("appVerifiedSSHControlConnectionHasEnded")};
   if (mode === 'auto') {
     shell.session.auto = options;
-    shell.session.transportNotice = `Auto selected SSH. ${reasons.join('; ')}.`;
+    shell.session.transportNotice = t('appAutoSsh', {details:reasons.join('; ')});
   }
   return shell;
 }
@@ -219,19 +221,19 @@ type View =
   | "voice"
   | "devices"
   | "apple";
-const views = [
-  { id: "terminal" as const, label: "Terminal", Icon: TerminalSquare },
-  { id: "apple" as const, label: "Apple status", Icon: Activity },
-  { id: "agents" as const, label: "Agents", Icon: Bot },
-  { id: "chat" as const, label: "Transcript", Icon: MessageSquare },
-  { id: "usage" as const, label: "Usage", Icon: Activity },
-  { id: "files" as const, label: "Files", Icon: FolderOpen },
-  { id: "diff" as const, label: "Diff", Icon: GitCompareArrows },
-  { id: "sessions" as const, label: "Sessions", Icon: Layers },
-  { id: "preview" as const, label: "Preview", Icon: Globe },
-  { id: "attachments" as const, label: "Attach", Icon: Paperclip },
-  { id: "voice" as const, label: "Dictate", Icon: Mic },
-  { id: "devices" as const, label: "Devices", Icon: Smartphone },
+const views = () => [
+  { id: "terminal" as const, label: t("appTerminal"), Icon: TerminalSquare },
+  { id: "apple" as const, label: t("appAppleStatus"), Icon: Activity },
+  { id: "agents" as const, label: t("appAgents"), Icon: Bot },
+  { id: "chat" as const, label: t("appTranscript"), Icon: MessageSquare },
+  { id: "usage" as const, label: t("appUsage"), Icon: Activity },
+  { id: "files" as const, label: t("appFiles"), Icon: FolderOpen },
+  { id: "diff" as const, label: t("appDiff"), Icon: GitCompareArrows },
+  { id: "sessions" as const, label: t("appSessions"), Icon: Layers },
+  { id: "preview" as const, label: t("appPreview"), Icon: Globe },
+  { id: "attachments" as const, label: t("appAttach"), Icon: Paperclip },
+  { id: "voice" as const, label: t("appDictate"), Icon: Mic },
+  { id: "devices" as const, label: t("appDevices"), Icon: Smartphone },
 ];
 
 function Dialog({
@@ -243,6 +245,7 @@ function Dialog({
   children: ReactNode;
   close: () => void;
 }) {
+  useUi();
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(close);
   closeRef.current = close;
@@ -297,7 +300,7 @@ function Dialog({
           <h2>{title}</h2>
           <button
             className="icon-button"
-            aria-label={`Close ${title}`}
+            aria-label={t("appCloseValue1", {value1: title})}
             onClick={close}
           >
             <X size={19} />
@@ -312,33 +315,34 @@ function Dialog({
 export function validateHost(
   host: Pick<Host, "hostname" | "username" | "port" | "name">,
 ) {
-  if (!host.name.trim()) return "Give this host a name.";
+  if (!host.name.trim()) return t("appGiveThisHostAName");
   if (!host.hostname.trim() || /[\s/@\x00-\x1f]/.test(host.hostname))
-    return "Enter a hostname or IP address without a username, path, or spaces.";
+    return t("appEnterAHostnameOrIPAddressWithoutAUsername");
   if (!host.username.trim() || /[\s\x00-\x1f]/.test(host.username))
-    return "Enter a username without spaces.";
+    return t("appEnterAUsernameWithoutSpaces");
   if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535)
-    return "Port must be between 1 and 65535.";
+    return t("appPortMustBeBetween1And65535");
   return "";
 }
 
 function TransportOptions({mode, options, change, busy = false}: {mode:TransportMode; options:AutoOptions; change:(value:AutoOptions)=>void; busy?:boolean}) {
+  useUi();
   const {mosh, et} = options;
   return <>
     {(mode === 'auto' || mode === 'mosh') && <fieldset disabled={busy}>
-      <legend>Mosh over UDP</legend>
-      <p>SSH verifies the host and starts its Mosh server. Forced Mosh never falls back.</p>
-      <label>Mosh server path<input required maxLength={4096} value={mosh.serverPath} onChange={e=>change({...options,mosh:{...mosh,serverPath:e.target.value}})} /></label>
-      <label>First UDP port<input required type="number" min={1} max={65535} value={mosh.portMin} onChange={e=>change({...options,mosh:{...mosh,portMin:Number(e.target.value)}})} /></label>
-      <label>Last UDP port<input required type="number" min={mosh.portMin} max={Math.min(65535,mosh.portMin+1000)} value={mosh.portMax} onChange={e=>change({...options,mosh:{...mosh,portMax:Number(e.target.value)}})} /></label>
+      <legend>{t("appMoshOverUDP")}</legend>
+      <p>{t("appSSHVerifiesTheHostAndStartsItsMoshServer")}</p>
+      <label>{t("appMoshServerPath")}<input required maxLength={4096} value={mosh.serverPath} onChange={e=>change({...options,mosh:{...mosh,serverPath:e.target.value}})} /></label>
+      <label>{t("appFirstUDPPort")}<input required type="number" min={1} max={65535} value={mosh.portMin} onChange={e=>change({...options,mosh:{...mosh,portMin:Number(e.target.value)}})} /></label>
+      <label>{t("appLastUDPPort")}<input required type="number" min={mosh.portMin} max={Math.min(65535,mosh.portMin+1000)} value={mosh.portMax} onChange={e=>change({...options,mosh:{...mosh,portMax:Number(e.target.value)}})} /></label>
     </fieldset>}
     {(mode === 'auto' || mode === 'et') && <fieldset disabled={busy}>
-      <legend>Eternal Terminal over TCP</legend>
-      <p>The host must run etserver. Forced ET never falls back.</p>
-      <label>ET terminal path<input required maxLength={4096} value={et.serverPath} onChange={e=>change({...options,et:{...et,serverPath:e.target.value}})} /></label>
-      <label>ET server port<input required type="number" min={1} max={65535} value={et.port} onChange={e=>change({...options,et:{...et,port:Number(e.target.value)}})} /></label>
+      <legend>{t("appEternalTerminalOverTCP")}</legend>
+      <p>{t("appTheHostMustRunEtserverForcedETNeverFalls")}</p>
+      <label>{t("appETTerminalPath")}<input required maxLength={4096} value={et.serverPath} onChange={e=>change({...options,et:{...et,serverPath:e.target.value}})} /></label>
+      <label>{t("appETServerPort")}<input required type="number" min={1} max={65535} value={et.port} onChange={e=>change({...options,et:{...et,port:Number(e.target.value)}})} /></label>
     </fieldset>}
-    {mode === 'auto' && <p className="security-note">Auto tries Mosh, then Eternal Terminal, then SSH after verifying this host once. Unavailable transports are reported; authentication and trust failures stop the connection.</p>}
+    {mode === 'auto' && <p className="security-note">{t("appAutoTriesMoshThenEternalTerminalThenSSHAfter")}</p>}
   </>;
 }
 
@@ -353,6 +357,7 @@ function HostEditor({
   save: (host: Host) => Promise<void>;
   close: () => void;
 }) {
+  useUi();
   const invoke = useProtectedInvoke();
   const [host, setHost] = useState<Host>(
     initial ?? {
@@ -368,7 +373,7 @@ function HostEditor({
   const [busy, setBusy] = useState(false);
   const [protection, setProtection] = useState({
     available: false,
-    reason: "Checking device support…",
+    reason: t("appCheckingDeviceSupport"),
   });
   useEffect(() => {
     let alive = true;
@@ -384,7 +389,7 @@ function HostEditor({
         if (alive)
           setProtection({
             available: false,
-            reason: "Biometric protection is unavailable on this device.",
+            reason: t("appBiometricProtectionIsUnavailableOnThisDevice"),
           });
       });
     return () => {
@@ -416,29 +421,23 @@ function HostEditor({
   }
   return (
     <Dialog
-      title={initial ? "Edit host" : "Add a host"}
+      title={initial ? t("appEditHost") : t("appAddAHost")}
       close={() => {
         if (!busy) close();
       }}
     >
       <form onSubmit={(event) => void submit(event)} className="form-stack">
-        <p className="muted">
-          Connect directly to a machine you control. No relay, no account.
-        </p>
-        <label>
-          Name
-          <input
+        <p className="muted">{t("appConnectDirectlyToAMachineYouControlNoRelay")}</p>
+        <label>{t("appName")}<input
             value={host.name}
             onChange={(e) => setHost({ ...host, name: e.target.value })}
-            placeholder="Home workstation"
+            placeholder={t("appHomeWorkstation")}
             required
             maxLength={80}
           />
         </label>
         <div className="form-columns">
-          <label>
-            Hostname or IP
-            <input
+          <label>{t("appHostnameOrIP")}<input
               value={host.hostname}
               onChange={(e) => setHost({ ...host, hostname: e.target.value })}
               placeholder="workstation.local"
@@ -448,9 +447,7 @@ function HostEditor({
               spellCheck={false}
             />
           </label>
-          <label className="port-field">
-            Port
-            <input
+          <label className="port-field">{t("appPort")}<input
               type="number"
               min="1"
               max="65535"
@@ -462,22 +459,19 @@ function HostEditor({
             />
           </label>
         </div>
-        <label>
-          Username
-          <input
+        <label>{t("appUsername")}<input
             value={host.username}
             onChange={(e) => setHost({ ...host, username: e.target.value })}
-            placeholder="Your SSH username"
+            placeholder={t("appYourSSHUsername")}
             required
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
           />
         </label>
-        <label>Preferred transport
-          <select value={host.transport ?? 'ssh'} disabled={busy} onChange={event=>setHost({...host, transport:event.target.value as TransportMode})}>
-            <option value="auto">Auto · Mosh, then ET, then SSH</option>
-            <option value="ssh">SSH</option><option value="mosh">Mosh (forced)</option><option value="et">Eternal Terminal (forced)</option>
+        <label>{t("appPreferredTransport")}<select value={host.transport ?? 'ssh'} disabled={busy} onChange={event=>setHost({...host, transport:event.target.value as TransportMode})}>
+            <option value="auto">{t("appAutoMoshThenETThenSSH")}</option>
+            <option value="ssh">SSH</option><option value="mosh">{t("appMoshForced")}</option><option value="et">{t("appEternalTerminalForced")}</option>
           </select>
         </label>
         <TransportOptions mode={host.transport ?? 'ssh'} busy={busy}
@@ -485,19 +479,15 @@ function HostEditor({
           change={options=>setHost({...host,...options})} />
         {initial?.fingerprint && (
           <p className="security-note">
-            <ShieldCheck size={15} /> Host key is pinned. Changing the
-            destination requires verification again.
-          </p>
+            <ShieldCheck size={15} />{" "}{t("appHostKeyIsPinnedChangingTheDestinationRequiresVerification")}</p>
         )}
-        <label>
-          SSH bastion
-          <select
+        <label>{t("appSSHBastion")}<select
             value={host.jumpHostId || ""}
             onChange={(event) =>
               setHost({ ...host, jumpHostId: event.target.value || null })
             }
           >
-            <option value="">Connect directly</option>
+            <option value="">{t("appConnectDirectly")}</option>
             {hosts
               .filter(
                 (candidate) =>
@@ -517,9 +507,7 @@ function HostEditor({
             onChange={(event) =>
               setHost({ ...host, forwardAgent: event.target.checked })
             }
-          />
-          Forward this connection’s private-key identity
-        </label>
+          />{t("appForwardThisConnectionSPrivateKeyIdentity")}</label>
         <label>
           <input
             type="checkbox"
@@ -528,16 +516,10 @@ function HostEditor({
             onChange={(event) =>
               setHost({ ...host, biometricUnlock: event.target.checked })
             }
-          />
-          Require biometrics for saved credentials
-        </label>
+          />{t("appRequireBiometricsForSavedCredentials")}</label>
         <p className="security-note">{protection.reason}</p>
         {host.forwardAgent && (
-          <p className="security-note">
-            Programs on this host can request signatures with your selected
-            identity while connected. Your other keys and local SSH agent are
-            not exposed. Requires private-key authentication.
-          </p>
+          <p className="security-note">{t("appProgramsOnThisHostCanRequestSignaturesWithYour")}</p>
         )}
         {error && (
           <p className="inline-error" role="alert">
@@ -550,11 +532,9 @@ function HostEditor({
             className="subtle-button"
             onClick={close}
             disabled={busy}
-          >
-            Cancel
-          </button>
+          >{t("appCancel")}</button>
           <button className="primary-button" disabled={busy}>
-            {busy ? "Saving…" : "Save host"}
+            {busy ? t("appSaving") : t("appSaveHost")}
           </button>
         </div>
       </form>
@@ -573,6 +553,7 @@ function ConnectDialog({
   connected: (session: LiveSession) => void;
   close: () => void;
 }) {
+  useUi();
   const invoke = useProtectedInvoke();
   const api = useProtectedApi(nativeApi);
   const [method, setMethod] = useState<"password" | "key">("password");
@@ -638,7 +619,7 @@ function ConnectDialog({
             value?.et === true && !host.jumpHostId && !host.forwardAgent,
           );
       })
-      .catch(() => { if (alive.current) setCapabilityReason('transport capability check failed'); })
+      .catch(() => { if (alive.current) setCapabilityReason(t("appTransportCapabilityCheckFailed")); })
       .finally(() => { if (alive.current) setCapabilitiesReady(true); });
     void invoke<boolean>("has_credentials", { hostId: host.id })
       .then((saved) => {
@@ -723,7 +704,7 @@ function ConnectDialog({
         setTrust(null);
         setError(
           detail?.kind === "host_key_changed"
-            ? "The host key changed. Connection blocked. Verify the server independently before replacing this host."
+            ? t("appHostKeyChanged")
             : errorMessage(e),
         );
       }
@@ -736,7 +717,7 @@ function ConnectDialog({
 
   return (
     <Dialog
-      title={trust ? "Verify this host" : `Connect to ${host.name}`}
+      title={trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {
         void invoke("cancel_credential_auth").catch(() => {});
         close();
@@ -747,37 +728,28 @@ function ConnectDialog({
           <div className="host-key-icon">
             <ShieldCheck size={27} />
           </div>
-          <p>
-            This is your first connection to{" "}
+          <p>{t("appThisIsYourFirstConnectionTo")}{" "}
             <strong>
               {trustHost.hostname}:{trustHost.port}
-            </strong>
-            . Check this fingerprint against the server through a trusted
-            channel.
-          </p>
+            </strong>{t("appCheckThisFingerprintAgainstTheServerThroughATrusted")}</p>
           <div className="fingerprint">
-            <span>Server public key · SHA-256</span>
+            <span>{t("appServerPublicKeySHA256")}</span>
             <code>{trust}</code>
           </div>
-          <p className="muted">
-            lazysh will pin this key and reject future connections if it
-            changes. Credentials for this server have not been sent.
-          </p>
+          <p className="muted">{t("appLazyshWillPinThisKeyAndRejectFutureConnections")}</p>
           {error && (
             <p className="inline-error" role="alert">
               {error}
             </p>
           )}
           <div className="dialog-actions">
-            <button className="subtle-button" disabled={busy} onClick={close}>
-              Cancel
-            </button>
+            <button className="subtle-button" disabled={busy} onClick={close}>{t("appCancel")}</button>
             <button
               className="primary-button"
               disabled={busy}
               onClick={() => void connect(true)}
             >
-              {busy ? "Connecting…" : "Trust key and connect"}
+              {busy ? t("appConnecting") : t("appTrustKeyAndConnect")}
             </button>
           </div>
         </div>
@@ -793,23 +765,21 @@ function ConnectDialog({
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
-          <label>
-            Transport
-            <select
+          <label>{t("appTransport")}<select
               value={transport}
               disabled={busy}
               onChange={(event) =>
                 setTransport(event.target.value as TransportMode)
               }
             >
-              <option value="auto">Auto · Mosh, then ET, then SSH</option>
+              <option value="auto">{t("appAutoMoshThenETThenSSH")}</option>
               <option value="ssh">SSH</option>
               <option value="mosh" disabled={!moshAvailable}>
-                Mosh{!moshAvailable ? " — unavailable for this connection" : ""}
+                Mosh{!moshAvailable ? t("appUnavailableForThisConnection") : ""}
               </option>
               <option value="et" disabled={!etAvailable}>
                 Eternal Terminal
-                {!etAvailable ? " — unavailable for this connection" : ""}
+                {!etAvailable ? t("appUnavailableForThisConnection") : ""}
               </option>
             </select>
           </label>
@@ -818,8 +788,7 @@ function ConnectDialog({
             change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />
           {host.jumpHostId && (
             <fieldset>
-              <legend>
-                Bastion:{" "}
+              <legend>{t("appBastion")}{" "}
                 {hosts.find((item) => item.id === host.jumpHostId)?.name ||
                   host.jumpHostId}
               </legend>
@@ -828,18 +797,11 @@ function ConnectDialog({
                   type="checkbox"
                   checked={savedJump}
                   onChange={(event) => setSavedJump(event.target.checked)}
-                />
-                Use bastion’s saved credentials
-              </label>
+                />{t("appUseBastionSSavedCredentials")}</label>
               {savedJump ? (
-                <p>
-                  Connect to the bastion directly and save its credentials
-                  first.
-                </p>
+                <p>{t("appConnectToTheBastionDirectlyAndSaveItsCredentials")}</p>
               ) : (
-                <label>
-                  Bastion password
-                  <input
+                <label>{t("appBastionPassword")}<input
                     type="password"
                     required
                     autoComplete="off"
@@ -853,22 +815,18 @@ function ConnectDialog({
           <div
             className="segmented"
             role="group"
-            aria-label="Authentication method"
+            aria-label={t("appAuthenticationMethod")}
           >
             <button
               type="button"
               aria-pressed={method === "password"}
               onClick={() => setMethod("password")}
-            >
-              Password
-            </button>
+            >{t("appPassword")}</button>
             <button
               type="button"
               aria-pressed={method === "key"}
               onClick={() => setMethod("key")}
-            >
-              Private key
-            </button>
+            >{t("appPrivateKey")}</button>
           </div>
           {(savedCredentials || storedCredentials) && (
             <div>
@@ -880,9 +838,7 @@ function ConnectDialog({
                     onChange={(event) =>
                       setUseSavedCredentials(event.target.checked)
                     }
-                  />
-                  Use saved credentials
-                </label>
+                  />{t("appUseSavedCredentials")}</label>
               )}
               <button
                 type="button"
@@ -897,9 +853,7 @@ function ConnectDialog({
                     })
                     .catch((e) => setError(errorMessage(e)));
                 }}
-              >
-                Forget saved credentials
-              </button>
+              >{t("appForgetSavedCredentials")}</button>
             </div>
           )}
           {host.biometricUnlock && storedCredentials && (
@@ -936,33 +890,25 @@ function ConnectDialog({
                         setBusy(false);
                     });
                 }}
-              >
-                Export private key with biometrics
-              </button>
+              >{t("appExportPrivateKeyWithBiometrics")}</button>
               {exportedIdentity && (
                 <>
-                  <label>
-                    Exported private key
-                    <textarea
+                  <label>{t("appExportedPrivateKey")}<textarea
                       readOnly
                       autoComplete="off"
                       spellCheck={false}
                       value={exportedIdentity}
                     />
                   </label>
-                  <button type="button" onClick={() => setExportedIdentity("")}>
-                    Hide exported key
-                  </button>
+                  <button type="button" onClick={() => setExportedIdentity("")}>{t("appHideExportedKey")}</button>
                 </>
               )}
             </div>
           )}
           {useSavedCredentials ? (
-            <p>Credentials will be read from this device’s secure store.</p>
+            <p>{t("appCredentialsWillBeReadFromThisDeviceSSecure")}</p>
           ) : method === "password" ? (
-            <label>
-              Password
-              <input
+            <label>{t("appPassword")}<input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -972,21 +918,17 @@ function ConnectDialog({
             </label>
           ) : (
             <>
-              <label>
-                Private key (OpenSSH or PEM)
-                <textarea
+              <label>{t("appPrivateKeyOpenSSHOrPEM")}<textarea
                   value={privateKey}
                   onChange={(e) => setPrivateKey(e.target.value)}
                   rows={7}
                   spellCheck={false}
                   autoComplete="off"
                   required
-                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                  placeholder={t("appBEGINOPENSSHPRIVATEKEY")}
                 />
               </label>
-              <label>
-                Key passphrase (if encrypted)
-                <input
+              <label>{t("appKeyPassphraseIfEncrypted")}<input
                   type="password"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
@@ -994,7 +936,7 @@ function ConnectDialog({
                 />
               </label>
               <details>
-                <summary>Generate or inspect an identity</summary>
+                <summary>{t("appGenerateOrInspectAnIdentity")}</summary>
                 <CredentialsPanel
                   onUse={(credentials) => {
                     setPrivateKey(credentials.privateKey || "");
@@ -1006,9 +948,7 @@ function ConnectDialog({
             </>
           )}
           <p className="security-note">
-            <KeyRound size={15} /> Credentials stay in memory unless you choose
-            to save them in this device’s secure store.
-          </p>
+            <KeyRound size={15} />{" "}{t("appCredentialsStayInMemoryUnlessYouChooseToSave")}</p>
           {!useSavedCredentials && (
             <label>
               <input
@@ -1017,9 +957,7 @@ function ConnectDialog({
                 onChange={(event) =>
                   setRememberCredentials(event.target.checked)
                 }
-              />
-              Save credentials on this device after connecting
-            </label>
+              />{t("appSaveCredentialsOnThisDeviceAfterConnecting")}</label>
           )}
           {error && (
             <p className="inline-error" role="alert">
@@ -1027,11 +965,9 @@ function ConnectDialog({
             </p>
           )}
           <div className="dialog-actions">
-            <button type="button" className="subtle-button" onClick={close}>
-              Cancel
-            </button>
+            <button type="button" className="subtle-button" onClick={close}>{t("appCancel")}</button>
             <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
-              {busy ? "Connecting…" : "Connect"}
+              {busy ? t("appConnecting") : t("appConnect")}
               <ChevronRight size={16} />
             </button>
           </div>
@@ -1042,16 +978,19 @@ function ConnectDialog({
 }
 
 export default function App() {
+  useUi();
+  useClientLocale();
   return <AccessShell native={native}>{registry => <WorkspaceApp registry={registry} />}</AccessShell>;
 }
 
 function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
+  useUi();
   const invoke = useProtectedInvoke();
   const api = useProtectedApi(nativeApi);
   useClientAppearance();
   const {sessionLayout} = usePreferences();
   const [hosts, setHosts] = useState<Host[]>([]);
-  const [localCapability, setLocalCapability] = useState({available:false,reason:'Checking local terminal support…'});
+  const [localCapability, setLocalCapability] = useState({available:false,reason:t("appCheckingLocalTerminalSupport")});
   const [openingLocal, setOpeningLocal] = useState(false);
   const localOpening = useRef(false);
   const [appleUsage, setAppleUsage] = useState<Record<string,AppleUsageReport>>({});
@@ -1104,7 +1043,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       || currentView.current.view!=='voice' || document.visibilityState!=='visible'
       || directBlocked || closingSessions.current.has(request.sessionId)
       || directContext.current.generation!==directGeneration || !request.claim())
-      return Promise.reject(new Error('Direct dictation cancelled because this session is no longer active. The result remains in the draft.'));
+      return Promise.reject(new Error(t("appDirectDictationCancelledBecauseThisSessionIsNoLonger")));
     return api.write(live.id,data);
   }
   const active = sessions.find((session) => session.id === activeId);
@@ -1133,8 +1072,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     let alive=true;
     if(native) void invoke<{available:boolean;reason:string}>('local_capability').then(value=>{
       if(alive && value && typeof value.available==='boolean') setLocalCapability(value);
-    }).catch(()=>{if(alive)setLocalCapability({available:false,reason:'Local terminal capability is unavailable.'});});
-    else setLocalCapability({available:false,reason:'Local terminals require the native desktop app.'});
+    }).catch(()=>{if(alive)setLocalCapability({available:false,reason:t("appLocalTerminalCapabilityIsUnavailable")});});
+    else setLocalCapability({available:false,reason:t("appLocalTerminalsRequireTheNativeDesktopApp")});
     return()=>{alive=false;};
   },[]);
   useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
@@ -1144,7 +1083,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     let pending:Prepared|undefined;
     const ownership = new PendingSessions();
     try {
-      pending=await prepareSession('', 'Local terminal', 'This device · local shell');
+      pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"));
       pending.session.local=true;
       const result=await api.connectLocal(pending.onEvent);
       pending.establish(result.sessionId);
@@ -1163,7 +1102,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     try {
       saveWorkspace(next);
     } catch {
-      setError("Workspace restoration could not be saved on this device.");
+      setError(t("appWorkspaceRestorationCouldNotBeSavedOnThisDevice"));
     }
   }
   async function restoreWorkspace() {
@@ -1180,14 +1119,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         let pending:Prepared|undefined;
         try {
           if(!localCapability.available)throw new Error(localCapability.reason);
-          pending=await prepareSession('', 'Local terminal', 'This device · local shell');pending.session.local=true;
+          pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"));pending.session.local=true;
           const result=await api.connectLocal(pending.onEvent);pending.establish(result.sessionId);
           restoringSessions.current.add(result.sessionId);
-          if(!mounted.current)throw new Error('Local restoration cancelled');
+          if(!mounted.current)throw new Error(t("appLocalRestorationCancelled"));
           restored.push(pending.session);
         }catch(error){
           if(pending?.session.id){await restoringSessions.current.close(pending.session.id).catch(()=>{});}
-          disposeTerminal(pending?.session);remaining.push(intent);failures.push(`Local terminal: ${errorMessage(error)}`);
+          disposeTerminal(pending?.session);remaining.push(intent);failures.push(t("appLocalFailure", {details:errorMessage(error)}));
         }
         continue;
       }
@@ -1209,9 +1148,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         });
         shell.establish(connected.sessionId);
         restoringSessions.current.add(connected.sessionId);
-        if (!mounted.current) throw {kind:'cancelled',message:'Workspace restoration cancelled'};
+        if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
         if (intent.auto || intent.et || intent.mosh) {
-          const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:'transport capability check failed'}));
+          const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
           child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
             intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, ()=>mounted.current,
             id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id));
@@ -1237,7 +1176,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 );
           child.establish(attached.sessionId);
           restoringSessions.current.add(attached.sessionId);
-          if (!mounted.current) throw {kind:'cancelled',message:'Workspace restoration cancelled'};
+          if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
           child.session.attached = intent.attached;
           await restoringSessions.current.close(shell.session.id);
           restoringSessions.current.delete(shell.session.id);
@@ -1453,7 +1392,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     retainSession(session.id);
     void api.adoptSession(session.id).catch(() => {
       // Native revokes pending sessions itself. Never tear down an already-adopted terminal on a stale acknowledgement.
-      if (mounted.current) setError('Could not confirm the connection. Check this terminal before reconnecting.');
+      if (mounted.current) setError(t("appCouldNotConfirmTheConnectionCheckThisTerminalBefore"));
     });
   }
   async function attachTmux(
@@ -1493,18 +1432,17 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     <div className="app-shell">
       <aside
         className={`sidebar ${sidebar ? "sidebar-open" : ""}`}
-        aria-label="Hosts and connections"
+        aria-label={t("appHostsAndConnections")}
       >
         <div className="brand">
-          <span className="brand-mark">
-            l<span>_</span>
+          <span className="brand-mark">l<span>_</span>
           </span>
           <span>
-            lazysh<small>your agents, within reach</small>
+            lazysh<small>{t("appYourAgentsWithinReach")}</small>
           </span>
           <button
             className="icon-button sidebar-close"
-            aria-label="Close hosts"
+            aria-label={t("appCloseHosts")}
             onClick={() => setSidebar(false)}
           >
             <X size={18} />
@@ -1512,18 +1450,18 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </div>
         <button className="search-button" onClick={() => setPalette(true)}>
           <Search size={15} />
-          <span>Jump to a host</span>
-          <kbd>⌘ K</kbd>
+          <span>{t("appJumpToAHost")}</span>
+          <kbd>{t("appK")}</kbd>
         </button>
         <button className="search-button" disabled={!localCapability.available || openingLocal}
           title={localCapability.reason} onClick={()=>void openLocalTerminal()}>
-          <TerminalSquare size={15}/><span>{openingLocal?'Opening local terminal…':'Open local terminal'}</span>
+          <TerminalSquare size={15}/><span>{openingLocal?t("appOpeningLocalTerminal"):t("appOpenLocalTerminal")}</span>
         </button>
         <div className="sidebar-heading">
-          <span>HOSTS</span>
+          <span>{t("appHOSTS")}</span>
           <button
             className="icon-button"
-            aria-label="Add host"
+            aria-label={t("appAddHost")}
             disabled={!native}
             onClick={() => setEditor("new")}
           >
@@ -1532,13 +1470,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </div>
         <div className="host-list">
           {!loaded ? (
-            <p className="sidebar-hint">Loading hosts…</p>
+            <p className="sidebar-hint">{t("appLoadingHosts")}</p>
           ) : hosts.length === 0 ? (
-            <p className="sidebar-hint">
-              Your machines live here.
-              <br />
-              Add a host to get started.
-            </p>
+            <p className="sidebar-hint">{t("appYourMachinesLiveHere")}<br />{t("appAddAHostToGetStarted")}</p>
           ) : (
             hosts.map((host) => (
               <div
@@ -1547,7 +1481,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               >
                 <button
                   className="host-connect"
-                  aria-label={`Connect to ${host.name}`}
+                  aria-label={t("appConnectToValue1", {value1: host.name})}
                   onClick={() => chooseHost(host)}
                 >
                   <span className="host-symbol">
@@ -1562,19 +1496,19 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   {sessions.some(
                     (session) =>
                       session.hostId === host.id && session.connected,
-                  ) && <span className="status-dot" aria-label="Connected" />}
+                  ) && <span className="status-dot" aria-label={t("appConnected")} />}
                 </button>
                 <div className="host-actions">
                   <button
                     className="icon-button"
-                    aria-label={`Edit ${host.name}`}
+                    aria-label={t("appEditValue1", {value1: host.name})}
                     onClick={() => setEditor(host)}
                   >
                     <Pencil size={13} />
                   </button>
                   <button
                     className="icon-button"
-                    aria-label={`Delete ${host.name}`}
+                    aria-label={t("appDeleteValue1", {value1: host.name})}
                     onClick={() => setDeleting(host)}
                     disabled={sessions.some(
                       (session) => session.hostId === host.id,
@@ -1592,12 +1526,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           disabled={!native}
           onClick={() => setEditor("new")}
         >
-          <Plus size={16} /> Add a host
-        </button>
+          <Plus size={16} />{" "}{t("appAddAHost")}</button>
         <div className="sidebar-bottom">
           <div>
             <ShieldCheck size={15} />
-            <span>Direct connection. Local first.</span>
+            <span>{t("appDirectConnectionLocalFirst")}</span>
           </div>
           <button
             className="about-button"
@@ -1605,15 +1538,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               setAbout(true);
               setSidebar(false);
             }}
-          >
-            About lazysh · 0.1.0
-          </button>
+          >{t("appAboutLazysh010")}</button>
         </div>
       </aside>
       {sidebar && (
         <button
           className="sidebar-scrim"
-          aria-label="Close host menu"
+          aria-label={t("appCloseHostMenu")}
           onClick={() => setSidebar(false)}
         />
       )}
@@ -1622,31 +1553,31 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <header className="workspace-header">
           <button
             className="icon-button mobile-menu"
-            aria-label="Open hosts"
+            aria-label={t("appOpenHosts")}
             onClick={() => setSidebar(true)}
           >
             <Menu size={19} />
           </button>
           <div className="breadcrumb">
-            <span>Workspace</span>
+            <span>{t("appWorkspace")}</span>
             {active && (
               <>
                 <ChevronRight size={13} />
-                <button className="session-switcher-trigger" aria-label="Switch terminal session" onClick={() => setSwitcher(true)}>{active.name}</button>
+                <button className="session-switcher-trigger" aria-label={t("appSwitchTerminalSession")} onClick={() => setSwitcher(true)}>{active.name}</button>
               </>
             )}
           </div>
           <div className="header-right">
             <button
               className="icon-button mobile-tools"
-              aria-label="Workspace tools"
+              aria-label={t("appWorkspaceTools")}
               onClick={() => setMobileTools(true)}
             >
               <Ellipsis size={18} />
             </button>
             <button
               className="icon-button"
-              aria-label="Shareable uploads"
+              aria-label={t("appShareableUploads")}
               disabled={!native}
               onClick={() => setSharing(true)}
             >
@@ -1654,7 +1585,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             </button>
             <button
               className="icon-button"
-              aria-label="Notification inbox"
+              aria-label={t("appNotificationInbox")}
               disabled={!native}
               onClick={() => setInbox(true)}
             >
@@ -1662,15 +1593,15 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             </button>
             <button
               className="icon-button"
-              aria-label="Encrypted sync"
+              aria-label={t("appEncryptedSync")}
               disabled={!native}
               onClick={() => setSync(true)}
             >
               <Cloud size={16} />
             </button>
             <button
-              className="icon-button"
-              aria-label="Preferences"
+              className="icon-button preferences-button"
+              aria-label={t("appPreferences")}
               onClick={() => setPreferences(true)}
             >
               <Settings size={16} />
@@ -1680,16 +1611,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 className={`status-dot ${active?.connected ? "" : "status-idle"}`}
               />
               {active?.connected
-                ? active.local ? 'Local terminal' : active.mosh
-                  ? "Mosh connected"
+                ? active.local ? t("appLocalTerminal") : active.mosh
+                  ? t("appMoshConnected")
                   : active.et
-                    ? "ET connected"
-                    : "SSH connected"
-                : "No active connection"}
+                    ? t("appETConnected")
+                    : t("appSSHConnected")
+                : t("appNoActiveConnection")}
             </span>
             <button
               className="icon-button"
-              aria-label="Search hosts"
+              aria-label={t("appSearchHosts")}
               onClick={() => setPalette(true)}
             >
               <Command size={16} />
@@ -1697,10 +1628,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
         </header>
         {!native && (
-          <div className="browser-banner" role="status">
-            Browser preview · SSH connections require the native lazysh app. Run{" "}
-            <code>bun run dev</code> to connect.
-          </div>
+          <div className="browser-banner" role="status">{t("appBrowserPreviewSSHConnectionsRequireTheNativeLazyshApp")}{" "}
+            <code>bun run dev</code>{" "}{t("appToConnect")}</div>
         )}
         {native && previousWorkspace.length > 0 && (
           <div className="browser-banner">
@@ -1708,21 +1637,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               disabled={restoring || !loaded}
               onClick={() => void restoreWorkspace()}
             >
-              {restoring ? "Restoring…" : "Restore previous workspace"}
+              {restoring ? t("appRestoring") : t("appRestorePreviousWorkspace")}
             </button>
-            <span>
-              Uses saved credentials; tmux and Herdr reattach. Open Zellij
-              sessions from Sessions.
-            </span>
+            <span>{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</span>
             <button
               disabled={restoring}
               onClick={() => {
                 setPreviousWorkspace([]);
                 persistWorkspace(sessionsRef.current);
               }}
-            >
-              Dismiss
-            </button>
+            >{t("appDismiss")}</button>
           </div>
         )}
         {error && (
@@ -1730,7 +1654,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <span>{error}</span>
             <button
               className="icon-button"
-              aria-label="Dismiss error"
+              aria-label={t("appDismissError")}
               onClick={() => setError("")}
             >
               <X size={16} />
@@ -1742,7 +1666,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <div
             className="session-tabs"
             role="tablist"
-            aria-label="Terminal connections"
+            aria-label={t("appTerminalConnections")}
           >
             {sessions.map((session) => (
               <div
@@ -1761,7 +1685,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 </button>
                 <button
                   className="icon-button"
-                  aria-label={`Disconnect ${session.name}`}
+                  aria-label={t("appDisconnectValue1", {value1: session.name})}
                   disabled={closingIds.includes(session.id)}
                   onClick={() => void closeSession(session)}
                 >
@@ -1771,7 +1695,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             ))}
             <button
               className="icon-button"
-              aria-label="New connection"
+              aria-label={t("appNewConnection")}
               onClick={() => setPalette(true)}
             >
               <Plus size={16} />
@@ -1781,8 +1705,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         {active ? (
           <>
             <div className="session-toolbar">
-              <nav className="view-tabs" aria-label="Session views">
-                {views.filter(({id})=>!active.local || id==='terminal' || id==='voice').map(({ id, label, Icon }) => (
+              <nav className="view-tabs" aria-label={t("appSessionViews")}>
+                {views().filter(({id})=>!active.local || id==='terminal' || id==='voice').map(({ id, label, Icon }) => (
                   <button
                     key={id}
                     aria-current={view === id ? "page" : undefined}
@@ -1793,24 +1717,22 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   </button>
                 ))}
               </nav>
-              {active.connected && !active.local && active.attached?.kind === 'tmux' && <button className="subtle-button" onClick={() => setJumpSession(active.id)}>Jump To</button>}
+              {active.connected && !active.local && active.attached?.kind === 'tmux' && <button className="subtle-button" onClick={() => setJumpSession(active.id)}>{t("appJumpTo")}</button>}
               <button
                 className="icon-button disconnect-button"
-                aria-label={`End ${active.name} connection`}
+                aria-label={t("appEndValue1Connection", {value1: active.name})}
                 disabled={closingIds.includes(active.id)}
                 onClick={() => void closeSession(active)}
               >
                 <Unplug size={16} />
               </button>
             </div>
-            {active.local && <p className="security-note">Local shell on this device. SSH host tools, remote files, agents and previews are unavailable in this session.</p>}
-            {active.attached?.restoreName === null && <p className="security-note" role="status">This tmux destination cannot be restored automatically because its exact name is unsupported. The live terminal and Jump To remain available.</p>}
+            {active.local && <p className="security-note">{t("appLocalShellOnThisDeviceSSHHostToolsRemote")}</p>}
+            {active.attached?.restoreName === null && <p className="security-note" role="status">{t("appUnsupportedTmuxRestoreName")}</p>}
             <div className="session-body">
               <Suspense
                 fallback={
-                  <p className="loading" role="status">
-                    Opening terminal…
-                  </p>
+                  <p className="loading" role="status">{t("appOpeningTerminal")}</p>
                 }
               >
                 {sessions.map((session) => (
@@ -1864,8 +1786,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {!active.connected && view !== "terminal" && (
                   <div className="panel-empty">
                     <Unplug size={28} />
-                    <h3>This connection has ended.</h3>
-                    <p>Connect again from Hosts to read live data.</p>
+                    <h3>{t("appThisConnectionHasEnded")}</h3>
+                    <p>{t("appConnectAgainFromHostsToReadLiveData")}</p>
                   </div>
                 )}
               </Suspense>
@@ -1876,36 +1798,21 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {active.destination}
               </span>
               <span>
-                {active.connected ? active.local ? "Local PTY" : active.mosh ? "Mosh" : active.et ? "ET" : "SSH" : "Disconnected"}
-                <i />
-                UTF-8
-                <i />
-                xterm-256color
-              </span>
+                {active.connected ? active.local ? t("appLocalPTY") : active.mosh ? "Mosh" : active.et ? "ET" : "SSH" : t("appDisconnected")}
+                <i />{t("appUTF8")}<i />{t("appXterm256color")}</span>
             </footer>
           </>
         ) : (
           <div className="welcome">
             <div className="welcome-content">
               <div className="welcome-terminal">
-                <span>
-                  l<span>_</span>
+                <span>l<span>_</span>
                 </span>
                 <div className="terminal-corner" />
               </div>
-              <p className="welcome-kicker">
-                A little closer to your machines.
-              </p>
-              <h1>
-                Good work doesn’t
-                <br />
-                need a desk.
-              </h1>
-              <p className="welcome-copy">
-                Your terminal, your agents, your own infrastructure.
-                <br />
-                Connect over SSH and pick up where you left off.
-              </p>
+              <p className="welcome-kicker">{t("appALittleCloserToYourMachines")}</p>
+              <h1>{t("appGoodWorkDoesnT")}<br />{t("appNeedADesk")}</h1>
+              <p className="welcome-copy">{t("appYourTerminalYourAgentsYourOwnInfrastructure")}<br />{t("appConnectOverSSHAndPickUpWhereYouLeft")}</p>
               <button
                 className="primary-button welcome-connect"
                 disabled={!native}
@@ -1914,28 +1821,21 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 }
               >
                 <Plus size={17} />
-                {hosts.length ? "Connect to a host" : "Add your first host"}
+                {hosts.length ? t("appConnectToAHost") : t("appAddYourFirstHost")}
                 <ChevronRight size={16} />
               </button>
               <div className="welcome-features">
                 <span>
-                  <TerminalSquare size={16} />A real terminal
-                </span>
+                  <TerminalSquare size={16} />{t("appARealTerminal")}</span>
                 <span>
-                  <Bot size={16} />
-                  Built for agents
-                </span>
+                  <Bot size={16} />{t("appBuiltForAgents")}</span>
                 <span>
-                  <ShieldCheck size={16} />
-                  No session relay
-                </span>
+                  <ShieldCheck size={16} />{t("appNoSessionRelay")}</span>
               </div>
             </div>
             <div className="welcome-bottom">
-              <span>Works with the tools you already use.</span>
-              <div>
-                Claude Code <i /> Codex <i /> OpenCode <i /> tmux
-              </div>
+              <span>{t("appWorksWithTheToolsYouAlreadyUse")}</span>
+              <div>{t("appClaudeCode")}{" "}<i />{" "}{t("appCodex")}{" "}<i />{" "}{t("appOpenCode")}{" "}<i />{" "}{t("appTmux")}</div>
             </div>
           </div>
         )}
@@ -1957,32 +1857,25 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         />
       )}
       {deleting && (
-        <Dialog title="Delete host" close={() => setDeleting(null)}>
+        <Dialog title={t("appDeleteHost")} close={() => setDeleting(null)}>
           <div className="form-stack">
-            <p>
-              Remove <strong>{deleting.name}</strong> and its pinned host key
-              from lazysh? Nothing on the remote machine will be changed.
-            </p>
+            <p>{t("appRemove")}{" "}<strong>{deleting.name}</strong>{" "}{t("appAndItsPinnedHostKeyFromLazyshNothingOn")}</p>
             <div className="dialog-actions">
               <button
                 className="subtle-button"
                 onClick={() => setDeleting(null)}
-              >
-                Cancel
-              </button>
+              >{t("appCancel")}</button>
               <button
                 className="danger-button"
                 onClick={() => void deleteHost()}
-              >
-                Delete host
-              </button>
+              >{t("appDeleteHost")}</button>
             </div>
           </div>
         </Dialog>
       )}
       {palette && (
         <Dialog
-          title="Jump to a host"
+          title={t("appJumpToAHost")}
           close={() => {
             setPalette(false);
             setSearch("");
@@ -1991,15 +1884,15 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <div className="palette-search">
             <Search size={18} />
             <input
-              aria-label="Search saved hosts"
-              placeholder="Search hosts or addresses…"
+              aria-label={t("appSearchSavedHosts")}
+              placeholder={t("appSearchHostsOrAddresses")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               autoFocus
             />
           </div>
           <div className="palette-list">
-            <button disabled={!localCapability.available || openingLocal} title={localCapability.reason} onClick={()=>void openLocalTerminal()}><TerminalSquare size={18}/><span>Local terminal · this device</span></button>
+            <button disabled={!localCapability.available || openingLocal} title={localCapability.reason} onClick={()=>void openLocalTerminal()}><TerminalSquare size={18}/><span>{t("appLocalTerminalThisDevice")}</span></button>
             {shownHosts.map((host) => (
               <button key={host.id} onClick={() => chooseHost(host)}>
                 <Server size={18} />
@@ -2015,8 +1908,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             {shownHosts.length === 0 && (
               <p className="muted">
                 {native
-                  ? "No matching hosts. Add one to start a connection."
-                  : "Open the native app to manage SSH hosts."}
+                  ? t("appNoMatchingHostsAddOneToStartAConnection")
+                  : t("appOpenTheNativeAppToManageSSHHosts")}
               </p>
             )}
           </div>
@@ -2028,95 +1921,87 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               setEditor("new");
             }}
           >
-            <Plus size={16} /> Add a new host
-          </button>
+            <Plus size={16} />{" "}{t("appAddANewHost")}</button>
         </Dialog>
       )}
       {preferences && (
-        <Dialog title="Preferences" close={() => setPreferences(false)}>
+        <Dialog title={t("appPreferences")} close={() => setPreferences(false)}>
           <div ref={setThemeLinkTarget} />
           <PreferencesPanel />
           <AccessPanel />
-          <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>Remote push settings</button>
+          <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
         </Dialog>
       )}
-      {pushSettings && <Dialog title="Remote push settings" close={()=>setPushSettings(false)}>
-        <Suspense fallback={<p>Loading push settings…</p>}><PushSettingsPanel /></Suspense>
+      {pushSettings && <Dialog title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
+        <Suspense fallback={<p>{t("appLoadingPushSettings")}</p>}><PushSettingsPanel /></Suspense>
       </Dialog>}
-      {jumpSession && active?.id === jumpSession && active.connected && active.attached?.kind === 'tmux' && <Dialog title="Jump To" close={() => setJumpSession(null)}>
-        <Suspense fallback={<p role="status">Reading tmux destinations…</p>}><TmuxJumpPanel key={jumpSession} sessionId={jumpSession} onClose={() => setJumpSession(null)} onJump={snapshot => tmuxJumped(jumpSession, snapshot)} /></Suspense>
+      {jumpSession && active?.id === jumpSession && active.connected && active.attached?.kind === 'tmux' && <Dialog title={t("appJumpTo")} close={() => setJumpSession(null)}>
+        <Suspense fallback={<p role="status">{t("appReadingTmuxDestinations")}</p>}><TmuxJumpPanel key={jumpSession} sessionId={jumpSession} onClose={() => setJumpSession(null)} onJump={snapshot => tmuxJumped(jumpSession, snapshot)} /></Suspense>
       </Dialog>}
-      {switcher && <Dialog title="Switch terminal session" close={()=>setSwitcher(false)}>
+      {switcher && <Dialog title={t("appSwitchTerminalSession")} close={()=>setSwitcher(false)}>
         <div className="session-switcher" data-layout={sessionLayout}>
           {sessions.map(session=><button className="session-choice" key={session.id} type="button" aria-current={session.id === activeId ? "true" : undefined} onClick={()=>{setActiveId(session.id);setSwitcher(false);setView('terminal');}}><span className="session-choice-name">{session.name}</span><span className="session-choice-destination">{session.destination}</span></button>)}
-          {!sessions.length && <p>No terminal sessions are open.</p>}
+          <p>{t("sessionCount", {count: sessions.length})}</p>
+          {!sessions.length && <p>{t("appNoTerminalSessionsAreOpen")}</p>}
         </div>
       </Dialog>}
       {native && <NotificationMonitor sessions={sessions.filter(session=>!session.local)} />}
       {inbox && (
-        <Dialog title="Notification inbox" close={() => setInbox(false)}>
+        <Dialog title={t("appNotificationInbox")} close={() => setInbox(false)}>
           <NotificationPanel sessions={sessions.filter(session=>!session.local)} />
         </Dialog>
       )}
       {about && (
-        <Dialog title="About lazysh" close={() => setAbout(false)}>
-          <Suspense fallback={<p>Loading license…</p>}>
+        <Dialog title={t("appAboutLazysh")} close={() => setAbout(false)}>
+          <Suspense fallback={<p>{t("appLoadingLicense")}</p>}>
             <AboutPanel />
           </Suspense>
         </Dialog>
       )}
       {mobileTools && (
-        <Dialog title="Workspace tools" close={() => setMobileTools(false)}>
+        <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
           <div className="form-stack">
-            <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>Remote push settings</button>
+            <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
             <button
               disabled={!native}
               onClick={() => {
                 setMobileTools(false);
                 setInbox(true);
               }}
-            >
-              Open notification inbox
-            </button>
+            >{t("appOpenNotificationInbox")}</button>
             <button
               disabled={!native}
               onClick={() => {
                 setMobileTools(false);
                 setSync(true);
               }}
-            >
-              Open encrypted sync
-            </button>
+            >{t("appOpenEncryptedSync")}</button>
             <button
               disabled={!native}
               onClick={() => {
                 setMobileTools(false);
                 setSharing(true);
               }}
-            >
-              Open shareable uploads
-            </button>
+            >{t("appOpenShareableUploads")}</button>
             <button
               onClick={() => {
                 setMobileTools(false);
                 setPalette(true);
               }}
-            >
-              Search saved hosts
-            </button>
+            >{t("appSearchSavedHosts")}</button>
           </div>
         </Dialog>
       )}
       {sharing && (
-        <Dialog title="Shareable uploads" close={() => setSharing(false)}>
-          <Suspense fallback={<p>Loading sharing…</p>}>
+        <Dialog title={t("appShareableUploads")} close={() => setSharing(false)}>
+          <Suspense fallback={<p>{t("appLoadingSharing")}</p>}>
             <SharePanel />
           </Suspense>
         </Dialog>
       )}
       {sync && (
-        <Dialog title="Encrypted sync" close={() => setSync(false)}>
-          <Suspense fallback={<p>Opening sync…</p>}>
+        <Dialog title={t("appEncryptedSync")} close={() => setSync(false)}>
+          <Suspense fallback={<p>{t("appOpeningSync")}</p>}>
             <SyncPanel onHostsChanged={() => void loadHosts()} />
           </Suspense>
         </Dialog>
