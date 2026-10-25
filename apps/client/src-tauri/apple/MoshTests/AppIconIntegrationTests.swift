@@ -53,10 +53,11 @@ final class AppIconIntegrationTests: XCTestCase {
         if (window.__lazyshIconInvoke) return true;
         const state = await window.__TAURI_INTERNALS__.invoke('app_lock_status');
         if (!state.initialized) return false;
-        if (state.enabled || state.locked || !/^[a-f0-9]{64}$/.test(state.nonce ?? '')) {
+        if (state.enabled || state.locked || (state.nonce !== undefined &&
+            (typeof state.nonce !== 'string' || !/^[a-f0-9]{64}$/.test(state.nonce)))) {
           throw new Error('Clean icon fixture requires initialized unlocked access');
         }
-        const headers = {'X-Lazysh-Access': state.nonce};
+        const headers = {'X-Lazysh-Access': state.nonce ?? ''};
         await window.__TAURI_INTERNALS__.invoke('app_lock_ready', {generation: state.generation});
         // Capture once in the page. Never export, refresh or retry a protected request's nonce.
         window.__lazyshIconInvoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args, {headers});

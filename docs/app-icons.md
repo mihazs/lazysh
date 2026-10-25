@@ -166,3 +166,18 @@ before querying UIKit, and rejects a concurrent valid setter before any status
 read. Completion still clears the busy state and queries actual UIKit readback;
 there is no cached or optimistic success. The native getter-count regression is
 pending execution on an Apple runner; source inspection is not a passing test.
+
+[Integrated run 40220503048](https://github.com/mihazs/lazysh/actions/runs/40220503048),
+head `25f55bf`, retained both literal compiled declarations and completed native
+navigation, then failed the new hosted access-preparation fixture before icon
+status was requested (`access-prepared.received=false`). UI acceptance was
+skipped. The fixture incorrectly required a nonce even for a clean disabled
+policy: current native authority explicitly permits an absent nonce in that
+state, and the frontend captures an empty header there. The fixture now accepts
+absence only after confirming initialized, unlocked and disabled state, rejects
+any malformed present nonce, and retains the original header once. It never
+refreshes or retries protected requests. This is a test contract correction,
+not evidence that icon IPC or the valid UIKit roundtrip passed. Raw Mosh also
+failed its separate empty-output standalone `--list` 45-second startup deadline;
+no target stack established its cause. [Artifact 12610047306](https://github.com/mihazs/lazysh/actions/runs/40220503048/artifacts/12610047306)
+retains the hosted failure. Fresh integrated native execution remains required.
