@@ -7,7 +7,7 @@
     "test:rust": "cargo test --manifest-path Cargo.toml --locked",
     "lint": "cargo clippy --manifest-path Cargo.toml --locked --all-targets -- -D warnings",
     "format:check": "cargo fmt --manifest-path Cargo.toml -- --check",
-    "test:resume": "xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshResumeTests -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -resultBundlePath ../../apps/client/src-tauri/gen/apple/resume-tests.xcresult test CODE_SIGNING_ALLOWED=NO"
+    "test:resume": "xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshResumeTests -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -resultBundlePath ../../apps/client/src-tauri/gen/apple/resume-tests.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -test-iterations 1 test CODE_SIGNING_ALLOWED=NO"
   },
   "license": "GPL-3.0-or-later"
 }

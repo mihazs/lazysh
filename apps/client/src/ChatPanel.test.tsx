@@ -69,7 +69,7 @@ it("opens explicit Grok record files without discovery or conversation claims", 
     agent: "grok-acp",
     path: "/host/updates.jsonl",
     offset: 0,
-  });
+  }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(
     vi.mocked(invoke).mock.calls.some(([name]) => name === "agent_transcripts"),
   ).toBe(false);
@@ -246,7 +246,7 @@ it('opens explicit Antigravity records with literal metadata, bounded thinking, 
   expect(screen.getByText('Bounded reasoning').closest('details')).toBeTruthy();
   expect(screen.getByText(/inputTokens: 18446744073709551615 · cacheReadTokens: 0/)).toBeTruthy();
   expect(container.querySelector('img,iframe,script')).toBeNull();
-  expect(invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:'antigravity-host',agent:'antigravity-jsonl',path:'/host/transcript.jsonl',offset:0});
+  expect(invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:'antigravity-host',agent:'antigravity-jsonl',path:'/host/transcript.jsonl',offset:0}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='agent_transcripts')).toBe(false);
 });
 it('forwards the snapshot checkpoint and keeps repeated step updates as distinct physical records',async()=>{
@@ -255,7 +255,7 @@ it('forwards the snapshot checkpoint and keeps repeated step updates as distinct
   fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/transcript.jsonl'}});
   fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));await screen.findByText('Synthetic step');
   fireEvent.click(screen.getByRole('button',{name:'Load next messages'}));await screen.findByText('Second step update');
-  expect(invoke).toHaveBeenLastCalledWith('agent_transcript',{sessionId:'host',agent:'antigravity-jsonl',path:'/host/transcript.jsonl',offset:100,checkpoint:antigravityPage.checkpoint});
+  expect(invoke).toHaveBeenLastCalledWith('agent_transcript',{sessionId:'host',agent:'antigravity-jsonl',path:'/host/transcript.jsonl',offset:100,checkpoint:antigravityPage.checkpoint}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getAllByRole('heading',{name:'record'})).toHaveLength(2);
 });
 it('reports rewrites without mixing replacement records and reopens from zero without the old checkpoint',async()=>{
@@ -268,7 +268,7 @@ it('reports rewrites without mixing replacement records and reopens from zero wi
   expect(screen.queryByText('Replacement step')).toBeNull();
   fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));await screen.findByText('Replacement step');
   expect(screen.queryByText('Synthetic step')).toBeNull();
-  expect(invoke).toHaveBeenLastCalledWith('agent_transcript',{sessionId:'host',agent:'antigravity-jsonl',path:'/host/transcript.jsonl',offset:0});
+  expect(invoke).toHaveBeenLastCalledWith('agent_transcript',{sessionId:'host',agent:'antigravity-jsonl',path:'/host/transcript.jsonl',offset:0}, { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('rejects invalid Antigravity metadata, checkpoint boundaries and rounded or overflowing usage',()=>{
   expect(parseTranscript(antigravityPage)).toEqual(antigravityPage);

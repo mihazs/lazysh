@@ -220,6 +220,7 @@ jobs:
       - name: Run native APNs registration state tests
         run: bunx turbo run test:apns --filter=@lazysh/push-registration
       - name: Run native resume cover and lifecycle tests
+        timeout-minutes: 8
         run: bunx turbo run test:resume --filter=@lazysh/credential-vault
       - name: Upload native resume results
         if: always()
