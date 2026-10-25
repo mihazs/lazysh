@@ -21,13 +21,18 @@ mod sftp_stream;
 mod share;
 mod ssh;
 mod sync;
+mod theme_links;
 mod vault;
 mod voice;
 mod zellij;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}));
+    builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_lazysh_apple_status::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
@@ -39,6 +44,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_lazysh_vault::init())
         .manage(app_lock::Runtime::default())
+        .manage(theme_links::ThemeLinks::default())
         .manage(previews::PreviewState::default())
         .manage(devices::DeviceStreams::default())
         .manage(share::ShareState::default())
@@ -55,6 +61,7 @@ pub fn run() {
                 app.path().app_data_dir()?.join("voice-models"),
             )?);
             app_lock::install(app)?;
+            theme_links::install(app)?;
             Ok(())
         })
         .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
@@ -66,6 +73,9 @@ pub fn run() {
                 app_lock::app_lock_status,
                 app_lock::app_lock_configure,
                 app_lock::app_lock_ready,
+                theme_links::theme_link_status,
+                theme_links::theme_link_read,
+                theme_links::theme_link_ack,
                 local::local_capability,
                 local::local_connect,
                 local::local_write,

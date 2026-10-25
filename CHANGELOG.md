@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Installed-app `lazysh://theme?data=…` links and selectable theme-link export.
+  Incoming links remain pending through resume locks and require explicit review
+  and apply or discard; manual import drafts and existing theme defaults are kept.
+  Desktop launches now share one app instance. QR scanning remains unavailable.
+
 - Opt-in following for an explicitly opened Claude conversation branch: bounded
   refreshes run two seconds after completion, replace abandoned branches, pause
   on hidden pages and stop on errors/source/session/access changes. Following
