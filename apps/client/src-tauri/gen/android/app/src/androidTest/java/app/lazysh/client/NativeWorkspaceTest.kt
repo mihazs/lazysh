@@ -135,4 +135,45 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "fixture deletion", "!document.querySelector(\"$selector\")")
         }
     }
+
+    @Test fun cloudCommandsReachNativeValidationThroughTheBundledWebView() {
+        val scenario = NativeActivityFixture.scenario
+        awaitDocument(scenario, "Cloud IPC bridge", "Boolean(window.__TAURI_INTERNALS__?.invoke)")
+        // The runtime CI job installs this app on a fresh isolated emulator.
+        // Do not clear the vault or enroll a device to establish the fixture.
+        assertEquals("true", evaluate(scenario, """(() => {
+          window.__lazyshCloudIpcResult = undefined;
+          window.__TAURI_INTERNALS__.invoke('voice_cloud_status', {}).then(
+            value => { window.__lazyshCloudIpcResult = {ok:true,value}; },
+            () => { window.__lazyshCloudIpcResult = {ok:false}; }
+          );
+          return true;
+        })()"""))
+        awaitDocument(scenario, "Cloud status reply", "window.__lazyshCloudIpcResult !== undefined")
+        assertEquals("Cloud status was denied by the native bridge", "true",
+            evaluate(scenario, "window.__lazyshCloudIpcResult.ok === true"))
+        assertEquals("Fresh emulator Cloud status must contain only configured:false", "true",
+            evaluate(scenario, """(() => {
+              const status = window.__lazyshCloudIpcResult.value;
+              return status?.configured === false && Object.keys(status).length === 1;
+            })()"""))
+
+        assertEquals("true", evaluate(scenario, """(() => {
+          window.__lazyshCloudIpcResult = undefined;
+          window.__TAURI_INTERNALS__.invoke('voice_cloud_enroll', {
+            origin:'https://cloud-ipc.instrumentation.invalid', token:'invalid-instrumentation-device-token'
+          }).then(
+            () => { window.__lazyshCloudIpcResult = {ok:true}; },
+            error => { window.__lazyshCloudIpcResult = {ok:false,error:String(error)}; }
+          );
+          return true;
+        })()"""))
+        awaitDocument(scenario, "Cloud token validation reply", "window.__lazyshCloudIpcResult !== undefined")
+        assertEquals("Enrollment must reach native token validation before HTTP or vault writes", "true",
+            evaluate(scenario, """window.__lazyshCloudIpcResult.ok === false &&
+              window.__lazyshCloudIpcResult.error === "Enter the service's 64-character device token"
+            """))
+        evaluate(scenario, "delete window.__lazyshCloudIpcResult")
+    }
+
 }

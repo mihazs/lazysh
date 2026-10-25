@@ -11,10 +11,15 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   privacy manifests embedded in separate resource bundles. Auto transport
   selection now considers Mosh on iOS, where it previously skipped it; host-key
   verification and explicit fallback rules remain unchanged.
+- Explicit Cloud dictation enrollment with origin-bound device tokens in the
+  platform vault, authenticated service capabilities/language hints and quota
+  totals, bounded in-memory WAV uploads, and exact-recording cancellation.
+  Local Whisper and editable review remain the defaults; no automatic cloud
+  fallback, provider credentials in clients, deployment, or upload on enrollment.
 - Optional Unix-host transcription relay with administrator-issued device tokens,
   revocation, durable audio quotas and cancellable bounded WAV uploads to a fixed
   OpenAI transcription endpoint. No deployment, client enrollment or audio-upload
-  default changes; client integration remains separate.
+  default changes.
 - Optional direct delivery of completed dictation to the current terminal, with
   a separate Auto-send Enter option, bounded input and stale-session cancellation.
   Both options start off and reset when Voice closes; editable review remains the
