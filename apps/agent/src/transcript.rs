@@ -254,6 +254,9 @@ fn block(kind: &str, text: String, id: Option<String>, name: Option<String>) -> 
     value
 }
 fn content(value: &Value) -> Vec<Value> {
+    content_with_errors(value, false)
+}
+fn content_with_errors(value: &Value, claude_errors: bool) -> Vec<Value> {
     if let Some(text) = value.as_str() {
         return vec![block("text", text.into(), None, None)];
     }
@@ -281,16 +284,29 @@ fn content(value: &Value) -> Vec<Value> {
                     string(part, "id"),
                     string(part, "name"),
                 ),
-                "tool_result" => block(
-                    "tool_result",
-                    content(part.get("content")?)
-                        .iter()
-                        .filter_map(|p| p["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    string(part, "tool_use_id"),
-                    None,
-                ),
+                "tool_result" => {
+                    let result_content = if claude_errors {
+                        part.get("content").unwrap_or(&Value::Null)
+                    } else {
+                        part.get("content")?
+                    };
+                    let mut result = block(
+                        "tool_result",
+                        content(result_content)
+                            .iter()
+                            .filter_map(|p| p["text"].as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        string(part, "tool_use_id"),
+                        None,
+                    );
+                    if claude_errors {
+                        if let Some(is_error) = part["is_error"].as_bool() {
+                            result["isError"] = json!(is_error);
+                        }
+                    }
+                    result
+                }
                 _ => return None,
             })
         })
@@ -359,7 +375,10 @@ fn normalize(record: &Value, agent: TranscriptAgent, offset: u64) -> Option<Valu
                 return None;
             }
             let message = record.get("message")?;
-            let blocks = content(message.get("content")?);
+            let blocks = content_with_errors(
+                message.get("content")?,
+                matches!(agent, TranscriptAgent::Claude),
+            );
             let mut usage = serde_json::Map::new();
             for (source, target) in [
                 ("input_tokens", "inputTokens"),

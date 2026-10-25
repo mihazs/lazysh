@@ -7,6 +7,22 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Optional repository pre-commit duplicate detection with pinned jscpd and Bun.
+  Run `bun run hooks:install` to enable it for the repository and linked
+  worktrees. New clones fail against a reviewed existing-clone baseline while
+  lint-staged preserves partial staging; dependency installation alone does not
+  activate hooks or change an existing hooks configuration.
+
+- Device-local iOS Home Screen icon selection with the original Default and
+  new Amber artwork, UIKit support checks and actual selection readback. The
+  default icon is unchanged; desktop, Android and browser builds report this
+  feature unavailable. Icon selection does not sync or affect terminal themes.
+
+- Claude transcript tool results retain explicit recorded error flags in paging
+  and branch-follow views. Failed results show a recorded-error label with the
+  original tool ID and output; no live status or retry action is inferred.
+  Existing transcript and follow defaults are unchanged.
+
 - Installed-app `lazysh://theme?data=…` links and selectable theme-link export.
   Incoming links remain pending through resume locks and require explicit review
   and apply or discard; manual import drafts and existing theme defaults are kept.
