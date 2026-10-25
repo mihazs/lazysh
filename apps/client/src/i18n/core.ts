@@ -42,7 +42,7 @@ export const uiI18n = createUiInstance();
 type Catalog = typeof english;
 export type UiKey = keyof Catalog;
 type Variables<S extends string> = S extends `${string}{{${infer Name}}}${infer Rest}` ? Name | Variables<Rest> : never;
-type Values<K extends UiKey> = Record<Variables<Catalog[K]>, string | number>;
+type Values<K extends UiKey> = Record<Variables<Catalog[K]>, string | number> & {count?: number};
 /** Typed keys and interpolation values, with plain React text as the result. */
 export function t<K extends UiKey>(key: K, ...args: Variables<Catalog[K]> extends never ? [values?: Values<K>] : [values: Values<K>]): string {
   return String(uiI18n.t(key as never, args[0] as never));
@@ -53,4 +53,9 @@ export function formatNumber(value: number, options?: Intl.NumberFormatOptions):
 }
 export function formatDate(value: number | Date, options?: Intl.DateTimeFormatOptions): string {
   return new Intl.DateTimeFormat(uiI18n.language, options).format(value);
+}
+
+/** Human-readable timestamps retain date and time; machine attributes stay at the call site. */
+export function formatDateTime(value: number | Date): string {
+  return formatDate(value, {year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit',second:'2-digit'});
 }

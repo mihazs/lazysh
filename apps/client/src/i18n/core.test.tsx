@@ -48,6 +48,9 @@ it('expands catalog copy without changing interpolation values or offering a pro
 });
 // TypeScript checks these contracts; executing deliberately invalid calls is unnecessary.
 function typedCatalogContracts() {
+  t("usageMinutes",{minutes:"1",count:1});
+  // @ts-expect-error Plural selection requires a numeric count, distinct from formatted display text.
+  t("usageMinutes",{minutes:"1",count:"1"});
   // @ts-expect-error Unknown catalog keys are rejected.
   t('aKeyThatDoesNotExist');
   // @ts-expect-error Interpolation values are required.

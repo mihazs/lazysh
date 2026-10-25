@@ -20,6 +20,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- English, Brazilian Portuguese and Spanish interface text for Transcript, Usage
+  and the notification inbox, including accessibility labels and validation.
+  Usage and inbox dates/numbers follow the selected interface locale. Recorded
+  messages, tool arguments, provider/agent names, IDs and remote diagnostics stay
+  verbatim. Language changes retain drafts and polling/listener lifecycles;
+  language preference defaults and native permission behavior are unchanged.
+
 - Brazilian Portuguese and Spanish Apple permission explanations, with English
   fallback. Apple selects permission-sheet localization through the app's OS
   language; the in-app language override does not override system prompts. The

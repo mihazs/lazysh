@@ -3,6 +3,8 @@
 The bundled catalogs cover English (`en`), Brazilian Portuguese (`pt-BR`) and
 Spanish (`es`) for the shell, host editor and connection dialogs, Preferences
 and its theme, font, icon and shortcut controls, and renderer access settings.
+Transcript, Usage and the notification inbox also have app-owned labels, controls
+and validation in all three catalogs.
 This is a partial milestone under issue #79. Other feature panels and native
 lock-cover/biometric-reason text still require their own localization and
 acceptance. Apple permission purposes have separate bundled resources below;
@@ -26,6 +28,8 @@ Portuguese and Spanish in `translations.ts`: each key has a required
 the catalog test verifies every placeholder and required CLDR plural category.
 Technical terms, key names and commands inside explanations must stay exact.
 Use the zero plural override for zero sessions and supply one/many/other forms.
+For a formatted quantity, pass its display text as a separate interpolation value
+and the original numeric `count` for plural selection (for example `usageMinutes`).
 These catalogs are authored interface text, not a machine-translation service.
 
 Import `t` and call
@@ -49,7 +53,10 @@ The catalog deliberately stays app-local until a real native consumer requires a
 shared contract. Native permission text and OS language selection are not governed
 by this TypeScript catalog. English fallback and interpolation/plural validation are required for every
 catalog. Native permission-label coverage and platform acceptance are required
-before claiming end-to-end language support.
+before claiming end-to-end language support. Notification action titles use the
+active interface language when the existing listener registration runs; changing
+language does not restart polling/listeners or request OS permission again.
+Native notification body/permission text remains outside this renderer catalog.
 
 ## Apple permission explanations
 
@@ -82,6 +89,11 @@ Run the existing project tasks from `apps/client`:
 - `bun run test:e2e e2e/i18n.spec.ts` checks desktop and phone widths, a live
   synthetic terminal, preserved host drafts, diagnostics, keyboard focus and
   expanded labels, plus actual Brazilian Portuguese and Spanish UI workflows.
+- `bun run test src/i18n/recordedPanels.test.tsx` exercises translated staging,
+  usage inspection and explicit inbox actions with synthetic native responses,
+  unchanged original access headers and preserved renderer identities.
+- `bun run test:e2e e2e/recorded-panel-locales.spec.ts` checks real panel rendering
+  and long labels at desktop/phone widths, raw records and exact action targets.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
