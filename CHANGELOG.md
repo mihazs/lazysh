@@ -14,6 +14,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Brazilian Portuguese and Spanish Apple permission explanations, with English
+  fallback. Apple selects permission-sheet localization through the app's OS
+  language; the in-app language override does not override system prompts. The
+  microphone purpose now describes dictation using the selected engine.
+
 - An English interface catalog and an App language preference for System or
   English. System is the default and uses supported English regional formatting,
   falling back to English for other system languages. Shell, host forms and

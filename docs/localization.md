@@ -38,6 +38,27 @@ by this TypeScript catalog. A new supported translation must include English
 fallback, interpolation/plural validation, native permission-label coverage and
 platform acceptance before being advertised.
 
+## Apple permission explanations
+
+The main Apple app bundles English, Brazilian Portuguese and Spanish
+`InfoPlist.strings` tables from `src-tauri/apple/Localizations`. They localize the
+existing Face ID and microphone purposes; the base `Info.plist` supplies English
+fallback. The microphone text covers the selected dictation engine. This adds no
+new permission request or change to the selected engine.
+
+Apple resolves these resources using its app/OS language selection. The in-app
+language preference does not force system permission sheets into another
+language. See Apple's [localized property-list guidance](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/AboutInformationPropertyListFiles.html)
+and Tauri's [macOS localization packaging](https://v2.tauri.app/distribute/macos-application-bundle/#infoplist-localization).
+XcodeGen includes the localization group in the iOS app; the macOS-specific Tauri
+resource map preserves each `.lproj` directory at the bundle resource root.
+
+The existing actual-app XCTest target checks the installed iOS host's three
+literal resource paths, purpose keys, fallback values and Foundation lookups. It
+does not display a permission prompt or verify physical-device OS language
+behavior. macOS compilation without bundling does not verify installed resources.
+Native lock-cover and biometric-reason localization remain separate issue #79 work.
+
 ## Verification
 
 Run the existing project tasks from `apps/client`:
