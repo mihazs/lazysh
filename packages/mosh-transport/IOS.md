@@ -72,8 +72,10 @@ result upload and simulator cleanup remain unconditional.
 CI containment for [issue #45](https://github.com/mihazs/lazysh/issues/45) bounds
 the iOS job to 60 minutes, each native XCTest step to eight minutes, and the
 Watch build to eight minutes. Canonical XCTest commands enable
-[180-second per-case timeouts](https://developer.apple.com/documentation/xctest/xctestcase/executiontimeallowance) and explicitly
-run one iteration, without retry-on-failure. Case timeouts do not cover a runner
+[180-second per-case timeouts](https://developer.apple.com/documentation/xctest/xctestcase/executiontimeallowance), retaining
+default single execution without repetition or retry flags. Xcode rejected
+`-test-iterations 1` as requiring a count greater than one, so that flag is
+omitted rather than increasing the count. Case timeouts do not cover a runner
 that stalls before starting a case; the step bounds cover that phase. App
 installation is bounded to three minutes, and cleanup to two minutes.
 
@@ -125,7 +127,7 @@ explain the intermittent raw startup cause, and the new containment bounds
 still require CI validation.
 
 ```console
-xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -test-iterations 1 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$PWD/apps/client/src-tauri/gen/apple/build/arm64-sim"
+xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$PWD/apps/client/src-tauri/gen/apple/build/arm64-sim"
 ```
 
 The two tests read the actual host application's embedded SDK resource bundles,

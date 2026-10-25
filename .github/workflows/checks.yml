@@ -247,7 +247,7 @@ jobs:
       - name: Verify actual iOS Mosh IPC and privacy resources
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
-        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 -test-iterations 1 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
+        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Run native workspace Save, relaunch, and Delete acceptance
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
