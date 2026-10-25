@@ -1,4 +1,4 @@
-import { useProtectedInvoke } from './access';
+import { captureAccess, useAccessSnapshot, useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 
 import Markdown from "react-markdown";
@@ -118,6 +118,20 @@ export function parseTranscript(value: unknown): Page {
 
 export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: string; onOpenTerminal?: () => void }) {
   const invoke = useProtectedInvoke();
+  const access = useRef(captureAccess()).current;
+  const accessState = useAccessSnapshot();
+  const mounted = useRef(true);
+  const flight = useRef(false);
+  const automaticRequest = useRef(false);
+  const pageHidden = useRef(false);
+  const [visible, setVisible] = useState(document.visibilityState !== 'hidden');
+  const [following, setFollowing] = useState(false);
+  const followRef = useRef(false);
+  followRef.current = following;
+  const [completed, setCompleted] = useState(0);
+  const messageList = useRef<HTMLDivElement>(null);
+  const atLatestRef = useRef(true);
+  const [atLatest, setAtLatest] = useState(true);
   const [agent, setAgent] = useState("claude");
   const [path, setPath] = useState("");
   const [view, setView] = useState("records");
@@ -141,14 +155,50 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
   const [draftStatus, setDraftStatus] = useState("");
   const composing = useRef(false);
   const request = useRef(0);
-  useEffect(() => { setDraft(""); setDraftStatus(""); composing.current = false; }, [sessionId]);
-  useEffect(
-    () => () => {
-      request.current++;
-    },
-    [sessionId],
-  );
+  const conversation = opened?.agent === 'claude' && opened.view === 'conversation';
+  const canFollow = conversation && agent === 'claude' && view === 'conversation' && path.trim() === opened.path;
+  useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
+  useEffect(() => {
+    setDraft(''); setDraftStatus(''); composing.current = false;
+    setOpened(undefined); setMessages([]); setOffset(0); setCheckpoint(undefined); setMore(false);
+    setFollowing(false); request.current++;
+    return () => {request.current++;};
+  }, [sessionId]);
+  useEffect(() => {setFollowing(false); followRef.current = false; request.current++;}, [agent,path,view,transcriptSessionId]);
+  useEffect(() => {
+    if (!access.current()) {setFollowing(false); followRef.current = false; request.current++;}
+  }, [accessState.epoch,access]);
+  useEffect(() => {
+    const visibility = () => {
+      const current = document.visibilityState !== 'hidden' && !pageHidden.current;
+      if (!current && automaticRequest.current) request.current++;
+      setVisible(current);
+    };
+    const hide = () => {pageHidden.current = true; visibility();};
+    const show = () => {pageHidden.current = false; visibility();};
+    document.addEventListener('visibilitychange',visibility);
+    window.addEventListener('pagehide',hide); window.addEventListener('pageshow',show);
+    return () => {document.removeEventListener('visibilitychange',visibility); window.removeEventListener('pagehide',hide); window.removeEventListener('pageshow',show);};
+  }, []);
+  function currentRequest(current: number) {
+    return mounted.current && access.current() && request.current === current;
+  }
+  function jumpToLatest() {
+    atLatestRef.current = true; setAtLatest(true);
+    if (messageList.current) messageList.current.scrollTop = messageList.current.scrollHeight;
+  }
+  useEffect(() => {if (following && atLatestRef.current) jumpToLatest();}, [following,messages]);
+  const autoRead = useRef(() => {});
+  autoRead.current = () => {void read(false,true);};
+  useEffect(() => {
+    if (!following || !canFollow || busy || !visible || !access.current()) return;
+    const timer = setTimeout(() => autoRead.current(),2000);
+    return () => clearTimeout(timer);
+  }, [following,canFollow,busy,visible,completed,accessState.epoch,access]);
   async function discover() {
+    if (flight.current || !access.current()) return;
+    flight.current = true;
+    automaticRequest.current = false;
     const current = ++request.current;
     setBusy(true);
     setError("");
@@ -175,14 +225,18 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         )
       )
         throw new Error("Invalid transcript list.");
-      if (current === request.current) setDiscovered(result.sessions);
+      if (currentRequest(current)) setDiscovered(result.sessions);
     } catch (e) {
-      if (current === request.current) setError(errorMessage(e));
+      if (currentRequest(current)) setError(errorMessage(e));
     } finally {
-      if (current === request.current) setBusy(false);
+      flight.current = false;
+      automaticRequest.current = false;
+      if (mounted.current && access.current()) {setBusy(false); setCompleted(value => value + 1);}
     }
   }
-  async function read(reset: boolean) {
+  async function read(reset: boolean, automatic = false) {
+    if (flight.current || !access.current()) return;
+    if (automatic && (!followRef.current || !canFollow || pageHidden.current || document.visibilityState === 'hidden')) return;
     const source = reset
       ? {
           agent,
@@ -194,6 +248,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         }
       : opened;
     if (!source) return;
+    flight.current = true;
+    automaticRequest.current = automatic;
     const current = ++request.current;
     setBusy(true);
     setError("");
@@ -218,8 +274,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         (page.hasMore && page.nextOffset === cursor)
       )
         throw new Error("Transcript changed. Open it again to restart.");
-      if (request.current !== current) return;
+      if (!currentRequest(current)) return;
       setOpened(source);
+      if (reset) {atLatestRef.current = true; setAtLatest(true);}
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
       setMore(page.hasMore);
@@ -232,10 +289,15 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         ].slice(-500);
       });
     } catch (e) {
-      if (request.current === current) setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
-        ? "Transcript changed. Open it again to restart." : errorMessage(e));
+      if (currentRequest(current)) {
+        setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
+          ? "Transcript changed. Open it again to restart." : errorMessage(e));
+        setFollowing(false); followRef.current = false;
+      }
     } finally {
-      if (request.current === current) setBusy(false);
+      flight.current = false;
+      automaticRequest.current = false;
+      if (mounted.current && access.current()) {setBusy(false); setCompleted(value => value + 1);}
     }
   }
   function stageDraft() {
@@ -365,7 +427,20 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             : opened.agent === "antigravity-jsonl" ? "showing up to 500 step records" : "showing up to 500 recorded messages"}
         </p>
       )}
-      <div className="chat-messages">
+      {conversation && <div className="chat-follow-controls">
+        <label><input type="checkbox" disabled={!canFollow || !access.current()} checked={following} onChange={event => {
+          followRef.current = event.target.checked; setFollowing(event.target.checked);
+          if (!event.target.checked && automaticRequest.current) request.current++;
+          if (event.target.checked) setError('');
+        }} />Follow selected Claude branch</label>
+        <p>Refresh two seconds after each read completes. Hidden pages pause following. Errors stop it; enable it again to resume.</p>
+        {following && <p role="status">{visible ? 'Following selected branch.' : 'Following paused while this page is hidden.'}</p>}
+        {!atLatest && <button onClick={jumpToLatest}>Jump to latest</button>}
+      </div>}
+      <div ref={messageList} className={`chat-messages${conversation ? ' chat-conversation-messages' : ''}`} role={conversation ? 'region' : undefined} aria-label={conversation ? 'Conversation messages' : undefined} tabIndex={conversation ? 0 : undefined} onScroll={() => {
+        const element = messageList.current;
+        if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
+      }}>
         {messages.map((message) => (
           <article key={message.id} className="chat-message">
             <h4>{message.role}</h4>
