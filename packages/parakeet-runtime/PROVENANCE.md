@@ -48,7 +48,7 @@ The iOS archive digest is the publisher release API digest; no iOS archive was d
 
 ## Runtime licenses
 
-Retain source copyright notices and applicable notices when redistributing binaries/source. Bundled license texts are in `licenses/`:
+Retain source copyright notices and applicable notices when redistributing binaries/source. Bundled license texts are in `licenses/`; trailing whitespace is normalized without changing license wording:
 
 - sherpa-onnx, kaldi-native-fbank, kaldi-decoder, kaldifst/OpenFST and simple-sentencepiece: Apache-2.0. Original per-file authorship remains in the pinned source archives.
 - ONNX Runtime: MIT, plus its upstream third-party notices (included).
