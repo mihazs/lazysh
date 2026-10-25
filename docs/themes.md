@@ -30,8 +30,58 @@ payloads can be pasted as data; lazysh does not register Moshi's URL scheme.
 
 The terminal honors supplied colors. App surfaces derive opaque colors from the
 palette and choose readable text/accent colors, so low-contrast terminal colors
-cannot make Preferences unreadable. This does not reproduce Moshi's light-mode
-256-color ramp.
+cannot make Preferences unreadable.
+
+## Light terminal indexed colors
+
+Paper and custom themes explicitly marked `mode: "light"` now use a tuned
+extended palette. This changes their previous default rendering of indexed
+colors 16–255, including text already in scrollback. Dark themes and flat legacy
+palettes without reviewed mode metadata keep xterm's standard extended palette.
+Changing back to those themes removes the light mapping. Supplied ANSI colors
+0–15 and literal RGB escape sequences remain unchanged.
+
+The 216-color cube starts with channel levels `[0, 95, 135, 175, 215, 255]`.
+When `0.299R + 0.587G + 0.114B > 200`, each channel becomes
+`floor(0.6 * channel + 0.5)`; otherwise it is unchanged. Grayscale index `232+i`
+uses `max(8, min(238, 238 - 10*i))` for each channel, for `i=0..23`.
+Thus index 250 becomes `#3a3a3a` and 237 becomes `#bcbcbc`, making a common
+light-on-dark indexed status line dark-on-light. This policy does not guarantee
+a minimum contrast for every color combination or arbitrary imported palette.
+
+The mapping uses public xterm 5.5.0 `ITheme.extendedAnsi`, affecting the same
+indices in foregrounds and backgrounds. xterm swaps logical foreground/background
+for inverse video before resolving their palette entries; selection and decoration
+overrides keep their existing precedence. No additional private renderer seam,
+buffer rewrite or minimum-contrast override is involved.
+
+### Evidence and limits
+
+The [Moshi personalization documentation](https://getmoshi.app/docs/personalization)
+describes an inverted light-mode ramp for built-in and imported light themes,
+without specifying a formula. The formula above was independently recovered by
+read-only static analysis of the pinned Linux desktop Go alpha 0.5.28 executable
+recorded in [Moshi evidence](moshi-evidence.md), SHA-256
+`c3043607369f45f8e57fc0aed7ab20e9570b9b6175a4e1291dceebc47a3601b0`.
+
+Its `.gopclntab` starts at file offset `0x188f5a0`. Decoding the Go function
+table using the installed Go `debug/gosym` layout matched all 26,661 entry
+offsets to their function records. This identified
+`moshi-go/internal/theme.lightExtendedAnsi` at virtual addresses
+`0xaed0c0..0xaed740` (end exclusive) and `DeriveXtermTheme` at
+`0xaed740..0xaed9a0`. Binutils disassembly of these bounded ranges established
+the arithmetic, cube loop order, rounding and exact `light` dispatch. Referenced
+read-only constants include the cube levels at `0x1c34010`, brightness weights
+at `0x1c2b2b0/0x1c2b2c8/0x1c2b288`, threshold at `0x1c2b328`, scale at
+`0x1c2b2d0`, and grayscale endpoint at `0x1c2b330`. No target code was executed,
+and no proprietary source or assets were copied. REA native decompilers were
+unavailable; GoReSym did not parse this artifact, so neither supplied this result.
+
+This establishes the pinned desktop artifact's palette math, not byte-identical
+current Moshi mobile rendering. Browser tests verify lazysh's actual xterm
+foreground/background, inverse, selection, decoration, bold/faint, scrollback,
+alternate-buffer and theme-change behavior; physical Android/iOS WebView pixels
+and vendor mobile inverse/selection details remain unverified.
 
 ## Terminal bold colors
 
@@ -82,4 +132,4 @@ theme changes, contrast, wide/combined characters and unchanged buffer attribute
 A test-only proposed character joiner exercises joined cells; the application
 keeps proposed APIs disabled. Native Cargo tests cover settings import validation.
 Browser checks do not establish physical mobile WebView, clipboard or native
-system-bar behavior, nor Moshi's vendor-specific 256-color inversion formula.
+system-bar behavior or Moshi's mobile rendering.

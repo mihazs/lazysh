@@ -3,6 +3,24 @@
     "//"
   ],
   "tasks": {
+    "test:parakeet-inference:release": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_PARAKEET_TEST_ARCHIVE", "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CMAKE_BUILD_PARALLEL_LEVEL", "CMAKE_TOOLCHAIN_FILE",
+        "CC", "CXX", "AR", "SDKROOT", "DEVELOPER_DIR",
+        "ANDROID_NDK_HOME", "NDK_HOME"
+      ]
+    },
+    "test:parakeet-inference": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_PARAKEET_TEST_ARCHIVE", "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CMAKE_BUILD_PARALLEL_LEVEL", "CMAKE_TOOLCHAIN_FILE",
+        "CC", "CXX", "AR", "SDKROOT", "DEVELOPER_DIR",
+        "ANDROID_NDK_HOME", "NDK_HOME"
+      ]
+    },
     "check:rust": {
       "cache": false,
       "passThroughEnv": [

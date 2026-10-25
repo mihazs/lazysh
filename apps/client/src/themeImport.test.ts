@@ -9,7 +9,10 @@ describe('bounded reviewed theme documents',()=>{
     const imported=parseThemeImport(JSON.stringify({v:1,...info,colors}),info);
     expect(imported.colors).toMatchObject({black:'#eeeeee',green:'#eeeeee',brightBlack:'#eeeeee',brightRed:'#ab1234',brightGreen:'#eeeeee',cursor:'#eeeeee',selectionBackground:expect.stringMatching(/^#[a-f0-9]{6}$/)});
     const preferences=parsePreferences({...defaults,theme:'custom',customTheme:colors,customThemeInfo:info});
-    expect(terminalOptions(preferences).theme).toEqual(imported.colors);
+    const {extendedAnsi,...renderedColors}=terminalOptions(preferences).theme!;
+    expect(renderedColors).toEqual(imported.colors);
+    expect(extendedAnsi).toHaveLength(240);
+    expect(preferences.customTheme).not.toHaveProperty('extendedAnsi');
     const exported=exportTheme(imported);
     expect(parseThemeImport(exported.json,info)).toEqual(imported);
     expect(parseThemeImport(exported.code,info)).toEqual(imported);

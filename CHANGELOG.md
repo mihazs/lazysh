@@ -16,9 +16,14 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Opt-in Linux Parakeet inference acceptance with a licensed public speech
+  fixture, repeat-recognizer and model-file cleanup checks, and reported timing
+  and process peak memory. No client engine, automatic download or changed voice
+  default; device and platform acceptance remain pending.
+
 - Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
   model archive validation and native exception/ownership tests. It adds no
-  dictation UI or automatic model download; real-model and device validation
+  dictation UI or automatic model download; broader model and device validation
   remain pending, and Apple/Windows model loading fails closed pending native
   ACL validation.
 
@@ -27,7 +32,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Reviewed v1 themes without `bold` now keep normal colors instead of implicit
   brightening; bundled themes and existing unreviewed palettes retain their
   bright-bold defaults. The adapter preserves inverse, selection and faint text;
-  vendor-specific light 256-color palette mapping remains separate.
+  vendor mobile pixel behavior remains unverified.
 
 - Reviewed whole-app custom themes with bounded JSON/share-code import and export,
   light/dark metadata, contrast-safe app chrome, and settings sync validation.
@@ -82,7 +87,20 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 - Discovery of existing Devin ATIF exports through absolute `XDG_DATA_HOME`, with
   the standard home fallback. No Devin process or exporter is launched.
 
+### Changed
+
+- Paper and explicitly light imported terminal themes now darken bright indexed
+  cube colors and reverse the indexed grayscale ramp using the pinned Moshi
+  desktop 0.5.28 palette math. This changes their default 256-color rendering;
+  base ANSI colors, literal RGB, dark themes and legacy palettes without mode
+  metadata keep their behavior. Browser rendering is verified; physical mobile
+  WebView and current Moshi mobile pixel parity remain unverified.
+
 ### Fixed
+
+- Linux Parakeet runtime startup now matches each pinned static ONNX Runtime
+  artifact's libstdc++ ABI. A real no-model ORT/regex regression catches the
+  invalid-free abort found by public-speech acceptance before model loading.
 
 - Retain bounded syscall excerpts from the actual concurrent companion hook test
   in Linux CI, without changing storage durability or its wait budget.
