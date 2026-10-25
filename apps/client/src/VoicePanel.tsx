@@ -421,7 +421,9 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
       }
       if (appleRequest.current === requestId) appleRequest.current = "";
       await context?.close().catch(() => {});
-      if (engine === 'parakeet' && canPublish() && parakeetRequest.current === requestId) {
+      // Empty IDs are pre-request sentinels, not ownership of another recording.
+      // A real cancelled UUID still owns native finishing cleanup across generations.
+      if (engine === 'parakeet' && requestId && canPublish() && parakeetRequest.current === requestId) {
         parakeetRequest.current = ''; setBusy(false);
         await refreshParakeet().catch(e => { if (canPublish()) setError(errorMessage(e)); });
       }

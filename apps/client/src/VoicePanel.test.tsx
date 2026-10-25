@@ -304,6 +304,70 @@ async function recordParakeet() {
   await waitFor(()=>expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_parakeet_transcribe')).toBe(true));
   return vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_transcribe').at(-1)![1] as {requestId:string;samples:number[]};
 }
+for (const outcome of ['success','failure'] as const) for (const replacement of ['microphone','decode'] as const) {
+  it(`does not let cancelled pre-request decode ${outcome} clear a replacement awaiting ${replacement}`,async()=>{
+    const fixture=parakeetFixture({installed:true});
+    const microphone=parakeetMicrophone();
+    const audio=()=>({sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)});
+    let finishOld!:()=>void, finishNew!:()=>void;
+    const oldDecode=new Promise<ReturnType<typeof audio>>((resolve,reject)=>{finishOld=()=>outcome==='success'?resolve(audio()):reject(new Error('Cancelled old decode failed'));});
+    const newDecode=new Promise<ReturnType<typeof audio>>(resolve=>{finishNew=()=>resolve(audio());});
+    const decode=vi.fn().mockReturnValueOnce(oldDecode).mockReturnValueOnce(newDecode);
+    vi.stubGlobal('AudioContext',class {decodeAudioData(){return decode();}async close(){}});
+    render(<VoicePanel/>);await chooseParakeet();
+    fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
+    fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+    await waitFor(()=>expect(decode).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+    await act(async()=>{});
+    let grantMicrophone:undefined|(()=>void);
+    if(replacement==='microphone')microphone.mockImplementationOnce(()=>new Promise(resolve=>{grantMicrophone=()=>resolve({getTracks:()=>[{stop:vi.fn()}]});}));
+    fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
+    if(replacement==='decode') {
+      fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+      await waitFor(()=>expect(decode).toHaveBeenCalledTimes(2));
+    }
+    expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',true);
+    const statusReads=vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_status').length;
+    await act(async()=>finishOld());
+    expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',true);
+    expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',true);
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_status')).toHaveLength(statusReads);
+    expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='voice_parakeet_transcribe'||name==='voice_parakeet_cancel')).toBe(false);
+    expect(screen.queryAllByRole('alert').filter(alert=>!alert.closest('[aria-label="Dictation history"]'))).toEqual([]);
+    const grant=grantMicrophone;
+    if(grant) {
+      await act(async()=>grant());
+      fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
+    }
+    await act(async()=>finishNew());
+    await waitFor(()=>expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_parakeet_transcribe')).toHaveLength(1));
+    const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_parakeet_transcribe')![1] as {requestId:string};
+    Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+    await act(async()=>fixture.complete(request.requestId,'Replacement result'));
+    expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','Replacement result');
+    expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',false);
+  });
+}
+it('retains real cancelled UUID cleanup and waits for native finishing capacity before recording again',async()=>{
+  const fixture=parakeetFixture({installed:true});parakeetMicrophone();
+  render(<VoicePanel/>);await chooseParakeet();vi.useFakeTimers();
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Record speech'}));});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Stop and transcribe'}));});
+  const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='voice_parakeet_transcribe')![1] as {requestId:string};
+  expect(request.requestId).not.toBe('');
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Cancel'}));});
+  expect(invoke).toHaveBeenCalledWith('voice_parakeet_cancel',{requestId:request.requestId},expect.anything());
+  await act(async()=>fixture.complete(request.requestId,'Cancelled native result'));
+  expect(screen.getByRole('button',{name:'Finishing cancelled work…'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',true);
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','');
+  Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null});
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1000);});
+  expect(screen.getByRole('button',{name:'Record speech'})).toHaveProperty('disabled',false);
+  expect(screen.getByLabelText('Speech engine')).toHaveProperty('disabled',false);
+});
 it('keeps Whisper default and requires explicit fixed Parakeet download with bounded request-scoped progress',async()=>{
   const fixture=parakeetFixture();render(<VoicePanel/>);
   expect(screen.getByLabelText('Speech engine')).toHaveProperty('value','whisper');
