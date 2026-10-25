@@ -69,7 +69,12 @@ internal object NativeActivityFixture {
         }
         return result
     }
-    private fun windowField(value: CharSequence?): String = value?.take(128)?.toString() ?: "unavailable"
+    private fun windowField(value: CharSequence?): String {
+        if (value == null) return "unavailable"
+        if (value.length <= 128) return value.toString()
+        val end = if (Character.isHighSurrogate(value[126])) 126 else 127
+        return value.subSequence(0, end).toString() + "…"
+    }
 
     private fun rootIdentity(root: AccessibilityNodeInfo?): JSONObject {
         val result = JSONObject()
