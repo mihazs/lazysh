@@ -7,6 +7,7 @@ async function fixture(page:Page) {
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
       if (command==='list_hosts') return [];
+      if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
       if (command==='local_connect') return {sessionId:'local:shortcut-fixture'};
       if (command==='local_write') {window.simpleShortcutWrites.push(args.data as string);return;}
