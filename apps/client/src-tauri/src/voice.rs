@@ -24,6 +24,7 @@ struct Import {
     name: String,
     file: File,
     bytes: u64,
+    access: Option<AccessLease>,
 }
 pub struct VoiceState {
     dir: PathBuf,
@@ -132,6 +133,14 @@ pub fn voice_models(
     access.run_sync(|| list(&state))
 }
 fn begin(state: &VoiceState, name: String, bytes: u64) -> Result<String> {
+    begin_scoped(state, name, bytes, None)
+}
+fn begin_scoped(
+    state: &VoiceState,
+    name: String,
+    bytes: u64,
+    access: Option<AccessLease>,
+) -> Result<String> {
     let destination = state.path(&name)?;
     if !(1024..=MAX_MODEL).contains(&bytes) {
         return Err("Choose a Whisper tiny/base GGML model up to 160 MiB".into());
@@ -159,8 +168,54 @@ fn begin(state: &VoiceState, name: String, bytes: u64) -> Result<String> {
         name,
         file,
         bytes,
+        access,
     });
     Ok(id)
+}
+fn begin_for_access(
+    state: &VoiceState,
+    name: String,
+    bytes: u64,
+    access: &AccessLease,
+) -> Result<String> {
+    access.check()?;
+    // Policy changes revoke replies without necessarily backgrounding the app.
+    // Inspect authority outside the slot lock; cleanup must target only that UUID.
+    let previous = state
+        .import
+        .lock()
+        .map_err(|_| "Model import lock failed")?
+        .as_ref()
+        .and_then(|import| {
+            import
+                .access
+                .clone()
+                .map(|lease| (import.id.clone(), lease))
+        });
+    if let Some((id, lease)) = previous {
+        if lease.check().is_err() {
+            let _ = finish(state, &id, true);
+        }
+    }
+    access.with_current(|| begin_scoped(state, name, bytes, Some(access.clone())))?
+}
+fn with_import_access<T>(
+    state: &VoiceState,
+    id: &str,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let access = state
+        .import
+        .lock()
+        .map_err(|_| "Model import lock failed")?
+        .as_ref()
+        .filter(|import| import.id == id)
+        .map(|import| import.access.clone())
+        .ok_or("Model import expired")?;
+    match access {
+        Some(access) => access.with_current(action)?,
+        None => action(),
+    }
 }
 #[tauri::command]
 pub fn voice_import_begin(
@@ -170,7 +225,7 @@ pub fn voice_import_begin(
     bytes: u64,
 ) -> Protected<String> {
     access.run_sync(|| {
-        let id = begin(&state, name, bytes)?;
+        let id = begin_for_access(&state, name, bytes, &access)?;
         if let Err(error) = access.check() {
             let _ = finish(&state, &id, true);
             return Err(error.into());
@@ -214,7 +269,7 @@ pub fn voice_import_chunk(
     offset: u64,
     bytes: Vec<u8>,
 ) -> Protected<()> {
-    access.run_sync(|| chunk(&state, &id, offset, &bytes))
+    access.run_sync(|| with_import_access(&state, &id, || chunk(&state, &id, offset, &bytes)))
 }
 fn finish(state: &VoiceState, id: &str, cancel: bool) -> Result<()> {
     let mut pending = state
@@ -260,7 +315,7 @@ pub fn voice_import_finish(
     id: String,
     cancel: bool,
 ) -> Protected<()> {
-    access.run_sync(|| finish(&state, &id, cancel))
+    access.run_sync(|| with_import_access(&state, &id, || finish(&state, &id, cancel)))
 }
 #[tauri::command]
 pub fn voice_remove_model(
@@ -422,6 +477,49 @@ pub fn voice_cancel(state: State<'_, VoiceState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn policy_change_discards_revoked_manual_import_without_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = VoiceState::new(dir.path().to_owned()).unwrap();
+        let authority = crate::app_lock::AccessState::default();
+        authority.initialize(true, false, "fixture".into()).unwrap();
+        for enabled in [true, false] {
+            let nonce = authority.status().unwrap().nonce;
+            let old = authority.lease(nonce.as_deref()).unwrap();
+            let first = begin_for_access(&state, "base.bin".into(), 1024, &old).unwrap();
+            let temporary = dir.path().join(format!("{first}.part"));
+            chunk(&state, &first, 0, b"lmgg").unwrap();
+            authority
+                .configure_after_proof(authority.generation().unwrap(), enabled)
+                .unwrap();
+            assert!(old.check().is_err());
+            assert!(
+                with_import_access(&state, &first, || chunk(&state, &first, 4, b"more")).is_err()
+            );
+            assert!(with_import_access(&state, &first, || finish(&state, &first, true)).is_err());
+            assert_eq!(fs::metadata(&temporary).unwrap().len(), 4);
+            let nonce = authority.status().unwrap().nonce;
+            let fresh = authority.lease(nonce.as_deref()).unwrap();
+            let replacement = begin_for_access(&state, "base.bin".into(), 1024, &fresh)
+                .expect("a revoked manual import must not occupy the next view's slot");
+            assert!(!temporary.exists());
+            assert_ne!(first, replacement);
+            let replacement_path = dir.path().join(format!("{replacement}.part"));
+            assert!(replacement_path.exists());
+            assert!(begin_for_access(&state, "other.bin".into(), 1024, &old).is_err());
+            // A delayed cleanup from the old view must never take its replacement.
+            assert!(finish(&state, &first, true).is_err());
+            assert!(replacement_path.exists());
+            assert_eq!(
+                state.import.lock().unwrap().as_ref().unwrap().id,
+                replacement
+            );
+            with_import_access(&state, &replacement, || finish(&state, &replacement, true))
+                .unwrap();
+            assert!(!replacement_path.exists());
+        }
+        assert!(list(&state).unwrap().is_empty());
+    }
     #[test]
     fn lock_discards_partial_import_and_cancels_inference() {
         let dir = tempfile::tempdir().unwrap();

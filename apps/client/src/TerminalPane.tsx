@@ -1,4 +1,4 @@
-import { useProtectedApi } from './access';
+import { captureAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -28,6 +28,9 @@ export default function TerminalPane({ session, active, reportError }: {
   reportError: (message: string) => void;
 }) {
   const api = useProtectedApi(nativeApi);
+  const access = useRef(captureAccess()).current;
+  const mounted = useRef(true);
+  useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
   const container = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -184,8 +187,10 @@ export default function TerminalPane({ session, active, reportError }: {
     setMeta(false); session.terminal.focus();
   }
   async function copy(text: string) {
+    if (!mounted.current || !access.current()) return;
+    // An OS clipboard write already dispatched cannot be undone on lock.
     try { await navigator.clipboard.writeText(text); }
-    catch { reportError("Clipboard access was unavailable. Use your system copy menu."); }
+    catch { if (mounted.current && access.current()) reportError("Clipboard access was unavailable. Use your system copy menu."); }
   }
   async function openLink() {
     if (!link || openingLink) return;
@@ -196,9 +201,14 @@ export default function TerminalPane({ session, active, reportError }: {
     finally { setOpeningLink(false); }
   }
   async function paste() {
-    if (!session.connected) return;
-    try { session.terminal.paste(await navigator.clipboard.readText()); session.terminal.focus(); }
-    catch { reportError("Clipboard access was unavailable. Paste using your keyboard or system menu."); }
+    if (!session.connected || !mounted.current || !access.current()) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      // The retained terminal may now have a fresh onData handler after unlock.
+      if (!mounted.current || !access.current()) return;
+      session.terminal.paste(text); session.terminal.focus();
+    }
+    catch { if (mounted.current && access.current()) reportError("Clipboard access was unavailable. Paste using your keyboard or system menu."); }
   }
   function search(direction: number) {
     if (!query) return;

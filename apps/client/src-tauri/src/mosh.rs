@@ -280,11 +280,15 @@ pub(crate) fn run(
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
             let mut pending: Option<(Vec<u8>, usize, crate::app_lock::AccessLease)> = None;
             loop {
-                if *cancelled.borrow() || (ready.is_some() && *initial_cancel.borrow()) {
+                if *cancelled.borrow()
+                    || output.is_closed()
+                    || (ready.is_some() && *initial_cancel.borrow())
+                {
                     return Ok(());
                 }
+                let output_paused = access.is_locked() || output.capacity() == 0;
                 client
-                    .pause_output(access.is_locked() || output.capacity() == 0)
+                    .pause_output(output_paused)
                     .map_err(|error| SshError::new("mosh", error))?;
                 let update = client
                     .poll()
@@ -304,11 +308,13 @@ pub(crate) fn run(
                         return Err(SshError::new("mosh_udp_unreachable", "Mosh did not receive an authenticated UDP reply. Allow the configured UDP range to this SSH host."));
                     }
                 }
+                let mut accepted = true;
                 if !update.bytes.is_empty() {
                     match output.try_send(update.bytes) {
                         Ok(()) => {}
                         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return Ok(()),
                         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            accepted = false;
                             // No UDP-loop blocking: next accepted output is a full redraw.
                             client
                                 .pause_output(true)
@@ -317,7 +323,16 @@ pub(crate) fn run(
                     }
                 }
                 if update.finished {
-                    return Ok(());
+                    if !output_paused && accepted {
+                        return Ok(());
+                    }
+                    // Protocol completion does not retire a paused final screen.
+                    // Keep the bounded native framebuffer until resume forces a
+                    // full redraw; cancellation above still takes priority.
+                    client
+                        .wait(update.next_poll.min(Duration::from_millis(20)))
+                        .map_err(|error| SshError::new("mosh", error))?;
+                    continue;
                 }
                 let mut available = update.input_capacity;
                 for _ in 0..32 {
@@ -465,5 +480,227 @@ mod tests {
         };
         assert_eq!(address.scope_id(), 7);
         assert_eq!(address.port(), 60001);
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    #[derive(Clone, Copy)]
+    enum FinalScreenCase {
+        Locked,
+        OutputFull,
+        Cancel,
+        Rebind,
+        ClosedReceiver,
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    async fn finished_screen_fixture(scenario: FinalScreenCase) {
+        use crate::app_lock::AccessState;
+        use lazysh_mosh_transport::{fixture_ack, fixture_packet};
+        use tokio::sync::{mpsc, oneshot};
+        struct Cancel(watch::Sender<bool>);
+        impl Drop for Cancel {
+            fn drop(&mut self) {
+                self.0.send_replace(true);
+            }
+        }
+        fn screen(text: &str) -> Vec<u8> {
+            assert!(text.len() < 100);
+            let mut data = vec![
+                0x0a,
+                text.len() as u8 + 4,
+                0x12,
+                text.len() as u8 + 2,
+                0x22,
+                text.len() as u8,
+            ];
+            data.extend_from_slice(text.as_bytes());
+            data
+        }
+        async fn until(output: &mut mpsc::Receiver<Vec<u8>>, marker: &str) {
+            timeout(Duration::from_secs(5), async {
+                let mut text = Vec::new();
+                loop {
+                    text.extend(
+                        output
+                            .recv()
+                            .await
+                            .expect("Mosh ended before its final screen was delivered"),
+                    );
+                    assert!(text.len() <= 8 * 1024 * 1024);
+                    if String::from_utf8_lossy(&text).contains(marker) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("Mosh final display timed out");
+        }
+        let access = AccessState::default();
+        access.initialize(true, true, "fixture".into()).unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let bootstrap = Bootstrap {
+            key: Zeroizing::new("AAAAAAAAAAAAAAAAAAAAAA".into()),
+            remote: socket.local_addr().unwrap(),
+        };
+        let (_input, input) = mpsc::channel(1);
+        let (cancel, cancelled) = watch::channel(false);
+        let cancellation = Cancel(cancel);
+        let (_parent, parent) = watch::channel(false);
+        let (output, mut received) = mpsc::channel(1);
+        let filler = output.clone();
+        let (ready, connected) = oneshot::channel();
+        let authority = access.clone();
+        let worker = tauri::async_runtime::spawn_blocking(move || {
+            run(
+                bootstrap, 80, 24, authority, input, cancelled, parent, output, ready,
+            )
+        });
+        let mut datagram = [0; 2048];
+        let (_, peer) = timeout(Duration::from_secs(5), socket.recv_from(&mut datagram))
+            .await
+            .unwrap()
+            .unwrap();
+        socket
+            .send_to(&fixture_packet(0, 1, &screen("BASE")).unwrap(), peer)
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(5), connected)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        until(&mut received, "BASE").await;
+        if matches!(scenario, FinalScreenCase::OutputFull) {
+            filler.try_send(b"BLOCKER".to_vec()).unwrap();
+        } else {
+            access.lock().unwrap();
+        }
+        drop(filler);
+        socket
+            .send_to(
+                &fixture_packet(1, u64::MAX, &screen("FINAL_SCREEN")).unwrap(),
+                peer,
+            )
+            .await
+            .unwrap();
+        // An authenticated ACK for the terminal shutdown state proves that the
+        // native poll saw the final framebuffer while this output gate was closed.
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let (size, sender) = socket.recv_from(&mut datagram).await.unwrap();
+                assert_eq!(sender, peer);
+                if fixture_ack(&datagram[..size]).unwrap() == u64::MAX {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("peer did not acknowledge the final native state");
+        match scenario {
+            FinalScreenCase::ClosedReceiver => {
+                drop(received);
+                assert!(access.is_locked());
+                assert!(!*cancellation.0.borrow());
+                timeout(Duration::from_secs(3), worker)
+                    .await
+                    .expect("closed output receiver must not wait for unlock or cancellation")
+                    .unwrap()
+                    .unwrap();
+                assert!(access.is_locked());
+                assert!(!*cancellation.0.borrow());
+                return;
+            }
+            FinalScreenCase::Cancel | FinalScreenCase::Rebind => {
+                if matches!(scenario, FinalScreenCase::Rebind) {
+                    access.replace_renderer().unwrap();
+                }
+                cancellation.0.send_replace(true);
+                timeout(Duration::from_secs(3), worker)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                assert!(received.recv().await.is_none());
+                return;
+            }
+            FinalScreenCase::Locked | FinalScreenCase::OutputFull => {}
+        }
+        if matches!(scenario, FinalScreenCase::OutputFull) {
+            assert_eq!(received.recv().await.unwrap(), b"BLOCKER");
+        } else {
+            assert!(
+                received.try_recv().is_err(),
+                "final output escaped the locked gate"
+            );
+            access.authorize(access.generation().unwrap()).unwrap();
+            access.ready(access.generation().unwrap()).unwrap();
+        }
+        until(&mut received, "FINAL_SCREEN").await;
+        timeout(Duration::from_secs(3), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(received.recv().await.is_none());
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    #[tokio::test]
+    async fn final_screen_survives_server_shutdown_while_locked() {
+        finished_screen_fixture(FinalScreenCase::Locked).await;
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    #[tokio::test]
+    async fn final_screen_survives_server_shutdown_while_output_is_full() {
+        finished_screen_fixture(FinalScreenCase::OutputFull).await;
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    #[tokio::test]
+    async fn renderer_rebind_cancels_a_finished_locked_client_without_final_output() {
+        finished_screen_fixture(FinalScreenCase::Rebind).await;
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    #[tokio::test]
+    async fn cancellation_does_not_wait_for_final_screen_unlock() {
+        finished_screen_fixture(FinalScreenCase::Cancel).await;
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    #[tokio::test]
+    async fn closed_receiver_does_not_wait_for_final_screen_unlock_or_cancellation() {
+        finished_screen_fixture(FinalScreenCase::ClosedReceiver).await;
     }
 }

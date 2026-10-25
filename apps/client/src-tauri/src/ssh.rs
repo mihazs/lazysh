@@ -337,7 +337,7 @@ impl AppState {
         config.hosts = hosts;
         Ok(())
     }
-    pub(crate) async fn credential_guard(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    pub(crate) async fn credential_guard(&self, id: &str) -> crate::vault::CredentialGuard {
         let lock = self
             .credential_locks
             .lock()
@@ -345,7 +345,7 @@ impl AppState {
             .entry(id.to_owned())
             .or_default()
             .clone();
-        lock.lock_owned().await
+        Arc::new(lock.lock_owned().await)
     }
     pub(crate) fn mark_credentials(&self, id: &str, stored: bool) -> Result<()> {
         let mut config = self.config()?;
@@ -385,30 +385,30 @@ pub async fn save_host(
     lease
         .run(async {
             let _guard = state.credential_guard(&host.id).await;
-            host.validate()?;
-            {
-                let config = state.config()?;
-                crate::routing::validate(&host, &config.hosts)?;
-                validate_protection_change(&host, &config.hosts)?;
-            }
-            if state.host(&host.id).ok().is_some_and(|old| {
-                old.credentials_stored
-                    && (old.hostname != host.hostname
-                        || old.port != host.port
-                        || old.username != host.username
-                        || old.jump_host_id != host.jump_host_id
-                        || old.forward_agent != host.forward_agent)
-            }) {
-                let vault_host = host.id.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    crate::vault::remove(&app, &vault_host)
-                })
-                .await
-                .map_err(|_| SshError::new("storage", "Credential deletion failed"))?
-                .map_err(|message| SshError::new("storage", message))?;
-                state.mark_credentials(&host.id, false)?;
-            }
-            save_host_inner(&state, host)
+            let state = state.inner().clone();
+            crate::vault::credential_worker(_guard, lease.clone(), move || {
+                host.validate()?;
+                {
+                    let config = state.config()?;
+                    crate::routing::validate(&host, &config.hosts)?;
+                    validate_protection_change(&host, &config.hosts)?;
+                }
+                if state.host(&host.id).ok().is_some_and(|old| {
+                    old.credentials_stored
+                        && (old.hostname != host.hostname
+                            || old.port != host.port
+                            || old.username != host.username
+                            || old.jump_host_id != host.jump_host_id
+                            || old.forward_agent != host.forward_agent)
+                }) {
+                    crate::vault::remove(&app, &host.id)
+                        .map_err(|message| SshError::new("storage", message))?;
+                    state.mark_credentials(&host.id, false)?;
+                }
+                save_host_inner(&state, host)
+            })
+            .await
+            .map_err(|_| SshError::new("storage", "Host update failed"))?
         })
         .await
 }
@@ -458,28 +458,27 @@ pub async fn delete_host(
     lease
         .run(async {
             let _guard = state.credential_guard(&host_id).await;
-            if state
-                .config()?
-                .hosts
-                .iter()
-                .any(|host| host.jump_host_id.as_deref() == Some(&host_id))
-            {
-                return Err(SshError::new(
-                    "host_in_use",
-                    "Remove routes using this bastion before deleting it",
-                ));
-            }
-            if state.host(&host_id)?.credentials_stored {
-                let vault_app = app.clone();
-                let vault_host = host_id.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    crate::vault::remove(&vault_app, &vault_host)
-                })
-                .await
-                .map_err(|_| SshError::new("storage", "Credential deletion failed"))?
-                .map_err(|message| SshError::new("storage", message))?;
-            }
-            remove_host_metadata(&state, &host_id)
+            let state = state.inner().clone();
+            crate::vault::credential_worker(_guard, lease.clone(), move || {
+                if state
+                    .config()?
+                    .hosts
+                    .iter()
+                    .any(|host| host.jump_host_id.as_deref() == Some(&host_id))
+                {
+                    return Err(SshError::new(
+                        "host_in_use",
+                        "Remove routes using this bastion before deleting it",
+                    ));
+                }
+                if state.host(&host_id)?.credentials_stored {
+                    crate::vault::remove(&app, &host_id)
+                        .map_err(|message| SshError::new("storage", message))?;
+                }
+                remove_host_metadata(&state, &host_id)
+            })
+            .await
+            .map_err(|_| SshError::new("storage", "Host deletion failed"))?
         })
         .await
 }
@@ -1010,14 +1009,21 @@ pub async fn connect(
                     &host,
                     jump_credentials,
                     &operation,
+                    &lease,
                 ),
             )
             .await?;
             let credentials = if use_saved_credentials.unwrap_or(false) {
                 match during_connect(&operation, async {
-                    crate::vault::load_for_operation(app.clone(), host.clone(), operation.clone())
-                        .await
-                        .map_err(|message| SshError::new("storage", message))
+                    crate::vault::load_for_operation(
+                        app.clone(),
+                        host.clone(),
+                        operation.clone(),
+                        _guard.clone(),
+                        lease.clone(),
+                    )
+                    .await
+                    .map_err(|message| SshError::new("storage", message))
                 })
                 .await
                 {
@@ -1061,17 +1067,20 @@ pub async fn connect(
                     host.clone(),
                     credentials,
                     operation.clone(),
+                    _guard.clone(),
+                    lease.clone(),
                 )
                 .await
                 {
                     if !host.credentials_stored {
                         let vault_app = app.clone();
                         let vault_host = host_id.clone();
+                        let cleanup_guard = _guard.clone();
                         if matches!(
-                            tauri::async_runtime::spawn_blocking(move || crate::vault::remove(
-                                &vault_app,
-                                &vault_host
-                            ))
+                            tauri::async_runtime::spawn_blocking(move || {
+                                let _guard = cleanup_guard;
+                                crate::vault::remove(&vault_app, &vault_host)
+                            })
                             .await,
                             Ok(Ok(()))
                         ) {

@@ -994,6 +994,8 @@ pub async fn sync_push(
                                 app.clone(),
                                 current,
                                 credential_operation.clone(),
+                                _guard.clone(),
+                                access.clone(),
                             )
                             .await?,
                         });
@@ -1210,6 +1212,8 @@ pub async fn sync_apply(
             host.clone(),
             record.credentials,
             credential_operation.clone(),
+            _guard.clone(),
+            access.clone(),
         )
         .await
         {

@@ -1,7 +1,25 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::ssh::{AppState, Host};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::{AppHandle, State};
+use tauri_plugin_lazysh_vault::access::AccessError;
+
+pub(crate) type CredentialGuard = Arc<tokio::sync::OwnedMutexGuard<()>>;
+
+// Retain ownership through OS work and metadata even if the IPC caller disappears.
+pub(crate) fn credential_worker<T: Send + 'static, E: From<AccessError> + Send + 'static>(
+    guard: CredentialGuard,
+    access: AccessLease,
+    action: impl FnOnce() -> Result<T, E> + Send + 'static,
+) -> tauri::async_runtime::JoinHandle<Result<T, E>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        access.check()?;
+        action()
+    })
+}
+
 use tauri_plugin_lazysh_vault::{CredentialOperation, VaultExt};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -105,9 +123,11 @@ pub(crate) async fn load_for_operation(
     app: AppHandle,
     host: Host,
     operation: CredentialOperation,
+    guard: CredentialGuard,
+    access: AccessLease,
 ) -> Result<Credentials, String> {
     operation.check()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    credential_worker(guard, access.clone(), move || {
         operation.check()?;
         let value = Zeroizing::new(
             app.vault()
@@ -116,6 +136,7 @@ pub(crate) async fn load_for_operation(
         );
         let credentials = decode(&host, &value)?;
         operation.check()?;
+        access.check()?;
         Ok(credentials)
     })
     .await
@@ -127,9 +148,11 @@ pub(crate) async fn save_for_operation(
     host: Host,
     credentials: Credentials,
     operation: CredentialOperation,
+    guard: CredentialGuard,
+    access: AccessLease,
 ) -> Result<(), String> {
     operation.check()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    credential_worker(guard, access, move || {
         operation.check()?;
         let value = encode(&host, &credentials)?;
         app.vault()
@@ -147,6 +170,15 @@ pub(crate) struct ImportFailure {
     pub message: String,
     pub keep_marker: bool,
 }
+impl From<AccessError> for ImportFailure {
+    fn from(error: AccessError) -> Self {
+        Self {
+            message: error.into(),
+            keep_marker: true,
+        }
+    }
+}
+
 fn save_new_with_cleanup(
     exists: impl FnOnce() -> Result<bool, String>,
     create: impl FnOnce() -> Result<(), String>,
@@ -180,8 +212,10 @@ pub(crate) async fn save_new(
     host: Host,
     credentials: Credentials,
     operation: CredentialOperation,
+    guard: CredentialGuard,
+    access: AccessLease,
 ) -> Result<(), ImportFailure> {
-    tauri::async_runtime::spawn_blocking(move || {
+    credential_worker(guard, access, move || {
         let account = key(&host.id);
         save_new_with_cleanup(
             || app.vault().exists(&account),
@@ -214,9 +248,13 @@ pub async fn has_credentials(
             if host.fingerprint.is_none() || !host.credentials_stored {
                 return Ok(false);
             }
-            tauri::async_runtime::spawn_blocking(move || app.vault().exists(&key(&host.id)))
-                .await
-                .map_err(|_| "Could not inspect saved credentials".to_string())?
+            let worker_access = access.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                worker_access.check()?;
+                app.vault().exists(&key(&host.id))
+            })
+            .await
+            .map_err(|_| "Could not inspect saved credentials".to_string())?
         })
         .await
 }
@@ -235,13 +273,15 @@ pub async fn forget_credentials(
             if !host.credentials_stored {
                 return Ok(());
             }
-            let key_host = host_id.clone();
-            tauri::async_runtime::spawn_blocking(move || remove(&app, &key_host))
-                .await
-                .map_err(|_| "Could not delete credentials".to_string())??;
-            state
-                .mark_credentials(&host_id, false)
-                .map_err(|_| "Could not update credential metadata".into())
+            let state = state.inner().clone();
+            credential_worker(_guard, access.clone(), move || {
+                remove(&app, &host_id)?;
+                state
+                    .mark_credentials(&host_id, false)
+                    .map_err(|_| "Could not update credential metadata".to_string())
+            })
+            .await
+            .map_err(|_| "Could not delete credentials".to_string())?
         })
         .await
 }
@@ -291,7 +331,9 @@ pub async fn export_saved_identity(
                         .into(),
                 );
             }
-            let credentials = load_for_operation(app, host, operation.clone()).await?;
+            let credentials =
+                load_for_operation(app, host, operation.clone(), _guard.clone(), access.clone())
+                    .await?;
             operation.check()?;
             Ok(ExportedIdentity {
                 private_key: credentials
@@ -306,6 +348,83 @@ pub async fn export_saved_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn revoked_delete_retains_host_guard_and_finishes_metadata_before_next_writer() {
+        use crate::app_lock::AccessState;
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        state.sync_add_hosts(&[], vec![host()], &[]).unwrap();
+        state.mark_credentials("one", true).unwrap();
+        let authority = AccessState::default();
+        authority.initialize(true, false, "fixture".into()).unwrap();
+        let access = authority.lease(None).unwrap();
+        let guard = state.credential_guard("one").await;
+        let worker_state = state.clone();
+        let worker_access = access.clone();
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let caller = tokio::spawn(async move {
+            access
+                .run(async move {
+                    credential_worker(guard, worker_access, move || {
+                        entered.send(()).unwrap();
+                        wait.recv().unwrap();
+                        worker_state
+                            .mark_credentials("one", false)
+                            .map_err(|_| "fixture metadata failed".to_string())
+                    })
+                    .await
+                    .unwrap()
+                })
+                .await
+        });
+        started.await.unwrap();
+        authority
+            .configure_after_proof(authority.generation().unwrap(), true)
+            .unwrap();
+        assert!(caller.await.unwrap().is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), state.credential_guard("one"))
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        let _next = tokio::time::timeout(Duration::from_secs(2), state.credential_guard("one"))
+            .await
+            .unwrap();
+        assert!(!state.host("one").unwrap().credentials_stored);
+        assert!(
+            !AppState::new(dir.path().into())
+                .unwrap()
+                .host("one")
+                .unwrap()
+                .credentials_stored
+        );
+        state.mark_credentials("one", true).unwrap();
+        assert!(state.host("one").unwrap().credentials_stored);
+    }
+
+    #[tokio::test]
+    async fn queued_credential_worker_rejects_revoked_lease_before_dispatch() {
+        use crate::app_lock::AccessState;
+        let authority = AccessState::default();
+        authority.initialize(true, false, "fixture".into()).unwrap();
+        let access = authority.lease(None).unwrap();
+        authority
+            .configure_after_proof(authority.generation().unwrap(), true)
+            .unwrap();
+        let mutex = Arc::new(tokio::sync::Mutex::new(()));
+        let guard = Arc::new(mutex.clone().lock_owned().await);
+        let result = credential_worker(guard, access, || -> Result<(), String> {
+            panic!("revoked mutation must not touch the OS store")
+        })
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        assert!(mutex.try_lock().is_ok());
+    }
+
     #[test]
     fn failed_new_import_retains_recovery_marker_until_partial_write_cleanup_succeeds() {
         use std::cell::Cell;

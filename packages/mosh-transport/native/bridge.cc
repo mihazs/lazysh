@@ -10,6 +10,9 @@
 #include "src/util/dos_assert.h"
 
 #include "src/network/networktransport.h"
+#ifdef LAZYSH_MOSH_TEST_FIXTURES
+#include "src/network/compressor.h"
+#endif
 #include "src/network/networktransport-impl.h"
 #include "src/network/transportsender-impl.h"
 #include "src/statesync/completeterminal.h"
@@ -209,3 +212,22 @@ extern "C" int lazysh_mosh_test_packet(int instruction, uint64_t old_num, uint64
         *written = ciphertext.size();
     }, error, error_capacity);
 }
+
+#ifdef LAZYSH_MOSH_TEST_FIXTURES
+// Development-only authenticated ACK observer for the fixed public fixture key.
+extern "C" int lazysh_mosh_test_ack(const unsigned char* bytes, size_t length, uint64_t* ack,
+                                     char* error, size_t capacity) noexcept {
+    return boundary([&] {
+        if (length > 2048) throw std::runtime_error("Test packet is too large");
+        Crypto::Session encryption{Crypto::Base64Key("AAAAAAAAAAAAAAAAAAAAAA")};
+        Network::Packet packet(encryption.decrypt(reinterpret_cast<const char*>(bytes), length));
+        if (packet.direction != Network::TO_SERVER) throw std::runtime_error("Unexpected fixture direction");
+        Network::Fragment fragment(packet.payload);
+        if (fragment.fragment_num != 0 || !fragment.final) throw std::runtime_error("Fixture ACK must fit one fragment");
+        TransportBuffers::Instruction instruction;
+        if (!instruction.ParseFromString(Network::get_compressor().uncompress_str(fragment.contents)))
+            throw std::runtime_error("Invalid fixture instruction");
+        *ack = instruction.ack_num();
+    }, error, capacity);
+}
+#endif

@@ -57,6 +57,12 @@ queued calls do not acquire a fresh generation after a later unlock. Successful
 results and structured errors are checked again at serialization, and old frontend
 continuations are bound to their original view generation. The native cover remains
 until fresh authentication succeeds and the replacement UI acknowledges its reset.
+Queued credential reads and writes also retain their original access lease. An OS
+mutation that has already started keeps its per-host ownership until its metadata
+update finishes, even if the caller is revoked; a new writer cannot race that
+deletion or cleanup. Already dispatched OS calls cannot be rolled back. Late
+clipboard reads cannot paste through a replacement terminal handler.
+
 There is no frontend command that grants an unlock. During resume authentication,
 cancellation or missing/invalidated proof leaves access locked. Before enable
 intent is committed, a cancelled enable can return to the prior off
@@ -80,14 +86,19 @@ registry is not restored across WebView replacement.
 During ordinary locks, output pauses before
 ordered channel messages are sent; raw acknowledgments may release credit for bytes
 already delivered. Mosh keeps polling authenticated network state while rendering
-is paused and emits a full redraw on resume. ET uses bounded backpressure and may
+is paused and emits a full redraw on resume, including the final screen when the
+server exits while locked or the output queue is full. Cancellation, renderer
+replacement or a closed receiver still ends that retained client promptly.
+ET uses bounded backpressure and may
 reconnect/replay after its consumer resumes; this is not a promise that its TCP
 socket stays alive throughout a lock. New sessions remain native-pending until the
 frontend's retained registry owns their ID and explicitly adopts them; revocation
 cleans up unadopted sessions. Temporary bootstrap/control sessions are not adopted.
 
 Protected speech, uploads, device streams and browser-preview listeners are
-cancelled on lock. Existing explicit Live Activity, watch and system-notification
+cancelled on lock. Policy changes invalidate manual model imports too; the next
+explicit import clears the exact stale reservation, and stale requests cannot
+write, finish or remove its replacement. Existing explicit Live Activity, watch and system-notification
 exports are not withdrawn. Previously enabled SSH-agent forwarding also remains
 active on its retained connection: the remote host can still request signatures
 until that connection closes. The resume lock does not revoke that existing remote
