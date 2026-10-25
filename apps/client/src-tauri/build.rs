@@ -19,6 +19,8 @@ fn main() {
         "local_resize",
         "local_ack",
         "local_disconnect",
+        "app_icon_status",
+        "set_app_icon",
         "apple_status_capability",
         "apple_status_configure",
         "apple_status_publish",

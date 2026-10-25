@@ -233,6 +233,25 @@ jobs:
           xcrun --sdk iphonesimulator --show-sdk-version
       - run: bun run build:ios
         id: ios-app-build
+      - name: Inspect compiled iOS icon catalog
+        id: ios-icon-catalog
+        timeout-minutes: 2
+        if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
+        run: |
+          /usr/bin/assetutil --info apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app/Assets.car > "$RUNNER_TEMP/lazysh-icon-catalog.json"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons' apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app/Info.plist > "$RUNNER_TEMP/lazysh-icon-iphone.txt"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons~ipad' apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app/Info.plist > "$RUNNER_TEMP/lazysh-icon-ipad.txt"
+      - name: Retain compiled iOS icon catalog before runtime checks
+        timeout-minutes: 2
+        if: ${{ !cancelled() && (steps.ios-icon-catalog.outcome == 'success' || steps.ios-icon-catalog.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-icon-catalog
+          path: |
+            ${{ runner.temp }}/lazysh-icon-catalog.json
+            ${{ runner.temp }}/lazysh-icon-iphone.txt
+            ${{ runner.temp }}/lazysh-icon-ipad.txt
+          if-no-files-found: error
       - name: Retain bounded simulator signing diagnostics
         if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
         timeout-minutes: 3

@@ -9,6 +9,7 @@ async function fixture(page:Page) {
       if (command==='app_lock_status') return {initialized:true,supported:false,reason:'Synthetic shortcut access fixture.',enabled:false,locked:false,generation:'0'};
       if (command==='app_lock_ready' || command==='adopt_session') return;
       if (command==='list_hosts') return [];
+      if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
       if (command==='local_connect') return {sessionId:'local:shortcut-fixture'};
       if (command==='local_write') {const steps=args.steps as string[]|undefined; if(steps)window.simpleShortcutSteps.push(steps);window.simpleShortcutWrites.push(steps?steps.join(''):args.data as string);return;}
