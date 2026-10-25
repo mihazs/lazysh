@@ -2,11 +2,13 @@
 
 The bundled catalogs cover English (`en`), Brazilian Portuguese (`pt-BR`) and
 Spanish (`es`) for the shell, host editor and connection dialogs, Preferences
-and its theme, font, icon and shortcut controls, and renderer access settings. Transcript, Usage and the notification inbox
-also have app-owned labels, controls and validation in all three catalogs.
+and its theme, font, icon and shortcut controls, and renderer access settings.
+Transcript, Usage and the notification inbox also have app-owned labels, controls
+and validation in all three catalogs.
 This is a partial milestone under issue #79. Other feature panels and native
-platform permission/lock-cover text still require their own localization and
-acceptance. Selecting an interface language does not change native OS controls.
+lock-cover/biometric-reason text still require their own localization and
+acceptance. Apple permission purposes have separate bundled resources below;
+selecting an interface language does not change native OS controls.
 
 App language offers **System** (the unchanged default), **English**,
 **Português (Brasil)** and **Español**. System uses the first supported language
@@ -55,6 +57,28 @@ before claiming end-to-end language support. Notification action titles use the
 active interface language when the existing listener registration runs; changing
 language does not restart polling/listeners or request OS permission again.
 Native notification body/permission text remains outside this renderer catalog.
+
+## Apple permission explanations
+
+The main Apple app bundles English, Brazilian Portuguese and Spanish
+`InfoPlist.strings` tables from `src-tauri/apple/Localizations`. They localize the
+existing Face ID and microphone purposes; the base `Info.plist` supplies English
+fallback. The microphone text covers the selected dictation engine. This adds no
+new permission request or change to the selected engine.
+
+Apple resolves these resources using its app/OS language selection. The in-app
+language preference does not force system permission sheets into another
+language. See Apple's [localized property-list guidance](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/AboutInformationPropertyListFiles.html)
+and Tauri's [macOS localization packaging](https://v2.tauri.app/distribute/macos-application-bundle/#infoplist-localization).
+XcodeGen includes the localization group in the iOS app; the macOS-specific Tauri
+resource map preserves each `.lproj` directory at the bundle resource root.
+
+The existing actual-app XCTest target checks the installed iOS host's three
+literal resource paths, purpose keys, fallback values and Foundation lookups. It
+does not display a permission prompt or verify physical-device OS language
+behavior. The macOS hosted gate runs Tauri's app bundler and Apple's `plutil` on
+the three packaged tables; compilation without bundling does not verify resources.
+Native lock-cover and biometric-reason localization remain separate issue #79 work.
 
 ## Verification
 

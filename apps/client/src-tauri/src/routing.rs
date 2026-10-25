@@ -1,7 +1,6 @@
 use crate::ssh::{AppState, Host, Result, SshError, SshHandle};
 use crate::vault::Credentials;
 use std::{sync::Arc, time::Duration};
-use tokio::time::timeout;
 
 pub(crate) fn validate(host: &Host, hosts: &[Host]) -> Result<()> {
     let Some(jump_id) = host.jump_host_id.as_deref() else {
@@ -77,7 +76,7 @@ pub(crate) async fn verified_target(
         crate::ssh::authenticate_for_operation(handle, &jump, &credentials, operation)
             .await
             .map_err(|error| error.for_host(&jump.id))?;
-    through_bastion(state, host, Arc::new(jump_handle)).await
+    through_bastion(state, host, Arc::new(jump_handle), access).await
 }
 
 async fn locked_jump(
@@ -97,22 +96,24 @@ async fn locked_jump(
     Ok((jump, guard))
 }
 
-async fn through_bastion(
+pub(crate) async fn through_bastion(
     state: &AppState,
     target: &Host,
     jump: Arc<SshHandle>,
+    access: &crate::app_lock::AccessLease,
 ) -> Result<SshHandle> {
-    let channel = timeout(
-        Duration::from_secs(30),
-        jump.channel_open_direct_tcpip(
-            target.hostname.clone(),
-            u32::from(target.port),
-            "127.0.0.1",
-            0,
-        ),
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let channel = crate::ssh::open_owned(
+        &jump,
+        access,
+        deadline,
+        crate::ssh::ChannelRequest::DirectTcp {
+            host: target.hostname.clone(),
+            port: u32::from(target.port),
+        },
     )
-    .await
-    .map_err(|_| SshError::new("timeout", "Opening the bastion route timed out"))??;
+    .await?;
+    access.check()?;
     crate::ssh::verified_connection_on_stream(state, target, channel.into_stream(), Some(jump))
         .await
 }
@@ -309,9 +310,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = state(&dir, &[jump.clone(), target.clone()]);
         let jump_handle = authenticated_jump(&state, &jump).await;
-        let target_handle = through_bastion(&state, &target, Arc::new(jump_handle))
-            .await
-            .unwrap();
+        let target_handle = through_bastion(
+            &state,
+            &target,
+            Arc::new(jump_handle),
+            &crate::app_lock::AccessState::disabled()
+                .lease(None)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         let target_handle = crate::ssh::authenticate_handle(
             target_handle,
             &target,
@@ -355,10 +363,17 @@ mod tests {
             fingerprint: Some("SHA256:changed".into()),
             ..target
         };
-        let error = through_bastion(&state, &changed_target, Arc::new(jump_handle))
-            .await
-            .err()
-            .unwrap();
+        let error = through_bastion(
+            &state,
+            &changed_target,
+            Arc::new(jump_handle),
+            &crate::app_lock::AccessState::disabled()
+                .lease(None)
+                .unwrap(),
+        )
+        .await
+        .err()
+        .unwrap();
         let value = serde_json::to_value(error).unwrap();
         assert_eq!(value["kind"], "host_key_changed");
         assert_eq!(value["hostId"], "target");

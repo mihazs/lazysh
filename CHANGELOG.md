@@ -7,6 +7,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Cancelled exec, SFTP, preview/probe, bastion, Mosh/ET bootstrap and device-stream
+  channel openings retain ownership until peer confirmation and close late results
+  without tearing down the parent SSH connection. They now share the existing
+  four-pending-open limit per verified transport; a peer that never confirms can
+  occupy those slots until it responds or the last local transport owner closes.
+
 - Concurrent companion initialization rechecks a removed SQLite journal, WAL or
   shared-memory entry instead of rejecting its stale zero-link metadata. Rechecks
   are bounded, replacements must pass the original file protections, and bootstrap
@@ -21,12 +27,17 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   verbatim. Language changes retain drafts and polling/listener lifecycles;
   language preference defaults and native permission behavior are unchanged.
 
+- Brazilian Portuguese and Spanish Apple permission explanations, with English
+  fallback. Apple selects permission-sheet localization through the app's OS
+  language; the in-app language override does not override system prompts. The
+  microphone purpose now describes dictation using the selected engine.
+
 - Brazilian Portuguese (`pt-BR`) and Spanish (`es`) for the existing interface
   catalogs: shell, host forms and Preferences controls. System remains the
   default and now selects these languages when available; English is the fallback.
   Explicit choices persist and sync without reconnecting live terminals or
   changing user text, commands or remote output. Other panels and native
-  permission/lock-cover text remain separate localization work.
+  lock-cover text remain separate localization work.
 
 - An English interface catalog and an App language preference for System or
   English. System is the default and uses supported English regional formatting,
