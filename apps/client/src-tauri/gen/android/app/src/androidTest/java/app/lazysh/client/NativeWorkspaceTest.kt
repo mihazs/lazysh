@@ -31,14 +31,14 @@ class NativeWorkspaceTest {
         return null
     }
 
-    private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String): String {
+    private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String {
         val result = AtomicReference<String>()
         val completed = CountDownLatch(1)
         scenario.onActivity { activity ->
             val web = requireNotNull(webView(activity.window.decorView))
             web.evaluateJavascript(expression) { value -> result.set(value); completed.countDown() }
         }
-        assertTrue("WebView evaluation timed out", completed.await(30, TimeUnit.SECONDS))
+        assertTrue("WebView evaluation timed out", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
         return result.get()
     }
 
@@ -80,8 +80,28 @@ class NativeWorkspaceTest {
         // so its later synthetic change can be ignored. Inject native keys into
         // the focused WebView instead, preserving normal browser input events.
         onView(isAssignableFrom(WebView::class.java)).perform(typeTextIntoFocusedView(text))
-        assertEquals("true", evaluate(scenario,
-            "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"))
+        // Espresso acknowledges key injection, not the separate WebView renderer.
+        // Wait only for the exact result; never retype or assign the input value.
+        val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (true) {
+            if (System.nanoTime() >= deadline) {
+                val diagnostics = evaluate(scenario, """JSON.stringify((() => {
+                  const target=document.querySelector(${JSONObject.quote(selector)});
+                  const actual=target?.value ?? '', expected=${JSONObject.quote(text)};
+                  let mismatch=0;
+                  while(mismatch<Math.min(actual.length,expected.length) && actual[mismatch]===expected[mismatch]) mismatch++;
+                  return {actualLength:actual.length,expectedLength:expected.length,firstMismatchIndex:mismatch,
+                    activeTag:document.activeElement?.tagName,
+                    activeField:document.activeElement?.getAttribute('placeholder'),
+                    targetFocused:document.activeElement===target,documentFocused:document.hasFocus()};
+                })())""")
+                throw AssertionError("Native typed input did not settle for $selector: $diagnostics")
+            }
+            val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+            if (evaluate(scenario, typed, remainingMillis) == "true") break
+            Thread.sleep(50)
+        }
     }
 
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
