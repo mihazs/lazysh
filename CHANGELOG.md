@@ -7,12 +7,19 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
+  model archive validation and native exception/ownership tests. It adds no
+  dictation UI or automatic model download; real-model and device validation
+  remain pending, and Apple/Windows model loading fails closed pending native
+  ACL validation.
+
 - Custom theme bold-color policies: unchanged colors, bright ANSI colors, or a
   hexadecimal default bold foreground, with import/export and settings sync.
   Reviewed v1 themes without `bold` now keep normal colors instead of implicit
   brightening; bundled themes and existing unreviewed palettes retain their
-  bright-bold defaults. The terminal adapter preserves inverse, selection and faint-text
-  behavior; vendor-specific light 256-color palette mapping remains separate.
+  bright-bold defaults. The adapter preserves inverse, selection and faint text;
+  vendor-specific light 256-color palette mapping remains separate.
+
 - Reviewed whole-app custom themes with bounded JSON/share-code import and export,
   light/dark metadata, contrast-safe app chrome, and settings sync validation.
   Existing bundled choices and terminal-only palettes keep their behavior until
