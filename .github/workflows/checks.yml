@@ -183,6 +183,7 @@ jobs:
 
   native-ios-simulator:
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -211,6 +212,7 @@ jobs:
           IPHONEOS_DEPLOYMENT_TARGET: '16.0'
         run: cargo test -p lazysh-mosh-transport --target aarch64-apple-ios --lib --no-run --locked
       - name: Compile watchOS companion and complications
+        timeout-minutes: 8
         run: bunx turbo run build:watchos --filter=@lazysh/apple-status
       - name: Create isolated status test simulator
         id: ios-simulator
@@ -218,22 +220,38 @@ jobs:
           APPLE_STATUS_SIMULATOR_ID="$(xcrun simctl create lazysh-status-ci com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)"
           echo "APPLE_STATUS_SIMULATOR_ID=$APPLE_STATUS_SIMULATOR_ID" >> "$GITHUB_ENV"
       - name: Run native status lifecycle tests
+        timeout-minutes: 8
         run: bunx turbo run test:apple-status --filter=@lazysh/apple-status
       - name: Run native APNs registration state tests
+        timeout-minutes: 8
         run: bunx turbo run test:apns --filter=@lazysh/push-registration
       - name: Run native iOS Mosh unit and protocol tests
         id: ios-mosh-native
-        run: bun run test:ios-mosh
+        timeout-minutes: 18
+        run: |
+          set -o pipefail
+          bun run test:ios-mosh 2>&1 | tee "$RUNNER_TEMP/lazysh-ios-mosh.log"
+      - name: Upload raw iOS Mosh diagnostics before app acceptance
+        if: ${{ !cancelled() && (steps.ios-mosh-native.outcome == 'success' || steps.ios-mosh-native.outcome == 'failure') }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-mosh-diagnostics
+          path: ${{ runner.temp }}/lazysh-ios-mosh.log
+          if-no-files-found: error
       - name: Install actual iOS app for native acceptance
         id: ios-app-install
+        timeout-minutes: 3
         if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' && steps.ios-simulator.outcome == 'success' }}
         run: |
           xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
           xcrun simctl install "$APPLE_STATUS_SIMULATOR_ID" apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app
       - name: Verify actual iOS Mosh IPC and privacy resources
+        timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
-        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
+        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Run native workspace Save, relaunch, and Delete acceptance
+        timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
         run: bun run test:ios-workspace
       - name: Upload iOS app acceptance results
@@ -246,5 +264,6 @@ jobs:
             apps/client/src-tauri/gen/apple/mosh-app.xcresult
           if-no-files-found: warn
       - name: Remove status test simulator
+        timeout-minutes: 2
         if: always() && env.APPLE_STATUS_SIMULATOR_ID != ''
         run: xcrun simctl delete "$APPLE_STATUS_SIMULATOR_ID"

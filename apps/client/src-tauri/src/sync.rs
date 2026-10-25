@@ -452,6 +452,7 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "cjkFallback",
             "theme",
             "customTheme",
+            "customThemeInfo",
             "fontSize",
             "fontFamily",
             "cursorStyle",
@@ -470,6 +471,7 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "autoHideToolbar",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
+        validate_theme_preferences(object)?;
         if object
             .get("sessionLayout")
             .is_some_and(|value| !matches!(value.as_str(), Some("list" | "cards")))
@@ -529,6 +531,88 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
     }
     Ok(())
 }
+fn validate_theme_preferences(object: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+    let colors = object
+        .get("customTheme")
+        .map(|value| value.as_object().ok_or("Invalid imported theme"))
+        .transpose()?;
+    if let Some(colors) = colors {
+        const COLORS: &[&str] = &[
+            "background",
+            "foreground",
+            "cursor",
+            "cursorAccent",
+            "selectionBackground",
+            "selectionForeground",
+            "selectionInactiveBackground",
+            "black",
+            "red",
+            "green",
+            "yellow",
+            "blue",
+            "magenta",
+            "cyan",
+            "white",
+            "brightBlack",
+            "brightRed",
+            "brightGreen",
+            "brightYellow",
+            "brightBlue",
+            "brightMagenta",
+            "brightCyan",
+            "brightWhite",
+        ];
+        if !colors.contains_key("background")
+            || !colors.contains_key("foreground")
+            || colors.iter().any(|(key, value)| {
+                !COLORS.contains(&key.as_str())
+                    || !value.as_str().is_some_and(|color| {
+                        matches!(color.len(), 4 | 7 | 9)
+                            && color.starts_with('#')
+                            && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+                    })
+            })
+        {
+            return Err("Invalid imported theme colors".into());
+        }
+    }
+    if let Some(info) = object.get("customThemeInfo") {
+        let info = info.as_object().ok_or("Invalid imported theme metadata")?;
+        if info.len() != 2
+            || !info
+                .get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|name| {
+                    !name.trim().is_empty()
+                        && name.chars().count() <= 40
+                        && !name.chars().any(char::is_control)
+                })
+            || !matches!(
+                info.get("mode").and_then(|v| v.as_str()),
+                Some("dark" | "light")
+            )
+            || colors.is_none()
+        {
+            return Err("Invalid imported theme metadata".into());
+        }
+        for key in ["background", "foreground"] {
+            let color = colors.unwrap()[key].as_str().unwrap();
+            if color.len() == 9 && !color.to_ascii_lowercase().ends_with("ff") {
+                return Err("Whole-app theme colors must be opaque".into());
+            }
+        }
+    }
+    if object.get("appTheme").and_then(|v| v.as_str()) == Some("custom")
+        && (colors.is_none() || !object.contains_key("customThemeInfo"))
+    {
+        return Err("Custom app theme requires validated metadata and colors".into());
+    }
+    if object.get("theme").and_then(|v| v.as_str()) == Some("custom") && colors.is_none() {
+        return Err("Custom terminal theme requires colors".into());
+    }
+    Ok(())
+}
+
 fn encrypt(key: &str, bundle: &Bundle) -> Result<Vec<u8>> {
     validate_bundle(bundle, bundle.scope)?;
     let bytes =
@@ -1161,6 +1245,42 @@ mod tests {
             settings_revision: 0,
             credentials_revision: 0,
         }
+    }
+
+    #[test]
+    fn imported_theme_sync_validates_metadata_colors_and_legacy_palettes() {
+        let mut bundle = settings();
+        let colors = serde_json::json!({"background":"#fff","foreground":"#111111"});
+        bundle.preferences = Some(serde_json::json!({"version":1,"customTheme":colors}));
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        let valid = serde_json::json!({"version":1,"theme":"custom","appTheme":"custom","customTheme":colors,"customThemeInfo":{"name":"日光","mode":"light"}});
+        bundle.preferences = Some(valid.clone());
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        for bad in [
+            serde_json::json!({"name":"bad","mode":"system"}),
+            serde_json::json!({"name":" ","mode":"dark"}),
+            serde_json::json!({"name":"a".repeat(41),"mode":"dark"}),
+            serde_json::json!({"name":"x","mode":"light","extra":true}),
+        ] {
+            let mut value = valid.clone();
+            value["customThemeInfo"] = bad;
+            bundle.preferences = Some(value);
+            assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+        }
+        for bad in [
+            serde_json::json!({"background":"url(evil)","foreground":"#fff"}),
+            serde_json::json!({"background":"#ffffff00","foreground":"#fff"}),
+            serde_json::json!({"background":"#fff","foreground":"#111","bold":"#fff"}),
+        ] {
+            let mut value = valid.clone();
+            value["customTheme"] = bad;
+            bundle.preferences = Some(value);
+            assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+        }
+        let mut value = valid;
+        value.as_object_mut().unwrap().remove("customThemeInfo");
+        bundle.preferences = Some(value);
+        assert!(validate_bundle(&bundle, Scope::Settings).is_err());
     }
 
     #[test]

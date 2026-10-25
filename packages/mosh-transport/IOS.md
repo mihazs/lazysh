@@ -69,6 +69,26 @@ simulator setup succeeded and the workflow was not cancelled, even if this
 independent raw-library fixture fails. Its failure still fails the job, and
 result upload and simulator cleanup remain unconditional.
 
+CI containment for [issue #45](https://github.com/mihazs/lazysh/issues/45) bounds
+the iOS job to 60 minutes, each native XCTest step to eight minutes, and the
+Watch build to eight minutes. Canonical XCTest commands enable
+[180-second per-case timeouts](https://developer.apple.com/documentation/xctest/xctestcase/executiontimeallowance), retaining
+default single execution without repetition or retry flags. Xcode rejected
+`-test-iterations 1` as requiring a count greater than one, so that flag is
+omitted rather than increasing the count. Case timeouts do not cover a runner
+that stalls before starting a case; the step bounds cover that phase. App
+installation is bounded to three minutes, and cleanup to two minutes.
+
+The outer raw-fixture step has an 18-minute bound covering its existing build,
+boot and execution budgets. Its 45-second executable deadlines and five-second
+diagnostic budget are unchanged. The existing Bun command is captured with
+`tee` and explicit `pipefail`, preserving its failure outcome. A separate
+`lazysh-ios-mosh-diagnostics` artifact is uploaded immediately afterward, before
+hosted acceptance, so a later stall cannot hide that completed raw evidence.
+The existing result upload and simulator cleanup still run on failure. These
+are new runner bounds and evidence retention, not a fix or diagnosis of the
+intermittent startup cause. Runtime validation requires macOS CI.
+
 Native linking and simulator execution are distinct acceptance results. Physical
 device bootstrap, app session handoff, suspension/resume, network roaming, and
 battery measurements remain separate checks. This repository's Linux environment
@@ -99,10 +119,15 @@ own `CONFIGURATION_BUILD_DIR` and `TEST_HOST` point to the prebuilt app. In run
 40180208893 the test bundle compiled into the correct app, but the launcher
 searched DerivedData and neither hosted assertion ran. That run passed all six
 raw native tests, official-server interoperability and the real workspace Save,
-process relaunch and Delete test; the launcher correction still requires CI.
+process relaunch and Delete test. The launcher correction subsequently passed
+both hosted tests and workspace acceptance in run 40182020108 at `e9d9486`.
+PR43 run 40185579849 at `6c104ec` also passed hosted and workspace acceptance,
+despite an independent raw startup failure. These app-level passes do not
+explain the intermittent raw startup cause, and the new containment bounds
+still require CI validation.
 
 ```console
-xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$PWD/apps/client/src-tauri/gen/apple/build/arm64-sim"
+xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$PWD/apps/client/src-tauri/gen/apple/build/arm64-sim"
 ```
 
 The two tests read the actual host application's embedded SDK resource bundles,
@@ -110,7 +135,7 @@ verify the original upstream SHA-256 bytes and privacy properties, and invoke
 `transport_capabilities` through its actual WKWebView/Tauri IPC bridge. They do
 not mock the capability, start a user SSH session, or replace the library's
 existing authenticated-UDP tests. Hosted app loading, resource bundling and
-actual iOS app IPC remain unverified until this scheme passes in macOS/Xcode CI;
-the earlier library simulator pass does not establish those app-level results.
+actual iOS app IPC are simulator verified by the hosted test passes above;
+those results are distinct from the raw library tests and new CI bounds.
 Physical-device SSH/Mosh handoff, network roaming, background/resume and energy
 behavior remain acceptance work.
