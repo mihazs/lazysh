@@ -1,7 +1,8 @@
 import type { ITheme } from '@xterm/xterm';
 
 export type ThemeInfo = {name: string; mode: 'dark' | 'light'};
-export type ImportedTheme = ThemeInfo & {v: 1; colors: ITheme};
+export type ThemeColors = ITheme & {bold?: 'bright' | `#${string}`};
+export type ImportedTheme = ThemeInfo & {v: 1; colors: ThemeColors};
 const colorKeys = ['background','foreground','cursor','cursorAccent','selectionBackground','selectionForeground','selectionInactiveBackground','black','red','green','yellow','blue','magenta','cyan','white','brightBlack','brightRed','brightGreen','brightYellow','brightBlue','brightMagenta','brightCyan','brightWhite'];
 const bytes = (value: string) => new TextEncoder().encode(value);
 export function themeInfo(value: unknown): ThemeInfo {
@@ -10,15 +11,19 @@ export function themeInfo(value: unknown): ThemeInfo {
   if (Object.keys(p).some(key => !['name','mode'].includes(key)) || typeof p.name !== 'string' || !p.name.trim() || /[\uD800-\uDFFF]/u.test(p.name) || [...p.name].length > 40 || /[\x00-\x1f\x7f-\x9f]/.test(p.name) || (p.mode !== 'light' && p.mode !== 'dark')) throw new Error('Theme needs a name of up to 40 characters and light or dark mode.');
   return {name: p.name.trim(), mode: p.mode};
 }
-export function themeColors(value: unknown): ITheme {
+export function themeColors(value: unknown): ThemeColors {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('A theme must be a JSON object of hexadecimal colors.');
   const result: Record<string, string> = {};
   for (const [key, color] of Object.entries(value)) {
+    if (key === 'bold') {
+      if (color === 'bright') {result.bold = color; continue;}
+      if (typeof color !== 'string' || !/^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(color)) throw new Error('Invalid theme color: bold');
+    } else
     if (!colorKeys.includes(key) || typeof color !== 'string' || !/^#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i.test(color)) throw new Error(`Invalid theme color: ${key}`);
-    result[key] = color.length === 4 ? '#' + [...color.slice(1)].map(c => c + c).join('') : color.toLowerCase();
+    result[key] = (color.length === 4 ? '#' + [...color.slice(1)].map(c => c + c).join('') : color).toLowerCase();
   }
   if (!result.background || !result.foreground) throw new Error('Theme needs background and foreground colors.');
-  return result;
+  return result as ThemeColors;
 }
 export function importedTheme(value: unknown): ImportedTheme {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid theme document.');

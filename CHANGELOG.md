@@ -11,11 +11,23 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
   preparation remain disabled; real recognition and platform acceptance stay open.
 
+- Opt-in Linux Parakeet inference acceptance with a licensed public speech
+  fixture, repeat-recognizer and model-file cleanup checks, and reported timing
+  and process peak memory. No client engine, automatic download or changed voice
+  default; device and platform acceptance remain pending.
+
 - Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
   model archive validation and native exception/ownership tests. It adds no
-  dictation UI or automatic model download; real-model and device validation
+  dictation UI or automatic model download; broader model and device validation
   remain pending, and Apple/Windows model loading fails closed pending native
   ACL validation.
+
+- Custom theme bold-color policies: unchanged colors, bright ANSI colors, or a
+  hexadecimal default bold foreground, with import/export and settings sync.
+  Reviewed v1 themes without `bold` now keep normal colors instead of implicit
+  brightening; bundled themes and existing unreviewed palettes retain their
+  bright-bold defaults. The adapter preserves inverse, selection and faint text;
+  vendor-specific light 256-color palette mapping remains separate.
 
 - Reviewed whole-app custom themes with bounded JSON/share-code import and export,
   light/dark metadata, contrast-safe app chrome, and settings sync validation.
@@ -72,6 +84,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Linux Parakeet runtime startup now matches each pinned static ONNX Runtime
+  artifact's libstdc++ ABI. A real no-model ORT/regex regression catches the
+  invalid-free abort found by public-speech acceptance before model loading.
+
+- Retain bounded syscall excerpts from the actual concurrent companion hook test
+  in Linux CI, without changing storage durability or its wait budget.
 - Bound native iOS CI startup and test execution, and retain raw Mosh diagnostics
   before hosted app checks, while preserving failure gates and no-retry behavior.
 - Mobile workspace navigation reserves the full top safe area, keeping the
