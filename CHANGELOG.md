@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- macOS Parakeet model-storage admission checks actual Darwin ACLs and trusted
+  descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
+  preparation remain disabled; real recognition and platform acceptance stay open.
+
 - Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
   model archive validation and native exception/ownership tests. It adds no
   dictation UI or automatic model download; real-model and device validation
