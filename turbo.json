@@ -28,7 +28,8 @@
     "build:native": { "cache": false },
     "build:android": { "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "NDK_HOME", "ANDROID_NDK_HOME"] },
     "build:android:emulator": { "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "NDK_HOME", "ANDROID_NDK_HOME"] },
-    "test:android": { "dependsOn": ["build:android:emulator"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME"] },
+    "test:android-theme-links": { "dependsOn": ["build:android:emulator"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME"] },
+    "test:android": { "dependsOn": ["test:android-theme-links"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME"] },
     "init:ios": { "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT"] },
     "build:ios": { "dependsOn": ["init:ios"], "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT"] }
   }
