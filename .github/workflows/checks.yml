@@ -92,6 +92,8 @@ jobs:
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
+      - name: Exercise native resume policy persistence and cancellation
+        run: bunx turbo run test:resume-policy --filter=@lazysh/client
 
   native-android:
     runs-on: ubuntu-24.04
