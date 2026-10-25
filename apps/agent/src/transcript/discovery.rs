@@ -36,6 +36,12 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
     }
     let root = match root {
         Some(path) => path.to_path_buf(),
+        None if matches!(agent, TranscriptAgent::DevinAtif) => std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| dirs::home_dir().map(|home| home.join(".local/share")))
+            .ok_or(Error::InvalidArgument)?
+            .join("devin/cli/transcripts"),
         None => {
             let (variable, fallback, child) = match agent {
                 TranscriptAgent::Claude => (Some("CLAUDE_CONFIG_DIR"), ".claude", "projects"),
