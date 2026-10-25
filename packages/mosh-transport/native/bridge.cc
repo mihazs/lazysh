@@ -172,6 +172,7 @@ extern "C" uint64_t lazysh_mosh_test_state_num(void* pointer) noexcept {
     return static_cast<Client*>(pointer)->network->get_remote_state_num();
 }
 extern "C" void lazysh_mosh_test_set_errno(int value) noexcept { errno = value; }
+extern "C" size_t lazysh_mosh_test_receive_mtu() noexcept { return Crypto::Session::RECEIVE_MTU; }
 
 // Only referenced by Rust's cfg(test) fixtures; all packets use an ephemeral public test key.
 extern "C" int lazysh_mosh_test_packet(int instruction, uint64_t old_num, uint64_t new_num, uint64_t throwaway,
