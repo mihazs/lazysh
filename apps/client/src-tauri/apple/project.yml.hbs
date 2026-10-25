@@ -94,6 +94,8 @@ targets:
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
       groups: [app]
     dependencies:
+      # libapp.a retains Mosh's zlib references for the final Xcode link.
+      - sdk: libz.tbd
       - sdk: ActivityKit.framework
         weak: true
       - target: LazyshLiveActivity
