@@ -3,6 +3,16 @@ import { describe, expect, it } from "vitest";
 import { defaults, decodeClipboardRequest, parseChord, parsePreferences, parseTheme, terminalOptions } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
+  it('uses the extended light palette only for Paper or explicit light metadata', () => {
+    const colors = {background:'#ffffff',foreground:'#111111',red:'#123456',brightRed:'#abcdef'};
+    const legacy = parsePreferences({...defaults, customTheme:colors});
+    const light = parsePreferences({...legacy, customThemeInfo:{name:'Light',mode:'light'}});
+    const dark = parsePreferences({...light, customThemeInfo:{name:'Dark',mode:'dark'}});
+    for (const p of [light, {...defaults,theme:'paper' as const}]) expect(terminalOptions(p).theme?.extendedAnsi).toHaveLength(240);
+    for (const p of [defaults,legacy,dark]) expect(terminalOptions(p).theme?.extendedAnsi).toBeUndefined();
+    expect(terminalOptions(light).theme).toMatchObject(colors);
+    expect(terminalOptions(light).theme?.extendedAnsi).not.toBe(terminalOptions(light).theme?.extendedAnsi);
+  });
   it("preserves the list default for old or invalid stored layouts", () => {
     for (const sessionLayout of [undefined, null, "grid", "__proto__", [], {cards: true}]) {
       expect(parsePreferences({...defaults, sessionLayout}).sessionLayout).toBe("list");
