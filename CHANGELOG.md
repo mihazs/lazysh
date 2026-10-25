@@ -13,6 +13,9 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   and Linux report this option unavailable. Physical biometric acceptance remains
   a release gate; existing per-host credential protection stays independent.
 
+- Remembered list or cards layout for the active-session switcher. Existing
+  installations retain the list default; switching layout never reconnects sessions.
+
 - Explicit-file `antigravity-jsonl` step-record snapshots with append-safe
   checkpoints and restart on changed snapshot bytes, literal source/type/status,
   recorded thinking and compact truncation flags. No automatic discovery,
