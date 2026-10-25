@@ -1599,3 +1599,9 @@ button svg {
   .header-right > .mobile-tools { display: flex; min-width: 44px; min-height: 44px; }
   .header-right .connection-label { display: none; }
 }
+.terminal-dpad { display: grid; grid-template-columns: repeat(3, 44px); gap: 5px; align-self: flex-end; padding: 8px 12px; }
+.terminal-dpad button { min-height: 44px; min-width: 44px; border-radius: 6px; background: var(--theme-control, #26331e); color: var(--theme-text, #e0e8da); border: 1px solid var(--border); }
+.share-thumbnail { margin: 12px 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.share-thumbnail img { max-width: 100%; height: auto; max-height: 256px; object-fit: contain; border: 1px solid var(--border); }
+.share-thumbnail figcaption { color: var(--muted); font-size: 12px; }
+.share-thumbnail-loading { margin: 12px 0; }

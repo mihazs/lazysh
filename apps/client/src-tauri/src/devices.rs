@@ -1,5 +1,7 @@
 use crate::ssh::{exec, quote, AppState, Result, SshError};
 use tauri::State;
+pub mod stream;
+pub use stream::DeviceStreams;
 
 fn platform(value: &str) -> Result<()> {
     if matches!(value, "android" | "ios") {
@@ -17,6 +19,61 @@ fn identifier(value: &str) -> Result<()> {
     } else {
         Ok(())
     }
+}
+fn companion_command(id: &str, socket: &str, action: &str) -> Result<String> {
+    identifier(id)?;
+    if !socket.starts_with('/')
+        || socket.len() > 1024
+        || socket.contains(':')
+        || socket.chars().any(char::is_control)
+    {
+        return Err(SshError::new(
+            "invalid_input",
+            "Select a local Unix companion socket",
+        ));
+    }
+    Ok(format!(
+        "lazysh-agent devices ios --id={} --socket={} {action}",
+        quote(id),
+        quote(socket)
+    ))
+}
+#[tauri::command]
+pub async fn ios_device_probe(
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+    socket: String,
+) -> Result<serde_json::Value> {
+    let command = companion_command(&id, &socket, "probe")?;
+    let session = state.session(&session_id).await?;
+    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+}
+#[tauri::command]
+pub async fn ios_device_action(
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+    socket: String,
+    width: u32,
+    height: u32,
+    action: DeviceAction,
+) -> Result<serde_json::Value> {
+    let (subcommand,arguments)=match action {
+        DeviceAction::Tap{x,y} if x<width && y<height => ("tap",format!("--x {x} --y {y} --width {width} --height {height}")),
+        DeviceAction::Swipe{x,y,to_x,to_y,duration_ms} if x<width && y<height && to_x<width && to_y<height && (1..=10000).contains(&duration_ms)=>("swipe",format!("--x {x} --y {y} --to-x {to_x} --to-y {to_y} --duration-ms {duration_ms} --width {width} --height {height}")),
+        DeviceAction::Key{key} if matches!(key.as_str(),"home"|"power"|"volume-up"|"volume-down")=>("button",format!("--key {key}")),
+        _=>return Err(SshError::new("invalid_input","Unsupported iOS companion action")),
+    };
+    if !(1..=8192).contains(&width) || !(1..=8192).contains(&height) {
+        return Err(SshError::new(
+            "invalid_input",
+            "Invalid iOS point dimensions",
+        ));
+    }
+    let command = companion_command(&id, &socket, &format!("{subcommand} {arguments}"))?;
+    let session = state.session(&session_id).await?;
+    Ok(serde_json::from_str(&exec(&session, command).await?)?)
 }
 #[tauri::command]
 pub async fn list_devices(

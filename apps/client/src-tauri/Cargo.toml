@@ -28,10 +28,13 @@ whisper-rs = { version = "0.16", default-features = false }
 rand = "0.10"
 tauri-plugin-lazysh-vault = { path = "../../../packages/credential-vault" }
 tauri-plugin-lazysh-apple-speech = { path = "../../../packages/apple-speech" }
+tauri-plugin-lazysh-apple-status = { path = "../../../packages/apple-status" }
+tauri-plugin-lazysh-push = { path = "../../../packages/push-registration" }
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))'.dependencies]
 lazysh-mosh-transport = { path = "../../../packages/mosh-transport" }
 
 [dev-dependencies]

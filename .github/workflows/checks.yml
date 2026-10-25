@@ -135,6 +135,8 @@ jobs:
         with:
           targets: x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
+      - name: Install native Mosh fixture dependencies
+        run: sudo apt-get update && sudo apt-get install -y mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
       - run: bun install --frozen-lockfile
       - name: Grant this runner access to KVM
         run: |
@@ -155,7 +157,9 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on
           pre-emulator-launch-script: $ANDROID_HOME/emulator/emulator -accel-check
-          script: bun run test:android
+          script: |
+            bun run test:android
+            bun run test:android-mosh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -178,3 +182,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bun run build:ios
+      - name: Compile watchOS companion and complications
+        run: bunx turbo run build:watchos --filter=@lazysh/apple-status
+      - name: Create isolated status test simulator
+        run: |
+          APPLE_STATUS_SIMULATOR_ID="$(xcrun simctl create lazysh-status-ci com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)"
+          echo "APPLE_STATUS_SIMULATOR_ID=$APPLE_STATUS_SIMULATOR_ID" >> "$GITHUB_ENV"
+      - name: Run native status lifecycle tests
+        run: bunx turbo run test:apple-status --filter=@lazysh/apple-status
+      - name: Remove status test simulator
+        if: always() && env.APPLE_STATUS_SIMULATOR_ID != ''
+        run: xcrun simctl delete "$APPLE_STATUS_SIMULATOR_ID"

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "./SessionTools";
+import { useDeviceStream } from "./useDeviceStream";
 type Device = {
   id: string;
   name: string;
@@ -74,6 +75,12 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   const [selected, setSelected] = useState("");
   const [frame, setFrame] = useState<Frame>();
   const [live, setLive] = useState(false);
+  const [continuous, setContinuous] = useState(false);
+  const [socket, setSocket] = useState("");
+  const [companion, setCompanion] = useState<{
+    width: number;
+    height: number;
+  }>();
   const [input, setInput] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -88,12 +95,43 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     setSelected("");
     setFrame(undefined);
     setLive(false);
+    setContinuous(false);
+    setCompanion(undefined);
     setInput(false);
     setWarnings([]);
     return () => {
       current.current++;
     };
   }, [sessionId, platform]);
+  useEffect(() => {
+    const hidden = () => {
+      if (document.hidden) setContinuous(false);
+    };
+    document.addEventListener("visibilitychange", hidden);
+    return () => document.removeEventListener("visibilitychange", hidden);
+  }, []);
+  const streamFrame = useCallback(
+    (value: unknown) => {
+      const result = parseFrame(value);
+      if (result.id !== selected || result.platform !== "ios")
+        throw new Error("Simulator stream identity changed.");
+      setFrame(result);
+    },
+    [selected],
+  );
+  const streamError = useCallback((error: unknown) => {
+    setError(errorMessage(error));
+    setContinuous(false);
+    setInput(false);
+  }, []);
+  useDeviceStream(
+    continuous,
+    sessionId,
+    selected,
+    socket,
+    streamFrame,
+    streamError,
+  );
   async function run(action: () => Promise<void>) {
     if (running.current) return;
     running.current = true;
@@ -175,6 +213,21 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     if (generation === current.current) setFrame(result);
   }
   async function action(action: unknown, id = selected) {
+    const type = (action as { type?: string }).type;
+    if (
+      platform === "ios" &&
+      companion &&
+      ["tap", "swipe", "key"].includes(type || "")
+    ) {
+      await invoke("ios_device_action", {
+        sessionId,
+        id,
+        socket,
+        ...companion,
+        action,
+      });
+      return;
+    }
     await invoke("device_action", {
       sessionId,
       devicePlatform: platform,
@@ -196,8 +249,9 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     <section className="tool-panel" aria-label="Host devices">
       <h3>Simulators and devices</h3>
       <p>
-        Uses the SDK installed on this SSH host. Live view captures one frame
-        per second; input is sent only when enabled.
+        Uses the SDK installed on this SSH host. Screenshot refresh captures one
+        frame per second. Optional iOS idb video uses a private local companion
+        socket.
       </p>
       <div className="tool-bar">
         <label>
@@ -224,6 +278,8 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               setSelected(event.target.value);
               setFrame(undefined);
               setLive(false);
+              setContinuous(false);
+              setCompanion(undefined);
               setInput(false);
             }}
           >
@@ -236,6 +292,67 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           </select>
         </label>
       </div>
+      {platform === "ios" && selected && (
+        <div className="tool-bar">
+          <label>
+            idb companion socket
+            <input
+              value={socket}
+              disabled={continuous || busy}
+              placeholder="/private/tmp/lazysh-idb/idb.sock"
+              onChange={(event) => {
+                setSocket(event.target.value);
+                setCompanion(undefined);
+                setInput(false);
+              }}
+            />
+          </label>
+          <button
+            disabled={busy || continuous || !socket}
+            onClick={() =>
+              void run(async () => {
+                const generation = current.current;
+                const value = await invoke<{
+                  schemaVersion: number;
+                  id: string;
+                  platform: string;
+                  width: number;
+                  height: number;
+                }>("ios_device_probe", { sessionId, id: selected, socket });
+                if (
+                  value.schemaVersion !== 1 ||
+                  value.id !== selected ||
+                  value.platform !== "ios" ||
+                  ![value.width, value.height].every(
+                    (n) => Number.isInteger(n) && n > 0 && n <= 8192,
+                  )
+                )
+                  throw new Error(
+                    "Companion did not report verified simulator point dimensions.",
+                  );
+                if (generation === current.current)
+                  setCompanion({ width: value.width, height: value.height });
+              })
+            }
+          >
+            Verify iOS companion
+          </button>
+          <button
+            disabled={!companion || busy}
+            onClick={() => {
+              setLive(false);
+              setInput(false);
+              setContinuous(!continuous);
+            }}
+          >
+            {continuous ? "Stop video preview" : "Start video preview"}
+          </button>
+          <span>
+            Requires installed idb and an existing socket accessible only to
+            your host account.
+          </span>
+        </div>
+      )}
       {warnings.map((warning, index) => (
         <p role="status" key={index}>
           {warning}
@@ -249,13 +366,13 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       {device && (
         <div className="tool-bar">
           <button
-            disabled={busy || !device.capabilities.screenshot}
+            disabled={busy || continuous || !device.capabilities.screenshot}
             onClick={() => void run(capture)}
           >
             Capture screen
           </button>
           <button
-            disabled={!device.capabilities.screenshot}
+            disabled={continuous || !device.capabilities.screenshot}
             onClick={() => {
               setLive(!live);
               if (!live) void run(capture);
@@ -266,14 +383,17 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           <label>
             <input
               type="checkbox"
-              disabled={!device.capabilities.tap}
+              disabled={!device.capabilities.tap && !companion}
               checked={input}
               onChange={(event) => setInput(event.target.checked)}
             />
             Enable device input
           </label>
-          {device.capabilities.key &&
-            ["back", "home", "enter"].map((key) => (
+          {(device.capabilities.key || companion) &&
+            (platform === "ios"
+              ? ["home", "power", "volume-up", "volume-down"]
+              : ["back", "home", "enter"]
+            ).map((key) => (
               <button
                 key={key}
                 disabled={busy || !input}
@@ -312,14 +432,23 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
             touchAction: input ? "none" : "auto",
           }}
           onPointerDown={(event) => {
-            if (!input || busy) return;
+            if (
+              !input ||
+              busy ||
+              (companion &&
+                Math.abs(
+                  frame.imageWidth / frame.imageHeight -
+                    companion.width / companion.height,
+                ) > 0.02)
+            )
+              return;
             const rect = event.currentTarget.getBoundingClientRect();
             const point = framePoint(
               event.clientX - rect.left,
               event.clientY - rect.top,
               rect.width,
               rect.height,
-              frame,
+              platform === "ios" && companion ? companion : frame,
             );
             start.current = { ...point, time: Date.now(), id: selected };
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -334,10 +463,10 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               event.clientY - rect.top,
               rect.width,
               rect.height,
-              frame,
+              platform === "ios" && companion ? companion : frame,
             );
             const swipe = Math.hypot(end.x - began.x, end.y - began.y) > 10;
-            if (swipe && !device?.capabilities.swipe) return;
+            if (swipe && !device?.capabilities.swipe && !companion) return;
             void run(() =>
               action(
                 swipe

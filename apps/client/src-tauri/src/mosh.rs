@@ -2,10 +2,12 @@ use crate::ssh::{quote, Result, Session, SshError};
 use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, time::Duration};
-use tokio::{sync::watch, time::timeout};
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+use tokio::sync::watch;
+use tokio::time::timeout;
 use zeroize::Zeroizing;
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Options {
     #[serde(default = "default_server")]
@@ -34,7 +36,7 @@ impl Default for Options {
     }
 }
 impl Options {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.server_path.trim().is_empty()
             || self.server_path.len() > 4096
             || self.server_path.chars().any(char::is_control)
@@ -64,7 +66,11 @@ pub struct Capabilities {
 #[tauri::command]
 pub fn transport_capabilities() -> Capabilities {
     Capabilities {
-        mosh: cfg!(any(target_os = "linux", target_os = "macos")),
+        mosh: cfg!(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "android"
+        )),
         et: true,
     }
 }
@@ -197,7 +203,7 @@ async fn bootstrap_exec(session: &Session, command: String) -> Result<Zeroizing<
             }
             if status != Some(0) { return Err(SshError::new("mosh_bootstrap", "Mosh server failed to start. Check its executable path and UTF-8 locales.")); }
             Ok(bytes)
-        }) => result.map_err(|_| SshError::new("mosh_bootstrap", "Mosh bootstrap timed out"))?,
+        }) => match result { Ok(result) => result, Err(_) => Err(SshError::new("mosh_bootstrap", "Mosh bootstrap timed out")) },
     };
     let _ = timeout(Duration::from_secs(2), channel.close()).await;
     result
@@ -210,10 +216,14 @@ pub(crate) async fn bootstrap(
 ) -> Result<Bootstrap> {
     options.validate()?;
     check_size(cols, rows)?;
-    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+    if !cfg!(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android"
+    )) {
         return Err(SshError::new(
             "mosh_unsupported",
-            "Mosh is currently supported only on Linux and macOS desktop builds",
+            "Mosh is currently supported on Linux, macOS and Android builds",
         ));
     }
     if session.handle.agent_forwarding_enabled() {
@@ -231,7 +241,7 @@ pub(crate) async fn bootstrap(
     parse_bootstrap(&bytes, address, &options)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     bootstrap: Bootstrap,

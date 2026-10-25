@@ -87,3 +87,60 @@ it("shows host SDK availability errors without fabricating devices", async () =>
     await screen.findByText("Android SDK is not installed on this host."),
   ).toBeTruthy();
 });
+it("requires explicit socket verification and input enablement before iOS controls", async () => {
+  const id = "9C405382-203A-4DC0-A11B-B2FC37EBA881";
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "list_devices")
+      return {
+        schemaVersion: 1,
+        devices: [
+          {
+            id,
+            name: "iPhone",
+            state: "Booted",
+            kind: "simulator",
+            capabilities: { screenshot: true, tap: false, key: false },
+          },
+        ],
+        avds: [],
+      };
+    if (command === "ios_device_probe")
+      return { schemaVersion: 1, id, platform: "ios", width: 390, height: 844 };
+    return { schemaVersion: 1, status: "requested" };
+  });
+  render(<DevicePanel sessionId="ssh-ios" />);
+  fireEvent.change(screen.getByLabelText("Platform"), {
+    target: { value: "ios" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Find devices" }));
+  await screen.findByRole("option", { name: "iPhone · Booted" });
+  fireEvent.change(screen.getByLabelText("Device"), { target: { value: id } });
+  expect(
+    screen.getByRole("button", { name: "Start video preview" }),
+  ).toHaveProperty("disabled", true);
+  expect(screen.getByLabelText("Enable device input")).toHaveProperty(
+    "disabled",
+    true,
+  );
+  fireEvent.change(screen.getByLabelText("idb companion socket"), {
+    target: { value: "/private/idb.sock" },
+  });
+  expect(
+    vi.mocked(invoke).mock.calls.some(([name]) => name === "ios_device_probe"),
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Verify iOS companion" }));
+  const home = await screen.findByRole("button", { name: "home" });
+  expect(home).toHaveProperty("disabled", true);
+  fireEvent.click(screen.getByLabelText("Enable device input"));
+  fireEvent.click(home);
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("ios_device_action", {
+      sessionId: "ssh-ios",
+      id,
+      socket: "/private/idb.sock",
+      width: 390,
+      height: 844,
+      action: { type: "key", key: "home" },
+    }),
+  );
+});

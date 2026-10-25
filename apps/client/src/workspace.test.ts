@@ -72,3 +72,20 @@ it('preserves ET bootstrap options but rejects conflicting transport intentions'
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
   }
 });
+
+it('retains Auto options instead of its last selected transport and excludes credentials',()=>{
+  const mosh={serverPath:'mosh-server',portMin:60000,portMax:61000,key:'PRIVATE'};
+  const et={serverPath:'etterminal',port:2022,password:'PRIVATE'};
+  saveWorkspace([{hostId:'a',auto:{mosh,et},mosh}]);
+  expect(readWorkspace()).toEqual([{hostId:'a',auto:{mosh:{serverPath:'mosh-server',portMin:60000,portMax:61000},et:{serverPath:'etterminal',port:2022}}}]);
+  expect(localStorage.getItem('lazysh.workspace.v1')).not.toContain('PRIVATE');
+  for(const bad of [
+    {hostId:'a',auto:{mosh,et},et},
+    {hostId:'a',auto:{mosh:{...mosh,portMax:65536},et}},
+    {hostId:'a',auto:{mosh,et:{...et,serverPath:'bad\npath'}}},
+    {hostId:'a',auto:{mosh,et},attached:{kind:'tmux',name:'agent'}},
+  ]) {
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([bad]));
+    expect(readWorkspace()).toEqual([]);
+  }
+});

@@ -180,7 +180,7 @@ fn validate_message(message: &Value) -> Result<()> {
     Ok(())
 }
 
-fn open_transcript(path: &Path) -> Result<File> {
+pub(crate) fn open_transcript(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]

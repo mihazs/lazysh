@@ -1,5 +1,19 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 
+export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
+export type UsageFreshness = "fresh" | "stale" | "unknown";
+export type RecordedUsageContext = {
+  source: "codex_token_count"; usedTokens: number | null; limitTokens: number | null;
+  recordedAt: string | null; freshness: UsageFreshness;
+};
+export type RecordedProviderWindow = {
+  provider: "codex"; accountId: null; limitId: string | null; kind: "primary" | "secondary";
+  usedPercent: number; windowMinutes: number | null; resetsAt: string | null;
+  recordedAt: string | null; freshness: UsageFreshness;
+};
+export type MoshOptions = {serverPath: string; portMin: number; portMax: number};
+export type EtOptions = {serverPath: string; port: number};
+export type AutoOptions = {mosh: MoshOptions; et: EtOptions};
 export type Host = {
   id: string;
   name: string;
@@ -11,6 +25,9 @@ export type Host = {
   credentialsStored?: boolean;
   forwardAgent?: boolean;
   biometricUnlock?: boolean;
+  transport?: TransportMode | null;
+  mosh?: MoshOptions | null;
+  et?: EtOptions | null;
 };
 export type SshEvent =
   | { type: "data"; data: number[] }

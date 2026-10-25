@@ -4,12 +4,14 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+#[path = "native/android.rs"]
+mod android;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PROTOC");
     if !matches!(
         env::var("CARGO_CFG_TARGET_OS").unwrap().as_str(),
-        "linux" | "macos"
+        "linux" | "macos" | "android"
     ) {
         return;
     }
@@ -103,30 +105,53 @@ fn main() {
         "#define HAVE_ENDIAN_H 1\n#define HAVE_DECL_BE64TOH 1\n"
     };
     fs::write(root.join("src/include/config.h"), format!("#define HAVE_CLOCK_GETTIME 1\n#define HAVE_GETTIMEOFDAY 1\n#define HAVE_SYS_UIO_H 1\n#define HAVE_POSIX_MEMALIGN 1\n#define HAVE_STRINGS_H 1\n{byte_order}")).unwrap();
-    let protobuf = pkg_config::Config::new()
-        .probe("protobuf-lite")
-        .expect("target libprotobuf-lite and matching protoc are required");
-    let crypto = pkg_config::Config::new()
-        .probe("libcrypto")
-        .expect("target OpenSSL libcrypto is required");
-    let zlib = pkg_config::Config::new()
-        .probe("zlib")
-        .expect("target zlib is required");
+    let android_target = env::var("CARGO_CFG_TARGET_OS").unwrap() == "android";
+    let include_paths = if android_target {
+        android::prepare()
+    } else {
+        let protobuf = pkg_config::Config::new()
+            .probe("protobuf-lite")
+            .expect("target libprotobuf-lite and matching protoc are required");
+        let crypto = pkg_config::Config::new()
+            .probe("libcrypto")
+            .expect("target OpenSSL libcrypto is required");
+        let zlib = pkg_config::Config::new()
+            .probe("zlib")
+            .expect("target zlib is required");
+        protobuf
+            .include_paths
+            .into_iter()
+            .chain(crypto.include_paths)
+            .chain(zlib.include_paths)
+            .collect()
+    };
     let protos = ["userinput", "hostinput", "transportinstruction"];
-    let mut protoc = Command::new(env::var_os("PROTOC").unwrap_or_else(|| "protoc".into()));
-    protoc
-        .arg(format!(
-            "--cpp_out={}",
-            root.join("src/protobufs").display()
-        ))
-        .arg(format!("-I{}", root.join("src/protobufs").display()));
-    for name in protos {
-        protoc.arg(root.join(format!("src/protobufs/{name}.proto")));
+    if android_target {
+        for name in protos {
+            for extension in ["pb.cc", "pb.h"] {
+                fs::copy(
+                    format!("vendor-android/generated/{name}.{extension}"),
+                    root.join(format!("src/protobufs/{name}.{extension}")),
+                )
+                .unwrap();
+            }
+        }
+    } else {
+        let mut protoc = Command::new(env::var_os("PROTOC").unwrap_or_else(|| "protoc".into()));
+        protoc
+            .arg(format!(
+                "--cpp_out={}",
+                root.join("src/protobufs").display()
+            ))
+            .arg(format!("-I{}", root.join("src/protobufs").display()));
+        for name in protos {
+            protoc.arg(root.join(format!("src/protobufs/{name}.proto")));
+        }
+        assert!(
+            protoc.status().expect("cannot start protoc").success(),
+            "protoc generation failed"
+        );
     }
-    assert!(
-        protoc.status().expect("cannot start protoc").success(),
-        "protoc generation failed"
-    );
     let mut compiler = cc::Build::new();
     compiler
         .cpp(true)
@@ -137,12 +162,7 @@ fn main() {
         .include("native")
         .flag("-include")
         .flag("native/checks.h");
-    for path in protobuf
-        .include_paths
-        .iter()
-        .chain(crypto.include_paths.iter())
-        .chain(zlib.include_paths.iter())
-    {
+    for path in &include_paths {
         compiler.include(path);
     }
     compiler.files(sources).file("native/bridge.cc");

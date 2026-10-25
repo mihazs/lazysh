@@ -382,3 +382,149 @@ async fn oversized_responses_and_inflight_cancellation_release_native_upload_slo
     .unwrap();
     fixture.stop().await;
 }
+
+#[test]
+fn raster_previews_have_bounded_dimensions_and_are_reencoded_as_small_static_png() {
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+    use std::io::Cursor;
+    let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(320, 160, Rgb([20, 80, 140])));
+    for format in [
+        ImageFormat::Png,
+        ImageFormat::Jpeg,
+        ImageFormat::Gif,
+        ImageFormat::WebP,
+    ] {
+        let mut encoded = Cursor::new(Vec::new());
+        image.write_to(&mut encoded, format).unwrap();
+        let preview = thumbnail(encoded.get_ref()).unwrap();
+        assert_eq!(preview.mime, "image/png");
+        assert_eq!((preview.width, preview.height), (256, 128));
+        assert!(preview.data.len() <= THUMBNAIL_OUTPUT_LIMIT);
+        assert_eq!(
+            image::guess_format(&preview.data).unwrap(),
+            ImageFormat::Png
+        );
+    }
+    for data in [
+        b"<svg onload='bad()'/>".as_slice(),
+        b"<html><script>bad()</script></html>",
+        b"%PDF-1.7",
+    ] {
+        assert!(thumbnail(data).is_err());
+    }
+    assert!(thumbnail(&vec![0; THUMBNAIL_INPUT_LIMIT + 1]).is_err());
+    for (width, height) in [(0, 1), (8193, 1), (4096, 2049)] {
+        assert!(thumbnail_dimensions(width, height).is_err());
+    }
+    assert!(thumbnail_dimensions(8192, 1024).is_ok());
+}
+
+#[test]
+fn webp_preflight_rejects_extended_chunks_and_nested_allocation_headers_before_decode() {
+    fn riff(tag: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = b"RIFF\0\0\0\0WEBP".to_vec();
+        bytes.extend_from_slice(tag);
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(payload);
+        if !payload.len().is_multiple_of(2) {
+            bytes.push(0);
+        }
+        let length = (bytes.len() - 8) as u32;
+        bytes[4..8].copy_from_slice(&length.to_le_bytes());
+        bytes
+    }
+    let large_vp8 = [0x10, 0, 0, 0x9d, 1, 0x2a, 0xff, 0x3f, 0xff, 0x3f];
+    let mut extended = riff(b"VP8X", &[0; 10]);
+    extended.extend_from_slice(b"VP8 ");
+    extended.extend_from_slice(&10u32.to_le_bytes());
+    extended.extend_from_slice(&large_vp8);
+    let length = (extended.len() - 8) as u32;
+    extended[4..8].copy_from_slice(&length.to_le_bytes());
+    assert!(thumbnail(&extended)
+        .err()
+        .unwrap()
+        .contains("Only simple WebP"));
+    let mut metadata = riff(b"VP8L", &[0x2f, 0, 0, 0, 0]);
+    metadata.extend_from_slice(b"EXIF");
+    metadata.extend_from_slice(&u32::MAX.to_le_bytes());
+    let length = (metadata.len() - 8) as u32;
+    metadata[4..8].copy_from_slice(&length.to_le_bytes());
+    assert!(thumbnail(&metadata)
+        .err()
+        .unwrap()
+        .contains("Only simple WebP"));
+    let mut declared_huge = riff(b"VP8L", &[0x2f, 0, 0, 0, 0]);
+    declared_huge[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(thumbnail(&declared_huge)
+        .err()
+        .unwrap()
+        .contains("Only simple WebP"));
+    assert!(thumbnail(&riff(b"VP8 ", &large_vp8))
+        .err()
+        .unwrap()
+        .contains("8 megapixels"));
+    let huge_lossless = (0x3fff_u32 | (0x3fff << 14)).to_le_bytes();
+    let mut payload = vec![0x2f];
+    payload.extend_from_slice(&huge_lossless);
+    assert!(thumbnail(&riff(b"VP8L", &payload))
+        .err()
+        .unwrap()
+        .contains("8 megapixels"));
+}
+
+#[test]
+fn gif_preflight_bounds_the_first_frame_independently_of_its_logical_canvas() {
+    let gif = |width: u16, height: u16| {
+        let mut bytes = b"GIF89a\x01\0\x01\0\0\0\0\x2c\0\0\0\0".to_vec();
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.push(0);
+        bytes
+    };
+    assert!(thumbnail(&gif(4096, 4096))
+        .err()
+        .unwrap()
+        .contains("8 megapixels"));
+    assert!(thumbnail(&gif(2, 1)).err().unwrap().contains("canvas"));
+}
+
+#[tokio::test]
+async fn thumbnail_downloads_are_bounded_https_gets_without_management_credentials() {
+    use axum::{http::HeaderMap, routing::get};
+    use image::{DynamicImage, ImageFormat};
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    DynamicImage::new_rgba8(1, 1)
+        .write_to(&mut encoded, ImageFormat::Png)
+        .unwrap();
+    let bytes = encoded.into_inner();
+    let returned = bytes.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let router = axum::Router::new().route(
+        "/s/{id}",
+        get(move |headers: HeaderMap| {
+            assert!(!headers.contains_key(reqwest::header::AUTHORIZATION));
+            count.fetch_add(1, Ordering::SeqCst);
+            let bytes = returned.clone();
+            async move { bytes }
+        }),
+    );
+    let fixture = Fixture::new(Some(router)).await;
+    assert!(
+        thumbnail_bytes(fixture.client.clone(), &fixture.enrollment(), "../admin")
+            .await
+            .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let downloaded = thumbnail_bytes(
+        fixture.client.clone(),
+        &fixture.enrollment(),
+        &"a".repeat(64),
+    )
+    .await
+    .unwrap();
+    assert_eq!(downloaded, bytes);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(thumbnail(&downloaded).unwrap().width, 1);
+    fixture.stop().await;
+}

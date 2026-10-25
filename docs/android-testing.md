@@ -2,6 +2,8 @@
 
 Android runtime tests use the application module's standard `src/androidTest/java/` source set, AndroidJUnitRunner, ActivityScenario and Espresso-Web. They are separate from the vault module's local JVM JUnit tests.
 
+The suite retains one shared activity until AndroidJUnitRunner finishes. Destroying the last Tauri activity intentionally exits its native process, which also hosts instrumentation; per-test activity closure would discard test results. Configuration-change recreation remains exercised by the workspace test.
+
 Install the Android SDK, JDK 21 and NDK version declared by the application. Set `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME` for your toolchain. Start a dedicated x86_64 emulator and wait until this command returns `1`:
 
 ```sh

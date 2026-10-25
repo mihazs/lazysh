@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke, isTauri: () => true }));
-import SharePanel, { parseShare } from "./SharePanel";
+import SharePanel, { parseShare, thumbnailBlob } from "./SharePanel";
 const origin = "https://files.example.test";
 const id = "a".repeat(64);
 const share = {
@@ -16,13 +16,20 @@ const share = {
   expiresAt: 1800003600,
   url: `${origin}/s/${id}`,
 };
+const NativeURL = URL;
+const makeObjectUrl = vi.fn();
+const revokeObjectUrl = vi.fn();
+const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j97kAAAAASUVORK5CYII='), char => char.charCodeAt(0));
+const thumbnail = { mime: 'image/png', data: Array.from(png), width: 1, height: 1 };
 beforeEach(() => {
+  makeObjectUrl.mockReset().mockReturnValue('blob:thumbnail'); revokeObjectUrl.mockReset();
+  vi.stubGlobal('URL', class extends NativeURL { static createObjectURL = makeObjectUrl; static revokeObjectURL = revokeObjectUrl; });
   invoke.mockReset();
   invoke.mockImplementation(async (command: string) =>
     command === "share_status" ? { configured: true, origin } : undefined,
   );
 });
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it("rejects download addresses outside the configured capability endpoint", () => {
   expect(parseShare(share, origin)).toEqual(share);
   for (const url of [
@@ -193,4 +200,52 @@ it('keeps a delete action when cancellation races an accepted upload',async()=>{
   await act(async()=>finish?.({schemaVersion:1,share}));
   expect(await screen.findByText('Upload completed before cancellation. Delete it below to revoke the link.')).toBeTruthy();
   expect((screen.getByRole('button',{name:'Delete notes.txt'}) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('loads a sanitized image thumbnail only on explicit action and revokes its object URL', async () => {
+  const item = { ...share, name: 'photo.png', mime: 'image/png', size: png.length };
+  invoke.mockImplementation(async (command: string) => command === 'share_status' ? { configured: true, origin } : command === 'share_list' ? { schemaVersion: 1, shares: [item], nextCursor: null } : command === 'share_thumbnail' ? thumbnail : undefined);
+  const user = userEvent.setup(); const view = render(<SharePanel />);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh upload history' }) as HTMLButtonElement).disabled).toBe(false));
+  await user.click(screen.getByRole('button', { name: 'Refresh upload history' }));
+  const load = await screen.findByRole('button', { name: 'Load thumbnail for photo.png' });
+  expect(invoke.mock.calls.filter(([command]) => command === 'share_thumbnail')).toHaveLength(0);
+  expect(view.container.querySelector('img')).toBeNull();
+  await user.click(load);
+  const image = await screen.findByRole('img', { name: 'Thumbnail of photo.png' });
+  expect(invoke).toHaveBeenCalledWith('share_thumbnail', { id, requestId: expect.stringMatching(/^[a-f0-9-]{36}$/) });
+  expect(image.getAttribute('src')).toBe('blob:thumbnail');
+  expect(makeObjectUrl.mock.calls[0][0]).toMatchObject({ type: 'image/png', size: png.length });
+  await user.click(screen.getByRole('button', { name: 'Hide thumbnail for photo.png' }));
+  expect(revokeObjectUrl).toHaveBeenCalledExactlyOnceWith('blob:thumbnail');
+  view.unmount(); expect(revokeObjectUrl).toHaveBeenCalledTimes(1);
+});
+
+it('rejects active content, mismatched dimensions and oversized thumbnail payloads before creating an object URL', () => {
+  for (const value of [null, { ...thumbnail, mime: 'image/svg+xml' }, { ...thumbnail, data: Array.from(new TextEncoder().encode('<svg onload="bad()"/>')) }, { ...thumbnail, width: 256 }, { ...thumbnail, width: 8193 }, { ...thumbnail, data: [300] }, { ...thumbnail, data: Array(512 * 1024 + 1).fill(0) }]) expect(() => thumbnailBlob(value)).toThrow();
+  expect(makeObjectUrl).not.toHaveBeenCalled();
+});
+
+it('cancels an in-flight preview when closed and ignores its late response', async () => {
+  const item = { ...share, name: 'photo.png', mime: 'image/png', size: png.length };
+  let finish: ((value: unknown) => void) | undefined;
+  invoke.mockImplementation((command: string) => command === 'share_status' ? Promise.resolve({ configured: true, origin }) : command === 'share_list' ? Promise.resolve({ schemaVersion: 1, shares: [item], nextCursor: null }) : command === 'share_thumbnail' ? new Promise(resolve => { finish = resolve; }) : Promise.resolve());
+  const user = userEvent.setup(); const view = render(<SharePanel />);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh upload history' }) as HTMLButtonElement).disabled).toBe(false));
+  await user.click(screen.getByRole('button', { name: 'Refresh upload history' }));
+  await user.click(await screen.findByRole('button', { name: 'Load thumbnail for photo.png' }));
+  const requestId = invoke.mock.calls.find(([command]) => command === 'share_thumbnail')![1].requestId;
+  view.unmount(); expect(invoke).toHaveBeenCalledWith('share_thumbnail_cancel', { requestId });
+  await act(async () => finish?.(thumbnail));
+  expect(makeObjectUrl).not.toHaveBeenCalled();
+});
+
+it('keeps thumbnails unavailable for expired or large images and exposes no SVG preview', async () => {
+  invoke.mockImplementation(async (command: string) => command === 'share_status' ? { configured: true, origin } : command === 'share_list' ? { schemaVersion: 1, shares: [{ ...share, name: 'expired.png', mime: 'image/png', createdAt: 1, expiresAt: 2 }, { ...share, id: 'b'.repeat(64), url: `${origin}/s/${'b'.repeat(64)}`, name: 'large.jpg', mime: 'image/jpeg', size: 3 * 1024 * 1024 }, { ...share, id: 'c'.repeat(64), url: `${origin}/s/${'c'.repeat(64)}`, name: 'active.svg', mime: 'image/svg+xml' }], nextCursor: null } : undefined);
+  const user = userEvent.setup(); render(<SharePanel />);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh upload history' }) as HTMLButtonElement).disabled).toBe(false));
+  await user.click(screen.getByRole('button', { name: 'Refresh upload history' }));
+  expect(await screen.findByRole('button', { name: 'Load thumbnail for expired.png' })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: 'Load thumbnail for large.jpg' })).toHaveProperty('disabled', true);
+  expect(screen.queryByRole('button', { name: 'Load thumbnail for active.svg' })).toBeNull();
 });

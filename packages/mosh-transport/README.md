@@ -1,6 +1,6 @@
 # Headless Mosh transport
 
-This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux and macOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. Android, iOS, and Windows builds explicitly report Mosh unavailable.
+This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux and macOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. The package also supports Android target-native compilation; Android runtime/app acceptance remains separate. iOS and Windows builds explicitly report Mosh unavailable.
 
 The root Cargo workspace owns the lockfile. Bun/Turborepo tracks this package through `@lazysh/mosh-transport`; native build/test tasks use Cargo's cache and bypass Turbo artifact caching. Unsupported targets do not compile or link the C++ core.
 
@@ -18,7 +18,7 @@ Use Cargo's standard test/build structure. The current build requires a C++17 co
 
 ```console
 cargo test --manifest-path packages/mosh-transport/Cargo.toml --locked
-cargo test --manifest-path packages/mosh-transport/Cargo.toml --test official_server --locked -- --ignored
+cargo test --manifest-path packages/mosh-transport/Cargo.toml --test official_server --locked official_server_utf8_input_resize_shutdown_and_parallel_isolation -- --ignored
 cargo clippy --manifest-path packages/mosh-transport/Cargo.toml --all-targets --locked -- -D warnings
 cargo fmt --manifest-path packages/mosh-transport/Cargo.toml -- --check
 ```
@@ -27,7 +27,13 @@ The ignored integration test requires the official `mosh-server` 1.4.0 binary on
 
 `bun run test:mosh` also runs the application's ignored OpenSSH/Mosh interoperability test. That fixture verifies real host-key authentication and remote bootstrap, closes the initial SSH PTY after handoff, sends UTF-8 input, resizes, uses the retained SSH connection for SFTP, and disconnects through the shared session/output-acknowledgment path.
 
-`PROTOC` can select a matching host compiler. Cross compilation must supply actual target-native libraries through the conventional target-specific pkg-config/toolchain environment. Host libraries must never be passed off as mobile artifacts. Portable vendored dependency builds and Windows socket support remain unresolved; there is no pretend mobile fallback.
+Android uses pinned protobuf-lite 36.2, Abseil 20250512.1, utf8_range, matching generated messages, and the OpenSSL 3.6.3 Cargo source package; see [ANDROID-SOURCES.md](ANDROID-SOURCES.md). Set `ANDROID_NDK_HOME` (or `NDK_HOME`), target-specific `CC`/`CXX`/`AR`, and Cargo's target linker to the NDK tools. `ANDROID_API_LEVEL` defaults to 24 and must match the compiler/linker API. No host protobuf, OpenSSL, pkg-config, or protoc is used for Android. The NDK's `libc++_shared.so` must accompany standalone executables and the APK's native library. ARM64 and x86_64 native Cargo test executables link with NDK29/API24; this does not establish device execution, app bootstrap, background/resume, or roaming behavior.
+
+The native Cargo `android_peer` integration test exercises two clients, UTF-8, resize, and shutdown against an ephemeral official host server. With the NDK environment above, the `x86_64-linux-android` Rust target installed, and an accelerated Android emulator running, use `bun run test:android-mosh`. The native host fixture cross-compiles the peer in `target/android-mosh-tests`, reads the exact executable from Cargo's JSON artifact report, and selects the matching NDK runtime. It stages only a unique temporary device directory, runs the library unit suite on Android, starts temporary loopback mosh-server processes, and runs the Android test against the emulator's documented `10.0.2.2` host-loopback alias. `ANDROID_SERIAL` selects the emulator; `LAZYSH_ANDROID_ADB` optionally selects adb. For an already built peer, set both `LAZYSH_ANDROID_TEST_BINARY` and `LAZYSH_ANDROID_CXX_RUNTIME` to override compilation; `LAZYSH_ANDROID_UNIT_BINARY` optionally supplies the matching library test executable in that mode. Build steps have a 600-second deadline; adb steps have a 45-second deadline. Timeout kills the owned process group, retained subprocess output is bounded, device files are removed, and server processes have a 20-second network lifetime plus fixture cleanup. No custom runner script is used.
+
+Without an emulator, validate the same native fixture's cross-build and artifact selection with `cargo test -p lazysh-mosh-transport --test official_server --locked android_fixture_cross_compilation -- --ignored`. This checks the resulting executable's ELF64/x86_64 identity and matching runtime existence, without claiming Android runtime interoperability.
+
+`PROTOC` can select a matching host compiler for desktop builds. Cross compilation must supply actual target-native libraries through the conventional target-specific pkg-config/toolchain environment. Host libraries must never be passed off as mobile artifacts. Portable vendored dependency builds and Windows socket support remain unresolved; there is no pretend mobile fallback.
 
 ## Runtime contract
 
@@ -53,4 +59,4 @@ Original vendored files remain unchanged. `build.rs` applies the following dated
 - Bound queued input to 64 KiB of events and one returned ANSI frame to 8 MiB. The caller must apply its own bounded output delivery/backpressure before forwarding frames to a WebView.
 - Use `OPENSSL_cleanse` on native raw key copies and fixed xterm display initialization.
 
-Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, mobile/Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.
+Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS/Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.

@@ -109,7 +109,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             )?)
             .map_err(|_| Error::InvalidEvent)?,
         ),
-        Command::Devices { command } => Some(lazysh_agent::devices::run(command)?),
+        Command::Devices { command } => {
+            if let lazysh_agent::devices::DeviceCommand::Ios {
+                id,
+                socket,
+                action: lazysh_agent::devices::idb::IosAction::Stream,
+            } = command
+            {
+                lazysh_agent::devices::idb::stream(&id, &socket)?;
+                None
+            } else {
+                Some(lazysh_agent::devices::run(command)?)
+            }
+        }
         Command::ApprovalConfig => Some(lazysh_agent::approvals::config()),
         Command::ApprovalRequest {
             agent,

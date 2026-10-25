@@ -74,3 +74,29 @@ test('whole-app light and dark themes keep dialog text readable and reset', asyn
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-app-theme', 'forest');
 });
+
+test('gesture bindings and advanced chords survive reload and gesture reset preserves the shortcut library', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+  await page.getByText('Terminal touch gestures', {exact: true}).click();
+  await page.getByRole('combobox', {name: 'Double tap', exact: true}).selectOption('custom');
+  await page.getByLabel('Double tap chord', {exact: true}).fill('C-b, S-t');
+  await page.getByRole('combobox', {name: 'Swipe left', exact: true}).selectOption('nextSession');
+  await page.getByRole('combobox', {name: 'D-pad left corner', exact: true}).selectOption('custom');
+  await page.getByLabel('D-pad left corner chord', {exact: true}).fill('text:/clear');
+  await page.getByText('Keyboard chords', {exact: true}).click();
+  await page.getByLabel('Chord name', {exact: true}).fill('Agent pane');
+  await page.getByLabel('Key sequence', {exact: true}).fill('F12, M-h');
+  await page.getByRole('button', {name: 'Add chord', exact: true}).click();
+  await page.reload();
+  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+  await page.getByText('Terminal touch gestures', {exact: true}).click();
+  await expect(page.getByLabel('Double tap chord', {exact: true})).toHaveValue('C-b, S-t');
+  await expect(page.getByRole('combobox', {name: 'Swipe left', exact: true})).toHaveValue('nextSession');
+  await expect(page.getByLabel('D-pad left corner chord', {exact: true})).toHaveValue('text:/clear');
+  await page.getByRole('button', {name: 'Reset gestures', exact: true}).click();
+  await expect(page.getByRole('combobox', {name: 'Double tap', exact: true})).toHaveValue('none');
+  await expect(page.getByLabel('Double tap chord', {exact: true})).toHaveCount(0);
+  await page.getByText('Keyboard chords', {exact: true}).click();
+  await expect(page.getByText('Agent pane: F12, M-h', {exact: true})).toBeVisible();
+});

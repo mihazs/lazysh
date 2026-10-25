@@ -31,7 +31,9 @@
       },
       "devDependencies": {
         "@lazysh/apple-speech": "workspace:*",
+        "@lazysh/apple-status": "workspace:*",
         "@lazysh/credential-vault": "workspace:*",
+        "@lazysh/push-registration": "workspace:*",
         "@playwright/test": "^1.55.1",
         "@tauri-apps/cli": "^2.8.4",
         "@testing-library/react": "^16.3.0",
@@ -54,6 +56,10 @@
       "name": "@lazysh/apple-speech",
       "version": "0.1.0",
     },
+    "packages/apple-status": {
+      "name": "@lazysh/apple-status",
+      "version": "0.1.0",
+    },
     "packages/credential-vault": {
       "name": "@lazysh/credential-vault",
       "version": "0.1.0",
@@ -64,6 +70,10 @@
     },
     "packages/mosh-transport": {
       "name": "@lazysh/mosh-transport",
+      "version": "0.1.0",
+    },
+    "packages/push-registration": {
+      "name": "@lazysh/push-registration",
       "version": "0.1.0",
     },
   },
@@ -196,6 +206,8 @@
 
     "@lazysh/apple-speech": ["@lazysh/apple-speech@workspace:packages/apple-speech"],
 
+    "@lazysh/apple-status": ["@lazysh/apple-status@workspace:packages/apple-status"],
+
     "@lazysh/client": ["@lazysh/client@workspace:apps/client"],
 
     "@lazysh/credential-vault": ["@lazysh/credential-vault@workspace:packages/credential-vault"],
@@ -203,6 +215,8 @@
     "@lazysh/et-transport": ["@lazysh/et-transport@workspace:packages/et-transport"],
 
     "@lazysh/mosh-transport": ["@lazysh/mosh-transport@workspace:packages/mosh-transport"],
+
+    "@lazysh/push-registration": ["@lazysh/push-registration@workspace:packages/push-registration"],
 
     "@lazysh/share-service": ["@lazysh/share-service@workspace:apps/share-service"],
 

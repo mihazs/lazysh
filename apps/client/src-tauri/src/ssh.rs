@@ -55,8 +55,23 @@ impl<E: std::fmt::Display> From<E> for SshError {
 }
 pub(crate) type Result<T> = std::result::Result<T, SshError>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    Auto,
+    Ssh,
+    Mosh,
+    Et,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Host {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<Transport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mosh: Option<crate::mosh::Options>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub et: Option<crate::et::Options>,
     pub id: String,
     pub name: String,
     pub hostname: String,
@@ -86,6 +101,12 @@ fn is_false(value: &bool) -> bool {
 }
 impl Host {
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(options) = &self.mosh {
+            options.validate()?;
+        }
+        if let Some(options) = &self.et {
+            options.validate()?;
+        }
         if self.id.is_empty()
             || self.id.len() > 100
             || self.name.trim().is_empty()
@@ -1060,7 +1081,7 @@ pub async fn connect_mosh(
 ) -> Result<Connected> {
     let parent = state.session(&session_id).await?;
     let bootstrap = crate::mosh::bootstrap(&parent, options, cols, rows).await?;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     {
         spawn_native_terminal(
             &state,
@@ -1076,7 +1097,7 @@ pub async fn connect_mosh(
         )
         .await
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
     {
         let _ = (bootstrap, events);
         Err(SshError::new(
@@ -1759,6 +1780,9 @@ mod tests {
             while stream.read(&mut buffer).await.unwrap() != 0 {}
         });
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "delayed".into(),
             name: "Delayed".into(),
             hostname: "127.0.0.1".into(),
@@ -1823,10 +1847,53 @@ mod tests {
     }
 
     #[test]
+    fn transport_preferences_validate_and_survive_host_reload() {
+        let legacy = serde_json::json!({
+            "id":"transport-host", "name":"Transport", "hostname":"example.test",
+            "port":22, "username":"user"
+        });
+        let old: Host = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(old.transport, None);
+        let mut value = legacy;
+        value["transport"] = serde_json::json!("auto");
+        value["mosh"] =
+            serde_json::json!({"serverPath":"mosh-server","portMin":60000,"portMax":61000});
+        value["et"] = serde_json::json!({"serverPath":"etterminal","port":2022});
+        let host: Host = serde_json::from_value(value.clone()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        save_host_inner(&state, host).unwrap();
+        let reloaded = AppState::new(dir.path().into())
+            .unwrap()
+            .host("transport-host")
+            .unwrap();
+        assert_eq!(reloaded.transport, Some(Transport::Auto));
+        let saved = serde_json::to_value(reloaded).unwrap();
+        assert_eq!(saved["mosh"], value["mosh"]);
+        assert_eq!(saved["et"]["port"], 2022);
+        for (field, bad) in [
+            ("mosh", serde_json::json!({"portMin":0})),
+            ("mosh", serde_json::json!({"portMin":1,"portMax":65535})),
+            ("et", serde_json::json!({"port":0})),
+            ("et", serde_json::json!({"serverPath":"bad\npath"})),
+        ] {
+            let mut invalid = value.clone();
+            invalid[field] = bad;
+            let host: Host = serde_json::from_value(invalid).unwrap();
+            assert!(save_host_inner(&state, host).is_err());
+        }
+        value["transport"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<Host>(value).is_err());
+    }
+
+    #[test]
     fn credential_cleanup_metadata_is_native_owned_and_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "credential-host".into(),
             name: "Credentials".into(),
             hostname: "example.test".into(),
@@ -1862,6 +1929,9 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let state = AppState::new(dir.path().into()).unwrap();
             let host = Host {
+                transport: None,
+                mosh: None,
+                et: None,
                 id: "saved-identity".into(),
                 name: "Saved identity".into(),
                 hostname: "example.test".into(),
@@ -1903,6 +1973,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
         let jump = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "jump".into(),
             name: "Jump".into(),
             hostname: "jump.test".into(),
@@ -1915,6 +1988,9 @@ mod tests {
             forward_agent: false,
         };
         let mut target = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "target".into(),
             name: "Target".into(),
             hostname: "target.test".into(),
@@ -2101,6 +2177,14 @@ mod tests {
     }
     #[tokio::test]
     async fn stalled_et_bootstrap_closes_its_channel_and_preserves_ssh_control() {
+        assert_stalled_bootstrap_cleanup(true).await;
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[tokio::test]
+    async fn stalled_mosh_bootstrap_closes_its_channel_and_preserves_ssh_control() {
+        assert_stalled_bootstrap_cleanup(false).await;
+    }
+    async fn assert_stalled_bootstrap_cleanup(et: bool) {
         let (host, server, task) = server(false).await;
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
@@ -2120,7 +2204,15 @@ mod tests {
             validate_size: check_size,
         });
         let bootstrap = tokio::spawn(async move {
-            crate::et::bootstrap(&session, crate::et::Options::default(), 80, 24).await
+            if et {
+                crate::et::bootstrap(&session, crate::et::Options::default(), 80, 24)
+                    .await
+                    .map(|_| ())
+            } else {
+                crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
+                    .await
+                    .map(|_| ())
+            }
         });
         server.executed.notified().await;
         let clock_guard = tokio::spawn(async {
@@ -2131,11 +2223,27 @@ mod tests {
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(16)).await;
         let error = bootstrap.await.unwrap().err().unwrap();
-        assert_eq!(error.kind, "et_bootstrap");
-        assert_eq!(error.message, "ET bootstrap timed out");
-        server.closed.notified().await;
+        assert_eq!(
+            error.kind,
+            if et { "et_bootstrap" } else { "mosh_bootstrap" }
+        );
+        assert_eq!(
+            error.message,
+            if et {
+                "ET bootstrap timed out"
+            } else {
+                "Mosh bootstrap timed out"
+            }
+        );
+        tokio::time::resume();
+        timeout(Duration::from_secs(2), server.closed.notified())
+            .await
+            .expect("timed-out bootstrap must close its SSH channel");
         // ChannelClose must not tear down the retained verified connection.
-        let channel = handle.channel_open_session().await.unwrap();
+        let channel = timeout(Duration::from_secs(2), handle.channel_open_session())
+            .await
+            .unwrap()
+            .unwrap();
         channel.close().await.unwrap();
         clock_guard.abort();
         task.abort();
@@ -2211,6 +2319,9 @@ mod tests {
             ..Default::default()
         });
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "test-host".into(),
             name: "Test".into(),
             hostname: "127.0.0.1".into(),
@@ -2471,6 +2582,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
         let mut host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "one".into(),
             name: "First".into(),
             hostname: "server".into(),
@@ -2774,6 +2888,9 @@ mod tests {
         .unwrap();
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "openssh".into(),
             name: "OpenSSH fixture".into(),
             hostname: "127.0.0.1".into(),

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { defaults, gestureActions, gestureDirections, parseChord, parseTheme, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type Preferences, type ToolbarKey } from "./preferences";
+import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabels, parseChord, parseTheme, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 export default function PreferencesPanel() {
@@ -28,6 +28,11 @@ export default function PreferencesPanel() {
     if (index < 0 || other < 0 || other >= toolbar.length) return;
     [toolbar[index], toolbar[other]] = [toolbar[other], toolbar[index]];
     update({toolbar});
+  }
+  function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = gestureActions) {
+    return <div key={slot}><label>{label}<select value={action} onChange={event => change(event.target.value as GestureAction)}>{allowed.map(item => <option key={item} value={item}>{gestureLabels[item]}</option>)}</select></label>
+      {action === "custom" && <label>{label} chord<input key={`${slot}:${preferences.gestureChords[slot] ?? ""}`} maxLength={128} defaultValue={preferences.gestureChords[slot] ?? ""} placeholder="C-b, T" onBlur={event => {try {parseChord(event.target.value); update({gestureChords: {...preferences.gestureChords, [slot]: event.target.value}});} catch (error) {setError(String(error));}}} /></label>}
+    </div>;
   }
   return <section className="preferences-panel" aria-label="Terminal preferences">
     <h2>Terminal preferences</h2>
@@ -63,9 +68,13 @@ export default function PreferencesPanel() {
     <label><input type="checkbox" checked={preferences.screenReader} onChange={e => update({screenReader: e.target.checked})} />Screen reader announcements</label>
     <label><input type="checkbox" checked={preferences.pinchZoom} onChange={e => update({pinchZoom: e.target.checked})} />Pinch with two fingers to resize terminal text</label>
     <label><input type="checkbox" checked={preferences.autoHideToolbar} onChange={e => update({autoHideToolbar: e.target.checked})} />Auto-hide toolbar in desktop pointer layouts</label>
-    <details><summary>Two-finger swipe actions</summary>
-      <p>Gestures leave text selection and composition alone. Single-finger scrolling stays available.</p>
-      {gestureDirections.map(direction => <label key={direction}>Swipe {direction}<select value={preferences.gestures[direction]} onChange={e => update({gestures: {...preferences.gestures, [direction]: e.target.value as GestureAction}})}>{gestureActions.map(action => <option key={action} value={action}>{action}</option>)}</select></label>)}
+    <details><summary>Terminal touch gestures</summary>
+      <p>Bindings are optional. Selection, composition and screen reader gestures take priority. Single-finger vertical scrolling stays available. Long presses keep the system selection menu.</p>
+      {bodyGestureSlots.map(slot => binding(slot, {tap: "Single tap", doubleTap: "Double tap", tripleTap: "Triple tap", swipeLeft: "Swipe left", swipeRight: "Swipe right"}[slot], preferences.bodyGestures[slot], action => update({bodyGestures: {...preferences.bodyGestures, [slot]: action}})))}
+      {gestureDirections.map(direction => binding(`two${direction[0].toUpperCase()}${direction.slice(1)}` as GestureSlot, `Two-finger swipe ${direction}`, preferences.gestures[direction], action => update({gestures: {...preferences.gestures, [direction]: action}})))}
+      <p>Add the D-pad item under Toolbar keys to show its arrow grid and corner shortcuts.</p>
+      {(["left", "right"] as const).map(corner => binding(corner === "left" ? "cornerLeft" : "cornerRight", `D-pad ${corner} corner`, preferences.dpadCorners[corner], action => update({dpadCorners: {...preferences.dpadCorners, [corner]: action}}), ["none", "backspace", "interrupt", "custom"]))}
+      <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom})}>Reset gestures</button>
     </details>
     <details><summary>Import terminal theme</summary>
       <label>Theme JSON<textarea maxLength={4096} value={themeJson} onChange={e => setThemeJson(e.target.value)} placeholder={'{"background":"#101311","foreground":"#d9e0d6"}'} /></label>
@@ -83,7 +92,7 @@ export default function PreferencesPanel() {
       <button disabled={!label.trim() || !text || preferences.snippets.length >= 12} onClick={() => { update({snippets: [...preferences.snippets, {label: label.trim(), text}]}); setLabel(""); setText(""); }}>Add snippet</button>
     </details>
     <details><summary>Keyboard chords</summary>
-      <p>Send up to 8 steps to the terminal. Example: Ctrl+b n. Use Ctrl, Alt, Shift, arrows, Enter, Escape, Tab, Space, PageUp, PageDown, Home, End, Insert, Delete, Backspace, or F1–F12. Chords run only when you press their toolbar button.</p>
+      <p>Send up to 8 steps: C-b, S-t or Ctrl+b Shift+t. C-/M-/S- and Ctrl+/Opt+/Shift+ modifiers, Esc, BSpace, dash, plus, arrows and F1–F12 are supported. Use text:/clear for literal text. Chords run from their toolbar button or an explicitly configured gesture.</p>
       <ul>{preferences.chords.map((chord, index) => <li key={index}><span>{chord.label}: {chord.keys}</span><button aria-label={`Remove chord ${chord.label}`} onClick={() => update({chords: preferences.chords.filter((_, i) => i !== index)})}>Remove</button></li>)}</ul>
       <label>Chord name<input maxLength={32} value={chordLabel} onChange={e => setChordLabel(e.target.value)} /></label>
       <label>Key sequence<input maxLength={128} value={keys} onChange={e => setKeys(e.target.value)} /></label>

@@ -1,5 +1,10 @@
 import { useState } from "react";
 import license from "../../../LICENSE?raw";
+import opensslLicense from "../../../packages/mosh-transport/OPENSSL-LICENSE.txt?raw";
+import protobufLicense from "../../../packages/mosh-transport/vendor-android/protobuf/LICENSE?raw";
+import utf8License from "../../../packages/mosh-transport/vendor-android/protobuf/third_party/utf8_range/LICENSE?raw";
+import abseilLicense from "../../../packages/mosh-transport/vendor-android/abseil/LICENSE?raw";
+import etLicense from "../../../packages/et-transport/LICENSE-MIT?raw";
 import moshIos from "../../../packages/mosh-transport/vendor/COPYING.iOS?raw";
 import { api, native } from "./bridge";
 import { errorMessage } from "./SessionTools";
@@ -55,11 +60,18 @@ export default function AboutPanel() {
         <button onClick={() => open(source)}>Mosh source and notices</button>
         <pre style={{ whiteSpace: "pre-wrap" }}>{moshIos}</pre>
       </details>
-      <p>
-        ET transport includes adapted MIT-licensed code; its original notice and
-        provenance accompany the source. The test font retains its Open Font
-        License.
-      </p>
+      {[
+        ["Protocol Buffers", protobufLicense],
+        ["UTF-8 Range", utf8License],
+        ["Abseil", abseilLicense],
+        ["OpenSSL", opensslLicense],
+        ["Eternal Terminal adapter", etLicense],
+      ].map(([name, text]) => (
+        <details key={name}>
+          <summary>{name} license</summary>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{text}</pre>
+        </details>
+      ))}
     </section>
   );
 }

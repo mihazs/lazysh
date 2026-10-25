@@ -6,6 +6,8 @@ The client keeps the management token in the platform credential vault. It never
 
 Downloads are public to anyone holding the unguessable URL until expiry or deletion. Expiry prevents new downloads immediately; a cleanup task removes expired objects within the next minute. It cannot retract bytes already downloaded. History and deletion require the management token. The service's wall clock must be correct for expiry timestamps.
 
+Image history offers an explicit **Load thumbnail** action for PNG, JPEG, GIF and simple VP8/VP8L WebP files up to 2 MiB. It downloads only from the configured service, without sending the management token, and checks source dimensions before decoding (8 megapixels and 8192 pixels per side). GIF frame dimensions are checked independently of its logical canvas. Extended/animated WebP and additional WebP metadata chunks are rejected before constructing a decoder, because the decoder's generic limits do not cover every nested allocation. These originals remain shareable and downloadable. One preview operation runs at a time. The native client preserves image orientation, converts the first frame to a static PNG no larger than 256×256, and keeps smaller originals small. The WebView receives only this sanitized thumbnail through IPC and displays a local Blob URL, revoked on hide, expiry, refresh or close. SVG and HTML are never previewed. Decoder allocation limits are also requested; actual platform memory and responsiveness still require device measurements.
+
 ## Run the optional Rust service
 
 `apps/share-service` is a standalone Rust application in the Bun/Turborepo and Cargo workspaces. Native tasks use Cargo; there is no custom test runner or service deployment script.

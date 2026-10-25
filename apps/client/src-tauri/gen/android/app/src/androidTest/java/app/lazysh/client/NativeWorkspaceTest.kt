@@ -49,7 +49,7 @@ class NativeWorkspaceTest {
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
         val fixture = "Instrumentation ${UUID.randomUUID()}"
         val selector = "button[aria-label='Connect to $fixture']"
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+        run { val scenario = NativeActivityFixture.scenario
             awaitDocument(scenario, "Boolean(document.querySelector('button.welcome-connect'))")
             assertEquals("true", evaluate(scenario, "Boolean(window.__TAURI_INTERNALS__)"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())

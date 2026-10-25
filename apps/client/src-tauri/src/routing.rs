@@ -176,6 +176,9 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
         let host = Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: id.into(),
             name: id.into(),
             hostname: "127.0.0.1".into(),
@@ -214,6 +217,9 @@ mod tests {
     }
     fn host(id: &str, jump: Option<&str>) -> Host {
         Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: id.into(),
             name: id.into(),
             hostname: id.into(),

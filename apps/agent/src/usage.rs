@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::{collections::HashMap, path::Path};
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+mod codex;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +23,30 @@ pub struct UsageSnapshot {
     samples: Vec<UsageSample>,
     context: Value,
     quota: Value,
+    recorded_context: Option<RecordedContext>,
+    provider_windows: Vec<ProviderWindow>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordedContext {
+    source: &'static str,
+    used_tokens: Option<u64>,
+    limit_tokens: Option<u64>,
+    recorded_at: Option<String>,
+    freshness: &'static str,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderWindow {
+    provider: &'static str,
+    account_id: Option<String>,
+    limit_id: Option<String>,
+    kind: &'static str,
+    used_percent: f64,
+    window_minutes: Option<u64>,
+    resets_at: Option<String>,
+    recorded_at: Option<String>,
+    freshness: &'static str,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +67,14 @@ pub fn read(
     session_id: Option<&str>,
     offset: u64,
 ) -> Result<UsageSnapshot> {
+    if matches!(agent, TranscriptAgent::Codex) {
+        let observed_at = Utc::now();
+        let window = codex::read(path, offset, observed_at)?;
+        let mut snapshot = from_page(window.page, observed_at)?;
+        snapshot.recorded_context = window.context;
+        snapshot.provider_windows = window.windows;
+        return Ok(snapshot);
+    }
     let page = match agent {
         TranscriptAgent::Hermes | TranscriptAgent::Opencode => transcript::read_database_page(
             path,
@@ -152,5 +185,7 @@ pub fn from_page(page: TranscriptPage, observed_at: DateTime<Utc>) -> Result<Usa
         samples,
         context: json!({"usedTokens":null,"limitTokens":null,"remainingTokens":null}),
         quota: json!({"remaining":null,"resetsAt":null}),
+        recorded_context: None,
+        provider_windows: Vec::new(),
     })
 }

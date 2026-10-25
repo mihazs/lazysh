@@ -19,6 +19,8 @@ export type LiveSession = {
   connected: boolean;
   mosh?: {serverPath: string; portMin: number; portMax: number};
   et?: {serverPath: string; port: number};
+  auto?: import('./bridge').AutoOptions;
+  transportNotice?: string;
   message?: string;
   attached?: {kind: 'tmux' | 'herdr' | 'zellij'; name: string};
 };

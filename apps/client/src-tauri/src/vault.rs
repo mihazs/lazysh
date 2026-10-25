@@ -334,6 +334,9 @@ mod tests {
     }
     fn host() -> Host {
         Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: "one".into(),
             name: "Test".into(),
             hostname: "host".into(),
@@ -357,6 +360,17 @@ mod tests {
         let encoded = encode(&host, &credentials).unwrap();
         assert_eq!(
             decode(&host, &encoded).unwrap().password.as_deref(),
+            Some("secret")
+        );
+        let mut preferences_changed = host.clone();
+        preferences_changed.transport = Some(crate::ssh::Transport::Auto);
+        preferences_changed.mosh = Some(crate::mosh::Options::default());
+        preferences_changed.et = Some(crate::et::Options::default());
+        assert_eq!(
+            decode(&preferences_changed, &encoded)
+                .unwrap()
+                .password
+                .as_deref(),
             Some("secret")
         );
         for changed in [

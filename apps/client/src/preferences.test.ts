@@ -27,12 +27,21 @@ describe("keyboard chords", () => {
     expect(parseChord("Ctrl+b n")).toBe("\x02n");
     expect(parseChord("Ctrl+Alt+c Shift+Tab F12 Ctrl+Left")).toBe("\x1b\x03\x1b[Z\x1b[24~\x1b[1;5D");
     expect(parseChord("Space Ctrl+Space Shift+a F1")).toBe(" \x00A\x1bOP");
+    expect(parseChord("C-b, S-t")).toBe("\x02T");
+    expect(parseChord("M-x Opt+y Esc BSpace dash plus")).toBe("\x1bx\x1by\x1b\x7f-+");
+    expect(parseChord("C-dash")).toBe("\x1f");
+    expect(parseChord("text:/clear, keep spaces ")).toBe("/clear, keep spaces ");
   });
   it("rejects invalid and unbounded sequences and filters unsafe stored chords", () => {
-    for (const sequence of ["", "Ctrl+Ctrl+c", "Meta+c", "Ctrl+1", "Shift+1", "__proto__", "toString", "F13", "a ".repeat(9), "\x1b"]) expect(() => parseChord(sequence)).toThrow();
+    for (const sequence of ["", "Ctrl+Ctrl+c", "Meta+c", "Ctrl+1", "Shift+1", "__proto__", "toString", "F13", "a ".repeat(9), "\x1b", "Contrl-b", "C-b,,T", "text:\x1b", "text:"]) expect(() => parseChord(sequence)).toThrow();
     const p = parsePreferences({...defaults, chords: [{label: "next", keys: "Ctrl+b n"}, {label: "bad", keys: "Ctrl+wat"}], gestures: {left: "evil", right: "tab", up: "find"}});
     expect(p.chords).toEqual([{label: "next", keys: "Ctrl+b n"}]);
     expect(p.gestures).toEqual({left: "none", right: "tab", up: "find", down: "none"});
+  });
+  it("keeps gesture chord content bound to a slot and drops malformed imported mappings", () => {
+    const preferences = parsePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, doubleTap: "custom", swipeLeft: "nextSession", tap: "unknown"}, gestureChords: {doubleTap: "C-b, T", twoLeft: "Contrl-x", unknown: "C-c"}});
+    expect(preferences.bodyGestures).toMatchObject({doubleTap: "custom", swipeLeft: "nextSession", tap: "none"});
+    expect(preferences.gestureChords).toEqual({doubleTap: "C-b, T"});
   });
 });
 

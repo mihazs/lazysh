@@ -463,6 +463,9 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
             "chords",
             "pinchZoom",
             "gestures",
+            "bodyGestures",
+            "gestureChords",
+            "dpadCorners",
             "autoHideToolbar",
         ];
         let object = preferences.as_object().ok_or("Invalid sync preferences")?;
@@ -1114,6 +1117,9 @@ mod tests {
     }
     fn host(id: &str) -> Host {
         Host {
+            transport: None,
+            mosh: None,
+            et: None,
             id: id.into(),
             name: id.into(),
             hostname: format!("{id}.example"),

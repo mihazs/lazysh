@@ -2,7 +2,7 @@ use crate::ssh::{AppState, Connected, Input, Result, Session, SshError, SshEvent
 use lazysh_et_transport::{Client, Event, SessionSecret};
 use rand::distr::{Alphanumeric, SampleString};
 use russh::ChannelMsg;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, time::Duration};
 use tauri::{ipc::Channel, State};
 use tokio::{
@@ -11,7 +11,7 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Options {
     #[serde(default = "default_server")]
@@ -37,7 +37,7 @@ impl Default for Options {
     }
 }
 impl Options {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.port == 0
             || self.server_path.trim().is_empty()
             || self.server_path.len() > 4096
@@ -176,6 +176,18 @@ pub async fn connect_et(
     .await
 }
 
+fn startup_error(error: lazysh_et_transport::Error) -> SshError {
+    use lazysh_et_transport::Error;
+    let kind = match &error {
+        Error::Io(_) => "et_unreachable",
+        Error::Closed => "et_closed",
+        Error::UnsupportedHandshake => "et_unsupported_handshake",
+        Error::Authentication => "et_authentication",
+        _ => "et_protocol",
+    };
+    SshError::new(kind, error)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run(
     bootstrap: Bootstrap,
@@ -194,7 +206,7 @@ async fn run(
         let mut client = tokio::select! {
             _ = cancelled.changed() => return Err(SshError::new("cancelled", "ET connection was cancelled")),
             _ = initial_cancel.changed() => return Err(SshError::new("cancelled", "ET connection was cancelled")),
-            result = Client::connect(endpoint, bootstrap.secret, cols as u16, rows as u16) => result.map_err(|error| SshError::new("et", error))?,
+            result = Client::connect(endpoint, bootstrap.secret, cols as u16, rows as u16) => result.map_err(startup_error)?,
         };
         let control = client.control(); let mut input_cancel = cancelled.clone();
         let mut input_job = tauri::async_runtime::spawn(async move {
@@ -258,6 +270,21 @@ async fn run(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[test]
+    fn startup_errors_keep_authentication_and_protocol_distinct_from_unreachable_transport() {
+        use lazysh_et_transport::Error;
+        let kind = |error| serde_json::to_value(startup_error(error)).unwrap()["kind"].clone();
+        assert_eq!(kind(Error::Authentication), "et_authentication");
+        assert_eq!(kind(Error::Protocol("invalid frame")), "et_protocol");
+        assert_eq!(
+            kind(Error::Io(std::io::ErrorKind::ConnectionRefused.into())),
+            "et_unreachable"
+        );
+        assert_eq!(
+            kind(Error::UnsupportedHandshake),
+            "et_unsupported_handshake"
+        );
+    }
     #[test]
     fn validates_and_quotes_options_without_treating_paths_as_shell_fragments() {
         let options = Options {

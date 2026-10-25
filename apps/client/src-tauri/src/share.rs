@@ -140,6 +140,7 @@ type Uploads = Mutex<HashMap<String, Upload>>;
 #[derive(Default)]
 pub struct ShareState {
     uploads: Arc<Uploads>,
+    thumbnail: Arc<Mutex<Option<ThumbnailWork>>>,
     changing: Arc<AtomicBool>,
     generation: AtomicU64,
 }
@@ -163,6 +164,10 @@ async fn cancel_all(state: &ShareState) {
         let _ = upload.cancel.send(true);
     }
     uploads.retain(|_, upload| upload.pending.is_none());
+    drop(uploads);
+    if let Some(work) = state.thumbnail.lock().await.as_ref() {
+        let _ = work.cancel.send(true);
+    }
 }
 fn configured_token(
     origin: &str,
@@ -622,6 +627,298 @@ pub async fn share_upload_cancel(state: State<'_, ShareState>, id: String) -> Re
         let _ = upload.cancel.send(true);
         if upload.pending.is_some() {
             uploads.remove(&id);
+        }
+    }
+    Ok(())
+}
+
+const THUMBNAIL_INPUT_LIMIT: usize = 2 * 1024 * 1024;
+const THUMBNAIL_OUTPUT_LIMIT: usize = 512 * 1024;
+struct ThumbnailWork {
+    request_id: String,
+    cancel: watch::Sender<bool>,
+}
+struct ThumbnailLease {
+    state: Arc<Mutex<Option<ThumbnailWork>>>,
+    request_id: String,
+}
+impl Drop for ThumbnailLease {
+    fn drop(&mut self) {
+        let clear = |work: &mut Option<ThumbnailWork>| {
+            if work
+                .as_ref()
+                .is_some_and(|work| work.request_id == self.request_id)
+            {
+                *work = None;
+            }
+        };
+        if let Ok(mut work) = self.state.try_lock() {
+            clear(&mut work);
+        } else {
+            let state = self.state.clone();
+            let id = self.request_id.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut work = state.lock().await;
+                if work.as_ref().is_some_and(|work| work.request_id == id) {
+                    *work = None;
+                }
+            });
+        }
+    }
+}
+#[derive(Serialize)]
+pub struct Thumbnail {
+    mime: &'static str,
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+fn thumbnail_dimensions(width: u32, height: u32) -> Result<()> {
+    if width == 0
+        || height == 0
+        || width > 8192
+        || height > 8192
+        || u64::from(width) * u64::from(height) > 8 * 1024 * 1024
+    {
+        return Err("Image previews support at most 8 megapixels and 8192 pixels per side".into());
+    }
+    Ok(())
+}
+fn little16(bytes: &[u8]) -> u32 {
+    u32::from(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+fn webp_preflight(bytes: &[u8]) -> Result<()> {
+    const UNSUPPORTED: &str = "Only simple WebP files with one VP8 or VP8L chunk can be previewed; download the original instead";
+    if bytes.len() < 20 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+        return Err("Invalid WebP container".into());
+    }
+    let declared =
+        u32::from_le_bytes(bytes[4..8].try_into().map_err(|_| "Invalid WebP size")?) as u64;
+    let chunk_size = u32::from_le_bytes(
+        bytes[16..20]
+            .try_into()
+            .map_err(|_| "Invalid WebP chunk size")?,
+    ) as u64;
+    if declared + 8 != bytes.len() as u64
+        || 20 + chunk_size + (chunk_size & 1) != bytes.len() as u64
+    {
+        return Err(UNSUPPORTED.into());
+    }
+    let payload = &bytes[20..20 + chunk_size as usize];
+    let (width, height) = match &bytes[12..16] {
+        b"VP8 "
+            if payload.len() >= 10
+                && payload[0] & 1 == 0
+                && payload[3..6] == [0x9d, 0x01, 0x2a] =>
+        {
+            let width = little16(&payload[6..8]);
+            let height = little16(&payload[8..10]);
+            if width & 0xc000 != 0 || height & 0xc000 != 0 {
+                return Err(UNSUPPORTED.into());
+            }
+            (width, height)
+        }
+        b"VP8L" if payload.len() >= 5 && payload[0] == 0x2f => {
+            let bits = u32::from_le_bytes(
+                payload[1..5]
+                    .try_into()
+                    .map_err(|_| "Invalid WebP dimensions")?,
+            );
+            if bits >> 29 != 0 {
+                return Err(UNSUPPORTED.into());
+            }
+            ((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1)
+        }
+        _ => return Err(UNSUPPORTED.into()),
+    };
+    thumbnail_dimensions(width, height)
+}
+fn gif_preflight(bytes: &[u8]) -> Result<()> {
+    if bytes.len() < 13 {
+        return Err("Invalid GIF header".into());
+    }
+    let (width, height) = (little16(&bytes[6..8]), little16(&bytes[8..10]));
+    thumbnail_dimensions(width, height)?;
+    let mut offset = 13usize;
+    if bytes[10] & 0x80 != 0 {
+        offset += 3 * (1usize << ((bytes[10] & 7) + 1));
+    }
+    loop {
+        match bytes.get(offset) {
+            Some(0x21) => {
+                offset += 2;
+                loop {
+                    let size = usize::from(*bytes.get(offset).ok_or("Invalid GIF extension")?);
+                    offset += 1;
+                    if size == 0 {
+                        break;
+                    }
+                    offset = offset
+                        .checked_add(size)
+                        .filter(|end| *end <= bytes.len())
+                        .ok_or("Invalid GIF extension size")?;
+                }
+            }
+            Some(0x2c) => {
+                let frame = bytes
+                    .get(offset + 1..offset + 10)
+                    .ok_or("Invalid GIF frame header")?;
+                let (left, top, frame_width, frame_height) = (
+                    little16(&frame[..2]),
+                    little16(&frame[2..4]),
+                    little16(&frame[4..6]),
+                    little16(&frame[6..8]),
+                );
+                thumbnail_dimensions(frame_width, frame_height)?;
+                if left + frame_width > width || top + frame_height > height {
+                    return Err("GIF preview frame exceeds its bounded canvas; download the original instead".into());
+                }
+                return Ok(());
+            }
+            _ => return Err("GIF preview has no valid bounded first frame".into()),
+        }
+    }
+}
+fn thumbnail(bytes: &[u8]) -> Result<Thumbnail> {
+    use image::{ImageDecoder, ImageFormat, ImageReader};
+    use std::io::Cursor;
+    if bytes.len() > THUMBNAIL_INPUT_LIMIT {
+        return Err("Image previews are limited to 2 MiB".into());
+    }
+    let format = image::guess_format(bytes)
+        .map_err(|_| "Only PNG, JPEG, GIF and WebP images can be previewed")?;
+    if !matches!(
+        format,
+        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP
+    ) {
+        return Err("Only PNG, JPEG, GIF and WebP images can be previewed".into());
+    }
+    match format {
+        ImageFormat::WebP => webp_preflight(bytes)?,
+        ImageFormat::Gif => gif_preflight(bytes)?,
+        _ => {}
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(limits.clone());
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|_| "Cannot read image dimensions within preview limits")?;
+    thumbnail_dimensions(width, height)?;
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(limits);
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|_| "Cannot decode this image within preview limits")?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut decoded = image::DynamicImage::from_decoder(decoder)
+        .map_err(|_| "Cannot decode this image within preview limits")?;
+    decoded.apply_orientation(orientation);
+    let image = image::DynamicImage::ImageRgba8(
+        decoded
+            .thumbnail(decoded.width().min(256), decoded.height().min(256))
+            .to_rgba8(),
+    );
+    let (width, height) = (image.width(), image.height());
+    let mut data = Cursor::new(Vec::new());
+    image
+        .write_to(&mut data, ImageFormat::Png)
+        .map_err(|_| "Cannot encode image thumbnail")?;
+    let data = data.into_inner();
+    if data.len() > THUMBNAIL_OUTPUT_LIMIT {
+        return Err("Encoded thumbnail exceeds the preview limit".into());
+    }
+    Ok(Thumbnail {
+        mime: "image/png",
+        data,
+        width,
+        height,
+    })
+}
+async fn thumbnail_bytes(client: Client, enrollment: &Enrollment, id: &str) -> Result<Vec<u8>> {
+    if !valid_id(id) {
+        return Err("Invalid shared file identifier".into());
+    }
+    let mut response = client
+        .get(format!("{}/s/{id}", enrollment.origin))
+        .send()
+        .await
+        .map_err(|_| "Cannot read the shared image")?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err("Image link expired, was deleted, or the service refused it".into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > THUMBNAIL_INPUT_LIMIT as u64)
+    {
+        return Err("Image previews are limited to 2 MiB".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Cannot read the shared image")?
+    {
+        if bytes.len() + chunk.len() > THUMBNAIL_INPUT_LIMIT {
+            return Err("Image previews are limited to 2 MiB".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+#[tauri::command]
+pub async fn share_thumbnail(
+    app: AppHandle,
+    state: State<'_, ShareState>,
+    id: String,
+    request_id: String,
+) -> Result<Thumbnail> {
+    if !valid_id(&id) || uuid::Uuid::parse_str(&request_id).is_err() {
+        return Err("Invalid image preview request".into());
+    }
+    if state.changing.load(Ordering::Acquire) {
+        return Err("Sharing service configuration is changing".into());
+    }
+    let generation = state.generation.load(Ordering::Acquire);
+    let (cancel, mut cancelled) = watch::channel(false);
+    {
+        let mut work = state.thumbnail.lock().await;
+        if work.is_some() {
+            return Err("Wait for the current image preview to finish".into());
+        }
+        *work = Some(ThumbnailWork {
+            request_id: request_id.clone(),
+            cancel,
+        });
+    }
+    let lease = Arc::new(ThumbnailLease {
+        state: state.thumbnail.clone(),
+        request_id,
+    });
+    tokio::select! {
+        _ = cancelled.changed() => Err("Image preview cancelled".into()),
+        result = async {
+            let enrollment = load(app).await?.ok_or("Configure a sharing service first")?;
+            if state.changing.load(Ordering::Acquire) || generation != state.generation.load(Ordering::Acquire) { return Err("Sharing service changed; open the preview again".into()); }
+            let bytes = thumbnail_bytes(client()?, &enrollment, &id).await?;
+            let decoding = lease.clone();
+            tauri::async_runtime::spawn_blocking(move || { let _lease = decoding; thumbnail(&bytes) }).await.map_err(|_| "Image decoder stopped".to_owned())?
+        } => result,
+    }
+}
+#[tauri::command]
+pub async fn share_thumbnail_cancel(
+    state: State<'_, ShareState>,
+    request_id: String,
+) -> Result<()> {
+    if let Some(work) = state.thumbnail.lock().await.as_ref() {
+        if work.request_id == request_id {
+            let _ = work.cancel.send(true);
         }
     }
     Ok(())

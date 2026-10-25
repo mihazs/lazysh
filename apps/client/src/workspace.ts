@@ -1,9 +1,21 @@
+import type {AutoOptions, EtOptions, MoshOptions} from "./bridge";
 export type SessionIntent = {
   hostId: string;
+  auto?: AutoOptions;
   et?: { serverPath: string; port: number };
   mosh?: { serverPath: string; portMin: number; portMax: number };
   attached?: { kind: "tmux" | "herdr" | "zellij"; name: string };
 };
+function validMosh(value: MoshOptions) {
+  return !!value && typeof value.serverPath === 'string' && value.serverPath.length > 0 && value.serverPath.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value.serverPath)
+    && Number.isInteger(value.portMin) && Number.isInteger(value.portMax) && value.portMin >= 1 && value.portMax <= 65535 && value.portMax >= value.portMin && value.portMax - value.portMin <= 1000;
+}
+function validEt(value: EtOptions) {
+  return !!value && typeof value.serverPath === 'string' && value.serverPath.length > 0 && value.serverPath.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value.serverPath)
+    && Number.isInteger(value.port) && value.port >= 1 && value.port <= 65535;
+}
+function publicMosh(value:MoshOptions):MoshOptions { return {serverPath:value.serverPath,portMin:value.portMin,portMax:value.portMax}; }
+function publicEt(value:EtOptions):EtOptions { return {serverPath:value.serverPath,port:value.port}; }
 const key = "lazysh.workspace.v1";
 export function readWorkspace(): SessionIntent[] {
   try {
@@ -18,25 +30,10 @@ export function readWorkspace(): SessionIntent[] {
         item.hostId.length <= 100 &&
         !(item.mosh && item.attached) &&
         !(item.et && (item.mosh || item.attached)) &&
-        (!item.et ||
-          (typeof item.et.serverPath === "string" &&
-            item.et.serverPath.length > 0 &&
-            item.et.serverPath.length <= 4096 &&
-            !/[\x00-\x1f\x7f]/.test(item.et.serverPath) &&
-            Number.isInteger(item.et.port) &&
-            item.et.port >= 1 &&
-            item.et.port <= 65535)) &&
-        (!item.mosh ||
-          (typeof item.mosh.serverPath === "string" &&
-            item.mosh.serverPath.length > 0 &&
-            item.mosh.serverPath.length <= 4096 &&
-            !/[\x00-\x1f\x7f]/.test(item.mosh.serverPath) &&
-            Number.isInteger(item.mosh.portMin) &&
-            Number.isInteger(item.mosh.portMax) &&
-            item.mosh.portMin >= 1 &&
-            item.mosh.portMax <= 65535 &&
-            item.mosh.portMax >= item.mosh.portMin &&
-            item.mosh.portMax - item.mosh.portMin <= 1000)) &&
+        !(item.auto && (item.mosh || item.et || item.attached)) &&
+        (!item.auto || (validMosh(item.auto.mosh) && validEt(item.auto.et))) &&
+        (!item.et || validEt(item.et)) &&
+        (!item.mosh || validMosh(item.mosh)) &&
         (!item.attached ||
           (["tmux", "herdr", "zellij"].includes(item.attached.kind) &&
             typeof item.attached.name === "string" &&
@@ -52,10 +49,11 @@ export function saveWorkspace(sessions: SessionIntent[]) {
   localStorage.setItem(
     key,
     JSON.stringify(
-      sessions.slice(0, 20).map(({ hostId, attached, mosh, et }) => ({
+      sessions.slice(0, 20).map(({ hostId, attached, mosh, et, auto }) => ({
         hostId,
-        ...(et ? { et: { serverPath: et.serverPath, port: et.port } } : {}),
-        ...(mosh
+        ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
+        ...(!auto && et ? { et: publicEt(et) } : {}),
+        ...(!auto && mosh
           ? {
               mosh: {
                 serverPath: mosh.serverPath,
@@ -64,7 +62,7 @@ export function saveWorkspace(sessions: SessionIntent[]) {
               },
             }
           : {}),
-        ...(attached
+        ...(!auto && attached
           ? { attached: { kind: attached.kind, name: attached.name } }
           : {}),
       })),

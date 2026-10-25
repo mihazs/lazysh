@@ -49,7 +49,7 @@ class NativeVaultTest {
     }
 
     @Test fun keystoreRoundtripStoresOnlyCiphertextAndRejectsTampering() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+        run { val scenario = NativeActivityFixture.scenario
             lateinit var plugin: VaultPlugin
             scenario.onActivity { plugin = VaultPlugin(it) }
             val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -82,7 +82,7 @@ class NativeVaultTest {
     }
 
     @Test fun protectedWriteNeverFallsBackWhenUnavailableOrExplicitlyCancelled() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+        run { val scenario = NativeActivityFixture.scenario
             lateinit var plugin: VaultPlugin
             scenario.onActivity { plugin = VaultPlugin(it) }
             val account = "instrumentation-protected-${UUID.randomUUID()}"
@@ -102,7 +102,7 @@ class NativeVaultTest {
     }
 
     @Test fun cancelledAndBackgroundOperationsCannotReturnStoredSecrets() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+        run { val scenario = NativeActivityFixture.scenario
             lateinit var plugin: VaultPlugin
             scenario.onActivity { plugin = VaultPlugin(it) }
             val account = "instrumentation-cancel-${UUID.randomUUID()}"

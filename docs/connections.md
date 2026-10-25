@@ -10,6 +10,22 @@ Routing uses an SSH `direct-tcpip` channel to the destination address and port, 
 
 This implementation supports SSH routing. Bastion routes and selected-identity forwarding are SSH-terminal features. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
 
+## Transport selection
+
+Choose a host's **Preferred transport** in its editor. New hosts default to **Auto**; existing hosts without a preference keep SSH. The connection dialog starts with that preference and its saved helper paths/ports. A per-connection override does not silently change the saved host.
+
+Auto first completes normal SSH host-key verification and authentication. It then tries Mosh, Eternal Terminal and finally the existing SSH terminal, in that order. It skips transports unsupported by the app build, bastion routes or selected-identity forwarding and displays those reasons. Classified helper, locale or network availability failures can move to the next transport. Host-key, authentication, packet-authentication, cancellation and unclassified errors stop the attempt. Forced Mosh and forced ET report their failure without falling back.
+
+The session displays the chosen transport and observed fallback reasons. Workspace restoration retains the Auto intention and its public bootstrap options, then probes again after fresh verified SSH authentication. It does not save transport secrets or permanently replace Auto with its last SSH fallback.
+
+## Mosh
+
+Mosh starts the configured `mosh-server` through verified SSH and connects its authenticated UDP transport to the verified peer address. The default UDP range is 60000–61000; the configured range can contain at most 1001 ports. The host needs a UTF-8 locale and reachable UDP ports. Session keys stay in native memory and are never saved with host preferences.
+
+The official Mosh core is embedded under GPL-3.0-or-later. Linux interoperability is tested against the official server; macOS builds pass. Android ARM64 and x86_64 native executables link with target-specific dependencies, while Android runtime and roaming acceptance remain pending. iOS and Windows report Mosh unavailable. See [build and provenance notes](../packages/mosh-transport/README.md).
+
+The verified SSH control connection remains available for files and host tools. Mosh does not restore remote scrollback; use a durable multiplexer for remote history and process lifetime. Restoring after process death performs a fresh authenticated bootstrap rather than reusing session keys.
+
 ## Eternal Terminal
 
 The ET transport starts the host's `etterminal` helper through the already verified SSH connection, then connects the in-process Rust client to the same server IP on the configured ET TCP port (default 2022). The host must already run a compatible `etserver`. The helper path is configurable; advanced private ET instances can specify an absolute server FIFO path. IPv6 scope information from the verified SSH peer is preserved.
