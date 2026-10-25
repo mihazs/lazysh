@@ -5,6 +5,8 @@ import { errorMessage } from "./SessionTools";
 import { useDictationHistory } from './voiceHistory';
 import VoiceHistoryPanel from './VoiceHistoryPanel';
 import type { DirectDictation } from './voiceDelivery';
+import CloudVoiceSettingsPanel from './CloudVoiceSettingsPanel';
+import { CLOUD_LANGUAGES, validateCloudQuota, type CloudSnapshot, type CloudQuota } from './cloudVoice';
 
 type Model = { id: string; bytes: number };
 type CatalogModel = {id:string;file:string;label:string;bytes:number;sha256:string;revision:string};
@@ -28,7 +30,10 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
   const [cancellingDownload, setCancellingDownload] = useState(false);
   const [downloadBytes, setDownloadBytes] = useState(0);
   const [language, setLanguage] = useState("auto");
-  const [engine, setEngine] = useState<"whisper" | "apple">("whisper");
+  const [engine, setEngine] = useState<"whisper" | "apple" | "cloud">("whisper");
+  const [cloudSnapshot, setCloudSnapshot] = useState<CloudSnapshot>();
+  const [cloudLanguage, setCloudLanguage] = useState('auto');
+  const [cloudConfigBusy, setCloudConfigBusy] = useState(false);
   const [apple, setApple] = useState<AppleCapability>({
     available: false,
     reason: "Apple SpeechAnalyzer requires a supported iOS device.",
@@ -53,6 +58,22 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
   const importId = useRef("");
   const appleRequest = useRef("");
   const downloadRequest = useRef("");
+  const cloudRequest = useRef("");
+  const previousSession = useRef(sessionId);
+  async function cancelCloud(requestId: string, current = generation.current) {
+    try {
+      const result = await invoke<{cancelled: boolean; cleanup: string}>('voice_cloud_cancel', { requestId });
+      if (current === generation.current && result?.cleanup === 'unconfirmed')
+        setError(previous => `${previous}${previous ? ' ' : ''}Cloud cancellation cleanup could not be confirmed. An empty service reservation may expire after 30 seconds; retry explicitly.`);
+    } catch (e) { if (current === generation.current) setError(errorMessage(e)); }
+  }
+  useEffect(() => {
+    if (previousSession.current !== sessionId) { previousSession.current = sessionId; cancel(); setDirect(false); setAutoSend(false); }
+  }, [sessionId]);
+  useEffect(() => {
+    if (cloudSnapshot) setCloudLanguage(previous => cloudSnapshot.capabilities.languages.includes(previous) ? previous
+      : cloudSnapshot.capabilities.languages.includes('auto') ? 'auto' : cloudSnapshot.capabilities.languages[0]);
+  }, [cloudSnapshot]);
   async function refreshCatalog() {
     const entries = await invoke<CatalogModel[]>('voice_model_catalog');
     if(!Array.isArray(entries) || entries.length>4 || entries.some(entry=>!entry || !['tiny','tiny.en','base','base.en'].includes(entry.id)
@@ -134,6 +155,8 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
     window.addEventListener("pagehide", cancel);
     return () => {
       generation.current++;
+      const cloudId = cloudRequest.current; cloudRequest.current = '';
+      if (cloudId) void cancelCloud(cloudId);
       if (recorder.current?.state === "recording") recorder.current.stop();
       releaseMicrophone();
       void invoke("voice_cancel").catch(() => {});
@@ -226,7 +249,7 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
     releaseMicrophone();
     setRecording(false);
     setBusy(true);
-    setProgress("Transcribing on this device…");
+    setProgress(engine === "cloud" ? "Transcribing with Cloud…" : "Transcribing on this device…");
     let context: AudioContext | undefined;
     let requestId = "";
     try {
@@ -243,7 +266,20 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
         requestId = crypto.randomUUID();
         appleRequest.current = requestId;
       }
-      const text =
+      let text: string;
+      if (engine === 'cloud') {
+        requestId = cloudRequest.current;
+        if (!requestId) throw new Error('Cloud recording was cancelled.');
+        const result = await invoke<{requestId: string; text: string; quota: CloudQuota; checkedAt: number}>('voice_cloud_transcribe', {
+          requestId, sessionId, samples, language: cloudLanguage,
+        });
+        if (!result || result.requestId !== requestId || typeof result.text !== 'string'
+          || new TextEncoder().encode(result.text).length > 16384 || !Number.isSafeInteger(result.checkedAt) || result.checkedAt < 0)
+          throw new Error('Invalid Cloud transcription result.');
+        validateCloudQuota(result.quota);
+        text = result.text;
+        if (current === generation.current) setCloudSnapshot(previous => previous ? {...previous, quota: result.quota, checkedAt: result.checkedAt} : previous);
+      } else text =
         engine === "apple"
           ? await invoke<string>("apple_speech_transcribe", {
               samples,
@@ -273,6 +309,12 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
     } catch (e) {
       if (current === generation.current) setError(errorMessage(e));
     } finally {
+      if (engine === 'cloud') {
+        if (current === generation.current) {
+          const cloudId = cloudRequest.current; cloudRequest.current = '';
+          if (cloudId) void cancelCloud(cloudId);
+        }
+      }
       if (appleRequest.current === requestId) appleRequest.current = "";
       await context?.close().catch(() => {});
       if (current === generation.current) {
@@ -296,6 +338,15 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
         throw new Error(
           "Microphone recording is unavailable in this WebView. Check device microphone permissions.",
         );
+      if (engine === 'cloud') {
+        if (!cloudSnapshot || cloudSnapshot.quota.deviceRemainingSamples < 1600 || cloudSnapshot.quota.globalRemainingSamples < 1600)
+          throw new Error('Verify Cloud service capabilities and available audio quota before recording.');
+        const requestId = await invoke<string>('voice_cloud_begin', { sessionId });
+        if (typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId))
+          throw new Error('Invalid Cloud recording reservation.');
+        if (current !== generation.current || document.visibilityState !== 'visible') { void cancelCloud(requestId, current); return; }
+        cloudRequest.current = requestId;
+      }
       const media = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true },
         video: false,
@@ -310,19 +361,16 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
       const parts: Blob[] = [];
       let bytes = 0;
       capture.ondataavailable = (event) => {
+        if (current !== generation.current) return;
         bytes += event.data.size;
         if (bytes > 8 * 1024 * 1024) {
-          generation.current++;
-          capture.stop();
-          releaseMicrophone();
-          setRecording(false);
+          cancel();
           setError("Recording exceeded the audio size limit.");
         } else parts.push(event.data);
       };
       capture.onerror = () => {
-        generation.current++;
-        releaseMicrophone();
-        setRecording(false);
+        if (current !== generation.current) return;
+        cancel();
         setError("Microphone recording failed.");
       };
       capture.onstop = () => {
@@ -334,8 +382,12 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
         if (capture.state === "recording") capture.stop();
       }, MAX_VOICE_SECONDS * 1000);
     } catch (e) {
-      releaseMicrophone();
-      if (current === generation.current) setError(errorMessage(e));
+      if (current === generation.current) {
+        releaseMicrophone();
+        const cloudId = cloudRequest.current; cloudRequest.current = '';
+        if (cloudId) void cancelCloud(cloudId);
+        setError(errorMessage(e));
+      }
     } finally {
       if (current === generation.current) setBusy(false);
     }
@@ -343,6 +395,8 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
   function cancel() {
     generation.current++;
     history.invalidate();
+    const cloudId = cloudRequest.current; cloudRequest.current = '';
+    if (cloudId) void cancelCloud(cloudId);
     if(downloadRequest.current) {
       const requestId=downloadRequest.current;setCancellingDownload(true);setProgress('Cancelling model download…');
       void invoke<boolean>('voice_download_cancel',{requestId}).then(cancelled=>{
@@ -392,9 +446,9 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
   }
   return (
     <section className="tool-panel voice-panel" aria-label="Local dictation">
-      <h3>Local dictation</h3>
+      <h3>Dictation</h3>
       <p>
-        Record up to 30 seconds with an on-device engine. Review the result by default.
+        Record up to 30 seconds with an on-device engine or explicitly select Cloud. Review the result by default.
         No automatic cloud fallback.
       </p>
       {error && (
@@ -406,12 +460,13 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
         Speech engine
         <select
           value={engine}
-          disabled={busy || recording}
+          disabled={busy || recording || cloudConfigBusy}
           onChange={(event) =>
-            setEngine(event.target.value as "whisper" | "apple")
+            setEngine(event.target.value as "whisper" | "apple" | "cloud")
           }
         >
           <option value="whisper">Whisper</option>
+          <option value="cloud">Cloud · gpt-transcribe</option>
           <option value="apple" disabled={!apple.available}>
             Apple SpeechAnalyzer{apple.available ? "" : " — unavailable"}
           </option>
@@ -494,6 +549,13 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
             </select>
           </label>
         </>
+      ) : engine === 'cloud' ? (
+        <>
+          <CloudVoiceSettingsPanel snapshot={cloudSnapshot} onSnapshot={setCloudSnapshot} onBusy={setCloudConfigBusy} disabled={busy || recording}/>
+          <label>Cloud speech language<select value={cloudLanguage} disabled={busy || recording || cloudConfigBusy || !cloudSnapshot} onChange={event => setCloudLanguage(event.target.value)}>
+            {(cloudSnapshot?.capabilities.languages ?? ['auto']).map(code => <option key={code} value={code}>{CLOUD_LANGUAGES[code]}</option>)}
+          </select></label>
+        </>
       ) : (
         <>
           <p>{apple.reason}</p>
@@ -545,8 +607,8 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
       <div className="tool-bar">
         <button
           disabled={
-            busy ||
-            (engine === "whisper"
+            busy || cloudConfigBusy ||
+            (engine === "cloud" ? !cloudSnapshot || cloudSnapshot.quota.deviceRemainingSamples < 1600 || cloudSnapshot.quota.globalRemainingSamples < 1600 : engine === "whisper"
               ? !model
               : !apple.available ||
                 !apple.installedLanguages.includes(appleLanguage))

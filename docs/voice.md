@@ -1,4 +1,4 @@
-# Private local dictation
+# Dictation
 
 Open Voice, explicitly download a catalog model or import a trusted Whisper tiny/base GGML `.bin` file, choose its language, and select Record speech. Microphone permission is requested only when recording starts. Stop and transcribe runs the model on this device. Edit the draft before copying it or staging it in the current terminal composer. Staging does not send a prompt.
 
@@ -23,7 +23,7 @@ Only one download runs at a time. Progress reports bytes received and verificati
 
 Cargo tests stream deliberately fragmented data through a local HTTP fixture and the actual import path, checking hash mismatch, oversized/truncated responses, queued/body/header-wait cancellation, commit collisions, quota and cleanup. These fixtures validate transfer/publication behavior; they are not speech models or inference evidence. Vitest tests cover explicit opt-in, progress, busy/cancel states, quota, non-overwrite controls, verification errors and unmount cleanup. Production HTTPS redirect policy has separate boundary tests. Physical-device network, storage and background behavior still require acceptance testing.
 
-Recordings last at most 30 seconds and remain in memory. Audio is mixed to mono and resampled to 16 kHz before native inference. One inference runs at a time with at most four CPU threads, a cancellation callback, and a two-minute inference limit. Native diagnostic logging is suppressed because it can contain dictated text. No cloud provider or automatic upload is configured. Dictation history is temporary by default, with optional device-local persistence as described below.
+Recordings last at most 30 seconds and remain in memory. Audio is mixed to mono and resampled to 16 kHz before native inference. One inference runs at a time with at most four CPU threads, a cancellation callback, and a two-minute inference limit. Native diagnostic logging is suppressed because it can contain dictated text. Cloud starts unconfigured and requires explicit enrollment and engine selection. Dictation history is temporary by default, with optional device-local persistence as described below.
 
 The engine is [whisper-rs 0.16](https://codeberg.org/tazz4843/whisper-rs), backed by [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Upstream whisper.cpp documents Linux, Windows, macOS, Android and iOS support; lazysh must still verify microphone permission, codec decoding, inference latency, battery and model memory on each advertised device. Android includes microphone runtime permissions; Apple bundles include a microphone purpose string and macOS audio-input entitlement. A denied or unsupported microphone reports an error and does not start inference.
 
@@ -51,7 +51,74 @@ The implementation follows the current [SpeechAnalyzer API](https://developer.ap
 
 Rust tests validate the PCM, locale and request-ID boundary; UI tests cover explicit engine choice, installation and cancellation. Native Swift compilation is an iOS CI gate. No Apple microphone/model inference, accuracy, latency or battery claim has been verified on physical hardware.
 
-An optional Unix-host [transcription relay](cloud-transcription.md) provides a service-only foundation with revocable device tokens and durable quotas. It is not configured or contacted by this client yet. Remaining issue #13 work includes Parakeet, client enrollment/upload for explicitly selected cloud transcription, and real-device acceptance.
+An optional Unix-host [transcription relay](cloud-transcription.md) provides revocable device tokens and durable audio quotas for explicitly selected Cloud dictation. Remaining issue #13 work includes Parakeet and real-device acceptance.
+
+## Explicit Cloud dictation
+
+Whisper remains the initial engine. Select **Cloud** to configure your own relay;
+there is no automatic cloud fallback when a local engine fails. Import its HTTPS
+origin and an administrator-issued **device** token using **Verify and save Cloud
+device**. This probes authenticated capabilities and quota before saving the
+origin-bound enrollment in the platform credential vault. It does not record or
+upload audio. No provider API key or administrator token belongs in this form.
+No configured token is returned to the WebView or stored in browser preferences;
+unsaved input is cleared on hidden/pagehide. Changing origin requires a new token.
+
+Selecting Cloud or explicitly refreshing it checks the relay, not the provider's
+account validity. Record remains disabled until capabilities and available service
+audio quota have been verified. The panel shows device/shared remaining and total
+audio seconds, the UTC quota window, and last check time. A shared limit can be
+lower than a device limit; lowering an operator limit below prior usage correctly
+shows zero remaining. These are operator-configured relay limits, not OpenAI or
+Moshi allowances. Other devices can consume quota after a check, so the server
+remains authoritative at dispatch. Choose a language hint advertised by the
+service; `auto` omits the hint. Hints do not guarantee an output language.
+
+Only **Record speech** starts microphone capture. A local native reservation is
+created before microphone access; relay registration occurs only after recording,
+decoding and bounded mono 16 kHz PCM are ready. This avoids expiring its 30-second
+upload slot while recording. Audio is encoded into canonical PCM16 WAV in native
+memory (at most 960,044 bytes), never a temporary file, and uploaded only to the
+enrolled origin's fixed relay API paths.
+
+Cancel, a hidden WebView, pagehide, session change, unmount, or native window
+destruction invalidates that exact recording. Desktop blur alone does not cancel:
+microphone permission dialogs can move focus. A late local reservation is removed
+without opening the microphone or creating a remote job. A queued transcription
+cannot recreate a cancelled/expired reservation or use another session/window's
+identifier. Configuration epochs reject results from replaced enrollments.
+
+Once a relay job identifier is known, cancellation drops the upload/result wait
+and attempts a bounded DELETE using the same origin and token snapshot. If the
+registration response never supplied an identifier, cancellation sends no audio;
+an empty job might exist and expires 30 seconds after server creation. An explicit
+retry can receive an active-job error until it expires. Failed DELETE or offline
+cleanup is reported as unconfirmed. Cancellation cannot retract received audio,
+refund admitted service quota, or guarantee that a provider stops processing.
+There are no automatic registration, upload or input retries.
+
+**Forget Cloud device** cancels local recording work and removes this device's
+saved enrollment. It does not perform administrator-only server revocation; the
+administrator can revoke the issued token separately. OS credential calls are
+bounded to one owned task. Cancelling a recording does not wait for a blocked OS
+credential prompt, and no provider request starts from its late return. Another
+credential operation reports busy until that OS call finishes.
+
+Successful text follows the same editable draft, optional history consent and
+explicit direct-delivery controls described below. Cloud does not enable direct
+input or Enter. Returned text is bounded to 16 KiB UTF-8; the existing direct-input
+guard rejects terminal controls and stale sessions. The relay stores no
+transcripts, but opting into local Remember history can save the returned text on
+this device under the normal history policy.
+
+Native HTTPS fixtures verify the protocol, WAV encoding, validation, no redirects
+or retries, origin/session/epoch binding, pending-registration cleanup and OS-vault
+cancellation races. Vitest and desktop/phone Playwright use synthetic audio/IPC to
+verify opt-in, quota/language UI and stale-result suppression. Android
+instrumentation includes actual WebView-to-native status and invalid-token calls;
+its runtime outcome must be checked in hosted CI. These checks do not establish
+real provider/account compatibility, physical microphone behavior, native mobile
+background-event ordering, accuracy, billing, or live end-to-end cloud dictation.
 
 ## Dictation history
 
