@@ -1563,6 +1563,7 @@ button svg {
 .chat-panel label { display: grid; gap: 6px; min-width: 0; }
 .chat-panel input { min-width: 220px; }
 .chat-messages { max-width: 900px; display: grid; gap: 16px; margin: 20px 0; }
+.chat-conversation-messages { max-height: 60dvh; overflow: auto; overflow-anchor: none; }
 .chat-message { border: 1px solid var(--border); padding: 16px; border-radius: 8px; overflow-wrap: anywhere; min-width: 0; }
 .chat-message h4 { margin: 0 0 12px; text-transform: capitalize; color: var(--muted); }
 .chat-message pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; }
