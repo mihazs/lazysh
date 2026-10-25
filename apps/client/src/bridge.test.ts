@@ -4,6 +4,13 @@ vi.mock('@tauri-apps/api/core',()=>({invoke,isTauri:()=>true,Channel:class {onme
 import {api} from './bridge';
 import { accessSnapshot, acknowledgeAccessReady, applyAccessStatus } from './access';
 beforeEach(()=>invoke.mockClear());
+it('submits a complete sequence through one protected native request for either transport',async()=>{
+  for (const [id,command] of [['local:sequence','local_write'],['ssh-sequence','write_stdin']]) {
+    await api.writeSequence(id,['\x02','T']);
+    expect(invoke).toHaveBeenLastCalledWith(command,{sessionId:id,data:'',steps:['\x02','T']},expect.anything());
+  }
+  expect(invoke).toHaveBeenCalledTimes(2);
+});
 it('routes local terminal IO exclusively through its native registry',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
   await api.write(id,'hello');await api.resize(id,80,24);await api.ackOutput(id,5);await api.disconnect(id);
