@@ -6,6 +6,7 @@
     "build": "cargo build --release --locked --package lazysh-agent",
     "check": "cargo check --locked --package lazysh-agent",
     "test": "cargo test --locked --package lazysh-agent",
+    "test:storage": "cargo test --locked --package lazysh-agent --lib --test storage_wal",
     "lint": "cargo clippy --locked --package lazysh-agent --all-targets -- -D warnings",
     "format:check": "cargo fmt --manifest-path Cargo.toml -- --check"
   },

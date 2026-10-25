@@ -103,6 +103,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - name: Exercise native companion WAL admission and recovery
+        run: bun run test:storage
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
 
