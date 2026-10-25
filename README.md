@@ -1,18 +1,44 @@
-# lazysh
+# lazysh — Cross-platform SSH terminal and AI agent workspace
 
-A direct SSH terminal and agent workspace for Android, iOS, macOS, Linux, and Windows, built with Tauri 2, Rust, React, and xterm.js in a Bun/Turborepo monorepo.
+**lazysh** is a cross-platform SSH client and terminal workspace in development for **Android, iOS, macOS, Linux, and Windows**. It is designed for developers who want to connect directly to their own servers, work in remote shells, and manage long-running AI coding agents from desktop or mobile.
 
-Implementation is in progress. Moshi parity is a release objective, not a claim about this initial repository. Track delivery in the [Project](https://github.com/users/mihazs/projects/2), [parity epic](https://github.com/mihazs/lazysh/issues/1), and [feature evidence](docs/moshi-evidence.md).
+The project is built with **Rust, Tauri 2, React, and xterm.js**, using **Bun and Turborepo** for the application workspace. Direct SSH works with the user's own hosts; the companion and external services are optional.
+
+> **Project status:** Work in progress. The native implementation is available as a development preview. There is no stable release or verified cross-platform Moshi parity. See [implementation PR #22](https://github.com/mihazs/lazysh/pull/22), the [GitHub Project](https://github.com/users/mihazs/projects/2), and the [parity epic](https://github.com/mihazs/lazysh/issues/1) for test evidence and remaining work.
+
+## What is lazysh for?
+
+- **SSH terminal on desktop and mobile:** connect directly to remote SSH hosts using a shared native client.
+- **Remote development and persistent sessions:** use **tmux, Herdr, and Zellij** to keep long-running programs on the host when the client disconnects.
+- **AI coding-agent workflows:** view supported events and transcripts from host-side tools such as **Claude Code, Codex, and OpenCode**. Integration depth varies by agent.
+- **Local-first connections:** use SSH independently, with optional companion tools for agent and session workflows.
+
+## SSH and developer tools
 
 The implementation includes password/private-key SSH, explicit server fingerprint verification, concurrent terminal tabs, output backpressure, and an optional [local agent companion](docs/companion.md). The workspace adds transcript readers, tmux/Herdr/Zellij controls, historical Git browsing and review comments, SFTP transfers, image attachments, SSH-forwarded previews, terminal preferences, and local Whisper dictation. These features have individual limits and verification gates; their presence does not establish full Moshi parity.
 
-Credentials remain in memory by default. Explicit saving uses the device's [native credential store](docs/credentials.md), with optional Android/iOS/macOS biometric protection. Optional [encrypted sync](docs/sync.md), [Claude hook approvals](docs/approvals.md), [local notifications](docs/notifications.md), [expiring file sharing](docs/sharing.md), and [remote device controls](docs/devices.md) have separate setup and limits. Mosh supports Linux/macOS and builds for Android; Android runtime acceptance is pending. ET uses a portable Rust transport. New hosts offer observable Auto selection through Mosh, ET and SSH. Full agent coverage, remaining transport/platform acceptance, additional voice engines and background push delivery remain open. Native Apple status and Watch surfaces are implemented but still await platform acceptance. Mobile source compatibility does not establish a tested native release.
+Credentials remain in memory by default. Explicit saving uses the device's [native credential store](docs/credentials.md), with optional Android/iOS/macOS biometric protection. Optional [encrypted sync](docs/sync.md), [Claude hook approvals](docs/approvals.md), [local notifications](docs/notifications.md), [expiring file sharing](docs/sharing.md), and [remote device controls](docs/devices.md) have separate setup and limits. Mosh supports Linux/macOS/Android with native protocol tests; iOS library tests pass but app integration remains open. ET uses a portable Rust transport. New hosts offer observable Auto selection through Mosh, ET and SSH. Full agent coverage, remaining transport/platform acceptance, additional voice engines and background push delivery remain open. Native Apple status and Watch surfaces are implemented; physical-device acceptance remains open. Simulator and CI checks do not establish a tested native release.
 
-## Development
+See the [feature and behavior evidence](docs/moshi-evidence.md) for research and the limits of the target scope.
+
+## Technology stack
+
+| Layer | Implementation |
+| --- | --- |
+| Native application | Tauri 2 and Rust |
+| Terminal UI | React and xterm.js |
+| Build and workspace | Bun and Turborepo |
+| Connectivity | Direct SSH, with Mosh and Eternal Terminal integrations |
+| Optional host integrations | Rust companion for agent/session events |
+| Target platforms | Android, iOS, macOS, Linux, Windows |
+
+## Explore the development preview
 
 Requires Bun, Rust stable, the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, CMake and libclang for the local Whisper engine. Linux/macOS Mosh builds also require `protoc`, protobuf-lite, OpenSSL and zlib development libraries; see its [build notes](packages/mosh-transport/README.md).
 
 ```sh
+git clone https://github.com/mihazs/lazysh.git
+cd lazysh
 bun install --frozen-lockfile
 bun run dev
 ```
@@ -61,7 +87,13 @@ Android (API 24+, current Android System WebView): install JDK 21, SDK platform 
 
 iOS (16+): on macOS with Xcode, `bun run build:ios` initializes and builds an unsigned ARM64 simulator app. Distribution requires your own Apple signing identity. macOS desktop requires version 13+.
 
-lazysh is an independent implementation. It does not distribute Moshi code, branding, or assets.
+## Roadmap and contributions
+
+Development progress is tracked in the [GitHub Project](https://github.com/users/mihazs/projects/2), the [feature-parity epic](https://github.com/mihazs/lazysh/issues/1), and the [issue tracker](https://github.com/mihazs/lazysh/issues). Bug reports, design feedback, and implementation discussions are welcome through issues and pull requests. Check the current branch and issue status before assuming that a feature is complete.
+
+## Independence
+
+lazysh is an independent implementation informed by research into Moshi's documented SSH and agent workflows. **Moshi parity is a development objective, not a current capability claim.** lazysh does not distribute Moshi source code, branding, or assets.
 
 ## License
 
