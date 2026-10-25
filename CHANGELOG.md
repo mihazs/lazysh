@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Explicit-file `grok-acp` transcript records, based on a pinned official Grok
+  writer contract. Chunks, tool updates and plans remain separate records;
+  automatic discovery, active-branch replay and live Grok control are not enabled.
+  Existing defaults are unchanged.
 - Explicit Cloud dictation enrollment with origin-bound device tokens in the
   platform vault, authenticated service capabilities/language hints and quota
   totals, bounded in-memory WAV uploads, and exact-recording cancellation.
