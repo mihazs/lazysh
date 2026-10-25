@@ -113,7 +113,9 @@ fn view(app: AppHandle, covered: bool) {
             return;
         }
         let _ = tauri::async_runtime::spawn_blocking(move || {
-            let _ = app.vault().resume_view(covered, generation, native);
+            if let Err(error) = app.vault().resume_view(covered, generation, native) {
+                eprintln!("Native resume view update failed: {error}");
+            }
         })
         .await;
     });
@@ -251,6 +253,11 @@ async fn initialize(app: AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|_| "Cannot initialize resume protection")??;
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "Native resume policy resolved: supported={} enabled={enabled}",
+        capability.available
+    );
     app.vault()
         .access()
         .initialize(capability.available, enabled, capability.reason)
@@ -340,6 +347,8 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     match kind {
                         "ready" => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Native resume ready generation={generation}");
                             let first = !runtime.ready.swap(true, Ordering::SeqCst);
                             if !first && generation > observed {
                                 revoke(&callback);

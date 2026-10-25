@@ -26,6 +26,9 @@ final class ResumeCover: NSObject {
   deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
   func load(webview: WKWebView, host: UIView?) {
     precondition(Thread.isMainThread)
+    #if DEBUG
+    print("lazysh.resume load parentPresent=\(host != nil) parentIsWebView=\(host === webview)")
+    #endif
     self.webview = webview
     webview.isHidden = true
     guard let host = host, host !== webview else { return }
@@ -40,14 +43,25 @@ final class ResumeCover: NSObject {
     NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: panel.centerXAnchor), stack.centerYAnchor.constraint(equalTo: panel.centerYAnchor), stack.widthAnchor.constraint(lessThanOrEqualTo: panel.widthAnchor, constant: -48)])
     host.addSubview(panel); overlay = panel; render(); if events != nil { send("ready") }
   }
-  func register(_ callback: @escaping (String, UInt64) -> Void) { events = callback; button?.isEnabled = true; if ready { send("ready") } }
+  func register(_ callback: @escaping (String, UInt64) -> Void) {
+    events = callback; button?.isEnabled = true
+    #if DEBUG
+    print("lazysh.resume register ready=\(ready)")
+    #endif
+    if ready { send("ready") }
+  }
   func apply(_ args: ResumeView) -> Bool {
     guard ready, gate.apply(covered: args.covered, enabled: args.enabled, generation: args.generation, nativeGeneration: args.nativeGeneration) else { return false }
     render(); return true
   }
   func failure() { if gate.covered { status?.text = "Unlock failed or was cancelled. lazysh remains locked. Check device biometrics and retry." } }
   @objc private func unlockRequested() { if gate.covered { send("unlock") } }
-  private func send(_ kind: String) { events?(kind, gate.nativeGeneration) }
+  private func send(_ kind: String) {
+    #if DEBUG
+    print("lazysh.resume event=\(kind) generation=\(gate.nativeGeneration) registered=\(events != nil)")
+    #endif
+    events?(kind, gate.nativeGeneration)
+  }
   private func render() {
     let covered = gate.covered
     webview?.isHidden = covered; webview?.isUserInteractionEnabled = !covered; webview?.accessibilityElementsHidden = covered
