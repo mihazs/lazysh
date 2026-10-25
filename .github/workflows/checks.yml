@@ -207,26 +207,31 @@ jobs:
         run: |
           APPLE_STATUS_SIMULATOR_ID="$(xcrun simctl create lazysh-status-ci com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)"
           echo "APPLE_STATUS_SIMULATOR_ID=$APPLE_STATUS_SIMULATOR_ID" >> "$GITHUB_ENV"
-      - name: Install actual iOS app for workspace UI acceptance
-        run: |
-          xcrun simctl boot "$APPLE_STATUS_SIMULATOR_ID"
-          xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
-          xcrun simctl install "$APPLE_STATUS_SIMULATOR_ID" apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app
-      - name: Run native workspace Save, relaunch, and Delete acceptance
-        run: bun run test:ios-workspace
-      - name: Upload iOS workspace UI results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lazysh-ios-workspace-ui-results
-          path: apps/client/src-tauri/gen/apple/workspace-ui.xcresult
-          if-no-files-found: warn
       - name: Run native status lifecycle tests
         run: bunx turbo run test:apple-status --filter=@lazysh/apple-status
       - name: Run native APNs registration state tests
         run: bunx turbo run test:apns --filter=@lazysh/push-registration
       - name: Run native iOS Mosh unit and protocol tests
         run: bun run test:ios-mosh
+      - name: Install actual iOS app for native acceptance
+        id: ios-app-install
+        run: |
+          xcrun simctl bootstatus "$APPLE_STATUS_SIMULATOR_ID" -b
+          xcrun simctl install "$APPLE_STATUS_SIMULATOR_ID" apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app
+      - name: Verify actual iOS Mosh IPC and privacy resources
+        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult test CODE_SIGNING_ALLOWED=NO
+      - name: Run native workspace Save, relaunch, and Delete acceptance
+        if: always() && steps.ios-app-install.outcome == 'success'
+        run: bun run test:ios-workspace
+      - name: Upload iOS app acceptance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-app-acceptance-results
+          path: |
+            apps/client/src-tauri/gen/apple/workspace-ui.xcresult
+            apps/client/src-tauri/gen/apple/mosh-app.xcresult
+          if-no-files-found: warn
       - name: Remove status test simulator
         if: always() && env.APPLE_STATUS_SIMULATOR_ID != ''
         run: xcrun simctl delete "$APPLE_STATUS_SIMULATOR_ID"
