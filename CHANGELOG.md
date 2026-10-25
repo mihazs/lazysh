@@ -62,6 +62,8 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Bound native iOS CI startup and test execution, and retain raw Mosh diagnostics
+  before hosted app checks, while preserving failure gates and no-retry behavior.
 - Mobile workspace navigation reserves the full top safe area, keeping the
   Hosts menu below the iOS status bar and its controls inside the toolbar.
 - Phone dialog inputs use readable text sizing to avoid WebKit focus zoom
