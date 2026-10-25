@@ -6,6 +6,8 @@ final class WorkspaceUITests: XCTestCase {
     func testHostSaveSurvivesRelaunchAndCanBeDeleted() throws {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "app.lazysh.client")
+        // The UI runner launches a separate app, outside the hosted test scheme.
+        app.launchEnvironment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] = "1"
         let name = "uitest-" + UUID().uuidString.lowercased()
         app.launch()
         defer { app.terminate() }
