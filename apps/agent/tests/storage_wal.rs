@@ -282,6 +282,98 @@ fn writable_ancestor_is_rejected_before_any_state_chmod_or_database_open() {
     assert_eq!(fs::read_dir(leaf).unwrap().count(), 0);
 }
 
+#[cfg(unix)]
+#[test]
+fn chained_custom_link_route_is_rejected_without_mutating_its_target() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let safe = dir.path().join("safe");
+    let shared = dir.path().join("shared");
+    let owned = dir.path().join("owned");
+    for path in [&safe, &shared, &owned] {
+        fs::create_dir(path).unwrap();
+    }
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    fs::set_permissions(&owned, fs::Permissions::from_mode(0o750)).unwrap();
+    let db = owned.join("events.sqlite3");
+    fs::write(&db, b"untouched owned state").unwrap();
+    fs::set_permissions(&db, fs::Permissions::from_mode(0o640)).unwrap();
+    symlink(&owned, shared.join("hop")).unwrap();
+    symlink(shared.join("hop"), safe.join("link")).unwrap();
+    assert!(Store::open(&safe.join("link")).is_err());
+    assert!(Store::open(&safe.join("link/missing-child/state")).is_err());
+    assert!(!owned.join("missing-child").exists());
+    assert_eq!(fs::read(&db).unwrap(), b"untouched owned state");
+    assert_eq!(
+        fs::metadata(&db).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(
+        fs::metadata(&owned).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(fs::read_dir(owned).unwrap().count(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_junction_route_is_rejected_before_target_mutation() {
+    use std::os::windows::{fs::MetadataExt, process::CommandExt};
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    let junction = dir.path().join("junction");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("marker"), b"untouched owned target").unwrap();
+    // mklink is a native Windows built-in, invoked only for this owned Cargo
+    // fixture. Quote each path and reject cmd expansion/metacharacters; no
+    // generated shell script or untrusted argument is executed.
+    let target_text = target.to_str().expect("fixture path must be Unicode");
+    let junction_text = junction.to_str().expect("fixture path must be Unicode");
+    for text in [target_text, junction_text] {
+        assert!(
+            !text.chars().any(|c| "\"\r\n%!&|<>^".contains(c)),
+            "unsafe native fixture command path"
+        );
+    }
+    let output = Command::new("cmd.exe")
+        .args(["/d", "/v:off", "/s", "/c"])
+        .raw_arg(format!("mklink /J \"{junction_text}\" \"{target_text}\""))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "native junction creation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_ne!(
+        fs::symlink_metadata(&junction).unwrap().file_attributes() & 0x400,
+        0
+    );
+    assert!(Store::open(&junction.join("missing-state")).is_err());
+    assert!(!target.join("missing-state").exists());
+    assert_eq!(
+        fs::read(target.join("marker")).unwrap(),
+        b"untouched owned target"
+    );
+    assert_eq!(fs::read_dir(&target).unwrap().count(), 1);
+    // Remove only the owned junction, never recursively remove its target.
+    fs::remove_dir(junction).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn verified_darwin_system_temp_aliases_remain_supported() {
+    for root in ["/tmp", "/var/tmp"] {
+        let directory = tempfile::tempdir_in(root).unwrap();
+        let mut store = Store::open(directory.path()).unwrap();
+        store.ingest(&event(), Utc::now()).unwrap();
+        assert_eq!(
+            store.snapshot(50, Utc::now()).unwrap().sessions[0].event_count,
+            1
+        );
+    }
+}
+
 #[test]
 fn native_bootstrap_and_sqlite_share_one_wait_deadline() {
     use std::time::Instant;

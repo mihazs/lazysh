@@ -15,7 +15,8 @@ pub(crate) fn require_local(directory: &Path) -> io::Result<()> {
         ));
     }
     // A missing state directory inherits its nearest existing ancestor's mount.
-    // Resolve symlinks so Windows volume admission also checks the actual target.
+    // Store supplies its checked namespace. Never canonicalize it again and
+    // accidentally admit a different target than the path Store subsequently uses.
     // current_dir itself fails for a removed working directory. Do not fall
     // back repeatedly to "." after ENOENT or loop at the filesystem root.
     let absolute = if directory.is_absolute() {
@@ -26,7 +27,7 @@ pub(crate) fn require_local(directory: &Path) -> io::Result<()> {
     let mut ancestor = absolute.as_path();
     let existing = loop {
         match fs::metadata(ancestor) {
-            Ok(_) => break fs::canonicalize(ancestor)?,
+            Ok(_) => break ancestor.to_owned(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 ancestor = parent_ancestor(ancestor).ok_or(error)?;
             }

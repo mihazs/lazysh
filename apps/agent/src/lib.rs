@@ -3,6 +3,7 @@ pub mod approvals;
 pub mod devices;
 pub mod settings;
 mod storage_filesystem;
+mod storage_namespace;
 pub mod transcript;
 pub mod usage;
 use clap::ValueEnum;
@@ -260,7 +261,7 @@ fn validate_state_file(path: &Path) -> Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    if !metadata.is_file() {
+    if storage_namespace::is_link(&metadata) || !metadata.is_file() {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             "State must be a regular file",
@@ -286,7 +287,7 @@ fn validate_sidecar(path: &Path) -> Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    if !metadata.is_file() {
+    if storage_namespace::is_link(&metadata) || !metadata.is_file() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid state sidecar").into());
     }
     #[cfg(unix)]
@@ -302,48 +303,6 @@ fn validate_sidecar(path: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-// Resolve once and use only this namespace afterwards. A mode-0700 leaf is
-// insufficient if another user can replace it through a writable ancestor.
-fn private_state_directory(directory: &Path) -> Result<PathBuf> {
-    let canonical = fs::canonicalize(directory)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let uid = unsafe { libc::geteuid() };
-        let absolute = if directory.is_absolute() {
-            directory.to_owned()
-        } else {
-            std::env::current_dir()?.join(directory)
-        };
-        // Check the supplied route too: a foreign ancestor must not redirect
-        // an otherwise trusted canonical target through a symlink.
-        for route in [&absolute, &canonical] {
-            for (depth, path) in route.ancestors().enumerate() {
-                if path.as_os_str().is_empty() {
-                    continue;
-                }
-                let metadata = fs::metadata(path)?;
-                let owner = metadata.uid();
-                let mode = metadata.permissions().mode();
-                let trusted_sticky = owner == 0 && mode & 0o1000 != 0;
-                if !metadata.is_dir()
-                    || (depth == 0 && owner != uid)
-                    || (depth > 0 && owner != uid && owner != 0)
-                    || (depth > 0 && mode & 0o022 != 0 && !trusted_sticky)
-                {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "Untrusted state directory namespace",
-                    )
-                    .into());
-                }
-            }
-        }
-        fs::set_permissions(&canonical, fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(canonical)
 }
 
 fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File> {
@@ -382,7 +341,7 @@ impl Store {
     }
     // Private native-test seam: rejection must precede every state mutation.
     fn open_with_admission(directory: &Path, admit: fn(&Path) -> io::Result<()>) -> Result<Self> {
-        admit(directory).map_err(|error| {
+        fn path_error(error: io::Error) -> Error {
             if error.kind() == io::ErrorKind::Unsupported {
                 Error::UnsupportedStateFilesystem
             } else if error.kind() == io::ErrorKind::InvalidInput {
@@ -390,27 +349,10 @@ impl Store {
             } else {
                 Error::Io(error)
             }
-        })?;
-        match fs::symlink_metadata(directory) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Invalid state directory",
-                )))
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
         }
-        let mut directories = fs::DirBuilder::new();
-        directories.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            directories.mode(0o700);
-        }
-        directories.create(directory)?;
-        let directory = private_state_directory(directory)?;
+        let directory = storage_namespace::resolve(directory).map_err(path_error)?;
+        admit(&directory).map_err(path_error)?;
+        storage_namespace::create(&directory)?;
         let path = directory.join("events.sqlite3");
         // Never open/close the database outside SQLite: on POSIX, closing any
         // descriptor for this inode releases this process's SQLite locks.
@@ -524,6 +466,47 @@ pub fn claude_config() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_state_fails_before_admission_or_creation() {
+        fn must_not_admit(_: &Path) -> io::Result<()> {
+            panic!("drive-relative path reached filesystem admission");
+        }
+        // The seam ensures a regression cannot create anything in a drive's
+        // unrelated per-drive cwd: admission would panic before all mutation.
+        for path in ["C:junction/missing-state", "D:junction/missing-state", "C:"] {
+            assert!(matches!(
+                Store::open_with_admission(Path::new(path), must_not_admit),
+                Err(Error::InvalidArgument)
+            ));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_component_replaced_after_admission_is_not_followed_or_mutated() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        fn replace_component(directory: &Path) -> io::Result<()> {
+            let root = directory.parent().unwrap().parent().unwrap();
+            symlink(root.join("victim"), root.join("missing"))
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::create_dir(&victim).unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o750)).unwrap();
+        let db = victim.join("events.sqlite3");
+        fs::write(&db, b"untouched victim").unwrap();
+        assert!(
+            Store::open_with_admission(&dir.path().join("missing/state"), replace_component)
+                .is_err()
+        );
+        assert!(!victim.join("state").exists());
+        assert_eq!(
+            fs::metadata(&victim).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(fs::read(db).unwrap(), b"untouched victim");
+        assert_eq!(fs::read_dir(victim).unwrap().count(), 1);
+    }
     #[test]
     fn filesystem_rejection_precedes_creation_chmod_bootstrap_and_sqlite() {
         fn reject(_: &Path) -> io::Result<()> {
