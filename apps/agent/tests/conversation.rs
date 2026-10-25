@@ -20,6 +20,36 @@ fn ids(page: &lazysh_agent::transcript::TranscriptPage) -> Vec<&str> {
 }
 
 #[test]
+fn refreshed_branch_replaces_recorded_tool_error_without_inventing_live_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let mut records = vec![
+        message("root", None, "user", "inspect"),
+        json!({"type":"assistant","uuid":"call","parentUuid":"root","message":{"content":[{"type":"tool_use","id":"tool1","name":"Read","input":{}}]}}),
+        json!({"type":"user","uuid":"failed","parentUuid":"call","message":{"content":[{"type":"tool_result","tool_use_id":"tool1","content":"denied","is_error":true}]}}),
+    ];
+    write(&path, &records);
+    let failed = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(
+        failed.messages.last().unwrap()["blocks"][0]["isError"],
+        true
+    );
+    records.push(json!({"type":"user","uuid":"replacement","parentUuid":"call","message":{"content":[{"type":"tool_result","tool_use_id":"tool1","content":"read","is_error":false}]}}));
+    write(&path, &records);
+    let refreshed = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+    assert_eq!(refreshed.branch_id.as_deref(), Some("replacement"));
+    assert!(!ids(&refreshed).contains(&"failed"));
+    assert_eq!(
+        refreshed.messages.last().unwrap()["blocks"][0]["isError"],
+        false
+    );
+    assert_eq!(
+        refreshed.messages.last().unwrap()["blocks"][0]["id"],
+        "tool1"
+    );
+}
+
+#[test]
 fn latest_main_leaf_selects_one_branch_ignoring_progress_sidechains_and_old_forks() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("session.jsonl");

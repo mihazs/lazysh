@@ -30,6 +30,27 @@ const page = {
   nextOffset: 80,
   hasMore: false,
 };
+it('validates Claude-only boolean tool errors and renders recorded failures without changing output',async()=>{
+  const blocks=[{type:'tool_result',id:'failed-call',text:'Permission denied',isError:true},
+    {type:'tool_result',id:'ok-call',text:'Original success',isError:false},
+    {type:'tool_result',id:'unknown-call',text:'Unknown outcome'},
+    {type:'tool_result',id:'empty-call',text:'',isError:true}];
+  const response={...page,messages:[{...message,blocks}]};
+  expect(parseTranscript(response)).toEqual(response);
+  for(const value of [null,'false',0,{},[]])expect(()=>parseTranscript({...page,messages:[{...message,blocks:[{...blocks[0],isError:value}]}]})).toThrow('Invalid recorded tool error');
+  for(const type of ['text','thinking','tool_use','image'])expect(()=>parseTranscript({...page,messages:[{...message,blocks:[{...blocks[0],type}]}]})).toThrow('Invalid recorded tool error');
+  expect(()=>parseTranscript({...response,agent:'qoder-ide'})).toThrow('Invalid recorded tool error');
+  vi.mocked(invoke).mockResolvedValue(response);
+  render(<ChatPanel sessionId="claude-host"/>);
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/host/claude.jsonl'}});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  expect(await screen.findByText(/Recorded tool error · Tool ID: failed-call/)).toBeTruthy();
+  expect(screen.getByText(/Recorded tool error · Tool ID: empty-call/)).toBeTruthy();
+  expect(screen.getByText('Permission denied')).toBeTruthy();
+  expect(screen.getByText('Original success')).toBeTruthy();
+  expect(screen.getAllByText(/Recorded tool error/)).toHaveLength(2);
+  expect(screen.queryByRole('button',{name:/approve|deny|stop|retry/i})).toBeNull();
+});
 it('renders Grok statuses as recorded tool metadata without claiming live state or inventing output',async()=>{
   const blocks=[{type:'tool_use',id:'call',name:'Inspect source',text:'{"path":"not-read"}',status:'in_progress'},
     {type:'tool_result',id:'call',name:'Tool status',text:'Recorded tool status: failed',status:'failed'},
