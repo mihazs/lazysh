@@ -46,8 +46,18 @@ private struct StatusView: View {
               Text("\(snapshot.running) running · \(snapshot.waiting) waiting")
               Text(fresh ? "Updated \(Date(timeIntervalSince1970: Double(snapshot.observedAt)), style: .relative) ago" : "Stale · Open lazysh on iPhone").font(.caption)
             }
-            Section("Usage snapshot") {
-              if let tokens = snapshot.totalTokens { Text("\(tokens) tokens") } else { Text("Usage unavailable") }
+            Section("Inspected usage report") {
+              if let usage = snapshot.usage {
+                Text(usage.freshnessAt(UInt64(context.date.timeIntervalSince1970)) == .fresh ? "Recently recorded" : usage.freshness == .unknown ? "Freshness unknown" : "Stale record").font(.caption)
+                if let recorded = usage.recordedAt {
+                  Text(Date(timeIntervalSince1970: Double(recorded)), style: .date).font(.caption)
+                  Text(Date(timeIntervalSince1970: Double(recorded)), style: .time).font(.caption)
+                }
+                if let value = usage.inputTokens { Text("Input: \(value)") }
+                if let value = usage.outputTokens { Text("Output: \(value)") }
+                if let value = usage.cacheReadTokens { Text("Cache read: \(value)") }
+                if let value = usage.cacheWriteTokens { Text("Cache write: \(value)") }
+              } else { Text("Usage unavailable") }
             }
             Section("Inbox") {
               if snapshot.approvals.isEmpty { Text("No pending approvals") }

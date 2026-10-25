@@ -1,8 +1,10 @@
 # Headless Mosh transport
 
-This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux and macOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. The package also supports Android target-native compilation; Android runtime/app acceptance remains separate. iOS and Windows builds explicitly report Mosh unavailable.
+This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux and macOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. The package supports Android target-native compilation and has an iOS target-native build under validation; mobile runtime/app acceptance remains separate. The app keeps iOS Mosh disabled pending proof, and Windows remains unavailable.
 
 The root Cargo workspace owns the lockfile. Bun/Turborepo tracks this package through `@lazysh/mosh-transport`; native build/test tasks use Cargo's cache and bypass Turbo artifact caching. Unsupported targets do not compile or link the C++ core.
+
+See [IOS.md](IOS.md) for the shared dependency build, SDK/deployment settings, native Cargo simulator fixture, and remaining iOS acceptance checks.
 
 ## Source identity and licensing
 
@@ -59,4 +61,4 @@ Original vendored files remain unchanged. `build.rs` applies the following dated
 - Bound queued input to 64 KiB of events and one returned ANSI frame to 8 MiB. The caller must apply its own bounded output delivery/backpressure before forwarding frames to a WebView.
 - Use `OPENSSL_cleanse` on native raw key copies and fixed xterm display initialization.
 
-Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS/Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.
+Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS native/app acceptance, Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.

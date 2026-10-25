@@ -3285,10 +3285,16 @@ mod tests {
             assert_eq!(frame, websocket);
             socket.write_all(&[0x81, 2, b'H', b'i']).await.unwrap();
         });
-        let preview =
-            crate::previews::start_preview(app.state(), app.state(), id.clone(), http_port, None)
-                .await
-                .unwrap();
+        let preview = crate::previews::start_preview(
+            app.state(),
+            app.state(),
+            id.clone(),
+            http_port,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let preview = serde_json::to_value(preview).unwrap();
         let local_port = preview["localPort"].as_u64().unwrap() as u16;
         assert_ne!(

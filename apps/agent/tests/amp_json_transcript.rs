@@ -95,6 +95,7 @@ fn amp_export_cli_is_explicit_file_only_with_no_default_native_cache_discovery()
     let path = directory.path().join("amp.json");
     fs::write(&path, export(vec![]).to_string()).unwrap();
     let response = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["transcript", "--agent", "amp-json", "--path"])
         .arg(&path)
         .output()
@@ -105,6 +106,7 @@ fn amp_export_cli_is_explicit_file_only_with_no_default_native_cache_discovery()
         "amp-json"
     );
     let discovery = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["discover", "--agent", "amp-json"])
         .env("HOME", directory.path())
         .output()

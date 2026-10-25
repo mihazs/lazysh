@@ -1,6 +1,7 @@
 [workspace]
 members = ["apps/client/src-tauri", "apps/agent", "apps/share-service", "packages/credential-vault", "packages/mosh-transport", "packages/et-transport", "packages/apple-speech", "packages/apple-status", "packages/push-registration"]
 resolver = "2"
+exclude = ["packages/portable-pty-vendor"]
 
 [workspace.package]
 license = "GPL-3.0-or-later"

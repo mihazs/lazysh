@@ -4,6 +4,27 @@ struct StatusApproval: Codable, Equatable, Identifiable {
   let id: String
   let expiresAt: UInt64
 }
+struct StatusUsage: Codable, Equatable {
+  enum Freshness: String, Codable { case fresh, stale, unknown }
+  let inputTokens: UInt64?
+  let outputTokens: UInt64?
+  let cacheReadTokens: UInt64?
+  let cacheWriteTokens: UInt64?
+  let recordedAt: Int64?
+  let freshness: Freshness
+  let freshUntil: UInt64?
+  func freshnessAt(_ now: UInt64) -> Freshness {
+    freshness == .fresh && (freshUntil ?? 0) <= now ? .stale : freshness
+  }
+  func valid(observedAt: UInt64) -> Bool {
+    let counters = [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens].compactMap { $0 }
+    return !counters.isEmpty && counters.allSatisfy { $0 <= 9_007_199_254_740_991 }
+      && (recordedAt == nil || (-62_135_596_800...253_402_300_799).contains(recordedAt!))
+      && (freshUntil == nil || (observedAt <= UInt64.max - 900 && freshUntil! <= observedAt + 900))
+      && (recordedAt != nil || (freshness == .unknown && freshUntil == nil))
+      && (freshness != .fresh || freshUntil != nil)
+  }
+}
 struct StatusSnapshot: Codable, Equatable {
   let subscriptionId: String
   let sessionId: String
@@ -12,7 +33,7 @@ struct StatusSnapshot: Codable, Equatable {
   let expiresAt: UInt64
   let running: UInt16
   let waiting: UInt16
-  let totalTokens: UInt64?
+  let usage: StatusUsage?
   let approvals: [StatusApproval]
   func valid(now: UInt64) -> Bool {
     guard UUID(uuidString: subscriptionId)?.uuidString.lowercased() == subscriptionId,
@@ -21,7 +42,7 @@ struct StatusSnapshot: Codable, Equatable {
           now <= UInt64.max - 5, observedAt <= now + 5 && observedAt <= UInt64.max - 60,
           observedAt + 60 >= now && expiresAt > now && expiresAt > observedAt,
           expiresAt <= observedAt + 60, running <= 1000 && waiting <= 1000,
-          (totalTokens ?? 0) <= 9_007_199_254_740_991,
+          usage?.valid(observedAt: observedAt) ?? true,
           approvals.count <= 8, Set(approvals.map(\.id)).count == approvals.count,
           approvals.allSatisfy({ UUID(uuidString: $0.id)?.uuidString.lowercased() == $0.id && $0.expiresAt > now }),
           let data = try? JSONEncoder().encode(self), data.count <= 3500 else { return false }

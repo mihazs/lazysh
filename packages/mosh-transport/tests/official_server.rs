@@ -141,6 +141,12 @@ fn android_artifacts() -> (String, String, Option<String>) {
             tools.join("x86_64-linux-android24-clang"),
         );
     let output = command_output(command, std::time::Duration::from_secs(600));
+    let (binary, units) = cargo_test_artifacts(output, "android_peer");
+    let runtime = toolchain.join("sysroot/usr/lib/x86_64-linux-android/libc++_shared.so");
+    (binary, runtime.to_str().unwrap().to_owned(), Some(units))
+}
+
+fn cargo_test_artifacts(output: std::process::Output, peer_name: &str) -> (String, String) {
     let mut binary = None;
     let mut units = None;
     for value in String::from_utf8(output.stdout)
@@ -151,7 +157,7 @@ fn android_artifacts() -> (String, String, Option<String>) {
         if value["reason"] != "compiler-artifact" {
             continue;
         }
-        if value["target"]["name"] == "android_peer" {
+        if value["target"]["name"] == peer_name {
             binary = value["executable"].as_str().map(str::to_owned);
         } else if value["target"]["name"] == "lazysh_mosh_transport"
             && value["executable"].is_string()
@@ -159,10 +165,113 @@ fn android_artifacts() -> (String, String, Option<String>) {
             units = value["executable"].as_str().map(str::to_owned);
         }
     }
-    let binary = binary.expect("Cargo did not report the Android integration executable");
-    let units = units.expect("Cargo did not report the Android unit test executable");
-    let runtime = toolchain.join("sysroot/usr/lib/x86_64-linux-android/libc++_shared.so");
-    (binary, runtime.to_str().unwrap().to_owned(), Some(units))
+    let binary = binary.expect("Cargo did not report the mobile integration executable");
+    let units = units.expect("Cargo did not report the mobile unit test executable");
+    (binary, units)
+}
+
+fn ios_artifacts() -> (String, String) {
+    if !cfg!(target_os = "macos") {
+        panic!("iOS tests require macOS with full Xcode");
+    }
+    let target = if cfg!(target_arch = "aarch64") {
+        "aarch64-apple-ios-sim"
+    } else {
+        "x86_64-apple-ios"
+    };
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    command
+        .current_dir(workspace)
+        .args([
+            "test",
+            "-p",
+            "lazysh-mosh-transport",
+            "--target",
+            target,
+            "--lib",
+            "--test",
+            "ios_peer",
+            "--no-run",
+            "--locked",
+            "--message-format=json",
+        ])
+        .arg("--target-dir")
+        .arg(workspace.join("target/ios-mosh-tests"))
+        .env("CARGO_BUILD_JOBS", "4")
+        .env("IPHONEOS_DEPLOYMENT_TARGET", "16.0")
+        // Rust selects the target SDK through xcrun; never inherit a host or
+        // device SDKROOT when building for the simulator.
+        .env_remove("SDKROOT");
+    cargo_test_artifacts(
+        command_output(command, std::time::Duration::from_secs(600)),
+        "ios_peer",
+    )
+}
+
+#[test]
+#[ignore = "requires Xcode, a booted iOS Simulator, and official mosh-server"]
+fn ios_simulator_official_server_interoperability() {
+    let simulator =
+        std::env::var("APPLE_STATUS_SIMULATOR_ID").expect("isolated iOS test simulator ID");
+    assert!(
+        simulator.len() == 36
+            && simulator
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    );
+    let (peer, units) = ios_artifacts();
+    let mut boot = Command::new("xcrun");
+    boot.args(["simctl", "bootstatus", &simulator, "-b"]);
+    command_output(boot, std::time::Duration::from_secs(180));
+    let mut unit_command = Command::new("xcrun");
+    unit_command.args(["simctl", "spawn", &simulator, &units, "--nocapture"]);
+    let output = command_output(unit_command, std::time::Duration::from_secs(45));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("test result: ok.") && !text.contains("running 0 tests"),
+        "iOS unit tests did not execute: {text}"
+    );
+    println!("{text}");
+    let version = Command::new("mosh-server")
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
+    let first = Server::start();
+    let second = Server::start();
+    let mut protocol = Command::new("xcrun");
+    protocol
+        .args([
+            "simctl",
+            "spawn",
+            &simulator,
+            &peer,
+            "--ignored",
+            "--exact",
+            "ios_official_server_peer",
+            "--nocapture",
+        ])
+        .env("SIMCTL_CHILD_LAZYSH_MOSH_TEST_ONE_KEY", &first.key)
+        .env(
+            "SIMCTL_CHILD_LAZYSH_MOSH_TEST_ONE_PORT",
+            first.port.to_string(),
+        )
+        .env("SIMCTL_CHILD_LAZYSH_MOSH_TEST_TWO_KEY", &second.key)
+        .env(
+            "SIMCTL_CHILD_LAZYSH_MOSH_TEST_TWO_PORT",
+            second.port.to_string(),
+        );
+    let result = command_output(protocol, std::time::Duration::from_secs(45));
+    let text = String::from_utf8(result.stdout).unwrap();
+    assert!(
+        text.contains("1 passed"),
+        "iOS interoperability test did not execute: {text}"
+    );
 }
 
 struct DeviceDirectory(String);

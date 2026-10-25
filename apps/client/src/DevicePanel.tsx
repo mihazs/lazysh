@@ -76,6 +76,8 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   const [frame, setFrame] = useState<Frame>();
   const [live, setLive] = useState(false);
   const [continuous, setContinuous] = useState(false);
+  const [androidVideoReady, setAndroidVideoReady] = useState(false);
+  const [needsScreenshot, setNeedsScreenshot] = useState(false);
   const [socket, setSocket] = useState("");
   const [companion, setCompanion] = useState<{
     width: number;
@@ -96,6 +98,8 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     setFrame(undefined);
     setLive(false);
     setContinuous(false);
+    setAndroidVideoReady(false);
+    setNeedsScreenshot(false);
     setCompanion(undefined);
     setInput(false);
     setWarnings([]);
@@ -113,11 +117,11 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   const streamFrame = useCallback(
     (value: unknown) => {
       const result = parseFrame(value);
-      if (result.id !== selected || result.platform !== "ios")
-        throw new Error("Simulator stream identity changed.");
+      if (result.id !== selected || result.platform !== platform)
+        throw new Error("Device stream identity changed.");
       setFrame(result);
     },
-    [selected],
+    [selected, platform],
   );
   const streamError = useCallback((error: unknown) => {
     setError(errorMessage(error));
@@ -131,6 +135,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     socket,
     streamFrame,
     streamError,
+    platform,
   );
   async function run(action: () => Promise<void>) {
     if (running.current) return;
@@ -210,7 +215,10 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     );
     if (result.id !== selected || result.platform !== platform)
       throw new Error("Device frame identity changed.");
-    if (generation === current.current) setFrame(result);
+    if (generation === current.current) {
+      setFrame(result);
+      setNeedsScreenshot(false);
+    }
   }
   async function action(action: unknown, id = selected) {
     const type = (action as { type?: string }).type;
@@ -279,6 +287,8 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               setFrame(undefined);
               setLive(false);
               setContinuous(false);
+              setAndroidVideoReady(false);
+              setNeedsScreenshot(false);
               setCompanion(undefined);
               setInput(false);
             }}
@@ -292,6 +302,55 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           </select>
         </label>
       </div>
+      {platform === "android" && device?.capabilities.screenshot && (
+        <div className="tool-bar">
+          <button
+            disabled={busy || continuous}
+            onClick={() =>
+              void run(async () => {
+                const generation = current.current;
+                const value = await invoke<{
+                  schemaVersion: number;
+                  id: string;
+                  platform: string;
+                  stream: boolean;
+                  viewOnly: boolean;
+                  maximumSeconds: number;
+                }>("android_device_probe", { sessionId, id: selected });
+                if (
+                  value.schemaVersion !== 1 ||
+                  value.id !== selected ||
+                  value.platform !== "android" ||
+                  value.stream !== true ||
+                  value.viewOnly !== true ||
+                  value.maximumSeconds !== 180
+                )
+                  throw new Error(
+                    "Host Android video tools are unavailable or incompatible.",
+                  );
+                if (generation === current.current) setAndroidVideoReady(true);
+              })
+            }
+          >
+            Verify Android video tools
+          </button>
+          <button
+            disabled={!androidVideoReady || busy}
+            onClick={() => {
+              setLive(false);
+              setInput(false);
+              setNeedsScreenshot(true);
+              setContinuous(!continuous);
+            }}
+          >
+            {continuous ? "Stop video preview" : "Start video preview"}
+          </button>
+          <span>
+            View-only, up to three minutes. Requires installed host FFmpeg.
+            Capture a fresh screenshot after stopping to enable input.
+          </span>
+        </div>
+      )}
       {platform === "ios" && selected && (
         <div className="tool-bar">
           <label>
@@ -383,7 +442,10 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           <label>
             <input
               type="checkbox"
-              disabled={!device.capabilities.tap && !companion}
+              disabled={
+                (!device.capabilities.tap && !companion) ||
+                (platform === "android" && (continuous || needsScreenshot))
+              }
               checked={input}
               onChange={(event) => setInput(event.target.checked)}
             />
@@ -434,6 +496,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           onPointerDown={(event) => {
             if (
               !input ||
+              (platform === "android" && (continuous || needsScreenshot)) ||
               busy ||
               (companion &&
                 Math.abs(

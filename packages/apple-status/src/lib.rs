@@ -24,6 +24,48 @@ pub struct Approval {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordedUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub recorded_at: Option<i64>,
+    pub freshness: Freshness,
+    pub fresh_until: Option<u64>,
+}
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Freshness {
+    Fresh,
+    Stale,
+    Unknown,
+}
+impl RecordedUsage {
+    fn valid(&self, observed_at: u64) -> bool {
+        let counters = [
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        ];
+        counters.iter().any(Option::is_some)
+            && counters
+                .iter()
+                .flatten()
+                .all(|n| *n <= 9_007_199_254_740_991)
+            && self
+                .recorded_at
+                .is_none_or(|n| (-62_135_596_800..=253_402_300_799).contains(&n))
+            && self
+                .fresh_until
+                .is_none_or(|n| n <= observed_at.saturating_add(900))
+            && (self.recorded_at.is_some()
+                || (self.freshness == Freshness::Unknown && self.fresh_until.is_none()))
+            && (self.freshness != Freshness::Fresh || self.fresh_until.is_some())
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Snapshot {
     pub subscription_id: String,
     pub session_id: String,
@@ -32,7 +74,7 @@ pub struct Snapshot {
     pub expires_at: u64,
     pub running: u16,
     pub waiting: u16,
-    pub total_tokens: Option<u64>,
+    pub usage: Option<RecordedUsage>,
     pub approvals: Vec<Approval>,
 }
 fn valid_id(value: &str) -> bool {
@@ -52,8 +94,9 @@ fn validate(snapshot: &Snapshot, now: u64) -> Result<(), String> {
         || snapshot.running > 1000
         || snapshot.waiting > 1000
         || snapshot
-            .total_tokens
-            .is_some_and(|n| n > 9_007_199_254_740_991)
+            .usage
+            .as_ref()
+            .is_some_and(|usage| !usage.valid(snapshot.observed_at))
         || snapshot
             .approvals
             .iter()
@@ -207,7 +250,7 @@ mod tests {
             expires_at: 1060,
             running: 1,
             waiting: 1,
-            total_tokens: Some(50),
+            usage: None,
             approvals: vec![],
         }
     }
@@ -233,5 +276,34 @@ mod tests {
             2
         ];
         assert!(validate(&value, 1001).is_err());
+    }
+    #[test]
+    fn inspected_reports_preserve_missing_counters_and_require_honest_freshness() {
+        let mut usage = RecordedUsage {
+            input_tokens: Some(120),
+            output_tokens: Some(0),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            recorded_at: Some(900),
+            freshness: Freshness::Stale,
+            fresh_until: Some(1000),
+        };
+        assert!(usage.valid(1001));
+        let encoded = serde_json::to_value(&usage).unwrap();
+        assert_eq!(encoded["recordedAt"], 900);
+        assert!(encoded["cacheReadTokens"].is_null());
+        assert_eq!(encoded["outputTokens"], 0);
+        assert!(encoded.get("totalTokens").is_none());
+        usage.input_tokens = Some(u64::MAX);
+        assert!(!usage.valid(1001));
+        usage.input_tokens = Some(120);
+        usage.freshness = Freshness::Fresh;
+        usage.recorded_at = None;
+        assert!(!usage.valid(1001));
+        usage.recorded_at = Some(900);
+        usage.fresh_until = Some(1902);
+        assert!(!usage.valid(1001));
+        usage.fresh_until = Some(1800);
+        assert!(usage.valid(1001));
     }
 }

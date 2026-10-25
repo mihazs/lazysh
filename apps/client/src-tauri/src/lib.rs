@@ -1,12 +1,14 @@
 mod apple_speech;
 mod apple_status;
 mod approvals;
+mod companion_settings;
 mod devices;
 mod et;
 mod forward_agent;
 mod herdr;
 mod identities;
 mod links;
+mod local;
 mod mosh;
 mod multiplexer;
 mod notifications;
@@ -38,16 +40,24 @@ pub fn run() {
         .manage(devices::DeviceStreams::default())
         .manage(share::ShareState::default())
         .manage(sync::SyncState::default())
+        .manage(local::LocalState::default())
         .setup(|app| {
             use tauri::Manager;
             let state = ssh::AppState::new(app.path().app_config_dir()?)?;
             app.manage(state);
+            local::install_cleanup(app)?;
             app.manage(voice::VoiceState::new(
                 app.path().app_data_dir()?.join("voice-models"),
             )?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            local::local_capability,
+            local::local_connect,
+            local::local_write,
+            local::local_resize,
+            local::local_ack,
+            local::local_disconnect,
             apple_status::apple_status_capability,
             apple_status::apple_status_configure,
             apple_status::apple_status_publish,
@@ -78,6 +88,7 @@ pub fn run() {
             devices::device_frame,
             devices::device_action,
             devices::ios_device_probe,
+            devices::android_device_probe,
             devices::ios_device_action,
             devices::stream::device_stream_start,
             devices::stream::device_stream_next,
@@ -140,6 +151,8 @@ pub fn run() {
             ssh::list_multiplexer_sessions,
             ssh::attach_tmux,
             ssh::agent_snapshot,
+            companion_settings::get_companion_settings,
+            companion_settings::update_companion_settings,
             ssh::agent_transcript,
             ssh::agent_usage,
             ssh::agent_transcripts

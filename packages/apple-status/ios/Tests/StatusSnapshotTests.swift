@@ -3,7 +3,7 @@ import XCTest
 final class StatusSnapshotTests: XCTestCase {
   let id = "b11c6ca6-e4f7-4f63-859c-d08e66df2239"
   func snapshot(sequence: UInt64 = 1, subscription: String? = nil, expires: UInt64 = 1060) -> StatusSnapshot {
-    StatusSnapshot(subscriptionId: subscription ?? id, sessionId: id, sequence: sequence, observedAt: 1000, expiresAt: expires, running: 1, waiting: 2, totalTokens: 50, approvals: [])
+    StatusSnapshot(subscriptionId: subscription ?? id, sessionId: id, sequence: sequence, observedAt: 1000, expiresAt: expires, running: 1, waiting: 2, usage: nil, approvals: [])
   }
   func testCancellationAndReenableRejectQueuedOldSubscription() {
     var cursor = StatusCursor(); XCTAssertTrue(cursor.configure(id, enabled: true))
@@ -28,7 +28,7 @@ final class StatusSnapshotTests: XCTestCase {
   func testDeliveryOrderingSurvivesClockRollbackAndClears() {
     var inbox = StatusInbox()
     XCTAssertTrue(inbox.receive(StatusEnvelope(snapshot: snapshot(), deliveryId: id, deliverySequence: 1), now: 1001))
-    let corrected = StatusSnapshot(subscriptionId: id, sessionId: id, sequence: 2, observedAt: 900, expiresAt: 960, running: 2, waiting: 0, totalTokens: nil, approvals: [])
+    let corrected = StatusSnapshot(subscriptionId: id, sessionId: id, sequence: 2, observedAt: 900, expiresAt: 960, running: 2, waiting: 0, usage: nil, approvals: [])
     XCTAssertTrue(inbox.receive(StatusEnvelope(snapshot: corrected, deliveryId: id, deliverySequence: 2), now: 901))
     XCTAssertEqual(inbox.snapshot?.running, 2)
     XCTAssertTrue(inbox.receive(StatusEnvelope(snapshot: nil, deliveryId: id, deliverySequence: 3), now: 890))
@@ -43,5 +43,16 @@ final class StatusSnapshotTests: XCTestCase {
     inbox = try JSONDecoder().decode(StatusInbox.self, from: JSONEncoder().encode(inbox))
     XCTAssertFalse(inbox.receive(StatusEnvelope(snapshot: snapshot(), deliveryId: id, deliverySequence: 11), now: 1001))
     XCTAssertNil(inbox.snapshot)
+  }
+  func testRecordedUsageRetainsSeparateCountersAndDegradesAtOriginalDeadline() throws {
+    let report = StatusUsage(inputTokens: 10, outputTokens: nil, cacheReadTokens: 5, cacheWriteTokens: nil, recordedAt: 900, freshness: .fresh, freshUntil: 1800)
+    XCTAssertTrue(report.valid(observedAt: 1000))
+    XCTAssertEqual(report.freshnessAt(1700), .fresh)
+    XCTAssertEqual(report.freshnessAt(1800), .stale)
+    let decoded = try JSONDecoder().decode(StatusUsage.self, from: JSONEncoder().encode(report))
+    XCTAssertEqual(decoded.recordedAt, 900)
+    XCTAssertEqual(decoded.cacheReadTokens, 5)
+    XCTAssertNil(decoded.outputTokens)
+    XCTAssertEqual(decoded.freshnessAt(1900), .stale)
   }
 }

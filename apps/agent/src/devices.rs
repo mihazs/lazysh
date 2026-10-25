@@ -19,6 +19,7 @@ const MAX_SDK_TEXT: usize = 256 * 1024;
 const MAX_PNG: usize = 8 * 1024 * 1024;
 const MAX_FRAME: usize = 512 * 1024;
 const SDK_TIMEOUT: Duration = Duration::from_secs(10);
+pub mod android;
 pub mod idb;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
@@ -39,6 +40,12 @@ pub enum DeviceKey {
 }
 #[derive(Subcommand, Debug)]
 pub enum DeviceCommand {
+    Android {
+        #[arg(long)]
+        id: String,
+        #[command(subcommand)]
+        action: android::AndroidAction,
+    },
     /// Use an explicitly configured local iOS idb companion.
     Ios {
         #[arg(long)]
@@ -118,6 +125,7 @@ enum Tool {
     Emulator,
     Simctl,
     Idb,
+    Ffmpeg,
 }
 trait Runner {
     fn output(&mut self, tool: Tool, args: &[String], limit: usize) -> Result<Vec<u8>>;
@@ -134,13 +142,14 @@ impl SdkRunner {
             Tool::Emulator => ("emulator", "emulator"),
             Tool::Simctl => ("", "xcrun"),
             Tool::Idb => ("", "idb"),
+            Tool::Ffmpeg => ("", "ffmpeg"),
         };
         let filename = if cfg!(windows) && tool != Tool::Simctl {
             format!("{name}.exe")
         } else {
             name.into()
         };
-        let program = if matches!(tool, Tool::Simctl | Tool::Idb) {
+        let program = if matches!(tool, Tool::Simctl | Tool::Idb | Tool::Ffmpeg) {
             PathBuf::from(name)
         } else {
             sdk.map(PathBuf::from)
@@ -477,10 +486,14 @@ fn emulator_id(id: &str) -> bool {
         .is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 fn execute(runner: &mut impl Runner, command: DeviceCommand) -> Result<Value> {
+    if let DeviceCommand::Android { id, action } = command {
+        return android::execute(runner, &id, action);
+    }
     if let DeviceCommand::Ios { id, socket, action } = command {
         return idb::execute(runner, &id, &socket, action);
     }
     let (platform, id, operation) = match command {
+        DeviceCommand::Android { .. } => unreachable!("Android video commands are handled above"),
         DeviceCommand::Ios { .. } => unreachable!("iOS companion commands are handled above"),
         DeviceCommand::List { platform } => return inventory(runner, platform),
         DeviceCommand::Screenshot { platform, ref id } => {

@@ -22,7 +22,7 @@ it('shares only after explicit opt-in and revokes the exact subscription on clos
   await waitFor(()=>expect((screen.getByRole('button',{name:'Enable Watch status'}) as HTMLButtonElement).disabled).toBe(false));
   expect(invoke).not.toHaveBeenCalledWith('agent_snapshot',expect.anything());
   fireEvent.click(screen.getByRole('button',{name:'Start Live Activity'}));
-  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({startActivity:true,snapshot:expect.objectContaining({sessionId:id,totalTokens:null})})));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({startActivity:true,snapshot:expect.objectContaining({sessionId:id,usage:null})})));
   const configured=vi.mocked(invoke).mock.calls.find(([command,args])=>command==='apple_status_configure' && (args as {enabled:boolean}).enabled)![1] as {subscriptionId:string};
   view.unmount();
   expect(invoke).toHaveBeenCalledWith('apple_status_configure',{subscriptionId:configured.subscriptionId,enabled:false});
@@ -74,4 +74,26 @@ it('retains the explicit Live Activity request after a transient publish failure
   const calls=vi.mocked(invoke).mock.calls.filter(([command])=>command==='apple_status_publish');
   expect(calls).toHaveLength(2);
   expect(calls[1][1]).toHaveProperty('startActivity',true);
+});
+it('keeps inspected counters separate and never freshens an aged report when publishing new status',async()=>{
+  setup();const now=Date.now();const recordedAt=new Date(now-14*60_000).toISOString();
+  const usage={inputTokens:120,outputTokens:0,cacheReadTokens:null,cacheWriteTokens:null,recordedAt,freshness:'fresh' as const,observedAt:new Date(now).toISOString(),receivedAt:now-2*60_000};
+  render(<AppleStatusPanel sessionId={id} usage={usage}/>);
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Start Live Activity'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'Start Live Activity'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('apple_status_publish',expect.objectContaining({snapshot:expect.objectContaining({usage:{inputTokens:120,outputTokens:0,cacheReadTokens:null,cacheWriteTokens:null,recordedAt:Math.floor(Date.parse(recordedAt)/1000),freshness:'stale',freshUntil:Math.floor((now-60_000)/1000)}})})));
+  const payload=vi.mocked(invoke).mock.calls.find(([command])=>command==='apple_status_publish')![1];
+  expect(JSON.stringify(payload)).not.toContain('totalTokens');
+});
+it('routes Watch review only to the selected enabled SSH session',async()=>{
+  setup();const review=vi.fn();render(<AppleStatusPanel sessionId={id} onReview={review}/>);
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Start Live Activity'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'Start Live Activity'}));
+  await screen.findByRole('button',{name:'Stop Apple status'});
+  const callback=vi.mocked(listen).mock.calls.find(([name])=>name==='lazysh-apple-review')![1] as (event:{payload:{sessionId:string;approvalId:string}})=>void;
+  callback({payload:{sessionId:'another-session',approvalId:id}});expect(review).not.toHaveBeenCalled();
+  callback({payload:{sessionId:id,approvalId:id}});expect(review).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button',{name:'Stop Apple status'}));
+  callback({payload:{sessionId:id,approvalId:id}});expect(review).toHaveBeenCalledOnce();
+  expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='resolve_agent_approval')).toBe(false);
 });

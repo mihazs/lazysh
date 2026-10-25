@@ -6,6 +6,7 @@
     "main"
   ],
   "permissions": [
+    "allow-local-capability", "allow-local-connect", "allow-local-write", "allow-local-resize", "allow-local-ack", "allow-local-disconnect",
     "allow-share-thumbnail", "allow-share-thumbnail-cancel",
     "allow-apple-speech-capability",
     "allow-apple-speech-install",
@@ -29,6 +30,7 @@
     "allow-device-frame",
     "allow-device-action",
     "allow-ios-device-probe",
+    "allow-android-device-probe",
     "allow-ios-device-action",
     "allow-device-stream-start",
     "allow-device-stream-next",

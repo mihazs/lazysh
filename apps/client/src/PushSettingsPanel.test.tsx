@@ -6,7 +6,7 @@ import PushSettingsPanel from './PushSettingsPanel';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
-const off = { supported: true, configured: true, enabled: false, tokenPresent: false, busy: false, reason: 'Registration off' };
+const off = { provider: 'fcm', supported: true, configured: true, enabled: false, tokenPresent: false, busy: false, reason: 'Registration off' };
 
 it('requires explicit external-service consent and never registers during mount', async () => {
   vi.mocked(invoke).mockResolvedValue(off);
@@ -52,4 +52,13 @@ it('can pause pending registration and ignores its late completion', async () =>
   await screen.findByText('Registration off');
   finish({ ...off, enabled: true, reason: 'Stale registration result' });
   await waitFor(() => expect(screen.queryByText('Stale registration result')).toBeNull());
+});
+
+it('discloses Apple contact and local-only disable semantics for APNs', async () => {
+  vi.mocked(invoke).mockResolvedValue({ ...off, provider: 'apns', enabled: true, tokenPresent: true });
+  render(<PushSettingsPanel />);
+  await screen.findByRole('button', { name: 'Disable APNs registration' });
+  expect(document.body.textContent).toContain('Apple APNs');
+  expect(document.body.textContent).not.toContain('Google Firebase');
+  expect(document.body.textContent).toContain('does not invalidate a token globally');
 });

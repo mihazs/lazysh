@@ -12,7 +12,7 @@ Selecting an inbox row or a supported OS notification action opens only the exac
 
 ## Background push remains separate
 
-The inbox uses [Tauri's local notification plugin](https://v2.tauri.app/plugin/notification/). A suspended mobile app cannot keep polling SSH or receive new host events through this path. The separate [Android device-registration control](push-registration.md) can explicitly register/revoke an FCM token on configured builds, but it does not connect a remote delivery service or upload inbox events. APNs and background host-event push delivery remain incomplete.
+The inbox uses [Tauri's local notification plugin](https://v2.tauri.app/plugin/notification/). A suspended mobile app cannot keep polling SSH or receive new host events through this path. The separate [native device-registration control](push-registration.md) supports explicit Android FCM and iOS APNs registration on configured builds, but it does not connect a remote delivery service or upload inbox events. Actual background host-event push delivery remains incomplete.
 
 Full remote push requires a separate, opt-in delivery service and native registration lifecycle:
 

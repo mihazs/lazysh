@@ -142,6 +142,7 @@ fn database_discovery_returns_exact_ids_and_cli_requires_selected_session() {
     assert_eq!(page["truncated"], true);
     assert_eq!(page["sessions"][0]["path"], hermes_path.to_str().unwrap());
     let output = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["transcript", "--agent", "hermes", "--path"])
         .arg(&hermes_path)
         .args(["--session-id", "s1"])
@@ -151,6 +152,7 @@ fn database_discovery_returns_exact_ids_and_cli_requires_selected_session() {
     let output: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(output["messages"][0]["blocks"][0]["text"], "hello");
     let missing = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["transcript", "--agent", "hermes", "--path"])
         .arg(&hermes_path)
         .output()

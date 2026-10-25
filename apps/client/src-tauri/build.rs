@@ -1,5 +1,11 @@
 fn main() {
     let app = tauri_build::AppManifest::new().commands(&[
+        "local_capability",
+        "local_connect",
+        "local_write",
+        "local_resize",
+        "local_ack",
+        "local_disconnect",
         "apple_status_capability",
         "apple_status_configure",
         "apple_status_publish",
@@ -30,6 +36,7 @@ fn main() {
         "device_frame",
         "device_action",
         "ios_device_probe",
+        "android_device_probe",
         "ios_device_action",
         "device_stream_start",
         "device_stream_next",

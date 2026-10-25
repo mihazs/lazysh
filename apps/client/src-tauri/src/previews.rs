@@ -10,6 +10,8 @@ use tokio::{
     time::timeout,
 };
 
+mod proxy;
+
 const MAX_FORWARDS: usize = 16;
 const MAX_PER_SESSION: usize = 4;
 
@@ -21,6 +23,7 @@ pub struct Preview {
     remote_address: String,
     local_port: u16,
     url: String,
+    picker_token: Option<String>,
 }
 struct Forward {
     session_id: String,
@@ -38,6 +41,7 @@ pub async fn start_preview(
     session_id: String,
     remote_port: u16,
     remote_address: Option<String>,
+    annotations: Option<bool>,
 ) -> Result<Preview> {
     if remote_port == 0 {
         return Err(SshError::new(
@@ -79,7 +83,11 @@ pub async fn start_preview(
         remote_address: remote_address.clone(),
         local_port,
         url: format!("http://127.0.0.1:{local_port}/"),
+        picker_token: annotations
+            .unwrap_or(false)
+            .then(|| uuid::Uuid::new_v4().to_string()),
     };
+    let picker_token = preview.picker_token.clone();
     let (stop, stopped) = watch::channel(false);
     let (finished, completion) = watch::channel(false);
     forwards.insert(
@@ -96,7 +104,12 @@ pub async fn start_preview(
     let handle = session.handle.clone();
     let cancelled = session.cancel.subscribe();
     tauri::async_runtime::spawn(async move {
-        relay_listener(listener, cancelled, stopped, move || {
+        let remote_host = if remote_address == "::1" {
+            format!("[::1]:{remote_port}")
+        } else {
+            format!("127.0.0.1:{remote_port}")
+        };
+        let connect = move || {
             let handle = handle.clone();
             let remote_address = remote_address.clone();
             async move {
@@ -110,8 +123,12 @@ pub async fn start_preview(
                     .await?;
                 Ok(channel.into_stream())
             }
-        })
-        .await;
+        };
+        if let Some(token) = picker_token {
+            proxy::listener(listener, cancelled, stopped, token, remote_host, connect).await;
+        } else {
+            relay_listener(listener, cancelled, stopped, connect).await;
+        }
         store.lock().await.remove(&id);
         let _ = finished.send(true);
     });
@@ -419,6 +436,7 @@ mod tests {
                     remote_address: "127.0.0.1".into(),
                     local_port: 41234,
                     url: "http://127.0.0.1:41234/".into(),
+                    picker_token: None,
                 },
                 stop,
                 finished,

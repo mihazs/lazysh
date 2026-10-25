@@ -9,6 +9,7 @@ export function useDeviceStream(
   socket: string,
   onFrame: (value: unknown) => void,
   onError: (error: unknown) => void,
+  platform = "ios",
 ) {
   useEffect(() => {
     if (!enabled) return;
@@ -27,6 +28,7 @@ export function useDeviceStream(
           sessionId,
           id,
           socket,
+          devicePlatform: platform,
         });
         let sequence = 0;
         while (!cancelled) {
@@ -34,15 +36,21 @@ export function useDeviceStream(
             sequence: number;
             frame?: unknown;
             error?: unknown;
+            idle?: boolean;
           }>("device_stream_next", { sessionId, streamId, after: sequence });
           if (cancelled) break;
           if (packet.error) throw packet.error;
+          if (packet.idle === true) {
+            if (packet.sequence !== sequence || packet.frame)
+              throw new Error("Invalid idle device packet.");
+            continue;
+          }
           if (
             !Number.isSafeInteger(packet.sequence) ||
             packet.sequence <= sequence ||
             !packet.frame
           )
-            throw new Error("Invalid simulator stream sequence.");
+            throw new Error("Invalid device stream sequence.");
           sequence = packet.sequence;
           onFrame(packet.frame);
         }
@@ -60,5 +68,5 @@ export function useDeviceStream(
       cancelled = true;
       void stop().catch(() => {});
     };
-  }, [enabled, sessionId, id, socket, onFrame, onError]);
+  }, [enabled, sessionId, id, socket, platform, onFrame, onError]);
 }
