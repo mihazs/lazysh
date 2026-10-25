@@ -16,6 +16,26 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   messages use their matching system protobuf implementation. The existing
   archive-specific export guard remains; upstream cached artifacts are unchanged.
 
+- Claude transcript tool results retain explicit recorded error flags in paging
+  and branch-follow views. Failed results show a recorded-error label with the
+  original tool ID and output; no live status or retry action is inferred.
+  Existing transcript and follow defaults are unchanged.
+
+- Installed-app `lazysh://theme?data=…` links and selectable theme-link export.
+  Incoming links remain pending through resume locks and require explicit review
+  and apply or discard; manual import drafts and existing theme defaults are kept.
+  Desktop launches now share one app instance. QR scanning remains unavailable.
+
+- Advanced chords, compiled modified Simple shortcuts and multiplexer prefix
+  shortcuts dispatch as one bounded native queue item with 50 ms between steps.
+  The first step is immediate, literal text stays one write, and later input
+  cannot interleave. Unsent steps retain their original access lease and are
+  discarded on revocation or disconnect; ET also discards timed remainders and
+  queued chords after observed connection loss. The interval is a lazysh choice,
+  not a verified Moshi timing value. Prefix settings now reject comma-separated
+  multi-step and `text:` literal bindings because a prefix must be one key.
+  No gesture defaults change.
+
 - Grok ACP record cards now preserve explicit recorded tool statuses and tool-ID
   linkage, including status-only updates previously omitted. Missing/unknown
   statuses remain unassigned and original output stays intact. These historical
