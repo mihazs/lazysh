@@ -240,6 +240,36 @@ lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --l
 
 This is a **record stream**, not reconstructed Grok Chat View. Every normalized row has a byte-offset record ID, so chunks sharing a provider `messageId` remain distinct. Standard ACP user/assistant text, plaintext thinking, attachment placeholders, tool calls and recorded output/diffs are supported. Tool updates remain separate snapshots; their optional collections replace upstream state rather than representing append deltas. Complete ACP plan snapshots and xAI `plan_kept` content render as labeled text. Media, resource URIs, terminal references, diff paths and plan URIs are never opened or fetched. Metadata/status-only updates do not fabricate tool output.
 
+Explicit tool statuses `pending`, `in_progress`, `completed` and `failed` are
+preserved as optional `status` metadata on existing tool-linked `tool_use`,
+`tool_result` and attachment-placeholder `image` blocks. The UI labels these
+**Recorded status** with the tool ID, not current live activity or an approval
+request. A recognized status-only update produces a **Tool status** card with
+generated descriptive text such as `Recorded tool status: failed`; this text is
+metadata, not output produced by the tool. Tool calls without output do not gain
+a fake result. Actual arguments, output, diffs and attachment placeholders remain
+unchanged. Repeated updates remain separate physical records, even for the same
+tool ID; no latest-state replay or replacement is inferred.
+
+Missing, null and unknown statuses remain unassigned; protocol default `pending`
+is not materialized in this explicit-record reader. An unknown/missing-status
+update with real output still preserves that output, while one with neither
+recognized status nor output remains omitted. The optional field keeps schema
+version 1 and existing block types, cursors, ID limits and output bounds. Older
+clients ignore optional status metadata; status-only cards remain readable through
+their ordinary name/text fields.
+
+Status evidence is the existing pinned ACP schema **0.11.4** `tool_call.rs`
+`ToolCallStatus` enum (lines 420–433), `ToolCallUpdateFields.status` (line 217)
+and the pinned Grok disk/writer contract below; fixture provenance remains in
+the Grok fixture README. Native fixtures cover all four explicit states,
+status-only paging, unassigned values, unchanged outputs, linked inert media and
+maximum block counts. UI and desktop/phone browser fixtures verify labels,
+tool IDs, input/output preservation and absence of live controls or media fetches.
+No actual provider CLI, account transcript, credential or installed-release
+runtime was exercised. These statuses do not establish a current working/stop
+state, pending permission, or prompt-target identity.
+
 The modern disk envelope is `{timestamp, method, params: {sessionId, update}}`. `timestamp` is a provider-recorded unsigned UNIX-second value, converted to RFC 3339; missing/invalid/out-of-range values are skipped without substituting local time. Only `session/update` and `_x.ai/session/update` are accepted. Legacy raw notifications, unknown event types, usage/quota fields, turn-completion summaries and rewind markers are omitted while advancing the cursor. Malformed complete JSON fails. The existing regular-file, Unix owner/no-follow/nonblocking checks, 256 KiB record, 4 MiB scan, 100 messages/page and 512 KiB output budgets apply. An incomplete final line remains retryable from the returned cursor. Grok tool IDs are limited to 256 UTF-8 bytes and tool content to 999 blocks for a call or 1,000 for an update, checked before cloning identifiers; oversized records fail without truncating identity. A single normalized record exceeding the page budget fails explicitly instead of returning a non-progressing cursor.
 
 Automatic discovery and `--view conversation` are explicitly unsupported for this adapter. The UI labels it **Grok ACP records (explicit file)** and disables discovery. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Defaults and live terminal controls are unchanged.
