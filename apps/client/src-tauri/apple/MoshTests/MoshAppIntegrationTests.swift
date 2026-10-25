@@ -19,7 +19,12 @@ final class MoshAppIntegrationTests: XCTestCase {
   func testActualNativeIPCOffersMosh() throws {
     let mirrorPresent = ProcessInfo.processInfo.environment["OS_ACTIVITY_DT_MODE"] != nil
     let mirrorDisabledMarker = ProcessInfo.processInfo.environment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] == "1"
-    print("lazysh.hosted logging mirrorPresent=\(mirrorPresent) mirrorDisabledMarker=\(mirrorDisabledMarker)")
+    let loggingDiagnostic = "lazysh.hosted logging mirrorPresent=\(mirrorPresent) mirrorDisabledMarker=\(mirrorDisabledMarker)"
+    print(loggingDiagnostic)
+    let loggingAttachment = XCTAttachment(string: loggingDiagnostic)
+    loggingAttachment.name = "Hosted logging controls"
+    loggingAttachment.lifetime = .keepAlways
+    add(loggingAttachment)
     let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
       guard let view = self.appWebView(), let url = view.url else { return false }
       return url.scheme != "about" && !view.isLoading
@@ -74,6 +79,7 @@ final class MoshAppIntegrationTests: XCTestCase {
     var alive = true
     var finished = false
     var last = (initialized: false, enabled: false, locked: true, reason: "Native resume status has not replied")
+    var lastBootstrap = "unavailable"
     // Poll natively: hidden WKWebView timers must not control the bootstrap deadline.
     // This clean installed-app fixture has never opted into resume protection.
     func poll() {
@@ -84,11 +90,25 @@ final class MoshAppIntegrationTests: XCTestCase {
         let state;
         try { state = await window.__TAURI_INTERNALS__.invoke('app_lock_status'); }
         catch { return {initialized: false, enabled: false, locked: true, reason: 'Native resume status IPC failed'}; }
+        const phases = ['pending', 'running', 'succeeded', 'failed'];
+        const stages = ['registration', 'capability', 'policyProof', 'authority', 'worker'];
+        const trace = state?.debugBootstrap;
+        // Copy fixed diagnostic fields only; never attach the full response or nonce.
+        const bootstrap = trace ? JSON.stringify({
+          registration: phases.includes(trace.registration) ? trace.registration : 'unknown',
+          readyReceived: trace.readyReceived === true,
+          capability: phases.includes(trace.capability) ? trace.capability : 'unknown',
+          policyProof: phases.includes(trace.policyProof) ? trace.policyProof : 'unknown',
+          authority: phases.includes(trace.authority) ? trace.authority : 'unknown',
+          worker: phases.includes(trace.worker) ? trace.worker : 'unknown',
+          firstFailure: stages.includes(trace.firstFailure) ? trace.firstFailure : null
+        }) : 'unavailable';
         return {
           initialized: state?.initialized === true,
           enabled: state?.enabled === true,
           locked: state?.locked !== false,
-          reason: typeof state?.reason === 'string' ? state.reason.slice(0, 160) : 'Native resume status unavailable'
+          reason: typeof state?.reason === 'string' ? state.reason.slice(0, 160) : 'Native resume status unavailable',
+          bootstrap
         };
         """, arguments: [:], in: nil, in: .page) { result in
           DispatchQueue.main.async {
@@ -102,6 +122,7 @@ final class MoshAppIntegrationTests: XCTestCase {
             switch result {
             case .success(let response):
               if let state = response as? [String: Any] {
+                lastBootstrap = String((state["bootstrap"] as? String ?? "unavailable").prefix(512))
                 last = (state["initialized"] as? Bool == true,
                         state["enabled"] as? Bool == true,
                         state["locked"] as? Bool != false,
@@ -128,7 +149,13 @@ final class MoshAppIntegrationTests: XCTestCase {
       let revealed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !view.isHidden }, object: nil)
       _ = XCTWaiter.wait(for: [revealed], timeout: max(0, bootstrapDeadline.timeIntervalSinceNow))
     }
-    let diagnostic = "initialized=\(last.initialized), enabled=\(last.enabled), locked=\(last.locked), reason=\(last.reason), \(resumeVisibility(view))"
+    let mirrorPresent = ProcessInfo.processInfo.environment["OS_ACTIVITY_DT_MODE"] != nil
+    let mirrorDisabledMarker = ProcessInfo.processInfo.environment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] == "1"
+    let diagnostic = "initialized=\(last.initialized), enabled=\(last.enabled), locked=\(last.locked), reason=\(last.reason), \(resumeVisibility(view)), bootstrap=\(lastBootstrap), mirrorPresent=\(mirrorPresent), mirrorDisabledMarker=\(mirrorDisabledMarker)"
+    let attachment = XCTAttachment(string: diagnostic)
+    attachment.name = "Native resume bootstrap projection"
+    attachment.lifetime = .keepAlways
+    add(attachment)
     XCTAssertTrue(completed && last.initialized && !last.enabled && !last.locked && !view.isHidden, diagnostic)
   }
 

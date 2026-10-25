@@ -11,7 +11,19 @@ use tauri_plugin_lazysh_vault::VaultExt;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 const ACCOUNT: &str = "resume-lock-proof-v1";
+#[cfg(debug_assertions)]
+mod bootstrap;
 mod policy;
+macro_rules! bootstrap_trace {
+    ($app:expr, $stage:ident, $outcome:ident) => {
+        #[cfg(debug_assertions)]
+        $app.state::<Runtime>()
+            .bootstrap
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record(bootstrap::Stage::$stage, bootstrap::Outcome::$outcome);
+    };
+}
 use policy::{PolicyStore, Proof};
 fn policy_store(app: &AppHandle) -> Result<PolicyStore, String> {
     app.path()
@@ -57,6 +69,8 @@ impl Proof for NativeProof<'_> {
 }
 #[derive(Default)]
 pub struct Runtime {
+    #[cfg(debug_assertions)]
+    bootstrap: std::sync::Mutex<bootstrap::Snapshot>,
     native: AtomicU64,
     ready: AtomicBool,
     operation: Arc<Mutex<()>>,
@@ -235,33 +249,58 @@ fn revoke_for(app: &AppHandle, replacement: bool, native: Option<u64>) {
 }
 async fn initialize(app: AppHandle) -> Result<(), String> {
     let handle = app.clone();
+    bootstrap_trace!(&app, Worker, Running);
     let (capability, enabled) = tauri::async_runtime::spawn_blocking(move || {
-        let capability = handle.vault().resume_capability()?;
+        bootstrap_trace!(&handle, Capability, Running);
+        let capability = handle.vault().resume_capability().inspect_err(|_| {
+            bootstrap_trace!(&handle, Capability, Failed);
+        })?;
+        bootstrap_trace!(&handle, Capability, Succeeded);
+        bootstrap_trace!(&handle, PolicyProof, Running);
         let enabled = if cfg!(any(
             target_os = "android",
             target_os = "ios",
             target_os = "macos"
         )) {
-            policy_store(&handle)?.initialize(&NativeProof {
-                app: &handle,
-                operation: &handle.vault().operation(),
-            })?
+            policy_store(&handle)
+                .and_then(|store| {
+                    store.initialize(&NativeProof {
+                        app: &handle,
+                        operation: &handle.vault().operation(),
+                    })
+                })
+                .inspect_err(|_| {
+                    bootstrap_trace!(&handle, PolicyProof, Failed);
+                })?
         } else {
             false
         };
+        bootstrap_trace!(&handle, PolicyProof, Succeeded);
         Ok::<_, String>((capability, enabled))
     })
     .await
-    .map_err(|_| "Cannot initialize resume protection")??;
+    .map_err(|_| {
+        bootstrap_trace!(&app, Worker, Failed);
+        "Cannot initialize resume protection"
+    })?
+    .inspect_err(|_| {
+        bootstrap_trace!(&app, Worker, Failed);
+    })?;
+    bootstrap_trace!(&app, Worker, Succeeded);
     #[cfg(debug_assertions)]
     eprintln!(
         "Native resume policy resolved: supported={} enabled={enabled}",
         capability.available
     );
+    bootstrap_trace!(&app, Authority, Running);
     app.vault()
         .access()
         .initialize(capability.available, enabled, capability.reason)
-        .map_err(String::from)?;
+        .map_err(String::from)
+        .inspect_err(|_| {
+            bootstrap_trace!(&app, Authority, Failed);
+        })?;
+    bootstrap_trace!(&app, Authority, Succeeded);
     publish(&app);
     view(app.clone(), enabled);
     #[cfg(target_os = "macos")]
@@ -348,6 +387,14 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     match kind {
                         "ready" => {
                             #[cfg(debug_assertions)]
+                            {
+                                runtime
+                                    .bootstrap
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .ready_received = true;
+                            }
+                            #[cfg(debug_assertions)]
                             eprintln!("Native resume ready generation={generation}");
                             let first = !runtime.ready.swap(true, Ordering::SeqCst);
                             if !first && generation > observed {
@@ -405,18 +452,39 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
         Ok(())
     });
+    bootstrap_trace!(&handle, Registration, Running);
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = handle.vault().register_resume(events) {
+            bootstrap_trace!(&handle, Registration, Failed);
             eprintln!("Native resume registration failed: {error}");
             failure(handle.clone());
             let _ = handle.emit("lazysh-app-lock-error", error);
+        } else {
+            bootstrap_trace!(&handle, Registration, Succeeded);
         }
     });
     Ok(())
 }
 #[tauri::command]
-pub fn app_lock_status(app: AppHandle) -> Result<AccessStatus, String> {
-    app.vault().access().status().map_err(Into::into)
+pub fn app_lock_status(app: AppHandle) -> Result<StatusProjection, String> {
+    Ok(StatusProjection {
+        status: app.vault().access().status().map_err(String::from)?,
+        #[cfg(debug_assertions)]
+        debug_bootstrap: app
+            .state::<Runtime>()
+            .bootstrap
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+    })
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusProjection {
+    #[serde(flatten)]
+    status: AccessStatus,
+    #[cfg(debug_assertions)]
+    debug_bootstrap: bootstrap::Snapshot,
 }
 #[tauri::command]
 pub async fn app_lock_configure(
@@ -591,6 +659,42 @@ pub fn allowed_while_locked(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(debug_assertions)]
+    #[test]
+    fn failed_bootstrap_diagnostics_are_bounded_and_never_grant_authority() {
+        use bootstrap::{Outcome, Snapshot, Stage};
+        let authority = AccessState::default();
+        let mut diagnostics = Snapshot::default();
+        diagnostics.record(Stage::Registration, Outcome::Running);
+        diagnostics.ready_received = true;
+        diagnostics.record(Stage::Capability, Outcome::Succeeded);
+        diagnostics.record(Stage::PolicyProof, Outcome::Failed);
+        // Ready may be delivered before the register bridge returns. Its later
+        // success must not erase the startup failure or expose any authority.
+        for _ in 0..10_000 {
+            diagnostics.record(Stage::Registration, Outcome::Succeeded);
+            diagnostics.record(Stage::PolicyProof, Outcome::Succeeded);
+            diagnostics.record(Stage::Worker, Outcome::Failed);
+        }
+        let serialized = serde_json::to_value(StatusProjection {
+            status: authority.status().unwrap(),
+            debug_bootstrap: diagnostics,
+        })
+        .unwrap();
+        assert_eq!(serialized["initialized"], false);
+        assert_eq!(serialized["locked"], true);
+        assert!(serialized.get("nonce").is_none());
+        assert_eq!(serialized["debugBootstrap"]["registration"], "succeeded");
+        assert_eq!(serialized["debugBootstrap"]["policyProof"], "failed");
+        assert_eq!(serialized["debugBootstrap"]["firstFailure"], "policyProof");
+        assert!(
+            serde_json::to_vec(&serialized["debugBootstrap"])
+                .unwrap()
+                .len()
+                <= 256
+        );
+        assert!(authority.lease(None).is_err());
+    }
     #[tokio::test]
     async fn dropped_configuration_caller_keeps_commit_and_operation_owned() {
         let directory = tempfile::tempdir().unwrap();
