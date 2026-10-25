@@ -26,6 +26,10 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
 const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(all(test, unix))]
+#[path = "tmux_jump_fixture.rs"]
+mod tmux_jump_fixture;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SshError {
     kind: &'static str,
