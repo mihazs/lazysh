@@ -288,3 +288,18 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     scheme:
       testTargets: [LazyshStatusTests]
+
+  LazyshPushTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.2"
+    sources:
+      - path: ../../../../../packages/push-registration/ios/Shared/APNsRegistrationState.swift
+      - path: ../../../../../packages/push-registration/ios/Tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.lazysh.client.pushtests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: true
+    scheme:
+      testTargets: [LazyshPushTests]

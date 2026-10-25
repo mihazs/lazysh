@@ -144,3 +144,83 @@ it("requires explicit socket verification and input enablement before iOS contro
     }),
   );
 });
+it("keeps Android video view-only until a fresh screenshot follows stop", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "list_devices")
+      return {
+        schemaVersion: 1,
+        devices: [
+          {
+            id: frame.id,
+            name: "Android",
+            state: "device",
+            kind: "emulator",
+            capabilities: { screenshot: true, tap: true, key: true },
+          },
+        ],
+        avds: [],
+      };
+    if (command === "android_device_probe")
+      return {
+        schemaVersion: 1,
+        id: frame.id,
+        platform: "android",
+        stream: true,
+        viewOnly: true,
+        maximumSeconds: 180,
+      };
+    if (command === "device_stream_start") return "video";
+    if (command === "device_stream_next") return new Promise(() => {});
+    if (command === "device_frame") return frame;
+    return undefined;
+  });
+  render(<DevicePanel sessionId="ssh-video" />);
+  fireEvent.click(screen.getByRole("button", { name: "Find devices" }));
+  await screen.findByRole("option", { name: "Android · device" });
+  fireEvent.change(screen.getByLabelText("Device"), {
+    target: { value: frame.id },
+  });
+  expect(
+    screen.getByRole("button", { name: "Start video preview" }),
+  ).toHaveProperty("disabled", true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Verify Android video tools" }),
+  );
+  await vi.waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Start video preview" }),
+    ).toHaveProperty("disabled", false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Start video preview" }));
+  expect(screen.getByLabelText("Enable device input")).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("device_stream_start", {
+      sessionId: "ssh-video",
+      id: frame.id,
+      socket: "",
+      devicePlatform: "android",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Stop video preview" }));
+  expect(screen.getByLabelText("Enable device input")).toHaveProperty(
+    "disabled",
+    true,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Capture screen" }));
+  await vi.waitFor(() =>
+    expect(screen.getByLabelText("Enable device input")).toHaveProperty(
+      "disabled",
+      false,
+    ),
+  );
+  expect(
+    vi.mocked(invoke).mock.calls.some(([name]) => name === "device_action"),
+  ).toBe(false);
+  expect(invoke).toHaveBeenCalledWith("device_stream_stop", {
+    sessionId: "ssh-video",
+    streamId: "video",
+  });
+});

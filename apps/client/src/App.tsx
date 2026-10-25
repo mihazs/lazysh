@@ -48,6 +48,7 @@ import {
   type AutoOptions,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
+import type { AppleUsageReport } from "./UsagePanel";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import AgentPanel from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
@@ -1021,6 +1022,10 @@ function ConnectDialog({
 export default function App() {
   useClientAppearance();
   const [hosts, setHosts] = useState<Host[]>([]);
+  const [localCapability, setLocalCapability] = useState({available:false,reason:'Checking local terminal support…'});
+  const [openingLocal, setOpeningLocal] = useState(false);
+  const localOpening = useRef(false);
+  const [appleUsage, setAppleUsage] = useState<Record<string,AppleUsageReport>>({});
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [view, setView] = useState<View>("terminal");
@@ -1057,6 +1062,33 @@ export default function App() {
     };
   }, []);
 
+  useEffect(()=>{
+    let alive=true;
+    if(native) void invoke<{available:boolean;reason:string}>('local_capability').then(value=>{
+      if(alive && value && typeof value.available==='boolean') setLocalCapability(value);
+    }).catch(()=>{if(alive)setLocalCapability({available:false,reason:'Local terminal capability is unavailable.'});});
+    else setLocalCapability({available:false,reason:'Local terminals require the native desktop app.'});
+    return()=>{alive=false;};
+  },[]);
+  useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
+  async function openLocalTerminal() {
+    if(localOpening.current || !localCapability.available)return;
+    localOpening.current=true;setOpeningLocal(true);setError('');
+    let pending:Prepared|undefined;
+    try {
+      pending=await prepareSession('', 'Local terminal', 'This device · local shell');
+      pending.session.local=true;
+      const result=await api.connectLocal(pending.onEvent);
+      pending.establish(result.sessionId);
+      if(!mounted.current){await api.disconnect(result.sessionId);pending.session.terminal.dispose();return;}
+      sessionConnected(pending.session);setPalette(false);setSidebar(false);
+    }catch(error){
+      if(pending?.session.id)await api.disconnect(pending.session.id).catch(()=>{});
+      pending?.session.terminal.dispose();
+      if(mounted.current)setError(errorMessage(error));
+    }finally{localOpening.current=false;if(mounted.current)setOpeningLocal(false);}
+  }
+
   function persistWorkspace(next: SessionIntent[]) {
     try {
       saveWorkspace(next);
@@ -1074,6 +1106,21 @@ export default function App() {
     const failures: string[] = [];
     for (const intent of previousWorkspace) {
       if (!mounted.current) break;
+      if(intent.local) {
+        let pending:Prepared|undefined;
+        try {
+          if(!localCapability.available)throw new Error(localCapability.reason);
+          pending=await prepareSession('', 'Local terminal', 'This device · local shell');pending.session.local=true;
+          const result=await api.connectLocal(pending.onEvent);pending.establish(result.sessionId);
+          restoringSessions.current.add(result.sessionId);
+          if(!mounted.current)throw new Error('Local restoration cancelled');
+          restored.push(pending.session);
+        }catch(error){
+          if(pending?.session.id){await api.disconnect(pending.session.id).catch(()=>{});restoringSessions.current.delete(pending.session.id);}
+          pending?.session.terminal.dispose();remaining.push(intent);failures.push(`Local terminal: ${errorMessage(error)}`);
+        }
+        continue;
+      }
       const host = hosts.find((item) => item.id === intent.hostId);
       if (!host || intent.attached?.kind === "zellij") {
         remaining.push(intent);
@@ -1196,7 +1243,7 @@ export default function App() {
         return;
       if (
         !sessionsRef.current.some(
-          (session) => session.id === detail.sessionId && session.connected,
+          (session) => session.id === detail.sessionId && session.connected && !session.local,
         )
       )
         return;
@@ -1292,6 +1339,7 @@ export default function App() {
     try {
       await api.disconnect(session.id);
       session.terminal.dispose();
+      setAppleUsage(previous=>{const next={...previous};delete next[session.id];return next;});
       persistWorkspace(
         sessionsRef.current.filter((item) => item.id !== session.id),
       );
@@ -1317,7 +1365,7 @@ export default function App() {
     setActiveId(session.id);
     setView("terminal");
     setConnectingHost(null);
-    void loadHosts();
+    if(!session.local)void loadHosts();
   }
   async function attachTmux(
     source: LiveSession,
@@ -1373,6 +1421,10 @@ export default function App() {
           <Search size={15} />
           <span>Jump to a host</span>
           <kbd>⌘ K</kbd>
+        </button>
+        <button className="search-button" disabled={!localCapability.available || openingLocal}
+          title={localCapability.reason} onClick={()=>void openLocalTerminal()}>
+          <TerminalSquare size={15}/><span>{openingLocal?'Opening local terminal…':'Open local terminal'}</span>
         </button>
         <div className="sidebar-heading">
           <span>HOSTS</span>
@@ -1534,7 +1586,7 @@ export default function App() {
                 className={`status-dot ${active?.connected ? "" : "status-idle"}`}
               />
               {active?.connected
-                ? active.mosh
+                ? active.local ? 'Local terminal' : active.mosh
                   ? "Mosh connected"
                   : active.et
                     ? "ET connected"
@@ -1596,7 +1648,7 @@ export default function App() {
           <div
             className="session-tabs"
             role="tablist"
-            aria-label="SSH connections"
+            aria-label="Terminal connections"
           >
             {sessions.map((session) => (
               <div
@@ -1635,7 +1687,7 @@ export default function App() {
           <>
             <div className="session-toolbar">
               <nav className="view-tabs" aria-label="Session views">
-                {views.map(({ id, label, Icon }) => (
+                {views.filter(({id})=>!active.local || id==='terminal' || id==='voice').map(({ id, label, Icon }) => (
                   <button
                     key={id}
                     aria-current={view === id ? "page" : undefined}
@@ -1654,6 +1706,7 @@ export default function App() {
                 <Unplug size={16} />
               </button>
             </div>
+            {active.local && <p className="security-note">Local shell on this device. SSH host tools, remote files, agents and previews are unavailable in this session.</p>}
             <div className="session-body">
               <Suspense
                 fallback={
@@ -1670,39 +1723,39 @@ export default function App() {
                     reportError={setError}
                   />
                 ))}
-                {active.connected && view === "agents" && (
+                {active.connected && !active.local && view === "agents" && (
                   <AgentPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && view === "usage" && (
-                  <UsagePanel key={active.id} sessionId={active.id} />
+                {active.connected && !active.local && view === "usage" && (
+                  <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />
                 )}
-                {active.connected && view === "chat" && (
+                {active.connected && !active.local && view === "chat" && (
                   <ChatPanel
                     key={active.id}
                     sessionId={active.id}
                     onOpenTerminal={() => setView("terminal")}
                   />
                 )}
-                {active.connected && view === "preview" && (
+                {active.connected && !active.local && view === "preview" && (
                   <PreviewPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && view === "attachments" && (
+                {active.connected && !active.local && view === "attachments" && (
                   <AttachmentPanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && view === "voice" && (
                   <VoicePanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && view === "devices" && (
+                {active.connected && !active.local && view === "devices" && (
                   <DevicePanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && view === "files" && (
+                {active.connected && !active.local && view === "files" && (
                   <FilesPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && view === "diff" && (
+                {active.connected && !active.local && view === "diff" && (
                   <RepositoryPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && view === 'apple' && <AppleStatusPanel key={active.id} sessionId={active.id} onReview={()=>setView('agents')} />}
-                {active.connected && view === "sessions" && (
+                {active.connected && !active.local && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>setView('agents')} /></div>}
+                {active.connected && !active.local && view === "sessions" && (
                   <MuxPanel
                     key={active.id}
                     sessionId={active.id}
@@ -1721,11 +1774,11 @@ export default function App() {
             </div>
             <footer className="workspace-footer">
               <span>
-                <ShieldCheck size={12} />
+                {active.local ? <TerminalSquare size={12}/> : <ShieldCheck size={12} />}
                 {active.destination}
               </span>
               <span>
-                {active.connected ? active.mosh ? "Mosh" : active.et ? "ET" : "SSH" : "Disconnected"}
+                {active.connected ? active.local ? "Local PTY" : active.mosh ? "Mosh" : active.et ? "ET" : "SSH" : "Disconnected"}
                 <i />
                 UTF-8
                 <i />
@@ -1848,6 +1901,7 @@ export default function App() {
             />
           </div>
           <div className="palette-list">
+            <button disabled={!localCapability.available || openingLocal} title={localCapability.reason} onClick={()=>void openLocalTerminal()}><TerminalSquare size={18}/><span>Local terminal · this device</span></button>
             {shownHosts.map((host) => (
               <button key={host.id} onClick={() => chooseHost(host)}>
                 <Server size={18} />
@@ -1895,10 +1949,10 @@ export default function App() {
           {!sessions.length && <p>No terminal sessions are open.</p>}
         </div>
       </Dialog>}
-      {native && <NotificationMonitor sessions={sessions} />}
+      {native && <NotificationMonitor sessions={sessions.filter(session=>!session.local)} />}
       {inbox && (
         <Dialog title="Notification inbox" close={() => setInbox(false)}>
-          <NotificationPanel sessions={sessions} />
+          <NotificationPanel sessions={sessions.filter(session=>!session.local)} />
         </Dialog>
       )}
       {about && (

@@ -2768,7 +2768,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![list_hosts])
-            .build(tauri::generate_context!())
+            .build(tauri::generate_context!(test = true))
             .unwrap();
         app.manage(AppState::new(dir.path().into()).unwrap());
         let main = tauri::WebviewWindowBuilder::new(
@@ -3285,10 +3285,16 @@ mod tests {
             assert_eq!(frame, websocket);
             socket.write_all(&[0x81, 2, b'H', b'i']).await.unwrap();
         });
-        let preview =
-            crate::previews::start_preview(app.state(), app.state(), id.clone(), http_port, None)
-                .await
-                .unwrap();
+        let preview = crate::previews::start_preview(
+            app.state(),
+            app.state(),
+            id.clone(),
+            http_port,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let preview = serde_json::to_value(preview).unwrap();
         let local_port = preview["localPort"].as_u64().unwrap() as u16;
         assert_ne!(

@@ -82,6 +82,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - name: Exercise native local PTY and ConPTY lifecycle
+        run: bunx turbo run test:local --filter=@lazysh/client
 
   native-android:
     runs-on: ubuntu-24.04
@@ -185,7 +187,20 @@ jobs:
         with:
           cache-on-failure: true
       - run: bun install --frozen-lockfile
+      - name: Install host Mosh fixture dependencies
+        run: |
+          brew install protobuf openssl@3 zlib pkgconf mosh cmake
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix protobuf)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: Report Xcode and target SDKs
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphonesimulator --show-sdk-version
       - run: bun run build:ios
+      - name: Link native Mosh tests for iOS devices
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+        run: cargo test -p lazysh-mosh-transport --target aarch64-apple-ios --lib --no-run --locked
       - name: Compile watchOS companion and complications
         run: bunx turbo run build:watchos --filter=@lazysh/apple-status
       - name: Create isolated status test simulator
@@ -194,6 +209,10 @@ jobs:
           echo "APPLE_STATUS_SIMULATOR_ID=$APPLE_STATUS_SIMULATOR_ID" >> "$GITHUB_ENV"
       - name: Run native status lifecycle tests
         run: bunx turbo run test:apple-status --filter=@lazysh/apple-status
+      - name: Run native APNs registration state tests
+        run: bunx turbo run test:apns --filter=@lazysh/push-registration
+      - name: Run native iOS Mosh unit and protocol tests
+        run: bun run test:ios-mosh
       - name: Remove status test simulator
         if: always() && env.APPLE_STATUS_SIMULATOR_ID != ''
         run: xcrun simctl delete "$APPLE_STATUS_SIMULATOR_ID"

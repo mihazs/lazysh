@@ -11,6 +11,8 @@ lazysh-agent devices tap --platform android --id emulator-5554 --x 100 --y 220
 lazysh-agent devices swipe --platform android --id emulator-5554 --x 100 --y 500 --to-x 100 --to-y 100 --duration-ms 300
 lazysh-agent devices key --platform android --id emulator-5554 --key home
 lazysh-agent devices boot --platform android --id Pixel_API_36
+lazysh-agent devices android --id emulator-5554 probe
+lazysh-agent devices android --id emulator-5554 stream
 lazysh-agent devices list --platform ios
 lazysh-agent devices screenshot --platform ios --id 9C405382-203A-4DC0-A11B-B2FC37EBA881
 ```
@@ -22,6 +24,18 @@ Screenshots return a JPEG frame as `{schemaVersion, platform, id, mime, base64, 
 Raw PNG capture is bounded to 8 MiB, dimensions to 8192 pixels per side and 16 million total pixels, and decoder allocation to 128 MiB. Frames are reduced to fit 1280 pixels per side, with a second 720-pixel reduction if needed. Encoded JPEG data is capped at 512 KiB so its base64 JSON fits the SSH command's response budget. Invalid or oversized captures fail. iOS writes a screenshot to a new filename in a private temporary directory which is removed after capture, including on errors.
 
 Touch and key controls are supported on Android using numeric pixel coordinates and fixed SDK key names. Keys are `back`, `home`, `enter`, `menu`, `power`, `volume-up`, and `volume-down`. Plain `simctl` iOS discovery reports touch/swipe/key capabilities false. Optional idb enables the explicitly verified controls described below.
+
+## Optional view-only Android video
+
+Android video requires an existing host `ffmpeg` executable with its H.264 decoder, MJPEG encoder, multipart JPEG muxer, and FPS filter. Lazysh probes those components and the device's `shell_v2` feature, and asks `screenrecord` to parse the capture options before `--help` exits without recording. It never installs FFmpeg or copies a capture server to the device. The output-format switch is implemented in AOSP but marked unofficial and omitted from its help text; incompatible vendor implementations fail the probe or stream instead of claiming support.
+
+Choose **Verify Android video tools**, then **Start video preview**. The companion runs fixed argument arrays equivalent to `adb -s SERIAL shell -T -n screenrecord --output-format=h264 --bit-rate 2000000 --time-limit 180 --size WIDTHxHEIGHT -`, piping H.264 directly into its owned host FFmpeg process. `-T` disables terminal transformations, and shell-v2 separates stderr and exit status from video bytes. Encoder dimensions preserve the initial screenshot aspect ratio, fit within 1280 pixels, and use even dimensions. FFmpeg accepts only the pipe protocol and H.264 input, limits individual allocations to 64 MiB and decoded images to 1,638,400 pixels, uses one codec/filter thread, and emits a target eight JPEG frames per second. Multipart headers are limited to 1024 bytes and each JPEG to 512 KiB before the shared bounded decoder and latest-frame bridge accept it. Android video frame dimensions describe the decoded preview, not a touch coordinate space.
+
+This preview is **view-only**: Android's documented recording behavior does not support rotation reliably, so video frames cannot safely provide touch coordinates. Stopping video, hiding the panel, or a stream failure keeps pointer input disabled until **Capture screen** supplies a fresh screenshot. Existing screenshot refresh and explicitly enabled screenshot controls remain available. Rotation-aware video input remains issue #19 work. Video has no audio or recording/download feature, stops after three minutes, and can fail when a device has no compatible AVC encoder. Startup requires a first valid frame within ten seconds. After that, an unchanged screen keeps its previous image until another frame arrives, cancellation, or the total deadline. Native frame pulls wait up to fifteen seconds and return an explicit idle response without updating the image or capture sequence. Idle-screen cadence still requires device acceptance testing.
+
+Cancellation, SSH stdin EOF/disconnect, output backpressure timeout, and failure kill and reap both owned host children. AOSP's shell-v2 daemon sends SIGHUP to its subprocess on protocol disconnect and waits for its exit; the explicit 180-second recording limit also bounds incompatible vendor behavior. Lazysh never kills unrelated screenrecord processes or restarts the shared adb server. Source contracts: [AOSP recording implementation](https://android.googlesource.com/platform/frameworks/av/+/refs/heads/main/cmds/screenrecord/screenrecord.cpp), [adb subprocess lifecycle](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/daemon/shell_service.cpp), [FFmpeg multipart JPEG framing](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/mpjpeg.c), and [Android recording limitations](https://developer.android.com/tools/adb#screenrecord).
+
+The real Cargo codec fixture has executed an installed FFmpeg 9.0.2 H.264-to-JPEG pipeline, cancellation after a validated frame, and malformed-input failure. Other native tests reject missing device protocol/decoder capabilities and oversized/truncated multipart data. This does not verify a device AVC encoder, vendor adb lifecycle, rotation behavior, actual frame rate, or battery cost; Android emulator/device acceptance remains pending.
 
 ## Optional continuous iOS preview
 

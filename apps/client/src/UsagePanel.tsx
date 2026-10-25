@@ -14,6 +14,7 @@ type Sample = {
   inputTokens: number | null; outputTokens: number | null;
   cacheReadTokens: number | null; cacheWriteTokens: number | null;
 };
+export type AppleUsageReport = Omit<Sample, "id"> & { observedAt: string; receivedAt: number };
 type Snapshot = {
   schemaVersion: 1; agent: string; scope: "transcript_window"; observedAt: string;
   nextOffset: number; hasMore: boolean; samplesAvailable: number; samples: Sample[];
@@ -81,7 +82,7 @@ export function windowFreshness(window: RecordedProviderWindow, observedAt: stri
 const freshnessLabel = { fresh: "Recently recorded", stale: "Stale record", unknown: "Record freshness unknown" };
 const count = (value: number | null) => value === null ? "Unknown" : value.toLocaleString();
 
-export default function UsagePanel({ sessionId }: { sessionId: string }) {
+export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId: string; onShareAppleUsage?: (report: AppleUsageReport) => void }) {
   const [agent, setAgent] = useState("claude");
   const [path, setPath] = useState("");
   const [transcriptSessionId, setTranscriptSessionId] = useState("");
@@ -138,6 +139,7 @@ export default function UsagePanel({ sessionId }: { sessionId: string }) {
       <p>Read on host <time dateTime={data.observedAt}>{new Date(data.observedAt).toLocaleString()}</time>. Showing the last {data.samples.length} of {data.samplesAvailable} usage reports in this inspected window.</p>
       <section aria-label="Latest report in inspected records"><h4>Latest report in inspected records</h4>
         <dl className="usage-values">{[["Input tokens", latest?.inputTokens ?? null], ["Output tokens", latest?.outputTokens ?? null], ["Cache read tokens", latest?.cacheReadTokens ?? null], ["Cache write tokens", latest?.cacheWriteTokens ?? null]].map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd>{count(value as number | null)}</dd></div>)}</dl>
+        {latest && onShareAppleUsage && <button disabled={busy || counters.every(key=>latest[key]===null)} onClick={()=>onShareAppleUsage({inputTokens:latest.inputTokens,outputTokens:latest.outputTokens,cacheReadTokens:latest.cacheReadTokens,cacheWriteTokens:latest.cacheWriteTokens,recordedAt:latest.recordedAt,freshness:latest.freshness,observedAt:data.observedAt,receivedAt})}>Use latest report for Watch</button>}
       </section>
       {data.samples.length === 0 && <p>No token counters were recorded in this inspected window. Missing values remain unknown.</p>}
       <section aria-label="Context and provider limits"><h4>Context and provider limits</h4><dl className="usage-values"><div><dt>Context used</dt><dd>Unknown</dd></div><div><dt>Context remaining</dt><dd>Unknown</dd></div><div><dt>Context window</dt><dd>Unknown</dd></div><div><dt>Provider limit and reset</dt><dd>Unknown</dd></div></dl><p>Current context and provider limits haven’t been collected. Input counts do not establish remaining context.</p></section>

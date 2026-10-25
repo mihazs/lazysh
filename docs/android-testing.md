@@ -2,7 +2,9 @@
 
 Android runtime tests use the application module's standard `src/androidTest/java/` source set, AndroidJUnitRunner, ActivityScenario and Espresso-Web. They are separate from the vault module's local JVM JUnit tests.
 
-The suite retains one shared activity until AndroidJUnitRunner finishes. Destroying the last Tauri activity intentionally exits its native process, which also hosts instrumentation; per-test activity closure would discard test results. Configuration-change recreation remains exercised by the workspace test.
+The suite retains one shared activity until AndroidJUnitRunner finishes. Destroying the last Tauri activity intentionally exits its native process, which also hosts instrumentation; per-test activity closure would discard test results. The standard runner argument `waitForActivitiesToComplete=false` prevents AndroidJUnitRunner's automatic activity-finisher listener from destroying that shared activity between test methods. Configuration-change recreation remains exercised by the workspace test.
+
+The workspace fixture locates/clicks DOM controls with Espresso-Web, then types through Espresso's native `typeTextIntoFocusedView`. Espresso-Web's JavaScript `webKeys` atom assigns the input value directly, which updates React's value tracker before its synthetic event and can leave controlled form state unchanged. The test checks fixture values and form validity, and reports the exact readiness stage and visible form error without dumping page contents.
 
 Install the Android SDK, JDK 21 and NDK version declared by the application. Set `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME` for your toolchain. Start a dedicated x86_64 emulator and wait until this command returns `1`:
 

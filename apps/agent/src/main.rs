@@ -13,6 +13,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Show host companion settings without creating state when absent.
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommand,
+    },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
         #[arg(long, value_enum)]
@@ -93,8 +98,50 @@ enum Command {
         view: lazysh_agent::transcript::TranscriptView,
     },
 }
+#[derive(Subcommand)]
+enum SettingsCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        transcript_discovery_enabled: bool,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        recorded_usage_enabled: bool,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        device_tools_enabled: bool,
+    },
+}
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
+    let operation = match &cli.command {
+        Command::Discover { .. } => Some(lazysh_agent::settings::Operation::TranscriptDiscovery),
+        Command::Usage { .. } => Some(lazysh_agent::settings::Operation::RecordedUsage),
+        Command::Devices { .. } => Some(lazysh_agent::settings::Operation::DeviceTools),
+        _ => None,
+    };
+    if let Some(operation) = operation {
+        lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
+    }
     let output = match cli.command {
+        Command::Settings { command } => {
+            let directory = lazysh_agent::state_directory()?;
+            let settings = match command {
+                SettingsCommand::Show => lazysh_agent::settings::read(&directory)?,
+                SettingsCommand::Update {
+                    expected_revision,
+                    transcript_discovery_enabled,
+                    recorded_usage_enabled,
+                    device_tools_enabled,
+                } => lazysh_agent::settings::update(
+                    &directory,
+                    expected_revision,
+                    transcript_discovery_enabled,
+                    recorded_usage_enabled,
+                    device_tools_enabled,
+                )?,
+            };
+            Some(serde_json::to_value(settings).map_err(|_| Error::InvalidEvent)?)
+        }
         Command::Usage {
             agent,
             path,
@@ -110,7 +157,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             .map_err(|_| Error::InvalidEvent)?,
         ),
         Command::Devices { command } => {
-            if let lazysh_agent::devices::DeviceCommand::Ios {
+            if let lazysh_agent::devices::DeviceCommand::Android {
+                id,
+                action: lazysh_agent::devices::android::AndroidAction::Stream,
+            } = command
+            {
+                lazysh_agent::devices::android::stream(&id)?;
+                None
+            } else if let lazysh_agent::devices::DeviceCommand::Ios {
                 id,
                 socket,
                 action: lazysh_agent::devices::idb::IosAction::Stream,

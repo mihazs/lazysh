@@ -15,6 +15,7 @@
     "build:android:emulator": "turbo run build:android:emulator --filter=@lazysh/client",
     "test:android": "turbo run test:android --filter=@lazysh/client",
     "test:android-mosh": "turbo run test:android-mosh --filter=@lazysh/mosh-transport",
+    "test:ios-mosh": "turbo run test:ios-mosh --filter=@lazysh/mosh-transport",
     "check": "turbo run check check:rust",
     "test": "turbo run test test:rust",
     "test:e2e": "turbo run test:e2e",

@@ -25,7 +25,7 @@ fn ensure_capacity(entries: &mut HashMap<String, Stream>, session_id: &str) -> R
     {
         return Err(SshError::new(
             "busy",
-            "Stop the existing simulator stream first",
+            "Stop the existing device stream first",
         ));
     }
     Ok(())
@@ -35,13 +35,14 @@ pub struct Packet {
     sequence: u64,
     frame: Option<Value>,
     error: Option<SshError>,
+    idle: bool,
 }
 
-fn record(bytes: &[u8], id: &str) -> Result<Value> {
+fn record(bytes: &[u8], id: &str, platform: &str) -> Result<Value> {
     let frame: Value = serde_json::from_slice(bytes)?;
     if frame["schemaVersion"] != 1
         || frame["id"] != id
-        || frame["platform"] != "ios"
+        || frame["platform"] != platform
         || frame["mime"] != "image/jpeg"
         || !frame["base64"].as_str().is_some_and(|value| {
             value.starts_with("/9j/")
@@ -53,15 +54,12 @@ fn record(bytes: &[u8], id: &str) -> Result<Value> {
     {
         return Err(SshError::new(
             "invalid_output",
-            "Invalid simulator stream frame",
+            "Invalid device stream frame",
         ));
     }
     for key in ["width", "height", "imageWidth", "imageHeight"] {
         if !frame[key].as_u64().is_some_and(|v| (1..=8192).contains(&v)) {
-            return Err(SshError::new(
-                "invalid_output",
-                "Invalid simulator dimensions",
-            ));
+            return Err(SshError::new("invalid_output", "Invalid device dimensions"));
         }
     }
     Ok(frame)
@@ -70,6 +68,7 @@ async fn receive(
     session: Arc<crate::ssh::Session>,
     command: String,
     id: String,
+    platform: String,
     mut cancel: watch::Receiver<bool>,
     output: watch::Sender<Packet>,
 ) -> Result<()> {
@@ -80,36 +79,44 @@ async fn receive(
     let mut channel = tokio::select! { biased;
         _=cancel.changed()=>return Ok(()),
         _=disconnected.changed()=>return Ok(()),
-        result=tokio::time::timeout(Duration::from_secs(10),session.handle.channel_open_session())=>result.map_err(|_|SshError::new("timeout","Simulator channel timed out"))??,
+        result=tokio::time::timeout(Duration::from_secs(10),session.handle.channel_open_session())=>result.map_err(|_|SshError::new("timeout","Device channel timed out"))??,
     };
-    let result=tokio::time::timeout(Duration::from_secs(900),async {
+    let maximum = Duration::from_secs(if platform == "android" { 180 } else { 900 });
+    let result=tokio::time::timeout(maximum,async {
         tokio::select! {biased;
             _=cancel.changed()=>return Ok(()),
             _=disconnected.changed()=>return Ok(()),
-            result=tokio::time::timeout(Duration::from_secs(10),channel.exec(true,command))=>result.map_err(|_|SshError::new("timeout","Starting simulator stream timed out"))??,
+            result=tokio::time::timeout(Duration::from_secs(10),channel.exec(true,command))=>result.map_err(|_|SshError::new("timeout","Starting device stream timed out"))??,
         }
         let mut buffer=Vec::new();let mut sequence=0;
+        let startup_deadline=tokio::time::Instant::now()+Duration::from_secs(12);
         loop {
+            let read_timeout=if sequence==0 {startup_deadline.saturating_duration_since(tokio::time::Instant::now())} else {Duration::from_secs(12)};
+            if sequence==0 && read_timeout.is_zero() {return Err(SshError::new("timeout","Device stream did not produce its first frame"));}
             let msg=tokio::select! {biased;
                 _=cancel.changed()=>return Ok(()),
                 _=disconnected.changed()=>return Ok(()),
-                msg=tokio::time::timeout(Duration::from_secs(12),channel.wait())=>msg.map_err(|_|SshError::new("timeout","Simulator stream stopped producing frames"))?,
+                msg=tokio::time::timeout(read_timeout,channel.wait())=>match msg {
+                    Ok(msg)=>msg,
+                    Err(_) if platform=="android" && sequence>0 && buffer.is_empty()=>continue,
+                    Err(_)=>return Err(SshError::new("timeout","Device stream stopped producing frames")),
+                },
             };
             match msg {
                 Some(ChannelMsg::Data{data})=>{
                     for byte in data.iter().copied() {
                         if byte==b'\n' {
-                            let frame=record(&buffer,&id)?;buffer.clear();sequence+=1;
-                            output.send_replace(Packet{sequence,frame:Some(frame),error:None});
-                        } else {if buffer.len()>=MAX_RECORD {return Err(SshError::new("output_too_large","Simulator stream frame exceeds limit"));}buffer.push(byte);}
+                            let frame=record(&buffer,&id,&platform)?;buffer.clear();sequence+=1;
+                            output.send_replace(Packet{sequence,frame:Some(frame),error:None,idle:false});
+                        } else {if buffer.len()>=MAX_RECORD {return Err(SshError::new("output_too_large","Device stream frame exceeds limit"));}buffer.push(byte);}
                     }
                 },
-                Some(ChannelMsg::ExitStatus{exit_status}) if exit_status!=0=>return Err(SshError::new("remote_command_failed","Simulator streaming failed; verify idb and the selected private companion socket")),
-                None=>return Err(SshError::new("disconnected","Simulator stream ended")),
+                Some(ChannelMsg::ExitStatus{exit_status}) if exit_status!=0=>return Err(SshError::new("remote_command_failed","Device video stopped; verify host video tools and device availability")),
+                None=>return Err(SshError::new("disconnected","Device video ended; start another preview if needed")),
                 _=>{},
             }
         }
-    }).await.map_err(|_|SshError::new("timeout","Simulator preview reached its 15 minute limit"));
+    }).await.map_err(|_|SshError::new("timeout","Device preview reached its maximum duration"));
     // EOF cancels the companion's stdin watcher even when the simulator is idle.
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         let _ = channel.eof().await;
@@ -124,9 +131,20 @@ pub async fn device_stream_start(
     streams: State<'_, DeviceStreams>,
     session_id: String,
     id: String,
-    socket: String,
+    socket: Option<String>,
+    device_platform: Option<String>,
 ) -> Result<String> {
-    let command = companion_command(&id, &socket, "stream")?;
+    let platform = device_platform.unwrap_or_else(|| "ios".into());
+    let command = match platform.as_str() {
+        "android" => android_command(&id, "stream")?,
+        "ios" => companion_command(&id, socket.as_deref().unwrap_or(""), "stream")?,
+        _ => {
+            return Err(SshError::new(
+                "invalid_input",
+                "Unsupported device platform",
+            ))
+        }
+    };
     let session = state.session(&session_id).await?;
     let mut entries = streams.0.lock().await;
     ensure_capacity(&mut entries, &session_id)?;
@@ -144,12 +162,13 @@ pub async fn device_stream_start(
         },
     );
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = receive(session, command, id, request, output.clone()).await {
+        if let Err(error) = receive(session, command, id, platform, request, output.clone()).await {
             let sequence = output.borrow().sequence + 1;
             output.send_replace(Packet {
                 sequence,
                 frame: None,
                 error: Some(error),
+                idle: false,
             });
         }
         done.send_replace(true);
@@ -163,15 +182,18 @@ pub async fn device_stream_next(
     stream_id: String,
     after: u64,
 ) -> Result<Packet> {
-    let mut output = {
+    let output = {
         let entries = streams.0.lock().await;
         let stream = entries
             .get(&stream_id)
             .filter(|s| s.session_id == session_id)
-            .ok_or_else(|| SshError::new("invalid_input", "Unknown simulator stream"))?;
+            .ok_or_else(|| SshError::new("invalid_input", "Unknown device stream"))?;
         stream.output.clone()
     };
-    tokio::time::timeout(Duration::from_secs(15), async {
+    next_packet(output, after).await
+}
+async fn next_packet(mut output: watch::Receiver<Packet>, after: u64) -> Result<Packet> {
+    match tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let packet = output.borrow_and_update().clone();
             if packet.sequence > after {
@@ -180,11 +202,18 @@ pub async fn device_stream_next(
             output
                 .changed()
                 .await
-                .map_err(|_| SshError::new("disconnected", "Simulator stream closed"))?;
+                .map_err(|_| SshError::new("disconnected", "Device stream closed"))?;
         }
     })
     .await
-    .map_err(|_| SshError::new("timeout", "Waiting for simulator frame timed out"))?
+    {
+        Ok(result) => result,
+        Err(_) => Ok(Packet {
+            sequence: after,
+            idle: true,
+            ..Packet::default()
+        }),
+    }
 }
 #[tauri::command]
 pub async fn device_stream_stop(
@@ -199,7 +228,7 @@ pub async fn device_stream_stop(
     {
         return Err(SshError::new(
             "invalid_input",
-            "Simulator stream belongs to another session",
+            "Device stream belongs to another session",
         ));
     }
     let stream = entries.remove(&stream_id);
@@ -209,8 +238,8 @@ pub async fn device_stream_stop(
         if !*stream.done.borrow() {
             tokio::time::timeout(Duration::from_secs(5), stream.done.changed())
                 .await
-                .map_err(|_| SshError::new("timeout", "Simulator stream cleanup timed out"))?
-                .map_err(|_| SshError::new("disconnected", "Simulator cleanup stopped"))?;
+                .map_err(|_| SshError::new("timeout", "Device stream cleanup timed out"))?
+                .map_err(|_| SshError::new("disconnected", "Device cleanup stopped"))?;
         }
     }
     Ok(())
@@ -221,11 +250,12 @@ mod tests {
     #[test]
     fn streamed_records_bind_identity_and_bound_payloads() {
         let frame = serde_json::json!({"schemaVersion":1,"id":"test","platform":"ios","mime":"image/jpeg","base64":"/9j/2Q==","width":390,"height":844,"imageWidth":195,"imageHeight":422});
-        assert!(record(&serde_json::to_vec(&frame).unwrap(), "test").is_ok());
-        assert!(record(&serde_json::to_vec(&frame).unwrap(), "other").is_err());
+        assert!(record(&serde_json::to_vec(&frame).unwrap(), "test", "ios").is_ok());
+        assert!(record(&serde_json::to_vec(&frame).unwrap(), "other", "ios").is_err());
+        assert!(record(&serde_json::to_vec(&frame).unwrap(), "test", "android").is_err());
         let mut hostile = frame;
         hostile["width"] = 0.into();
-        assert!(record(&serde_json::to_vec(&hostile).unwrap(), "test").is_err());
+        assert!(record(&serde_json::to_vec(&hostile).unwrap(), "test", "ios").is_err());
     }
     #[test]
     fn latest_slot_discards_old_frames_without_webview_queue_growth() {
@@ -237,6 +267,32 @@ mod tests {
             });
         }
         assert_eq!(latest.borrow().sequence, 99);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn idle_poll_preserves_last_frame_and_closed_source_cancels_wait() {
+        let frame = serde_json::json!({"original":"capture"});
+        let (output, latest) = watch::channel(Packet {
+            sequence: 1,
+            frame: Some(frame.clone()),
+            ..Packet::default()
+        });
+        let start = tokio::time::Instant::now();
+        let idle = next_packet(latest.clone(), 1).await.unwrap();
+        assert!(idle.idle);
+        assert_eq!(idle.sequence, 1);
+        assert!(idle.frame.is_none());
+        assert_eq!(tokio::time::Instant::now() - start, Duration::from_secs(15));
+        assert_eq!(latest.borrow().frame, Some(frame));
+        output.send_replace(Packet {
+            sequence: 2,
+            frame: Some(serde_json::json!({"next":"capture"})),
+            ..Packet::default()
+        });
+        let next = next_packet(latest.clone(), 1).await.unwrap();
+        assert_eq!(next.sequence, 2);
+        assert!(!next.idle);
+        drop(output);
+        assert!(next_packet(latest, 2).await.is_err());
     }
     #[test]
     fn finished_or_crashed_workers_do_not_reserve_slots_after_renderer_reload() {

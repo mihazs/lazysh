@@ -11,6 +11,8 @@ lazysh-agent snapshot --limit 50
 
 Ensure `lazysh-agent` is on the noninteractive SSH PATH. lazysh reads `lazysh-agent snapshot --limit 50` over the existing verified SSH session when you open or refresh the Agents panel. There is no HTTP server or listening port.
 
+The Agents panel's [host companion settings](companion-settings.md) control new transcript discovery, recorded usage inspection and device operations. Settings persist on the host; absent settings preserve existing defaults without creating state.
+
 ## Claude Code
 
 Run `lazysh-agent claude-config` and merge the printed `hooks` entries into your Claude settings, preserving existing entries. This command only prints JSON. Run Claude in tmux to include its `TMUX_PANE` identity. The [official hook reference](https://code.claude.com/docs/en/hooks) defines the inputs this adapter handles. Lifecycle summaries include tool names but omit prompts, tool arguments, transcripts, and credentials. An informational notification does not imply a pending approval.

@@ -17,6 +17,7 @@ export type LiveSession = {
   destination: string;
   terminal: Terminal;
   connected: boolean;
+  local?: true;
   mosh?: {serverPath: string; portMin: number; portMax: number};
   et?: {serverPath: string; port: number};
   auto?: import('./bridge').AutoOptions;

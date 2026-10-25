@@ -46,6 +46,7 @@ fn omo_cli_discovery_honors_documented_agent_directory_precedence_with_fixture_h
         .unwrap();
     }
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["discover", "--agent", "omo"])
         .env("OMO_CODING_AGENT_DIR", format!(" {} ", omo.display()))
         .env("SENPI_CODING_AGENT_DIR", &senpi)

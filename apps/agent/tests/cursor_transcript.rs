@@ -70,6 +70,7 @@ fn cursor_cli_uses_explicit_versioned_record_stream() {
     let path = directory.path().join("chat.jsonl");
     fs::write(&path, "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}}\n").unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .arg("transcript")
         .args(["--agent", "cursor", "--path"])
         .arg(path)

@@ -1,6 +1,26 @@
-# Android device registration
+# Native device registration
 
-Remote push registration is a separate opt-in control from the connected-host inbox and local notifications. It currently implements Android Firebase Cloud Messaging (FCM) device registration only. iOS APNs registration, relay/account binding, authenticated event ingestion, delivery tests and cold-start session routing remain incomplete in issue #14. Enabling registration does not create those services.
+Remote push registration is a separate opt-in control from the connected-host inbox and local notifications. Android uses Firebase Cloud Messaging (FCM); iOS uses Apple Push Notification service (APNs). Both remain unconfigured by default. Relay/account binding, authenticated event ingestion, delivery tests and cold-start session routing remain incomplete in issue #14. Enabling registration does not create those services.
+
+## iOS APNs
+
+A signed release maintainer must enable the real push entitlement and App ID capability through [Apple's registration setup](https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns), then explicitly set `plugins.lazysh-push.apnsEnabled` to `true` in that release's Tauri configuration. This flag declares intended configuration; it does not inspect or prove the code-signing entitlement. The default build does not enable it. The app confirms actual registration only after Apple's success callback. No APNs provider key, certificate, delivery endpoint or account is embedded.
+
+The panel discloses Apple contact and requires initial consent. Existing system-notification authorization must be enabled through the inbox first. A single bounded request calls `UIApplication.registerForRemoteNotifications()` and settles from its actual success/failure delegate callback, with a 30-second timeout. The native process retains the token only in memory and never sends it to the renderer or logs it. Apple explicitly discourages caching tokens in local storage, so only consent persists. Previously opted-in installations request a fresh registration after launch; default/off installations do not contact APNs.
+
+Disable clears the local consent, pending request and in-memory token, and calls Apple's [unregisterForRemoteNotifications](https://developer.apple.com/documentation/uikit/uiapplication/unregisterforremotenotifications()). Late callbacks while disabled cannot reactivate registration, and late permission checks cannot start a cancelled request. This removes the local app association, not global token validity or any future server/account binding. Delivered notifications and system notification permission are separate.
+
+Callbacks delivered on main are processed synchronously. An off-main callback captures the synchronized operation epoch and dispatch phase before a main-thread handoff; stale handoffs cannot complete or fail a newer request, and no callback can complete a request before its actual native registration call begins. APNs does not provide request IDs: this guard identifies the app's callback handoff, not the originating OS request. It does not establish future server/account binding.
+
+Tauri 2.12.5's iOS `Plugin` API exposes no APNs delegate callbacks. Its pinned Tao 0.37.2 runtime creates an `AppDelegate` subclass of `UIResponder` before plugin initialization and later passes that class to `UIApplicationMain`. The Swift plugin uses Apple's documented [class_addMethod](https://developer.apple.com/documentation/objectivec/class_addmethod(_:_:_:_:)) to add only the absent success/failure selectors at that point. It never replaces or exchanges existing implementations, changes the application delegate, or replaces the notification-center delegate used by local notifications. Conflicting selectors or an unexpected delegate class leave the capability unavailable. No `UIApplication.shared` access occurs during plugin initialization: Tao requires it not to exist before `UIApplicationMain`. Actual registration checks the live delegate's exact class again. Recheck this source contract when upgrading Tauri/Tao.
+
+The native iOS unit-test scheme `LazyshPushTests` compiles the Foundation state model with XCTest. It exercises real-callback requirements, ephemeral tokens, pause/late-callback refusal, monotonic operation epochs, timeout isolation and rotation/failure. These state tests do not register with Apple or prove delegate delivery/signing. The Swift plugin's UIKit/Tauri compilation and simulator tests require macOS/Xcode; both are unexecuted locally in this Linux workspace. Signed-device registration and actual remote delivery remain acceptance work.
+
+```sh
+APPLE_STATUS_SIMULATOR_ID=<dedicated-simulator-uuid> bunx turbo run test:apns --filter=@lazysh/push-registration
+```
+
+## Android FCM
 
 An unconfigured build reports that remote registration is unavailable. The repository contains no Firebase project configuration, provider keys, service-account credentials or default delivery endpoint. A release maintainer must add the Firebase Android application configuration for the actual application ID using the [official Firebase setup](https://firebase.google.com/docs/android/setup). Google Services Gradle processing is not silently enabled; the generated Firebase string resources may instead be supplied through the normal Android resource source set. Never put provider service-account JSON in an Android package.
 

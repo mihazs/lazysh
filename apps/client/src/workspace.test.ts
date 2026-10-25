@@ -89,3 +89,12 @@ it('retains Auto options instead of its last selected transport and excludes cre
     expect(readWorkspace()).toEqual([]);
   }
 });
+
+it('persists local intent without inventing an SSH host or retaining output',()=>{
+  saveWorkspace([{local:true,hostId:'',password:'SECRET',output:'PRIVATE'} as never]);
+  expect(readWorkspace()).toEqual([{local:true}]);
+  expect(localStorage.getItem('lazysh.workspace.v1')).toBe('[{"local":true}]');
+  for(const item of [{local:true,hostId:'fake-local'},{local:true,et:{serverPath:'etterminal',port:2022}},{local:'true'}]) {
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
+  }
+});

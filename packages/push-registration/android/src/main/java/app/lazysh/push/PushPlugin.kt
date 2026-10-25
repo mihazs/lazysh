@@ -64,6 +64,7 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
         val controller = controller()
         val services = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(activity) == ConnectionResult.SUCCESS
         return JSObject().apply {
+            put("provider", "fcm")
             put("supported", true)
             put("configured", controller != null && services)
             put("enabled", controller?.enabled == true)

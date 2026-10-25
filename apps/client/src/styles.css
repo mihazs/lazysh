@@ -1620,3 +1620,7 @@ button svg {
 .share-thumbnail img { max-width: 100%; height: auto; max-height: 256px; object-fit: contain; border: 1px solid var(--border); }
 .share-thumbnail figcaption { color: var(--muted); font-size: 12px; }
 .share-thumbnail-loading { margin: 12px 0; }
+.preview-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.preview-picker p { flex: 1; min-width: 160px; }
+.preview-selection { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
+.preview-selection code { white-space: pre-wrap; }

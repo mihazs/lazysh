@@ -4,6 +4,7 @@ use tauri::{plugin::TauriPlugin, AppHandle, Manager, Runtime};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistrationStatus {
+    pub provider: String,
     pub supported: bool,
     pub configured: bool,
     pub enabled: bool,
@@ -13,30 +14,31 @@ pub struct RegistrationStatus {
 }
 
 struct Push<R: Runtime> {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     handle: tauri::plugin::PluginHandle<R>,
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     _runtime: std::marker::PhantomData<fn() -> R>,
 }
 
 struct ControlSequence(std::sync::atomic::AtomicU64);
 
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Control {
     operation_epoch: u64,
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 fn unsupported() -> RegistrationStatus {
     RegistrationStatus {
+        provider: "none".into(),
         supported: false,
         configured: false,
         enabled: false,
         token_present: false,
         busy: false,
-        reason: "Remote push registration is currently available only on configured Android builds. Local inbox notifications remain available.".into(),
+        reason: "Remote push registration requires a configured Android or iOS build. Local inbox notifications remain available.".into(),
     }
 }
 
@@ -45,7 +47,7 @@ fn call<R: Runtime>(
     command: &str,
     epoch: u64,
 ) -> Result<RegistrationStatus, String> {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.state::<Push<R>>()
             .handle
@@ -59,7 +61,7 @@ fn call<R: Runtime>(
                 "Cannot complete native push registration; check configuration and retry".into()
             })
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
     {
         let _ = (app.state::<Push<R>>(), epoch);
         if command == "status" {
@@ -109,6 +111,9 @@ pub mod commands {
 }
 pub use commands::*;
 
+#[cfg(target_os = "ios")]
+tauri::ios_plugin_binding!(init_plugin_lazysh_push);
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("lazysh-push")
         .setup(|app, api| {
@@ -116,7 +121,11 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let push = Push {
                 handle: api.register_android_plugin("app.lazysh.push", "PushPlugin")?,
             };
-            #[cfg(not(target_os = "android"))]
+            #[cfg(target_os = "ios")]
+            let push = Push {
+                handle: api.register_ios_plugin(init_plugin_lazysh_push)?,
+            };
+            #[cfg(desktop)]
             let push = {
                 let _ = api;
                 Push::<R> {
@@ -128,4 +137,43 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             Ok(())
         })
         .build()
+}
+
+#[cfg(all(test, desktop))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_platform_does_not_claim_native_registration() {
+        let app = tauri::test::mock_builder()
+            .plugin(init())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let status = call(app.handle(), "status", 0).unwrap();
+        assert_eq!(status.provider, "none");
+        assert!(
+            !status.supported && !status.configured && !status.enabled && !status.token_present
+        );
+        assert!(call(app.handle(), "register", 1).is_err());
+        assert!(call(app.handle(), "disable", 2).is_err());
+    }
+
+    #[test]
+    fn concurrent_controls_receive_unique_ordered_epochs() {
+        let sequence = std::sync::Arc::new(ControlSequence(std::sync::atomic::AtomicU64::new(0)));
+        let workers: Vec<_> = (0..32)
+            .map(|_| {
+                let sequence = sequence.clone();
+                std::thread::spawn(move || {
+                    sequence.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+                })
+            })
+            .collect();
+        let mut tickets: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        tickets.sort_unstable();
+        assert_eq!(tickets, (1..=32).collect::<Vec<_>>());
+    }
 }

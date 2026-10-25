@@ -40,3 +40,23 @@ pub fn session(key: &str, address: std::net::SocketAddr, label: &str) {
         thread::sleep(Duration::from_millis(5));
     }
 }
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn fixture_peers(host: &str) {
+    let mut workers = Vec::new();
+    for label in ["ONE", "TWO"] {
+        let key =
+            std::env::var(format!("LAZYSH_MOSH_TEST_{label}_KEY")).expect("ephemeral fixture key");
+        let port: u16 = std::env::var(format!("LAZYSH_MOSH_TEST_{label}_PORT"))
+            .expect("ephemeral fixture port")
+            .parse()
+            .unwrap();
+        assert!(port > 0);
+        assert_eq!(key.len(), 22);
+        let address = format!("{host}:{port}").parse().unwrap();
+        workers.push(std::thread::spawn(move || session(&key, address, label)));
+    }
+    for worker in workers {
+        worker.join().unwrap();
+    }
+}

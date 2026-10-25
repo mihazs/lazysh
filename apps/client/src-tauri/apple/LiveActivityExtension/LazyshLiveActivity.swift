@@ -11,7 +11,7 @@ struct LazyshLiveActivity: Widget {
         Text(context.isStale ? "Open lazysh to refresh" : "\(context.state.running) running · \(context.state.waiting) waiting")
       }
       .padding().privacySensitive()
-      .widgetURL(URL(string: "lazysh://agents"))
+      .widgetURL(URL(string: "lazysh://agents/\(context.attributes.subscriptionId)"))
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) { Label("lazysh", systemImage: "terminal") }
@@ -20,7 +20,7 @@ struct LazyshLiveActivity: Widget {
       } compactLeading: { Image(systemName: "terminal") }
         compactTrailing: { Text(context.isStale ? "—" : "\(context.state.waiting)") }
         minimal: { Image(systemName: context.isStale ? "clock" : "terminal") }
-      .widgetURL(URL(string: "lazysh://agents"))
+      .widgetURL(URL(string: "lazysh://agents/\(context.attributes.subscriptionId)"))
     }
   }
 }
