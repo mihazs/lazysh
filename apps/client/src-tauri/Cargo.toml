@@ -17,6 +17,7 @@ parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+lazysh-common = { path = "../../../packages/common" }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
 tauri = { version = "2", features = [] }
@@ -58,6 +59,7 @@ libc = "0.2"
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime" }
 
 [dev-dependencies]
+lazysh-common = { path = "../../../packages/common", features = ["test-support"] }
 hound = "3.5"
 futures-util = "0.3"
 tokio = { version = "1", features = ["test-util"] }

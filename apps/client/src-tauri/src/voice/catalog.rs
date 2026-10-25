@@ -1,7 +1,7 @@
 use super::{begin, chunk, finish, Result, VoiceState, MAX_MODEL};
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
-use reqwest::{redirect::Policy, Client, Url};
+use reqwest::{Client, Url};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -206,10 +206,7 @@ async fn cancellation(receiver: &mut watch::Receiver<bool>) {
     }
 }
 fn publisher_url(url: &Url) -> bool {
-    url.scheme() == "https"
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.port().is_none_or(|port| port == 443)
+    super::download::https_without_credentials(url)
         && url.host_str().is_some_and(|host| {
             host == "huggingface.co"
                 || host.ends_with(".huggingface.co")
@@ -218,19 +215,7 @@ fn publisher_url(url: &Url) -> bool {
         })
 }
 fn client() -> Result<Client> {
-    Client::builder()
-        .no_proxy()
-        .https_only(true)
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(900))
-        .redirect(Policy::custom(|attempt| {
-            if attempt.previous().len() > 5 || !publisher_url(attempt.url()) {
-                attempt.error("Unsupported model download redirect")
-            } else {
-                attempt.follow()
-            }
-        }))
-        .build()
+    super::download::client(publisher_url, "Unsupported model download redirect")
         .map_err(|_| "Cannot initialize model download".into())
 }
 #[derive(Clone, Serialize)]

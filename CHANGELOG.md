@@ -5,6 +5,13 @@
 This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
 
+### Fixed
+
+- Concurrent companion initialization rechecks a removed SQLite journal, WAL or
+  shared-memory entry instead of rejecting its stale zero-link metadata. Rechecks
+  are bounded, replacements must pass the original file protections, and bootstrap
+  locks still fail closed. Separate SQLite contention failures remain under review.
+
 ### Added
 
 - Linux x86_64 Parakeet dictation with an explicitly downloaded, hash-pinned
@@ -15,6 +22,19 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 - Linux native linking isolates ORT's embedded protobuf namespace so Mosh
   messages use their matching system protobuf implementation. The existing
   archive-specific export guard remains; upstream cached artifacts are unchanged.
+
+- Repository pre-commit duplicate detection with pinned jscpd and Bun now rejects
+  every detected clone, including pre-existing duplication; the previous baseline
+  allowance is removed. Refactor with DRY until the scan reports zero clones.
+  This instruction prints after successful and failed hook runs without changing
+  their exit status. `bun run hooks:install` still explicitly enables the hook
+  for the repository and linked worktrees, and lint-staged preserves partial
+  staging. Dependency installation does not change the hooks configuration.
+
+- Device-local iOS Home Screen icon selection with the original Default and
+  new Amber artwork, UIKit support checks and actual selection readback. The
+  default icon is unchanged; desktop, Android and browser builds report this
+  feature unavailable. Icon selection does not sync or affect terminal themes.
 
 - Claude transcript tool results retain explicit recorded error flags in paging
   and branch-follow views. Failed results show a recorded-error label with the

@@ -1,3 +1,4 @@
+import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
 declare global {interface Window {simpleShortcutWrites:string[];simpleShortcutSteps:string[][]}}
@@ -9,6 +10,7 @@ async function fixture(page:Page) {
       if (command==='app_lock_status') return {initialized:true,supported:false,reason:'Synthetic shortcut access fixture.',enabled:false,locked:false,generation:'0'};
       if (command==='app_lock_ready' || command==='adopt_session') return;
       if (command==='list_hosts') return [];
+      if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
       if (command==='local_connect') return {sessionId:'local:shortcut-fixture'};
       if (command==='local_write') {const steps=args.steps as string[]|undefined; if(steps)window.simpleShortcutSteps.push(steps);window.simpleShortcutWrites.push(steps?steps.join(''):args.data as string);return;}
@@ -101,8 +103,7 @@ test('custom gesture and D-pad builders save isolated bindings and send only on 
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
   expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).gestureChords)).toEqual({tap:'text: 你好,, 😀 ',cornerLeft:'C-a comma b',twoRight:'M-b 1'});
   await page.reload();
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
-  await page.getByText('Terminal touch gestures',{exact:true}).click();
+  await openGestureSettings(page);
   await expect(page.getByLabel('Single tap chord',{exact:true})).toHaveValue('text: 你好,, 😀 ');
   await expect(page.getByLabel('D-pad left corner chord',{exact:true})).toHaveValue('C-a comma b');
   await expect(page.getByLabel('Two-finger swipe right chord',{exact:true})).toHaveValue('M-b 1');
@@ -124,9 +125,7 @@ test('custom gesture and D-pad builders save isolated bindings and send only on 
 test('invalid slot drafts survive other-slot saves and builder switches never rewrite stored Advanced bindings',async({page})=>{
   await fixture(page);
   await page.getByText('Terminal touch gestures',{exact:true}).click();
-  await page.getByRole('combobox',{name:'Double tap',exact:true}).selectOption('custom');
-  await page.getByLabel('Double tap chord',{exact:true}).fill('C-b, S-t');
-  await page.getByRole('button',{name:'Save Double tap chord',exact:true}).click();
+  await saveAdvancedGesture(page, 'Double tap', 'C-b, S-t');
   await page.getByRole('combobox',{name:'Double tap shortcut builder',exact:true}).selectOption('simple');
   await page.getByLabel('Double tap Control',{exact:true}).check();
   await page.getByRole('textbox',{name:'Double tap custom shortcut text',exact:true}).fill('a,');
@@ -139,11 +138,10 @@ test('invalid slot drafts survive other-slot saves and builder switches never re
   await expect(page.getByRole('textbox',{name:'Double tap custom shortcut text',exact:true})).toHaveValue('a,');
   expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).gestureChords)).toEqual({doubleTap:'C-b, S-t',cornerRight:'text: trailing '});
   await page.getByRole('combobox',{name:'Double tap shortcut builder',exact:true}).selectOption('advanced');
-  await expect(page.getByLabel('Double tap chord',{exact:true})).toHaveValue('C-b, S-t');
+  await expectGestureBinding(page, 'Double tap', 'C-b, S-t');
   await page.reload();
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
-  await page.getByText('Terminal touch gestures',{exact:true}).click();
-  await expect(page.getByLabel('Double tap chord',{exact:true})).toHaveValue('C-b, S-t');
+  await openGestureSettings(page);
+  await expectGestureBinding(page, 'Double tap', 'C-b, S-t');
   await expect(page.getByLabel('D-pad right corner chord',{exact:true})).toHaveValue('text: trailing ');
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
 });

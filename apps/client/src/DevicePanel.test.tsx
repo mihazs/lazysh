@@ -1,16 +1,12 @@
 // @vitest-environment jsdom
+import { cleanupNativeMocks } from "./test/nativeCoreMock";
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import DevicePanel, { framePoint, parseFrame } from "./DevicePanel";
-vi.mock("@tauri-apps/api/core", async (original) => ({
-  ...(await original<typeof import("@tauri-apps/api/core")>()),
-  invoke: vi.fn(),
-}));
-afterEach(() => {
-  cleanup();
-  vi.clearAllMocks();
-});
+vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
+afterEach(cleanupNativeMocks);
+
 const frame = {
   schemaVersion: 1,
   platform: "android",

@@ -6,6 +6,21 @@ fn export(steps: Vec<Value>) -> Value {
     json!({"schema_version":"ATIF-v1.7","session_id":"fixture","agent":{"name":"devin","version":"3000.11.205"},"steps":steps,"final_metrics":{"total_prompt_tokens":999},"extra":{"secret":"SECRET"}})
 }
 
+fn export_fixture(steps: Vec<Value>) -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("export.json");
+    fs::write(&path, export(steps).to_string()).unwrap();
+    (directory, path)
+}
+fn assert_empty_exports(output: &std::process::Output) {
+    assert!(output.status.success());
+    assert!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
 #[test]
 fn devin_atif_export_preserves_steps_and_actual_metrics_without_resolving_references() {
     let directory = tempfile::tempdir().unwrap();
@@ -38,18 +53,11 @@ fn devin_atif_export_preserves_steps_and_actual_metrics_without_resolving_refere
 
 #[test]
 fn atif_snapshot_paging_preserves_step_cursor_across_hidden_steps() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("export.json");
-    fs::write(
-        &path,
-        export(vec![
-            json!({"step_id":1,"source":"user","message":"One"}),
-            json!({"step_id":2,"source":"system","message":"HIDDEN"}),
-            json!({"step_id":3,"source":"agent","message":"Two"}),
-        ])
-        .to_string(),
-    )
-    .unwrap();
+    let (_directory, path) = export_fixture(vec![
+        json!({"step_id":1,"source":"user","message":"One"}),
+        json!({"step_id":2,"source":"system","message":"HIDDEN"}),
+        json!({"step_id":3,"source":"agent","message":"Two"}),
+    ]);
     let first = read_page(&path, TranscriptAgent::DevinAtif, 0, 1).unwrap();
     assert_eq!(first.next_offset, 2);
     assert!(first.has_more);
@@ -94,13 +102,8 @@ fn unsupported_schema_duplicate_ids_malformed_and_oversized_exports_fail() {
 
 #[test]
 fn devin_atif_cli_reads_explicit_export_and_missing_default_exports_are_empty() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("export.json");
-    fs::write(
-        &path,
-        export(vec![json!({"step_id":1,"source":"user","message":"Hello"})]).to_string(),
-    )
-    .unwrap();
+    let (directory, path) =
+        export_fixture(vec![json!({"step_id":1,"source":"user","message":"Hello"})]);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
         .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["transcript", "--agent", "devin-atif", "--path"])
@@ -242,13 +245,7 @@ fn devin_discovery_honors_xdg_precedence_and_selected_export_uses_existing_reade
     }
     let missing_data = dir.path().join("missing-data");
     let output = discover_exports(&home, Some(&missing_data), "50");
-    assert!(output.status.success());
-    assert!(
-        serde_json::from_slice::<Value>(&output.stdout).unwrap()["sessions"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert_empty_exports(&output);
     assert!(!missing_data.exists());
     assert!(!home.join("companion-state").exists());
 }
@@ -287,13 +284,7 @@ fn devin_default_discovery_refuses_symlink_root_and_skips_linked_candidates() {
     fs::write(&outside, b"private fixture").unwrap();
     symlink(&outside, root.join("session.json")).unwrap();
     let output = discover_exports(dir.path(), Some(dir.path()), "50");
-    assert!(output.status.success());
-    assert!(
-        serde_json::from_slice::<Value>(&output.stdout).unwrap()["sessions"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert_empty_exports(&output);
     fs::remove_dir_all(&root).unwrap();
     symlink(dir.path(), &root).unwrap();
     let output = discover_exports(dir.path(), Some(dir.path()), "50");

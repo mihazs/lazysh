@@ -1,7 +1,7 @@
 use super::discovery::{DiscoveredSession, Discovery};
 use super::{
-    block, content, open_transcript, string, validate_message, Error, Result, TranscriptAgent,
-    TranscriptPage, MAX_LINE, MAX_PAGE,
+    block, content, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage,
+    MAX_LINE, MAX_PAGE,
 };
 use rusqlite::{limits::Limit, Connection, OpenFlags};
 use serde_json::{json, Value};
@@ -85,10 +85,7 @@ pub fn read_database_page(
             _ => return Err(Error::InvalidArgument),
         };
         if let Some(message) = message {
-            validate_message(&message)?;
-            let size = serde_json::to_vec(&message)
-                .map_err(|_| Error::InvalidEvent)?
-                .len();
+            let size = super::message_size(&message)?;
             if size > MAX_PAGE {
                 return Err(Error::InvalidEvent);
             }

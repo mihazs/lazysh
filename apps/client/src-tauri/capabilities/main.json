@@ -120,6 +120,8 @@
     "allow-agent-transcript",
     "allow-agent-transcripts",
     "allow-agent-usage",
+    "allow-app-icon-status",
+    "allow-set-app-icon",
     "allow-apple-status-capability",
     "allow-apple-status-configure",
     "allow-apple-status-publish",

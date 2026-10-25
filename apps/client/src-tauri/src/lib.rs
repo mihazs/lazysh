@@ -1,3 +1,4 @@
+mod app_icons;
 mod app_lock;
 mod apple_speech;
 mod apple_status;
@@ -74,6 +75,8 @@ pub fn run() {
                 app_lock::app_lock_status,
                 app_lock::app_lock_configure,
                 app_lock::app_lock_ready,
+                app_icons::app_icon_status,
+                app_icons::set_app_icon,
                 theme_links::theme_link_status,
                 theme_links::theme_link_read,
                 theme_links::theme_link_ack,

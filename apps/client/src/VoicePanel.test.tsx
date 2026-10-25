@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
+import { cleanupNativeMocks } from "./test/nativeCoreMock";
+import { installSpeechCapture } from "./test/speechCapture";
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import VoicePanel from './VoicePanel';
 import { accessSnapshot, applyAccessStatus } from './access';
 
-vi.mock('@tauri-apps/api/core', async original => ({ ...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn(), Channel:class {onmessage:((event:unknown)=>void)|undefined;} }));
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'}); });
+vi.mock('@tauri-apps/api/core', async original => ({ ...await (await import("./test/nativeCoreMock")).mockNativeCore(original), Channel:class {onmessage:((event:unknown)=>void)|undefined;} }));
+afterEach(() => { cleanupNativeMocks(); vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'}); });
 
 it('requires a local model and explicit recording and handles microphone denial', async () => {
   vi.mocked(invoke).mockResolvedValue([{id:'ggml-tiny.en.bin',bytes:75*1024*1024}]);
@@ -144,24 +146,7 @@ it('requires explicit Apple asset installation and cancels the exact pending req
   expect(invoke).not.toHaveBeenCalledWith('apple_speech_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('preserves current-view dictation and cannot refill cleared history from late inference',async()=>{
-  let complete!:(text:string)=>void;
-  vi.mocked(invoke).mockImplementation(command=>{
-    if(command==='voice_models')return Promise.resolve([{id:'tiny.bin',bytes:1024}]) as never;
-    if(command==='voice_model_catalog')return Promise.resolve([]) as never;
-    if(command==='voice_transcribe')return new Promise<string>(resolve=>{complete=resolve;}) as never;
-    return Promise.resolve() as never;
-  });
-  class Capture {
-    state='inactive';mimeType='audio/webm';onstop:(()=>void)|undefined;
-    start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}
-  }
-  vi.stubGlobal('MediaRecorder',Capture);
-  vi.stubGlobal('Blob',class {async arrayBuffer(){return new ArrayBuffer(0);}});
-  vi.stubGlobal('AudioContext',class {
-    async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}
-    async close(){}
-  });
-  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:vi.fn().mockResolvedValue({getTracks:()=>[{stop:vi.fn()}]})}});
+  const {complete}=speechFixture();
   const stage=vi.fn();window.addEventListener('lazysh-prompt-draft',stage);
   const view=render(<VoicePanel sessionId="ssh1"/>);
   await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('tiny.bin'));
@@ -193,11 +178,7 @@ function speechFixture(){
     if(command==='voice_transcribe')return new Promise<string>(resolve=>{complete=resolve;}) as never;
     return Promise.resolve() as never;
   });
-  class Capture {state='inactive';mimeType='audio/webm';onstop:(()=>void)|undefined;start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}}
-  vi.stubGlobal('MediaRecorder',Capture);
-  vi.stubGlobal('Blob',class {async arrayBuffer(){return new ArrayBuffer(0);}});
-  vi.stubGlobal('AudioContext',class {async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}async close(){}});
-  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:vi.fn().mockResolvedValue({getTracks:()=>[{stop:vi.fn()}]})}});
+  installSpeechCapture();
   return {complete:(text:string)=>complete(text),record:async()=>{
     await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('tiny.bin'));
     const before=vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_transcribe').length;
@@ -286,13 +267,7 @@ function parakeetFixture(overrides: Record<string, unknown> = {}) {
     complete:(requestId:string,text:string)=>finishTranscription({requestId,text})};
 }
 function parakeetMicrophone() {
-  class Capture {state='inactive';mimeType='audio/webm';onstop:(()=>void)|undefined;start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}}
-  vi.stubGlobal('MediaRecorder',Capture);
-  vi.stubGlobal('Blob',class {async arrayBuffer(){return new ArrayBuffer(0);}});
-  vi.stubGlobal('AudioContext',class {async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}async close(){}});
-  const getUserMedia=vi.fn().mockResolvedValue({getTracks:()=>[{stop:vi.fn()}]});
-  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia}});
-  return getUserMedia;
+  return installSpeechCapture().microphone;
 }
 async function chooseParakeet() {
   await waitFor(()=>expect(screen.getByRole('option',{name:'Parakeet · local'})).toHaveProperty('disabled',false));
@@ -307,8 +282,8 @@ async function recordParakeet() {
 for (const outcome of ['success','failure'] as const) for (const replacement of ['microphone','decode'] as const) {
   it(`does not let cancelled pre-request decode ${outcome} clear a replacement awaiting ${replacement}`,async()=>{
     const fixture=parakeetFixture({installed:true});
-    const microphone=parakeetMicrophone();
-    const audio=()=>({sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)});
+    const {microphone, audio:sample}=installSpeechCapture();
+    const audio=()=>sample;
     let finishOld!:()=>void, finishNew!:()=>void;
     const oldDecode=new Promise<ReturnType<typeof audio>>((resolve,reject)=>{finishOld=()=>outcome==='success'?resolve(audio()):reject(new Error('Cancelled old decode failed'));});
     const newDecode=new Promise<ReturnType<typeof audio>>(resolve=>{finishNew=()=>resolve(audio());});

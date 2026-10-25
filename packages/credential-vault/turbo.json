@@ -3,22 +3,6 @@
     "//"
   ],
   "tasks": {
-    "check:rust": {
-      "cache": false,
-      "outputs": []
-    },
-    "test:rust": {
-      "cache": false,
-      "outputs": []
-    },
-    "lint": {
-      "cache": false,
-      "outputs": []
-    },
-    "format:check": {
-      "cache": false,
-      "outputs": []
-    },
     "test:resume": {
       "cache": false,
       "outputs": [],

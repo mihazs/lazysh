@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+if [ "${1-}" = "--install" ]; then
+  current_hooks=$(git config --get core.hooksPath || :)
+  if [ -n "$current_hooks" ] && [ "$current_hooks" != ".githooks" ]; then
+    printf '%s\n' 'Refusing to replace existing core.hooksPath; integrate the hook explicitly.' >&2
+    exit 1
+  fi
+  if [ -z "$current_hooks" ]; then
+    default_hook=$(git rev-parse --git-path hooks/pre-commit)
+    if [ -e "$default_hook" ] || [ -L "$default_hook" ]; then
+      printf '%s\n' 'Refusing to bypass an existing pre-commit hook; integrate it explicitly.' >&2
+      exit 1
+    fi
+  fi
+  git config --local core.hooksPath .githooks
+  printf '%s\n' 'Enabled .githooks for this repository, including linked worktrees.'
+  exit 0
+fi
+
+status=0
+bun run --bun duplicates:staged || status=$?
+printf '%s\n' 'jscpd must report zero duplicates. Refactor duplicated code with DRY; do not bypass the gate, baseline clones, relax thresholds, or hide handwritten code/tests. Keep vendor, generated-artifact and legal-notice scope explicit and preserve third-party attribution.' >&2 || :
+exit "$status"

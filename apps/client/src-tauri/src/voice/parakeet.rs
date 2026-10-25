@@ -66,6 +66,10 @@ impl ParakeetState {
             Self {}
         }
     }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn manager(&self) -> Result<&Arc<local::Manager>> {
+        self.manager.as_ref().map_err(Clone::clone)
+    }
     fn status(&self) -> Status {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         {
@@ -129,9 +133,7 @@ pub async fn voice_parakeet_install(
             {
                 state
                     .parakeet
-                    .manager
-                    .as_ref()
-                    .map_err(Clone::clone)?
+                    .manager()?
                     .install(&access, &request_id, events)
                     .await
             }
@@ -153,13 +155,7 @@ pub async fn voice_parakeet_remove(
         .run(async {
             #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
             {
-                state
-                    .parakeet
-                    .manager
-                    .as_ref()
-                    .map_err(Clone::clone)?
-                    .remove(&access, &request_id)
-                    .await
+                state.parakeet.manager()?.remove(&access, &request_id).await
             }
             #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
             {
@@ -182,9 +178,7 @@ pub async fn voice_parakeet_transcribe(
             {
                 state
                     .parakeet
-                    .manager
-                    .as_ref()
-                    .map_err(Clone::clone)?
+                    .manager()?
                     .transcribe(&access, &request_id, samples)
                     .await
             }

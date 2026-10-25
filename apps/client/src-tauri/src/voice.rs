@@ -15,7 +15,10 @@ use tauri::State;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 pub mod catalog;
 pub mod cloud;
+mod download;
 pub mod parakeet;
+#[cfg(test)]
+mod test_support;
 
 #[cfg(all(test, feature = "parakeet-acceptance"))]
 mod interop_tests;
@@ -549,14 +552,7 @@ mod tests {
         assert!(begin(&state, "../model.bin".into(), 1024).is_err());
         assert!(begin(&state, "base.bin".into(), MAX_MODEL + 1).is_err());
         let id = begin(&state, "base.bin".into(), 1024).unwrap();
-        let mut bytes = vec![0; 1024];
-        bytes[..4].copy_from_slice(b"lmgg");
-        for (index, value) in [51864i32, 1500, 512, 8, 6, 448, 512, 8, 6, 80, 1]
-            .iter()
-            .enumerate()
-        {
-            bytes[4 + index * 4..8 + index * 4].copy_from_slice(&value.to_le_bytes());
-        }
+        let mut bytes = super::test_support::ggml_bytes();
         assert!(chunk(&state, &id, 4, &bytes).is_err());
         chunk(&state, &id, 0, &bytes).unwrap();
         finish(&state, &id, false).unwrap();

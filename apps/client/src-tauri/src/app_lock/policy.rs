@@ -70,13 +70,7 @@ impl PolicyStore {
         directory.create(parent).map_err(|_| STORAGE)?;
         let temporary = parent.join(format!(".resume-lock-{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| -> Result<(), String> {
-            let mut options = fs::OpenOptions::new();
-            options.create_new(true).write(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
+            let options = lazysh_common::fs::private_create_new();
             let mut file = options.open(&temporary).map_err(|_| STORAGE)?;
             let bytes = serde_json::to_vec(&Record {
                 version: 1,

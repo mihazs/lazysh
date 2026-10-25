@@ -174,11 +174,24 @@ mod tests {
             Ok(())
         }
     }
+    type RunningServer = (Host, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>);
+    async fn route_servers() -> (RunningServer, RunningServer) {
+        let (mut target, attempts, task) = server("target", "target-secret", None).await;
+        let jump = server("jump", "jump-secret", Some(target.port)).await;
+        target.jump_host_id = Some(jump.0.id.clone());
+        ((target, attempts, task), jump)
+    }
+    async fn authenticated_jump(state: &AppState, jump: &Host) -> crate::ssh::SshHandle {
+        let handle = crate::ssh::verified_connection(state, jump).await.unwrap();
+        crate::ssh::authenticate_handle(handle, jump, Some("jump-secret".into()), None, None)
+            .await
+            .unwrap()
+    }
     async fn server(
         id: &str,
         password: &'static str,
         forwarded_port: Option<u16>,
-    ) -> (Host, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+    ) -> RunningServer {
         use server::Server;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
@@ -291,25 +304,11 @@ mod tests {
 
     #[tokio::test]
     async fn nested_ssh_verifies_each_key_and_keeps_credentials_separate() {
-        let (mut target, target_attempts, target_task) =
-            server("target", "target-secret", None).await;
-        let (jump, jump_attempts, jump_task) =
-            server("jump", "jump-secret", Some(target.port)).await;
-        target.jump_host_id = Some(jump.id.clone());
+        let ((target, target_attempts, target_task), (jump, jump_attempts, jump_task)) =
+            route_servers().await;
         let dir = tempfile::tempdir().unwrap();
         let state = state(&dir, &[jump.clone(), target.clone()]);
-        let jump_handle = crate::ssh::verified_connection(&state, &jump)
-            .await
-            .unwrap();
-        let jump_handle = crate::ssh::authenticate_handle(
-            jump_handle,
-            &jump,
-            Some("jump-secret".into()),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let jump_handle = authenticated_jump(&state, &jump).await;
         let target_handle = through_bastion(&state, &target, Arc::new(jump_handle))
             .await
             .unwrap();
@@ -334,11 +333,8 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_jump_and_changed_target_receive_no_credentials_for_that_peer() {
-        let (mut target, target_attempts, target_task) =
-            server("target", "target-secret", None).await;
-        let (jump, jump_attempts, jump_task) =
-            server("jump", "jump-secret", Some(target.port)).await;
-        target.jump_host_id = Some(jump.id.clone());
+        let ((target, target_attempts, target_task), (jump, jump_attempts, jump_task)) =
+            route_servers().await;
         let dir = tempfile::tempdir().unwrap();
         let unknown_jump = Host {
             fingerprint: None,
@@ -354,18 +350,7 @@ mod tests {
         assert_eq!(value["hostId"], "jump");
         assert!(jump_attempts.lock().unwrap().is_empty());
         assert!(target_attempts.lock().unwrap().is_empty());
-        let jump_handle = crate::ssh::verified_connection(&state, &jump)
-            .await
-            .unwrap();
-        let jump_handle = crate::ssh::authenticate_handle(
-            jump_handle,
-            &jump,
-            Some("jump-secret".into()),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let jump_handle = authenticated_jump(&state, &jump).await;
         let changed_target = Host {
             fingerprint: Some("SHA256:changed".into()),
             ..target

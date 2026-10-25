@@ -13,6 +13,45 @@ Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
 Do not substitute a passing build for device or behavioral acceptance.
 
+## Pre-commit duplicate detection
+
+After `bun install --frozen-lockfile`, run `bun run hooks:install` to enable the
+versioned Git hook. This explicitly sets the repository-local `core.hooksPath`
+to `.githooks`, including all linked worktrees; dependency installation does not
+activate hooks. The installer refuses to replace a different hooks path or bypass
+an existing default pre-commit hook. Integrate existing hooks explicitly instead.
+
+The hook uses pinned jscpd and lint-staged, executed with Bun. lint-staged
+`--hide-all` temporarily hides unstaged tracked and untracked changes, so the
+whole-repository scan compares the index with unchanged source. Its native Git
+backup/restore preserves partial staging; ignored dependencies stay in place.
+Git and Bun must be available in the committing environment. See lint-staged's
+reported backup stash recovery instructions if an interrupted run needs recovery.
+
+`bun run duplicates:check` scans the current working tree without changing it;
+`bun run duplicates:staged` runs the actual index-oriented gate. Any detected
+clone fails: duplication must be zero, including pre-existing duplicates.
+Detection uses mild mode, at least 50 tokens and five lines, with the native
+`1mb` per-file limit. Authored
+code and tests, including Kotlin under `gen/android`, remain covered. Only build
+outputs, three vendored dependency trees and lockfiles are excluded
+explicitly; jscpd also respects Git ignore rules.
+
+Refactor duplicated code with DRY until jscpd reports zero clones. Do not bypass
+the hook, add a baseline, relax detection thresholds, or hide handwritten code
+or tests to make it pass. Preserve third-party attribution and keep vendor,
+generated-artifact and legal-notice scope explicit. The hook prints this
+instruction after both successful and failed runs, preserving its command's exit
+status. Installation alone does not print the post-run instruction.
+
+Run `bun run test:hooks` for native Bun/Git integration tests. They create and
+remove isolated repositories and linked worktrees under `~/dev/.worktrees/`,
+and exercise clean and rejected commits, existing-clone rejection even with a
+baseline present, partial staging, restoration, spaced paths, authored Android
+coverage, exact failure status, instruction output and hook-install conflicts.
+These checks run in the Linux client CI job; other committing platforms have not
+been runtime-verified by this fixture.
+
 ## Commit attribution
 
 Inspect author and committer identity on every PR commit before requesting merge.
@@ -32,3 +71,9 @@ User-facing changes require an entry under `[Unreleased]` in `CHANGELOG.md`.
 Explicitly identify changed defaults. Internal refactors, dead-code removal and
 test-only changes are exempt. Pure repository workflow documentation is also
 exempt. Review and resolve findings, then merge ready changes autonomously.
+
+The code scan retains the existing vendored/build exclusions and excludes
+`packages/parakeet-runtime/licenses/**`: upstream legal text must remain verbatim.
+The unchanged upstream deep-link `xdg_commands.rs` and `xdg_unregister.rs` tests
+are also explicitly excluded; authored deep-link code and regression tests remain
+in scope. Authored source and tests have no duplication baseline or allowance.

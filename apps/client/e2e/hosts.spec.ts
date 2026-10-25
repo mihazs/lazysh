@@ -1,22 +1,17 @@
+import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  await installNativeBridge(page);
   await page.addInitScript(() => {
-    Object.defineProperty(window, 'isTauri', {value:true});
     let hosts = [{id:'fixture-host', name:'Touch workstation', hostname:'fixture.invalid', username:'test', port:22}];
-    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {
-      transformCallback: () => 1,
-      unregisterCallback: () => {},
-      invoke: async (command: string) => {
-        if(command==='app_lock_status')return {initialized:true,supported:false,reason:'Browser fixture',enabled:false,locked:false,generation:'0'};
-        if(command==='app_lock_ready' || command==='adopt_session')return;
+    window.nativeFixtureInvoke = async(command: string, args: Record<string, unknown> = {}) => {
         if (command === 'list_hosts') return hosts;
         if (command === 'local_capability') return {available:false, reason:'Test fixture'};
         if (command === 'delete_host') { hosts=[]; return; }
         if (command.startsWith('plugin:event|')) return 1;
         throw new Error(`Unexpected native command: ${command}`);
-      },
-    } });
+    };
   });
 });
 

@@ -2,7 +2,7 @@ use super::*;
 use lazysh_parakeet_runtime::{
     Recognizer, VerifiedBundle, ARCHIVE_SHA256, ARCHIVE_URL, MAX_SAMPLES,
 };
-use reqwest::{redirect::Policy, Client, Url};
+use reqwest::{Client, Url};
 use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
@@ -449,10 +449,7 @@ impl Drop for Work {
     }
 }
 fn publisher_url(url: &Url) -> bool {
-    url.scheme() == "https"
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.port().is_none_or(|port| port == 443)
+    super::super::download::https_without_credentials(url)
         && matches!(
             url.host_str(),
             Some(
@@ -528,19 +525,7 @@ fn publish(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 fn publisher_client() -> Result<Client> {
-    Client::builder()
-        .no_proxy()
-        .https_only(true)
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(900))
-        .redirect(Policy::custom(|attempt| {
-            if attempt.previous().len() > 5 || !publisher_url(attempt.url()) {
-                attempt.error("Unsupported Parakeet download redirect")
-            } else {
-                attempt.follow()
-            }
-        }))
-        .build()
+    super::super::download::client(publisher_url, "Unsupported Parakeet download redirect")
         .map_err(|_| "Cannot initialize Parakeet model download".into())
 }
 

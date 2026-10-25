@@ -1,3 +1,23 @@
+{{#*inline "build-scripts"}}
+{{~#each this}}{{#if this.path}}
+      - path {{this.path}}{{/if}}{{#if this.script}}
+      - script: {{this.script}}{{/if}}{{#if this.name}}
+        name: {{this.name}}{{/if}}{{#if this.input-files}}
+        inputFiles: {{~#each this.input-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-files}}
+        outputFiles: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.input-file-lists}}
+        inputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.output-file-lists}}
+        outputFileLists: {{~#each this.output-files}}
+          - {{this}}{{/each}}{{/if}}{{#if this.shell}}
+        shell: {{this.shell}}{{/if}}{{#if this.show-env-vars}}
+        showEnvVars: {{this.show_env_vars}}{{/if}}{{#if this.run-only-when-installing}}
+        runOnlyWhenInstalling: {{this.run-only-when-installing}}{{/if}}{{#if this.based-on-dependency-analysis}}
+        basedOnDependencyAnalysis: {{this.based-on-dependency-analysis}}{{/if}}{{#if this.discovered-dependency-file}}
+        discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
+      {{~/each}}
+{{/inline}}
 # Based on tauri-cli 2.12.4 templates/mobile/ios/project.yml. Preserve upstream build placeholders when upgrading.
 name: {{app.name}}
 options:
@@ -40,6 +60,7 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      - path: ../../apple/AlternateIcons.xcassets
       # Exclude built static libs: regenerating with xcodegen after a build
       # otherwise turns the per-configuration libapp.a copies into colliding
       # resources ("Multiple commands produce …/libapp.a"). They are linked
@@ -92,6 +113,8 @@ targets:
     settings:
       base:
         ENABLE_BITCODE: false
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: LazyshAmber
         ARCHS: [{{join ios-valid-archs}}]
         VALID_ARCHS: {{~#each ios-valid-archs}} {{this}} {{/each}}
         LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
@@ -134,24 +157,7 @@ targets:
       - sdk: {{this}}.framework{{/each}}{{/if}}
       - sdk: WebKit.framework
     preBuildScripts:
-      {{~#each ios-pre-build-scripts}}{{#if this.path}}
-      - path {{this.path}}{{/if}}{{#if this.script}}
-      - script: {{this.script}}{{/if}}{{#if this.name}}
-        name: {{this.name}}{{/if}}{{#if this.input-files}}
-        inputFiles: {{~#each this.input-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.output-files}}
-        outputFiles: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.input-file-lists}}
-        inputFileLists: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.output-file-lists}}
-        outputFileLists: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.shell}}
-        shell: {{this.shell}}{{/if}}{{#if this.show-env-vars}}
-        showEnvVars: {{this.show_env_vars}}{{/if}}{{#if this.run-only-when-installing}}
-        runOnlyWhenInstalling: {{this.run-only-when-installing}}{{/if}}{{#if this.based-on-dependency-analysis}}
-        basedOnDependencyAnalysis: {{this.based-on-dependency-analysis}}{{/if}}{{#if this.discovered-dependency-file}}
-        discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
-      {{~/each}}
+{{> build-scripts ios-pre-build-scripts}}
 
       - script: |
           {{ shell-escape tauri-binary }} {{ tauri-binary-args-str }} -v --platform "${PLATFORM_DISPLAY_NAME:?}" --sdk-root "${SDKROOT:?}" --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration "${CONFIGURATION:?}" ${FORCE_COLOR} ${ARCHS:?}
@@ -162,45 +168,11 @@ targets:
           - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/{{ lib-output-file-name }}
     {{~#if ios-post-compile-scripts}}
     postCompileScripts:
-      {{~#each ios-post-compile-scripts}}{{#if this.path}}
-      - path {{this.path}}{{/if}}{{#if this.script}}
-      - script: {{this.script}}{{/if}}{{#if this.name}}
-        name: {{this.name}}{{/if}}{{#if this.input-files}}
-        inputFiles: {{~#each this.input-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.output-files}}
-        outputFiles: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.input-file-lists}}
-        inputFileLists: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.output-file-lists}}
-        outputFileLists: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.shell}}
-        shell: {{this.shell}}{{/if}}{{#if this.show-env-vars}}
-        showEnvVars: {{this.show_env_vars}}{{/if}}{{#if this.run-only-when-installing}}
-        runOnlyWhenInstalling: {{this.run-only-when-installing}}{{/if}}{{#if this.based-on-dependency-analysis}}
-        basedOnDependencyAnalysis: {{this.based-on-dependency-analysis}}{{/if}}{{#if this.discovered-dependency-file}}
-        discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
-      {{~/each~}}
+{{> build-scripts ios-post-compile-scripts}}
     {{~/if~}}
     {{~#if ios-post-build-scripts}}
     postBuildScripts:
-      {{~#each ios-post-build-scripts}}{{#if this.path}}
-      - path {{this.path}}{{/if}}{{#if this.script}}
-      - script: {{this.script}}{{/if}}{{#if this.name}}
-        name: {{this.name}}{{/if}}{{#if this.input-files}}
-        inputFiles: {{~#each this.input-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.output-files}}
-        outputFiles: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.input-file-lists}}
-        inputFileLists: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.output-file-lists}}
-        outputFileLists: {{~#each this.output-files}}
-          - {{this}}{{/each}}{{/if}}{{#if this.shell}}
-        shell: {{this.shell}}{{/if}}{{#if this.show-env-vars}}
-        showEnvVars: {{this.show_env_vars}}{{/if}}{{#if this.run-only-when-installing}}
-        runOnlyWhenInstalling: {{this.run-only-when-installing}}{{/if}}{{#if this.based-on-dependency-analysis}}
-        basedOnDependencyAnalysis: {{this.based-on-dependency-analysis}}{{/if}}{{#if this.discovered-dependency-file}}
-        discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
-      {{~/each~}}
+{{> build-scripts ios-post-build-scripts}}
     {{~/if}}
 
   LazyshMoshAbseilPrivacy:
@@ -354,6 +326,7 @@ targets:
     deploymentTarget: "16.2"
     sources:
       - path: ../../../../../packages/apple-status/ios/Shared/StatusSnapshot.swift
+      - path: ../../../../../packages/apple-status/ios/Shared/AppIconState.swift
       - path: ../../../../../packages/apple-status/ios/Tests
     settings:
       base:

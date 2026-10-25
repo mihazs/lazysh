@@ -249,14 +249,7 @@ impl MacVault {
             return Err("Credential authentication cancelled".into());
         }
         if !biometric && !legacy_exists(service, &marker(key))? {
-            return match keyring::Entry::new(service, key)
-                .map_err(|_| "OS credential store unavailable")?
-                .get_password()
-            {
-                Ok(value) => Ok(Some(value)),
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(_) => Err("Cannot read ordinary Keychain credentials".into()),
-            };
+            return crate::read_ordinary(service, key, "Cannot read ordinary Keychain credentials");
         }
         if !protected_exists(service, key)? {
             return Err(

@@ -150,13 +150,57 @@ fn validate(snapshot: &Snapshot, now: u64) -> Result<(), String> {
     }
     Ok(())
 }
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppIconStatus {
+    pub available: bool,
+    pub current: String,
+    pub reason: String,
+}
 pub struct AppleStatus<R: Runtime> {
-    #[cfg(target_os = "ios")]
-    handle: tauri::plugin::PluginHandle<R>,
-    #[cfg(not(target_os = "ios"))]
-    runtime: std::marker::PhantomData<fn() -> R>,
+    handle: lazysh_common::IosHandle<tauri::plugin::PluginHandle<R>>,
 }
 impl<R: Runtime> AppleStatus<R> {
+    pub async fn app_icon_status(&self) -> Result<AppIconStatus, String> {
+        #[cfg(target_os = "ios")]
+        {
+            self.handle
+                .run_mobile_plugin_async("appIconStatus", ())
+                .await
+                .map_err(|_| "Cannot read the iOS app icon".into())
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            Ok(AppIconStatus {
+                available: false,
+                current: "unknown".into(),
+                reason: "Alternate Home Screen icons require iOS. The app icon is unchanged."
+                    .into(),
+            })
+        }
+    }
+    pub async fn set_app_icon(&self, icon: String) -> Result<AppIconStatus, String> {
+        if !matches!(icon.as_str(), "default" | "amber") {
+            return Err("Choose a bundled lazysh app icon".into());
+        }
+        #[cfg(target_os = "ios")]
+        {
+            self.handle
+                .run_mobile_plugin_async("setAppIcon", serde_json::json!({"icon": icon}))
+                .await
+                .map_err(|error| match error {
+                    tauri::plugin::mobile::PluginInvokeError::InvokeRejected(error) => error
+                        .message
+                        .unwrap_or_else(|| "iOS could not change the Home Screen icon".into()),
+                    _ => "iOS app icon service is unavailable".into(),
+                })
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            Err("Alternate Home Screen icons require iOS".into())
+        }
+    }
+
     pub async fn capability(&self) -> Result<Capability, String> {
         #[cfg(target_os = "ios")]
         {
@@ -264,7 +308,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let status = {
                 let _ = api;
                 AppleStatus::<R> {
-                    runtime: std::marker::PhantomData,
+                    handle: std::marker::PhantomData,
                 }
             };
             app.manage(status);

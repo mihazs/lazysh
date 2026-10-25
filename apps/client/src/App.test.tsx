@@ -551,23 +551,22 @@ it("exports a protected key only on explicit request and clears it when forgotte
   );
 });
 
-it("allows cancellation while private key authentication is pending", async () => {
-  mocks.api.listHosts.mockResolvedValue([
-    { ...host, biometricUnlock: true, credentialsStored: true },
-  ]);
-  mocks.invoke.mockImplementation((command: string) =>
-    command === "export_saved_identity"
-      ? new Promise(() => {})
-      : Promise.resolve(command === "has_credentials"),
-  );
+async function openPendingKeyExport(exporter: () => Promise<unknown>) {
+  mocks.api.listHosts.mockResolvedValue([{ ...host, biometricUnlock: true, credentialsStored: true }]);
+  mocks.invoke.mockImplementation((command: string) => command === "export_saved_identity" ? exporter() : Promise.resolve(command === "has_credentials"));
   const user = userEvent.setup();
   render(<App />);
-  await user.click(
-    await screen.findByRole("button", { name: "Connect to Home" }),
-  );
-  await user.click(
-    screen.getByRole("button", { name: "Export private key with biometrics" }),
-  );
+  await user.click(await screen.findByRole("button", { name: "Connect to Home" }));
+  await user.click(screen.getByRole("button", { name: "Export private key with biometrics" }));
+  return user;
+}
+function verifiedMoshControl() {
+  mocks.invoke.mockImplementation(async (command: string) => command === "transport_capabilities" ? { mosh: true } : false);
+  mocks.api.connect.mockResolvedValue({ sessionId: "ssh-control" });
+}
+
+it("allows cancellation while private key authentication is pending", async () => {
+  const user = await openPendingKeyExport(() => new Promise(() => {}));
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(mocks.invoke).toHaveBeenCalledWith("cancel_credential_auth", undefined, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(
@@ -578,25 +577,8 @@ it("allows cancellation while private key authentication is pending", async () =
 });
 
 it("clears exported keys on background and rejects a late authentication result", async () => {
-  mocks.api.listHosts.mockResolvedValue([
-    { ...host, biometricUnlock: true, credentialsStored: true },
-  ]);
   let resolveExport: ((value: { privateKey: string }) => void) | undefined;
-  mocks.invoke.mockImplementation((command: string) =>
-    command === "export_saved_identity"
-      ? new Promise((resolve) => {
-          resolveExport = resolve;
-        })
-      : Promise.resolve(command === "has_credentials"),
-  );
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(
-    await screen.findByRole("button", { name: "Connect to Home" }),
-  );
-  await user.click(
-    screen.getByRole("button", { name: "Export private key with biometrics" }),
-  );
+  const user = await openPendingKeyExport(() => new Promise(resolve => { resolveExport = resolve; }));
   act(() => window.dispatchEvent(new Event("pagehide")));
   await act(async () => resolveExport?.({ privateKey: "late-private-key" }));
   expect(screen.queryByLabelText("Exported private key")).toBeNull();
@@ -611,10 +593,7 @@ it("clears exported keys on background and rejects a late authentication result"
 });
 
 it("hands a verified SSH connection to Mosh before exposing terminal input", async () => {
-  mocks.invoke.mockImplementation(async (command: string) =>
-    command === "transport_capabilities" ? { mosh: true } : false,
-  );
-  mocks.api.connect.mockResolvedValue({ sessionId: "ssh-control" });
+  verifiedMoshControl();
   mocks.api.connectMosh.mockResolvedValue({ sessionId: "mosh-terminal" });
   const user = await openConnection();
   await user.selectOptions(screen.getByLabelText("Transport"), "mosh");
@@ -638,10 +617,7 @@ it("hands a verified SSH connection to Mosh before exposing terminal input", asy
 });
 
 it("closes the SSH bootstrap when forced Mosh fails without falling back", async () => {
-  mocks.invoke.mockImplementation(async (command: string) =>
-    command === "transport_capabilities" ? { mosh: true } : false,
-  );
-  mocks.api.connect.mockResolvedValue({ sessionId: "ssh-control" });
+  verifiedMoshControl();
   mocks.api.connectMosh.mockRejectedValue(
     new Error("Mosh UDP connection failed"),
   );
@@ -655,10 +631,7 @@ it("closes the SSH bootstrap when forced Mosh fails without falling back", async
 });
 
 it("cancels the SSH control session during Mosh bootstrap and closes a late result", async () => {
-  mocks.invoke.mockImplementation(async (command: string) =>
-    command === "transport_capabilities" ? { mosh: true } : false,
-  );
-  mocks.api.connect.mockResolvedValue({ sessionId: "ssh-control" });
+  verifiedMoshControl();
   let finish: ((value: { sessionId: string }) => void) | undefined;
   mocks.api.connectMosh.mockImplementation(
     () =>

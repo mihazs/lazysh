@@ -1,10 +1,16 @@
+#[cfg(unix)]
+#[path = "support/permissions.rs"]
+mod permissions;
+#[path = "support/process.rs"]
+mod process;
+#[path = "support/thread_join.rs"]
+mod thread_join;
 use lazysh_agent::{Agent, SessionState, Store};
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::Write,
     path::Path,
-    process::{Command, Output, Stdio},
+    process::{Command, Output},
 };
 #[path = "support/storage_trace.rs"]
 mod storage_trace;
@@ -23,18 +29,14 @@ fn run_traced(
         || Command::new(program),
         |(trace, worker)| trace.command(worker, program),
     );
-    let mut child = command
-        .args(args)
-        .env("LAZYSH_STATE_DIR", directory)
-        .env("TMUX_PANE", "%7")
-        .current_dir(directory)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let _ = child.stdin.take().unwrap().write_all(payload);
-    child.wait_with_output().unwrap()
+    process::run(
+        command
+            .args(args)
+            .env("LAZYSH_STATE_DIR", directory)
+            .env("TMUX_PANE", "%7")
+            .current_dir(directory),
+        payload,
+    )
 }
 fn event(session: &str, state: &str) -> Value {
     json!({"schemaVersion":1,"sessionId":session,"agent":"Test Agent","project":"/work/app","state":state,"summary":"A turn","paneId":"%1"})
@@ -183,21 +185,7 @@ fn snapshot_caps_rows_and_uses_private_local_storage() {
         2
     );
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        assert_eq!(
-            fs::metadata(dir.path().join("events.sqlite3"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-    }
+    permissions::assert_state_modes(dir.path(), 0o700, 0o600);
 }
 
 #[test]
@@ -252,10 +240,7 @@ fn concurrent_hooks_preserve_every_event() {
                 })
             })
             .collect::<Vec<_>>();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().unwrap())
-            .collect::<Vec<_>>()
+        thread_join::join_workers(workers)
     });
     // Retain evidence from this exact failing case before its unchanged gates.
     if let Some(trace) = trace {
@@ -342,13 +327,17 @@ struct ContendedWorker {
     result: lazysh_agent::Result<()>,
 }
 
-fn contended_ingests(
-    hold: std::time::Duration,
-) -> (Vec<ContendedWorker>, std::time::Duration, u64) {
+fn exclusive_store() -> (tempfile::TempDir, rusqlite::Connection) {
     let dir = tempfile::tempdir().unwrap();
     drop(Store::open(dir.path()).unwrap());
     let blocker = rusqlite::Connection::open(dir.path().join("events.sqlite3")).unwrap();
     blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    (dir, blocker)
+}
+fn contended_ingests(
+    hold: std::time::Duration,
+) -> (Vec<ContendedWorker>, std::time::Duration, u64) {
+    let (dir, blocker) = exclusive_store();
     let barrier = std::sync::Barrier::new(17);
     let normalized = lazysh_agent::normalize(&event("same", "working"), Agent::Generic, None)
         .unwrap()
@@ -463,10 +452,7 @@ fn near_deadline_contention_counts_every_success_and_fails_explicitly() {
 
 #[test]
 fn sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code() {
-    let dir = tempfile::tempdir().unwrap();
-    drop(Store::open(dir.path()).unwrap());
-    let blocker = rusqlite::Connection::open(dir.path().join("events.sqlite3")).unwrap();
-    blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let (dir, blocker) = exclusive_store();
     let started = std::time::Instant::now();
     let output = ingest(
         dir.path(),

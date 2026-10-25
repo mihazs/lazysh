@@ -1,14 +1,10 @@
 use lazysh_agent::transcript::{conversation, discover, TranscriptAgent};
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, process::Command};
+use std::{fs, process::Command};
 
-fn write(path: &Path, records: &[Value]) {
-    let mut file = fs::File::create(path).unwrap();
-    for record in records {
-        serde_json::to_writer(&mut file, record).unwrap();
-        writeln!(file).unwrap();
-    }
-}
+#[path = "support/jsonl.rs"]
+mod jsonl;
+use jsonl::write;
 fn message(id: &str, parent: Option<&str>, role: &str, text: &str) -> Value {
     json!({"type":role,"uuid":id,"parentUuid":parent,"message":{"content":text}})
 }

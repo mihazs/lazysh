@@ -25,18 +25,6 @@ enum Command {
         listen: SocketAddr,
     },
 }
-async fn shutdown() {
-    #[cfg(unix)]
-    {
-        if let Ok(mut terminate) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
-            return;
-        }
-    }
-    let _ = tokio::signal::ctrl_c().await;
-}
 async fn run() -> Result<(), String> {
     match Cli::parse().command {
         Command::Keygen => {
@@ -83,7 +71,7 @@ async fn run() -> Result<(), String> {
                     .local_addr()
                     .map_err(|_| "Cannot read listener address")?
             );
-            lazysh_share::serve(listener, service, shutdown())
+            lazysh_share::serve(listener, service, lazysh_common::server::shutdown_signal())
                 .await
                 .map_err(|_| "Share service stopped after a listener error".into())
         }

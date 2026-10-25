@@ -1,4 +1,4 @@
-use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::app_lock::AccessLease;
 use crate::ssh::{quote, AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -36,14 +36,9 @@ pub struct Pane {
 }
 
 fn text(value: &str, max: usize) -> Result<()> {
-    if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
-        return Err(SshError::new(
-            "invalid_target",
-            "Invalid Herdr name or path",
-        ));
-    }
-    Ok(())
+    crate::multiplexer::validate_text(value, max, "Invalid Herdr name or path")
 }
+
 fn target(value: &str, kind: Option<char>) -> Result<()> {
     let mut parts = value.split(':');
     let workspace = parts.next().unwrap_or("");
@@ -224,7 +219,7 @@ pub async fn herdr_tree(
     session_id: String,
     name: String,
     access: AccessLease,
-) -> std::result::Result<Guarded<HerdrTree>, GuardedError<crate::ssh::SshError>> {
+) -> crate::ssh::AccessResult<HerdrTree> {
     access
         .run(async {
             let command = command(&name, "api snapshot".into())?;
@@ -240,14 +235,14 @@ pub async fn herdr_action(
     name: String,
     action: HerdrAction,
     access: AccessLease,
-) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+) -> crate::ssh::AccessResult<()> {
     access
-        .run(async {
-            let command = action_command(&name, &action)?;
-            let session = state.session(&session_id).await?;
-            crate::ssh::exec_for_access(&session, command, &access).await?;
-            Ok(())
-        })
+        .run(crate::multiplexer::execute_action(
+            &state,
+            &access,
+            &session_id,
+            action_command(&name, &action),
+        ))
         .await
 }
 
@@ -285,13 +280,7 @@ mod tests {
         let run = |text: String| {
             let mut cmd = Command::new("sh");
             configure(&mut cmd);
-            let output = cmd.arg("-c").arg(text).output().unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap()
+            lazysh_common::test_support::successful_output(cmd.arg("-c").arg(text))
         };
         let mut ready = false;
         for _ in 0..100 {
@@ -311,7 +300,8 @@ mod tests {
         }
         assert!(ready, "isolated Herdr server did not become ready");
         let session = "default";
-        let tree = parse(&run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let snapshot = || parse(&run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let tree = snapshot();
         let workspace = tree.workspaces[0].workspace_id.clone();
         let pane = tree.panes[0].pane_id.clone();
         run(command(
@@ -362,7 +352,7 @@ mod tests {
             },
         )
         .unwrap());
-        let tree = parse(&run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let tree = snapshot();
         assert_eq!(tree.workspaces[0].label, "literal'$(touch nope)");
         assert_eq!(tree.tabs.len(), 2);
         assert_eq!(tree.panes.len(), 3);
@@ -385,7 +375,7 @@ mod tests {
             },
         )
         .unwrap());
-        let tree = parse(&run(command(session, "api snapshot".into()).unwrap())).unwrap();
+        let tree = snapshot();
         assert_eq!(tree.workspaces.len(), 2);
         run(command(session, "server stop".into()).unwrap());
     }
