@@ -224,7 +224,7 @@ jobs:
           xcrun simctl install "$APPLE_STATUS_SIMULATOR_ID" apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app
       - name: Verify actual iOS Mosh IPC and privacy resources
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
-        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult test CODE_SIGNING_ALLOWED=NO
+        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Run native workspace Save, relaunch, and Delete acceptance
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
         run: bun run test:ios-workspace

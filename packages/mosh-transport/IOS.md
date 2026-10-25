@@ -93,9 +93,16 @@ The hosted test target uses that same `build/arm64-sim` product root through
 to be a descendant of the test target's product directory. A host path outside
 the default DerivedData products directory fails during build planning, before
 any XCTest can run.
+The invocation also sets this product directory globally: the launcher resolves
+the host app through the invocation's products root, even when the test target's
+own `CONFIGURATION_BUILD_DIR` and `TEST_HOST` point to the prebuilt app. In run
+40180208893 the test bundle compiled into the correct app, but the launcher
+searched DerivedData and neither hosted assertion ran. That run passed all six
+raw native tests, official-server interoperability and the real workspace Save,
+process relaunch and Delete test; the launcher correction still requires CI.
 
 ```console
-xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" test CODE_SIGNING_ALLOWED=NO
+xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$PWD/apps/client/src-tauri/gen/apple/build/arm64-sim"
 ```
 
 The two tests read the actual host application's embedded SDK resource bundles,
