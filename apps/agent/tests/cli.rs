@@ -245,6 +245,192 @@ fn concurrent_hooks_preserve_every_event() {
 }
 
 #[test]
+fn simultaneous_initialization_and_ingest_preserve_every_event() {
+    for _ in 0..4 {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Barrier::new(16);
+        let normalized = lazysh_agent::normalize(&event("same", "working"), Agent::Generic, None)
+            .unwrap()
+            .unwrap();
+        std::thread::scope(|scope| {
+            let workers = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        let mut store = Store::open(dir.path()).expect("concurrent Store::open");
+                        store
+                            .ingest(&normalized, chrono::Utc::now())
+                            .expect("concurrent ingest");
+                    })
+                })
+                .collect::<Vec<_>>();
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+        let mut store = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            store.snapshot(50, chrono::Utc::now()).unwrap().sessions[0].event_count,
+            16
+        );
+    }
+}
+
+#[derive(Debug)]
+struct ContendedWorker {
+    started_after: std::time::Duration,
+    open_elapsed: std::time::Duration,
+    total_elapsed: std::time::Duration,
+    stage: &'static str,
+    result: lazysh_agent::Result<()>,
+}
+
+fn contended_ingests(
+    hold: std::time::Duration,
+) -> (Vec<ContendedWorker>, std::time::Duration, u64) {
+    let dir = tempfile::tempdir().unwrap();
+    drop(Store::open(dir.path()).unwrap());
+    let blocker = rusqlite::Connection::open(dir.path().join("events.sqlite3")).unwrap();
+    blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let barrier = std::sync::Barrier::new(17);
+    let normalized = lazysh_agent::normalize(&event("same", "working"), Agent::Generic, None)
+        .unwrap()
+        .unwrap();
+    let epoch = std::time::Instant::now();
+    let (workers, actual_hold) = std::thread::scope(|scope| {
+        let workers = (0..16)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    let started = std::time::Instant::now();
+                    let started_after = started.duration_since(epoch);
+                    let opened = Store::open(dir.path());
+                    let open_elapsed = started.elapsed();
+                    let (stage, result) = match opened {
+                        Ok(mut store) => match store.ingest(&normalized, chrono::Utc::now()) {
+                            Ok(()) => ("complete", Ok(())),
+                            Err(error) => ("ingest", Err(error)),
+                        },
+                        Err(error) => ("open", Err(error)),
+                    };
+                    ContendedWorker {
+                        started_after,
+                        open_elapsed,
+                        total_elapsed: started.elapsed(),
+                        stage,
+                        result,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let hold_started = std::time::Instant::now();
+        std::thread::sleep(hold);
+        blocker.execute_batch("ROLLBACK").unwrap();
+        let actual_hold = hold_started.elapsed();
+        (
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>(),
+            actual_hold,
+        )
+    });
+    let stored = Store::open(dir.path())
+        .unwrap()
+        .snapshot(50, chrono::Utc::now())
+        .unwrap()
+        .sessions
+        .first()
+        .map_or(0, |session| session.event_count);
+    (workers, actual_hold, stored)
+}
+
+#[test]
+fn concurrent_ingest_recovers_after_a_transient_database_lock() {
+    // Leave ample budget for all writers, scheduling and durable filesystem I/O.
+    let (workers, actual_hold, stored) = contended_ingests(std::time::Duration::from_millis(250));
+    assert!(
+        workers.iter().all(|worker| worker.result.is_ok()),
+        "actual_hold={actual_hold:?}, workers={workers:#?}"
+    );
+    assert_eq!(
+        stored, 16,
+        "actual_hold={actual_hold:?}, workers={workers:#?}"
+    );
+}
+
+#[test]
+fn near_deadline_contention_counts_every_success_and_fails_explicitly() {
+    // This stress case deliberately leaves little wait budget. Recovery of all
+    // workers is not promised; successful commits must still never be lost.
+    let (workers, actual_hold, stored) = contended_ingests(std::time::Duration::from_millis(2700));
+    eprintln!("actual_hold={actual_hold:?}, workers={workers:#?}");
+    let mut successes = 0;
+    for worker in &workers {
+        assert!(
+            worker.started_after < std::time::Duration::from_secs(7),
+            "{worker:?}"
+        );
+        assert!(worker.open_elapsed <= worker.total_elapsed, "{worker:?}");
+        assert!(
+            worker.total_elapsed < std::time::Duration::from_secs(7),
+            "{worker:?}"
+        );
+        match &worker.result {
+            Ok(()) => {
+                assert_eq!(worker.stage, "complete");
+                successes += 1;
+            }
+            Err(lazysh_agent::Error::Storage(rusqlite::Error::SqliteFailure(code, _))) => {
+                assert_eq!(code.extended_code, 5, "{worker:?}");
+                // Catch immediate non-retryable upgrades separately from budget exhaustion.
+                let failed_stage_elapsed = match worker.stage {
+                    "open" => worker.open_elapsed,
+                    "ingest" => worker.total_elapsed.saturating_sub(worker.open_elapsed),
+                    _ => panic!("unexpected failed stage: {worker:?}"),
+                };
+                assert!(
+                    failed_stage_elapsed >= std::time::Duration::from_secs(2),
+                    "early busy failure: {worker:?}"
+                );
+            }
+            Err(error) => panic!("unexpected contention failure: {error:?}, worker={worker:?}"),
+        }
+    }
+    assert_eq!(
+        stored, successes,
+        "actual_hold={actual_hold:?}, workers={workers:#?}"
+    );
+}
+
+#[test]
+fn sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code() {
+    let dir = tempfile::tempdir().unwrap();
+    drop(Store::open(dir.path()).unwrap());
+    let blocker = rusqlite::Connection::open(dir.path().join("events.sqlite3")).unwrap();
+    blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let started = std::time::Instant::now();
+    let output = ingest(
+        dir.path(),
+        "generic",
+        &event("private-session-marker", "working"),
+    );
+    assert!(!output.status.success());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "lazysh-agent: StorageError: operation failed (sqlite_code=5)\n"
+    );
+    blocker.execute_batch("ROLLBACK").unwrap();
+    assert!(snapshot(dir.path(), "50")["sessions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn oversized_stdin_fails_before_opening_storage() {
     let dir = tempfile::tempdir().unwrap();
     let mut payload = event("a", "working");

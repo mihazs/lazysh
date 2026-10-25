@@ -275,7 +275,18 @@ fn main() -> std::process::ExitCode {
     match execute(Cli::parse()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("lazysh-agent: {}: operation failed", error.class());
+            // SQLite messages may contain paths or user-controlled schema names.
+            // Keep diagnostics numeric so contention can be distinguished from I/O
+            // and malformed storage without printing any database content.
+            if let Error::Storage(rusqlite::Error::SqliteFailure(code, _)) = &error {
+                eprintln!(
+                    "lazysh-agent: {}: operation failed (sqlite_code={})",
+                    error.class(),
+                    code.extended_code
+                );
+            } else {
+                eprintln!("lazysh-agent: {}: operation failed", error.class());
+            }
             std::process::ExitCode::FAILURE
         }
     }

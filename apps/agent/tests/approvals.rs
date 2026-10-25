@@ -213,15 +213,16 @@ fn timeout_denies_and_invalid_payloads_do_not_create_state() {
     let dir = tempfile::tempdir().unwrap();
     let started = Instant::now();
     let hook = start(dir.path(), "1");
-    let request = pending(dir.path());
     let output = hook.finish();
+    assert!(started.elapsed() >= Duration::from_millis(900));
     assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["hookSpecificOutput"]["decision"]
             ["behavior"],
         "deny"
     );
-    assert!(!resolve(dir.path(), &request, "allow").status.success());
+    assert_eq!(list(dir.path())["requests"], json!([]));
     for invalid in [
         json!({"hook_event_name":"PreToolUse"}),
         json!({"hook_event_name":"PermissionRequest","session_id":"s","cwd":"/w","tool_name":"Bash","tool_input":{"command":"x".repeat(16385)}}),
@@ -235,6 +236,65 @@ fn timeout_denies_and_invalid_payloads_do_not_create_state() {
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(!path.exists());
+    }
+}
+
+#[test]
+fn expired_tokens_are_rejected_even_while_the_originating_lease_is_held() {
+    use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+    use lazysh_agent::approvals::Request;
+    use sha2::{Digest, Sha256};
+
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(list(dir.path())["requests"], json!([]));
+    let database = rusqlite::Connection::open(dir.path().join("approvals/events.sqlite3")).unwrap();
+    // Hold native leases ourselves so scheduling cannot close a short-lived hook
+    // before the resolver checks expiry. Both rows have valid identity hashes.
+    for expired in [false, true] {
+        let now = Utc::now();
+        let created = now - ChronoDuration::seconds(2);
+        let expires = now + ChronoDuration::seconds(if expired { -1 } else { 60 });
+        let mut request = Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            expected_hash: String::new(),
+            agent: "claude",
+            session_id: "session-one".into(),
+            project: "/work/project".into(),
+            pane_id: Some("%7".into()),
+            tool_name: "Bash".into(),
+            tool_input: payload()["tool_input"].clone(),
+            created_at: created.to_rfc3339_opts(SecondsFormat::Millis, true),
+            expires_at: expires.to_rfc3339_opts(SecondsFormat::Millis, true),
+        };
+        request.expected_hash = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&request).unwrap())
+        );
+        let lease = tempfile::NamedTempFile::new_in(dir.path().join("approvals"))
+            .unwrap()
+            .persist(dir.path().join(format!("approvals/{}.lease", request.id)))
+            .unwrap();
+        lease.try_lock().unwrap();
+        database.execute(
+            "INSERT INTO approvals(id,hash,session_id,project,pane_id,tool_name,tool_input,created,expires) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            rusqlite::params![request.id, request.expected_hash, request.session_id, request.project, request.pane_id, request.tool_name, request.tool_input.to_string(), created.timestamp_millis(), expires.timestamp_millis()],
+        ).unwrap();
+        let output = resolve(
+            dir.path(),
+            &serde_json::to_value(&request).unwrap(),
+            "allow",
+        );
+        // Explicitly unlock even if a spawned process briefly inherited the fd.
+        lease.unlock().unwrap();
+        assert_eq!(output.status.success(), !expired);
+        if expired {
+            assert!(output.stdout.is_empty());
+        } else {
+            assert_eq!(
+                serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+                json!({"schemaVersion":1,"accepted":true})
+            );
+        }
     }
 }
 
