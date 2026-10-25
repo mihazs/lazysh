@@ -1,0 +1,401 @@
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "./SessionTools";
+
+type Status = { configured: boolean; origin: string | null };
+type Share = {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: number;
+  expiresAt: number;
+  url: string;
+};
+type Page = { schemaVersion: 1; shares: Share[]; nextCursor: string | null };
+const limit = 10 * 1024 * 1024;
+function originUrl(value: string): URL {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error("Use the HTTPS origin of your sharing service.");
+  return url;
+}
+export function parseShare(value: unknown, origin: string): Share {
+  const item = value as Share;
+  if (
+    !item ||
+    !/^[a-f0-9]{64}$/.test(item.id) ||
+    typeof item.name !== "string" ||
+    !item.name ||
+    item.name.length > 255 ||
+    typeof item.mime !== "string" ||
+    item.mime.length > 128 ||
+    !Number.isSafeInteger(item.size) ||
+    item.size < 0 ||
+    item.size > limit ||
+    !Number.isSafeInteger(item.createdAt) ||
+    !Number.isSafeInteger(item.expiresAt) ||
+    item.createdAt < 0 ||
+    item.expiresAt <= item.createdAt ||
+    item.expiresAt > 8640000000000 ||
+    typeof item.url !== "string"
+  )
+    throw new Error("Invalid sharing service response.");
+  const url = new URL(item.url);
+  if (
+    url.origin !== originUrl(origin).origin ||
+    url.username ||
+    url.password ||
+    url.pathname !== `/s/${item.id}` ||
+    url.search ||
+    url.hash
+  )
+    throw new Error("The service returned an unexpected download address.");
+  return item;
+}
+function parsePage(value: unknown, origin: string): Page {
+  const page = value as Page;
+  if (
+    !page ||
+    page.schemaVersion !== 1 ||
+    !Array.isArray(page.shares) ||
+    page.shares.length > 50 ||
+    (page.nextCursor !== null &&
+      (typeof page.nextCursor !== "string" || page.nextCursor.length > 1024))
+  )
+    throw new Error("Invalid sharing history response.");
+  return {
+    ...page,
+    shares: page.shares.map((item) => parseShare(item, origin)),
+  };
+}
+
+export default function SharePanel() {
+  const [status, setStatus] = useState<Status>({
+    configured: false,
+    origin: null,
+  });
+  const [origin, setOrigin] = useState("");
+  const [token, setToken] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [ttl, setTtl] = useState(3600);
+  const [items, setItems] = useState<Share[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [now, setNow] = useState(Date.now());
+  const alive = useRef(true);
+  const cancelled = useRef(false);
+  const uploadId = useRef<string | null>(null);
+  useEffect(() => {
+    alive.current = true;
+    void invoke<Status>("share_status")
+      .then((value) => {
+        if (value.origin) originUrl(value.origin);
+        if (alive.current) {
+          setStatus(value);
+          setOrigin(value.origin || "");
+        }
+      })
+      .catch((e) => {
+        if (alive.current) setError(errorMessage(e));
+      })
+      .finally(() => {
+        if (alive.current) setBusy(false);
+      });
+    const clock = setInterval(() => setNow(Date.now()), 30000);
+    return () => {
+      alive.current = false;
+      cancelled.current = true;
+      clearInterval(clock);
+      if (uploadId.current)
+        void invoke("share_upload_cancel", { id: uploadId.current }).catch(
+          () => {},
+        );
+    };
+  }, []);
+  async function configure() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      originUrl(origin);
+      const value = await invoke<Status>("share_configure", { origin, token });
+      if (alive.current) {
+        setStatus(value);
+        setToken("");
+        setItems([]);
+        setCursor(null);
+        setMessage("Sharing service saved on this device.");
+      }
+    } catch (e) {
+      if (alive.current) setError(errorMessage(e));
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }
+  async function history(next: string | null = null) {
+    if (!status.origin) return;
+    setBusy(true);
+    setError("");
+    try {
+      const page = parsePage(
+        await invoke("share_list", { limit: 50, cursor: next }),
+        status.origin,
+      );
+      if (alive.current) {
+        setItems(page.shares);
+        setCursor(page.nextCursor);
+      }
+    } catch (e) {
+      if (alive.current) setError(errorMessage(e));
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }
+  async function upload() {
+    if (!file || !status.origin) return;
+    if (file.size > limit) {
+      setError("Files must be 10 MiB or smaller.");
+      return;
+    }
+    setBusy(true);
+    setUploading(true);
+    setProgress(0);
+    setError("");
+    setMessage("");
+    cancelled.current = false;
+    let sent = false;
+    try {
+      const result = await invoke<{ id: string }>("share_upload_begin", {
+        name: file.name,
+        mime: file.type || "application/octet-stream",
+        size: file.size,
+        ttlSeconds: ttl,
+      });
+      uploadId.current = result.id;
+      for (let offset = 0; offset < file.size; offset += 256 * 1024) {
+        if (cancelled.current || !alive.current)
+          throw new Error("Upload cancelled.");
+        const chunk = new Uint8Array(
+          await file.slice(offset, offset + 256 * 1024).arrayBuffer(),
+        );
+        if (cancelled.current || !alive.current)
+          throw new Error("Upload cancelled.");
+        await invoke("share_upload_chunk", {
+          id: result.id,
+          offset,
+          data: Array.from(chunk),
+        });
+        if (alive.current)
+          setProgress(Math.min(file.size, offset + chunk.length));
+      }
+      if (cancelled.current || !alive.current)
+        throw new Error("Upload cancelled.");
+      sent = true;
+      const response = await invoke<{ schemaVersion: number; share: unknown }>(
+        "share_upload_finish",
+        { id: result.id },
+      );
+      if (response.schemaVersion !== 1)
+        throw new Error("Unsupported sharing service response.");
+      const item = parseShare(response.share, status.origin);
+      uploadId.current = null;
+      if (alive.current) {
+        setItems((current) =>
+          [
+            item,
+            ...current.filter((existing) => existing.id !== item.id),
+          ].slice(0, 50),
+        );
+        setMessage(cancelled.current ? "Upload completed before cancellation. Delete it below to revoke the link." : "Upload complete. Copy its expiring link below.");
+      } else window.dispatchEvent(new CustomEvent('lazysh-error',{detail:'A shared upload completed while the dialog was closing. Open Shareable uploads and refresh history to delete it.'}));
+    } catch (e) {
+      if (alive.current)
+        setError(
+          cancelled.current
+            ? "Upload cancelled. Refresh history to check for a completed upload."
+            : errorMessage(e),
+        );
+      else if(sent)window.dispatchEvent(new CustomEvent('lazysh-error',{detail:'A shared upload stopped while the dialog was closing. Refresh sharing history to check whether the service completed it.'}));
+    } finally {
+      if (uploadId.current) {
+        await invoke("share_upload_cancel", { id: uploadId.current }).catch(
+          () => {},
+        );
+        uploadId.current = null;
+      }
+      if (alive.current) {
+        setBusy(false);
+        setUploading(false);
+      }
+    }
+  }
+  async function remove(item: Share) {
+    if (
+      !window.confirm(
+        `Delete the shared file “${item.name}” and revoke its link?`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("share_delete", { id: item.id });
+      if (alive.current)
+        setItems((current) =>
+          current.filter((existing) => existing.id !== item.id),
+        );
+    } catch (e) {
+      if (alive.current) setError(errorMessage(e));
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }
+  return (
+    <section className="preferences-panel" aria-label="Shareable uploads">
+      <h2>Shareable uploads</h2>
+      <p>
+        Optional: send a selected file to your HTTPS sharing service and create
+        an expiring download link. Host attachments use SSH separately.
+      </p>
+      {error && <p role="alert">{error}</p>}
+      {message && <p role="status">{message}</p>}
+      <fieldset disabled={busy}>
+        <legend>Service on this device</legend>
+        <label>
+          Sharing service origin
+          <input
+            type="url"
+            placeholder="https://files.example.com"
+            value={origin}
+            onChange={(event) => setOrigin(event.target.value)}
+          />
+        </label>
+        <label>
+          Management token
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            maxLength={64}
+          />
+        </label>
+        <p>
+          The token stays in the native credential store. Leave it blank to keep
+          the existing token for the same service.
+        </p>
+        <button onClick={() => void configure()} disabled={!origin.trim()}>
+          Save sharing service
+        </button>
+      {status.configured && <button onClick={()=>{
+        setBusy(true);setError("");
+        void invoke("share_forget").then(()=>{if(alive.current){setStatus({configured:false,origin:null});setOrigin("");setToken("");setItems([]);setCursor(null);setMessage("Service credentials removed from this device.");}}).catch(e=>{if(alive.current)setError(errorMessage(e));}).finally(()=>{if(alive.current)setBusy(false);});
+      }}>Forget service on this device</button>}
+      </fieldset>
+      <fieldset disabled={busy || !status.configured}>
+        <legend>New expiring link</legend>
+        <label>
+          File to share
+          <input
+            type="file"
+            onChange={(event) => {
+              setFile(event.target.files?.[0] || null);
+              setError("");
+            }}
+          />
+        </label>
+        {file && (
+          <p>
+            {file.name} · {file.size.toLocaleString()} bytes
+          </p>
+        )}
+        <label>
+          Link lifetime
+          <select
+            value={ttl}
+            onChange={(event) => setTtl(Number(event.target.value))}
+          >
+            <option value={3600}>1 hour</option>
+            <option value={86400}>1 day</option>
+            <option value={604800}>7 days</option>
+          </select>
+        </label>
+        <button
+          disabled={!file || file.size > limit}
+          onClick={() => void upload()}
+        >
+          Upload and create link
+        </button>
+      </fieldset>
+      {uploading && (
+        <div>
+          <label>
+            Preparing upload
+            <progress max={file?.size || 1} value={progress} />
+          </label>
+          {progress === file?.size && <p>Sending to the sharing service…</p>}
+          <button
+            onClick={() => {
+              cancelled.current = true;
+              if (uploadId.current)
+                void invoke("share_upload_cancel", {
+                  id: uploadId.current,
+                }).catch(() => {});
+            }}
+          >
+            Cancel upload
+          </button>
+        </div>
+      )}
+      <button
+        disabled={busy || !status.configured}
+        onClick={() => void history()}
+      >
+        Refresh upload history
+      </button>
+      <ul>
+        {items.map((item) => (
+          <li key={item.id}>
+            <strong>{item.name}</strong>
+            <p>
+              {item.size.toLocaleString()} bytes ·{" "}
+              {item.expiresAt * 1000 <= now ? "Expired" : "Expires"}{" "}
+              {new Date(item.expiresAt * 1000).toLocaleString()}
+            </p>
+            <button
+              disabled={busy || item.expiresAt * 1000 <= now}
+              onClick={() => {
+                void navigator.clipboard
+                  .writeText(item.url)
+                  .then(() => setMessage("Expiring link copied."))
+                  .catch(() => setError("Clipboard unavailable."));
+              }}
+            >
+              Copy link for {item.name}
+            </button>
+            <button disabled={busy} onClick={() => void remove(item)}>
+              Delete {item.name}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {cursor && (
+        <button disabled={busy} onClick={() => void history(cursor)}>
+          Older uploads
+        </button>
+      )}
+    </section>
+  );
+}

@@ -4,6 +4,11 @@
   "description": "Local lazysh window only; remote pages never receive native permissions.",
   "windows": ["main"],
   "permissions": [
+    "allow-apple-speech-capability", "allow-apple-speech-install", "allow-apple-speech-remove", "allow-apple-speech-transcribe", "allow-apple-speech-cancel",
+    "allow-share-status", "allow-share-configure", "allow-share-forget", "allow-share-list", "allow-share-delete",
+    "allow-share-upload-begin", "allow-share-upload-chunk", "allow-share-upload-finish", "allow-share-upload-cancel",
+    "allow-transport-capabilities", "allow-connect-mosh",
+    "allow-connect-et",
     "allow-open-web-url",
     "allow-list-devices", "allow-device-frame", "allow-device-action",
     "allow-sync-status", "allow-sync-configure", "allow-sync-recovery-key", "allow-sync-forget", "allow-sync-push", "allow-sync-preview", "allow-sync-apply",
@@ -24,6 +29,6 @@
     "allow-trust-host-key", "allow-connect", "allow-write-stdin", "allow-ack-output",
     "allow-resize", "allow-disconnect", "allow-list-directory", "allow-read-file",
     "allow-upload-file", "allow-get-diff", "allow-list-multiplexer-sessions",
-    "allow-attach-tmux", "allow-agent-snapshot", "allow-agent-transcript", "allow-agent-transcripts"
+    "allow-attach-tmux", "allow-agent-snapshot", "allow-agent-transcript", "allow-agent-transcripts", "allow-agent-usage"
   ]
 }

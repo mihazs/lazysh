@@ -1,14 +1,22 @@
 import { useState } from "react";
 import { defaults, gestureActions, gestureDirections, parseChord, parseTheme, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type Preferences, type ToolbarKey } from "./preferences";
+import { deleteAllFonts, deleteFont, fontFamilyFor, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 export default function PreferencesPanel() {
   const preferences = usePreferences();
+  const fonts = useDeviceFonts();
+  const [fontBusy, setFontBusy] = useState(false);
   const [error, setError] = useState("");
   const [themeJson, setThemeJson] = useState("");
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
   const [chordLabel, setChordLabel] = useState("");
   const [keys, setKeys] = useState("");
+  async function fontAction(action: () => Promise<unknown>) {
+    if (fontBusy) return;
+    setFontBusy(true); setError("");
+    try {await action();} catch (error) {setError(String(error));} finally {setFontBusy(false);}
+  }
   function update(patch: Partial<Preferences>) {
     try { savePreferences({ ...preferences, ...patch }); setError(""); }
     catch { setError("Settings could not be saved on this device."); }
@@ -23,15 +31,30 @@ export default function PreferencesPanel() {
   }
   return <section className="preferences-panel" aria-label="Terminal preferences">
     <h2>Terminal preferences</h2>
-    <p>Changes apply to every open terminal. Settings stay on this device.</p>
+    <p>Changes apply to every open terminal.</p>
     {error && <p role="alert">{error}</p>}
-    <label>Theme<select value={preferences.customTheme ? "custom" : preferences.theme} onChange={e => update({theme: e.target.value as Preferences["theme"], customTheme: undefined})}>
+    <label>App theme<select value={preferences.appTheme} onChange={e => update({appTheme: e.target.value as Preferences["appTheme"]})}>{Object.keys(themes).map(theme => <option key={theme}>{theme}</option>)}</select></label>
+    <label>Terminal theme<select value={preferences.customTheme ? "custom" : preferences.theme} onChange={e => update({theme: e.target.value as Preferences["theme"], customTheme: undefined})}>
       {Object.keys(themes).map(theme => <option key={theme} value={theme}>{theme}</option>)}
       {preferences.customTheme && <option value="custom">Custom</option>}
     </select></label>
     <label>Font size<input type="number" min={10} max={32} value={preferences.fontSize} onChange={e => { if (e.target.value) update({fontSize: Number(e.target.value)}); }} /></label>
     <label>Font family<input maxLength={256} value={preferences.fontFamily} onChange={e => update({fontFamily: e.target.value})} /></label>
-    <p>Use a font installed on your device; include a CJK fallback where needed.</p>
+    <label>CJK fallback families<input maxLength={256} value={preferences.cjkFallback} onChange={e => update({cjkFallback: e.target.value})} /></label>
+    <p>Use installed font families or import local font files below. Imported font files and selections stay on this device.</p>
+    <details><summary>Imported fonts</summary>
+      {fonts.warnings.map(warning => <p key={warning} role="status">{warning}</p>)}
+      <label>Import font file<input type="file" accept=".ttf,.otf,.woff,.woff2,.ttc" disabled={fontBusy} onChange={event => {const file = event.target.files?.[0]; event.target.value = ""; if (file) void fontAction(() => importFont(file));}} /></label>
+      <p>At most 4 fonts, 24 MiB per font and 48 MiB total. No font downloads run automatically.</p>
+      {(["primary", "cjk"] as const).map(role => <label key={role}>{role === "primary" ? "Imported terminal font" : "Imported CJK fallback"}<select disabled={fontBusy} value={fonts.selection[role] ?? ""} onChange={e => void fontAction(() => selectFont(role, e.target.value || undefined))}>
+        <option value="">Use installed fallback families</option>
+        {fonts.selection[role] && !fonts.fonts.some(font => font.id === fonts.selection[role]) && <option value={fonts.selection[role]}>Missing font — using fallback</option>}
+        {fonts.fonts.map(font => <option key={font.id} value={font.id}>{font.name}</option>)}
+      </select></label>)}
+      <p className="font-sample" style={{fontFamily: fontFamilyFor(preferences, fonts), fontSize: preferences.fontSize}}>lazysh 0123456789 · 中文 日本語 한국어</p>
+      <ul>{fonts.fonts.map(font => <li key={font.id}><span>{font.name} ({(font.size / 1024 / 1024).toFixed(2)} MiB)</span><button disabled={fontBusy} aria-label={`Delete font ${font.name}`} onClick={() => void fontAction(() => deleteFont(font.id))}>Delete</button></li>)}</ul>
+      <button disabled={fontBusy} onClick={() => void fontAction(deleteAllFonts)}>Delete all imported fonts</button>
+    </details>
     <label>Cursor<select value={preferences.cursorStyle} onChange={e => update({cursorStyle: e.target.value as Preferences["cursorStyle"]})}>{["bar", "block", "underline"].map(value => <option key={value}>{value}</option>)}</select></label>
     <label><input type="checkbox" checked={preferences.cursorBlink} onChange={e => update({cursorBlink: e.target.checked})} />Blink cursor</label>
     <label>History lines<input type="number" min={100} max={20000} step={100} value={preferences.scrollback} onChange={e => { if (e.target.value) update({scrollback: Number(e.target.value)}); }} /></label>
@@ -66,6 +89,6 @@ export default function PreferencesPanel() {
       <label>Key sequence<input maxLength={128} value={keys} onChange={e => setKeys(e.target.value)} /></label>
       <button disabled={!chordLabel.trim() || !keys.trim() || preferences.chords.length >= 12} onClick={() => {try {parseChord(keys); update({chords: [...preferences.chords, {label: chordLabel.trim(), keys: keys.trim()}]}); setChordLabel(""); setKeys("");} catch (e) {setError(String(e));}}}>Add chord</button>
     </details>
-    <button onClick={() => update({...defaults, toolbar: [...defaults.toolbar], snippets: [], customTheme: undefined})}>Reset preferences</button>
+    <button onClick={() => {update({...defaults, toolbar: [...defaults.toolbar], snippets: [], customTheme: undefined}); void fontAction(resetFontSelection);}}>Reset preferences</button>
   </section>;
 }

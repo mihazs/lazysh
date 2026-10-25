@@ -1,5 +1,22 @@
 fn main() {
     let app = tauri_build::AppManifest::new().commands(&[
+        "apple_speech_capability",
+        "apple_speech_install",
+        "apple_speech_remove",
+        "apple_speech_transcribe",
+        "apple_speech_cancel",
+        "share_status",
+        "share_configure",
+        "share_forget",
+        "share_list",
+        "share_delete",
+        "share_upload_begin",
+        "share_upload_chunk",
+        "share_upload_finish",
+        "share_upload_cancel",
+        "transport_capabilities",
+        "connect_mosh",
+        "connect_et",
         "open_web_url",
         "list_devices",
         "device_frame",
@@ -63,6 +80,7 @@ fn main() {
         "attach_tmux",
         "agent_snapshot",
         "agent_transcript",
+        "agent_usage",
         "agent_transcripts",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app))

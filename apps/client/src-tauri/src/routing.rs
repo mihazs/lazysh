@@ -35,6 +35,7 @@ pub(crate) async fn verified_target(
     state: &AppState,
     host: &Host,
     jump_credentials: Option<Credentials>,
+    operation: &tauri_plugin_lazysh_vault::CredentialOperation,
 ) -> Result<SshHandle> {
     let Some(jump_id) = host.jump_host_id.as_deref() else {
         if jump_credentials.is_some() {
@@ -55,7 +56,7 @@ pub(crate) async fn verified_target(
     let handle = crate::ssh::verified_connection(state, &jump).await?;
     let credentials = match jump_credentials {
         Some(credentials) => credentials,
-        None => crate::vault::load(app, jump.clone())
+        None => crate::vault::load_for_operation(app, jump.clone(), operation.clone())
             .await
             .map_err(|message| {
                 SshError::new(
@@ -65,15 +66,10 @@ pub(crate) async fn verified_target(
                 .for_host(&jump.id)
             })?,
     };
-    let jump_handle = crate::ssh::authenticate_handle(
-        handle,
-        &jump,
-        credentials.password.clone(),
-        credentials.private_key.clone(),
-        credentials.passphrase.clone(),
-    )
-    .await
-    .map_err(|error| error.for_host(&jump.id))?;
+    let jump_handle =
+        crate::ssh::authenticate_for_operation(handle, &jump, &credentials, operation)
+            .await
+            .map_err(|error| error.for_host(&jump.id))?;
     through_bastion(state, host, Arc::new(jump_handle)).await
 }
 

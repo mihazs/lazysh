@@ -1,7 +1,7 @@
 use crate::ssh::{AppState, Host};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use tauri_plugin_lazysh_vault::VaultExt;
+use tauri_plugin_lazysh_vault::{CredentialOperation, VaultExt};
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -100,28 +100,39 @@ fn decode(host: &Host, value: &str) -> Result<Credentials, String> {
     Ok(stored.credentials)
 }
 
-pub(crate) async fn load(app: AppHandle, host: Host) -> Result<Credentials, String> {
+pub(crate) async fn load_for_operation(
+    app: AppHandle,
+    host: Host,
+    operation: CredentialOperation,
+) -> Result<Credentials, String> {
+    operation.check()?;
     tauri::async_runtime::spawn_blocking(move || {
+        operation.check()?;
         let value = Zeroizing::new(
             app.vault()
-                .get_protected(&key(&host.id), host.biometric_unlock)?
+                .get_protected_for(&key(&host.id), host.biometric_unlock, &operation)?
                 .ok_or("No saved credentials for this host")?,
         );
-        decode(&host, &value)
+        let credentials = decode(&host, &value)?;
+        operation.check()?;
+        Ok(credentials)
     })
     .await
     .map_err(|_| "Could not read saved credentials".to_string())?
 }
 
-pub(crate) async fn save(
+pub(crate) async fn save_for_operation(
     app: AppHandle,
     host: Host,
     credentials: Credentials,
+    operation: CredentialOperation,
 ) -> Result<(), String> {
+    operation.check()?;
     tauri::async_runtime::spawn_blocking(move || {
+        operation.check()?;
         let value = encode(&host, &credentials)?;
         app.vault()
-            .set_protected(&key(&host.id), &value, host.biometric_unlock)
+            .set_protected_for(&key(&host.id), &value, host.biometric_unlock, &operation)
     })
     .await
     .map_err(|_| "Could not save credentials".to_string())?
@@ -167,15 +178,17 @@ pub(crate) async fn save_new(
     app: AppHandle,
     host: Host,
     credentials: Credentials,
+    operation: CredentialOperation,
 ) -> Result<(), ImportFailure> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = key(&host.id);
         save_new_with_cleanup(
             || app.vault().exists(&account),
             || {
+                operation.check()?;
                 let value = encode(&host, &credentials)?;
                 app.vault()
-                    .set_protected(&account, &value, host.biometric_unlock)
+                    .set_protected_for(&account, &value, host.biometric_unlock, &operation)
             },
             || app.vault().delete(&account),
         )
@@ -233,7 +246,8 @@ pub async fn credential_protection(
 
 #[tauri::command]
 pub async fn cancel_credential_auth(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || app.vault().cancel_authentication())
+    let auth_epoch = app.vault().begin_cancellation();
+    tauri::async_runtime::spawn_blocking(move || app.vault().cancel_authentication_at(auth_epoch))
         .await
         .map_err(|_| "Cannot cancel credential authentication".to_string())?
 }
@@ -250,14 +264,20 @@ pub async fn export_saved_identity(
     state: State<'_, AppState>,
     host_id: String,
 ) -> Result<ExportedIdentity, String> {
-    let _guard = state.credential_guard(&host_id).await;
+    let operation = app.vault().operation();
+    let _guard = crate::ssh::during_connect(&operation, async {
+        Ok(state.credential_guard(&host_id).await)
+    })
+    .await
+    .map_err(|_| "Credential operation cancelled")?;
     let host = state.host(&host_id).map_err(|_| "Host no longer exists")?;
     if !host.biometric_unlock || !host.credentials_stored {
         return Err(
             "Private-key export requires saved credentials protected with biometrics".into(),
         );
     }
-    let credentials = load(app, host).await?;
+    let credentials = load_for_operation(app, host, operation.clone()).await?;
+    operation.check()?;
     Ok(ExportedIdentity {
         private_key: credentials
             .private_key

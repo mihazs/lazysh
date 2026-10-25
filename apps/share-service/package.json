@@ -1,0 +1,13 @@
+{
+  "name": "@lazysh/share-service",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "cargo build --release --locked --package lazysh-share",
+    "check": "cargo check --locked --package lazysh-share",
+    "test": "cargo test --locked --package lazysh-share",
+    "lint": "cargo clippy --locked --package lazysh-share --all-targets -- -D warnings",
+    "format:check": "cargo fmt --manifest-path Cargo.toml -- --check"
+  },
+  "license": "GPL-3.0-or-later"
+}

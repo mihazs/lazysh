@@ -1,0 +1,384 @@
+use super::*;
+use std::sync::atomic::AtomicUsize;
+use tokio::{
+    io::copy_bidirectional,
+    net::{TcpListener, TcpStream},
+    sync::oneshot,
+    task::JoinSet,
+};
+use tokio_rustls::{
+    rustls::{
+        pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
+        ServerConfig,
+    },
+    TlsAcceptor,
+};
+
+const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+struct Fixture {
+    directory: tempfile::TempDir,
+    origin: String,
+    backend: Option<tokio::task::JoinHandle<()>>,
+    tls: tokio::task::JoinHandle<()>,
+    stop: Option<oneshot::Sender<()>>,
+    client: Client,
+}
+impl Fixture {
+    async fn new(router: Option<axum::Router>) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let front = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = front.local_addr().unwrap();
+        let origin = format!("https://localhost:{}", address.port());
+        let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let root = reqwest::Certificate::from_der(certificate.cert.der().as_ref()).unwrap();
+        let config = ServerConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.cert.der().clone()],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                certificate.signing_key.serialize_der(),
+            )),
+        )
+        .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backend_address = listener.local_addr().unwrap();
+        let (stop, stopped) = oneshot::channel();
+        let backend = if let Some(router) = router {
+            tokio::spawn(async move {
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(async {
+                        let _ = stopped.await;
+                    })
+                    .await
+                    .unwrap();
+            })
+        } else {
+            let config =
+                lazysh_share::Config::new(directory.path().join("state"), &origin, TOKEN).unwrap();
+            let service = lazysh_share::Service::open(config).unwrap();
+            tokio::spawn(async move {
+                lazysh_share::serve(listener, service, async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+            })
+        };
+        let tls = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = front.accept() => { let Ok((socket, _)) = accepted else { return }; let acceptor = acceptor.clone(); connections.spawn(async move { if let Ok(mut incoming) = acceptor.accept(socket).await { if let Ok(mut outgoing) = TcpStream::connect(backend_address).await { let _ = copy_bidirectional(&mut incoming, &mut outgoing).await; } } }); },
+                    _ = connections.join_next(), if !connections.is_empty() => {},
+                }
+            }
+        });
+        let client = Client::builder()
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .resolve("localhost", address)
+            .add_root_certificate(root)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        Self {
+            directory,
+            origin,
+            backend: Some(backend),
+            tls,
+            stop: Some(stop),
+            client,
+        }
+    }
+    fn enrollment(&self) -> Enrollment {
+        Enrollment {
+            version: 1,
+            origin: self.origin.clone(),
+            token: TOKEN.into(),
+        }
+    }
+    async fn stop(mut self) {
+        self.tls.abort();
+        let _ = self.tls.await;
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(backend) = self.backend.take() {
+            backend.await.unwrap();
+        }
+        drop(self.client);
+        self.directory.close().unwrap();
+    }
+}
+fn enrollment() -> Enrollment {
+    Enrollment {
+        version: 1,
+        origin: "https://shares.example".into(),
+        token: TOKEN.into(),
+    }
+}
+
+#[test]
+fn rejects_unsafe_configuration_and_unexpected_download_urls() {
+    for value in [
+        "http://example.com",
+        "https://user:pass@example.com",
+        "https://@example.com",
+        "https:///example.com",
+        "https://example.com/path",
+        "https://example.com/?token=x",
+        "https://example.com/#fragment",
+        "https://exa\nmple.com",
+    ] {
+        assert!(origin(value).is_err(), "accepted {value}");
+    }
+    assert!(decode(&format!(
+        r#"{{"version":1,"origin":"https://shares.example/path","token":"{TOKEN}"}}"#
+    ))
+    .is_err());
+    let share = |url: &str| SharedFile {
+        id: "a".repeat(64),
+        name: "file".into(),
+        mime: "text/plain".into(),
+        size: 1,
+        created_at: 1000,
+        expires_at: 4600,
+        url: url.into(),
+    };
+    for url in [
+        "https://evil.example/s/aaa",
+        "file:///etc/passwd",
+        "https://shares.example/s/aaa?token=x",
+    ] {
+        assert!(share(url).validate("https://shares.example").is_err());
+    }
+    assert!(
+        share(&format!("https://shares.example/s/{}", "a".repeat(64)))
+            .validate("https://shares.example")
+            .is_ok()
+    );
+}
+
+#[test]
+fn blank_management_tokens_reuse_only_the_exact_existing_service() {
+    assert_eq!(
+        &*configured_token(
+            "https://shares.example",
+            Zeroizing::new(String::new()),
+            Some(enrollment())
+        )
+        .unwrap(),
+        TOKEN
+    );
+    assert!(configured_token(
+        "https://different.example",
+        Zeroizing::new(String::new()),
+        Some(enrollment())
+    )
+    .is_err());
+    assert!(configured_token(
+        "https://shares.example",
+        Zeroizing::new(String::new()),
+        None
+    )
+    .is_err());
+    assert!(configured_token(
+        "https://shares.example",
+        Zeroizing::new("invalid".into()),
+        None
+    )
+    .is_err());
+}
+
+#[tokio::test]
+async fn chunk_order_size_quota_expiry_and_incomplete_finish_are_enforced() {
+    let state = ShareState::default();
+    let mut uploads = state.uploads.lock().await;
+    let id = insert(
+        &mut uploads,
+        enrollment(),
+        "file".into(),
+        "text/plain".into(),
+        3,
+        3600,
+    )
+    .unwrap();
+    assert!(chunk(&mut uploads, &id, 1, b"a").is_err());
+    assert!(chunk(&mut uploads, &id, 0, &vec![0; 256 * 1024 + 1]).is_err());
+    chunk(&mut uploads, &id, 0, b"a").unwrap();
+    assert!(chunk(&mut uploads, &id, 0, b"a").is_err());
+    let second = insert(
+        &mut uploads,
+        enrollment(),
+        "second".into(),
+        "text/plain".into(),
+        0,
+        3600,
+    )
+    .unwrap();
+    assert!(insert(
+        &mut uploads,
+        enrollment(),
+        "third".into(),
+        "text/plain".into(),
+        0,
+        3600
+    )
+    .is_err());
+    uploads.get_mut(&second).unwrap().touched = Instant::now() - IDLE - Duration::from_secs(1);
+    prune(&mut uploads);
+    assert!(!uploads.contains_key(&second));
+    drop(uploads);
+    assert!(finish(&state, id.clone(), client().unwrap())
+        .await
+        .err()
+        .unwrap()
+        .contains("incomplete"));
+    assert!(state.uploads.lock().await.contains_key(&id));
+    cancel_all(&state).await;
+    assert!(state.uploads.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn actual_https_upload_history_and_delete_work_without_exposing_management_token() {
+    let fixture = Fixture::new(None).await;
+    let state = ShareState::default();
+    let id = insert(
+        &mut *state.uploads.lock().await,
+        fixture.enrollment(),
+        "hello🌲.txt".into(),
+        "text/plain".into(),
+        5,
+        3600,
+    )
+    .unwrap();
+    chunk(&mut *state.uploads.lock().await, &id, 0, b"hello").unwrap();
+    let result = finish(&state, id, fixture.client.clone()).await.unwrap();
+    assert_eq!(result.share.name, "hello🌲.txt");
+    assert_eq!(result.share.size, 5);
+    assert!(!serde_json::to_string(&result).unwrap().contains(TOKEN));
+    assert!(state.uploads.lock().await.is_empty());
+    let history = list(fixture.client.clone(), &fixture.enrollment(), 50, None)
+        .await
+        .unwrap();
+    assert_eq!(history.shares.len(), 1);
+    delete(
+        fixture.client.clone(),
+        &fixture.enrollment(),
+        &result.share.id,
+    )
+    .await
+    .unwrap();
+    assert!(
+        list(fixture.client.clone(), &fixture.enrollment(), 50, None)
+            .await
+            .unwrap()
+            .shares
+            .is_empty()
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn redirects_are_not_followed_and_error_bodies_are_not_exposed() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let called = calls.clone();
+    let router = axum::Router::new()
+        .route(
+            "/v1/shares",
+            axum::routing::post(|| async {
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [("location", "/leak")],
+                    "secret server response",
+                )
+            }),
+        )
+        .route(
+            "/leak",
+            axum::routing::post(move || {
+                called.fetch_add(1, Ordering::SeqCst);
+                async { "leaked" }
+            }),
+        );
+    let fixture = Fixture::new(Some(router)).await;
+    let pending = Pending {
+        enrollment: fixture.enrollment(),
+        name: "file".into(),
+        mime: "text/plain".into(),
+        ttl: 3600,
+        data: Zeroizing::new(b"sensitive file".to_vec()),
+    };
+    let error = send(fixture.client.clone(), pending).await.err().unwrap();
+    assert!(!error.contains("secret"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn oversized_responses_and_inflight_cancellation_release_native_upload_slots() {
+    let router = axum::Router::new().route(
+        "/v1/shares",
+        axum::routing::get(|| async { vec![b'x'; MAX_RESPONSE + 1] }).post(|| async {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            "delayed"
+        }),
+    );
+    let fixture = Fixture::new(Some(router)).await;
+    assert!(
+        list(fixture.client.clone(), &fixture.enrollment(), 50, None)
+            .await
+            .err()
+            .unwrap()
+            .contains("256 KiB")
+    );
+    let state = Arc::new(ShareState::default());
+    let id = insert(
+        &mut *state.uploads.lock().await,
+        fixture.enrollment(),
+        "file".into(),
+        "text/plain".into(),
+        1,
+        3600,
+    )
+    .unwrap();
+    chunk(&mut *state.uploads.lock().await, &id, 0, b"x").unwrap();
+    let sending = {
+        let state = state.clone();
+        let id = id.clone();
+        let client = fixture.client.clone();
+        tokio::spawn(async move { finish(&state, id, client).await })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if state
+                .uploads
+                .lock()
+                .await
+                .get(&id)
+                .is_some_and(|upload| upload.pending.is_none())
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    cancel_all(&state).await;
+    assert!(sending.await.unwrap().err().unwrap().contains("cancelled"));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !state.uploads.lock().await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture.stop().await;
+}

@@ -4,6 +4,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { api } from "./bridge";
 import { decodeClipboardRequest, parseChord, savePreferences, terminalOptions, usePreferences, type GestureAction, type ToolbarKey } from "./preferences";
 import type { LiveSession } from "./terminal";
+import { fontFamilyFor, useDeviceFonts } from "./fonts";
 import "@xterm/xterm/css/xterm.css";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
@@ -31,6 +32,7 @@ export default function TerminalPane({ session, active, reportError }: {
   const activeRef = useRef(active);
   activeRef.current = active;
   const preferences = usePreferences();
+  const fonts = useDeviceFonts();
   const [ctrl, setCtrl] = useState(false);
   const [meta, setMeta] = useState(false);
   const [clipboard, setClipboard] = useState<string | null>(null);
@@ -145,9 +147,9 @@ export default function TerminalPane({ session, active, reportError }: {
   }, [session.id]);
 
   useEffect(() => {
-    session.terminal.options = terminalOptions(preferences);
+    session.terminal.options = terminalOptions(preferences, fontFamilyFor(preferences, fonts));
     if (active) requestAnimationFrame(() => fit.current?.fit());
-  }, [preferences, session, active]);
+  }, [preferences, fonts, session, active]);
 
   useEffect(() => {
     if (active) requestAnimationFrame(() => { fit.current?.fit(); if (composing) composerInput.current?.focus(); else session.terminal.focus(); });
@@ -246,6 +248,7 @@ export default function TerminalPane({ session, active, reportError }: {
     gesture.current = null;
   }
   return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
+    {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={warning}>{warning}</div>)}
     {!session.connected && <div className="session-notice" role="status">Session ended{session.message ? ` · ${session.message}` : ""}. Close this tab or connect again from Hosts.</div>}
     {clipboard !== null && <div className="terminal-consent" role="region" aria-label="Remote clipboard request">
       <p>The remote program wants to replace your clipboard ({clipboard.length} characters).</p>

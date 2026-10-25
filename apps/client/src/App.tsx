@@ -9,6 +9,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import {
   Bot,
+  Activity,
   ChevronRight,
   Command,
   FolderOpen,
@@ -22,6 +23,8 @@ import {
   Paperclip,
   Mic,
   Cloud,
+  Share2,
+  Ellipsis,
   Bell,
   Smartphone,
   Pencil,
@@ -46,17 +49,21 @@ import type { LiveSession } from "./terminal";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import AgentPanel from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
+import { useClientAppearance } from "./appearance";
 import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
 const ChatPanel = lazy(() => import("./ChatPanel"));
+const UsagePanel = lazy(() => import("./UsagePanel"));
 const PreviewPanel = lazy(() => import("./PreviewPanel"));
 const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const AttachmentPanel = lazy(() => import("./AttachmentPanel"));
 const VoicePanel = lazy(() => import("./VoicePanel"));
 const SyncPanel = lazy(() => import("./SyncPanel"));
+const SharePanel = lazy(() => import("./SharePanel"));
+const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
 
 async function prepareSession(
@@ -116,6 +123,7 @@ type View =
   | "diff"
   | "sessions"
   | "chat"
+  | "usage"
   | "preview"
   | "attachments"
   | "voice"
@@ -124,6 +132,7 @@ const views = [
   { id: "terminal" as const, label: "Terminal", Icon: TerminalSquare },
   { id: "agents" as const, label: "Agents", Icon: Bot },
   { id: "chat" as const, label: "Transcript", Icon: MessageSquare },
+  { id: "usage" as const, label: "Usage", Icon: Activity },
   { id: "files" as const, label: "Files", Icon: FolderOpen },
   { id: "diff" as const, label: "Diff", Icon: GitCompareArrows },
   { id: "sessions" as const, label: "Sessions", Icon: Layers },
@@ -458,11 +467,51 @@ function ConnectDialog({
   const [savedJump, setSavedJump] = useState(true);
   const [jumpPassword, setJumpPassword] = useState("");
   const [exportedIdentity, setExportedIdentity] = useState("");
+  const [transport, setTransport] = useState<"ssh" | "mosh" | "et">("ssh");
+  const [moshAvailable, setMoshAvailable] = useState(false);
+  const [etAvailable, setEtAvailable] = useState(false);
+  const [etServer, setEtServer] = useState("etterminal");
+  const [etPort, setEtPort] = useState(2022);
+  const [moshServer, setMoshServer] = useState("mosh-server");
+  const [moshPortMin, setMoshPortMin] = useState(60000);
+  const [moshPortMax, setMoshPortMax] = useState(61000);
+  const exportGeneration = useRef(0);
   const trustHost = hosts.find((item) => item.id === trustHostId) || host;
   const connecting = useRef(false);
+  const connectingSessions = useRef(new Set<string>());
   const alive = useRef(true);
   useEffect(() => {
+    const hide = () => {
+      exportGeneration.current += 1;
+      setExportedIdentity("");
+      if (!connecting.current) setBusy(false);
+      void invoke("cancel_credential_auth").catch(() => {});
+    };
+    const visibility = () => {
+      if (document.visibilityState !== "visible") hide();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("pagehide", hide);
+    return () => {
+      exportGeneration.current += 1;
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("pagehide", hide);
+    };
+  }, []);
+  useEffect(() => {
     alive.current = true;
+    void invoke<{ mosh: boolean; et: boolean }>("transport_capabilities")
+      .then((value) => {
+        if (alive.current)
+          setMoshAvailable(
+            value?.mosh === true && !host.jumpHostId && !host.forwardAgent,
+          );
+        if (alive.current)
+          setEtAvailable(
+            value?.et === true && !host.jumpHostId && !host.forwardAgent,
+          );
+      })
+      .catch(() => {});
     void invoke<boolean>("has_credentials", { hostId: host.id })
       .then((saved) => {
         if (alive.current) setSavedCredentials(saved === true);
@@ -471,6 +520,9 @@ function ConnectDialog({
     return () => {
       alive.current = false;
       void invoke("cancel_credential_auth").catch(() => {});
+      for (const id of connectingSessions.current)
+        void api.disconnect(id).catch(() => {});
+      connectingSessions.current.clear();
     };
   }, []);
 
@@ -480,6 +532,7 @@ function ConnectDialog({
     setBusy(true);
     setError("");
     let session: LiveSession | undefined;
+    let control: Awaited<ReturnType<typeof prepareSession>> | undefined;
     try {
       if (accept && trust) {
         await api.trustHostKey(trustHostId, trust);
@@ -509,16 +562,66 @@ function ConnectDialog({
             })
           : await api.connect(host.id, credentials, pending.onEvent);
       pending.establish(result.sessionId);
+      connectingSessions.current.add(result.sessionId);
       if (!alive.current) {
         await api.disconnect(result.sessionId);
         session.terminal.dispose();
         return;
       }
+      if (transport !== "ssh") {
+        control = pending;
+        const upgradedSession = await prepareSession(
+          host.id,
+          host.name,
+          `${host.username}@${host.hostname} · ${transport === "mosh" ? "Mosh" : "ET"}`,
+        );
+        session = upgradedSession.session;
+        if (transport === "mosh")
+          session.mosh = {
+            serverPath: moshServer,
+            portMin: moshPortMin,
+            portMax: moshPortMax,
+          };
+        else session.et = { serverPath: etServer, port: etPort };
+        const upgraded =
+          transport === "et"
+            ? await api.connectEt(
+                result.sessionId,
+                { serverPath: etServer, port: etPort },
+                upgradedSession.onEvent,
+              )
+            : await api.connectMosh(
+                result.sessionId,
+                {
+                  serverPath: moshServer,
+                  portMin: moshPortMin,
+                  portMax: moshPortMax,
+                },
+                upgradedSession.onEvent,
+              );
+        upgradedSession.establish(upgraded.sessionId);
+        connectingSessions.current.add(upgraded.sessionId);
+        await api.disconnect(result.sessionId);
+        connectingSessions.current.delete(result.sessionId);
+        control.session.terminal.dispose();
+        control = undefined;
+        if (!alive.current) {
+          await api.disconnect(upgraded.sessionId);
+          session.terminal.dispose();
+          return;
+        }
+      }
       setPassword("");
       setPrivateKey("");
       setPassphrase("");
+      connectingSessions.current.clear();
       connected(session);
     } catch (e) {
+      if (session?.id) await api.disconnect(session.id).catch(() => {});
+      if (control) {
+        await api.disconnect(control.session.id).catch(() => {});
+        control.session.terminal.dispose();
+      }
       session?.terminal.dispose();
       const detail = e as SshError;
       if (detail?.kind === "unknown_host_key" && detail.fingerprint) {
@@ -533,6 +636,7 @@ function ConnectDialog({
         );
       }
     } finally {
+      connectingSessions.current.clear();
       connecting.current = false;
       if (alive.current) setBusy(false);
     }
@@ -597,6 +701,99 @@ function ConnectDialog({
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
+          <label>
+            Transport
+            <select
+              value={transport}
+              disabled={busy}
+              onChange={(event) =>
+                setTransport(event.target.value as "ssh" | "mosh" | "et")
+              }
+            >
+              <option value="ssh">SSH</option>
+              <option value="mosh" disabled={!moshAvailable}>
+                Mosh{!moshAvailable ? " — unavailable for this connection" : ""}
+              </option>
+              <option value="et" disabled={!etAvailable}>
+                Eternal Terminal
+                {!etAvailable ? " — unavailable for this connection" : ""}
+              </option>
+            </select>
+          </label>
+          {transport === "et" && (
+            <fieldset disabled={busy}>
+              <legend>Eternal Terminal over TCP</legend>
+              <p>
+                SSH verifies the host and starts a fresh ET session. The host
+                must already run its ET server.
+              </p>
+              <label>
+                ET terminal path
+                <input
+                  required
+                  maxLength={4096}
+                  value={etServer}
+                  onChange={(event) => setEtServer(event.target.value)}
+                />
+              </label>
+              <label>
+                ET server port
+                <input
+                  required
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={etPort}
+                  onChange={(event) => setEtPort(Number(event.target.value))}
+                />
+              </label>
+            </fieldset>
+          )}
+          {transport === "mosh" && (
+            <fieldset disabled={busy}>
+              <legend>Mosh over UDP</legend>
+              <p>
+                SSH verifies the host and starts its Mosh server. UDP must reach
+                the same host. A failed Mosh connection will not silently switch
+                transports.
+              </p>
+              <label>
+                Mosh server path
+                <input
+                  value={moshServer}
+                  required
+                  maxLength={4096}
+                  onChange={(event) => setMoshServer(event.target.value)}
+                />
+              </label>
+              <label>
+                First UDP port
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={65535}
+                  value={moshPortMin}
+                  onChange={(event) =>
+                    setMoshPortMin(Number(event.target.value))
+                  }
+                />
+              </label>
+              <label>
+                Last UDP port
+                <input
+                  type="number"
+                  required
+                  min={moshPortMin}
+                  max={Math.min(65535, moshPortMin + 1000)}
+                  value={moshPortMax}
+                  onChange={(event) =>
+                    setMoshPortMax(Number(event.target.value))
+                  }
+                />
+              </label>
+            </fieldset>
+          )}
           {host.jumpHostId && (
             <fieldset>
               <legend>
@@ -691,17 +888,30 @@ function ConnectDialog({
                 onClick={() => {
                   setBusy(true);
                   setError("");
+                  const generation = ++exportGeneration.current;
                   void invoke<{ privateKey: string }>("export_saved_identity", {
                     hostId: host.id,
                   })
                     .then((result) => {
-                      if (alive.current) setExportedIdentity(result.privateKey);
+                      if (
+                        alive.current &&
+                        generation === exportGeneration.current
+                      )
+                        setExportedIdentity(result.privateKey);
                     })
                     .catch((error) => {
-                      if (alive.current) setError(errorMessage(error));
+                      if (
+                        alive.current &&
+                        generation === exportGeneration.current
+                      )
+                        setError(errorMessage(error));
                     })
                     .finally(() => {
-                      if (alive.current) setBusy(false);
+                      if (
+                        alive.current &&
+                        generation === exportGeneration.current
+                      )
+                        setBusy(false);
                     });
                 }}
               >
@@ -810,6 +1020,7 @@ function ConnectDialog({
 }
 
 export default function App() {
+  useClientAppearance();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -822,6 +1033,9 @@ export default function App() {
   const [palette, setPalette] = useState(false);
   const [preferences, setPreferences] = useState(false);
   const [sync, setSync] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [mobileTools, setMobileTools] = useState(false);
+  const [about, setAbout] = useState(false);
   const [inbox, setInbox] = useState(false);
   const [previousWorkspace, setPreviousWorkspace] = useState(readWorkspace);
   const [restoring, setRestoring] = useState(false);
@@ -865,7 +1079,39 @@ export default function App() {
           useSavedCredentials: true,
         });
         shell.establish(connected.sessionId);
-        if (intent.attached) {
+        if (intent.et) {
+          child = await prepareSession(
+            host.id,
+            host.name,
+            `${host.username}@${host.hostname} · ET`,
+          );
+          const result = await api.connectEt(
+            shell.session.id,
+            intent.et,
+            child.onEvent,
+          );
+          child.establish(result.sessionId);
+          child.session.et = intent.et;
+          await api.disconnect(shell.session.id);
+          shell.session.terminal.dispose();
+          restored.push(child.session);
+        } else if (intent.mosh) {
+          child = await prepareSession(
+            host.id,
+            host.name,
+            `${host.username}@${host.hostname} · Mosh`,
+          );
+          const result = await api.connectMosh(
+            shell.session.id,
+            intent.mosh,
+            child.onEvent,
+          );
+          child.establish(result.sessionId);
+          child.session.mosh = intent.mosh;
+          await api.disconnect(shell.session.id);
+          shell.session.terminal.dispose();
+          restored.push(child.session);
+        } else if (intent.attached) {
           child = await prepareSession(
             host.id,
             `${host.name} / ${intent.attached.name}`,
@@ -1189,9 +1435,15 @@ export default function App() {
             <ShieldCheck size={15} />
             <span>Direct connection. Local first.</span>
           </div>
-          <small>
-            lazysh <span>0.1.0 · alpha</span>
-          </small>
+          <button
+            className="about-button"
+            onClick={() => {
+              setAbout(true);
+              setSidebar(false);
+            }}
+          >
+            About lazysh · 0.1.0
+          </button>
         </div>
       </aside>
       {sidebar && (
@@ -1221,6 +1473,21 @@ export default function App() {
           </div>
           <div className="header-right">
             <button
+              className="icon-button mobile-tools"
+              aria-label="Workspace tools"
+              onClick={() => setMobileTools(true)}
+            >
+              <Ellipsis size={18} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Shareable uploads"
+              disabled={!native}
+              onClick={() => setSharing(true)}
+            >
+              <Share2 size={16} />
+            </button>
+            <button
               className="icon-button"
               aria-label="Notification inbox"
               disabled={!native}
@@ -1247,7 +1514,13 @@ export default function App() {
               <span
                 className={`status-dot ${active?.connected ? "" : "status-idle"}`}
               />
-              {active?.connected ? "SSH connected" : "No active connection"}
+              {active?.connected
+                ? active.mosh
+                  ? "Mosh connected"
+                  : active.et
+                    ? "ET connected"
+                    : "SSH connected"
+                : "No active connection"}
             </span>
             <button
               className="icon-button"
@@ -1380,8 +1653,15 @@ export default function App() {
                 {active.connected && view === "agents" && (
                   <AgentPanel key={active.id} sessionId={active.id} />
                 )}
+                {active.connected && view === "usage" && (
+                  <UsagePanel key={active.id} sessionId={active.id} />
+                )}
                 {active.connected && view === "chat" && (
-                  <ChatPanel key={active.id} sessionId={active.id} onOpenTerminal={() => setView("terminal")} />
+                  <ChatPanel
+                    key={active.id}
+                    sessionId={active.id}
+                    onOpenTerminal={() => setView("terminal")}
+                  />
                 )}
                 {active.connected && view === "preview" && (
                   <PreviewPanel key={active.id} sessionId={active.id} />
@@ -1588,6 +1868,61 @@ export default function App() {
       {inbox && (
         <Dialog title="Notification inbox" close={() => setInbox(false)}>
           <NotificationPanel sessions={sessions} />
+        </Dialog>
+      )}
+      {about && (
+        <Dialog title="About lazysh" close={() => setAbout(false)}>
+          <Suspense fallback={<p>Loading license…</p>}>
+            <AboutPanel />
+          </Suspense>
+        </Dialog>
+      )}
+      {mobileTools && (
+        <Dialog title="Workspace tools" close={() => setMobileTools(false)}>
+          <div className="form-stack">
+            <button
+              disabled={!native}
+              onClick={() => {
+                setMobileTools(false);
+                setInbox(true);
+              }}
+            >
+              Open notification inbox
+            </button>
+            <button
+              disabled={!native}
+              onClick={() => {
+                setMobileTools(false);
+                setSync(true);
+              }}
+            >
+              Open encrypted sync
+            </button>
+            <button
+              disabled={!native}
+              onClick={() => {
+                setMobileTools(false);
+                setSharing(true);
+              }}
+            >
+              Open shareable uploads
+            </button>
+            <button
+              onClick={() => {
+                setMobileTools(false);
+                setPalette(true);
+              }}
+            >
+              Search saved hosts
+            </button>
+          </div>
+        </Dialog>
+      )}
+      {sharing && (
+        <Dialog title="Shareable uploads" close={() => setSharing(false)}>
+          <Suspense fallback={<p>Loading sharing…</p>}>
+            <SharePanel />
+          </Suspense>
         </Dialog>
       )}
       {sync && (

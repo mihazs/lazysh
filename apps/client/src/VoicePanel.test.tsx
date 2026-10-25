@@ -27,7 +27,7 @@ it('stages an edited draft only on explicit request and never sends terminal inp
   expect(listener).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Stage in terminal composer'}));
   expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh1',text:'review this code'});
-  expect(vi.mocked(invoke).mock.calls.every(([name]) => name === 'voice_models')).toBe(true);
+  expect(vi.mocked(invoke).mock.calls.every(([name]) => name === 'voice_models' || name === 'apple_speech_capability')).toBe(true);
   window.removeEventListener('lazysh-prompt-draft',listener);
 });
 
@@ -45,4 +45,27 @@ it('releases a microphone granted after the dictation view has closed', async ()
   grant({getTracks:() => [{stop}]} as unknown as MediaStream);
   await waitFor(() => expect(stop).toHaveBeenCalledOnce());
   expect(capture).not.toHaveBeenCalled();
+});
+
+it('requires explicit Apple asset installation and cancels the exact pending request', async () => {
+  let complete: (()=>void)|undefined;
+  vi.mocked(invoke).mockImplementation((command)=>{
+    if(command==='voice_models')return Promise.resolve([]) as never;
+    if(command==='apple_speech_capability')return Promise.resolve({available:true,reason:'On-device speech',supportedLanguages:['en-US'],installedLanguages:[],reservedLanguages:[]}) as never;
+    if(command==='apple_speech_install')return new Promise<void>(resolve=>{complete=resolve;}) as never;
+    return Promise.resolve() as never;
+  });
+  render(<VoicePanel/>);
+  await waitFor(()=>expect((screen.getByRole('option',{name:'Apple SpeechAnalyzer'}) as HTMLOptionElement).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText('Speech engine'),{target:{value:'apple'}});
+  expect((screen.getByRole('button',{name:'Record speech'}) as HTMLButtonElement).disabled).toBe(true);
+  expect(invoke).not.toHaveBeenCalledWith('apple_speech_install',expect.anything());
+  fireEvent.click(screen.getByRole('button',{name:'Download Apple speech language'}));
+  const request=vi.mocked(invoke).mock.calls.find(([name])=>name==='apple_speech_install')?.[1];
+  expect(request).toEqual({language:'en-US',requestId:expect.stringMatching(/^[0-9a-f-]{36}$/)});
+  fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+  expect(invoke).toHaveBeenCalledWith('apple_speech_cancel',{requestId:(request as {requestId:string}).requestId});
+  complete?.();
+  await waitFor(()=>expect(screen.queryByText('Downloading Apple speech assets…')).toBeNull());
+  expect(invoke).not.toHaveBeenCalledWith('apple_speech_transcribe',expect.anything());
 });

@@ -1,0 +1,10 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "check:rust": { "cache": false, "outputs": [] },
+    "test:rust": { "cache": false, "outputs": [] },
+    "test:mosh": { "cache": false, "outputs": [] },
+    "lint": { "cache": false, "outputs": [] },
+    "format:check": { "cache": false, "outputs": [] }
+  }
+}

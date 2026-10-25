@@ -14,9 +14,11 @@ export type GestureAction = typeof gestureActions[number];
 export type Preferences = {
   version: 1;
   theme: keyof typeof themes;
+  appTheme: keyof typeof themes;
   customTheme?: ITheme;
   fontSize: number;
   fontFamily: string;
+  cjkFallback: string;
   cursorStyle: "bar" | "block" | "underline";
   cursorBlink: boolean;
   scrollback: number;
@@ -30,8 +32,9 @@ export type Preferences = {
   autoHideToolbar: boolean;
 };
 export const defaults: Preferences = {
-  version: 1, theme: "forest", fontSize: 14,
+  version: 1, theme: "forest", appTheme: "forest", fontSize: 14,
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
+  cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false,
   toolbar: ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"], snippets: [],
@@ -62,9 +65,11 @@ export function parsePreferences(value: unknown): Preferences {
   return {
     version: 1,
     theme: typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,
+    appTheme: typeof p.appTheme === "string" && Object.hasOwn(themes, p.appTheme) ? p.appTheme as Preferences["appTheme"] : defaults.appTheme,
     ...(customTheme ? { customTheme } : {}),
     fontSize: number("fontSize", 10, 32, defaults.fontSize),
     fontFamily: typeof p.fontFamily === "string" && p.fontFamily.length > 0 && p.fontFamily.length <= 256 && !/[;{}\x00-\x1f]/.test(p.fontFamily) ? p.fontFamily : defaults.fontFamily,
+    cjkFallback: typeof p.cjkFallback === "string" && p.cjkFallback.length > 0 && p.cjkFallback.length <= 256 && !/[;{}\x00-\x1f]/.test(p.cjkFallback) ? p.cjkFallback : defaults.cjkFallback,
     cursorStyle: p.cursorStyle === "bar" || p.cursorStyle === "block" || p.cursorStyle === "underline" ? p.cursorStyle : defaults.cursorStyle,
     cursorBlink: typeof p.cursorBlink === "boolean" ? p.cursorBlink : defaults.cursorBlink,
     scrollback: number("scrollback", 100, 20000, defaults.scrollback),
@@ -105,8 +110,8 @@ function subscribe(listener: () => void) {
   return () => { window.removeEventListener(event, listener); window.removeEventListener("storage", stored); };
 }
 export function usePreferences() { return useSyncExternalStore(subscribe, getPreferences, () => defaults); }
-export function terminalOptions(p: Preferences): ITerminalOptions {
-  return { fontSize: p.fontSize, fontFamily: p.fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, theme: p.customTheme ?? themes[p.theme] };
+export function terminalOptions(p: Preferences, fontFamily = `${p.fontFamily}, ${p.cjkFallback}`): ITerminalOptions {
+  return { fontSize: p.fontSize, fontFamily, cursorStyle: p.cursorStyle, cursorBlink: p.cursorBlink, scrollback: p.scrollback, macOptionIsMeta: p.optionAsMeta, screenReaderMode: p.screenReader, theme: p.customTheme ?? themes[p.theme] };
 }
 
 export function decodeClipboardRequest(data: string): string | undefined {

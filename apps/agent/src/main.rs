@@ -13,6 +13,17 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect reported token counters in one bounded transcript window.
+    Usage {
+        #[arg(long, value_enum)]
+        agent: lazysh_agent::transcript::TranscriptAgent,
+        #[arg(long)]
+        path: std::path::PathBuf,
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+    },
     /// Inspect and explicitly control host Android devices or iOS Simulators.
     Devices {
         #[command(subcommand)]
@@ -84,6 +95,20 @@ enum Command {
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     let output = match cli.command {
+        Command::Usage {
+            agent,
+            path,
+            session_id,
+            offset,
+        } => Some(
+            serde_json::to_value(lazysh_agent::usage::read(
+                &path,
+                agent,
+                session_id.as_deref(),
+                offset,
+            )?)
+            .map_err(|_| Error::InvalidEvent)?,
+        ),
         Command::Devices { command } => Some(lazysh_agent::devices::run(command)?),
         Command::ApprovalConfig => Some(lazysh_agent::approvals::config()),
         Command::ApprovalRequest {

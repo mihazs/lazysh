@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Host } from "./bridge";
 
@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
     deleteHost: vi.fn(),
     trustHostKey: vi.fn(),
     connect: vi.fn(),
+    connectMosh: vi.fn(),
+    connectEt: vi.fn(),
     disconnect: vi.fn(),
     write: vi.fn(),
     resize: vi.fn(),
@@ -66,6 +68,16 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+
+async function openConnection() {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(
+    await screen.findByRole("button", { name: "Connect to Home" }),
+  );
+  await user.type(screen.getByLabelText("Password"), "temporary-secret");
+  return user;
+}
 
 describe("host validation", () => {
   it("accepts direct IPv4, IPv6, and tailnet destinations and rejects ambiguous SSH strings", () => {
@@ -178,16 +190,6 @@ describe("connection flow", () => {
       hostId: "home",
     });
   });
-
-  async function openConnection() {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(
-      await screen.findByRole("button", { name: "Connect to Home" }),
-    );
-    await user.type(screen.getByLabelText("Password"), "temporary-secret");
-    return user;
-  }
 
   it("requires explicit host-key acceptance before retrying and keeps credentials out of storage", async () => {
     mocks.api.connect
@@ -484,4 +486,118 @@ it("allows cancellation while private key authentication is pending", async () =
       name: "Export private key with biometrics",
     }),
   ).toBeNull();
+});
+
+it("clears exported keys on background and rejects a late authentication result", async () => {
+  mocks.api.listHosts.mockResolvedValue([
+    { ...host, biometricUnlock: true, credentialsStored: true },
+  ]);
+  let resolveExport: ((value: { privateKey: string }) => void) | undefined;
+  mocks.invoke.mockImplementation((command: string) =>
+    command === "export_saved_identity"
+      ? new Promise((resolve) => {
+          resolveExport = resolve;
+        })
+      : Promise.resolve(command === "has_credentials"),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(
+    await screen.findByRole("button", { name: "Connect to Home" }),
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Export private key with biometrics" }),
+  );
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  await act(async () => resolveExport?.({ privateKey: "late-private-key" }));
+  expect(screen.queryByLabelText("Exported private key")).toBeNull();
+  await user.click(
+    screen.getByRole("button", { name: "Export private key with biometrics" }),
+  );
+  await act(async () => resolveExport?.({ privateKey: "fresh-private-key" }));
+  expect(screen.getByLabelText("Exported private key")).toBeTruthy();
+  act(() => window.dispatchEvent(new Event("pagehide")));
+  expect(screen.queryByLabelText("Exported private key")).toBeNull();
+  expect(mocks.invoke).toHaveBeenCalledWith("cancel_credential_auth");
+});
+
+it("hands a verified SSH connection to Mosh before exposing terminal input", async () => {
+  mocks.invoke.mockImplementation(async (command: string) =>
+    command === "transport_capabilities" ? { mosh: true } : false,
+  );
+  mocks.api.connect.mockResolvedValue({ sessionId: "ssh-control" });
+  mocks.api.connectMosh.mockResolvedValue({ sessionId: "mosh-terminal" });
+  const user = await openConnection();
+  await user.selectOptions(screen.getByLabelText("Transport"), "mosh");
+  await user.click(screen.getByRole("button", { name: "Connect" }));
+  expect(await screen.findByText("Live SSH terminal")).toBeTruthy();
+  expect(mocks.api.connectMosh).toHaveBeenCalledWith(
+    "ssh-control",
+    { serverPath: "mosh-server", portMin: 60000, portMax: 61000 },
+    expect.any(Function),
+  );
+  expect(mocks.api.disconnect).toHaveBeenCalledWith("ssh-control");
+  expect(localStorage.setItem).toHaveBeenCalledWith(
+    "lazysh.workspace.v1",
+    JSON.stringify([
+      {
+        hostId: "home",
+        mosh: { serverPath: "mosh-server", portMin: 60000, portMax: 61000 },
+      },
+    ]),
+  );
+});
+
+it("closes the SSH bootstrap when forced Mosh fails without falling back", async () => {
+  mocks.invoke.mockImplementation(async (command: string) =>
+    command === "transport_capabilities" ? { mosh: true } : false,
+  );
+  mocks.api.connect.mockResolvedValue({ sessionId: "ssh-control" });
+  mocks.api.connectMosh.mockRejectedValue(
+    new Error("Mosh UDP connection failed"),
+  );
+  const user = await openConnection();
+  await user.selectOptions(screen.getByLabelText("Transport"), "mosh");
+  await user.click(screen.getByRole("button", { name: "Connect" }));
+  expect(await screen.findByText("Mosh UDP connection failed")).toBeTruthy();
+  expect(screen.queryByText("Live SSH terminal")).toBeNull();
+  expect(mocks.api.disconnect).toHaveBeenCalledWith("ssh-control");
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1);
+});
+
+it("cancels the SSH control session during Mosh bootstrap and closes a late result", async () => {
+  mocks.invoke.mockImplementation(async (command: string) =>
+    command === "transport_capabilities" ? { mosh: true } : false,
+  );
+  mocks.api.connect.mockResolvedValue({ sessionId: "ssh-control" });
+  let finish: ((value: { sessionId: string }) => void) | undefined;
+  mocks.api.connectMosh.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const user = await openConnection();
+  await user.selectOptions(screen.getByLabelText("Transport"), "mosh");
+  await user.click(screen.getByRole("button", { name: "Connect" }));
+  await waitFor(() => expect(mocks.api.connectMosh).toHaveBeenCalled());
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(mocks.api.disconnect).toHaveBeenCalledWith("ssh-control");
+  await act(async () => finish?.({ sessionId: "late-mosh" }));
+  expect(mocks.api.disconnect).toHaveBeenCalledWith("late-mosh");
+  expect(screen.queryByText("Live SSH terminal")).toBeNull();
+});
+
+it("opens a fresh ET transport through verified SSH and preserves only reconnect options", async () => {
+  mocks.invoke.mockImplementation(async(command:string)=>command==='transport_capabilities'?{et:true,mosh:true}:false);
+  mocks.api.connect.mockResolvedValue({sessionId:'ssh-control'});
+  mocks.api.connectEt.mockResolvedValue({sessionId:'et-terminal'});
+  const user=await openConnection();
+  await user.selectOptions(screen.getByLabelText('Transport'),'et');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+  expect(mocks.api.connectEt).toHaveBeenCalledWith('ssh-control',{serverPath:'etterminal',port:2022},expect.any(Function));
+  expect(mocks.api.disconnect).toHaveBeenCalledWith('ssh-control');
+  expect(mocks.api.connectMosh).not.toHaveBeenCalled();
+  expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home',et:{serverPath:'etterminal',port:2022}}]));
 });

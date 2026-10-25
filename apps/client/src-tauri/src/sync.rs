@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, State};
-use tauri_plugin_lazysh_vault::VaultExt;
+use tauri_plugin_lazysh_vault::{CredentialOperation, VaultExt};
 use tokio::sync::Mutex;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -370,24 +370,47 @@ impl Remote {
     }
 }
 async fn load(app: &AppHandle) -> Result<Option<Enrollment>> {
+    load_for_operation(app, app.vault().operation()).await
+}
+async fn load_for_operation(
+    app: &AppHandle,
+    operation: CredentialOperation,
+) -> Result<Option<Enrollment>> {
+    operation.check()?;
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || match app.vault().get(ACCOUNT)? {
-        Some(value) => serde_json::from_str(&Zeroizing::new(value))
-            .map(Some)
-            .map_err(|_| "Invalid saved sync enrollment".into()),
-        None => Ok(None),
+    tauri::async_runtime::spawn_blocking(move || {
+        operation.check()?;
+        let result = match app.vault().get_protected_for(ACCOUNT, false, &operation)? {
+            Some(value) => serde_json::from_str(&Zeroizing::new(value))
+                .map(Some)
+                .map_err(|_| "Invalid saved sync enrollment".into()),
+            None => Ok(None),
+        };
+        operation.check()?;
+        result
     })
     .await
     .map_err(|_| "Cannot read sync enrollment")?
 }
 async fn save(app: &AppHandle, enrollment: &Enrollment) -> Result<()> {
+    save_for_operation(app, enrollment, app.vault().operation()).await
+}
+async fn save_for_operation(
+    app: &AppHandle,
+    enrollment: &Enrollment,
+    operation: CredentialOperation,
+) -> Result<()> {
+    operation.check()?;
     let value = Zeroizing::new(
         serde_json::to_string(enrollment).map_err(|_| "Cannot encode sync enrollment")?,
     );
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || app.vault().set(ACCOUNT, &value))
-        .await
-        .map_err(|_| "Cannot save sync enrollment")?
+    tauri::async_runtime::spawn_blocking(move || {
+        app.vault()
+            .set_protected_for(ACCOUNT, &value, false, &operation)
+    })
+    .await
+    .map_err(|_| "Cannot save sync enrollment")?
 }
 fn ensure_enabled(enrollment: &Enrollment, scope: Scope) -> Result<()> {
     if !enrollment.enabled(scope) {
@@ -424,6 +447,8 @@ fn validate_bundle(bundle: &Bundle, scope: Scope) -> Result<()> {
     if let Some(preferences) = &bundle.preferences {
         const ALLOWED: &[&str] = &[
             "version",
+            "appTheme",
+            "cjkFallback",
             "theme",
             "customTheme",
             "fontSize",
@@ -786,9 +811,13 @@ pub async fn sync_push(
     scope: Scope,
     preferences: Option<serde_json::Value>,
 ) -> Result<Uploaded> {
+    let credential_operation = app.vault().operation();
     let _guard = state.operation.lock().await;
-    let mut enrollment = load(&app).await?.ok_or("Configure encrypted sync first")?;
+    let mut enrollment = load_for_operation(&app, credential_operation.clone())
+        .await?
+        .ok_or("Configure encrypted sync first")?;
     ensure_enabled(&enrollment, scope)?;
+    credential_operation.check()?;
     let remote = Remote::new(&enrollment.config.endpoint)?;
     let current = remote.fetch(&enrollment, scope).await?;
     if current.as_ref().map(|(_, tag)| tag.as_str()) != enrollment.etag(scope) {
@@ -808,13 +837,19 @@ pub async fn sync_push(
                     .map_err(|_| "A host changed during sync")?;
                 if !same_identity(host, &current)
                     || host.fingerprint != current.fingerprint
+                    || host.biometric_unlock != current.biometric_unlock
                     || !current.credentials_stored
                 {
                     return Err("A host changed during sync; retry".into());
                 }
                 credentials.push(CredentialRecord {
                     host_id: host.id.clone(),
-                    credentials: crate::vault::load(app.clone(), current).await?,
+                    credentials: crate::vault::load_for_operation(
+                        app.clone(),
+                        current,
+                        credential_operation.clone(),
+                    )
+                    .await?,
                 });
             }
         }
@@ -867,12 +902,13 @@ pub async fn sync_push(
     })
     .await
     .map_err(|_| "Cannot encrypt sync snapshot")??;
+    credential_operation.check()?;
     let tag = remote
         .put(&enrollment, scope, ciphertext, enrollment.etag(scope))
         .await?;
     enrollment.set_etag(scope, tag);
     enrollment.set_revision(scope, previous_revision + 1);
-    save(&app, &enrollment).await?;
+    save_for_operation(&app, &enrollment, credential_operation).await?;
     Ok(Uploaded { uploaded: true })
 }
 #[tauri::command]
@@ -948,6 +984,7 @@ pub async fn sync_apply(
     hosts: State<'_, AppState>,
     token: String,
 ) -> Result<Applied> {
+    let credential_operation = app.vault().operation();
     let _guard = state.operation.lock().await;
     let pending = state
         .pending
@@ -959,7 +996,9 @@ pub async fn sync_apply(
         return Err("Sync preview expired. Fetch and review it again.".into());
     }
     let scope = pending.bundle.scope;
-    let mut enrollment = load(&app).await?.ok_or("Configure encrypted sync first")?;
+    let mut enrollment = load_for_operation(&app, credential_operation.clone())
+        .await?
+        .ok_or("Configure encrypted sync first")?;
     ensure_enabled(&enrollment, scope)?;
     let current = Remote::new(&enrollment.config.endpoint)?
         .fetch(&enrollment, scope)
@@ -968,6 +1007,7 @@ pub async fn sync_apply(
         return Err("Remote sync changed. Fetch and review it again.".into());
     }
     let hosts_added = pending.additions.len();
+    credential_operation.check()?;
     hosts
         .sync_add_hosts(&pending.local, pending.additions, &pending.enroll_pins)
         .map_err(|_| "Local hosts changed or a route conflicts. Fetch and review a new preview.")?;
@@ -988,15 +1028,27 @@ pub async fn sync_apply(
             .ok_or("Imported host identity is missing")?;
         if !same_identity(&host, expected)
             || host.fingerprint != expected.fingerprint
+            || host.biometric_unlock
+                != pending
+                    .local
+                    .iter()
+                    .find(|h| h.id == host.id)
+                    .is_some_and(|h| h.biometric_unlock)
             || host.credentials_stored
         {
             return Err("Local host identity or credentials changed during import. Existing data was preserved.".into());
         }
+        credential_operation.check()?;
         hosts
             .mark_credentials(&host.id, true)
             .map_err(|_| "Cannot prepare imported credential metadata")?;
-        if let Err(error) =
-            crate::vault::save_new(app.clone(), host.clone(), record.credentials).await
+        if let Err(error) = crate::vault::save_new(
+            app.clone(),
+            host.clone(),
+            record.credentials,
+            credential_operation.clone(),
+        )
+        .await
         {
             return Err(import_failure(&hosts, &host.id, error));
         }
@@ -1004,7 +1056,7 @@ pub async fn sync_apply(
     }
     enrollment.set_etag(scope, Some(pending.etag));
     enrollment.set_revision(scope, pending.bundle.revision);
-    save(&app, &enrollment).await?;
+    save_for_operation(&app, &enrollment, credential_operation).await?;
     Ok(Applied {
         hosts_added,
         credentials_added,

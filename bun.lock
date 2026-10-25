@@ -16,6 +16,8 @@
       "name": "@lazysh/client",
       "version": "0.1.0",
       "dependencies": {
+        "@lazysh/et-transport": "workspace:*",
+        "@lazysh/mosh-transport": "workspace:*",
         "@tauri-apps/api": "^2.8.0",
         "@tauri-apps/plugin-notification": "^2.7.0",
         "@xterm/addon-fit": "^0.10.0",
@@ -28,6 +30,7 @@
         "react-markdown": "^10.1.0",
       },
       "devDependencies": {
+        "@lazysh/apple-speech": "workspace:*",
         "@lazysh/credential-vault": "workspace:*",
         "@playwright/test": "^1.55.1",
         "@tauri-apps/cli": "^2.8.4",
@@ -43,8 +46,24 @@
         "vitest": "^5.0.5",
       },
     },
+    "apps/share-service": {
+      "name": "@lazysh/share-service",
+      "version": "0.1.0",
+    },
+    "packages/apple-speech": {
+      "name": "@lazysh/apple-speech",
+      "version": "0.1.0",
+    },
     "packages/credential-vault": {
       "name": "@lazysh/credential-vault",
+      "version": "0.1.0",
+    },
+    "packages/et-transport": {
+      "name": "@lazysh/et-transport",
+      "version": "0.1.0",
+    },
+    "packages/mosh-transport": {
+      "name": "@lazysh/mosh-transport",
       "version": "0.1.0",
     },
   },
@@ -175,9 +194,17 @@
 
     "@lazysh/agent": ["@lazysh/agent@workspace:apps/agent"],
 
+    "@lazysh/apple-speech": ["@lazysh/apple-speech@workspace:packages/apple-speech"],
+
     "@lazysh/client": ["@lazysh/client@workspace:apps/client"],
 
     "@lazysh/credential-vault": ["@lazysh/credential-vault@workspace:packages/credential-vault"],
+
+    "@lazysh/et-transport": ["@lazysh/et-transport@workspace:packages/et-transport"],
+
+    "@lazysh/mosh-transport": ["@lazysh/mosh-transport@workspace:packages/mosh-transport"],
+
+    "@lazysh/share-service": ["@lazysh/share-service@workspace:apps/share-service"],
 
     "@napi-rs/lzma-linux-x64-gnu": ["@napi-rs/lzma-linux-x64-gnu@1.5.1", "", { "os": "linux", "cpu": "x64" }, "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="],
 

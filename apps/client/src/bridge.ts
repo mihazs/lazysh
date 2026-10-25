@@ -32,6 +32,16 @@ export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
 
 export const native = isTauri();
 export const api = {
+  connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
+    const events = new Channel<SshEvent>();
+    events.onmessage = onEvent;
+    return invoke<{sessionId: string}>("connect_et", {sessionId, options, cols:100, rows:30, events});
+  },
+  connectMosh: (sessionId: string, options: {serverPath?: string; portMin?: number; portMax?: number}, onEvent: (event: SshEvent) => void) => {
+    const events = new Channel<SshEvent>();
+    events.onmessage = onEvent;
+    return invoke<{sessionId: string}>("connect_mosh", {sessionId, options, cols:100, rows:30, events});
+  },
   openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
   attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
     const events = new Channel<SshEvent>();
