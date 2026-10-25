@@ -8,11 +8,37 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    cell::Cell,
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+thread_local! {
+    static STORAGE_WAIT_STARTED: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+fn wait_for_storage(attempt: i32) -> bool {
+    STORAGE_WAIT_STARTED.with(|started| {
+        let now = Instant::now();
+        let start = if attempt == 0 {
+            now
+        } else {
+            started.get().unwrap_or(now)
+        };
+        started.set(Some(start));
+        let remaining = Duration::from_secs(3).saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return false;
+        }
+        // SQLite's default timeout backs off to 100 ms. Concurrent short hook
+        // writes can then wake in lockstep, leaving it idle between waves.
+        // Poll briefly under the same wall-clock budget, without weakening syncs.
+        std::thread::sleep(remaining.min(Duration::from_millis(5)));
+        true
+    })
+}
 
 pub const MAX_INPUT: usize = 256 * 1024;
 const RETENTION_SECONDS: f64 = 7.0 * 86400.0;
@@ -269,14 +295,14 @@ impl Store {
             }
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
-        let connection = Connection::open_with_flags(
+        let mut connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
-        connection.busy_timeout(Duration::from_secs(3))?;
+        connection.busy_handler(Some(wait_for_storage))?;
         connection.execute_batch(
             "PRAGMA journal_size_limit=1048576;
             CREATE TABLE IF NOT EXISTS sessions (

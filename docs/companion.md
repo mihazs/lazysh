@@ -29,6 +29,8 @@ States are `working`, `needs_attention`, and `done`. Agent plus session ID ident
 
 At most 100 session summaries are retained for seven days in `events.sqlite3` in the user's state directory (`~/.local/state/lazysh` on Linux; the local application data directory on macOS/Windows). A mode-0700 directory and mode-0600 database are used on Unix. `LAZYSH_STATE_DIR` overrides that directory for testing. No original event payloads are retained. This does not yet provide automatic background refresh or remote approval actions.
 
+Concurrent lifecycle writes use short lock polls within a three-second elapsed-time wait budget per SQLite locking episode. Sustained contention fails explicitly; storage failures include only the numeric SQLite extended error code, never its potentially sensitive message. Journal and synchronization settings retain SQLite's durable defaults.
+
 ## Read transcript records
 
 Select a transcript file on the host and request a page:
