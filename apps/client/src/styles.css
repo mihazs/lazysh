@@ -1629,3 +1629,28 @@ button svg {
 .preview-picker p { flex: 1; min-width: 160px; }
 .preview-selection { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
 .preview-selection code { white-space: pre-wrap; }
+
+.session-switcher {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+}
+.session-switcher[data-layout="cards"] {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+}
+.session-choice {
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.session-choice[aria-current="true"] { border-color: var(--accent); }
+.session-switcher[data-layout="list"] .session-choice-destination::before { content: " · "; }
+.session-switcher[data-layout="cards"] .session-choice { padding: 16px; }
+.session-switcher[data-layout="cards"] .session-choice-name { display: block; font-weight: 600; }
+.session-switcher[data-layout="cards"] .session-choice-destination { display: block; margin-top: 6px; color: var(--muted); }
+
+.session-switcher-trigger { min-width: 44px; min-height: 44px; background: transparent; color: var(--theme-text, #c6d0bd); font-weight: 500; text-align: left; overflow-wrap: anywhere; }
