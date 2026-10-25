@@ -27,7 +27,11 @@ Native listener `EventId`/unlisten behavior remains available. Rapid events
 may coalesce to the latest native snapshot; lazysh intentionally has one pending
 theme review, not a replay queue. Rust event caches retain at most eight URLs of
 16 KiB each. Android cold-start string retrieval and desktop CLI ingress also
-bound raw strings before URL parsing; Apple callbacks already contain typed URLs.
+bound raw strings before URL parsing; Android also checks both cold and warm
+intent inputs in Kotlin before `toUri()`, `currentUrl` retention or channel
+serialization. A quick UTF-16 character bound keeps the subsequent UTF-8 byte
+check allocation bounded to at most 48 KiB; accepted input is at most 16 KiB.
+Apple callbacks already contain typed URLs.
 JavaScript deep-link IPC permissions are not granted by the app.
 
 An additional `..Default::default()` initializes two newly added `rust-ini`
@@ -44,3 +48,9 @@ stale-access read/serialization/ack rejection.
 
 Review this patch on every upstream plugin upgrade. Do not grant its frontend
 APIs or restore URL event payloads without preserving lazysh's lock boundary.
+
+The Android JUnit `DeepLinkInputTest` covers ASCII, multibyte and surrogate-pair
+byte boundaries in the shared pre-parse ingress guard. `DeepLinkInput.kt` and
+`DeepLinkInputTest.kt` are new lazysh-authored files under GPL-3.0-or-later;
+existing upstream files retain their original licenses and notices. The CLI-specific mock
+regression is gated to Linux and Windows, where that ingress API is active.

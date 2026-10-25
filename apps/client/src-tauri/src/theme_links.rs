@@ -150,6 +150,7 @@ pub fn theme_link_ack(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn native_plugin_routes_metadata_without_replaying_or_permanently_deduplicating_links() {
         use std::sync::{

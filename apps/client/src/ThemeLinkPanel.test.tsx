@@ -7,6 +7,7 @@ import ThemeLinkPanel from './ThemeLinkPanel';
 import ThemeImportPanel from './ThemeImportPanel';
 import {acknowledgeAccessReady,accessSnapshot,applyAccessStatus} from './access';
 import {defaults,getPreferences,savePreferences} from './preferences';
+import * as preferences from './preferences';
 import {exportTheme} from './themeImport';
 vi.mock('@tauri-apps/api/core',()=>({invoke:vi.fn()}));
 vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn()}));
@@ -21,7 +22,7 @@ function offer(name='Linked 日光',id=receipt) {
 }
 beforeEach(()=>{
   vi.clearAllMocks();savePreferences({...defaults});ready();offer();
-  vi.mocked(listen).mockImplementation(async(_name,handler)=>{changed=()=>handler({payload:null} as never);return()=>{};});
+  vi.mocked(listen).mockImplementation(async(_name,handler)=>{changed=()=>{handler({payload:null} as never);};return()=>{};});
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='theme_link_status')return !!pending;
     if(command==='theme_link_read')return pending;
@@ -80,12 +81,14 @@ it('does not fetch before ready, and the original mount stays revoked across loc
   fireEvent.click(await screen.findByRole('button',{name:'Review linked theme'}));
   await screen.findByRole('heading',{name:'Linked 日光'});
   let finish:()=>void=()=>{};
-  vi.mocked(invoke).mockImplementation(async(command)=>command==='theme_link_ack'?new Promise(resolve=>{finish=()=>resolve(null);}):true);
+  vi.mocked(invoke).mockImplementation(async(command)=>command==='theme_link_ack'?new Promise(resolve=>{pending=null;finish=()=>resolve(null);}):true);
   fireEvent.click(screen.getByRole('button',{name:'Apply linked theme'}));
+  expect(getPreferences().theme).toBe('custom');
+  expect(pending).toBeNull();
   act(()=>applyAccessStatus({initialized:true,supported:true,reason:'locked',enabled:true,locked:true,generation:String(++generation)}));
   act(()=>ready());
   await act(async()=>finish());
-  expect(getPreferences().theme).toBe('forest');
+  expect(getPreferences().theme).toBe('custom');
   const before=vi.mocked(invoke).mock.calls.length;
   expect((screen.getByRole('button',{name:'Apply linked theme'}) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('button',{name:'Discard theme link'}));
@@ -116,4 +119,49 @@ it.each([{label:'unsupported',json:'{"v":1,"colors":{"background":"url(evil)"}}'
   expect(getPreferences().theme).toBe('forest');
   fireEvent.click(screen.getByRole('button',{name:'Discard theme link'}));
   await waitFor(()=>expect(pending).toBeNull());
+});
+
+it('reports acknowledgement failure separately after saving the reviewed theme',async()=>{
+  render(<ThemeLinkPanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Review linked theme'}));
+  await screen.findByRole('heading',{name:'Linked 日光'});
+  vi.mocked(invoke).mockRejectedValueOnce(new Error('Synthetic ack failure'));
+  fireEvent.click(screen.getByRole('button',{name:'Apply linked theme'}));
+  expect((await screen.findByRole('alert')).textContent).toContain('already applied');
+  expect(screen.getByRole('status').textContent).toContain('applied');
+  expect(getPreferences().theme).toBe('custom');expect(pending?.receipt).toBe(receipt);
+});
+it('does not acknowledge a theme whose preference persistence fails',async()=>{
+  render(<ThemeLinkPanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Review linked theme'}));
+  await screen.findByRole('heading',{name:'Linked 日光'});
+  const save=vi.spyOn(preferences,'savePreferences').mockImplementationOnce(()=>{throw new Error('Synthetic storage failure');});
+  try {
+    fireEvent.click(screen.getByRole('button',{name:'Apply linked theme'}));
+    await screen.findByRole('alert');
+    expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='theme_link_ack')).toBe(false);
+    expect(pending?.receipt).toBe(receipt);expect(getPreferences().theme).toBe('forest');
+  } finally {save.mockRestore();}
+});
+it('ignores an older post-ack status reply after a newer replacement event refresh',async()=>{
+  render(<ThemeLinkPanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Review linked theme'}));
+  await screen.findByRole('heading',{name:'Linked 日光'});
+  let finish:()=>void=()=>{},held=false;
+  vi.mocked(invoke).mockImplementation(async(command)=>{
+    if(command==='theme_link_ack'){pending=null;return null;}
+    if(command==='theme_link_status' && !held){held=true;return new Promise(resolve=>{finish=()=>resolve(false);});}
+    if(command==='theme_link_status')return !!pending;
+    if(command==='theme_link_read')return pending;
+    throw new Error('unexpected command');
+  });
+  fireEvent.click(screen.getByRole('button',{name:'Discard theme link'}));
+  await waitFor(()=>expect(held).toBe(true));
+  offer('New pending','22222222-2222-4222-8222-222222222222');
+  await act(async()=>changed());
+  await screen.findByRole('button',{name:'Review linked theme'});
+  await act(async()=>finish());
+  expect(screen.getByRole('button',{name:'Review linked theme'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Review linked theme'}));
+  await screen.findByRole('heading',{name:'New pending'});
 });

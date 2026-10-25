@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { bindProtectedInvoke, captureAccess, isAccessReady, subscribeAccess } from './access';
@@ -19,22 +19,28 @@ export default function ThemeLinkPanel({target}: {target?: HTMLElement|null}) {
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const [pending,setPending]=useState(false),[candidate,setCandidate]=useState<Candidate>(),[preview,setPreview]=useState<ImportedTheme>();
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
-  const mounted=useRef(true),running=useRef(false);
+  const mounted=useRef(true),running=useRef(false),statusRevision=useRef(0);
+  // Every status path shares this sequence: a late acknowledgement refresh must
+  // never overwrite a newer OS-event refresh for a replacement candidate.
+  const refresh=useCallback(async()=>{
+    if(!mounted.current || !lease.current() || !isAccessReady())return;
+    const request=++statusRevision.current;
+    try {
+      const value=await invoke<unknown>('theme_link_status');
+      if(mounted.current && request===statusRevision.current && lease.current() && typeof value==='boolean')setPending(value);
+    } catch {/* Metadata failures do not change a reviewed or applied theme. */}
+  },[lease,invoke]);
   useEffect(()=>{
-    mounted.current=true;let disposed=false,revision=0,stopEvent:(()=>void)|undefined;
-    const refresh=()=>{
-      if(disposed || !lease.current() || !isAccessReady())return;
-      const request=++revision;
-      void invoke<unknown>('theme_link_status').then(value=>{if(!disposed && request===revision && lease.current() && typeof value==='boolean')setPending(value);}).catch(()=>{});
-    };
+    mounted.current=true;let disposed=false,stopEvent:(()=>void)|undefined;
     const stopAccess=subscribeAccess(refresh);
     void listen('lazysh-theme-link',refresh).then(stop=>{if(disposed)stop();else{stopEvent=stop;refresh();}}).catch(()=>{});
     refresh();
-    return()=>{disposed=true;mounted.current=false;stopAccess();stopEvent?.();};
-  },[lease,invoke]);
+    return()=>{disposed=true;mounted.current=false;++statusRevision.current;stopAccess();stopEvent?.();};
+  },[refresh]);
   async function action(kind:'review'|'apply'|'cancel') {
     if(!mounted.current || !lease.current() || running.current)return;
     running.current=true;setBusy(true);setError('');setNotice('');
+    let applied=false;
     try {
       if(kind==='review') {
         const value=await invoke<unknown>('theme_link_read');
@@ -44,18 +50,19 @@ export default function ThemeLinkPanel({target}: {target?: HTMLElement|null}) {
         try {setPreview(parseThemeImport(next.code,{name:'Linked theme',mode:'dark'}));}
         catch {setError('This link does not contain a supported theme. Discard it or keep your current theme.');}
       } else if(candidate) {
+        if(kind==='apply' && preview) {
+          // Persistence is synchronous under this mount's original current lease.
+          // A committed acknowledgement may outlive its revoked IPC response.
+          lease.assert();
+          savePreferences({...getPreferences(),customTheme:preview.colors,customThemeInfo:{name:preview.name,mode:preview.mode},theme:'custom',appTheme:'custom'});
+          applied=true;setNotice('Linked theme applied to app and terminal.');
+        }
         await invoke('theme_link_ack',{receipt:candidate.receipt});
         lease.assert();if(!mounted.current)return;
-        if(kind==='apply' && preview) {
-          savePreferences({...getPreferences(),customTheme:preview.colors,customThemeInfo:{name:preview.name,mode:preview.mode},theme:'custom',appTheme:'custom'});
-          setNotice('Linked theme applied to app and terminal.');
-        }
         setCandidate(undefined);setPreview(undefined);
-        // Refresh failure must not misreport an already applied theme as unchanged.
-        const value=await invoke<unknown>('theme_link_status').catch(()=>undefined);
-        if(mounted.current && lease.current() && typeof value==='boolean')setPending(value);
+        await refresh();
       }
-    } catch {if(mounted.current && lease.current())setError('Theme link could not be updated. Your current theme was kept. Retry when ready.');}
+    } catch {if(mounted.current && lease.current())setError(applied?'The linked theme is already applied, but its pending link could not be acknowledged. Retry or discard the link when ready.':'Theme link could not be updated. Your current theme was kept. Retry when ready.');}
     finally {if(mounted.current && lease.current()){running.current=false;setBusy(false);}}
   }
   if(!pending && !candidate && !notice)return null;

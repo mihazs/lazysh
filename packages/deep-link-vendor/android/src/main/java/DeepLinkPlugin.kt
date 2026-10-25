@@ -102,6 +102,10 @@ class DeepLinkPlugin(private val activity: Activity): Plugin(activity) {
     }
 
     private fun isDeepLink(url: String): Boolean {
+        // Both load() and onNewIntent() enter here before parsing, retaining or
+        // serializing the raw URL into the native channel.
+        if (!isBoundedDeepLinkInput(url)) return false
+
         val config = this.config ?: return false
 
         if (config.mobile.isEmpty()) {
