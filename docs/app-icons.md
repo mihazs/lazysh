@@ -181,3 +181,20 @@ not evidence that icon IPC or the valid UIKit roundtrip passed. Raw Mosh also
 failed its separate empty-output standalone `--list` 45-second startup deadline;
 no target stack established its cause. [Artifact 12610047306](https://github.com/mihazs/lazysh/actions/runs/40220503048/artifacts/12610047306)
 retains the hosted failure. Fresh integrated native execution remains required.
+
+[Run 40223058310](https://github.com/mihazs/lazysh/actions/runs/40223058310),
+head `5a2b058`, passed all four named native icon controller tests, including
+`testPendingMutationDoesNotQueryLaunchServicesBeforeCompletion`, plus raw Mosh and
+protected hosted resource/status/invalid-input acceptance. Retained stages confirm initialized
+access prepared and real native status `available=true`, `current=default`.
+UI still failed before any setter: the combined Current icon label now existed,
+but the selector query expected Button/PopUpButton. The retained WebKit AX tree
+instead exposes `Other`, label `Home Screen icon`, value `Default`, at y=-115;
+Apply is also offscreen at y=-72. [Artifact 12611121995](https://github.com/mihazs/lazysh/actions/runs/40223058310/artifacts/12611121995)
+retains these exact stages. The UI test now queries the observed selector type
+and uses at most four real swipes to reveal both selector and Apply, requiring
+actual hitability/enabled state before touch. It stops on failed assertions.
+Native wheel/menu handling, actual current readback, relaunch and restoration
+remain unchanged. No valid UIKit setter or roundtrip success is claimed yet.
+Latest main's Grok record status and Mosh recovery tests are merged normally;
+new exact-head native execution remains required.

@@ -4,6 +4,7 @@ import XCTest
 final class AppIconUITests: XCTestCase {
   @MainActor
   func testActualHomeScreenIconRoundtripAndRelaunch() throws {
+    continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "app.lazysh.client")
     app.launchEnvironment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] = "1"
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -32,22 +33,22 @@ final class AppIconUITests: XCTestCase {
     defer {
       // Attempt the original icon even after a failed roundtrip; never report an unverified cleanup.
       if changed {
-        do { try select(originalChoice, in: app); apply(in: app); _ = awaitIcon(originalChoice, app: app, springboard: springboard) }
+        do { try select(originalChoice, in: app); try apply(in: app); _ = awaitIcon(originalChoice, app: app, springboard: springboard) }
         catch { XCTFail("Could not restore the original icon through the real UI: \(error)") }
       }
     }
     let applyButton = app.webViews.buttons["Apply app icon"].firstMatch
     XCTAssertTrue(applyButton.waitForExistence(timeout: 10))
     if originalChoice == "Amber" {
-      try select("Default", in: app); apply(in: app); changed = true
+      try select("Default", in: app); try apply(in: app); changed = true
       guard awaitIcon("Default", app: app, springboard: springboard) else { return }
     }
-    try select("Amber", in: app); apply(in: app); changed = true
+    try select("Amber", in: app); try apply(in: app); changed = true
     guard awaitIcon("Amber", app: app, springboard: springboard) else { return }
     app.terminate(); app.launch()
     try openPreferences(app)
     guard awaitIcon("Amber", app: app, springboard: springboard) else { return }
-    try select("Default", in: app); apply(in: app)
+    try select("Default", in: app); try apply(in: app)
     guard awaitIcon("Default", app: app, springboard: springboard) else { return }
     if originalChoice == "Default" { changed = false }
   }
@@ -62,12 +63,11 @@ final class AppIconUITests: XCTestCase {
   }
   @MainActor
   private func select(_ value: String, in app: XCUIApplication) throws {
-    // WebKit exposes native select menus as buttons or pop-up buttons depending on iOS.
-    let popup = app.webViews.popUpButtons["Home Screen icon"].firstMatch
-    let button = app.webViews.buttons["Home Screen icon"].firstMatch
-    let control = popup.exists ? popup : button
-    XCTAssertTrue(control.waitForExistence(timeout: 10), "The Home Screen icon selector must be accessible")
+    // Retained native WebKit AX exposes this select as Other, with its label/value.
+    let control = app.webViews.otherElements["Home Screen icon"].firstMatch
+    try reveal(control, in: app)
     XCTAssertTrue(control.isEnabled, "UIKit must report alternate icon support")
+    guard control.isEnabled else { throw IconUIFailure.unavailable }
     control.tap()
     let wheel = app.pickerWheels.firstMatch
     if wheel.waitForExistence(timeout: 2) {
@@ -81,10 +81,26 @@ final class AppIconUITests: XCTestCase {
     }
   }
   @MainActor
-  private func apply(in app: XCUIApplication) {
+  private func apply(in app: XCUIApplication) throws {
     let button = app.webViews.buttons["Apply app icon"].firstMatch
+    try reveal(button, in: app)
     XCTAssertTrue(button.isEnabled, "Applying a different bundled icon must be available")
+    guard button.isEnabled else { throw IconUIFailure.unavailable }
     button.tap()
+  }
+  private enum IconUIFailure: Error { case unavailable }
+  @MainActor
+  private func reveal(_ element: XCUIElement, in app: XCUIApplication) throws {
+    let exists = element.waitForExistence(timeout: 10)
+    XCTAssertTrue(exists, "The actual app icon control must be accessible")
+    guard exists else { throw IconUIFailure.unavailable }
+    for _ in 0..<4 {
+      if element.isHittable { break }
+      if element.frame.midY < app.frame.midY { app.webViews.firstMatch.swipeDown() }
+      else { app.webViews.firstMatch.swipeUp() }
+    }
+    XCTAssertTrue(element.isHittable, "The actual app icon control must accept a real touch")
+    guard element.isHittable else { throw IconUIFailure.unavailable }
   }
   @MainActor
   private func awaitIcon(_ value: String, app: XCUIApplication, springboard: XCUIApplication) -> Bool {
