@@ -4170,8 +4170,12 @@ mod tests {
                 Channel::new(|_| Ok(())),
                 "fixture",
                 check_size,
-                move |_access, _input, mut cancellation, _initial, _output, ready| {
+                move |_access, input, mut cancellation, _initial, output, ready| {
                     tauri::async_runtime::spawn(async move {
+                        // Keep producer ownership until cancellation. Dropping output
+                        // here would correctly end the session before attempt.abort().
+                        let _input = input;
+                        let _output = output;
                         let _ready = ready;
                         let _ = began.send(());
                         cancellation.changed().await.unwrap();
@@ -4184,8 +4188,16 @@ mod tests {
             .await
         });
         started.await.unwrap();
+        assert!(
+            !attempt.is_finished(),
+            "native fixture ended before cancellation"
+        );
         attempt.abort();
-        assert!(attempt.await.err().unwrap().is_cancelled());
+        match attempt.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(Err(error)) => panic!("native fixture returned before abort: {}", error.kind),
+            Ok(Ok(_)) => panic!("native fixture unexpectedly published a connection"),
+        }
         timeout(Duration::from_secs(2), stopped)
             .await
             .unwrap()
