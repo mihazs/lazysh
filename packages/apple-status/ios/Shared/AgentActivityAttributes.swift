@@ -1,4 +1,5 @@
 import ActivityKit
+import Foundation
 
 @available(iOS 16.2, *)
 struct AgentActivityAttributes: ActivityAttributes {

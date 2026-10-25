@@ -20,9 +20,12 @@ pub fn prepare() -> Vec<PathBuf> {
             "Android source integrity failed: {path}"
         );
     }
-    let ndk = env::var_os("ANDROID_NDK_HOME")
-        .or_else(|| env::var_os("NDK_HOME"))
+    // Tauri selects NDK_HOME. CI images may also export an older default
+    // ANDROID_NDK_HOME; never combine its CMake/sysroot with Tauri's compiler.
+    let ndk = env::var_os("NDK_HOME")
+        .or_else(|| env::var_os("ANDROID_NDK_HOME"))
         .expect("ANDROID_NDK_HOME or NDK_HOME must select the Android NDK");
+    let ndk = PathBuf::from(ndk);
     for name in ["ANDROID_NDK_HOME", "NDK_HOME", "ANDROID_API_LEVEL"] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -42,7 +45,7 @@ pub fn prepare() -> Vec<PathBuf> {
     let installed = cmake::Config::new("native/android")
         .define(
             "CMAKE_TOOLCHAIN_FILE",
-            PathBuf::from(ndk).join("build/cmake/android.toolchain.cmake"),
+            ndk.join("build/cmake/android.toolchain.cmake"),
         )
         .define("ANDROID_ABI", abi)
         .define("ANDROID_PLATFORM", format!("android-{api}"))
@@ -70,6 +73,19 @@ pub fn prepare() -> Vec<PathBuf> {
             .unwrap();
         println!("cargo:rustc-link-lib=static={name}");
     }
+    // Tauri provides TARGET_AR but no TARGET_RANLIB. cc's inferred GNU-prefixed
+    // ranlib is absent from modern NDKs. Pin it to this NDK's LLVM binutils.
+    let ranlib = fs::read_dir(ndk.join("toolchains/llvm/prebuilt"))
+        .unwrap()
+        .map(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .join(format!("bin/llvm-ranlib{}", env::consts::EXE_SUFFIX))
+        })
+        .find(|path| path.is_file())
+        .expect("selected NDK must contain llvm-ranlib");
+    env::set_var("TARGET_RANLIB", ranlib);
     let crypto = openssl_src::Build::new().build();
     println!(
         "cargo:rustc-link-search=native={}",

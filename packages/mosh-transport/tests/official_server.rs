@@ -87,8 +87,8 @@ fn android_artifacts() -> (String, String, Option<String>) {
         );
     }
     let ndk = std::path::PathBuf::from(
-        std::env::var_os("ANDROID_NDK_HOME")
-            .or_else(|| std::env::var_os("NDK_HOME"))
+        std::env::var_os("NDK_HOME")
+            .or_else(|| std::env::var_os("ANDROID_NDK_HOME"))
             .expect("Android NDK path"),
     );
     let host = if cfg!(target_os = "macos") {
@@ -125,6 +125,7 @@ fn android_artifacts() -> (String, String, Option<String>) {
         .arg(workspace.join("target/android-mosh-tests"))
         .env("CARGO_BUILD_JOBS", "4")
         .env("ANDROID_NDK_HOME", &ndk)
+        .env("NDK_HOME", &ndk)
         .env("ANDROID_API_LEVEL", "24")
         .env(
             "CC_x86_64_linux_android",
