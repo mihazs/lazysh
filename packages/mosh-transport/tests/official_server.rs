@@ -79,6 +79,47 @@ fn redact_tail(mut text: String, keys: &[String]) -> String {
     text.split_off(start)
 }
 
+fn redact_head(mut text: String, keys: &[String], limit: usize) -> String {
+    for key in keys.iter().filter(|key| !key.is_empty()) {
+        text = text.replace(key, "<redacted>");
+    }
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn sample_report(
+    pid: u32,
+    description: &str,
+    sample: &std::process::Output,
+    timed_out: bool,
+    keys: &[String],
+) -> String {
+    // Keep each call graph ahead of Binary Images, rather than retaining only
+    // the last process's image list. Two 6KiB samples + 2KiB inventory < 16KiB.
+    let stderr = redact_head(
+        String::from_utf8_lossy(&sample.stderr).into_owned(),
+        keys,
+        512,
+    );
+    let mut report = redact_head(
+        format!("sample pid={pid} deadline_exceeded={timed_out} status={}\n{description}\nstderr: {stderr}\nstdout:\n", sample.status),
+        keys, 1024,
+    );
+    let body = redact_head(
+        String::from_utf8_lossy(&sample.stdout).into_owned(),
+        keys,
+        6144 - report.len() - 1,
+    );
+    report.push_str(&body);
+    report.push('\n');
+    report
+}
+
 // ps supplies executable names, never argv or environment. Retain only the
 // owned leader and its direct native child in the leader's process group.
 fn owned_processes(
@@ -107,27 +148,56 @@ fn owned_processes(
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn simulator_timeout_diagnostics(leader: u32, executable: &std::path::Path) -> String {
+fn simulator_timeout_diagnostics(
+    leader: u32,
+    executable: &std::path::Path,
+    keys: &[String],
+) -> String {
+    let mut inventory = Command::new("/bin/ps");
+    inventory.args(["-axo", "pid=,ppid=,pgid=,comm="]);
+    simulator_diagnostics_with_inventory(leader, executable, inventory, keys)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn simulator_diagnostics_with_inventory(
+    leader: u32,
+    executable: &std::path::Path,
+    inventory: Command,
+    keys: &[String],
+) -> String {
     use std::time::{Duration, Instant};
+    if leader == 0 || leader > libc::pid_t::MAX as u32 {
+        return "simulator diagnostics: invalid owned process identifier".into();
+    }
     // Inventory <=1s, then at most two 1-second samples, each with a <=2s
     // command budget. A single absolute 5s limit bounds the entire observation.
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut inventory = Command::new("/bin/ps");
-    inventory.args(["-axo", "pid=,ppid=,pgid=,comm="]);
-    let Ok((inventory, timed_out, _)) =
-        bounded_output(inventory, Duration::from_secs(1), |_| String::new())
-    else {
-        return "simulator diagnostics: owned-process inventory unavailable".into();
-    };
-    if timed_out || !inventory.status.success() {
-        return "simulator diagnostics: owned-process inventory unavailable".into();
-    }
-    let processes = owned_processes(
-        &String::from_utf8_lossy(&inventory.stdout),
-        leader,
-        executable,
-    );
     let mut diagnostics = String::from("simulator diagnostics (argv/environment omitted):\n");
+    let mut processes = match bounded_output(inventory, Duration::from_secs(1), |_| String::new()) {
+        Ok((inventory, false, _)) if inventory.status.success() => owned_processes(
+            &String::from_utf8_lossy(&inventory.stdout),
+            leader,
+            executable,
+        ),
+        Ok((inventory, timed_out, _)) => {
+            diagnostics.push_str(&format!(
+                "inventory deadline_exceeded={timed_out} status={} stderr={}\n",
+                inventory.status,
+                String::from_utf8_lossy(&inventory.stderr),
+            ));
+            Vec::new()
+        }
+        Err(error) => {
+            diagnostics.push_str(&format!("inventory unavailable: {error}\n"));
+            Vec::new()
+        }
+    };
+    diagnostics = redact_head(diagnostics, keys, 2048);
+    // The leader remains our unreaped child even if ps fails or times out.
+    // Inventory failure must not prevent sampling that already-known process.
+    if !processes.iter().any(|(pid, _)| *pid == leader) {
+        processes.insert(0, (leader, format!("pid={leader} executable=owned-simctl")));
+    }
     for (pid, description) in processes.into_iter().take(2) {
         // Recheck group membership immediately before sampling. The leader is
         // our unreaped child; never attach to another group or a shared daemon.
@@ -138,7 +208,6 @@ fn simulator_timeout_diagnostics(leader: u32, executable: &std::path::Path) -> S
         if remaining.is_zero() {
             break;
         }
-        diagnostics.push_str(&format!("{description}\n"));
         let mut sample = Command::new("/usr/bin/sample");
         sample.args([&pid.to_string(), "1", "10", "-file", "/dev/stdout"]);
         let Ok((sample, timed_out, _)) =
@@ -146,15 +215,14 @@ fn simulator_timeout_diagnostics(leader: u32, executable: &std::path::Path) -> S
                 String::new()
             })
         else {
-            diagnostics.push_str("sample tool unavailable\n");
+            diagnostics.push_str(&redact_head(
+                format!("sample pid={pid} tool unavailable\n{description}\n"),
+                keys,
+                6144,
+            ));
             continue;
         };
-        diagnostics.push_str(&format!(
-            "sample deadline_exceeded={timed_out} status={}\n{}\n{}\n",
-            sample.status,
-            String::from_utf8_lossy(&sample.stdout),
-            String::from_utf8_lossy(&sample.stderr)
-        ));
+        diagnostics.push_str(&sample_report(pid, &description, &sample, timed_out, keys));
     }
     diagnostics
 }
@@ -200,14 +268,14 @@ fn command_output(command: Command, timeout: std::time::Duration) -> std::proces
     let (output, timed_out, diagnostics) = bounded_output(command, timeout, |_pid| {
         #[cfg(target_os = "macos")]
         if let Some(executable) = native_executable {
-            return simulator_timeout_diagnostics(_pid, &executable);
+            return simulator_timeout_diagnostics(_pid, &executable, &keys);
         }
         String::new()
     })
     .expect("native fixture command");
     let stdout = redact_tail(String::from_utf8_lossy(&output.stdout).into_owned(), &keys);
     let stderr = redact_tail(String::from_utf8_lossy(&output.stderr).into_owned(), &keys);
-    let diagnostics = redact_tail(diagnostics, &keys);
+    let diagnostics = redact_head(diagnostics, &keys, 16_384);
     assert!(
         !timed_out,
         "native fixture command exceeded its deadline ({timeout:?}): {description}. stdout: {stdout}\nstderr: {stderr}\n{diagnostics}",
@@ -552,9 +620,38 @@ fn diagnostic_redaction_precedes_bounded_unicode_tail() {
 }
 
 #[test]
+fn each_sample_keeps_its_calltree_and_status_before_long_binary_image_tails() {
+    use std::os::unix::process::ExitStatusExt;
+    let secret = "ephemeral-fixture-key".to_owned();
+    let keys = std::slice::from_ref(&secret);
+    let mut diagnostics = "inventory header\n".repeat(100);
+    for pid in [101, 102] {
+        let sample = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: format!(
+                "Call graph: OWNED_STACK_{pid} key={secret}\nBinary Images:\n{}",
+                "🌐 image-address\n".repeat(10_000)
+            )
+            .into_bytes(),
+            stderr: format!("sample key={secret}").into_bytes(),
+        };
+        let report = sample_report(pid, "owned executable", &sample, false, keys);
+        assert!(report.len() <= 6144);
+        diagnostics.push_str(&report);
+    }
+    let diagnostics = redact_head(diagnostics, keys, 16_384);
+    assert!(diagnostics.len() <= 16_384);
+    for pid in [101, 102] {
+        assert!(diagnostics.contains(&format!("sample pid={pid} deadline_exceeded=false status=")));
+        assert!(diagnostics.contains(&format!("OWNED_STACK_{pid} key=<redacted>")));
+    }
+    assert!(!diagnostics.contains(&secret));
+}
+
+#[test]
 fn simulator_diagnostics_never_sample_an_unowned_process_group() {
     let observed =
-        simulator_timeout_diagnostics(u32::MAX, std::path::Path::new("ios_peer-fixture"));
+        simulator_timeout_diagnostics(u32::MAX, std::path::Path::new("ios_peer-fixture"), &[]);
     assert!(!observed.contains("pid="));
     assert!(!observed.contains("sample deadline_exceeded="));
 }
@@ -566,13 +663,39 @@ fn simulator_diagnostics_observe_the_live_fixture_and_keep_its_deadline() {
     child.arg("10");
     let (_, timed_out, diagnostics) =
         bounded_output(child, std::time::Duration::from_millis(50), |pid| {
-            simulator_timeout_diagnostics(pid, std::path::Path::new("ios_peer-no-child"))
+            simulator_timeout_diagnostics(pid, std::path::Path::new("ios_peer-no-child"), &[])
         })
         .unwrap();
     assert!(timed_out);
     assert!(diagnostics.contains("executable="), "{diagnostics}");
     assert_eq!(diagnostics.matches("executable=").count(), 1);
     assert!(started.elapsed() < std::time::Duration::from_secs(6));
+}
+
+#[test]
+fn inventory_failure_still_observes_the_owned_leader_and_tears_down() {
+    let mut child = Command::new("sleep");
+    child.arg("10");
+    let (_, timed_out, diagnostics) =
+        bounded_output(child, std::time::Duration::from_millis(50), |pid| {
+            simulator_diagnostics_with_inventory(
+                pid,
+                std::path::Path::new("ios_peer-no-child"),
+                Command::new("/nonexistent/lazysh-fixture-inventory"),
+                &[],
+            )
+        })
+        .unwrap();
+    assert!(timed_out);
+    assert!(
+        diagnostics.contains("inventory unavailable:"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("executable=owned-simctl"),
+        "{diagnostics}"
+    );
+    assert_eq!(diagnostics.matches("executable=").count(), 1);
 }
 
 struct DeviceDirectory(String);

@@ -48,9 +48,16 @@ terminating its owned process group. It records executable names/PIDs without
 argv or environment, and attempts one-second stack samples of its own `simctl`
 and an identifiable direct native child in that same process group. Shared
 CoreSimulator daemons and unrelated processes are excluded. Missing diagnostic
-tools do not prevent teardown; known fixture keys are redacted before retained
-diagnostic tails are bounded to 16 KiB. This instrumentation collects evidence;
+tools do not prevent teardown; known fixture keys are redacted before truncation.
+Diagnostic output retains up to 2 KiB of inventory status and the first 6 KiB
+of each process sample, including PID/status and its call graph before long
+Binary Images lists, within the overall 16 KiB limit. Compiler stdout/stderr
+continue to retain their last 16 KiB. This instrumentation collects evidence;
 it does not retry or establish the startup cause.
+CI run 40177092696 stalled before `--list` output and its inventory command
+was unavailable, so no stack was captured. The fixture now reports the inventory
+failure status and still samples its known owned leader independently of that
+inventory; child sampling continues to require positive ownership evidence.
 The peer communicates only with
 ephemeral official Mosh 1.4.0 host servers on shared loopback, exercising two
 parallel clients, UTF-8, remote PTY resize, and acknowledged shutdown. The host

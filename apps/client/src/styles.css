@@ -1193,6 +1193,11 @@ button svg {
   }
 }
 @media (max-width: 600px) {
+  .dialog input,
+  .dialog select,
+  .dialog textarea {
+    font-size: max(16px, 1em);
+  }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;

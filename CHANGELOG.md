@@ -41,6 +41,8 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 - Mobile workspace navigation reserves the full top safe area, keeping the
   Hosts menu below the iOS status bar and its controls inside the toolbar.
+- Phone dialog inputs use readable text sizing to avoid WebKit focus zoom
+  cropping the host form, while preserving user-controlled pinch zoom.
 - Opening another companion event store no longer closes a separate database
   file descriptor that could release an existing SQLite writer's POSIX lock.
 - Concurrent companion event writes preserve durable storage within bounded

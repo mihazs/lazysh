@@ -78,8 +78,21 @@ final class WorkspaceUITests: XCTestCase {
     @MainActor
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
         XCTAssertTrue(element.waitForExistence(timeout: 10), "Form must expose Save host")
-        let done = app.keyboards.buttons["Done"].firstMatch
-        if done.exists && done.isHittable { done.tap() }
+        if app.keyboards.firstMatch.exists {
+            // WKWebView's form accessory is a toolbar above the keyboard,
+            // rather than a child of XCUIElementTypeKeyboard.
+            let toolbarDone = app.toolbars.buttons["Done"].firstMatch
+            let keyboardDone = app.keyboards.buttons["Done"].firstMatch
+            let done = toolbarDone.exists ? toolbarDone : keyboardDone
+            XCTAssertTrue(done.waitForExistence(timeout: 10), "The native keyboard must offer Done")
+            XCTAssertTrue(done.isHittable, "Keyboard Done must accept an actual touch")
+            done.tap()
+            let dismissed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 10), .completed,
+                           "Dismiss the native keyboard before scrolling the host form")
+        }
         // Scroll the actual form using touch; never force a hidden button or DOM value.
         for _ in 0..<4 {
             if element.isHittable { break }

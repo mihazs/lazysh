@@ -8,12 +8,12 @@ import XCTest
 final class MoshAppIntegrationTests: XCTestCase {
   private func webView(in view: UIView) -> WKWebView? {
     if let webView = view as? WKWebView { return webView }
-    return view.subviews.lazy.compactMap { webView(in: $0) }.first
+    return view.subviews.lazy.compactMap { self.webView(in: $0) }.first
   }
 
   private func appWebView() -> WKWebView? {
     UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-      .flatMap(\.windows).lazy.compactMap { webView(in: $0) }.first
+      .flatMap(\.windows).lazy.compactMap { self.webView(in: $0) }.first
   }
 
   func testActualNativeIPCOffersMosh() throws {
