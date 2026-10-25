@@ -28,6 +28,8 @@ test('host actions remain reachable by touch and keyboard without connecting', a
   await expect(remove).toBeVisible();
   if (phone) {
     for (const button of [edit, remove]) {
+      // Wait for the drawer transition to settle before measuring its targets.
+      await button.scrollIntoViewIfNeeded();
       const bounds = await button.boundingBox();
       expect(bounds?.width).toBeGreaterThanOrEqual(44);
       expect(bounds?.height).toBeGreaterThanOrEqual(44);
