@@ -104,6 +104,8 @@ unsafe extern "C" {
     fn lazysh_mosh_test_state_num(client: *mut c_void) -> u64;
     #[cfg(test)]
     fn lazysh_mosh_test_set_errno(value: c_int);
+    #[cfg(test)]
+    fn lazysh_mosh_test_receive_mtu() -> usize;
 }
 
 fn operation(call: impl FnOnce(*mut c_char, usize) -> c_int) -> Result<()> {
@@ -357,15 +359,45 @@ mod tests {
     }
     #[test]
     fn unauthenticated_oversize_datagram_is_dropped_before_valid_traffic() {
-        let (mut client, socket, address) = fake_server();
-        socket.send_to(&vec![0; 65507], address).unwrap();
-        // SAFETY: errno is thread-local; clearing stale EAGAIN makes this reproduce the pre-authentication failure.
-        unsafe { lazysh_mosh_test_set_errno(0) };
-        assert!(client.poll().is_ok());
-        socket
-            .send_to(&packet(true, 0, 1, 0, &host_bytes("SURVIVED")), address)
-            .unwrap();
-        assert!(String::from_utf8_lossy(&client.poll().unwrap().bytes).contains("SURVIVED"));
+        // SAFETY: this getter returns the native receive-buffer constant and
+        // touches no client, pointer, clock, locale, or mutable shared state.
+        let receive_mtu = unsafe { lazysh_mosh_test_receive_mtu() };
+        assert!(receive_mtu < 65507);
+        for size in [receive_mtu + 1, 65507] {
+            let (mut client, socket, address) = fake_server();
+            match socket.send_to(&vec![0; size], address) {
+                Ok(written) => assert_eq!(written, size),
+                Err(error) if size == 65507 => {
+                    // Darwin can reject the IPv4 maximum at its UDP send limit.
+                    // The buffer+1 case above MUST be delivered on every target,
+                    // exercising the same pre-authentication MSG_TRUNC path.
+                    assert_eq!(error.raw_os_error(), Some(libc::EMSGSIZE));
+                }
+                Err(error) => {
+                    panic!("buffer+1 oversize datagram must reach the native receiver: {error}")
+                }
+            }
+            // SAFETY: errno is thread-local; clearing stale EAGAIN makes this
+            // reproduce the pre-authentication failure independently of errno.
+            unsafe { lazysh_mosh_test_set_errno(0) };
+            assert!(client.poll().is_ok());
+            socket
+                .send_to(&packet(true, 0, 1, 0, &host_bytes("SURVIVED")), address)
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let mut output = Vec::new();
+            loop {
+                output.extend(client.poll().unwrap().bytes);
+                if String::from_utf8_lossy(&output).contains("SURVIVED") {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "valid authenticated traffic must recover after the oversized datagram"
+                );
+                client.wait(Duration::from_millis(10)).unwrap();
+            }
+        }
     }
     #[test]
     fn authenticated_fragment_bounds_and_invalid_tags_do_not_abort() {

@@ -2768,7 +2768,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![list_hosts])
-            .build(tauri::generate_context!())
+            .build(tauri::generate_context!(test = true))
             .unwrap();
         app.manage(AppState::new(dir.path().into()).unwrap());
         let main = tauri::WebviewWindowBuilder::new(
