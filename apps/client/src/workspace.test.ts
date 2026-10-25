@@ -35,6 +35,28 @@ it("rejects corrupt or unbounded workspace state", () => {
   expect(readWorkspace()).toEqual([]);
 });
 
+it('persists the exact native restoration name, omitting unrestorable terminals without a substitute', () => {
+  saveWorkspace([
+    {hostId:'plain'},
+    {hostId:'exact',attached:{kind:'tmux' as const,name:'safe label',restoreName:'actual\u00a0name'}},
+    {hostId:'unsupported',attached:{kind:'tmux' as const,name:'old or sanitized label',restoreName:null}},
+  ]);
+  expect(readWorkspace()).toEqual([{hostId:'plain'},{hostId:'exact',attached:{kind:'tmux',name:'actual\u00a0name'}}]);
+  expect(localStorage.getItem('lazysh.workspace.v1')).not.toMatch(/safe label|old or sanitized|unsupported|restoreName/);
+});
+
+it('rejects tmux restoration names with controls or more than 200 UTF8 bytes before saving or reading', () => {
+  for (const name of ['é'.repeat(101),'line\nbreak','control\u0085name']) {
+    saveWorkspace([{hostId:'invalid',attached:{kind:'tmux',name}},
+      {hostId:'invalid-exact',attached:{kind:'tmux',name:'safe label',restoreName:name}}]);
+    expect(localStorage.getItem('lazysh.workspace.v1')).toBe('[]');
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'invalid',attached:{kind:'tmux',name}}]));
+    expect(readWorkspace()).toEqual([]);
+  }
+  saveWorkspace([{hostId:'valid',attached:{kind:'tmux',name:'é'.repeat(100)}}]);
+  expect(readWorkspace()).toHaveLength(1);
+});
+
 it("restores bounded Mosh options without storing transport secrets", () => {
   const mosh = {
     serverPath: "/opt/mosh-server",

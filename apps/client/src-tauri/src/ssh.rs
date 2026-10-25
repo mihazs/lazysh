@@ -28,6 +28,9 @@ const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(all(test, unix))]
+#[path = "tmux_jump_fixture.rs"]
+mod tmux_jump_fixture;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SshError {
@@ -574,7 +577,9 @@ impl client::Handler for HostVerifier {
     }
 }
 pub(crate) struct SshHandle {
-    handle: client::Handle<HostVerifier>,
+    handle: Arc<client::Handle<HostVerifier>>,
+    open_slots: Arc<Semaphore>,
+    open_owner_gone: watch::Sender<bool>,
     forward_agent: crate::forward_agent::ForwardAgent,
     pub(crate) peer_address: Option<std::net::SocketAddr>,
 }
@@ -589,13 +594,9 @@ impl std::ops::Deref for SshHandle {
         &self.handle
     }
 }
-impl std::ops::DerefMut for SshHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.handle
-    }
-}
 impl Drop for SshHandle {
     fn drop(&mut self) {
+        self.open_owner_gone.send_replace(true);
         self.forward_agent.close();
     }
 }
@@ -612,6 +613,7 @@ pub(crate) struct Session {
     finished: watch::Sender<bool>,
     pub(crate) cancel: watch::Sender<bool>,
     validate_size: fn(u32, u32) -> Result<()>,
+    pub(crate) tmux: StdMutex<Option<crate::tmux_jump::Binding>>,
 }
 impl Session {
     fn new(
@@ -626,6 +628,7 @@ impl Session {
             input,
             cancel,
             validate_size,
+            tmux: StdMutex::new(None),
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
             renderer_gone: watch::channel(false).0,
@@ -903,7 +906,9 @@ where
         }
     };
     Ok(SshHandle {
-        handle,
+        handle: Arc::new(handle),
+        open_slots: Arc::new(Semaphore::new(4)),
+        open_owner_gone: watch::channel(false).0,
         forward_agent,
         peer_address: None,
     })
@@ -936,6 +941,12 @@ async fn authenticate_handle_mut(
             "Agent forwarding requires the private key selected for this connection",
         ));
     }
+    let transport = Arc::get_mut(&mut handle.handle).ok_or_else(|| {
+        SshError::new(
+            "connection_in_use",
+            "Cannot authenticate a shared SSH transport",
+        )
+    })?;
     let mut selected_key = None;
     let auth = if let Some(key) = private_key.as_ref().filter(|k| !k.is_empty()) {
         let key = Arc::new(decode_secret_key(
@@ -945,16 +956,16 @@ async fn authenticate_handle_mut(
         if host.forward_agent {
             selected_key = Some(key.clone());
         }
-        let hash = handle.best_supported_rsa_hash().await?.flatten();
+        let hash = transport.best_supported_rsa_hash().await?.flatten();
         timeout(
             OP_TIMEOUT,
-            handle.authenticate_publickey(&host.username, PrivateKeyWithHashAlg::new(key, hash)),
+            transport.authenticate_publickey(&host.username, PrivateKeyWithHashAlg::new(key, hash)),
         )
         .await
     } else if let Some(password) = password {
         timeout(
             OP_TIMEOUT,
-            handle.authenticate_password(&host.username, password.as_str()),
+            transport.authenticate_password(&host.username, password.as_str()),
         )
         .await
     } else {
@@ -1094,14 +1105,18 @@ pub async fn connect(
             let handle = Arc::new(
                 authenticate_for_operation(handle, &host, &credentials, &operation).await?,
             );
-            let (channel, initial) =
-                match during_connect(&operation, open_terminal(&handle, cols, rows, None)).await {
-                    Ok(terminal) => terminal,
-                    Err(error) => {
-                        close_failed_connect(&handle).await;
-                        return Err(error);
-                    }
-                };
+            let (channel, initial) = match during_connect(
+                &operation,
+                open_terminal_for(&handle, &lease, cols, rows, None),
+            )
+            .await
+            {
+                Ok(terminal) => terminal,
+                Err(error) => {
+                    close_failed_connect(&handle).await;
+                    return Err(error);
+                }
+            };
             if remember_credentials.unwrap_or(false) {
                 if operation.check().is_err() {
                     close_failed_connect(&handle).await;
@@ -1166,7 +1181,7 @@ pub async fn connect(
         })
         .await
 }
-async fn request_ok(channel: &mut russh::Channel<client::Msg>) -> Result<Vec<u8>> {
+pub(crate) async fn request_ok(channel: &mut russh::Channel<client::Msg>) -> Result<Vec<u8>> {
     timeout(OP_TIMEOUT, async {
         let mut initial = Vec::new();
         loop {
@@ -1224,15 +1239,109 @@ async fn start_session(
     .await
 }
 const OUTPUT_WINDOW: u32 = 256 * 1024;
+/// A channel must remain close-owned even before a terminal task is registered.
+/// russh's raw Channel Drop does not request remote close on retained SSH.
+pub(crate) struct OwnedChannel {
+    channel: Option<russh::Channel<client::Msg>>,
+    closed: std::sync::atomic::AtomicBool,
+}
+impl From<russh::Channel<client::Msg>> for OwnedChannel {
+    fn from(channel: russh::Channel<client::Msg>) -> Self {
+        Self {
+            channel: Some(channel),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+impl std::ops::Deref for OwnedChannel {
+    type Target = russh::Channel<client::Msg>;
+    fn deref(&self) -> &Self::Target {
+        self.channel.as_ref().unwrap()
+    }
+}
+impl std::ops::DerefMut for OwnedChannel {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.channel.as_mut().unwrap()
+    }
+}
+impl OwnedChannel {
+    pub(crate) async fn close(&self) -> std::result::Result<(), russh::Error> {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.channel.as_ref().unwrap().close().await?;
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+impl Drop for OwnedChannel {
+    fn drop(&mut self) {
+        if !self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some(channel) = self.channel.take() {
+                tauri::async_runtime::spawn(async move {
+                    let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
+                });
+            }
+        }
+    }
+}
+/// Retain the underlying open until confirmation, even after the caller's
+/// deadline. Otherwise russh drops its receiver and ignores a late confirmation.
+/// Workers own only the core transport; last SshHandle Drop stops them all.
+pub(crate) async fn open_owned_channel(
+    handle: &SshHandle,
+    lease: &AccessLease,
+    deadline: tokio::time::Instant,
+) -> Result<OwnedChannel> {
+    lease.check()?;
+    let permit=handle.open_slots.clone().try_acquire_owned().map_err(|_|SshError::new("ssh_open_busy","SSH channel openings await peer confirmation; reconnect if the peer remains unresponsive"))?;
+    let transport = handle.handle.clone();
+    let mut owner_gone = handle.open_owner_gone.subscribe();
+    let original = lease.clone();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    tauri::async_runtime::spawn(async move {
+        let _permit = permit;
+        if *owner_gone.borrow() || original.check().is_err() || reply.is_closed() {
+            return;
+        }
+        let result = tokio::select! {biased;
+            _=owner_gone.changed()=>return,
+            result=transport.channel_open_session()=>result.map(OwnedChannel::from).map_err(SshError::from),
+        };
+        // A rejected/stale result drops its already-close-owned channel here.
+        let _ = original.with_current(|| reply.send(result));
+    });
+    tokio::select! {biased;
+        _=lease.cancelled()=>Err(SshError::new("cancelled","SSH channel opening cancelled")),
+        result=tokio::time::timeout_at(deadline,response)=>result.map_err(|_|SshError::new("timeout","Opening terminal timed out"))?.map_err(|_|SshError::new("disconnected","SSH channel opening retired"))?,
+    }
+}
+#[cfg(test)]
 async fn open_terminal(
     handle: &Arc<SshHandle>,
     cols: u32,
     rows: u32,
     command: Option<String>,
-) -> Result<(russh::Channel<client::Msg>, Vec<u8>)> {
-    let mut channel = timeout(OP_TIMEOUT, handle.channel_open_session())
-        .await
-        .map_err(|_| SshError::new("timeout", "Opening terminal timed out"))??;
+) -> Result<(OwnedChannel, Vec<u8>)> {
+    open_terminal_for(
+        handle,
+        &AccessState::disabled().lease(None).unwrap(),
+        cols,
+        rows,
+        command,
+    )
+    .await
+}
+async fn open_terminal_for(
+    handle: &Arc<SshHandle>,
+    creation: &AccessLease,
+    cols: u32,
+    rows: u32,
+    command: Option<String>,
+) -> Result<(OwnedChannel, Vec<u8>)> {
+    let mut channel =
+        open_owned_channel(handle, creation, tokio::time::Instant::now() + OP_TIMEOUT).await?;
+    creation.check()?;
     let result = timeout(OP_TIMEOUT, async {
         channel
             .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
@@ -1411,10 +1520,11 @@ async fn spawn_terminal(
     state: &AppState,
     creation: AccessLease,
     handle: Arc<SshHandle>,
-    mut channel: russh::Channel<client::Msg>,
+    channel: impl Into<OwnedChannel>,
     initial: Vec<u8>,
     events: Channel<SshEvent>,
 ) -> Result<Connected> {
+    let mut channel = channel.into();
     let (input, mut rx) = mpsc::channel(32);
     let (cancel, mut cancellation) = watch::channel(false);
     let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
@@ -2304,11 +2414,25 @@ pub async fn attach_multiplexer(
 ) -> AccessResult<Connected> {
     lease
         .run(async {
+            // Both public tmux attachment entry points must establish the same
+            // native display binding; frontend routing is not the authority.
+            if matches!(kind, crate::multiplexer::MultiplexerKind::Tmux) {
+                return attach_tmux_inner(
+                    &state,
+                    lease.clone(),
+                    session_id,
+                    name,
+                    cols,
+                    rows,
+                    events,
+                )
+                .await;
+            }
             check_size(cols, rows)?;
             let command = crate::multiplexer::attach_command(kind, &name)?;
             let parent = state.session(&session_id).await?;
             let (channel, initial) =
-                open_terminal(&parent.handle, cols, rows, Some(command)).await?;
+                open_terminal_for(&parent.handle, &lease, cols, rows, Some(command)).await?;
             spawn_terminal(
                 &state,
                 lease.clone(),
@@ -2338,12 +2462,18 @@ async fn attach_tmux_inner(
         ));
     }
     let parent = state.session(&session_id).await?;
-    let command = format!(
-        "tmux attach-session -t {}",
-        crate::multiplexer::tmux_arg(&format!("={name}"))
-    );
-    let (channel, initial) = open_terminal(&parent.handle, cols, rows, Some(command)).await?;
-    spawn_terminal(
+    let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
+    let command = crate::tmux_jump::attach_command(&name, &marker);
+    let (mut channel, mut initial) =
+        open_terminal_for(&parent.handle, &creation, cols, rows, Some(command)).await?;
+    let identity = crate::tmux_jump::handshake(&mut channel, &mut initial, &marker).await;
+    let control = match identity {
+        Some(identity) => {
+            crate::tmux_jump::prepare(&parent.handle, identity, &name, &creation).await
+        }
+        None => None,
+    };
+    let connected = spawn_terminal(
         state,
         creation,
         parent.handle.clone(),
@@ -2351,7 +2481,16 @@ async fn attach_tmux_inner(
         initial,
         events,
     )
-    .await
+    .await?;
+    if let Some(control) = control {
+        let child = state.session(&connected.session_id).await?;
+        *child
+            .tmux
+            .lock()
+            .map_err(|_| SshError::new("tmux_unavailable", "Cannot bind tmux display"))? =
+            Some(crate::tmux_jump::start(control, child.cancel.subscribe()));
+    }
+    Ok(connected)
 }
 
 #[cfg(test)]
@@ -2744,6 +2883,13 @@ mod tests {
         input_data: Arc<StdMutex<Vec<u8>>>,
         executed: Arc<tokio::sync::Notify>,
         closed: Arc<tokio::sync::Notify>,
+        tmux_metadata: Arc<std::sync::atomic::AtomicBool>,
+        command_channels: Arc<StdMutex<Vec<ChannelId>>>,
+        closed_channels: Arc<StdMutex<Vec<ChannelId>>>,
+        hold_opens: Arc<std::sync::atomic::AtomicBool>,
+        held_opens: Arc<StdMutex<Vec<(ChannelId, server::ChannelOpenHandle)>>>,
+        open_started: Arc<tokio::sync::Notify>,
+        opening_channel: Arc<StdMutex<Option<ChannelId>>>,
     }
     impl server::Server for TestServer {
         type Handler = Self;
@@ -2755,9 +2901,10 @@ mod tests {
         type Error = russh::Error;
         async fn channel_close(
             &mut self,
-            _: ChannelId,
+            channel: ChannelId,
             _: &mut server::Session,
         ) -> std::result::Result<(), Self::Error> {
+            self.closed_channels.lock().unwrap().push(channel);
             self.closed.notify_one();
             Ok(())
         }
@@ -2787,11 +2934,17 @@ mod tests {
         }
         async fn channel_open_session(
             &mut self,
-            _: russh::Channel<server::Msg>,
+            channel: russh::Channel<server::Msg>,
             reply: server::ChannelOpenHandle,
             _: &mut server::Session,
         ) -> std::result::Result<(), Self::Error> {
-            reply.accept().await;
+            *self.opening_channel.lock().unwrap() = Some(channel.id());
+            if self.hold_opens.load(Ordering::SeqCst) {
+                self.held_opens.lock().unwrap().push((channel.id(), reply));
+                self.open_started.notify_one();
+            } else {
+                reply.accept().await;
+            }
             Ok(())
         }
         async fn pty_request(
@@ -2845,12 +2998,24 @@ mod tests {
             command: &[u8],
             session: &mut server::Session,
         ) -> std::result::Result<(), Self::Error> {
+            let text = String::from_utf8(command.to_vec()).unwrap();
+            self.command_channels.lock().unwrap().push(channel);
             self.commands
                 .lock()
                 .unwrap()
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
-            session.data(channel, b"attached\r\n".to_vec())?;
+            if self.tmux_metadata.load(Ordering::SeqCst) {
+                if let Some(start) = text.find("LAZYSH_ATTACH_") {
+                    let marker = &text[start..start + 46];
+                    session.data(
+                        channel,
+                        format!("{marker}\t42\t/dev/pts/42\r\n").into_bytes(),
+                    )?;
+                }
+            } else {
+                session.data(channel, b"attached\r\n".to_vec())?;
+            }
             self.executed.notify_one();
             Ok(())
         }
@@ -3029,6 +3194,13 @@ mod tests {
             input_data: Arc::new(StdMutex::new(Vec::new())),
             executed: Arc::new(tokio::sync::Notify::new()),
             closed: Arc::new(tokio::sync::Notify::new()),
+            tmux_metadata: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            command_channels: Arc::new(StdMutex::new(Vec::new())),
+            closed_channels: Arc::new(StdMutex::new(Vec::new())),
+            hold_opens: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            held_opens: Arc::new(StdMutex::new(Vec::new())),
+            open_started: Arc::new(tokio::sync::Notify::new()),
+            opening_channel: Arc::new(StdMutex::new(None)),
         };
         let mut runner = test_server.clone();
         let task = tokio::spawn(async move {
@@ -3084,29 +3256,213 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tmux_attach_cancellation_closes_display_during_handshake() {
+        cancelled_tmux_attach(AttachPause::Handshake).await;
+    }
+    #[tokio::test]
+    async fn tmux_attach_cancellation_closes_display_during_control_preparation() {
+        cancelled_tmux_attach(AttachPause::Control).await;
+    }
+    #[tokio::test]
+    async fn tmux_attach_cancellation_closes_late_open_confirmation() {
+        cancelled_tmux_attach(AttachPause::Open).await;
+    }
+    #[derive(Clone, Copy)]
+    enum AttachPause {
+        Handshake,
+        Control,
+        Open,
+    }
+    async fn cancelled_tmux_attach(stage: AttachPause) {
+        let (host, server, task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        state.config().unwrap().hosts.push(host.clone());
+        let parent = password_terminal(&state, &host, Channel::new(|_| Ok(()))).await;
+        server
+            .tmux_metadata
+            .store(matches!(stage, AttachPause::Control), Ordering::SeqCst);
+        server
+            .hold_opens
+            .store(matches!(stage, AttachPause::Open), Ordering::SeqCst);
+        let access = unlocked_access();
+        let creation = ready_lease(&access);
+        let worker_state = state.clone();
+        let parent_id = parent.session_id.clone();
+        let pending = tokio::spawn(async move {
+            creation
+                .run(attach_tmux_inner(
+                    &worker_state,
+                    creation.clone(),
+                    parent_id,
+                    "owned".into(),
+                    80,
+                    24,
+                    Channel::new(|_| Ok(())),
+                ))
+                .await
+        });
+        let display = if matches!(stage, AttachPause::Open) {
+            timeout(Duration::from_secs(3), server.open_started.notified())
+                .await
+                .unwrap();
+            server.opening_channel.lock().unwrap().unwrap()
+        } else {
+            timeout(Duration::from_secs(3), async {
+                while server.commands.lock().unwrap().len()
+                    < if matches!(stage, AttachPause::Control) {
+                        2
+                    } else {
+                        1
+                    }
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("fixture must reach selected attach stage");
+            server.command_channels.lock().unwrap()[0]
+        };
+        access.lock().unwrap();
+        assert!(pending.await.unwrap().is_err());
+        server.hold_opens.store(false, Ordering::SeqCst);
+        let held = std::mem::take(&mut *server.held_opens.lock().unwrap());
+        for (_, reply) in held {
+            reply.accept().await;
+        }
+        let closed = timeout(Duration::from_secs(3), async {
+            while !server.closed_channels.lock().unwrap().contains(&display) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let only_parent = state.sessions.lock().await.len() == 1;
+        let parent = state.session(&parent.session_id).await.unwrap();
+        let probe = parent.handle.channel_open_session().await;
+        if let Ok(channel) = &probe {
+            channel.close().await.unwrap();
+        }
+        parent.cancel.send_replace(true);
+        task.abort();
+        assert!(
+            closed.is_ok(),
+            "cancelled unpublished tmux display must request remote close"
+        );
+        assert!(
+            only_parent,
+            "cancelled display must never enter the native session registry"
+        );
+        assert!(
+            probe.is_ok(),
+            "cleanup must preserve the verified parent SSH transport"
+        );
+    }
+    #[tokio::test]
+    async fn unconfirmed_channel_capacity_is_quarantined_until_last_owner_drops() {
+        let (host, server, task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
+        let access = unlocked_access();
+        let lease = ready_lease(&access);
+        server.hold_opens.store(true, Ordering::SeqCst);
+        let slots = handle.open_slots.clone();
+        let core = Arc::downgrade(&handle.handle);
+        let mut callers = tokio::task::JoinSet::new();
+        for index in 0..4 {
+            let handle = handle.clone();
+            let lease = lease.clone();
+            let allowance = if index == 0 {
+                Duration::from_secs(3)
+            } else {
+                OP_TIMEOUT
+            };
+            callers.spawn(async move {
+                open_owned_channel(&handle, &lease, tokio::time::Instant::now() + allowance).await
+            });
+        }
+        timeout(Duration::from_secs(3), async {
+            while server.held_opens.lock().unwrap().len() != 4 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("all opens must be admitted before fixture revokes them");
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(4)).await;
+        let expired = callers.join_next().await.unwrap().unwrap();
+        tokio::time::resume();
+        assert!(matches!(expired,Err(error) if error.kind=="timeout"));
+        assert_eq!(
+            slots.available_permits(),
+            0,
+            "caller deadline cannot discard owned pending opens"
+        );
+        access.lock().unwrap();
+        while let Some(result) = callers.join_next().await {
+            assert!(result.unwrap().is_err());
+        }
+        assert_eq!(
+            slots.available_permits(),
+            0,
+            "caller cancellation cannot release pending-open capacity"
+        );
+        access.authorize(access.generation().unwrap()).unwrap();
+        let fresh = ready_lease(&access);
+        let fifth = open_owned_channel(
+            &handle,
+            &fresh,
+            tokio::time::Instant::now() + Duration::from_secs(3),
+        )
+        .await;
+        assert!(matches!(fifth,Err(error) if error.kind=="ssh_open_busy"));
+        drop(handle);
+        timeout(Duration::from_secs(3), async {
+            while slots.available_permits() != 4 || core.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("last outer owner must stop pending workers and release the core transport");
+        // Release fixture-owned confirmations only after proving worker/core exit.
+        let held = std::mem::take(&mut *server.held_opens.lock().unwrap());
+        for (_, reply) in held {
+            reply.accept().await;
+        }
+        task.abort();
+    }
+    #[tokio::test]
     async fn tmux_uses_a_separate_pty_and_preserves_the_parent_shell() {
+        use tauri::Manager;
         let (host, server, server_task) = server(false).await;
         let (_dir, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
         let (events, mut rx) = event_channel(|json| json);
         let parent = password_terminal(&state, &host, events).await;
-        let child = attach_tmux_inner(
-            &state,
+        let app = tauri::test::mock_app();
+        app.manage(state.clone());
+        // Exercise the generic public entry point too: it must establish the
+        // same owned metadata/binding path as attach_tmux, not a bare attach.
+        let child = attach_multiplexer(
             access_lease(),
+            app.state(),
             parent.session_id.clone(),
+            crate::multiplexer::MultiplexerKind::Tmux,
             "safe'name;touch /tmp/nope".into(),
             80,
             24,
             Channel::new(|_| Ok(())),
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         assert_ne!(parent.session_id, child.session_id);
         assert_eq!(state.sessions.lock().await.len(), 2);
-        assert_eq!(
-            *server.commands.lock().unwrap(),
-            vec!["tmux attach-session -t '=safe'\\''name;touch /tmp/nope'"]
-        );
+        let commands = server.commands.lock().unwrap().clone();
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].starts_with("exec sh -c 'printf "));
+        assert!(commands[0].contains("LAZYSH_ATTACH_"));
+        assert!(commands[0].contains("; exec tmux attach-session -t "));
+        assert!(commands[0].contains("name;touch /tmp/nope"));
         assert!(server.input_data.lock().unwrap().is_empty());
         let child = state.session(&child.session_id).await.unwrap();
         child.cancel.send(true).unwrap();

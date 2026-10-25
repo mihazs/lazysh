@@ -14,6 +14,17 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- In-session tmux Jump To session/window trees with saved list, accordion and
+  grid layouts and an exact Current marker. Navigation uses a display-owned
+  retained control connection, validates its generation and captured PID/TTY,
+  and stops on cancellation, server loss or interrupted/ambiguous responses.
+  An unavailable binding disables navigation without replacing the terminal.
+  The extra control client affects tmux attached counts/hooks; switching a
+  window also changes the destination session's shared current window.
+  Cancelled attachment setup closes its unpublished SSH display channel. Saved
+  restoration uses the exact validated destination name; unsupported names keep
+  the live terminal available with a notice and omit its restoration intent.
+
 - Linux x86_64 Parakeet dictation with an explicitly downloaded, hash-pinned
   local model, one reusable recognizer, and model removal. Whisper remains the
   default. Cancel discards the result while native preparation/inference may
