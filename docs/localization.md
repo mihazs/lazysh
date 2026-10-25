@@ -56,7 +56,8 @@ resource map preserves each `.lproj` directory at the bundle resource root.
 The existing actual-app XCTest target checks the installed iOS host's three
 literal resource paths, purpose keys, fallback values and Foundation lookups. It
 does not display a permission prompt or verify physical-device OS language
-behavior. macOS compilation without bundling does not verify installed resources.
+behavior. The macOS hosted gate runs Tauri's app bundler and Apple's `plutil` on
+the three packaged tables; compilation without bundling does not verify resources.
 Native lock-cover and biometric-reason localization remain separate issue #79 work.
 
 ## Verification
