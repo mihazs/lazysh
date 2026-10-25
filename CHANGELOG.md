@@ -7,6 +7,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Simple custom-text builders in custom gesture and D-pad bindings, using the
+  existing bounded shortcut compiler. Each editor keeps its own unsaved drafts
+  and errors. Advanced remains the default; existing bindings are unchanged.
+  Gesture/D-pad chord edits now require their explicit Save button instead of
+  saving Advanced text on blur. Building and saving never send terminal input.
+
 - Default-off combined Whisper/Parakeet native acceptance tasks, with fixed
   public speech inputs and separate processes for both initialization orders.
   Linux archive-specific symbol isolation prevents private ORT protobuf symbols
