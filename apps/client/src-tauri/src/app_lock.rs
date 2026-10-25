@@ -269,8 +269,14 @@ async fn initialize(app: AppHandle) -> Result<(), String> {
                         operation: &handle.vault().operation(),
                     })
                 })
-                .inspect_err(|_| {
-                    bootstrap_trace!(&handle, PolicyProof, Failed);
+                .inspect_err(|_error| {
+                    #[cfg(debug_assertions)]
+                    handle
+                        .state::<Runtime>()
+                        .bootstrap
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .policy_failed(_error);
                 })?
         } else {
             false
@@ -659,6 +665,29 @@ pub fn allowed_while_locked(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(debug_assertions)]
+    #[test]
+    fn bootstrap_policy_errors_are_classified_without_retaining_error_text() {
+        for (message, expected) in [
+            ("Cannot locate native resume protection policy", "location"),
+            (policy::STORAGE, "storage"),
+            ("Cannot inspect device credentials", "credentialInspection"),
+            ("Device credential service unavailable", "credentialService"),
+            (
+                "private fixture path and proof must never be captured",
+                "other",
+            ),
+        ] {
+            let mut diagnostics = bootstrap::Snapshot::default();
+            diagnostics.policy_failed(message);
+            diagnostics.policy_failed("later private error");
+            let value = serde_json::to_value(diagnostics).unwrap();
+            assert_eq!(value["policyFailure"], expected);
+            assert_eq!(value["firstFailure"], "policyProof");
+            assert!(!value.to_string().contains(message));
+            assert!(value.to_string().len() <= 256);
+        }
+    }
     #[cfg(debug_assertions)]
     #[test]
     fn failed_bootstrap_diagnostics_are_bounded_and_never_grant_authority() {

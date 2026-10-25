@@ -92,6 +92,7 @@ final class MoshAppIntegrationTests: XCTestCase {
         catch { return {initialized: false, enabled: false, locked: true, reason: 'Native resume status IPC failed'}; }
         const phases = ['pending', 'running', 'succeeded', 'failed'];
         const stages = ['registration', 'capability', 'policyProof', 'authority', 'worker'];
+        const failures = ['location', 'storage', 'credentialInspection', 'credentialService', 'other'];
         const trace = state?.debugBootstrap;
         // Copy fixed diagnostic fields only; never attach the full response or nonce.
         const bootstrap = trace ? JSON.stringify({
@@ -101,7 +102,8 @@ final class MoshAppIntegrationTests: XCTestCase {
           policyProof: phases.includes(trace.policyProof) ? trace.policyProof : 'unknown',
           authority: phases.includes(trace.authority) ? trace.authority : 'unknown',
           worker: phases.includes(trace.worker) ? trace.worker : 'unknown',
-          firstFailure: stages.includes(trace.firstFailure) ? trace.firstFailure : null
+          firstFailure: stages.includes(trace.firstFailure) ? trace.firstFailure : null,
+          policyFailure: failures.includes(trace.policyFailure) ? trace.policyFailure : null
         }) : 'unavailable';
         return {
           initialized: state?.initialized === true,

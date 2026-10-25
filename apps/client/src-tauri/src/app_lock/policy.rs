@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 const LIMIT: u64 = 256;
-const STORAGE: &str = "Cannot read or commit native resume protection policy";
+pub(super) const STORAGE: &str = "Cannot read or commit native resume protection policy";
 #[derive(Clone)]
 pub(super) struct PolicyStore {
     path: PathBuf,
