@@ -1,0 +1,21 @@
+{
+  "minTokens": 50,
+  "minLines": 5,
+  "mode": "mild",
+  "maxSize": "1mb",
+  "reporters": ["console"],
+  "ignore": [
+    "**/node_modules/**",
+    "**/target/**",
+    "**/dist/**",
+    "**/.turbo/**",
+    "**/playwright-report/**",
+    "**/test-results/**",
+    "packages/mosh-transport/vendor/**",
+    "packages/mosh-transport/vendor-android/**",
+    "packages/portable-pty-vendor/**",
+    ".jscpd-baseline.json",
+    "bun.lock",
+    "Cargo.lock"
+  ]
+}

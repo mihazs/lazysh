@@ -7,6 +7,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Optional repository pre-commit duplicate detection with pinned jscpd and Bun.
+  Run `bun run hooks:install` to enable it for the repository and linked
+  worktrees. New clones fail against a reviewed existing-clone baseline while
+  lint-staged preserves partial staging; dependency installation alone does not
+  activate hooks or change an existing hooks configuration.
+
 - Claude transcript tool results retain explicit recorded error flags in paging
   and branch-follow views. Failed results show a recorded-error label with the
   original tool ID and output; no live status or retry action is inferred.
