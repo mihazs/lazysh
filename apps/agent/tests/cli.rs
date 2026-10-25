@@ -6,9 +6,24 @@ use std::{
     path::Path,
     process::{Command, Output, Stdio},
 };
+#[path = "support/storage_trace.rs"]
+mod storage_trace;
 
 fn run(directory: &Path, args: &[&str], payload: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+    run_traced(directory, args, payload, None)
+}
+fn run_traced(
+    directory: &Path,
+    args: &[&str],
+    payload: &[u8],
+    trace: Option<(&storage_trace::StorageTrace, usize)>,
+) -> Output {
+    let program = Path::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+    let mut command = trace.map_or_else(
+        || Command::new(program),
+        |(trace, worker)| trace.command(worker, program),
+    );
+    let mut child = command
         .args(args)
         .env("LAZYSH_STATE_DIR", directory)
         .env("TMUX_PANE", "%7")
@@ -220,24 +235,41 @@ fn config_is_print_only_and_contains_supported_hooks() {
 
 #[test]
 fn concurrent_hooks_preserve_every_event() {
+    let trace = storage_trace::StorageTrace::from_env();
     let dir = tempfile::tempdir().unwrap();
-    std::thread::scope(|scope| {
+    let outputs = std::thread::scope(|scope| {
         let workers = (0..16)
-            .map(|_| {
-                scope.spawn(|| {
-                    let output = ingest(dir.path(), "generic", &event("same", "working"));
-                    assert!(
-                        output.status.success(),
-                        "{}",
-                        String::from_utf8_lossy(&output.stderr)
-                    );
+            .map(|worker| {
+                let trace = trace.as_ref();
+                let directory = dir.path();
+                scope.spawn(move || {
+                    run_traced(
+                        directory,
+                        &["ingest", "--agent", "generic"],
+                        &serde_json::to_vec(&event("same", "working")).unwrap(),
+                        trace.map(|trace| (trace, worker)),
+                    )
                 })
             })
             .collect::<Vec<_>>();
-        for worker in workers {
-            worker.join().unwrap();
-        }
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
     });
+    // Retain evidence from this exact failing case before its unchanged gates.
+    if let Some(trace) = trace {
+        trace
+            .export(&outputs)
+            .expect("export owned storage trace excerpts");
+    }
+    for output in outputs {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let output = snapshot(dir.path(), "50");
     let sessions = output["sessions"].as_array().unwrap();
     assert_eq!(sessions.len(), 1);
