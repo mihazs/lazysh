@@ -3,6 +3,6 @@
   "tasks": {
     "build": { "cache": false, "outputs": [] },
     "check": { "cache": false },
-    "test": { "cache": false }
+    "test": { "cache": false, "passThroughEnv": ["LAZYSH_TEST_STORAGE_TRACE_DIR"] }
   }
 }
