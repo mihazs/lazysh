@@ -3297,8 +3297,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let events = Channel::new(move |body| {
             if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-                tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap())
-                    .unwrap();
+                let _ = tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap());
             }
             Ok(())
         });
@@ -3344,6 +3343,13 @@ mod tests {
         .unwrap();
         assert_eq!(*server.input_data.lock().unwrap(), b"ABCTAIL");
         session.cancel.send_replace(true);
+        timeout(Duration::from_secs(3), async {
+            while !*session.finished.borrow() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         task.abort();
     }
     #[tokio::test]
@@ -3421,6 +3427,13 @@ mod tests {
         .unwrap();
         assert_eq!(*server.input_data.lock().unwrap(), b"A");
         session.cancel.send_replace(true);
+        timeout(Duration::from_secs(3), async {
+            while !*session.finished.borrow() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         task.abort();
     }
     #[tokio::test]
