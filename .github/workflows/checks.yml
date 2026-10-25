@@ -202,8 +202,8 @@ jobs:
         with:
           name: lazysh-android-runtime-results
           path: |
-            apps/client/src-tauri/gen/android/app/build/reports/androidTests/connected/
-            apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/connected/
+            apps/client/src-tauri/gen/android/app/build/reports/androidTests/
+            apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/
           if-no-files-found: warn
 
   native-ios-simulator:

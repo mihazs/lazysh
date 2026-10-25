@@ -4,6 +4,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import android.app.KeyguardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
 import android.os.SystemClock
@@ -27,6 +28,10 @@ import org.junit.Assert.assertTrue
  */
 internal object NativeActivityFixture {
     val scenario: ActivityScenario<MainActivity> by lazy {
+        launch(Intent(InstrumentationRegistry.getInstrumentation().targetContext, MainActivity::class.java))
+    }
+
+    fun launch(intent: Intent): ActivityScenario<MainActivity> {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -41,7 +46,7 @@ internal object NativeActivityFixture {
                 assertTrue("Test device rejected the wake event", instrumentation.uiAutomation.injectInputEvent(event, true))
             }
         }
-        ActivityScenario.launch(MainActivity::class.java).also { scenario ->
+        return ActivityScenario.launch<MainActivity>(intent).also { scenario ->
             scenario.onActivity { activity ->
                 if (keyguard.isKeyguardLocked) {
                     assertFalse("Unlock the dedicated test device before instrumentation", keyguard.isDeviceSecure)
