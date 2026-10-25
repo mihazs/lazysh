@@ -13,6 +13,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Gesture/D-pad chord edits now require their explicit Save button instead of
   saving Advanced text on blur. Building and saving never send terminal input.
 
+- Default-off combined Whisper/Parakeet native acceptance tasks, with fixed
+  public speech inputs and separate processes for both initialization orders.
+  Linux archive-specific symbol isolation prevents private ORT protobuf symbols
+  from overriding Mosh's system protobuf library; no client engine is enabled.
+
 - macOS Parakeet model-storage admission checks actual Darwin ACLs and trusted
   descriptor ancestry, with native filesystem regression fixtures. iOS and Windows
   preparation remain disabled; real recognition and platform acceptance stay open.

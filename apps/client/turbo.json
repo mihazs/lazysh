@@ -1,0 +1,30 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "test:voice-interop:smoke": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_PARAKEET_SOURCE_ARCHIVE", "CARGO_BUILD_JOBS",
+        "CMAKE_BUILD_PARALLEL_LEVEL", "WHISPER_DONT_GENERATE_BINDINGS", "CC", "CXX"
+      ]
+    },
+    "test:voice-interop": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_WHISPER_TEST_MODEL", "LAZYSH_WHISPER_TEST_WAV",
+        "LAZYSH_PARAKEET_TEST_ARCHIVE", "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL",
+        "WHISPER_DONT_GENERATE_BINDINGS", "CC", "CXX"
+      ]
+    },
+    "test:voice-interop:release": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_WHISPER_TEST_MODEL", "LAZYSH_WHISPER_TEST_WAV",
+        "LAZYSH_PARAKEET_TEST_ARCHIVE", "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL",
+        "WHISPER_DONT_GENERATE_BINDINGS", "CC", "CXX"
+      ]
+    }
+  }
+}
