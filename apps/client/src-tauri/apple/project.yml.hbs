@@ -364,3 +364,22 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     scheme:
       testTargets: [LazyshPushTests]
+
+  # Standalone UI runner exercises the already built/installed production app.
+  # No app dependency: the app's Rust phase requires a live Tauri CLI server.
+  LazyshWorkspaceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.2"
+    sources:
+      - path: ../../apple/UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.lazysh.client.workspaceuitests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: ""
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
+    scheme:
+      testTargets: [LazyshWorkspaceUITests]

@@ -27,7 +27,8 @@
     "lint": "turbo run lint",
     "format:check": "turbo run format:check",
     "build:ios": "turbo run build:ios --filter=@lazysh/client",
-    "test:install-browser": "turbo run test:install-browser"
+    "test:install-browser": "turbo run test:install-browser",
+    "test:ios-workspace": "turbo run test:ios-workspace --filter=@lazysh/client"
   },
   "devDependencies": {
     "turbo": "^2.11.10"
