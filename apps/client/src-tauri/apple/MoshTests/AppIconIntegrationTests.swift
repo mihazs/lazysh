@@ -17,8 +17,17 @@ final class AppIconIntegrationTests: XCTestCase {
       guard let view = self.appWebView(), let url = view.url else { return false }
       return UIApplication.shared.applicationState == .active && url.scheme != "about" && !view.isLoading
     }, object: nil)
-    wait(for: [ready], timeout: 30)
-    return try XCTUnwrap(appWebView())
+    let result = XCTWaiter.wait(for: [ready], timeout: 30)
+    let view = appWebView()
+    let scheme = view?.url?.scheme ?? "none"
+    let fields: [String: Any] = ["completed": result == .completed, "viewPresent": view != nil,
+      "loading": view?.isLoading ?? false, "hidden": view?.isHidden ?? true,
+      "scheme": ["tauri", "http", "https", "about", "none"].contains(scheme) ? scheme : "other"]
+    let attachment = XCTAttachment(string: String(data: try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]), encoding: .utf8) ?? "Native readiness unavailable")
+    attachment.name = "Icon hosted app navigation readiness"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    return try XCTUnwrap(result == .completed ? view : nil, "Icon IPC requires completed native app navigation within 30 seconds")
   }
   private func record(_ stage: String, received: Bool, status: [String: Any]? = nil) {
     var fields: [String: Any] = ["stage": stage, "received": received,

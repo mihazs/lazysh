@@ -64,9 +64,29 @@ with Amber/readback/relaunch/Default and original-icon cleanup. Hosted tests ret
 status preflight, invalid-input rejection and bundle-resource checks. Native
 success remains pending execution of this corrected test boundary.
 
-The same run found missing `CFBundleIconFiles` beneath a manually supplied icon
-dictionary. Apple's [alternate-icon configuration guide](https://developer.apple.com/documentation/xcode/configuring-your-app-to-use-alternate-app-icons)
-instructs using compiler build settings rather than manually overriding these
-icon dictionaries. The template now lets actool generate them. Resource checks
-still require both idioms' generated names/files and decodable bundled PNGs;
-removing the manual override is a packaging correction, not an assertion waiver.
+That run also found missing `CFBundleIconFiles` beneath a manually supplied icon
+dictionary. The initial explanation that the manual dictionary caused the missing
+files was not established. In [run 40211520800](https://github.com/mihazs/lazysh/actions/runs/40211520800),
+head `380a2bc` still reported only `CFBundleIconName=LazyshAmber` after the manual
+dictionaries were removed. The manual-overwrite cause is therefore retracted.
+
+Apple's current [alternate-icon configuration guide](https://developer.apple.com/documentation/xcode/configuring-your-app-to-use-alternate-app-icons)
+requires compiler build settings rather than manual icon dictionary overrides,
+and its [asset catalog guide](https://developer.apple.com/documentation/xcode/configuring-your-app-icon)
+supports generated variants from one 1024-pixel source. These justify keeping the
+compiler-owned configuration, but do not prove which rendition representation
+this installed Xcode produces. The archived alternate-key reference describes
+file arrays; it is not sufficient to assume every modern catalog emits external
+PNGs. The existing Files/resource assertion remains until native `assetutil`
+output establishes the actual compiled catalog contract. CI collects only this
+app's fixed `Assets.car` and iPhone/iPad icon dictionaries and retains that scoped
+metadata immediately after build, before runtime checks. No resource assertion
+is waived merely because a catalog file exists.
+
+Run 40211520800 also failed the separate Mosh hosted navigation readiness check,
+then attempted IPC despite that failure and saw an undefined JavaScript bridge.
+That follow-on exception does not establish another native command defect. The
+hosted tests now record only native view-presence/loading/visibility and a bounded
+URL scheme, then stop on failed readiness before invoking. The existing 30-second
+readiness deadline is unchanged. No valid UI icon roundtrip ran in that workflow;
+it remains a separate pending gate.
