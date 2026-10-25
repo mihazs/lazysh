@@ -99,7 +99,7 @@ class AppleStatusPlugin: Plugin, WCSessionDelegate {
       guard message["action"] as? String == "review", let id = message["approvalId"] as? String,
             latest.approvals.contains(where: { $0.id == id && $0.expiresAt > UInt64(Date().timeIntervalSince1970) }),
             UIApplication.shared.applicationState == .active, let review = self.review else { replyHandler(["ok": false]); return }
-      review.send(["sessionId": latest.sessionId, "approvalId": id]); replyHandler(["ok": true])
+      review.send(["sessionId": latest.sessionId, "approvalId": id] as JsonObject); replyHandler(["ok": true])
     }
   }
 }

@@ -135,6 +135,8 @@ jobs:
         with:
           targets: x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Install native Mosh fixture dependencies
         run: sudo apt-get update && sudo apt-get install -y mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
       - run: bun install --frozen-lockfile
@@ -180,6 +182,8 @@ jobs:
         with:
           targets: aarch64-apple-ios, aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - run: bun install --frozen-lockfile
       - run: bun run build:ios
       - name: Compile watchOS companion and complications
