@@ -7,7 +7,11 @@ use std::{
     thread,
 };
 
-fn command_output(mut command: Command, timeout: std::time::Duration) -> std::process::Output {
+fn bounded_output(
+    mut command: Command,
+    timeout: std::time::Duration,
+    on_timeout: impl FnOnce(u32) -> String,
+) -> std::io::Result<(std::process::Output, bool, String)> {
     use std::os::unix::process::CommandExt;
     use std::{
         io::Read,
@@ -25,42 +29,28 @@ fn command_output(mut command: Command, timeout: std::time::Duration) -> std::pr
             output.extend_from_slice(&buffer[..retained]);
         }
     }
-    // Inspect only the program/argv, never Command's Debug representation: its
-    // environment contains the private, ephemeral Mosh fixture keys.
-    let arguments: Vec<_> = command
-        .get_args()
-        .map(|argument| {
-            let argument = argument.to_string_lossy();
-            match argument.split_once('=') {
-                Some((name, _)) if name.ends_with("_KEY") => format!("{name}=<redacted>"),
-                _ => argument.into_owned(),
-            }
-        })
-        .collect();
-    let description = format!(
-        "{} {}",
-        command.get_program().to_string_lossy(),
-        arguments.join(" ")
-    );
     // Keep Cargo/compiler or adb children inside this fixture's process group.
     command.process_group(0);
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .expect("native fixture command");
+        .spawn()?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let out = thread::spawn(move || capture(stdout));
     let err = thread::spawn(move || capture(stderr));
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
+    let mut diagnostics = String::new();
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
         if Instant::now() >= deadline {
             timed_out = true;
+            // Observe this still-owned process before reaping it. Diagnostics
+            // have a separate fixed budget; they never retry the timed-out job.
+            diagnostics = on_timeout(child.id());
             // SAFETY: this child created its own process group above. Its PID is
             // still owned and unreaped, so the group cannot refer to another job.
             unsafe {
@@ -75,17 +65,156 @@ fn command_output(mut command: Command, timeout: std::time::Duration) -> std::pr
         stdout: out.join().unwrap(),
         stderr: err.join().unwrap(),
     };
+    Ok((output, timed_out, diagnostics))
+}
+
+fn redact_tail(mut text: String, keys: &[String]) -> String {
+    for key in keys.iter().filter(|key| !key.is_empty()) {
+        text = text.replace(key, "<redacted>");
+    }
+    let mut start = text.len().saturating_sub(16_384);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text.split_off(start)
+}
+
+// ps supplies executable names, never argv or environment. Retain only the
+// owned leader and its direct native child in the leader's process group.
+fn owned_processes(
+    inventory: &str,
+    leader: u32,
+    executable: &std::path::Path,
+) -> Vec<(u32, String)> {
+    inventory
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let parent = fields.next()?.parse::<u32>().ok()?;
+            let group = fields.next()?.parse::<u32>().ok()?;
+            let name = fields.collect::<Vec<_>>().join(" ");
+            let owned = group == leader
+                && (pid == leader
+                    || (parent == leader
+                        && std::path::Path::new(&name).file_name() == executable.file_name()));
+            owned.then_some((
+                pid,
+                format!("pid={pid} ppid={parent} pgid={group} executable={name}"),
+            ))
+        })
+        .collect()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn simulator_timeout_diagnostics(leader: u32, executable: &std::path::Path) -> String {
+    use std::time::{Duration, Instant};
+    // Inventory <=1s, then at most two 1-second samples, each with a <=2s
+    // command budget. A single absolute 5s limit bounds the entire observation.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut inventory = Command::new("/bin/ps");
+    inventory.args(["-axo", "pid=,ppid=,pgid=,comm="]);
+    let Ok((inventory, timed_out, _)) =
+        bounded_output(inventory, Duration::from_secs(1), |_| String::new())
+    else {
+        return "simulator diagnostics: owned-process inventory unavailable".into();
+    };
+    if timed_out || !inventory.status.success() {
+        return "simulator diagnostics: owned-process inventory unavailable".into();
+    }
+    let processes = owned_processes(
+        &String::from_utf8_lossy(&inventory.stdout),
+        leader,
+        executable,
+    );
+    let mut diagnostics = String::from("simulator diagnostics (argv/environment omitted):\n");
+    for (pid, description) in processes.into_iter().take(2) {
+        // Recheck group membership immediately before sampling. The leader is
+        // our unreaped child; never attach to another group or a shared daemon.
+        if unsafe { libc::getpgid(pid as libc::pid_t) } != leader as libc::pid_t {
+            continue;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        diagnostics.push_str(&format!("{description}\n"));
+        let mut sample = Command::new("/usr/bin/sample");
+        sample.args([&pid.to_string(), "1", "10", "-file", "/dev/stdout"]);
+        let Ok((sample, timed_out, _)) =
+            bounded_output(sample, remaining.min(Duration::from_secs(2)), |_| {
+                String::new()
+            })
+        else {
+            diagnostics.push_str("sample tool unavailable\n");
+            continue;
+        };
+        diagnostics.push_str(&format!(
+            "sample deadline_exceeded={timed_out} status={}\n{}\n{}\n",
+            sample.status,
+            String::from_utf8_lossy(&sample.stdout),
+            String::from_utf8_lossy(&sample.stderr)
+        ));
+    }
+    diagnostics
+}
+
+fn command_output(command: Command, timeout: std::time::Duration) -> std::process::Output {
+    // Inspect only program/argv, never Command's Debug representation: its
+    // environment contains the private, ephemeral Mosh fixture keys.
+    let mut keys: Vec<String> = command
+        .get_envs()
+        .filter(|(name, _)| name.to_string_lossy().ends_with("_KEY"))
+        .filter_map(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+        .collect();
+    let arguments: Vec<_> = command
+        .get_args()
+        .map(|argument| {
+            let argument = argument.to_string_lossy();
+            match argument.split_once('=') {
+                Some((name, value)) if name.ends_with("_KEY") => {
+                    keys.push(value.to_owned());
+                    format!("{name}=<redacted>")
+                }
+                _ => argument.into_owned(),
+            }
+        })
+        .collect();
+    let description = format!(
+        "{} {}",
+        command.get_program().to_string_lossy(),
+        arguments.join(" ")
+    );
+    #[cfg(target_os = "macos")]
+    let native_executable = (arguments.first().map(String::as_str) == Some("simctl")
+        && arguments.get(1).map(String::as_str) == Some("spawn"))
+    .then(|| {
+        command.get_args().find_map(|argument| {
+            let path = std::path::Path::new(argument);
+            let name = path.file_name()?.to_str()?;
+            (name.starts_with("lazysh_mosh_transport-") || name.starts_with("ios_peer-"))
+                .then(|| path.to_owned())
+        })
+    })
+    .flatten();
+    let (output, timed_out, diagnostics) = bounded_output(command, timeout, |_pid| {
+        #[cfg(target_os = "macos")]
+        if let Some(executable) = native_executable {
+            return simulator_timeout_diagnostics(_pid, &executable);
+        }
+        String::new()
+    })
+    .expect("native fixture command");
+    let stdout = redact_tail(String::from_utf8_lossy(&output.stdout).into_owned(), &keys);
+    let stderr = redact_tail(String::from_utf8_lossy(&output.stderr).into_owned(), &keys);
+    let diagnostics = redact_tail(diagnostics, &keys);
     assert!(
         !timed_out,
-        "native fixture command exceeded its deadline ({timeout:?}): {description}. stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout[output.stdout.len().saturating_sub(16_384)..]),
-        String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(16_384)..])
+        "native fixture command exceeded its deadline ({timeout:?}): {description}. stdout: {stdout}\nstderr: {stderr}\n{diagnostics}",
     );
     assert!(
         output.status.success(),
-        "native fixture failed ({description}). stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout[output.stdout.len().saturating_sub(16_384)..]),
-        String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(16_384)..])
+        "native fixture failed ({description}). stdout: {stdout}\nstderr: {stderr}"
     );
     output
 }
@@ -350,11 +479,12 @@ fn timed_out_fixture_reports_captured_diagnostics() {
         let mut child = Command::new("sh");
         child.args([
             "-c",
-            "printf 'native-fixture-ready\\n'; sleep 5",
+            "printf 'native-fixture-ready\\n%s\\n' \"$SIMCTL_CHILD_LAZYSH_MOSH_TEST_ONE_KEY\"; sleep 5",
             "fixture-helper",
             "LAZYSH_MOSH_TEST_ONE_KEY=private-argv-value",
         ]);
         child.env("PRIVATE_FIXTURE_ENV", "private-environment-value");
+        child.env("SIMCTL_CHILD_LAZYSH_MOSH_TEST_ONE_KEY", "private-fixture-env-key");
         command_output(child, std::time::Duration::from_millis(100))
     })
     .expect_err("fixture must enforce the deadline");
@@ -366,10 +496,83 @@ fn timed_out_fixture_reports_captured_diagnostics() {
     assert!(message.contains("LAZYSH_MOSH_TEST_ONE_KEY=<redacted>"));
     assert!(!message.contains("private-argv-value"));
     assert!(!message.contains("private-environment-value"));
+    assert!(!message.contains("private-fixture-env-key"));
     assert!(
         started.elapsed() < std::time::Duration::from_secs(2),
         "owned child group must be stopped and reaped"
     );
+}
+
+#[test]
+fn timeout_observer_sees_owned_process_before_its_group_is_reaped() {
+    let mut child = Command::new("sh");
+    child.args(["-c", "exec sleep 5"]);
+    let mut observed = None;
+    let (_, timed_out, diagnostics) =
+        bounded_output(child, std::time::Duration::from_millis(50), |pid| {
+            // SAFETY: this PID is our live, unreaped child, never a shared process.
+            assert_eq!(
+                unsafe { libc::getpgid(pid as libc::pid_t) },
+                pid as libc::pid_t
+            );
+            observed = Some(pid);
+            "owned process observed".into()
+        })
+        .unwrap();
+    assert!(timed_out);
+    assert_eq!(diagnostics, "owned process observed");
+    let pid = observed.expect("deadline must observe the child before terminating it");
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
+#[test]
+fn diagnostic_inventory_excludes_unowned_groups_and_unrelated_children() {
+    let inventory = "100 1 100 /usr/bin/simctl\n101 100 100 /tmp/ios_peer-one\n\
+                     102 100 777 /tmp/ios_peer-one\n103 100 100 /usr/bin/unrelated\n\
+                     104 999 100 /tmp/ios_peer-one\n105 1 105 private-unowned-process\n";
+    let processes = owned_processes(inventory, 100, std::path::Path::new("/tmp/ios_peer-one"));
+    assert_eq!(processes.len(), 2);
+    assert_eq!(processes[0].0, 100);
+    assert_eq!(processes[1].0, 101);
+    assert!(processes.iter().all(|(_, line)| !line.contains("unowned")));
+}
+
+#[test]
+fn diagnostic_redaction_precedes_bounded_unicode_tail() {
+    let secret = "private-fixture-key".to_owned();
+    let message = format!("{secret}{}{}", "🌐".repeat(8192), secret);
+    let redacted = redact_tail(message, std::slice::from_ref(&secret));
+    assert!(redacted.len() <= 16_384);
+    assert!(!redacted.contains(&secret));
+    assert!(redacted.ends_with("<redacted>"));
+}
+
+#[test]
+fn simulator_diagnostics_never_sample_an_unowned_process_group() {
+    let observed =
+        simulator_timeout_diagnostics(u32::MAX, std::path::Path::new("ios_peer-fixture"));
+    assert!(!observed.contains("pid="));
+    assert!(!observed.contains("sample deadline_exceeded="));
+}
+
+#[test]
+fn simulator_diagnostics_observe_the_live_fixture_and_keep_its_deadline() {
+    let started = std::time::Instant::now();
+    let mut child = Command::new("sleep");
+    child.arg("10");
+    let (_, timed_out, diagnostics) =
+        bounded_output(child, std::time::Duration::from_millis(50), |pid| {
+            simulator_timeout_diagnostics(pid, std::path::Path::new("ios_peer-no-child"))
+        })
+        .unwrap();
+    assert!(timed_out);
+    assert!(diagnostics.contains("executable="), "{diagnostics}");
+    assert_eq!(diagnostics.matches("executable=").count(), 1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(6));
 }
 
 struct DeviceDirectory(String);

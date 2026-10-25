@@ -42,12 +42,25 @@ test-body failures. It does not retry launches or increase suite deadlines.
 This launch path passed all six native tests and the two-client protocol test
 in CI run 40172672432. The earlier intermittent stall happened before the test
 runner's first output; its exact CoreSimulator startup cause remains unproven.
+On a stalled simulator executable, the fixture keeps the original 45-second
+failure deadline and adds at most five seconds of diagnostic observation before
+terminating its owned process group. It records executable names/PIDs without
+argv or environment, and attempts one-second stack samples of its own `simctl`
+and an identifiable direct native child in that same process group. Shared
+CoreSimulator daemons and unrelated processes are excluded. Missing diagnostic
+tools do not prevent teardown; known fixture keys are redacted before retained
+diagnostic tails are bounded to 16 KiB. This instrumentation collects evidence;
+it does not retry or establish the startup cause.
 The peer communicates only with
 ephemeral official Mosh 1.4.0 host servers on shared loopback, exercising two
 parallel clients, UTF-8, remote PTY resize, and acknowledged shutdown. The host
 fixture bounds build/start/execute deadlines and terminates its server processes;
 the CI job owns simulator creation and final cleanup. No custom runner script,
 external account, provisioning profile, or background entitlement is added.
+App installation and hosted/UI acceptance run whenever the app build and
+simulator setup succeeded and the workflow was not cancelled, even if this
+independent raw-library fixture fails. Its failure still fails the job, and
+result upload and simulator cleanup remain unconditional.
 
 Native linking and simulator execution are distinct acceptance results. Physical
 device bootstrap, app session handoff, suspension/resume, network roaming, and
