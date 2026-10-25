@@ -15,6 +15,7 @@ use tauri::State;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 pub mod catalog;
 pub mod cloud;
+pub mod parakeet;
 
 #[cfg(all(test, feature = "parakeet-acceptance"))]
 mod interop_tests;
@@ -35,6 +36,7 @@ pub struct VoiceState {
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     downloads: catalog::Downloads,
+    parakeet: parakeet::ParakeetState,
 }
 #[derive(Serialize)]
 pub struct VoiceModel {
@@ -45,6 +47,7 @@ impl VoiceState {
     pub(crate) fn cancel_for_lock(&self) {
         self.cancel.store(true, Ordering::Release);
         catalog::cancel_for_lock(self);
+        self.parakeet.cancel_for_lock();
         if let Ok(mut pending) = self.import.lock() {
             if let Some(import) = pending.take() {
                 let temporary = self.dir.join(format!("{}.part", import.id));
@@ -60,12 +63,15 @@ impl VoiceState {
                 let _ = fs::remove_file(entry.path());
             }
         }
+        let busy = Arc::new(AtomicBool::new(false));
+        let parakeet = parakeet::ParakeetState::new(dir.join("parakeet"), busy.clone());
         Ok(Self {
             dir,
             import: Mutex::new(None),
-            busy: Arc::new(AtomicBool::new(false)),
+            busy,
             cancel: Arc::new(AtomicBool::new(false)),
             downloads: catalog::Downloads::default(),
+            parakeet,
         })
     }
     fn path(&self, name: &str) -> Result<PathBuf> {
@@ -568,8 +574,7 @@ mod tests {
             .unwrap()
             .path()
             .extension()
-            .unwrap()
-            != "part"));
+            .is_none_or(|extension| extension != "part")));
     }
     #[test]
     fn invalid_audio_and_models_are_rejected_before_native_inference() {
