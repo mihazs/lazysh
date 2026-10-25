@@ -102,6 +102,7 @@ fn devin_atif_cli_reads_explicit_export_and_does_not_assume_cache_discovery() {
     )
     .unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["transcript", "--agent", "devin-atif", "--path"])
         .arg(&path)
         .output()
@@ -111,12 +112,14 @@ fn devin_atif_cli_reads_explicit_export_and_does_not_assume_cache_discovery() {
     assert_eq!(response["agent"], "devin-atif");
     assert_eq!(response["schemaVersion"], 1);
     let discover = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["discover", "--agent", "devin-atif"])
         .env("HOME", directory.path())
         .output()
         .unwrap();
     assert!(!discover.status.success());
     let explicit = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["discover", "--agent", "devin-atif", "--root"])
         .arg(directory.path())
         .output()

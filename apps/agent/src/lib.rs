@@ -1,6 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 pub mod approvals;
 pub mod devices;
+pub mod settings;
 pub mod transcript;
 pub mod usage;
 use clap::ValueEnum;
@@ -58,6 +59,7 @@ pub enum Error {
     InvalidEvent,
     InvalidArgument,
     Device(&'static str),
+    Settings(&'static str),
     Io(io::Error),
     Storage(rusqlite::Error),
 }
@@ -67,6 +69,7 @@ impl Error {
             Self::InvalidEvent => "InvalidEvent",
             Self::InvalidArgument => "InvalidArgument",
             Self::Device(kind) => kind,
+            Self::Settings(kind) => kind,
             Self::Io(_) => "IoError",
             Self::Storage(_) => "StorageError",
         }

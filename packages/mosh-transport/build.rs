@@ -6,12 +6,16 @@ use std::{
 };
 #[path = "native/android.rs"]
 mod android;
+#[path = "native/ios.rs"]
+mod ios;
+#[path = "native/mobile.rs"]
+mod mobile;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PROTOC");
     if !matches!(
         env::var("CARGO_CFG_TARGET_OS").unwrap().as_str(),
-        "linux" | "macos" | "android"
+        "linux" | "macos" | "android" | "ios"
     ) {
         return;
     }
@@ -106,8 +110,11 @@ fn main() {
     };
     fs::write(root.join("src/include/config.h"), format!("#define HAVE_CLOCK_GETTIME 1\n#define HAVE_GETTIMEOFDAY 1\n#define HAVE_SYS_UIO_H 1\n#define HAVE_POSIX_MEMALIGN 1\n#define HAVE_STRINGS_H 1\n{byte_order}")).unwrap();
     let android_target = env::var("CARGO_CFG_TARGET_OS").unwrap() == "android";
+    let ios_target = env::var("CARGO_CFG_TARGET_OS").unwrap() == "ios";
     let include_paths = if android_target {
         android::prepare()
+    } else if ios_target {
+        ios::prepare()
     } else {
         let protobuf = pkg_config::Config::new()
             .probe("protobuf-lite")
@@ -126,7 +133,7 @@ fn main() {
             .collect()
     };
     let protos = ["userinput", "hostinput", "transportinstruction"];
-    if android_target {
+    if android_target || ios_target {
         for name in protos {
             for extension in ["pb.cc", "pb.h"] {
                 fs::copy(

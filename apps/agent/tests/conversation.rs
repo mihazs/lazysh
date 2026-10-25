@@ -41,6 +41,7 @@ fn latest_main_leaf_selects_one_branch_ignoring_progress_sidechains_and_old_fork
     assert_eq!(page.branch_id.as_deref(), Some("new"));
     assert!(!page.has_more && !page.truncated);
     let output = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args([
             "transcript",
             "--agent",
@@ -157,6 +158,7 @@ fn discovery_only_lists_bounded_metadata_from_expected_depths() {
     fs::write(root.join("project/subagents/hidden.jsonl"), b"private").unwrap();
     fs::write(root.join("project/settings.json"), b"private").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["discover", "--agent", "claude", "--root"])
         .arg(&root)
         .output()

@@ -3,6 +3,10 @@
 These are unmodified upstream production sources and matching generated protobuf
 messages. `vendor-android.sha256` pins every included file and is verified
 before Android compilation. There are no build-time downloads.
+The iOS build reuses this exact snapshot and manifest; the directory name is
+retained to avoid copying or renaming the already verified Android sources.
+The two upstream `PrivacyInfo.xcprivacy` resource files are also preserved for
+iOS packaging; see [IOS.md](IOS.md) for the separate archive acceptance step.
 
 | Component | Source pin | Original archive SHA-256 | License |
 | --- | --- | --- | --- |

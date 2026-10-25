@@ -1,6 +1,7 @@
 import type {AutoOptions, EtOptions, MoshOptions} from "./bridge";
 export type SessionIntent = {
-  hostId: string;
+  hostId?: string;
+  local?: true;
   auto?: AutoOptions;
   et?: { serverPath: string; port: number };
   mosh?: { serverPath: string; portMin: number; portMax: number };
@@ -23,8 +24,10 @@ export function readWorkspace(): SessionIntent[] {
     if (!Array.isArray(value) || value.length > 20) return [];
     return value.filter(
       (item): item is SessionIntent =>
+        (item?.local === true && Object.keys(item).length === 1) || (
         !!item &&
         typeof item === "object" &&
+        item.local === undefined &&
         typeof item.hostId === "string" &&
         item.hostId.length > 0 &&
         item.hostId.length <= 100 &&
@@ -38,7 +41,7 @@ export function readWorkspace(): SessionIntent[] {
           (["tmux", "herdr", "zellij"].includes(item.attached.kind) &&
             typeof item.attached.name === "string" &&
             item.attached.name.length > 0 &&
-            item.attached.name.length <= 200)),
+            item.attached.name.length <= 200))),
     );
   } catch {
     return [];
@@ -49,7 +52,7 @@ export function saveWorkspace(sessions: SessionIntent[]) {
   localStorage.setItem(
     key,
     JSON.stringify(
-      sessions.slice(0, 20).map(({ hostId, attached, mosh, et, auto }) => ({
+      sessions.slice(0, 20).map(({ hostId, attached, mosh, et, auto, local }) => local ? {local:true} : ({
         hostId,
         ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
         ...(!auto && et ? { et: publicEt(et) } : {}),

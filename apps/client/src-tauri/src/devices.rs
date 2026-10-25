@@ -38,6 +38,23 @@ fn companion_command(id: &str, socket: &str, action: &str) -> Result<String> {
         quote(socket)
     ))
 }
+fn android_command(id: &str, action: &str) -> Result<String> {
+    identifier(id)?;
+    Ok(format!(
+        "lazysh-agent devices android --id={} {action}",
+        quote(id)
+    ))
+}
+#[tauri::command]
+pub async fn android_device_probe(
+    state: State<'_, AppState>,
+    session_id: String,
+    id: String,
+) -> Result<serde_json::Value> {
+    let command = android_command(&id, "probe")?;
+    let session = state.session(&session_id).await?;
+    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+}
 #[tauri::command]
 pub async fn ios_device_probe(
     state: State<'_, AppState>,

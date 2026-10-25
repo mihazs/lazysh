@@ -231,6 +231,17 @@ fn next_frame(reader: &mut impl Read, id: &str, width: u32, height: u32) -> Resu
     }
     let mut jpeg = vec![0; size];
     reader.read_exact(&mut jpeg)?;
+    jpeg_frame(Platform::Ios, id, jpeg, Some((width, height)))
+}
+pub(super) fn jpeg_frame(
+    platform: Platform,
+    id: &str,
+    jpeg: Vec<u8>,
+    points: Option<(u32, u32)>,
+) -> Result<Value> {
+    if jpeg.len() > MAX_FRAME {
+        return Err(Error::Device("DeviceOutputTooLarge"));
+    }
     let mut decoder = image::ImageReader::with_format(Cursor::new(&jpeg), image::ImageFormat::Jpeg);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
@@ -241,12 +252,13 @@ fn next_frame(reader: &mut impl Read, id: &str, width: u32, height: u32) -> Resu
         .decode()
         .map_err(|_| Error::Device("InvalidDeviceImage"))?;
     let (iw, ih) = (image.width(), image.height());
+    let (width, height) = points.unwrap_or((iw, ih));
     // Refuse stale portrait/landscape mappings instead of clicking the wrong point.
     if ((iw as f64 / ih as f64) - (width as f64 / height as f64)).abs() > 0.02 {
         return Err(Error::Device("DeviceDimensionsChanged"));
     }
     Ok(
-        json!({"schemaVersion":1,"platform":"ios","id":id,"mime":"image/jpeg","base64":base64::engine::general_purpose::STANDARD.encode(jpeg),"width":width,"height":height,"imageWidth":iw,"imageHeight":ih}),
+        json!({"schemaVersion":1,"platform":platform,"id":id,"mime":"image/jpeg","base64":base64::engine::general_purpose::STANDARD.encode(jpeg),"width":width,"height":height,"imageWidth":iw,"imageHeight":ih}),
     )
 }
 fn stream_child(

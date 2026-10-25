@@ -46,6 +46,7 @@ fn claude_pages_preserve_content_tools_usage_and_parent_identity() {
     assert_eq!(next.messages[1]["blocks"][0]["text"], "all tests pass");
     assert!(!next.has_more);
     let output = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("companion-state"))
         .args(["transcript", "--agent", "claude", "--path"])
         .arg(&path)
         .args(["--limit", "1"])

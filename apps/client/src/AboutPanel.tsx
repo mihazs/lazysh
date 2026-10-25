@@ -1,5 +1,6 @@
 import { useState } from "react";
 import license from "../../../LICENSE?raw";
+import ptyLicense from "../../../packages/portable-pty-vendor/LICENSE.md?raw";
 import opensslLicense from "../../../packages/mosh-transport/OPENSSL-LICENSE.txt?raw";
 import protobufLicense from "../../../packages/mosh-transport/vendor-android/protobuf/LICENSE?raw";
 import utf8License from "../../../packages/mosh-transport/vendor-android/protobuf/third_party/utf8_range/LICENSE?raw";
@@ -66,6 +67,7 @@ export default function AboutPanel() {
         ["Abseil", abseilLicense],
         ["OpenSSL", opensslLicense],
         ["Eternal Terminal adapter", etLicense],
+        ["Portable PTY", ptyLicense],
       ].map(([name, text]) => (
         <details key={name}>
           <summary>{name} license</summary>

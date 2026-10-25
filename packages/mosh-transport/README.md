@@ -1,8 +1,10 @@
 # Headless Mosh transport
 
-This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux and macOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. The package also supports Android target-native compilation; Android runtime/app acceptance remains separate. iOS and Windows builds explicitly report Mosh unavailable.
+This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux and macOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. The package supports Android target-native compilation and has an iOS target-native build under validation; mobile runtime/app acceptance remains separate. The app keeps iOS Mosh disabled pending proof, and Windows remains unavailable.
 
 The root Cargo workspace owns the lockfile. Bun/Turborepo tracks this package through `@lazysh/mosh-transport`; native build/test tasks use Cargo's cache and bypass Turbo artifact caching. Unsupported targets do not compile or link the C++ core.
+
+See [IOS.md](IOS.md) for the shared dependency build, SDK/deployment settings, native Cargo simulator fixture, and remaining iOS acceptance checks.
 
 ## Source identity and licensing
 
@@ -23,7 +25,7 @@ cargo clippy --manifest-path packages/mosh-transport/Cargo.toml --all-targets --
 cargo fmt --manifest-path packages/mosh-transport/Cargo.toml -- --check
 ```
 
-The ignored integration test requires the official `mosh-server` 1.4.0 binary on PATH. It starts temporary loopback-only server processes with a 20-second network timeout and cleans up their recorded PIDs. It tests two parallel clients, UTF-8 input, PTY resize, and graceful shutdown, and checks that the calling process's locale, SIGWINCH disposition, and stdin flags are unchanged. It does not contact user hosts or accounts. Unit tests cover malformed protobuf, oversized authenticated resize/state, input limits, invalid authentication tags, authenticated fragment bounds, scoped IPv6 address preservation, a hostile reference-state deletion attempt, and recovery after bounded state flooding. An unauthenticated maximum-size UDP datagram is dropped independently of stale `errno`, and a subsequent valid authenticated packet still updates the screen.
+The ignored integration test requires the official `mosh-server` 1.4.0 binary on PATH. It starts temporary loopback-only server processes with a 20-second network timeout and cleans up their recorded PIDs. It tests two parallel clients, UTF-8 input, PTY resize, and graceful shutdown, and checks that the calling process's locale, SIGWINCH disposition, and stdin flags are unchanged. It does not contact user hosts or accounts. Unit tests cover malformed protobuf, oversized authenticated resize/state, input limits, invalid authentication tags, authenticated fragment bounds, scoped IPv6 address preservation, a hostile reference-state deletion attempt, and recovery after bounded state flooding. An unauthenticated datagram one byte larger than the actual native receive buffer must reach the receiver on every platform and be dropped independently of stale `errno`; a subsequent authenticated packet must update the screen. The IPv4 maximum-size datagram is also exercised wherever the OS permits it; Darwin may reject that send with `EMSGSIZE`, which is explicitly checked before verifying normal authenticated recovery.
 
 `bun run test:mosh` also runs the application's ignored OpenSSH/Mosh interoperability test. That fixture verifies real host-key authentication and remote bootstrap, closes the initial SSH PTY after handoff, sends UTF-8 input, resizes, uses the retained SSH connection for SFTP, and disconnects through the shared session/output-acknowledgment path.
 
@@ -59,4 +61,4 @@ Original vendored files remain unchanged. `build.rs` applies the following dated
 - Bound queued input to 64 KiB of events and one returned ANSI frame to 8 MiB. The caller must apply its own bounded output delivery/backpressure before forwarding frames to a WebView.
 - Use `OPENSSL_cleanse` on native raw key copies and fixed xterm display initialization.
 
-Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS/Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.
+Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS native/app acceptance, Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     deleteHost: vi.fn(),
     trustHostKey: vi.fn(),
     connect: vi.fn(),
+    connectLocal: vi.fn(),
     connectMosh: vi.fn(),
     connectEt: vi.fn(),
     disconnect: vi.fn(),
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   },
   terminal: { write: vi.fn(), dispose: vi.fn() },
   invoke: vi.fn(),
+  appleProps: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
@@ -32,7 +34,14 @@ vi.mock("./TerminalPane", () => ({
 }));
 vi.mock("./AgentPanel", () => ({ default: () => <div>Agent companion</div> }));
 vi.mock('./PushSettingsPanel',()=>({default:()=> <div>Native push registration controls</div>}));
-vi.mock('./AppleStatusPanel',()=>({default:({sessionId,onReview}:{sessionId:string;onReview:()=>void})=><div>Apple controls for {sessionId}<button onClick={onReview}>Review Apple approval</button></div>}));
+vi.mock('./AppleStatusPanel',async()=>{
+  const {useState}=await import('react');
+  return {default:(props:{sessionId:string;usage?:unknown;onReview:()=>void})=>{
+    const [sharing,setSharing]=useState(false);mocks.appleProps(props);
+    return <div>Apple controls for {props.sessionId}<button onClick={props.onReview}>Review Apple approval</button><button onClick={()=>setSharing(true)}>Start test Apple sharing</button>{sharing && <p>Apple sharing remains active</p>}</div>;
+  }};
+});
+vi.mock('./UsagePanel',()=>({default:({onShareAppleUsage}:{onShareAppleUsage?:(report:unknown)=>void})=><button onClick={()=>onShareAppleUsage?.({recordedAt:'2026-10-25T12:00:00Z',freshness:'fresh',inputTokens:11,outputTokens:9,cacheReadTokens:null,cacheWriteTokens:2,observedAt:'2026-10-25T12:01:00Z',receivedAt:1792929660000})}>Use latest report for Watch</button>}));
 import App, { validateHost } from "./App";
 
 const host: Host = {
@@ -827,4 +836,60 @@ it('waits for native capabilities before starting Auto discovery',async()=>{
   await act(async()=>resolveCapabilities?.({mosh:true,et:true}));
   await user.click(screen.getByRole('button',{name:'Connect'}));
   expect(await screen.findByText('Auto selected Mosh.')).toBeTruthy();
+});
+
+function enableLocal() {
+  mocks.invoke.mockImplementation(async(command:string)=>command==='local_capability'?{available:true,reason:'Local desktop shell'}:false);
+  mocks.api.connectLocal.mockResolvedValue({sessionId:'local:desktop'});
+}
+it('opens an explicit local terminal without SSH authentication and hides remote tools',async()=>{
+  enableLocal();const user=userEvent.setup();render(<App/>);
+  await user.click(await screen.findByRole('button',{name:'Open local terminal'}));
+  expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+  expect(mocks.api.connectLocal).toHaveBeenCalledTimes(1);expect(mocks.api.connect).not.toHaveBeenCalled();
+  expect(screen.getByText(/Local PTY/)).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Files'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Agents'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Apple status'})).toBeNull();
+  expect(screen.queryByText('Apple controls for local:desktop')).toBeNull();
+  expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.workspace.v1','[{"local":true}]');
+  await user.click(screen.getByRole('button',{name:'Disconnect Local terminal'}));
+  expect(mocks.api.disconnect).toHaveBeenCalledWith('local:desktop');
+});
+it('keeps the local entry unavailable when the native platform reports unsupported',async()=>{
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  expect((screen.getByRole('button',{name:'Open local terminal'}) as HTMLButtonElement).disabled).toBe(true);
+  await user.click(screen.getByRole('button',{name:'Open local terminal'}));
+  expect(mocks.api.connectLocal).not.toHaveBeenCalled();
+});
+it('restores local intention through a fresh local PTY without a host lookup or SSH',async()=>{
+  enableLocal();vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?'[{"local":true}]':null);
+  mocks.api.listHosts.mockResolvedValue([]);
+  const user=userEvent.setup();render(<App/>);
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Open local terminal'}) as HTMLButtonElement).disabled).toBe(false));
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  expect(await screen.findByText(/Local PTY/)).toBeTruthy();expect(mocks.api.connectLocal).toHaveBeenCalledTimes(1);
+  expect(mocks.api.connect).not.toHaveBeenCalled();
+});
+it('disconnects a late local startup when the app closes',async()=>{
+  enableLocal();let finish:((value:{sessionId:string})=>void)|undefined;
+  mocks.api.connectLocal.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+  const user=userEvent.setup();const view=render(<App/>);
+  await user.click(await screen.findByRole('button',{name:'Open local terminal'}));
+  await waitFor(()=>expect(mocks.api.connectLocal).toHaveBeenCalled());view.unmount();
+  await act(async()=>finish?.({sessionId:'local:late'}));
+  expect(mocks.api.disconnect).toHaveBeenCalledWith('local:late');
+});
+
+it('keeps explicit Apple sharing mounted across tool navigation and binds the selected usage to its SSH session',async()=>{
+  mocks.api.connect.mockResolvedValueOnce({sessionId:'usage-one'}).mockResolvedValueOnce({sessionId:'usage-two'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Apple status'}));await user.click(screen.getByRole('button',{name:'Start test Apple sharing'}));
+  await user.click(screen.getByRole('button',{name:'Usage'}));await user.click(await screen.findByRole('button',{name:'Use latest report for Watch'}));
+  expect(mocks.appleProps).toHaveBeenLastCalledWith(expect.objectContaining({sessionId:'usage-one',usage:{recordedAt:'2026-10-25T12:00:00Z',freshness:'fresh',inputTokens:11,outputTokens:9,cacheReadTokens:null,cacheWriteTokens:2,observedAt:'2026-10-25T12:01:00Z',receivedAt:1792929660000}}));
+  await user.click(screen.getByRole('button',{name:'Apple status'}));expect(screen.getByText('Apple sharing remains active')).toBeTruthy();
+  await user.click(screen.getByRole('button',{name:'Connect to Home'}));await user.type(screen.getByLabelText('Password'),'second-secret');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(mocks.appleProps).toHaveBeenLastCalledWith(expect.objectContaining({sessionId:'usage-two',usage:null})));
+  expect(localStorage.setItem).not.toHaveBeenCalledWith('lazysh.workspace.v1',expect.stringContaining('inputTokens'));
 });

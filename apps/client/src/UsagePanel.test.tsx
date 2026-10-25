@@ -32,6 +32,16 @@ it("collects only after an explicit request, labels stale samples, and keeps con
   expect(screen.queryByText("240")).toBeNull();
   expect(screen.getAllByText("Unknown").length).toBeGreaterThan(3);
 });
+it("shares only an explicitly selected latest report without paths, sample identity or a summed total", async () => {
+  vi.mocked(invoke).mockResolvedValue(snapshot);const share=vi.fn();
+  render(<UsagePanel sessionId="ssh1" onShareAppleUsage={share}/>);
+  fireEvent.change(screen.getByLabelText("Usage transcript path"),{target:{value:"/secret/session.jsonl"}});
+  fireEvent.click(screen.getByRole("button",{name:"Inspect usage"}));
+  const button=await screen.findByRole("button",{name:"Use latest report for Watch"});
+  expect(share).not.toHaveBeenCalled();fireEvent.click(button);
+  expect(share).toHaveBeenCalledWith({inputTokens:120,outputTokens:12,cacheReadTokens:null,cacheWriteTokens:null,recordedAt:sample.recordedAt,freshness:"stale",observedAt:snapshot.observedAt,receivedAt:expect.any(Number)});
+  expect(JSON.stringify(share.mock.calls[0])).not.toMatch(/record1|secret|totalTokens/);
+});
 
 it("pages using the opaque cursor and rejects mismatched source identity", async () => {
   vi.mocked(invoke).mockResolvedValueOnce({ ...snapshot, hasMore: true }).mockResolvedValueOnce({ ...snapshot, agent: "copilot", nextOffset: 900 });
