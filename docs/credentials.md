@@ -57,16 +57,17 @@ queued calls do not acquire a fresh generation after a later unlock. Successful
 results and structured errors are checked again at serialization, and old frontend
 continuations are bound to their original view generation. The native cover remains
 until fresh authentication succeeds and the replacement UI acknowledges its reset.
-There is no frontend command that grants an unlock. Cancellation and missing or
-invalidated proof leave access locked. Before enable intent is committed, a cancelled enable can return to the prior off
+There is no frontend command that grants an unlock. During resume authentication,
+cancellation or missing/invalidated proof leaves access locked. Before enable
+intent is committed, a cancelled enable can return to the prior off
 state only after its newly owned proof is successfully removed and absence is
 confirmed. Once the true-intent commit is attempted, failures retain the recovery
 proof and remain restrictive. Disabling first authenticates the proof, commits
 false intent, then removes and confirms absence of the proof; an interrupted delete
 or a remaining proof conservatively restores enabled intent. The owned operation
 continues through admitted commits after caller cancellation, so an error does not
-promise that the prior setting is unchanged. Enrollment changes
-can invalidate this proof. There is currently no in-app recovery bypass for a lost
+promise that the prior setting is unchanged. Enrollment changes can invalidate
+this proof. There is currently no in-app recovery bypass for a lost
 proof; do not treat this development preview as having recovery-key support.
 
 Live terminal ownership and xterm buffers survive ordinary same-view background
