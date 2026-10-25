@@ -724,7 +724,7 @@ impl Drop for PendingTerminal {
     }
 }
 pub(crate) enum Input {
-    Data(String, AccessLease),
+    Data(crate::terminal_input::InputSequence, AccessLease),
     Resize(u32, u32, AccessLease),
 }
 #[derive(Clone, Serialize)]
@@ -1391,16 +1391,27 @@ async fn spawn_terminal(
         let completion = SessionCompletion::new(session.finished.clone());
         let result:Result<()> = async {
             send_output(&session, &events, &initial).await?;
+            let mut pending:Option<(crate::terminal_input::InputSequence,AccessLease)>=None;
             loop {
                 tokio::select! {
                     _=cancellation.changed()=>break,
+                    _=async { match &pending {Some((_,lease))=>lease.cancelled().await,None=>std::future::pending().await} }=>{pending=None;},
+                    _=async { match &pending {Some((data,_))=>tokio::time::sleep_until(data.ready_at()).await,None=>std::future::pending().await} }=>{
+                        if let Some((data,lease))=&mut pending {
+                            if lease.check().is_ok() {
+                                let count=data.bytes().len();
+                                tokio::select! { biased; _=lease.cancelled()=>{}, result=terminal_io(&session,channel.data(data.bytes()))=>{result?;data.advance(count);} }
+                            }
+                            if lease.check().is_err() || data.is_empty() {pending=None;}
+                        }
+                    },
                     message=channel.wait()=> match message {
                         Some(ChannelMsg::Data{data})|Some(ChannelMsg::ExtendedData{data,..}) => send_output(&session,&events,&data).await?,
                         None|Some(ChannelMsg::Close)|Some(ChannelMsg::Eof)=>break,
                         _=>{}
                     },
-                    input=rx.recv()=>match input {
-                        Some(Input::Data(data, lease))=>{ if lease.check().is_ok() { tokio::select! { biased; _ = lease.cancelled() => {}, result = terminal_io(&session,channel.data(data.as_bytes())) => {result?;} } } },
+                    input=rx.recv(), if pending.is_none()=>match input {
+                        Some(Input::Data(data, lease))=>{if !data.is_empty() && lease.check().is_ok() {pending=Some((data,lease));}},
                         Some(Input::Resize(cols,rows, lease))=>{ if lease.check().is_ok() { tokio::select! { biased; _ = lease.cancelled() => {}, result = terminal_io(&session,channel.window_change(cols,rows,0,0)) => {result?;} } } },
                         None=>break
                     }
@@ -1672,15 +1683,12 @@ pub async fn write_stdin(
     state: State<'_, AppState>,
     session_id: String,
     data: String,
+    steps: Option<Vec<String>>,
 ) -> AccessResult<()> {
     lease
         .run(async {
-            if data.len() > 65536 {
-                return Err(SshError::new(
-                    "input_too_large",
-                    "Paste at most 64 KiB at once",
-                ));
-            }
+            let data = crate::terminal_input::InputSequence::parse(data, steps)
+                .map_err(|message| SshError::new("input_too_large", message))?;
             state
                 .session(&session_id)
                 .await?
@@ -2913,6 +2921,18 @@ mod tests {
         reject_pty: bool,
         freeze_window: bool,
     ) -> (Host, TestServer, tokio::task::JoinHandle<()>) {
+        server_with_capacity(
+            reject_pty,
+            freeze_window,
+            if freeze_window { 128 } else { 2097152 },
+        )
+        .await
+    }
+    async fn server_with_capacity(
+        reject_pty: bool,
+        freeze_window: bool,
+        window_size: u32,
+    ) -> (Host, TestServer, tokio::task::JoinHandle<()>) {
         use server::Server;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let key =
@@ -2923,7 +2943,7 @@ mod tests {
             keys: vec![key],
             auth_rejection_time: Duration::from_millis(10),
             auth_rejection_time_initial: Some(Duration::from_millis(10)),
-            window_size: if freeze_window { 128 } else { 2097152 },
+            window_size,
             ..Default::default()
         });
         let host = Host {
@@ -3078,7 +3098,10 @@ mod tests {
         let parent_session = state.session(&parent.session_id).await.unwrap();
         parent_session
             .input
-            .send(Input::Data("parent-alive".into(), access_lease()))
+            .send(Input::Data(
+                "parent-alive".to_owned().into(),
+                access_lease(),
+            ))
             .await
             .unwrap();
         timeout(Duration::from_secs(3), async {
@@ -3138,6 +3161,7 @@ mod tests {
             app.state(),
             connected.session_id.clone(),
             "x".repeat(65536),
+            None,
         )
         .await
         .unwrap()
@@ -3265,6 +3289,154 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paced_ssh_sequence_retains_queue_order_and_services_output() {
+        let (host, server, task) = server(false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        state.config().unwrap().hosts.push(host.clone());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let events = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                let _ = tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap());
+            }
+            Ok(())
+        });
+        let connected = start_session(
+            &state,
+            host.id,
+            Some("test-password".into()),
+            None,
+            None,
+            80,
+            24,
+            events,
+        )
+        .await
+        .unwrap();
+        let session = state.session(&connected.session_id).await.unwrap();
+        let sequence = crate::terminal_input::InputSequence::parse(
+            String::new(),
+            Some(vec!["A".into(), "B".into(), "C".into()]),
+        )
+        .unwrap();
+        session
+            .input
+            .send(Input::Data(sequence, access_lease()))
+            .await
+            .unwrap();
+        session
+            .input
+            .send(Input::Data("TAIL".to_owned().into(), access_lease()))
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(3), async {
+            let mut output = Vec::new();
+            while !output.ends_with(b"ABCTAIL") {
+                let event = rx.recv().await.unwrap();
+                assert_ne!(event["type"], "closed");
+                if let Some(data) = event["data"].as_array() {
+                    output.extend(data.iter().map(|v| v.as_u64().unwrap() as u8));
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*server.input_data.lock().unwrap(), b"ABCTAIL");
+        session.cancel.send_replace(true);
+        timeout(Duration::from_secs(3), async {
+            while !*session.finished.borrow() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+    }
+    #[tokio::test]
+    async fn revoking_a_paced_ssh_sequence_discards_unsent_steps_even_after_unlock() {
+        // A one-byte frozen receive window admits A and deterministically holds B.
+        let (host, server, task) = server_with_capacity(false, true, 1).await;
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().into()).unwrap();
+        state.config().unwrap().hosts.push(host.clone());
+        let access = AccessState::default();
+        access.initialize(true, true, "test".into()).unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        let lease = access
+            .lease(access.status().unwrap().nonce.as_deref())
+            .unwrap();
+        let revoked = Arc::new(tokio::sync::Notify::new());
+        let signal = revoked.clone();
+        let owner = access.clone();
+        let events = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                let event: serde_json::Value = serde_json::from_str(&json).unwrap();
+                if event["data"]
+                    .as_array()
+                    .is_some_and(|data| data.iter().any(|v| v.as_u64() == Some(b'A' as u64)))
+                {
+                    owner.lock().unwrap();
+                    signal.notify_one();
+                }
+            }
+            Ok(())
+        });
+        let connected = start_session(
+            &state,
+            host.id,
+            Some("test-password".into()),
+            None,
+            None,
+            80,
+            24,
+            events,
+        )
+        .await
+        .unwrap();
+        let session = state.session(&connected.session_id).await.unwrap();
+        session
+            .input
+            .send(Input::Data(
+                crate::terminal_input::InputSequence::parse(
+                    String::new(),
+                    Some(vec!["A".into(), "B".into(), "C".into()]),
+                )
+                .unwrap(),
+                lease.clone(),
+            ))
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(3), revoked.notified())
+            .await
+            .unwrap();
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        assert!(lease.check().is_err());
+        session
+            .input
+            .send(Input::Resize(99, 33, access_lease()))
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(3), async {
+            while !server.sizes.lock().unwrap().contains(&(99, 33)) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*server.input_data.lock().unwrap(), b"A");
+        session.cancel.send_replace(true);
+        timeout(Duration::from_secs(3), async {
+            while !*session.finished.borrow() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+    }
+    #[tokio::test]
     async fn live_terminal_streams_utf8_resizes_and_cleans_up() {
         let (host, server, task) = server(false).await;
         let dir = tempfile::tempdir().unwrap();
@@ -3292,7 +3464,7 @@ mod tests {
         let session = state.session(&result.session_id).await.unwrap();
         session
             .input
-            .send(Input::Data("你好🌍".into(), access_lease()))
+            .send(Input::Data("你好🌍".to_owned().into(), access_lease()))
             .await
             .unwrap();
         session
@@ -3660,16 +3832,23 @@ mod tests {
                 .unwrap();
             }
             disconnect(app.state(), id).await.unwrap();
-            write_stdin(access_lease(), app.state(), mosh_id.clone(), String::new())
-                .await
-                .unwrap()
-                .into_inner()
-                .unwrap();
             write_stdin(
                 access_lease(),
                 app.state(),
                 mosh_id.clone(),
-                "printf 'MOSH_%s_READY\\n' '世界'\r".into(),
+                String::new(),
+                None,
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            write_stdin(
+                access_lease(),
+                app.state(),
+                mosh_id.clone(),
+                String::new(),
+                Some(vec!["printf 'MOSH_%s_READY\\n' '世界'".into(), "\r".into()]),
             )
             .await
             .unwrap()
@@ -3686,6 +3865,7 @@ mod tests {
                 app.state(),
                 mosh_id.clone(),
                 "set -- $(stty size); printf 'MOSH_SIZE_%s_%s\\n' \"$1\" \"$2\"\r".into(),
+                None,
             )
             .await
             .unwrap()
@@ -4027,6 +4207,7 @@ mod tests {
             app.state(),
             id.clone(),
             "printf lazysh-interoperability\\n\r".into(),
+            None,
         )
         .await
         .unwrap()

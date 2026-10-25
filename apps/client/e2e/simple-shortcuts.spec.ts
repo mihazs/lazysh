@@ -1,9 +1,9 @@
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutWrites:string[]}}
+declare global {interface Window {simpleShortcutWrites:string[];simpleShortcutSteps:string[][]}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
-    window.simpleShortcutWrites=[];
+    window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
       if (command==='app_lock_status') return {initialized:true,supported:false,reason:'Synthetic shortcut access fixture.',enabled:false,locked:false,generation:'0'};
@@ -12,7 +12,7 @@ async function fixture(page:Page) {
       if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
       if (command==='local_connect') return {sessionId:'local:shortcut-fixture'};
-      if (command==='local_write') {window.simpleShortcutWrites.push(args.data as string);return;}
+      if (command==='local_write') {const steps=args.steps as string[]|undefined; if(steps)window.simpleShortcutSteps.push(steps);window.simpleShortcutWrites.push(steps?steps.join(''):args.data as string);return;}
       if (['local_resize','local_ack','local_disconnect'].includes(command))return;
       if (command.startsWith('plugin:event|'))return 1;
       throw new Error(`Unexpected shortcut fixture command: ${command}`);
@@ -47,6 +47,7 @@ test('Simple custom text survives reload and sends exact toolbar bytes only on e
   for (const [label] of cases) await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:label,exact:true}).click();
   await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:'Unicode',exact:true}).click();
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([...cases.map(item=>item[2]),' 你好,, 😀 ']);
+  expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x02','1'],['\x01','\x02'],['\x01',',','b'],['\x00','b',' '],[' 你好,, 😀 ']]);
 });
 
 test('Simple limits and unsupported modifiers reject saving without truncating the entered text',async({page})=>{
@@ -118,6 +119,7 @@ test('custom gesture and D-pad builders save isolated bindings and send only on 
   await terminal.dispatchEvent('pointerdown',{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
   await terminal.dispatchEvent('pointerup',{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x01,b',' 你好,, 😀 ']);
+  expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x01',',','b'],[' 你好,, 😀 ']]);
 });
 
 test('invalid slot drafts survive other-slot saves and builder switches never rewrite stored Advanced bindings',async({page})=>{

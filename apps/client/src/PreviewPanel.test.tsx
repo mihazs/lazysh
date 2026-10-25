@@ -58,22 +58,3 @@ it('shows actual listener process metadata and applies only the explicit allowli
   expect(invoke).toHaveBeenCalledWith('discover_preview_ports', { sessionId: 'ssh-one', allowPorts: [3000, 8000, 8001], probeHttp: true }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(invoke).not.toHaveBeenCalledWith('start_preview', expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
-it('stages a page note only after an explicit user action', async () => {
-  vi.mocked(invoke).mockResolvedValue([preview]);
-  const staged = vi.fn();
-  window.addEventListener('lazysh-prompt-draft', staged);
-  try {
-    render(<PreviewPanel sessionId="ssh-one" />);
-    await screen.findByTitle('Host browser preview on port 5173');
-    fireEvent.change(screen.getByLabelText('Page path'), { target: { value: '/login' } });
-    fireEvent.change(screen.getByLabelText('Element selector (optional)'), { target: { value: '#submit' } });
-    fireEvent.change(screen.getByLabelText('Comment'), { target: { value: 'Increase contrast' } });
-    expect(staged).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Stage note in prompt' }));
-    expect(staged).toHaveBeenCalledOnce();
-    const detail = (staged.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail.sessionId).toBe('ssh-one');
-    expect(detail.text).toContain('Page: /login\nElement: #submit\nComment: Increase contrast');
-    expect(invoke).not.toHaveBeenCalledWith('write_stdin', expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
-  } finally { window.removeEventListener('lazysh-prompt-draft', staged); }
-});

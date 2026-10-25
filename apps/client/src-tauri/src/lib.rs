@@ -22,6 +22,7 @@ mod sftp_stream;
 mod share;
 mod ssh;
 mod sync;
+mod terminal_input;
 mod vault;
 mod voice;
 mod zellij;

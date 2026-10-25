@@ -73,16 +73,18 @@ pub async fn local_write(
     state: State<'_, LocalState>,
     session_id: String,
     data: String,
+    steps: Option<Vec<String>>,
 ) -> AccessResult<()> {
     lease
         .run(async {
             #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
             {
-                desktop::write(&state, &session_id, data, lease.clone())
+                let data = crate::terminal_input::InputSequence::parse(data, steps)?;
+                desktop::write_sequence(&state, &session_id, data, lease.clone())
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             {
-                let _ = (state, session_id, data);
+                let _ = (state, session_id, data, steps);
                 Err("Local terminals require the desktop app".into())
             }
         })
@@ -235,7 +237,7 @@ mod desktop {
     const WINDOW: usize = 256 * 1024;
     const SESSION_LIMIT: u32 = 20;
     enum Input {
-        Data(String, AccessLease),
+        Data(crate::terminal_input::InputSequence, AccessLease),
         Resize(u32, u32, AccessLease),
         Close,
     }
@@ -770,18 +772,22 @@ mod desktop {
                                         .map_err(|e| e.to_string())?;
                                 }
                             }
-                            Input::Data(data, lease) => {
+                            Input::Data(mut data, lease) => {
                                 if lease.check().is_err() {
                                     continue;
                                 }
-                                let mut bytes = data.as_bytes();
-                                while !bytes.is_empty() && !write_stop.load(Ordering::SeqCst) {
+                                while !data.is_empty() && !write_stop.load(Ordering::SeqCst) {
                                     if lease.check().is_err() {
                                         break;
                                     }
-                                    match writer.write(bytes) {
+                                    let delay = data.delay();
+                                    if !delay.is_zero() {
+                                        std::thread::sleep(delay.min(Duration::from_millis(10)));
+                                        continue;
+                                    }
+                                    match writer.write(data.bytes()) {
                                         Ok(0) => return Err("Local terminal input closed".into()),
-                                        Ok(length) => bytes = &bytes[length..],
+                                        Ok(length) => data.advance(length),
                                         Err(error)
                                             if error.kind() == std::io::ErrorKind::Interrupted =>
                                         {
@@ -929,15 +935,26 @@ mod desktop {
         })?;
         Ok(true)
     }
+    #[cfg(test)]
     pub fn write(
         state: &LocalState,
         id: &str,
         data: String,
         lease: AccessLease,
     ) -> Result<(), String> {
-        if data.len() > 65536 {
-            return Err("Paste at most 64 KiB at once".into());
-        }
+        write_sequence(
+            state,
+            id,
+            crate::terminal_input::InputSequence::parse(data, None)?,
+            lease,
+        )
+    }
+    pub fn write_sequence(
+        state: &LocalState,
+        id: &str,
+        data: crate::terminal_input::InputSequence,
+        lease: AccessLease,
+    ) -> Result<(), String> {
         state
             .0
             .session(id)?
@@ -1081,6 +1098,36 @@ mod tests {
         command.env("PATH", "/usr/bin:/bin");
         command.env("TERM", "xterm-256color");
         command
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn real_local_sequences_keep_following_input_outside_the_chord() {
+        let state = LocalState::default();
+        let (event, mut rx) = events();
+        let connected=desktop::start(&state,shell("stty -echo; printf READY; while IFS= read -r line; do printf 'INPUT:%s\\n' \"$line\"; done"),80,24,event).await.unwrap();
+        until(&mut rx, "READY").await;
+        desktop::write_sequence(
+            &state,
+            &connected.session_id,
+            crate::terminal_input::InputSequence::parse(
+                String::new(),
+                Some(vec!["ab".into(), "世界".into(), "\n".into()]),
+            )
+            .unwrap(),
+            access_lease(),
+        )
+        .unwrap();
+        desktop::write(
+            &state,
+            &connected.session_id,
+            "TAIL\n".into(),
+            access_lease(),
+        )
+        .unwrap();
+        let output = until(&mut rx, "INPUT:TAIL").await;
+        assert!(output.contains("INPUT:ab世界\r\nINPUT:TAIL"), "{output}");
+        desktop::disconnect(&state, &connected.session_id);
+        closed(&mut rx).await;
     }
     #[cfg(unix)]
     #[tokio::test]
