@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Optional device-local dictation history with explicit Remember consent,
+  seven-day availability, 20-entry/256 KiB bounds, editable reuse and Delete/Clear.
+  History remains temporary by default; saved text is not encrypted by lazysh,
+  and expired entries are pruned on use rather than while the app is closed.
+
 - Explicit downloads of four pinned Whisper tiny/base models, with bounded
   streaming, cancellation and SHA-256 verification before local publication.
   No automatic download, audio upload or prompt-submission default changes.

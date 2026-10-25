@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { MAX_VOICE_SECONDS, mono16k, validModelFile } from "./voice";
 import { errorMessage } from "./SessionTools";
+import { useDictationHistory } from './voiceHistory';
+import VoiceHistoryPanel from './VoiceHistoryPanel';
 
 type Model = { id: string; bytes: number };
 type CatalogModel = {id:string;file:string;label:string;bytes:number;sha256:string;revision:string};
@@ -34,7 +36,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
-  const [history, setHistory] = useState<string[]>([]);
+  const history = useDictationHistory();
   const [error, setError] = useState("");
   const [progress, setProgress] = useState("");
   const recorder = useRef<MediaRecorder | undefined>(undefined);
@@ -212,7 +214,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
       }
     }
   }
-  async function transcribe(blob: Blob, current: number) {
+  async function transcribe(blob: Blob, current: number, historyCapture: ReturnType<typeof history.capture>) {
     if (current !== generation.current) return;
     releaseMicrophone();
     setRecording(false);
@@ -250,7 +252,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
         throw new Error("Invalid transcription result.");
       if (current === generation.current) {
         setDraft(text);
-        if (text) setHistory((previous) => [text, ...previous].slice(0, 20));
+        history.add(text,historyCapture);
       }
     } catch (e) {
       if (current === generation.current) setError(errorMessage(e));
@@ -265,6 +267,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   }
   async function start() {
     const current = ++generation.current;
+    const historyCapture = history.capture();
     setError("");
     setBusy(true);
     try {
@@ -305,7 +308,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
         setError("Microphone recording failed.");
       };
       capture.onstop = () => {
-        void transcribe(new Blob(parts, { type: capture.mimeType }), current);
+        void transcribe(new Blob(parts, { type: capture.mimeType }), current, historyCapture);
       };
       capture.start(1000);
       setRecording(true);
@@ -321,6 +324,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
   }
   function cancel() {
     generation.current++;
+    history.invalidate();
     if(downloadRequest.current) {
       const requestId=downloadRequest.current;setCancellingDownload(true);setProgress('Cancelling model download…');
       void invoke<boolean>('voice_download_cancel',{requestId}).then(cancelled=>{
@@ -563,17 +567,7 @@ export default function VoicePanel({ sessionId }: { sessionId?: string }) {
           </button>
         )}
       </div>
-      {history.length > 0 && (
-        <details>
-          <summary>Session dictation history ({history.length})</summary>
-          <button onClick={() => setHistory([])}>Clear history</button>
-          {history.map((text, index) => (
-            <button key={index} onClick={() => setDraft(text)}>
-              {text.slice(0, 100)}
-            </button>
-          ))}
-        </details>
-      )}
+      <VoiceHistoryPanel history={history} onReuse={setDraft} disabled={busy || recording}/>
     </section>
   );
 }
