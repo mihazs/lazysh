@@ -74,7 +74,13 @@ fn main() {
             format!("lib{name}.a")
         };
         fs::copy(&path, output.join(destination)).expect("copy static archive");
-        println!("cargo:rustc-link-lib=static={name}");
+        // Preserve the archive identity on ELF so final consumers can isolate
+        // ORT's private protobuf symbols from system protobuf shared libraries.
+        if target == "linux" && name == "onnxruntime" {
+            println!("cargo:rustc-link-lib=static:-bundle={name}");
+        } else {
+            println!("cargo:rustc-link-lib=static={name}");
+        }
     }
     assert!(found_ort, "pinned static ONNX Runtime is missing");
     match target.as_str() {

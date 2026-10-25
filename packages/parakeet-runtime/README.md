@@ -1,6 +1,6 @@
 # Parakeet runtime
 
-Internal, synchronous CPU inference support for issue #13. This package is not connected to the client and does not add a dictation engine to the UI. It makes no provider requests and never downloads a speech model.
+Internal, synchronous CPU inference support for issue #13. The client has an optional acceptance-only dependency; this package does not add a dictation engine to the UI. It makes no provider requests and never downloads a speech model.
 
 `VerifiedBundle::read_in(reader, private_parent)` accepts only the exact pinned Parakeet TDT 0.6B v3 INT8 catalog archive described in [PROVENANCE.md](PROVENANCE.md). It streams at most the expected compressed size plus one byte into an owned private file, checks the fixed SHA-256 before decompression, and extracts only four fixed files. There is no arbitrary-directory, arbitrary-ONNX, caller-selected digest, or unchecked model constructor. A private snapshot avoids changing the input between verification and extraction.
 
@@ -27,6 +27,8 @@ Client integration must wait for the resume-lock prerequisite to merge, then sta
 ## Build and checks
 
 The build uses pinned official sherpa-onnx source/CMake with CPU static dependencies. It extracts only native build inputs, excluding upstream scripts and their absolute symlink. It downloads source/runtime dependencies, not model weights. `LAZYSH_PARAKEET_SOURCE_ARCHIVE` may point to a predownloaded source archive, but its fixed checksum is always checked. See provenance for the initial Linux proof and cross-platform limits.
+
+On Linux, the ORT archive uses Rust's `static:-bundle` linkage so it retains its filename at the final link instead of being copied into the Rust rlib. Rust rlib consumers inherit that named dependency; non-Rust consumers of a Linux `staticlib` must explicitly link the ORT archive themselves because it is not packed into the staticlib. A final executable that also links system protobuf must use `-Wl,--exclude-libs,libonnxruntime.a` to prevent ORT's private protobuf symbols from preempting that shared library. The client's optional `parakeet-acceptance` feature applies this exact-archive rule; the standalone package does not link system protobuf. This does not alter the pinned architecture-specific C++ ABI or Apple/Windows link flags. See [combined client acceptance](../../docs/voice-native-interop.md) for the reproduced shutdown failure and validation scope.
 
 From the repository root:
 
