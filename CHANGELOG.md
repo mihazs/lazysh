@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Optional Unix-host transcription relay with administrator-issued device tokens,
+  revocation, durable audio quotas and cancellable bounded WAV uploads to a fixed
+  OpenAI transcription endpoint. No deployment, client enrollment or audio-upload
+  default changes; client integration remains separate.
 - Explicit downloads of four pinned Whisper tiny/base models, with bounded
   streaming, cancellation and SHA-256 verification before local publication.
   No automatic download, audio upload or prompt-submission default changes.

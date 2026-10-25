@@ -51,4 +51,4 @@ The implementation follows the current [SpeechAnalyzer API](https://developer.ap
 
 Rust tests validate the PCM, locale and request-ID boundary; UI tests cover explicit engine choice, installation and cancellation. Native Swift compilation is an iOS CI gate. No Apple microphone/model inference, accuracy, latency or battery claim has been verified on physical hardware.
 
-Remaining issue #13 work includes Parakeet, optional explicitly configured cloud transcription, persistent history preferences, and real-device acceptance.
+An optional Unix-host [transcription relay](cloud-transcription.md) provides a service-only foundation with revocable device tokens and durable quotas. It is not configured or contacted by this client yet. Remaining issue #13 work includes Parakeet, client enrollment/upload for explicitly selected cloud transcription, and real-device acceptance.

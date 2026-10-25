@@ -1,0 +1,13 @@
+{
+  "name": "@lazysh/transcription-service",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "cargo build --release --locked --package lazysh-transcription",
+    "check": "cargo check --locked --package lazysh-transcription",
+    "test": "cargo test --locked --package lazysh-transcription",
+    "lint": "cargo clippy --locked --package lazysh-transcription --all-targets -- -D warnings",
+    "format:check": "cargo fmt --manifest-path Cargo.toml -- --check"
+  },
+  "license": "GPL-3.0-or-later"
+}
