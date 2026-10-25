@@ -33,6 +33,29 @@ At most 100 session summaries are retained for seven days in `events.sqlite3` in
 
 Concurrent lifecycle writes use short lock polls within a three-second elapsed-time wait budget per SQLite locking episode. Sustained contention fails explicitly; storage failures include only the numeric SQLite extended error code, never its potentially sensitive message. Journal and synchronization settings retain SQLite's durable defaults.
 
+The Linux CI companion test task explicitly opts into syscall observation for
+the existing `concurrent_hooks_preserve_every_event` Cargo integration case via
+`LAZYSH_TEST_STORAGE_TRACE_DIR`. Only that case's sixteen synthetic CLI child
+processes are wrapped in `strace`; other cases and services remain untraced.
+An explicit request fails if the tool or results directory is unavailable.
+Traces contain PID-separated `fcntl`, `fsync` and `fdatasync` calls with absolute
+timestamps, durations and file-descriptor paths, without event payload reads,
+writes, argv or environment. Strace propagates the child's exit status; the
+original sixteen-success and event-count assertions remain unchanged.
+
+The native fixture reaps every worker and exports evidence before checking the
+success gates. It exports at most 64 owned regular PID files, preserving up to
+128 KiB of beginning/end data per file (at most 8 MiB of trace excerpts), plus
+a bounded status manifest. Symlinks, hard links, foreign ownership and unexpected
+filenames are rejected. The temporary raw spool is **not byte-capped during
+tracing**; only the exported excerpts are capped, and the spool is removed when
+the fixture exits normally. CI uploads `lazysh-storage-syscalls` after the
+original task on success/failure, without rerunning the suite, and bounds the
+agent job to twenty minutes. Tracing changes scheduling and I/O timing, so these
+artifacts are evidence with an observer effect, not a diagnosis or storage fix
+for [issue #36](https://github.com/mihazs/lazysh/issues/36). Production storage,
+durability and the three-second busy budget are unchanged.
+
 ## Read transcript records
 
 Select a transcript file on the host and request a page:
