@@ -160,6 +160,30 @@ plugin's CLI delivery, `get_current`, `on_open_url`, unlisten, metadata replay a
 same-URL reopening, plus route bounds and stale lease/read/ack behavior. Mobile
 and packaged desktop cold/warm OS delivery remain platform acceptance checks.
 
+### Android intent acceptance
+
+On an isolated, unlocked API 36 emulator, run `bun run test:android`. Turbo first
+builds the emulator APK, runs the single native theme-link method through
+`test:android-theme-links`, then runs the ordinary instrumentation suite with
+that method excluded. `bun run test:android-theme-links` also runs the focused
+method alone. These are AndroidJUnit4/ActivityScenario/Espresso tests against the
+bundled app and real implicit `ACTION_VIEW` intents, not a synthetic bridge.
+
+The focused invocation requires no existing MainActivity. It checks packaged
+manifest resolution, first-Activity delivery, explicit preview/discard, reopening
+the exact same URL into the same warm Activity, explicit apply, replacement
+discard and preservation of a manually typed theme draft. It resets its own
+appearance fixture through Preferences. It never force-stops the app, closes the
+last Tauri Activity, enrolls protection or bypasses a native cover. First-Activity
+startup inside instrumentation does not establish an external force-stopped
+process launch or physical biometric behavior.
+
+The two invocations retain separate native Gradle report/results directories
+under `app/build/reports/androidTests/` and `app/build/outputs/androidTest-results/`;
+CI uploads both, including failure diagnostics. Merely compiling the test is not
+runtime acceptance: inspect the dedicated method and ordinary-suite results for
+the tested commit. iOS and packaged desktop URL delivery stay separate gates.
+
 QR scanning remains a separate issue #16 task. No camera permission or barcode
 scanner is added by this change.
 
