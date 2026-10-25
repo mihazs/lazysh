@@ -146,19 +146,11 @@ fn string(payload: &Value, key: &str, max: usize) -> Result<String> {
     crate::text(value, max)?;
     Ok(value.into())
 }
-fn hook_request(mut input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Request> {
+fn hook_request(input: impl Read, pane: Option<&str>, timeout: u16) -> Result<Request> {
     if !(1..=600).contains(&timeout) {
         return Err(Error::InvalidArgument);
     }
-    let mut bytes = Vec::new();
-    input
-        .by_ref()
-        .take(MAX_INPUT as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_INPUT {
-        return Err(Error::InvalidEvent);
-    }
-    let payload: Value = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidEvent)?;
+    let payload = crate::read_bounded_json(input, MAX_INPUT)?;
     if payload.get("hook_event_name").and_then(Value::as_str) != Some("PermissionRequest") {
         return Err(Error::InvalidEvent);
     }

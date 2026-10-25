@@ -1,4 +1,5 @@
 use super::*;
+use crate::voice::test_support::ggml_bytes as bytes;
 use axum::{body::Body, http::Response, routing::get, Router};
 use futures_util::{stream, StreamExt};
 use std::{convert::Infallible, sync::Arc};
@@ -66,16 +67,14 @@ impl Drop for Fixture {
         self.server.abort();
     }
 }
-fn bytes() -> Vec<u8> {
-    let mut bytes = vec![0; 1024];
-    bytes[..4].copy_from_slice(b"lmgg");
-    for (index, value) in [51864i32, 1500, 512, 8, 6, 448, 512, 8, 6, 80, 1]
-        .iter()
-        .enumerate()
-    {
-        bytes[4 + index * 4..8 + index * 4].copy_from_slice(&value.to_le_bytes());
-    }
-    bytes
+async fn download_fixture(
+    data: Vec<u8>,
+    wait_halfway: bool,
+) -> (Fixture, tempfile::TempDir, VoiceState) {
+    let fixture = Fixture::new(data, None, wait_halfway).await;
+    let dir = tempfile::tempdir().unwrap();
+    let state = VoiceState::new(dir.path().to_owned()).unwrap();
+    (fixture, dir, state)
 }
 fn model(hash: &str) -> CatalogModel<'_> {
     CatalogModel {
@@ -136,9 +135,7 @@ fn publisher_policy_and_catalog_are_fixed_and_bounded() {
 async fn streams_fragmented_ggml_through_import_and_verifies_before_exclusive_publication() {
     let data = bytes();
     let hash = format!("{:x}", Sha256::digest(&data));
-    let fixture = Fixture::new(data.clone(), None, true).await;
-    let dir = tempfile::tempdir().unwrap();
-    let state = VoiceState::new(dir.path().to_owned()).unwrap();
+    let (fixture, _dir, state) = download_fixture(data.clone(), true).await;
     let mut progress = Vec::new();
     download(
         &state,
@@ -178,9 +175,7 @@ async fn streams_fragmented_ggml_through_import_and_verifies_before_exclusive_pu
 async fn cancelling_a_partial_stream_or_a_queued_request_never_publishes() {
     let data = bytes();
     let hash = format!("{:x}", Sha256::digest(&data));
-    let fixture = Fixture::new(data, None, true).await;
-    let dir = tempfile::tempdir().unwrap();
-    let state = VoiceState::new(dir.path().to_owned()).unwrap();
+    let (fixture, _dir, state) = download_fixture(data, true).await;
     let result = download(
         &state,
         &model(&hash),
@@ -259,9 +254,7 @@ async fn cancellation_collisions_and_quota_changes_before_commit_never_overwrite
     let data = bytes();
     let hash = format!("{:x}", Sha256::digest(&data));
     for scenario in 0..3 {
-        let fixture = Fixture::new(data.clone(), None, false).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = VoiceState::new(dir.path().to_owned()).unwrap();
+        let (fixture, _dir, state) = download_fixture(data.clone(), false).await;
         let result = download(
             &state,
             &model(&hash),

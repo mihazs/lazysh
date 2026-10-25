@@ -26,6 +26,8 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
 const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(all(test, unix))]
 #[path = "tmux_jump_fixture.rs"]
 mod tmux_jump_fixture;
@@ -208,11 +210,7 @@ impl AppState {
         let sessions = {
             let mut active = self.sessions.lock().await;
             let mut retiring = self.retiring.lock().await;
-            active
-                .drain()
-                .chain(retiring.drain())
-                .map(|(_, session)| session)
-                .collect::<Vec<_>>()
+            drain_sessions(&mut active, &mut retiring)
         };
         for session in &sessions {
             session.renderer_gone.send_replace(true);
@@ -669,30 +667,50 @@ async fn retire_session(
         retired.insert(id.to_owned(), session.clone());
     }
 }
+pub(crate) async fn adoption_revoked(
+    adopted: &std::sync::atomic::AtomicBool,
+    adoption: &tokio::sync::Notify,
+    cancellation: &mut watch::Receiver<bool>,
+    creation: &AccessLease,
+) -> bool {
+    if adopted.load(std::sync::atomic::Ordering::SeqCst) || *cancellation.borrow() {
+        return false;
+    }
+    tokio::select! {biased;
+        _=adoption.notified()=>false,
+        _=cancellation.changed()=>false,
+        _=creation.cancelled()=>!adopted.load(std::sync::atomic::Ordering::SeqCst),
+    }
+}
+pub(crate) fn drain_sessions<T>(
+    active: &mut HashMap<String, T>,
+    retiring: &mut HashMap<String, T>,
+) -> Vec<T> {
+    active
+        .drain()
+        .chain(retiring.drain())
+        .map(|(_, session)| session)
+        .collect()
+}
+
 fn watch_adoption(state: &AppState, id: &str, session: &Arc<Session>) {
     let session = session.clone();
     let sessions = state.sessions.clone();
     let retiring = state.retiring.clone();
     let id = id.to_owned();
     tauri::async_runtime::spawn(async move {
-        if session.adopted.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
-        }
         let mut cancellation = session.cancel.subscribe();
-        if *cancellation.borrow() {
-            return;
-        }
-        tokio::select! {
-            biased;
-            _ = session.adoption.notified() => {},
-            _ = cancellation.changed() => {},
-            _ = session.creation.cancelled() => {
-                if !session.adopted.load(std::sync::atomic::Ordering::SeqCst) {
-                    session.cancel.send_replace(true);
-                    session.output_credits.close();
-                    retire_session(&sessions, &retiring, &id, &session).await;
-                }
-            }
+        if adoption_revoked(
+            &session.adopted,
+            &session.adoption,
+            &mut cancellation,
+            &session.creation,
+        )
+        .await
+        {
+            session.cancel.send_replace(true);
+            session.output_credits.close();
+            retire_session(&sessions, &retiring, &id, &session).await;
         }
     });
 }
@@ -2098,6 +2116,25 @@ fn transcript_command(
     Ok(command)
 }
 
+async fn transcript_result(
+    state: &AppState,
+    session_id: &str,
+    mut command: String,
+    transcript_session_id: Option<String>,
+) -> Result<serde_json::Value> {
+    if let Some(id) = transcript_session_id {
+        if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
+            return Err(SshError::new(
+                "invalid_input",
+                "Invalid transcript session identifier",
+            ));
+        }
+        command.push_str(&format!(" --session-id={}", quote(&id)));
+    }
+    let session = state.session(session_id).await?;
+    Ok(serde_json::from_str(&exec(&session, command).await?)?)
+}
+
 #[tauri::command]
 pub async fn agent_usage(
     lease: AccessLease,
@@ -2112,21 +2149,11 @@ pub async fn agent_usage(
     lease
         .run(async {
             validate_transcript_source(&agent, &path, offset)?;
-            let mut command = format!(
+            let command = format!(
                 "lazysh-agent usage --agent {agent} --path={} --offset {offset}",
                 quote(&path)
             );
-            if let Some(id) = transcript_session_id {
-                if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
-                    return Err(SshError::new(
-                        "invalid_input",
-                        "Invalid transcript session identifier",
-                    ));
-                }
-                command.push_str(&format!(" --session-id={}", quote(&id)));
-            }
-            let session = state.session(&session_id).await?;
-            Ok(serde_json::from_str(&exec(&session, command).await?)?)
+            transcript_result(&state, &session_id, command, transcript_session_id).await
         })
         .await
 }
@@ -2160,17 +2187,7 @@ pub async fn agent_transcript(
                     ))
                 }
             }
-            if let Some(id) = transcript_session_id {
-                if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
-                    return Err(SshError::new(
-                        "invalid_input",
-                        "Invalid transcript session identifier",
-                    ));
-                }
-                command.push_str(&format!(" --session-id={}", quote(&id)));
-            }
-            let session = state.session(&session_id).await?;
-            Ok(serde_json::from_str(&exec(&session, command).await?)?)
+            transcript_result(&state, &session_id, command, transcript_session_id).await
         })
         .await
 }
@@ -2373,6 +2390,113 @@ async fn attach_tmux_inner(
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::*;
+    fn fixture_state() -> (tempfile::TempDir, AppState) {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::new(directory.path().into()).unwrap();
+        (directory, state)
+    }
+    fn ed25519_key() -> russh::keys::PrivateKey {
+        russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()
+    }
+    struct TerminalFixture {
+        server: TestServer,
+        task: tokio::task::JoinHandle<()>,
+        directory: tempfile::TempDir,
+        state: AppState,
+        rx: mpsc::UnboundedReceiver<serde_json::Value>,
+        connected: Connected,
+    }
+    async fn json_terminal_fixture() -> TerminalFixture {
+        let (host, server, task) = server(false).await;
+        let (directory, state) = fixture_state();
+        state.config().unwrap().hosts.push(host.clone());
+        let (events, rx) = json_events();
+        let connected = password_terminal(&state, &host, events).await;
+        TerminalFixture {
+            server,
+            task,
+            directory,
+            state,
+            rx,
+            connected,
+        }
+    }
+    async fn password_handle(state: &AppState, host: &Host) -> Arc<SshHandle> {
+        Arc::new(
+            authenticate(state, host, Some("test-password".into()), None, None)
+                .await
+                .unwrap(),
+        )
+    }
+    async fn password_error(state: &AppState, host: &Host) -> SshError {
+        authenticate(state, host, Some("test-password".into()), None, None)
+            .await
+            .err()
+            .unwrap()
+    }
+    async fn key_handle(
+        state: &AppState,
+        host: &Host,
+        key: &russh::keys::PrivateKey,
+    ) -> Arc<SshHandle> {
+        Arc::new(
+            authenticate(
+                state,
+                host,
+                None,
+                Some(key.to_openssh(Default::default()).unwrap().to_string()),
+                None,
+            )
+            .await
+            .unwrap(),
+        )
+    }
+    async fn password_terminal(
+        state: &AppState,
+        host: &Host,
+        events: Channel<SshEvent>,
+    ) -> Connected {
+        start_session(
+            state,
+            host.id.clone(),
+            Some("test-password".into()),
+            None,
+            None,
+            80,
+            24,
+            events,
+        )
+        .await
+        .unwrap()
+    }
+    async fn finish_session(session: &Session) {
+        session.cancel.send_replace(true);
+        timeout(Duration::from_secs(3), async {
+            while !*session.finished.borrow() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    fn metadata_host(id: &str, name: &str) -> Host {
+        Host {
+            transport: None,
+            mosh: None,
+            et: None,
+            id: id.into(),
+            name: name.into(),
+            hostname: "example.test".into(),
+            port: 22,
+            username: "user".into(),
+            fingerprint: None,
+            credentials_stored: false,
+            jump_host_id: None,
+            forward_agent: false,
+            biometric_unlock: false,
+        }
+    }
     fn access_lease() -> crate::app_lock::AccessLease {
         crate::app_lock::AccessState::disabled()
             .lease(None)
@@ -2383,8 +2507,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[tokio::test]
     async fn closing_during_delayed_verification_aborts_transport_before_credentials() {
-        let directory = tempfile::tempdir().unwrap();
-        let state = AppState::new(directory.path().into()).unwrap();
+        let (_directory, state) = fixture_state();
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
@@ -2435,8 +2558,7 @@ mod tests {
 
     #[tokio::test]
     async fn credential_operations_serialize_remember_then_forget_without_blocking_other_hosts() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (_dir, state) = fixture_state();
         let first = state.credential_guard("one").await;
         let other_host = timeout(Duration::from_millis(100), state.credential_guard("two"))
             .await
@@ -2478,8 +2600,7 @@ mod tests {
             serde_json::json!({"serverPath":"mosh-server","portMin":60000,"portMax":61000});
         value["et"] = serde_json::json!({"serverPath":"etterminal","port":2022});
         let host: Host = serde_json::from_value(value.clone()).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (dir, state) = fixture_state();
         save_host_inner(&state, host).unwrap();
         let reloaded = AppState::new(dir.path().into())
             .unwrap()
@@ -2506,23 +2627,9 @@ mod tests {
 
     #[test]
     fn credential_cleanup_metadata_is_native_owned_and_survives_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        let host = Host {
-            transport: None,
-            mosh: None,
-            et: None,
-            id: "credential-host".into(),
-            name: "Credentials".into(),
-            hostname: "example.test".into(),
-            port: 22,
-            username: "user".into(),
-            fingerprint: None,
-            credentials_stored: true,
-            jump_host_id: None,
-            forward_agent: false,
-            biometric_unlock: false,
-        };
+        let (dir, state) = fixture_state();
+        let mut host = metadata_host("credential-host", "Credentials");
+        host.credentials_stored = true;
         let mut host = save_host_inner(&state, host).unwrap();
         assert!(!host.credentials_stored);
         state.mark_credentials(&host.id, true).unwrap();
@@ -2544,23 +2651,10 @@ mod tests {
     #[test]
     fn biometric_policy_changes_preserve_saved_identities_until_explicit_forget() {
         for initially_protected in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
-            let state = AppState::new(dir.path().into()).unwrap();
-            let host = Host {
-                transport: None,
-                mosh: None,
-                et: None,
-                id: "saved-identity".into(),
-                name: "Saved identity".into(),
-                hostname: "example.test".into(),
-                port: 22,
-                username: "user".into(),
-                fingerprint: Some("SHA256:verified".into()),
-                credentials_stored: false,
-                jump_host_id: None,
-                forward_agent: false,
-                biometric_unlock: initially_protected,
-            };
+            let (dir, state) = fixture_state();
+            let mut host = metadata_host("saved-identity", "Saved identity");
+            host.fingerprint = Some("SHA256:verified".into());
+            host.biometric_unlock = initially_protected;
             state.config().unwrap().hosts.push(host.clone());
             state.mark_credentials(&host.id, true).unwrap();
             let before = fs::read(dir.path().join("hosts.json")).unwrap();
@@ -2588,8 +2682,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_bastion_rechecks_dependencies_added_while_vault_removal_is_pending() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (_dir, state) = fixture_state();
         let jump = Host {
             transport: None,
             mosh: None,
@@ -2840,13 +2933,8 @@ mod tests {
     }
     async fn assert_stalled_bootstrap_cleanup(et: bool) {
         let (host, server, task) = server(false).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        let handle = Arc::new(
-            authenticate(&state, &host, Some("test-password".into()), None, None)
-                .await
-                .unwrap(),
-        );
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
         let (input, _) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
         let session = Arc::new(adopted_fixture_session(handle.clone(), input, cancel));
@@ -2899,12 +2987,8 @@ mod tests {
     async fn forwarding_with_password_authentication_fails_before_sending_credentials() {
         let (mut host, server, task) = server(false).await;
         host.forward_agent = true;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        let error = authenticate(&state, &host, Some("test-password".into()), None, None)
-            .await
-            .err()
-            .unwrap();
+        let (_dir, state) = fixture_state();
+        let error = password_error(&state, &host).await;
         assert_eq!(error.kind, "forwarding_requires_key");
         assert_eq!(server.auth_attempts.load(Ordering::SeqCst), 0);
         task.abort();
@@ -2914,22 +2998,9 @@ mod tests {
     async fn mosh_rejects_agent_forwarding_before_bootstrap_commands() {
         let (mut host, server, task) = server(false).await;
         host.forward_agent = true;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        let key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
-        let handle = Arc::new(
-            authenticate(
-                &state,
-                &host,
-                None,
-                Some(key.to_openssh(Default::default()).unwrap().to_string()),
-                None,
-            )
-            .await
-            .unwrap(),
-        );
+        let (_dir, state) = fixture_state();
+        let key = ed25519_key();
+        let handle = key_handle(&state, &host, &key).await;
         let (input, _) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
         let session = adopted_fixture_session(handle, input, cancel);
@@ -2959,9 +3030,7 @@ mod tests {
     ) -> (Host, TestServer, tokio::task::JoinHandle<()>) {
         use server::Server;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
+        let key = ed25519_key();
         let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
         let config = Arc::new(server::Config {
             keys: vec![key],
@@ -3005,13 +3074,8 @@ mod tests {
     #[tokio::test]
     async fn output_waits_for_consumption_and_rejects_forged_credit() {
         let (host, _, server_task) = server(false).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        let handle = Arc::new(
-            authenticate(&state, &host, Some("test-password".into()), None, None)
-                .await
-                .unwrap(),
-        );
+        let (_dir, state) = fixture_state();
+        let handle = password_handle(&state, &host).await;
         let (input, _) = mpsc::channel(32);
         let (cancel, _) = watch::channel(false);
         let session = Arc::new(adopted_fixture_session(handle, input, cancel));
@@ -3057,28 +3121,10 @@ mod tests {
     async fn tmux_uses_a_separate_pty_and_preserves_the_parent_shell() {
         use tauri::Manager;
         let (host, server, server_task) = server(false).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (_dir, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let events = Channel::new(move |body| {
-            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-                let _ = tx.send(json);
-            }
-            Ok(())
-        });
-        let parent = start_session(
-            &state,
-            host.id,
-            Some("test-password".into()),
-            None,
-            None,
-            80,
-            24,
-            events,
-        )
-        .await
-        .unwrap();
+        let (events, mut rx) = event_channel(|json| json);
+        let parent = password_terminal(&state, &host, events).await;
         let app = tauri::test::mock_app();
         app.manage(state.clone());
         // Exercise the generic public entry point too: it must establish the
@@ -3153,18 +3199,11 @@ mod tests {
     async fn disconnect_interrupts_a_peer_that_stops_granting_write_window() {
         use tauri::Manager;
         let (host, _, server_task) = server_with_window(false, true).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (_dir, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
         let app = tauri::test::mock_app();
         app.manage(state);
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let events = Channel::new(move |body| {
-            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-                let _ = tx.send(json);
-            }
-            Ok(())
-        });
+        let (events, mut rx) = event_channel(|json| json);
         let connected = start_session(
             &app.state(),
             host.id.clone(),
@@ -3208,13 +3247,9 @@ mod tests {
     async fn untrusted_and_changed_keys_never_receive_credentials() {
         let (mut host, server, task) = server(false).await;
         let expected = host.fingerprint.take().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (dir, state) = fixture_state();
         save_host_inner(&state, host.clone()).unwrap();
-        let error = authenticate(&state, &host, Some("test-password".into()), None, None)
-            .await
-            .err()
-            .unwrap();
+        let error = password_error(&state, &host).await;
         assert_eq!(error.kind, "unknown_host_key");
         assert_eq!(error.fingerprint, Some(expected.clone()));
         assert_eq!(server.auth_attempts.load(Ordering::SeqCst), 0);
@@ -3246,8 +3281,7 @@ mod tests {
 
     #[test]
     fn ui_cannot_inject_clear_or_change_a_pin() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (_dir, state) = fixture_state();
         let mut host = Host {
             transport: None,
             mosh: None,
@@ -3291,11 +3325,8 @@ mod tests {
     #[tokio::test]
     async fn private_keys_authenticate_and_incorrect_passwords_fail() {
         let (host, _, task) = server(false).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        let key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
+        let (_dir, state) = fixture_state();
+        let key = ed25519_key();
         let pem = key.to_openssh(Default::default()).unwrap();
         let handle = authenticate(&state, &host, None, Some(pem.to_string()), None)
             .await
@@ -3311,29 +3342,14 @@ mod tests {
 
     #[tokio::test]
     async fn paced_ssh_sequence_retains_queue_order_and_services_output() {
-        let (host, server, task) = server(false).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        state.config().unwrap().hosts.push(host.clone());
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let events = Channel::new(move |body| {
-            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-                let _ = tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap());
-            }
-            Ok(())
-        });
-        let connected = start_session(
-            &state,
-            host.id,
-            Some("test-password".into()),
-            None,
-            None,
-            80,
-            24,
-            events,
-        )
-        .await
-        .unwrap();
+        let TerminalFixture {
+            server,
+            task,
+            directory: _dir,
+            state,
+            mut rx,
+            connected,
+        } = json_terminal_fixture().await;
         let session = state.session(&connected.session_id).await.unwrap();
         let sequence = crate::terminal_input::InputSequence::parse(
             String::new(),
@@ -3363,27 +3379,16 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(*server.input_data.lock().unwrap(), b"ABCTAIL");
-        session.cancel.send_replace(true);
-        timeout(Duration::from_secs(3), async {
-            while !*session.finished.borrow() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        finish_session(&session).await;
         task.abort();
     }
     #[tokio::test]
     async fn revoking_a_paced_ssh_sequence_discards_unsent_steps_even_after_unlock() {
         // A one-byte frozen receive window admits A and deterministically holds B.
         let (host, server, task) = server_with_capacity(false, true, 1).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (_dir, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
-        let access = AccessState::default();
-        access.initialize(true, true, "test".into()).unwrap();
-        access.authorize(access.generation().unwrap()).unwrap();
-        access.ready(access.generation().unwrap()).unwrap();
+        let access = unlocked_access();
         let lease = access
             .lease(access.status().unwrap().nonce.as_deref())
             .unwrap();
@@ -3403,18 +3408,7 @@ mod tests {
             }
             Ok(())
         });
-        let connected = start_session(
-            &state,
-            host.id,
-            Some("test-password".into()),
-            None,
-            None,
-            80,
-            24,
-            events,
-        )
-        .await
-        .unwrap();
+        let connected = password_terminal(&state, &host, events).await;
         let session = state.session(&connected.session_id).await.unwrap();
         session
             .input
@@ -3447,41 +3441,19 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(*server.input_data.lock().unwrap(), b"A");
-        session.cancel.send_replace(true);
-        timeout(Duration::from_secs(3), async {
-            while !*session.finished.borrow() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        finish_session(&session).await;
         task.abort();
     }
     #[tokio::test]
     async fn live_terminal_streams_utf8_resizes_and_cleans_up() {
-        let (host, server, task) = server(false).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
-        state.config().unwrap().hosts.push(host.clone());
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let events = Channel::new(move |body| {
-            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-                let _ = tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap());
-            }
-            Ok(())
-        });
-        let result = start_session(
-            &state,
-            host.id,
-            Some("test-password".into()),
-            None,
-            None,
-            80,
-            24,
-            events,
-        )
-        .await
-        .unwrap();
+        let TerminalFixture {
+            server,
+            task,
+            directory: _dir,
+            state,
+            mut rx,
+            connected: result,
+        } = json_terminal_fixture().await;
         let session = state.session(&result.session_id).await.unwrap();
         session
             .input
@@ -3537,8 +3509,7 @@ mod tests {
     #[tokio::test]
     async fn server_rejected_pty_does_not_create_a_session() {
         let (host, _, task) = server(true).await;
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(dir.path().into()).unwrap();
+        let (_dir, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
         let error = start_session(
             &state,
@@ -3663,12 +3634,8 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
-        let user_key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
+        let key = ed25519_key();
+        let user_key = ed25519_key();
         let key_path = dir.path().join("host_key");
         fs::write(
             &key_path,
@@ -3748,17 +3715,7 @@ mod tests {
                 forward_agent: true,
                 ..host.clone()
             };
-            let handle = Arc::new(
-                authenticate(
-                    &app.state(),
-                    &forwarding_host,
-                    None,
-                    Some(user_key.to_openssh(Default::default()).unwrap().to_string()),
-                    None,
-                )
-                .await
-                .unwrap(),
-            );
+            let handle = key_handle(&app.state(), &forwarding_host, &user_key).await;
             let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
             let forwarding = spawn_terminal(
                 &app.state(),
@@ -3806,13 +3763,7 @@ mod tests {
             let options =
                 serde_json::from_value(serde_json::json!({"portMin":udp_port,"portMax":udp_port}))
                     .unwrap();
-            let (tx, mut rx) = mpsc::unbounded_channel();
-            let events = Channel::new(move |body| {
-                if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-                    let _ = tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap());
-                }
-                Ok(())
-            });
+            let (events, mut rx) = json_events();
             let connected = connect_mosh(
                 access_lease(),
                 app.state(),
@@ -3952,17 +3903,7 @@ mod tests {
             forward_agent: true,
             ..host.clone()
         };
-        let forwarding_handle = Arc::new(
-            authenticate(
-                &app.state(),
-                &forwarding_host,
-                None,
-                Some(user_key.to_openssh(Default::default()).unwrap().to_string()),
-                None,
-            )
-            .await
-            .unwrap(),
-        );
+        let forwarding_handle = key_handle(&app.state(), &forwarding_host, &user_key).await;
         let (mut channel, mut forwarded_output) = open_terminal(
             &forwarding_handle,
             80,
@@ -4248,19 +4189,12 @@ mod tests {
     }
     #[tokio::test(start_paused = true)]
     async fn locked_terminal_delivery_pauses_deadline_and_resumes_without_dropped_indices() {
-        let access = AccessState::default();
-        access.initialize(true, true, "test".into()).unwrap();
-        access.authorize(access.generation().unwrap()).unwrap();
-        access.ready(access.generation().unwrap()).unwrap();
+        let access = unlocked_access();
         let credits = Semaphore::new(0);
         let inflight = StdMutex::new(0);
         let (cancel, mut cancellation) = watch::channel(false);
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let observed = calls.clone();
-        let events = Channel::new(move |_| {
-            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        });
+        let events = counting_events(&calls);
         let delivery = deliver_output(
             &access,
             &credits,
@@ -4271,33 +4205,17 @@ mod tests {
             None,
         );
         tokio::pin!(delivery);
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
+        assert_pending(delivery.as_mut()).await;
         access.lock().unwrap();
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
+        assert_pending(delivery.as_mut()).await;
         tokio::time::advance(OP_TIMEOUT * 2).await;
         credits.add_permits(3);
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
+        assert_pending(delivery.as_mut()).await;
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(*inflight.lock().unwrap(), 0);
         access.authorize(access.generation().unwrap()).unwrap();
         // Native authentication alone does not resume delivery before UI reset ACK.
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
+        assert_pending(delivery.as_mut()).await;
         access.ready(access.generation().unwrap()).unwrap();
         delivery.await.unwrap();
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -4314,21 +4232,14 @@ mod tests {
             None,
         );
         tokio::pin!(pending);
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(pending.as_mut(), cx).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
+        assert_pending(pending.as_mut()).await;
         cancel.send_replace(true);
         assert!(pending.await.is_err());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
     #[test]
     fn ssh_errors_keep_fingerprints_only_for_the_original_unlocked_generation() {
-        let access = AccessState::default();
-        access.initialize(true, true, "test".into()).unwrap();
-        access.authorize(access.generation().unwrap()).unwrap();
-        access.ready(access.generation().unwrap()).unwrap();
+        let access = unlocked_access();
         let nonce = access.status().unwrap().nonce.unwrap();
         let lease = access.lease(Some(&nonce)).unwrap();
         let mut source = SshError::new("host_key_required", "REMOTE_PRIVATE_STDERR");
@@ -4354,8 +4265,7 @@ mod tests {
     #[tokio::test]
     async fn cancelled_native_start_reaps_unpublished_worker_and_preserves_parent() {
         let (host, _, server_task) = server(false).await;
-        let directory = tempfile::tempdir().unwrap();
-        let state = AppState::new(directory.path().into()).unwrap();
+        let (_directory, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
         let connected = start_session(
             &state,
@@ -4446,14 +4356,9 @@ mod tests {
             (id, session)
         }
         let (host, _, server_task) = server(false).await;
-        let directory = tempfile::tempdir().unwrap();
-        let state = AppState::new(directory.path().into()).unwrap();
+        let (_directory, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
-        let handle = Arc::new(
-            authenticate(&state, &host, Some("test-password".into()), None, None)
-                .await
-                .unwrap(),
-        );
+        let handle = password_handle(&state, &host).await;
         let access = AccessState::default();
         access.initialize(true, true, "test".into()).unwrap();
         for serialized in [false, true] {
@@ -4486,10 +4391,7 @@ mod tests {
             .unwrap();
             assert!(*session.cancel.borrow());
             access.authorize(access.generation().unwrap()).unwrap();
-            access.ready(access.generation().unwrap()).unwrap();
-            let fresh = access
-                .lease(access.status().unwrap().nonce.as_deref())
-                .unwrap();
+            let fresh = ready_lease(&access);
             assert!(mark_adopted(&session, &fresh).is_err());
         }
         let creation = access
@@ -4516,11 +4418,7 @@ mod tests {
         });
         let delivery = send_output(&session, &events, b"owned");
         tokio::pin!(delivery);
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(delivery.as_mut(), cx).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
+        assert_pending(delivery.as_mut()).await;
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
         access.authorize(access.generation().unwrap()).unwrap();
         access.ready(access.generation().unwrap()).unwrap();
@@ -4530,10 +4428,7 @@ mod tests {
     }
     #[tokio::test]
     async fn revoked_unadopted_output_cannot_freshen_before_cleanup_watcher_runs() {
-        let access = AccessState::default();
-        access.initialize(true, true, "test".into()).unwrap();
-        access.authorize(access.generation().unwrap()).unwrap();
-        access.ready(access.generation().unwrap()).unwrap();
+        let access = unlocked_access();
         let nonce = access.status().unwrap().nonce.unwrap();
         let creation = access.lease(Some(&nonce)).unwrap();
         let adopted = std::sync::atomic::AtomicBool::new(false);
@@ -4584,18 +4479,13 @@ mod tests {
     ) {
         use tauri::ipc::IpcResponse;
         let (host, _, server_task) = server(false).await;
-        let directory = tempfile::tempdir().unwrap();
-        let state = AppState::new(directory.path().into()).unwrap();
+        let (_directory, state) = fixture_state();
         state.config().unwrap().hosts.push(host.clone());
         let access = AccessState::disabled();
         let creation = access.lease(None).unwrap();
         let old_events = Arc::new(AtomicUsize::new(0));
         let observed = old_events.clone();
-        let handle = Arc::new(
-            authenticate(&state, &host, Some("test-password".into()), None, None)
-                .await
-                .unwrap(),
-        );
+        let handle = password_handle(&state, &host).await;
         let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
         let parent = spawn_terminal(
             &state,
@@ -4659,18 +4549,8 @@ mod tests {
         state.cancel_for_renderer_rebind().await;
         assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(old_events.load(Ordering::SeqCst), before);
-        assert!(access.finish_renderer_replacement().unwrap());
-        access.foreground().unwrap();
-        access.ready(access.generation().unwrap()).unwrap();
-        assert!(access.lease(None).is_err());
-        let fresh = access
-            .lease(access.status().unwrap().nonce.as_deref())
-            .unwrap();
-        let handle = Arc::new(
-            authenticate(&state, &host, Some("test-password".into()), None, None)
-                .await
-                .unwrap(),
-        );
+        let fresh = replacement_lease(&access);
+        let handle = password_handle(&state, &host).await;
         let (channel, initial) = open_terminal(&handle, 80, 24, None).await.unwrap();
         let connected = spawn_terminal(
             &state,

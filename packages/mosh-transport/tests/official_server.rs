@@ -317,32 +317,14 @@ fn android_artifacts() -> (String, String, Option<String>) {
     };
     let toolchain = ndk.join("toolchains/llvm/prebuilt").join(host);
     let tools = toolchain.join("bin");
-    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
-    let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    let mut command = cross_test_command(
+        "x86_64-linux-android",
+        "android_peer",
+        "target/android-mosh-tests",
+    );
     command
-        .current_dir(workspace)
-        .args([
-            "test",
-            "-p",
-            "lazysh-mosh-transport",
-            "--target",
-            "x86_64-linux-android",
-            "--lib",
-            "--test",
-            "android_peer",
-            "--no-run",
-            "--locked",
-            "--message-format=json",
-        ])
         // A separate target directory prevents nested Cargo from waiting on the
         // outer Cargo test's build lock. Source/dependencies still use Cargo caches.
-        .arg("--target-dir")
-        .arg(workspace.join("target/android-mosh-tests"))
-        .env("CARGO_BUILD_JOBS", "4")
         .env("ANDROID_NDK_HOME", &ndk)
         .env("NDK_HOME", &ndk)
         .env("ANDROID_API_LEVEL", "24")
@@ -389,15 +371,7 @@ fn cargo_test_artifacts(output: std::process::Output, peer_name: &str) -> (Strin
     (binary, units)
 }
 
-fn ios_artifacts() -> (String, String) {
-    if !cfg!(target_os = "macos") {
-        panic!("iOS tests require macOS with full Xcode");
-    }
-    let target = if cfg!(target_arch = "aarch64") {
-        "aarch64-apple-ios-sim"
-    } else {
-        "x86_64-apple-ios"
-    };
+fn cross_test_command(target: &str, peer: &str, directory: &str) -> Command {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -414,14 +388,28 @@ fn ios_artifacts() -> (String, String) {
             target,
             "--lib",
             "--test",
-            "ios_peer",
+            peer,
             "--no-run",
             "--locked",
             "--message-format=json",
         ])
         .arg("--target-dir")
-        .arg(workspace.join("target/ios-mosh-tests"))
-        .env("CARGO_BUILD_JOBS", "4")
+        .arg(workspace.join(directory))
+        .env("CARGO_BUILD_JOBS", "4");
+    command
+}
+
+fn ios_artifacts() -> (String, String) {
+    if !cfg!(target_os = "macos") {
+        panic!("iOS tests require macOS with full Xcode");
+    }
+    let target = if cfg!(target_arch = "aarch64") {
+        "aarch64-apple-ios-sim"
+    } else {
+        "x86_64-apple-ios"
+    };
+    let mut command = cross_test_command(target, "ios_peer", "target/ios-mosh-tests");
+    command
         .env("IPHONEOS_DEPLOYMENT_TARGET", "16.0")
         // Rust selects the target SDK through xcrun; never inherit a host or
         // device SDKROOT when building for the simulator.
@@ -861,8 +849,17 @@ fn official_server_utf8_input_resize_shutdown_and_parallel_isolation() {
         String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"),
         "fixture must be official Mosh 1.4.0"
     );
-    // SAFETY: these operations read the current process's locale, signal disposition, and stdin flags without changing them.
-    let (locale, signal, stdin) = unsafe {
+    let original = process_state();
+    let first = thread::spawn(|| session("ONE"));
+    let second = thread::spawn(|| session("TWO"));
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(original, process_state());
+}
+
+fn process_state() -> (std::ffi::CString, (usize, libc::c_int), libc::c_int) {
+    // SAFETY: read-only inspection of locale, signal disposition and stdin flags.
+    unsafe {
         let locale = CStr::from_ptr(libc::setlocale(libc::LC_CTYPE, std::ptr::null())).to_owned();
         let mut action: libc::sigaction = std::mem::zeroed();
         assert_eq!(
@@ -874,23 +871,5 @@ fn official_server_utf8_input_resize_shutdown_and_parallel_isolation() {
             (action.sa_sigaction, action.sa_flags),
             libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL),
         )
-    };
-    let first = thread::spawn(|| session("ONE"));
-    let second = thread::spawn(|| session("TWO"));
-    first.join().unwrap();
-    second.join().unwrap();
-    // SAFETY: identical read-only inspection after both clients have shut down.
-    unsafe {
-        assert_eq!(
-            locale.as_c_str(),
-            CStr::from_ptr(libc::setlocale(libc::LC_CTYPE, std::ptr::null()))
-        );
-        let mut action: libc::sigaction = std::mem::zeroed();
-        assert_eq!(
-            libc::sigaction(libc::SIGWINCH, std::ptr::null(), &mut action),
-            0
-        );
-        assert_eq!(signal, (action.sa_sigaction, action.sa_flags));
-        assert_eq!(stdin, libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL));
     }
 }

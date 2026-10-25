@@ -13,17 +13,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    future::Future,
-    net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
 use tokio::{
-    net::TcpListener,
     sync::{watch, Semaphore},
-    task::JoinSet,
     time::timeout,
 };
 use zeroize::Zeroizing;
@@ -633,46 +629,23 @@ impl Provider {
     }
 }
 
-pub async fn serve(
-    listener: TcpListener,
-    service: Service,
-    shutdown: impl Future<Output = ()> + Send,
-) -> std::io::Result<()> {
-    if !listener.local_addr()?.ip().is_loopback() {
-        return Err(std::io::Error::other(
-            "Require a loopback listener behind HTTPS",
-        ));
-    }
-    let connections = Arc::new(Semaphore::new(16));
-    let router = service.router();
-    let mut tasks = JoinSet::new();
-    tokio::pin!(shutdown);
-    struct Stop(Service);
-    impl Drop for Stop {
-        fn drop(&mut self) {
-            self.0.cancel_all();
+lazysh_common::relay_entrypoint!(
+    Service,
+    listener,
+    service,
+    shutdown,
+    std::io::Error::other("Require a loopback listener behind HTTPS"),
+    {
+        struct Stop(Service);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                self.0.cancel_all();
+            }
         }
+        let _stop = Stop(service);
+        lazysh_common::server::serve(listener, _stop.0.router(), shutdown, 16384, 32).await
     }
-    let _stop = Stop(service);
-    let result = loop {
-        tokio::select! {
-            _=&mut shutdown=>break Ok(()),
-            accepted=listener.accept()=>{
-                let (stream,_address):(tokio::net::TcpStream,SocketAddr)=match accepted {Ok(value)=>value,Err(error)=>break Err(error)};
-                let Ok(permit)=connections.clone().try_acquire_owned() else {drop(stream);continue;};let router=router.clone();
-                tasks.spawn(async move {
-                    let _permit=permit; let mut builder=hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new()).http1_only();
-                    builder.http1().header_read_timeout(Duration::from_secs(5)).timer(hyper_util::rt::TokioTimer::new()).max_buf_size(16384).max_headers(32);
-                    let _=timeout(Duration::from_secs(60),builder.serve_connection(hyper_util::rt::TokioIo::new(stream),hyper_util::service::TowerToHyperService::new(router))).await;
-                });
-            },
-            _=tasks.join_next(),if !tasks.is_empty()=>{},
-        }
-    };
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
-    result
-}
+);
 #[cfg(test)]
 mod tests;
 

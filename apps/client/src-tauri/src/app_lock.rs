@@ -663,6 +663,32 @@ pub fn allowed_while_locked(command: &str) -> bool {
 }
 
 #[cfg(test)]
+pub(crate) fn ready_fixture_authority(authority: &AccessState) {
+    authority
+        .initialize(true, true, "synthetic".into())
+        .unwrap();
+    authority
+        .authorize(authority.generation().unwrap())
+        .unwrap();
+    authority.ready(authority.generation().unwrap()).unwrap();
+}
+#[cfg(test)]
+pub(crate) fn fixture_request(
+    cmd: &str,
+    headers: tauri::http::HeaderMap,
+) -> tauri::webview::InvokeRequest {
+    tauri::webview::InvokeRequest {
+        cmd: cmd.into(),
+        callback: tauri::ipc::CallbackFn(0),
+        error: tauri::ipc::CallbackFn(1),
+        url: "http://127.0.0.1:1420".parse().unwrap(),
+        body: Default::default(),
+        headers,
+        invoke_key: tauri::test::INVOKE_KEY.into(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(debug_assertions)]
@@ -755,13 +781,7 @@ mod tests {
     fn repeated_native_ready_never_reinitializes_or_unlocks_a_recreated_view() {
         let authority = AccessState::default();
         assert_eq!(repeated_ready_cover(&authority).unwrap(), None);
-        authority
-            .initialize(true, true, "synthetic".into())
-            .unwrap();
-        authority
-            .authorize(authority.generation().unwrap())
-            .unwrap();
-        authority.ready(authority.generation().unwrap()).unwrap();
+        ready_fixture_authority(&authority);
         let nonce = authority.status().unwrap().nonce.unwrap();
         assert_eq!(repeated_ready_cover(&authority).unwrap(), Some(false));
         authority.background().unwrap();
@@ -806,15 +826,7 @@ mod tests {
             if let Some(nonce) = nonce {
                 headers.insert("x-lazysh-access", nonce.parse().unwrap());
             }
-            tauri::webview::InvokeRequest {
-                cmd: "list_hosts".into(),
-                callback: tauri::ipc::CallbackFn(0),
-                error: tauri::ipc::CallbackFn(1),
-                url: "http://127.0.0.1:1420".parse().unwrap(),
-                body: Default::default(),
-                headers,
-                invoke_key: tauri::test::INVOKE_KEY.into(),
-            }
+            fixture_request("list_hosts", headers)
         };
         assert!(tauri::test::get_ipc_response(&window, request(None)).is_err());
         authority

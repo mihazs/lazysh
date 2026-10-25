@@ -13,11 +13,15 @@
     "apps/agent": {
       "name": "@lazysh/agent",
       "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "apps/client": {
       "name": "@lazysh/client",
       "version": "0.1.0",
       "dependencies": {
+        "@lazysh/common": "workspace:*",
         "@lazysh/et-transport": "workspace:*",
         "@lazysh/mosh-transport": "workspace:*",
         "@tauri-apps/api": "^2.8.0",
@@ -53,17 +57,33 @@
     "apps/share-service": {
       "name": "@lazysh/share-service",
       "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "apps/transcription-service": {
       "name": "@lazysh/transcription-service",
       "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "packages/apple-speech": {
       "name": "@lazysh/apple-speech",
       "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "packages/apple-status": {
       "name": "@lazysh/apple-status",
+      "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
+    },
+    "packages/common": {
+      "name": "@lazysh/common",
       "version": "0.1.0",
     },
     "packages/credential-vault": {
@@ -73,6 +93,9 @@
     "packages/et-transport": {
       "name": "@lazysh/et-transport",
       "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "packages/mosh-transport": {
       "name": "@lazysh/mosh-transport",
@@ -81,6 +104,9 @@
     "packages/parakeet-runtime": {
       "name": "@lazysh/parakeet-runtime",
       "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "packages/push-registration": {
       "name": "@lazysh/push-registration",
@@ -219,6 +245,8 @@
     "@lazysh/apple-status": ["@lazysh/apple-status@workspace:packages/apple-status"],
 
     "@lazysh/client": ["@lazysh/client@workspace:apps/client"],
+
+    "@lazysh/common": ["@lazysh/common@workspace:packages/common"],
 
     "@lazysh/credential-vault": ["@lazysh/credential-vault@workspace:packages/credential-vault"],
 

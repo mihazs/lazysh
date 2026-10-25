@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { installSpeechCapture } from "./test/speechCapture";
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
@@ -143,24 +144,7 @@ it('requires explicit Apple asset installation and cancels the exact pending req
   expect(invoke).not.toHaveBeenCalledWith('apple_speech_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
 it('preserves current-view dictation and cannot refill cleared history from late inference',async()=>{
-  let complete!:(text:string)=>void;
-  vi.mocked(invoke).mockImplementation(command=>{
-    if(command==='voice_models')return Promise.resolve([{id:'tiny.bin',bytes:1024}]) as never;
-    if(command==='voice_model_catalog')return Promise.resolve([]) as never;
-    if(command==='voice_transcribe')return new Promise<string>(resolve=>{complete=resolve;}) as never;
-    return Promise.resolve() as never;
-  });
-  class Capture {
-    state='inactive';mimeType='audio/webm';onstop:(()=>void)|undefined;
-    start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}
-  }
-  vi.stubGlobal('MediaRecorder',Capture);
-  vi.stubGlobal('Blob',class {async arrayBuffer(){return new ArrayBuffer(0);}});
-  vi.stubGlobal('AudioContext',class {
-    async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}
-    async close(){}
-  });
-  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:vi.fn().mockResolvedValue({getTracks:()=>[{stop:vi.fn()}]})}});
+  const {complete}=speechFixture();
   const stage=vi.fn();window.addEventListener('lazysh-prompt-draft',stage);
   const view=render(<VoicePanel sessionId="ssh1"/>);
   await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('tiny.bin'));
@@ -192,11 +176,7 @@ function speechFixture(){
     if(command==='voice_transcribe')return new Promise<string>(resolve=>{complete=resolve;}) as never;
     return Promise.resolve() as never;
   });
-  class Capture {state='inactive';mimeType='audio/webm';onstop:(()=>void)|undefined;start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}}
-  vi.stubGlobal('MediaRecorder',Capture);
-  vi.stubGlobal('Blob',class {async arrayBuffer(){return new ArrayBuffer(0);}});
-  vi.stubGlobal('AudioContext',class {async decodeAudioData(){return {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};}async close(){}});
-  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:vi.fn().mockResolvedValue({getTracks:()=>[{stop:vi.fn()}]})}});
+  installSpeechCapture();
   return {complete:(text:string)=>complete(text),record:async()=>{
     await waitFor(()=>expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('tiny.bin'));
     const before=vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_transcribe').length;

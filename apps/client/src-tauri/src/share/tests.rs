@@ -1,34 +1,15 @@
 use super::*;
 use std::sync::atomic::AtomicUsize;
-use tokio::{
-    io::copy_bidirectional,
-    net::{TcpListener, TcpStream},
-    sync::oneshot,
-    task::JoinSet,
-};
-use tokio_rustls::{
-    rustls::{
-        pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
-        ServerConfig,
-    },
-    TlsAcceptor,
-};
+use tokio::{net::TcpListener, sync::oneshot};
 
 const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 #[tokio::test]
 async fn dropped_configuration_caller_cannot_release_an_admitted_blocking_write() {
     let state = ShareState::default();
     let guard = changing(&state).unwrap();
-    let (entered, started) = oneshot::channel();
-    let (release, wait) = std::sync::mpsc::channel();
-    let task = tokio::spawn(configuration_write(guard, move || {
-        entered.send(()).unwrap();
-        wait.recv().unwrap();
-        Ok(())
-    }));
-    started.await.unwrap();
-    task.abort();
-    let _ = task.await;
+    let release =
+        crate::share::test_support::abort_write(move |write| configuration_write(guard, write))
+            .await;
     assert!(
         changing(&state).is_err(),
         "the original OS write still owns configuration admission"
@@ -98,25 +79,7 @@ struct Fixture {
 impl Fixture {
     async fn new(router: Option<axum::Router>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let front = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = front.local_addr().unwrap();
-        let origin = format!("https://localhost:{}", address.port());
-        let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        let root = reqwest::Certificate::from_der(certificate.cert.der().as_ref()).unwrap();
-        let config = ServerConfig::builder_with_provider(Arc::new(
-            tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![certificate.cert.der().clone()],
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-                certificate.signing_key.serialize_der(),
-            )),
-        )
-        .unwrap();
-        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let front = crate::share::test_support::tls_front().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let backend_address = listener.local_addr().unwrap();
         let (stop, stopped) = oneshot::channel();
@@ -131,7 +94,8 @@ impl Fixture {
             })
         } else {
             let config =
-                lazysh_share::Config::new(directory.path().join("state"), &origin, TOKEN).unwrap();
+                lazysh_share::Config::new(directory.path().join("state"), &front.origin, TOKEN)
+                    .unwrap();
             let service = lazysh_share::Service::open(config).unwrap();
             tokio::spawn(async move {
                 lazysh_share::serve(listener, service, async {
@@ -141,27 +105,20 @@ impl Fixture {
                 .unwrap();
             })
         };
-        let tls = tokio::spawn(async move {
-            let mut connections = JoinSet::new();
-            loop {
-                tokio::select! {
-                    accepted = front.accept() => { let Ok((socket, _)) = accepted else { return }; let acceptor = acceptor.clone(); connections.spawn(async move { if let Ok(mut incoming) = acceptor.accept(socket).await { if let Ok(mut outgoing) = TcpStream::connect(backend_address).await { let _ = copy_bidirectional(&mut incoming, &mut outgoing).await; } } }); },
-                    _ = connections.join_next(), if !connections.is_empty() => {},
-                }
-            }
-        });
+        let tls =
+            crate::share::test_support::tls_proxy(front.listener, front.acceptor, backend_address);
         let client = Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .resolve("localhost", address)
-            .add_root_certificate(root)
+            .resolve("localhost", front.address)
+            .add_root_certificate(front.root)
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
         Self {
             directory,
-            origin,
+            origin: front.origin,
             backend: Some(backend),
             tls,
             stop: Some(stop),

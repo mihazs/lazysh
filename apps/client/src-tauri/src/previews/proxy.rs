@@ -467,8 +467,8 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Prefixed<S> {
 
 pub(super) async fn listener<F, Fut, S>(
     listener: TcpListener,
-    mut cancelled: watch::Receiver<bool>,
-    mut stopped: watch::Receiver<bool>,
+    cancelled: watch::Receiver<bool>,
+    stopped: watch::Receiver<bool>,
     token: String,
     remote_host: String,
     connect: F,
@@ -479,26 +479,13 @@ pub(super) async fn listener<F, Fut, S>(
 {
     let local_port = listener.local_addr().expect("bound listener").port();
     let connect = Arc::new(connect);
-    let slots = Arc::new(Semaphore::new(16));
     let budgets = Arc::new(Budgets {
         html: Arc::new(Semaphore::new(4)),
         upload: Arc::new(Semaphore::new(2)),
     });
-    let mut connections = JoinSet::new();
-    if *cancelled.borrow() || *stopped.borrow() {
-        return;
-    }
-    loop {
-        tokio::select! {
-            _ = cancelled.changed() => break,
-            _ = stopped.changed() => break,
-            Some(_) = connections.join_next(), if !connections.is_empty() => {},
-            accepted = listener.accept() => {
-                let Ok((local, _)) = accepted else { break };
-                let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
+    super::serve_connections(listener, cancelled, stopped, move |local| {
                 let connect = connect.clone(); let token = token.clone(); let remote_host = remote_host.clone(); let budgets = budgets.clone();
-                connections.spawn(async move {
-                    let _slot = slot;
+                async move {
                     let mut local = local;
                     let Ok(Ok(prefix)) = timeout(Duration::from_secs(5), request_head(&mut local)).await else {
                         let _ = local.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
@@ -520,13 +507,8 @@ pub(super) async fn listener<F, Fut, S>(
                             let _ = tokio::io::copy_bidirectional(&mut TokioIo::new(client), &mut TokioIo::new(remote)).await;
                         }
                     }).await;
-                });
-            }
-        }
-    }
-    drop(listener);
-    connections.abort_all();
-    while connections.join_next().await.is_some() {}
+                }
+    }).await;
 }
 
 #[cfg(test)]

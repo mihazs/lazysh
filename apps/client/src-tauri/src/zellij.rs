@@ -1,4 +1,4 @@
-use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::app_lock::AccessLease;
 use crate::ssh::{quote, AppState, Result, SshError};
 use serde::Deserialize;
 use tauri::State;
@@ -16,12 +16,7 @@ pub enum ZellijAction {
     ZoomPane,
 }
 fn text(value: &str, max: usize) -> Result<String> {
-    if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
-        return Err(SshError::new(
-            "invalid_target",
-            "Invalid Zellij name or path",
-        ));
-    }
+    crate::multiplexer::validate_text(value, max, "Invalid Zellij name or path")?;
     Ok(quote(value))
 }
 fn command(session: &str, action: &ZellijAction) -> Result<String> {
@@ -64,14 +59,14 @@ pub async fn zellij_action(
     name: String,
     action: ZellijAction,
     access: AccessLease,
-) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+) -> crate::ssh::AccessResult<()> {
     access
-        .run(async {
-            let command = command(&name, &action)?;
-            let session = state.session(&session_id).await?;
-            crate::ssh::exec_for_access(&session, command, &access).await?;
-            Ok(())
-        })
+        .run(crate::multiplexer::execute_action(
+            &state,
+            &access,
+            &session_id,
+            command(&name, &action),
+        ))
         .await
 }
 

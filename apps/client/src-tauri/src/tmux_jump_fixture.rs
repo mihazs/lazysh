@@ -678,9 +678,7 @@ async fn product_actor_probe() {
     let access = AccessState::default();
     access.initialize(true, true, String::new()).unwrap();
     access.authorize(access.generation().unwrap()).unwrap();
-    access.ready(access.generation().unwrap()).unwrap();
-    let nonce = access.status().unwrap().nonce.unwrap();
-    let lease = access.lease(Some(&nonce)).unwrap();
+    let lease = crate::ssh::test_support::ready_lease(&access);
     let control = crate::tmux_jump::prepare_command(
         &f.handle,
         identity.clone(),
@@ -701,9 +699,7 @@ async fn product_actor_probe() {
     );
     assert!(queued.await.is_err());
     access.authorize(access.generation().unwrap()).unwrap();
-    access.ready(access.generation().unwrap()).unwrap();
-    let nonce = access.status().unwrap().nonce.unwrap();
-    let lease = access.lease(Some(&nonce)).unwrap();
+    let lease = crate::ssh::test_support::ready_lease(&access);
     let snapshot = binding.call(&lease, &mut cancellation, None).await.unwrap();
     let json = serde_json::to_value(snapshot).unwrap();
     let target = json["sessions"]
@@ -740,9 +736,7 @@ async fn product_actor_probe() {
         .await
         .is_err());
     access.authorize(access.generation().unwrap()).unwrap();
-    access.ready(access.generation().unwrap()).unwrap();
-    let nonce = access.status().unwrap().nonce.unwrap();
-    let fresh = access.lease(Some(&nonce)).unwrap();
+    let fresh = crate::ssh::test_support::ready_lease(&access);
     let moved = binding
         .call(
             &fresh,
@@ -836,9 +830,7 @@ async fn product_actor_probe() {
     assert!(pending.await.unwrap().is_err());
     timeout(BOUND, partial.retired()).await.unwrap();
     access.authorize(access.generation().unwrap()).unwrap();
-    access.ready(access.generation().unwrap()).unwrap();
-    let nonce = access.status().unwrap().nonce.unwrap();
-    let fresh = access.lease(Some(&nonce)).unwrap();
+    let fresh = crate::ssh::test_support::ready_lease(&access);
     let (_live, mut live) = watch::channel(false);
     assert!(partial.call(&fresh, &mut live, None).await.is_err());
     let _ = channel.eof().await;

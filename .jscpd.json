@@ -3,7 +3,9 @@
   "minLines": 5,
   "mode": "mild",
   "maxSize": "1mb",
-  "reporters": ["console"],
+  "reporters": [
+    "console"
+  ],
   "ignore": [
     "**/node_modules/**",
     "**/target/**",
@@ -14,8 +16,10 @@
     "packages/mosh-transport/vendor/**",
     "packages/mosh-transport/vendor-android/**",
     "packages/portable-pty-vendor/**",
-    ".jscpd-baseline.json",
     "bun.lock",
-    "Cargo.lock"
+    "Cargo.lock",
+    "packages/parakeet-runtime/licenses/**",
+    "packages/deep-link-vendor/tests/xdg_commands.rs",
+    "packages/deep-link-vendor/tests/xdg_unregister.rs"
   ]
 }

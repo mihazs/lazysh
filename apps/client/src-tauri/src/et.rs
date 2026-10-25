@@ -13,13 +13,10 @@ use tokio::{
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Options {
-    #[serde(default = "default_server")]
     server_path: String,
-    #[serde(default = "default_port")]
     port: u16,
-    #[serde(default)]
     server_fifo: Option<String>,
 }
 fn default_server() -> String {
@@ -69,6 +66,37 @@ pub(crate) struct Bootstrap {
     endpoint: SocketAddr,
 }
 
+pub(crate) async fn read_bootstrap(
+    channel: &mut russh::Channel<russh::client::Msg>,
+    limit: usize,
+    kind: &'static str,
+    overflow: &str,
+) -> Result<(Zeroizing<Vec<u8>>, Option<u32>)> {
+    let mut output = Zeroizing::new(Vec::new());
+    let mut received = 0usize;
+    let mut status = None;
+    while let Some(message) = channel.wait().await {
+        match message {
+            ChannelMsg::Data { data } => {
+                received = received.saturating_add(data.len());
+                if received > limit {
+                    return Err(SshError::new(kind, overflow));
+                }
+                output.extend_from_slice(&data);
+            }
+            ChannelMsg::ExtendedData { data, .. } => {
+                received = received.saturating_add(data.len());
+                if received > limit {
+                    return Err(SshError::new(kind, overflow));
+                }
+            }
+            ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+            _ => {}
+        }
+    }
+    Ok((output, status))
+}
+
 pub(crate) async fn bootstrap(
     session: &Session,
     options: Options,
@@ -100,34 +128,13 @@ pub(crate) async fn bootstrap(
         channel.exec(true, options.command()).await?;
         channel.data(input.as_bytes()).await?;
         channel.eof().await?;
-        let mut output = Zeroizing::new(Vec::new());
-        let mut received = 0usize;
-        let mut status = None;
-        while let Some(message) = channel.wait().await {
-            match message {
-                ChannelMsg::Data { data } => {
-                    received = received.saturating_add(data.len());
-                    if received > 65536 {
-                        return Err(SshError::new(
-                            "et_bootstrap",
-                            "ET bootstrap output exceeds 64 KiB",
-                        ));
-                    }
-                    output.extend_from_slice(&data);
-                }
-                ChannelMsg::ExtendedData { data, .. } => {
-                    received = received.saturating_add(data.len());
-                    if received > 65536 {
-                        return Err(SshError::new(
-                            "et_bootstrap",
-                            "ET bootstrap output exceeds 64 KiB",
-                        ));
-                    }
-                }
-                ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
-                _ => {}
-            }
-        }
+        let (output, status) = read_bootstrap(
+            &mut channel,
+            65536,
+            "et_bootstrap",
+            "ET bootstrap output exceeds 64 KiB",
+        )
+        .await?;
         if status != Some(0) {
             return Err(SshError::new("et_bootstrap", "ET helper did not start. Check its executable, running etserver and optional FIFO path."));
         }
@@ -325,6 +332,19 @@ pub(crate) mod tests {
             .unwrap()
     }
     use super::*;
+    async fn record_dispatch(
+        input: crate::terminal_input::InputSequence,
+        cancelled: &mut watch::Receiver<bool>,
+        losses: &mut watch::Receiver<Option<tokio::time::Instant>>,
+        sent: &mpsc::UnboundedSender<Vec<u8>>,
+    ) {
+        dispatch_input(input, &access_lease(), cancelled, losses, |bytes| {
+            sent.send(bytes).unwrap();
+            std::future::ready(Ok(()))
+        })
+        .await
+        .unwrap();
+    }
     #[tokio::test(start_paused = true)]
     async fn paced_input_does_not_resume_after_connection_loss_and_new_input_can_start_fresh() {
         let (cancel, mut cancelled) = watch::channel(false);
@@ -359,18 +379,7 @@ pub(crate) mod tests {
         assert!(received.try_recv().is_err());
         let mut cancelled = cancel.subscribe();
         let mut losses = loss.subscribe();
-        dispatch_input(
-            queued,
-            &access_lease(),
-            &mut cancelled,
-            &mut losses,
-            |bytes| {
-                sent.send(bytes).unwrap();
-                std::future::ready(Ok(()))
-            },
-        )
-        .await
-        .unwrap();
+        record_dispatch(queued, &mut cancelled, &mut losses, &sent).await;
         assert!(
             received.try_recv().is_err(),
             "queued pre-loss chord must also be discarded"
@@ -382,18 +391,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         let fresh_dispatch = tokio::time::Instant::now();
-        dispatch_input(
-            input,
-            &access_lease(),
-            &mut cancelled,
-            &mut losses,
-            |bytes| {
-                sent.send(bytes).unwrap();
-                std::future::ready(Ok(()))
-            },
-        )
-        .await
-        .unwrap();
+        record_dispatch(input, &mut cancelled, &mut losses, &sent).await;
         assert_eq!(
             tokio::time::Instant::now() - fresh_dispatch,
             crate::terminal_input::STEP_DELAY
@@ -474,7 +472,6 @@ pub(crate) mod tests {
         parent: String,
         directory: &std::path::Path,
     ) {
-        use std::os::unix::ffi::OsStrExt;
         use tauri::Manager;
         struct Server {
             process: std::process::Child,
@@ -485,28 +482,10 @@ pub(crate) mod tests {
             fn drop(&mut self) {
                 let _ = self.process.kill();
                 let _ = self.process.wait();
-                if let Ok(entries) = std::fs::read_dir("/proc") {
-                    for entry in entries.flatten() {
-                        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-                            continue;
-                        };
-                        let Ok(command) = std::fs::read(entry.path().join("cmdline")) else {
-                            continue;
-                        };
-                        let args = command.split(|byte| *byte == 0).collect::<Vec<_>>();
-                        if args.first().is_some_and(|arg| {
-                            std::path::Path::new(std::ffi::OsStr::from_bytes(arg)).file_name()
-                                == self.terminal.file_name()
-                        }) && args
-                            .iter()
-                            .any(|arg| *arg == self.fifo.as_os_str().as_encoded_bytes())
-                        {
-                            let _ = std::process::Command::new("kill")
-                                .args(["-TERM", &pid.to_string()])
-                                .status();
-                        }
-                    }
-                }
+                lazysh_common::test_support::terminate_processes_matching(
+                    &self.terminal,
+                    self.fifo.as_os_str(),
+                );
             }
         }
         let server = std::env::var_os("ET_SERVER_BIN")

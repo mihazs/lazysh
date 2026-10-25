@@ -14,16 +14,8 @@ pub(crate) enum Error {
     NotFound,
     Invalid,
 }
-impl From<io::Error> for Error {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-impl From<rusqlite::Error> for Error {
-    fn from(error: rusqlite::Error) -> Self {
-        Self::Sql(error)
-    }
-}
+lazysh_common::impl_from_error!(Error, Io, io::Error);
+lazysh_common::impl_from_error!(Error, Sql, rusqlite::Error);
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -38,17 +30,14 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
-fn private_directory(path: &Path) -> Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
+fn validate_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
+    if metadata.file_type().is_symlink()
+        || if directory {
+            !metadata.is_dir()
+        } else {
+            !metadata.is_file()
+        }
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(path)?;
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(Error::Invalid);
     }
     #[cfg(unix)]
@@ -60,18 +49,15 @@ fn private_directory(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+fn private_directory(path: &Path) -> Result<()> {
+    lazysh_common::fs::private_directory(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    validate_metadata(&metadata, true)?;
+    Ok(())
+}
 fn private_file(path: &Path, create: bool) -> Result<File> {
     if let Ok(metadata) = fs::symlink_metadata(path) {
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(Error::Invalid);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(Error::Invalid);
-            }
-        }
+        validate_metadata(&metadata, false)?;
     }
     let mut options = OpenOptions::new();
     options.read(true).write(create);
@@ -177,12 +163,11 @@ impl Store {
         }
         let id = crate::random_secret();
         let path = self.directory.join(format!("blob-{id}"));
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
+        let mut options = lazysh_common::fs::private_create_new();
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+            options.custom_flags(libc::O_NOFOLLOW);
         }
         let mut created = false;
         let result = (|| -> Result<Share> {
@@ -235,17 +220,7 @@ impl Store {
                 before_id,
                 limit as u32
             ],
-            |row| {
-                Ok(Share {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    mime: row.get(2)?,
-                    size: unsigned(row, 3)?,
-                    created_at: unsigned(row, 4)?,
-                    expires_at: unsigned(row, 5)?,
-                    url: String::new(),
-                })
-            },
+            share_from_row,
         )?;
         rows.map(|row| {
             row.map(|share| share.with_origin(origin))
@@ -254,7 +229,7 @@ impl Store {
         .collect()
     }
     pub(crate) fn download(&self, id: &str, now: u64) -> Result<(Share, File)> {
-        let share = self.connection.query_row("SELECT id,name,mime,size,created_at,expires_at FROM shares WHERE id=? AND expires_at>?", params![id, now.min(i64::MAX as u64) as i64], |row| Ok(Share { id: row.get(0)?, name: row.get(1)?, mime: row.get(2)?, size: unsigned(row, 3)?, created_at: unsigned(row, 4)?, expires_at: unsigned(row, 5)?, url: String::new() })).optional()?.ok_or(Error::NotFound)?;
+        let share = self.connection.query_row("SELECT id,name,mime,size,created_at,expires_at FROM shares WHERE id=? AND expires_at>?", params![id, now.min(i64::MAX as u64) as i64], share_from_row).optional()?.ok_or(Error::NotFound)?;
         let file = private_file(&self.blob_path(id), false)?;
         if file.metadata()?.len() != share.size {
             return Err(Error::Invalid);
@@ -301,4 +276,16 @@ impl Store {
 fn unsigned(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(index)?;
     u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+}
+
+fn share_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Share> {
+    Ok(Share {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        mime: row.get(2)?,
+        size: unsigned(row, 3)?,
+        created_at: unsigned(row, 4)?,
+        expires_at: unsigned(row, 5)?,
+        url: String::new(),
+    })
 }

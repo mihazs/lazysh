@@ -4,6 +4,12 @@ use super::{
 use serde_json::Value;
 use std::{io::Read, path::Path};
 
+pub(super) fn read_export(path: &Path, limit: u8) -> Result<Value> {
+    if !(1..=100).contains(&limit) {
+        return Err(Error::InvalidArgument);
+    }
+    read(path)
+}
 pub(super) fn read(path: &Path) -> Result<Value> {
     let file = open_transcript(path)?;
     let before = file.metadata()?;
@@ -12,17 +18,7 @@ pub(super) fn read(path: &Path) -> Result<Value> {
     }
     let value =
         serde_json::from_reader(file.take(before.len())).map_err(|_| Error::InvalidEvent)?;
-    let after = open_transcript(path)?.metadata()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev() || before.ino() != after.ino() {
-            return Err(Error::InvalidEvent);
-        }
-    }
-    if before.len() != after.len() || before.modified()? != after.modified()? {
-        return Err(Error::InvalidEvent);
-    }
+    super::unchanged_snapshot(path, &before)?;
     Ok(value)
 }
 

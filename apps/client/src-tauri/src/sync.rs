@@ -403,12 +403,7 @@ async fn enrollment_write(
     guard: Arc<OwnedMutexGuard<()>>,
     write: impl FnOnce() -> Result<()> + Send + 'static,
 ) -> Result<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = guard;
-        write()
-    })
-    .await
-    .map_err(|_| "Sync enrollment worker stopped".to_owned())?
+    crate::share::worker::retained_write(guard, write, "Sync enrollment worker stopped").await
 }
 async fn save_for_operation(
     app: &AppHandle,
@@ -1245,20 +1240,30 @@ fn import_failure(hosts: &AppState, host_id: &str, error: crate::vault::ImportFa
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn credential_bundle(host: &Host, password: &str) -> Bundle {
+        Bundle {
+            version: 1,
+            revision: 1,
+            scope: Scope::Credentials,
+            hosts: vec![host.clone()],
+            preferences: None,
+            credentials: vec![CredentialRecord {
+                host_id: host.id.clone(),
+                credentials: Credentials {
+                    password: Some(password.into()),
+                    private_key: None,
+                    passphrase: None,
+                },
+            }],
+        }
+    }
     #[tokio::test]
     async fn dropped_sync_caller_cannot_release_an_admitted_enrollment_write() {
         let state = SyncState::default();
         let guard = Arc::new(state.operation.clone().lock_owned().await);
-        let (entered, started) = tokio::sync::oneshot::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        let task = tokio::spawn(enrollment_write(guard, move || {
-            entered.send(()).unwrap();
-            wait.recv().unwrap();
-            Ok(())
-        }));
-        started.await.unwrap();
-        task.abort();
-        let _ = task.await;
+        let release =
+            crate::share::test_support::abort_write(move |write| enrollment_write(guard, write))
+                .await;
         assert!(state.operation.try_lock().is_err());
         release.send(()).unwrap();
         drop(
@@ -1480,21 +1485,7 @@ mod tests {
     fn previews_exclude_secrets_and_preserve_local_pins_and_credentials() {
         let mut remote = host("same");
         remote.fingerprint = Some(format!("SHA256:{}", "A".repeat(43)));
-        let bundle = Bundle {
-            version: 1,
-            revision: 1,
-            scope: Scope::Credentials,
-            hosts: vec![remote.clone()],
-            preferences: None,
-            credentials: vec![CredentialRecord {
-                host_id: remote.id.clone(),
-                credentials: Credentials {
-                    password: Some("never-in-preview".into()),
-                    private_key: None,
-                    passphrase: None,
-                },
-            }],
-        };
+        let bundle = credential_bundle(&remote, "never-in-preview");
         validate_bundle(&bundle, Scope::Credentials).unwrap();
         let (additions, ids, hosts, conflicts) = plan(&bundle, &[]);
         assert_eq!(additions.len(), 1);
@@ -1563,21 +1554,7 @@ mod tests {
             .unwrap();
         let mut remote = metadata;
         remote.fingerprint = Some(format!("SHA256:{}", "A".repeat(43)));
-        let bundle = Bundle {
-            version: 1,
-            revision: 1,
-            scope: Scope::Credentials,
-            hosts: vec![remote.clone()],
-            preferences: None,
-            credentials: vec![CredentialRecord {
-                host_id: remote.id.clone(),
-                credentials: Credentials {
-                    password: Some("fixture-password".into()),
-                    private_key: None,
-                    passphrase: None,
-                },
-            }],
-        };
+        let bundle = credential_bundle(&remote, "fixture-password");
         let before = state.sync_snapshot().unwrap();
         let (additions, ids, preview, conflicts) = plan(&bundle, &before);
         assert!(additions.is_empty());
@@ -1615,21 +1592,7 @@ mod tests {
         let mut remote = local.clone();
         remote.biometric_unlock = false;
         remote.fingerprint = Some(format!("SHA256:{}", "A".repeat(43)));
-        let mut bundle = Bundle {
-            version: 1,
-            revision: 1,
-            scope: Scope::Credentials,
-            hosts: vec![remote.clone()],
-            preferences: None,
-            credentials: vec![CredentialRecord {
-                host_id: remote.id.clone(),
-                credentials: Credentials {
-                    password: Some("fixture-password".into()),
-                    private_key: None,
-                    passphrase: None,
-                },
-            }],
-        };
+        let mut bundle = credential_bundle(&remote, "fixture-password");
         validate_bundle(&bundle, Scope::Credentials).unwrap();
         let before = state.sync_snapshot().unwrap();
         let (additions, ids, _, conflicts) = plan(&bundle, &before);

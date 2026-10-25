@@ -10,5 +10,8 @@
     "format:check": "cargo fmt --manifest-path Cargo.toml -- --check",
     "test:apple-status": "xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshStatusTests -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO",
     "build:watchos": "xcodebuild -project ../../apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWatch -destination 'generic/platform=watchOS Simulator' build CODE_SIGNING_ALLOWED=NO"
+  },
+  "dependencies": {
+    "@lazysh/common": "workspace:*"
   }
 }

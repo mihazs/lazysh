@@ -1,3 +1,4 @@
+import { observeCurrent } from "./asyncState";
 import { useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -65,11 +66,13 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     const current = ++generation.current;
     setPreviews([]); setSelected(''); setListeners([]); setError(''); setBusy(true);
-    void invoke<unknown[]>('list_previews', { sessionId }).then(rows => {
+    const loading = invoke<unknown[]>('list_previews', { sessionId }).then(rows => {
       if (!Array.isArray(rows) || rows.length > 4) throw new Error('Invalid preview list.');
-      const values = rows.map(parsePreview);
-      if (generation.current === current) { setPreviews(values); setSelected(values[0]?.id ?? ''); }
-    }).catch(e => { if (generation.current === current) setError(errorMessage(e)); }).finally(() => { if (generation.current === current) setBusy(false); });
+      return rows.map(parsePreview);
+    });
+    observeCurrent(loading, () => generation.current === current,
+      values => { setPreviews(values); setSelected(values[0]?.id ?? ''); },
+      error => setError(errorMessage(error)), () => setBusy(false));
     return () => { generation.current++; };
   }, [sessionId]);
 

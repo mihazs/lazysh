@@ -1,4 +1,5 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use lazysh_common::valid_name;
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ use std::{
 use tauri::{AppHandle, State};
 use tauri_plugin_lazysh_vault::VaultExt;
 use tokio::sync::{watch, Mutex};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, String>;
 const ACCOUNT: &str = "share-service-enrollment-v1";
@@ -21,58 +22,16 @@ const MAX_FILE: usize = 10 * 1024 * 1024;
 const MAX_RESPONSE: usize = 256 * 1024;
 const IDLE: Duration = Duration::from_secs(120);
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Enrollment {
-    version: u8,
-    origin: String,
-    token: String,
-}
-impl Drop for Enrollment {
-    fn drop(&mut self) {
-        self.token.zeroize();
-    }
-}
+pub(crate) mod service;
+#[cfg(test)]
+pub(crate) mod test_support;
+pub(crate) mod worker;
+use service::{valid_id, Enrollment};
 fn origin(value: &str) -> Result<Url> {
-    let url = Url::parse(value).map_err(|_| "Enter a valid HTTPS service origin")?;
-    let authority = value
-        .split_once("://")
-        .map(|(_, address)| address.split(['/', '?', '#']).next().unwrap_or_default())
-        .unwrap_or_default();
-    if value.len() > 2048
-        || value.chars().any(|c| c.is_control() || c.is_whitespace())
-        || value.contains('\\')
-        || authority.is_empty()
-        || authority.contains('@')
-        || url.scheme() != "https"
-        || !url.has_host()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("Use an HTTPS origin without credentials, path, query or fragment".into());
-    }
-    Ok(url)
-}
-fn valid_id(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    service::origin(value, "Enter a valid HTTPS service origin")
 }
 fn valid_token(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
-}
-fn valid_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && value != "."
-        && value != ".."
-        && !value
-            .chars()
-            .any(|c| c.is_control() || c == '/' || c == '\\')
 }
 fn valid_mime(value: &str) -> bool {
     value.len() <= 128
@@ -171,12 +130,7 @@ async fn configuration_write(
     guard: Changing,
     write: impl FnOnce() -> Result<()> + Send + 'static,
 ) -> Result<()> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = guard;
-        write()
-    })
-    .await
-    .map_err(|_| "Sharing configuration worker stopped".to_owned())?
+    crate::share::worker::retained_write(guard, write, "Sharing configuration worker stopped").await
 }
 fn changing(state: &ShareState) -> Result<Changing> {
     state

@@ -9,18 +9,10 @@ use axum::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::{
-    io::copy_bidirectional,
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
     sync::{oneshot, Semaphore},
-    task::JoinSet,
 };
-use tokio_rustls::{
-    rustls::{
-        pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
-        ServerConfig,
-    },
-    TlsAcceptor,
-};
+
 const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const JOB: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 fn capabilities() -> Capabilities {
@@ -61,6 +53,39 @@ fn ready(origin: &str) -> CloudState {
     state.inner.lock().unwrap().verified = Some(snapshot(origin));
     state
 }
+fn authorized_access() -> (crate::app_lock::AccessState, AccessLease) {
+    let authority = crate::app_lock::AccessState::default();
+    authority.initialize(true, true, "fixture".into()).unwrap();
+    authority
+        .authorize(authority.generation().unwrap())
+        .unwrap();
+    let nonce = authority.status().unwrap().nonce.unwrap();
+    let access = authority.lease(Some(&nonce)).unwrap();
+    (authority, access)
+}
+async fn start_waiting_work(
+    fixture: &Fixture,
+    mut work: Work,
+) -> tokio::task::JoinHandle<Result<Completed>> {
+    let enrollment = fixture.enrollment.clone();
+    let client = fixture.client.clone();
+    let task = tokio::spawn(async move {
+        let (result, cleanup) = run(
+            &mut work,
+            enrollment,
+            client,
+            wav(&vec![0.0; 1600]).unwrap(),
+            "en".into(),
+        )
+        .await;
+        work.finish(result, cleanup)
+    });
+    let _ = tokio::time::timeout(Duration::from_secs(3), fixture.state.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    task
+}
 #[tokio::test]
 async fn lock_cancels_recording_without_permanently_closing_the_window() {
     let state = ready("https://voice.example");
@@ -81,13 +106,7 @@ async fn lock_cancels_recording_without_permanently_closing_the_window() {
 }
 #[test]
 fn reservation_cannot_be_claimed_with_a_fresh_lease_after_its_original_unlock_expires() {
-    let authority = crate::app_lock::AccessState::default();
-    authority.initialize(true, true, "fixture".into()).unwrap();
-    authority
-        .authorize(authority.generation().unwrap())
-        .unwrap();
-    let nonce = authority.status().unwrap().nonce.unwrap();
-    let access = authority.lease(Some(&nonce)).unwrap();
+    let (authority, access) = authorized_access();
     let state = ready("https://voice.example");
     let id = state.begin_scoped("main", None, Some(access)).unwrap();
     authority.background().unwrap();
@@ -472,25 +491,7 @@ impl Fixture {
             .route("/v1/transcriptions/{id}/audio", put(upload))
             .route("/v1/transcriptions/{id}", axum::routing::delete(delete_job))
             .with_state(state.clone());
-        let front = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = front.local_addr().unwrap();
-        let origin = format!("https://localhost:{}", address.port());
-        let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        let root = reqwest::Certificate::from_der(certificate.cert.der().as_ref()).unwrap();
-        let config = ServerConfig::builder_with_provider(Arc::new(
-            tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![certificate.cert.der().clone()],
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-                certificate.signing_key.serialize_der(),
-            )),
-        )
-        .unwrap();
-        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let front = crate::share::test_support::tls_front().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let destination = listener.local_addr().unwrap();
         let (stop, stopped) = oneshot::channel();
@@ -502,35 +503,35 @@ impl Fixture {
                 .await
                 .unwrap();
         });
-        let tls = tokio::spawn(async move {
-            let mut sockets = JoinSet::new();
-            loop {
-                tokio::select! {accepted=front.accept()=>{let Ok((socket,_))=accepted else{return;};let acceptor=acceptor.clone();sockets.spawn(async move{if let Ok(mut incoming)=acceptor.accept(socket).await{if let Ok(mut outgoing)=TcpStream::connect(destination).await{let _=copy_bidirectional(&mut incoming,&mut outgoing).await;}}});},_=sockets.join_next(),if !sockets.is_empty()=>{}}
-            }
-        });
+        let tls =
+            crate::share::test_support::tls_proxy(front.listener, front.acceptor, destination);
         let client = Client::builder()
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
-            .resolve("localhost", address)
-            .add_root_certificate(root)
+            .resolve("localhost", front.address)
+            .add_root_certificate(front.root)
             .connect_timeout(Duration::from_secs(3))
             .build()
             .unwrap();
         Self {
             enrollment: Enrollment {
                 version: 1,
-                origin: origin.clone(),
+                origin: front.origin.clone(),
                 token: TOKEN.into(),
             },
-            origin,
+            origin: front.origin,
             client,
             state,
             backend,
             tls,
             stop,
         }
+    }
+    async fn finish(self, state: &CloudState) {
+        assert!(state.inner.lock().unwrap().active.is_none());
+        self.stop().await;
     }
     async fn stop(self) {
         self.state.release.add_permits(10);
@@ -591,8 +592,7 @@ async fn native_worker_uploads_canonical_wav_once_and_rejects_bad_results_withou
             fixture.state.puts.load(Ordering::SeqCst),
             if mode == 3 { 0 } else { 1 }
         );
-        assert!(state.inner.lock().unwrap().active.is_none());
-        fixture.stop().await;
+        fixture.finish(&state).await;
     }
 }
 #[tokio::test]
@@ -605,24 +605,8 @@ async fn cancellation_with_unknown_registration_never_uploads_and_known_job_dele
             .store(if mode == 10 { 4 } else { mode }, Ordering::SeqCst);
         let state = ready(&fixture.origin);
         let id = state.begin("main", None).unwrap();
-        let mut work = Work::claim(state.clone(), &id, "main", None, "en").unwrap();
-        let enrollment = fixture.enrollment.clone();
-        let client = fixture.client.clone();
-        let task = tokio::spawn(async move {
-            let (result, cleanup) = run(
-                &mut work,
-                enrollment,
-                client,
-                wav(&vec![0.0; 1600]).unwrap(),
-                "en".into(),
-            )
-            .await;
-            work.finish(result, cleanup)
-        });
-        let _ = tokio::time::timeout(Duration::from_secs(3), fixture.state.entered.acquire())
-            .await
-            .unwrap()
-            .unwrap();
+        let work = Work::claim(state.clone(), &id, "main", None, "en").unwrap();
+        let task = start_waiting_work(&fixture, work).await;
         if mode == 10 {
             fixture.state.mode.store(10, Ordering::SeqCst);
         }
@@ -642,8 +626,7 @@ async fn cancellation_with_unknown_registration_never_uploads_and_known_job_dele
             fixture.state.deletes.load(Ordering::SeqCst),
             if mode == 2 { 0 } else { 1 }
         );
-        assert!(state.inner.lock().unwrap().active.is_none());
-        fixture.stop().await;
+        fixture.finish(&state).await;
     }
 }
 
@@ -652,34 +635,12 @@ async fn native_lease_revocation_cancels_owned_cloud_worker_across_immediate_reu
     for mode in [2, 4] {
         let fixture = Fixture::new().await;
         fixture.state.mode.store(mode, Ordering::SeqCst);
-        let authority = crate::app_lock::AccessState::default();
-        authority.initialize(true, true, "fixture".into()).unwrap();
-        authority
-            .authorize(authority.generation().unwrap())
-            .unwrap();
-        let nonce = authority.status().unwrap().nonce.unwrap();
-        let access = authority.lease(Some(&nonce)).unwrap();
+        let (authority, access) = authorized_access();
         let state = ready(&fixture.origin);
         let id = state.begin("main", None).unwrap();
         let mut work = Work::claim(state.clone(), &id, "main", None, "en").unwrap();
         work.bind_access(access.clone());
-        let enrollment = fixture.enrollment.clone();
-        let client = fixture.client.clone();
-        let task = tokio::spawn(async move {
-            let (result, cleanup) = run(
-                &mut work,
-                enrollment,
-                client,
-                wav(&vec![0.0; 1600]).unwrap(),
-                "en".into(),
-            )
-            .await;
-            work.finish(result, cleanup)
-        });
-        let _ = tokio::time::timeout(Duration::from_secs(3), fixture.state.entered.acquire())
-            .await
-            .unwrap()
-            .unwrap();
+        let task = start_waiting_work(&fixture, work).await;
         // No JS callback or state-specific cancellation hook: the immutable
         // lease alone must stop this detached worker, even after another unlock.
         authority.background().unwrap();
@@ -703,7 +664,6 @@ async fn native_lease_revocation_cancels_owned_cloud_worker_across_immediate_reu
         );
         let last = state.inner.lock().unwrap().last.as_ref().unwrap().1;
         assert!(matches!(last.cleanup, Cleanup::Unconfirmed) == (mode == 2));
-        assert!(state.inner.lock().unwrap().active.is_none());
-        fixture.stop().await;
+        fixture.finish(&state).await;
     }
 }

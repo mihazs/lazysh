@@ -2,13 +2,9 @@ use lazysh_agent::{transcript::TranscriptAgent, usage};
 use serde_json::{json, Value};
 use std::{fs, io::Write};
 
-fn records(path: &std::path::Path, values: &[Value]) {
-    let mut file = fs::File::create(path).unwrap();
-    for value in values {
-        serde_json::to_writer(&mut file, value).unwrap();
-        writeln!(file).unwrap();
-    }
-}
+#[path = "support/jsonl.rs"]
+mod jsonl;
+use jsonl::write as records;
 fn event(info: Value, rate: Value) -> Value {
     json!({"type":"event_msg","timestamp":"2020-01-01T00:00:00Z","payload":{"type":"token_count","info":info,"rate_limits":rate}})
 }

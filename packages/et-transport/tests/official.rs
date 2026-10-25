@@ -1,10 +1,9 @@
 #![cfg(target_os = "linux")]
 use lazysh_et_transport::{Client, Event, SessionSecret};
-use std::os::unix::ffi::OsStrExt;
 use std::{
     io::{BufRead, Write},
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -143,29 +142,23 @@ impl Drop for Fixture {
         let _ = self.server.kill();
         let _ = self.server.wait();
         // Only helpers with this fixture's exact private FIFO argument are ours.
-        if let Ok(entries) = std::fs::read_dir("/proc") {
-            for entry in entries.flatten() {
-                let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-                    continue;
-                };
-                let Ok(command) = std::fs::read(entry.path().join("cmdline")) else {
-                    continue;
-                };
-                let args = command.split(|value| *value == 0).collect::<Vec<_>>();
-                if args.first().is_some_and(|arg| {
-                    Path::new(std::ffi::OsStr::from_bytes(arg)).file_name()
-                        == self.terminal.file_name()
-                }) && args
-                    .iter()
-                    .any(|arg| *arg == self.fifo.as_os_str().as_encoded_bytes())
-                {
-                    let _ = Command::new("kill")
-                        .args(["-TERM", &pid.to_string()])
-                        .status();
-                }
+        lazysh_common::test_support::terminate_processes_matching(
+            &self.terminal,
+            self.fifo.as_os_str(),
+        );
+    }
+}
+
+async fn wait_disconnected(client: &mut Client) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if matches!(client.next_event().await, Some(Event::Disconnected)) {
+                break;
             }
         }
-    }
+    })
+    .await
+    .unwrap();
 }
 
 async fn until(client: &mut Client, text: &[u8]) -> Vec<u8> {
@@ -258,15 +251,7 @@ async fn official_server_utf8_resize_and_recovery_preserve_order() {
         .unwrap();
     until(&mut client, b"\r\n35 110\r\n").await;
     stop.send_replace(1);
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if matches!(client.next_event().await, Some(Event::Disconnected)) {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
+    wait_disconnected(&mut client).await;
     control
         .send(b"printf '\\n__FIRST__\\n'\n".to_vec())
         .await
@@ -286,15 +271,7 @@ async fn official_server_utf8_resize_and_recovery_preserve_order() {
         .send(b"printf '\\n__MIDFRAME__\\n'\n".to_vec())
         .await
         .unwrap();
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if matches!(client.next_event().await, Some(Event::Disconnected)) {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
+    wait_disconnected(&mut client).await;
     control.reconnect(endpoint).await.unwrap();
     let output = until(&mut client, b"\r\n__MIDFRAME__\r\n").await;
     assert_eq!(

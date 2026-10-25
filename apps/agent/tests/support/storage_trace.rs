@@ -149,13 +149,10 @@ fn validate_metadata(metadata: &fs::Metadata, directory: bool) -> io::Result<()>
 
 fn copy_excerpt(source: &Path, destination: &Path) -> io::Result<u64> {
     validate_metadata(&fs::symlink_metadata(source)?, false)?;
-    let mut options = OpenOptions::new();
-    options.read(true);
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
+    let options = lazysh_common::fs::read_options_with_flags(false, libc::O_CLOEXEC);
+    #[cfg(not(unix))]
+    let options = lazysh_common::fs::read_options(false);
     let mut source = options.open(source)?;
     let metadata = source.metadata()?;
     validate_metadata(&metadata, false)?;
