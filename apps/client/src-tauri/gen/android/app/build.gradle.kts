@@ -24,6 +24,9 @@ android {
         minSdk = 24
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Tauri exits its process when the last activity is finished. Keep the
+        // shared native activity alive until AndroidJUnitRunner reports results.
+        testInstrumentationRunnerArguments["waitForActivitiesToComplete"] = "false"
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }

@@ -158,8 +158,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on
           pre-emulator-launch-script: $ANDROID_HOME/emulator/emulator -accel-check
           script: |
-            bun run test:android
             bun run test:android-mosh
+            bun run test:android
       - uses: actions/upload-artifact@v4
         if: always()
         with:

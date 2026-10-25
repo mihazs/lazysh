@@ -225,6 +225,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: app.lazysh.client.watchkitapp
         SWIFT_VERSION: "5.0"
         SDKROOT: watchos
+        SUPPORTED_PLATFORMS: watchos watchsimulator
         TARGETED_DEVICE_FAMILY: "4"
         {{#if apple.development-team}}
         DEVELOPMENT_TEAM: {{apple.development-team}}
@@ -253,6 +254,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.lazysh.client.watchkitapp.widgets
+        SDKROOT: watchos
+        SUPPORTED_PLATFORMS: watchos watchsimulator
         SKIP_INSTALL: true
         APPLICATION_EXTENSION_API_ONLY: true
         SWIFT_VERSION: "5.0"
