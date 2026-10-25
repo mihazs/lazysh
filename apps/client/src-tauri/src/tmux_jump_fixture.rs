@@ -249,7 +249,7 @@ struct Identity {
     live: Arc<std::sync::atomic::AtomicBool>,
 }
 struct Display {
-    channel: russh::Channel<client::Msg>,
+    channel: OwnedChannel,
     identity: Identity,
 }
 impl Display {
@@ -659,6 +659,36 @@ async fn product_actor_probe() {
         "#{session_id}:#{window_id}",
     ]);
     let (bid, bwid) = b.split_once(':').unwrap();
+    let long_name = "a".repeat(201);
+    let long_id = f.local(&[
+        "new-session",
+        "-d",
+        "-s",
+        &long_name,
+        "-P",
+        "-F",
+        "#{session_id}",
+    ]);
+    assert_eq!(
+        f.local(&[
+            "display-message",
+            "-p",
+            "-t",
+            &a,
+            "#{m/r:[[:cntrl:]],work\tbuild}"
+        ]),
+        "1"
+    );
+    assert_eq!(
+        f.local(&[
+            "display-message",
+            "-p",
+            "-t",
+            &a,
+            "#{s/#{l:[[:cntrl:]]}/?/:#{l:work\tbuild}}"
+        ]),
+        "work?build"
+    );
     let expected_name = f.local(&["display-message", "-p", "-t", bid, "#{session_name}"]);
     assert!(expected_name.contains("a|b #{session_name}"));
     let window_name = "next|\\tab; '#{pane_id}'";
@@ -709,6 +739,15 @@ async fn product_actor_probe() {
         .find(|s| s["id"] == bid)
         .unwrap();
     assert_eq!(target["name"], expected_name);
+    assert_eq!(target["restoreName"], expected_name);
+    let oversized = json["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == long_id)
+        .unwrap();
+    assert_eq!(oversized["name"], long_name);
+    assert!(oversized["restoreName"].is_null());
     assert_eq!(target["windows"][0]["name"], expected_window);
     let selected = f.local(&[
         "new-window",

@@ -51,7 +51,7 @@ export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
 export type TmuxJumpSnapshot = {
   generation: string;
   current: { sessionId: string; windowId: string };
-  sessions: { id: string; name: string; windows: { id: string; index: number; name: string }[] }[];
+  sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string }[] }[];
 };
 
 export const native = isTauri();

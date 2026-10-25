@@ -21,6 +21,9 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   An unavailable binding disables navigation without replacing the terminal.
   The extra control client affects tmux attached counts/hooks; switching a
   window also changes the destination session's shared current window.
+  Cancelled attachment setup closes its unpublished SSH display channel. Saved
+  restoration uses the exact validated destination name; unsupported names keep
+  the live terminal available with a notice and omit its restoration intent.
 
 - Repository pre-commit duplicate detection with pinned jscpd and Bun now rejects
   every detected clone, including pre-existing duplication; the previous baseline

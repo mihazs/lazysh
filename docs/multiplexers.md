@@ -44,6 +44,13 @@ sending a command. List, accordion and grid share the existing saved layout
 preference. A successful switch remembers the destination's human session name;
 numeric IDs and navigation generations are never saved for reconnect.
 
+Display labels are separate from exact restoration names. Only a native-validated,
+control-free name of at most 200 UTF-8 bytes is saved. Unsupported destinations
+remain live and navigable with an explicit notice, and their entire restoration
+intent is omitted; a sanitized label or the previous target is never substituted.
+Host-side session switches/renames are not automatically reflected in saved
+intent; a successful lazysh jump or a new attachment refreshes it.
+
 lazysh captures PID/TTY metadata on its own SSH attach channel immediately before
 `exec tmux`, retaining other startup banners and terminal bytes. A separate,
 verified SSH control channel confirms that exact attached normal client. Every
@@ -57,7 +64,9 @@ The extra `no-output,ignore-size` control client affects attached/client counts
 and may trigger configured tmux hooks. Switching a window changes the destination
 session's **shared** current window, which other clients in that session may see.
 Closing the local display revokes navigation immediately, independently of the
-remote close acknowledgement. Idle control clients can survive a resume lock;
+remote close acknowledgement. Cancelling attachment setup requests close of its
+unpublished display channel during handshake or control preparation, while
+preserving the verified parent SSH transport. Idle control clients can survive a resume lock;
 queued requests retain their original access lease and are discarded after
 revocation. Interruption during command I/O, unexpected framing, timeout, or
 server loss permanently retires that binding. Reattach to obtain a fresh binding.

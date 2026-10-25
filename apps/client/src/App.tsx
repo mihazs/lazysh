@@ -1116,7 +1116,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if (!session?.attached || !destination) return;
     const suffix = ` / ${session.attached.name}`;
     if (session.name.endsWith(suffix)) session.name = `${session.name.slice(0, -suffix.length)} / ${destination.name}`;
-    session.attached = {kind:'tmux', name:destination.name};
+    session.attached = {kind:'tmux', name:destination.name, restoreName:destination.restoreName};
     persistWorkspace(sessionsRef.current);
     setSessions([...sessionsRef.current]);
   }
@@ -1804,6 +1804,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               </button>
             </div>
             {active.local && <p className="security-note">Local shell on this device. SSH host tools, remote files, agents and previews are unavailable in this session.</p>}
+            {active.attached?.restoreName === null && <p className="security-note" role="status">This tmux destination cannot be restored automatically because its exact name is unsupported. The live terminal and Jump To remain available.</p>}
             <div className="session-body">
               <Suspense
                 fallback={

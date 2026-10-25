@@ -10,8 +10,8 @@ test('attached display Jump To is reachable, remembers layouts and drops a late 
     localStorage.setItem('lazysh.multiplexer.layout', 'grid');
     window.tmuxJumpFixture = {jumps:[],defer:false};
     const snapshot = {generation:'retained-actor',current:{sessionId:'$1',windowId:'@1'},sessions:[
-      {id:'$1',name:'work',windows:[{id:'@1',index:0,name:'agent'}]},
-      {id:'$2',name:'builds',windows:[{id:'@2',index:1,name:'compiler'}]},
+      {id:'$1',name:'work',restoreName:'work',windows:[{id:'@1',index:0,name:'agent'}]},
+      {id:'$2',name:'builds',restoreName:'builds',windows:[{id:'@2',index:1,name:'compiler'}]},
     ]};
     let connections=0;
     Object.defineProperty(window,'isTauri',{value:true});

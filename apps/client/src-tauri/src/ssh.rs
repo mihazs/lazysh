@@ -1229,15 +1229,62 @@ async fn start_session(
     .await
 }
 const OUTPUT_WINDOW: u32 = 256 * 1024;
+/// A channel must remain close-owned even before a terminal task is registered.
+/// russh's raw Channel Drop does not request remote close on retained SSH.
+pub(crate) struct OwnedChannel {
+    channel: Option<russh::Channel<client::Msg>>,
+    closed: std::sync::atomic::AtomicBool,
+}
+impl From<russh::Channel<client::Msg>> for OwnedChannel {
+    fn from(channel: russh::Channel<client::Msg>) -> Self {
+        Self {
+            channel: Some(channel),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+impl std::ops::Deref for OwnedChannel {
+    type Target = russh::Channel<client::Msg>;
+    fn deref(&self) -> &Self::Target {
+        self.channel.as_ref().unwrap()
+    }
+}
+impl std::ops::DerefMut for OwnedChannel {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.channel.as_mut().unwrap()
+    }
+}
+impl OwnedChannel {
+    pub(crate) async fn close(&self) -> std::result::Result<(), russh::Error> {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.channel.as_ref().unwrap().close().await?;
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+impl Drop for OwnedChannel {
+    fn drop(&mut self) {
+        if !self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some(channel) = self.channel.take() {
+                tauri::async_runtime::spawn(async move {
+                    let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
+                });
+            }
+        }
+    }
+}
 async fn open_terminal(
     handle: &Arc<SshHandle>,
     cols: u32,
     rows: u32,
     command: Option<String>,
-) -> Result<(russh::Channel<client::Msg>, Vec<u8>)> {
-    let mut channel = timeout(OP_TIMEOUT, handle.channel_open_session())
+) -> Result<(OwnedChannel, Vec<u8>)> {
+    let channel = timeout(OP_TIMEOUT, handle.channel_open_session())
         .await
         .map_err(|_| SshError::new("timeout", "Opening terminal timed out"))??;
+    let mut channel = OwnedChannel::from(channel);
     let result = timeout(OP_TIMEOUT, async {
         channel
             .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
@@ -1416,10 +1463,11 @@ async fn spawn_terminal(
     state: &AppState,
     creation: AccessLease,
     handle: Arc<SshHandle>,
-    mut channel: russh::Channel<client::Msg>,
+    channel: impl Into<OwnedChannel>,
     initial: Vec<u8>,
     events: Channel<SshEvent>,
 ) -> Result<Connected> {
+    let mut channel = channel.into();
     let (input, mut rx) = mpsc::channel(32);
     let (cancel, mut cancellation) = watch::channel(false);
     let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
@@ -2778,6 +2826,9 @@ mod tests {
         input_data: Arc<StdMutex<Vec<u8>>>,
         executed: Arc<tokio::sync::Notify>,
         closed: Arc<tokio::sync::Notify>,
+        tmux_metadata: Arc<std::sync::atomic::AtomicBool>,
+        command_channels: Arc<StdMutex<Vec<ChannelId>>>,
+        closed_channels: Arc<StdMutex<Vec<ChannelId>>>,
     }
     impl server::Server for TestServer {
         type Handler = Self;
@@ -2789,9 +2840,10 @@ mod tests {
         type Error = russh::Error;
         async fn channel_close(
             &mut self,
-            _: ChannelId,
+            channel: ChannelId,
             _: &mut server::Session,
         ) -> std::result::Result<(), Self::Error> {
+            self.closed_channels.lock().unwrap().push(channel);
             self.closed.notify_one();
             Ok(())
         }
@@ -2879,12 +2931,24 @@ mod tests {
             command: &[u8],
             session: &mut server::Session,
         ) -> std::result::Result<(), Self::Error> {
+            let text = String::from_utf8(command.to_vec()).unwrap();
+            self.command_channels.lock().unwrap().push(channel);
             self.commands
                 .lock()
                 .unwrap()
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
-            session.data(channel, b"attached\r\n".to_vec())?;
+            if self.tmux_metadata.load(Ordering::SeqCst) {
+                if let Some(start) = text.find("LAZYSH_ATTACH_") {
+                    let marker = &text[start..start + 46];
+                    session.data(
+                        channel,
+                        format!("{marker}\t42\t/dev/pts/42\r\n").into_bytes(),
+                    )?;
+                }
+            } else {
+                session.data(channel, b"attached\r\n".to_vec())?;
+            }
             self.executed.notify_one();
             Ok(())
         }
@@ -3063,6 +3127,9 @@ mod tests {
             input_data: Arc::new(StdMutex::new(Vec::new())),
             executed: Arc::new(tokio::sync::Notify::new()),
             closed: Arc::new(tokio::sync::Notify::new()),
+            tmux_metadata: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            command_channels: Arc::new(StdMutex::new(Vec::new())),
+            closed_channels: Arc::new(StdMutex::new(Vec::new())),
         };
         let mut runner = test_server.clone();
         let task = tokio::spawn(async move {
@@ -3117,6 +3184,74 @@ mod tests {
         server_task.abort();
     }
 
+    #[tokio::test]
+    async fn tmux_attach_cancellation_closes_display_during_handshake() {
+        cancelled_tmux_attach(false).await;
+    }
+    #[tokio::test]
+    async fn tmux_attach_cancellation_closes_display_during_control_preparation() {
+        cancelled_tmux_attach(true).await;
+    }
+    async fn cancelled_tmux_attach(preparation: bool) {
+        let (host, server, task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        state.config().unwrap().hosts.push(host.clone());
+        let parent = password_terminal(&state, &host, Channel::new(|_| Ok(()))).await;
+        server.tmux_metadata.store(preparation, Ordering::SeqCst);
+        let access = unlocked_access();
+        let creation = ready_lease(&access);
+        let worker_state = state.clone();
+        let parent_id = parent.session_id.clone();
+        let pending = tokio::spawn(async move {
+            creation
+                .run(attach_tmux_inner(
+                    &worker_state,
+                    creation.clone(),
+                    parent_id,
+                    "owned".into(),
+                    80,
+                    24,
+                    Channel::new(|_| Ok(())),
+                ))
+                .await
+        });
+        timeout(Duration::from_secs(3), async {
+            while server.commands.lock().unwrap().len() < if preparation { 2 } else { 1 } {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("fixture must reach the selected blocked attach stage");
+        let display = server.command_channels.lock().unwrap()[0];
+        access.lock().unwrap();
+        assert!(pending.await.unwrap().is_err());
+        let closed = timeout(Duration::from_secs(3), async {
+            while !server.closed_channels.lock().unwrap().contains(&display) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let only_parent = state.sessions.lock().await.len() == 1;
+        let parent = state.session(&parent.session_id).await.unwrap();
+        let probe = parent.handle.channel_open_session().await;
+        if let Ok(channel) = &probe {
+            channel.close().await.unwrap();
+        }
+        parent.cancel.send_replace(true);
+        task.abort();
+        assert!(
+            closed.is_ok(),
+            "cancelled unpublished tmux display must request remote close"
+        );
+        assert!(
+            only_parent,
+            "cancelled display must never enter the native session registry"
+        );
+        assert!(
+            probe.is_ok(),
+            "cleanup must preserve the verified parent SSH transport"
+        );
+    }
     #[tokio::test]
     async fn tmux_uses_a_separate_pty_and_preserves_the_parent_shell() {
         use tauri::Manager;

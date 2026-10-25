@@ -56,8 +56,11 @@ pub struct Window {
 pub struct Session {
     id: String,
     name: String,
+    #[serde(rename = "restoreName")]
+    restore_name: Option<String>,
     windows: Vec<Window>,
 }
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
     generation: String,
@@ -127,8 +130,8 @@ pub(crate) async fn handshake(
     bytes: &mut Vec<u8>,
     marker: &str,
 ) -> Option<Identity> {
-    // Cancellation of this future preserves bytes accumulated so far and the
-    // original terminal channel. Navigation alone becomes unavailable.
+    // A handshake timeout preserves accumulated bytes and the terminal.
+    // The caller's close-owned channel handles cancellation of the attachment.
     tokio::time::timeout(DEADLINE, async {
         loop {
             if let Some(found) = take_frame(bytes, marker) {
@@ -153,7 +156,7 @@ pub(crate) async fn handshake(
 }
 
 pub(crate) struct Control {
-    channel: Option<russh::Channel<client::Msg>>,
+    channel: ssh::OwnedChannel,
     bytes: Vec<u8>,
     identity: Identity,
     generation: String,
@@ -172,7 +175,7 @@ impl Control {
             if self.bytes.len() > 64 * 1024 {
                 return Err(protocol());
             }
-            match self.channel.as_mut().unwrap().wait().await {
+            match self.channel.wait().await {
                 Some(ChannelMsg::Data { data }) => {
                     if data.len() > LIMIT || self.bytes.len() + data.len() > LIMIT {
                         return Err(protocol());
@@ -214,11 +217,7 @@ impl Control {
         }
     }
     async fn command(&mut self, command: &str, budget: &mut usize) -> Result<Vec<String>> {
-        self.channel
-            .as_ref()
-            .unwrap()
-            .data(format!("{command}\n").as_bytes())
-            .await?;
+        self.channel.data(format!("{command}\n").as_bytes()).await?;
         self.block(budget).await
     }
     async fn current(&mut self, budget: &mut usize) -> Result<Option<Current>> {
@@ -244,7 +243,7 @@ impl Control {
     async fn snapshot(&mut self, budget: &mut usize) -> Result<Snapshot> {
         // q quotes delimiters/backslashes; control characters are visibly
         // replaced BEFORE tmux's control stream can turn them into framing.
-        let rows=self.command("list-windows -a -F '#{session_id}|#{q;s/[[#:cntrl#:]]/?/:session_name}|#{window_id}|#{window_index}|#{q;s/[[#:cntrl#:]]/?/:window_name}'",budget).await?;
+        let rows=self.command("list-windows -a -F '#{session_id}|#{q;s/#{l:[[:cntrl:]]}/?/:session_name}|#{window_id}|#{window_index}|#{q;s/#{l:[[:cntrl:]]}/?/:window_name}|#{m/r:[[:cntrl:]],#{session_name}}'",budget).await?;
         let sessions = parse_tree(&rows)?;
         let current = self.current(budget).await?.ok_or_else(unavailable)?;
         if !sessions.iter().any(|s| {
@@ -268,11 +267,7 @@ impl Control {
         let guard = format!("#{{L:#{{?{normal},1,}}}}");
         let marker = format!("LAZYSH_JUMP_{}", uuid::Uuid::new_v4().simple());
         let command=format!("if-shell -F {} {{ switch-client -E -c {} -t {}; display-message -p {} }} {{ display-message -p {} }}",ssh::quote(&guard),ssh::quote(&self.identity.tty),ssh::quote(&format!("{session}:{window}")),ssh::quote(&format!("{marker}:ok")),ssh::quote(&format!("{marker}:gone")));
-        self.channel
-            .as_ref()
-            .unwrap()
-            .data(format!("{command}\n").as_bytes())
-            .await?;
+        self.channel.data(format!("{command}\n").as_bytes()).await?;
         for _ in 0..8 {
             let rows = self.block(budget).await?;
             if rows == [format!("{marker}:ok")] {
@@ -363,21 +358,29 @@ fn parse_tree(rows: &[String]) -> Result<Vec<Session>> {
     let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
     for row in rows {
         let f = fields(row)?;
-        if f.len() != 5
+        if f.len() != 6
             || !id(&f[0], b'$')
             || !id(&f[2], b'@')
             || f[1].len() > 1024
             || f[4].len() > 1024
+            || !matches!(f[5].as_str(), "0" | "1")
         {
             return Err(protocol());
         }
         let index = f[3].parse::<u32>().map_err(|_| protocol())?;
+        let restore_name = (f[5] == "0"
+            && !f[1].is_empty()
+            && f[1].len() <= 200
+            && !f[1].chars().any(char::is_control))
+        .then(|| f[1].clone());
         let entry = sessions.entry(f[0].clone()).or_insert_with(|| Session {
             id: f[0].clone(),
             name: f[1].clone(),
+            restore_name: restore_name.clone(),
             windows: Vec::new(),
         });
         if entry.name != f[1]
+            || entry.restore_name != restore_name
             || entry
                 .windows
                 .iter()
@@ -423,13 +426,13 @@ pub(crate) async fn prepare_command(
     let deadline = tokio::time::Instant::now() + DEADLINE;
     let channel = tokio::select! {biased; _=lease.cancelled()=>return None, result=tokio::time::timeout_at(deadline,handle.channel_open_session())=>result.ok()?.ok()?};
     let mut control = Control {
-        channel: Some(channel),
+        channel: channel.into(),
         bytes: Vec::new(),
         identity,
         generation: uuid::Uuid::new_v4().to_string(),
     };
     let operation = async {
-        let channel = control.channel.as_mut().unwrap();
+        let channel = &mut control.channel;
         channel.exec(true, command).await?;
         control.bytes = ssh::request_ok(channel).await?;
         let mut budget = LIMIT;
@@ -444,17 +447,6 @@ pub(crate) async fn prepare_command(
     };
     let result = tokio::select! {biased; _=lease.cancelled()=>None, result=tokio::time::timeout_at(deadline,operation)=>result.ok().and_then(std::result::Result::ok)};
     result.map(|_| control)
-}
-impl Drop for Control {
-    fn drop(&mut self) {
-        if let Some(channel) = self.channel.take() {
-            // Dropping a russh Channel does not request remote close. This
-            // owned cleanup survives cancellation of bootstrap/operation futures.
-            tauri::async_runtime::spawn(async move {
-                let _ = tokio::time::timeout(DEADLINE, channel.close()).await;
-            });
-        }
-    }
 }
 
 pub(crate) fn start(control: Control, cancellation: watch::Receiver<bool>) -> Binding {
@@ -607,7 +599,7 @@ pub(crate) fn start_with_revoked_queue_fixture(
 #[cfg(test)]
 pub(crate) fn fixture_control(channel: russh::Channel<client::Msg>, identity: Identity) -> Control {
     Control {
-        channel: Some(channel),
+        channel: channel.into(),
         bytes: Vec::new(),
         identity,
         generation: uuid::Uuid::new_v4().to_string(),
@@ -644,6 +636,24 @@ pub async fn tmux_jump(
 mod tests {
     use super::*;
     #[test]
+    fn oversized_labels_never_become_restoration_names() {
+        let rows = vec![format!("$0|{}|@0|0|shell|0", "a".repeat(201))];
+        let tree = parse_tree(&rows).unwrap();
+        assert!(tree[0].restore_name.is_none());
+        for (label, flag, restorable) in [
+            ("work?build".to_owned(), "1", false),
+            ("work?build".to_owned(), "0", true),
+            ("é".repeat(100), "0", true),
+            ("é".repeat(101), "0", false),
+        ] {
+            let tree = parse_tree(&[format!("$0|{label}|@0|0|shell|{flag}")]).unwrap();
+            assert_eq!(tree[0].restore_name.is_some(), restorable);
+            if restorable {
+                assert_eq!(tree[0].restore_name.as_deref(), Some(label.as_str()));
+            }
+        }
+    }
+    #[test]
     fn handshake_keeps_banners_and_terminal_bytes() {
         let mut bytes = b"banner\r\nM\t42\t/dev/pts/3\r\n\x1b[2Jhello".to_vec();
         assert_eq!(take_frame(&mut bytes, "M").unwrap().pid, 42);
@@ -655,11 +665,11 @@ mod tests {
     }
     #[test]
     fn tree_quotes_do_not_create_rows_or_execute_formats() {
-        let tree = parse_tree(&[r"$0|a\|b\ \#{session_name}|@1|2|x\\y\;\'\$".into()]).unwrap();
+        let tree = parse_tree(&[r"$0|a\|b\ \#{session_name}|@1|2|x\\y\;\'\$|0".into()]).unwrap();
         assert_eq!(tree[0].name, "a|b #{session_name}");
         assert_eq!(tree[0].windows[0].name, "x\\y;'$");
         assert!(parse_tree(&["$0|a|@1|0|line\n%end 1 2 3".into()]).is_err());
-        assert!(parse_tree(&["$0|a|@1|0|x".into(), "$0|b|@2|1|y".into()]).is_err());
+        assert!(parse_tree(&["$0|a|@1|0|x|0".into(), "$0|b|@2|1|y|0".into()]).is_err());
         assert!(!id("$", b'$'));
         assert!(!id("@1; kill-server", b'@'));
     }
