@@ -14,6 +14,45 @@ fn user(text: &str) -> Value {
 }
 
 #[test]
+fn claude_recorded_tool_errors_preserve_explicit_booleans_and_optional_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("errors.jsonl");
+    let mut records = Vec::new();
+    for flag in [
+        json!(true),
+        json!(false),
+        Value::Null,
+        json!("false"),
+        json!(0),
+    ] {
+        records.push(json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool1","content":[{"type":"text","text":"original output"}],"is_error":flag}]}}));
+    }
+    records.push(json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"empty","is_error":true}]}}));
+    records.push(json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"missing","content":"unchanged"}]}}));
+    write_records(&path, &records);
+    let page = read_page(&path, TranscriptAgent::Claude, 0, 50).unwrap();
+    assert_eq!(page.messages.len(), 7);
+    for (index, expected) in [Some(true), Some(false), None, None, None]
+        .into_iter()
+        .enumerate()
+    {
+        let block = &page.messages[index]["blocks"][0];
+        assert_eq!(block["isError"].as_bool(), expected);
+        assert_eq!(block["text"], "original output");
+        assert_eq!(block["id"], "tool1");
+    }
+    assert_eq!(page.messages[5]["blocks"][0]["isError"], true);
+    assert_eq!(page.messages[5]["blocks"][0]["text"], "");
+    assert!(page.messages[6]["blocks"][0].get("isError").is_none());
+    let other = read_page(&path, TranscriptAgent::QoderIde, 0, 50).unwrap();
+    assert!(other
+        .messages
+        .iter()
+        .flat_map(|m| m["blocks"].as_array().unwrap())
+        .all(|b| b.get("isError").is_none()));
+}
+
+#[test]
 fn claude_pages_preserve_content_tools_usage_and_parent_identity() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("transcript.jsonl");

@@ -89,6 +89,28 @@ The default view is an append-record browser. Claude sidechain, team, and meta r
 
 The app's transcript view includes an editable **Draft for this terminal** composer. **Stage in terminal** (or Ctrl/Command-Enter after IME composition ends) moves the draft into the composer for that existing SSH terminal. Review the intended live agent pane there before using **Paste draft**. Staging does not send a prompt, launch an agent, or establish that the manually selected transcript belongs to the current pane. Permissions, plans, questions and stop requests remain live-terminal actions until their exact runtime mapping is verified. **Open terminal** returns to that terminal without staging text.
 
+### Claude recorded tool errors
+
+Claude `tool_result` blocks preserve an explicit boolean `is_error` as optional
+`isError` metadata in the existing schema-v1 response. The client labels `true`
+as **Recorded tool error**, retaining the original output and tool ID. Explicit
+`false` is preserved without inventing a completion badge; missing, null and
+non-boolean flags remain unknown. Optional missing content produces an empty
+result, not fabricated output. This applies to record paging and current-branch
+snapshots/following, and does not establish a current failure, approval or retry
+action. Other adapters do not gain this metadata from similarly named fields.
+
+Primary provenance: Anthropic's Agent SDK Python commit
+[`0e89b298e771259378a6cd3734e00d323dff5703`](https://github.com/anthropics/claude-agent-sdk-python/tree/0e89b298e771259378a6cd3734e00d323dff5703),
+[`types.py:1218–1223`](https://github.com/anthropics/claude-agent-sdk-python/blob/0e89b298e771259378a6cd3734e00d323dff5703/src/claude_agent_sdk/types.py#L1218)
+defines optional result content and error flag;
+[`message_parser.py:115–120`](https://github.com/anthropics/claude-agent-sdk-python/blob/0e89b298e771259378a6cd3734e00d323dff5703/src/claude_agent_sdk/_internal/message_parser.py#L115)
+reads them from Claude CLI user-message content. The official
+[tool-result error contract](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)
+defines `true` as an execution error. Native and browser fixtures are synthetic;
+no Claude CLI, private transcript, provider account or physical mobile WebView
+was used to verify this slice.
+
 ### Claude current branch
 
 Use `lazysh-agent transcript --agent claude --view conversation --path /absolute/path/session.jsonl --limit 100` to reconstruct the current main conversation branch. This reads a bounded complete snapshot, picks the latest main user/assistant leaf, follows `parentUuid`, and recovers sibling tool calls and results belonging to responses on that branch. Compaction follows the new summary chain without reconnecting `logicalParentUuid` to obsolete context. Duplicate UUIDs use their latest record; cycles fail closed.
