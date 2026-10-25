@@ -22,31 +22,7 @@ fn speech_samples() -> Vec<f32> {
         .collect()
 }
 
-fn words(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .map(str::to_ascii_uppercase)
-        .collect()
-}
-
-fn word_error_rate(reference: &str, observed: &str) -> f64 {
-    let reference = words(reference);
-    let observed = words(observed);
-    assert!(!reference.is_empty());
-    let mut previous: Vec<usize> = (0..=observed.len()).collect();
-    for (i, expected) in reference.iter().enumerate() {
-        let mut row = vec![i + 1];
-        for (j, actual) in observed.iter().enumerate() {
-            row.push(
-                (previous[j] + usize::from(expected != actual))
-                    .min(previous[j + 1] + 1)
-                    .min(row[j] + 1),
-            );
-        }
-        previous = row;
-    }
-    previous[observed.len()] as f64 / reference.len() as f64
-}
+use lazysh_common::test_support::word_error_rate;
 
 #[test]
 fn licensed_speech_fixture_has_the_recorded_format_and_bounds() {

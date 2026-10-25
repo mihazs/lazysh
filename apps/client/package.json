@@ -46,7 +46,8 @@
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "@lazysh/common": "workspace:*"
   },
   "devDependencies": {
     "@lazysh/credential-vault": "workspace:*",

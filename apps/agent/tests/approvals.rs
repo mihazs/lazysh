@@ -1,3 +1,5 @@
+#[path = "support/process.rs"]
+mod process;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -16,15 +18,7 @@ fn command(directory: &Path) -> Command {
     command
 }
 fn run(directory: &Path, args: &[&str], input: &[u8]) -> Output {
-    let mut child = command(directory)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let _ = child.stdin.take().unwrap().write_all(input);
-    child.wait_with_output().unwrap()
+    process::run(command(directory).args(args), input)
 }
 fn payload() -> Value {
     json!({"hook_event_name":"PermissionRequest","session_id":"session-one","cwd":"/work/project","tool_name":"Bash","tool_input":{"command":"echo PRIVATE_APPROVAL_TOOL_INPUT_MARKER"}})

@@ -446,13 +446,7 @@ mod tests {
 
     #[cfg(unix)]
     fn run(command: String) -> String {
-        let output = Command::new("sh").args(["-c", &command]).output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap()
+        lazysh_common::test_support::successful_output(Command::new("sh").args(["-c", &command]))
     }
     #[test]
     fn rejects_untrusted_revisions_and_relative_escape() {

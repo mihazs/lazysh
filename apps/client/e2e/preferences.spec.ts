@@ -1,3 +1,4 @@
+import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import { expect, test } from '@playwright/test';
 
 const fontFile = new URL('./fixtures/LiberationMono-Regular.ttf', import.meta.url).pathname;
@@ -77,11 +78,8 @@ test('whole-app light and dark themes keep dialog text readable and reset', asyn
 
 test('gesture bindings and advanced chords survive reload and gesture reset preserves the shortcut library', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
-  await page.getByText('Terminal touch gestures', {exact: true}).click();
-  await page.getByRole('combobox', {name: 'Double tap', exact: true}).selectOption('custom');
-  await page.getByLabel('Double tap chord', {exact: true}).fill('C-b, S-t');
-  await page.getByRole('button', {name: 'Save Double tap chord', exact: true}).click();
+  await openGestureSettings(page);
+  await saveAdvancedGesture(page, 'Double tap', 'C-b, S-t');
   await page.getByRole('combobox', {name: 'Swipe left', exact: true}).selectOption('nextSession');
   await page.getByRole('combobox', {name: 'D-pad left corner', exact: true}).selectOption('custom');
   await page.getByLabel('D-pad left corner chord', {exact: true}).fill('text:/clear');
@@ -91,9 +89,8 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
   await page.getByLabel('Key sequence', {exact: true}).fill('F12, M-h');
   await page.getByRole('button', {name: 'Add chord', exact: true}).click();
   await page.reload();
-  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
-  await page.getByText('Terminal touch gestures', {exact: true}).click();
-  await expect(page.getByLabel('Double tap chord', {exact: true})).toHaveValue('C-b, S-t');
+  await openGestureSettings(page);
+  await expectGestureBinding(page, 'Double tap', 'C-b, S-t');
   await expect(page.getByRole('combobox', {name: 'Swipe left', exact: true})).toHaveValue('nextSession');
   await expect(page.getByLabel('D-pad left corner chord', {exact: true})).toHaveValue('text:/clear');
   await page.getByRole('button', {name: 'Reset gestures', exact: true}).click();
@@ -105,8 +102,7 @@ test('gesture bindings and advanced chords survive reload and gesture reset pres
 
 test('explicit Zellij tab and pane gesture actions persist without changing defaults and reset cleanly', async ({page}) => {
   await page.goto('/');
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
-  await page.getByText('Terminal touch gestures',{exact:true}).click();
+  await openGestureSettings(page);
   const bindings=[['Swipe left','nextZellijTab'],['Swipe right','previousZellijTab'],['Two-finger swipe left','nextZellijPane'],['Two-finger swipe right','previousZellijPane']];
   for(const [label,action] of bindings){
     const select=page.getByRole('combobox',{name:label,exact:true});
@@ -114,8 +110,7 @@ test('explicit Zellij tab and pane gesture actions persist without changing defa
     await select.selectOption(action);
   }
   await page.reload();
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
-  await page.getByText('Terminal touch gestures',{exact:true}).click();
+  await openGestureSettings(page);
   for(const [label,action] of bindings) await expect(page.getByRole('combobox',{name:label,exact:true})).toHaveValue(action);
   await expect(page.getByRole('combobox',{name:'Two-finger swipe up',exact:true})).toHaveValue('none');
   await page.getByRole('button',{name:'Reset gestures',exact:true}).click();

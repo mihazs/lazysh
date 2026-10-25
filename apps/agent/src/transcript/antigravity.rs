@@ -137,13 +137,7 @@ pub(super) fn read_page(
     let mut bytes = Vec::new();
     (&mut file).take(before.len()).read_to_end(&mut bytes)?;
     let after = open_transcript(path)?.metadata()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev() || before.ino() != after.ino() {
-            return Err(Error::InvalidEvent);
-        }
-    }
+    crate::transcript::same_file(&before, &after)?;
     if before.len() != bytes.len() as u64
         || before.len() != after.len()
         || before.modified()? != after.modified()?

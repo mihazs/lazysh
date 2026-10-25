@@ -3,7 +3,7 @@ use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::Path,
 };
@@ -128,17 +128,7 @@ pub fn read_page_with_checkpoint(
     }
     let mut file = open_transcript(path)?;
     let metadata = file.metadata()?;
-    if offset > metadata.len() {
-        return Err(Error::InvalidArgument);
-    }
-    if offset > 0 {
-        file.seek(SeekFrom::Start(offset - 1))?;
-        let mut previous = [0];
-        file.read_exact(&mut previous)?;
-        if previous != *b"\n" {
-            return Err(Error::InvalidArgument);
-        }
-    }
+    seek_record(&mut file, offset, metadata.len())?;
     let mut reader = BufReader::new(file.take(metadata.len() - offset));
     let mut next_offset = offset;
     let mut messages = Vec::new();
@@ -148,14 +138,8 @@ pub fn read_page_with_checkpoint(
         && next_offset - offset < MAX_SCAN
         && messages.len() < usize::from(limit)
     {
-        let mut line = Vec::new();
-        let bytes = reader
-            .by_ref()
-            .take(MAX_LINE + 1)
-            .read_until(b'\n', &mut line)?;
-        if bytes as u64 > MAX_LINE {
-            return Err(Error::InvalidEvent);
-        }
+        let line = read_record_line(&mut reader)?;
+        let bytes = line.len();
         if line.last() != Some(&b'\n') {
             pending_tail = true;
             break;
@@ -175,10 +159,7 @@ pub fn read_page_with_checkpoint(
             grok_acp::validate_bounds(&record)?;
         }
         if let Some(message) = normalize(&record, agent, next_offset) {
-            validate_message(&message)?;
-            let size = serde_json::to_vec(&message)
-                .map_err(|_| Error::InvalidEvent)?
-                .len();
+            let size = message_size(&message)?;
             if size > MAX_PAGE {
                 return Err(Error::InvalidEvent);
             }
@@ -203,6 +184,52 @@ pub fn read_page_with_checkpoint(
     })
 }
 
+pub(crate) fn seek_record(file: &mut File, offset: u64, length: u64) -> Result<()> {
+    if offset > length {
+        return Err(Error::InvalidArgument);
+    }
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset - 1))?;
+        let mut previous = [0];
+        file.read_exact(&mut previous)?;
+        if previous != *b"\n" {
+            return Err(Error::InvalidArgument);
+        }
+    }
+    Ok(())
+}
+fn read_record_line(reader: &mut impl BufRead) -> Result<Vec<u8>> {
+    let mut line = Vec::new();
+    reader.take(MAX_LINE + 1).read_until(b'\n', &mut line)?;
+    if line.len() as u64 > MAX_LINE {
+        return Err(Error::InvalidEvent);
+    }
+    Ok(line)
+}
+fn message_size(message: &Value) -> Result<usize> {
+    validate_message(message)?;
+    serde_json::to_vec(message)
+        .map(|bytes| bytes.len())
+        .map_err(|_| Error::InvalidEvent)
+}
+pub(crate) fn same_file(before: &std::fs::Metadata, after: &std::fs::Metadata) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return Err(Error::InvalidEvent);
+        }
+    }
+    Ok(())
+}
+fn unchanged_snapshot(path: &Path, before: &std::fs::Metadata) -> Result<()> {
+    let after = open_transcript(path)?.metadata()?;
+    same_file(before, &after)?;
+    if before.len() != after.len() || before.modified()? != after.modified()? {
+        return Err(Error::InvalidEvent);
+    }
+    Ok(())
+}
 fn validate_message(message: &Value) -> Result<()> {
     if message["blocks"]
         .as_array()
@@ -214,13 +241,7 @@ fn validate_message(message: &Value) -> Result<()> {
 }
 
 pub(crate) fn open_transcript(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
+    let options = lazysh_common::fs::read_options(false);
     #[cfg(not(unix))]
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(Error::InvalidArgument);
@@ -240,6 +261,19 @@ pub(crate) fn open_transcript(path: &Path) -> Result<File> {
     Ok(file)
 }
 
+fn copy_usage(output: &mut Value, input: &Value, fields: &[(&str, &str)]) {
+    let usage: serde_json::Map<String, Value> = fields
+        .iter()
+        .filter_map(|(source, target)| {
+            input[*source]
+                .as_u64()
+                .map(|n| ((*target).to_owned(), json!(n)))
+        })
+        .collect();
+    if !usage.is_empty() {
+        output["usage"] = Value::Object(usage);
+    }
+}
 fn string(value: &Value, field: &str) -> Option<String> {
     value.get(field)?.as_str().map(str::to_owned)
 }

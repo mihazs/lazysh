@@ -2,7 +2,7 @@ use crate::{digest, secret, ApiError, Config, Device, Quota};
 use axum::http::StatusCode;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::Read,
     path::Path,
 };
@@ -23,15 +23,8 @@ fn private(metadata: &fs::Metadata, directory: bool) -> Result<(), String> {
     if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
         return Err("Require a private regular file or directory".into());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o077 != 0
-            || (!directory && metadata.nlink() != 1)
-        {
-            return Err("Require private owner-only storage without hard links".into());
-        }
+    if !lazysh_common::fs::owner_only(metadata, directory) {
+        return Err("Require private owner-only storage without hard links".into());
     }
     Ok(())
 }
@@ -46,15 +39,8 @@ fn file(path: &Path, create: bool) -> Result<File, String> {
         Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err("Cannot open private file".into()),
     }
-    let mut options = OpenOptions::new();
-    options.read(true).write(create).create(create);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
+    let mut options = lazysh_common::fs::read_options(create);
+    options.create(create);
     let file = options.open(path).map_err(|_| "Cannot open private file")?;
     private(
         &file.metadata().map_err(|_| "Cannot inspect private file")?,
@@ -113,15 +99,7 @@ impl Store {
                 }
             }
         }
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder
-            .create(directory)
+        lazysh_common::fs::private_directory(directory)
             .map_err(|_| "Cannot create private storage")?;
         private(
             &fs::symlink_metadata(directory).map_err(|_| "Cannot inspect private storage")?,

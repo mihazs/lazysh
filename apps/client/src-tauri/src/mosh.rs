@@ -1,5 +1,4 @@
 use crate::ssh::{quote, Result, Session, SshError};
-use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, time::Duration};
 #[cfg(any(
@@ -13,13 +12,10 @@ use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Options {
-    #[serde(default = "default_server")]
     server_path: String,
-    #[serde(default = "default_min")]
     port_min: u16,
-    #[serde(default = "default_max")]
     port_max: u16,
 }
 fn default_server() -> String {
@@ -189,24 +185,7 @@ async fn bootstrap_exec(session: &Session, command: String) -> Result<Zeroizing<
         _ = cancelled.changed() => Err(SshError::new("cancelled", "Mosh connection was cancelled")),
         result = timeout(Duration::from_secs(15), async {
             channel.exec(true, command).await?;
-            let mut bytes = Zeroizing::new(Vec::new());
-            let mut received = 0usize;
-            let mut status = None;
-            while let Some(message) = channel.wait().await {
-                match message {
-                    ChannelMsg::Data { data } => {
-                        received = received.saturating_add(data.len());
-                        if received > 8192 { return Err(SshError::new("mosh_bootstrap", "Mosh bootstrap output exceeds 8 KiB")); }
-                        bytes.extend_from_slice(&data);
-                    },
-                    ChannelMsg::ExtendedData { data, .. } => {
-                        received = received.saturating_add(data.len());
-                        if received > 8192 { return Err(SshError::new("mosh_bootstrap", "Mosh bootstrap output exceeds 8 KiB")); }
-                    },
-                    ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
-                    _ => {},
-                }
-            }
+            let (bytes, status) = crate::et::read_bootstrap(&mut channel, 8192, "mosh_bootstrap", "Mosh bootstrap output exceeds 8 KiB").await?;
             if status != Some(0) { return Err(SshError::new("mosh_bootstrap", "Mosh server failed to start. Check its executable path and UTF-8 locales.")); }
             Ok(bytes)
         }) => match result { Ok(result) => result, Err(_) => Err(SshError::new("mosh_bootstrap", "Mosh bootstrap timed out")) },

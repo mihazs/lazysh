@@ -40,17 +40,7 @@ it("closes a stream whose startup finishes after its panel is removed", async ()
 });
 it("holds one pull and rejects a repeated sequence then stops the source", async () => {
   let next!: (packet: unknown) => void;
-  vi.mocked(invoke).mockImplementation((name) => {
-    if (name === "device_stream_start")
-      return Promise.resolve("stream") as never;
-    if (name === "device_stream_next")
-      return new Promise((resolve) => {
-        next = resolve;
-      }) as never;
-    return Promise.resolve(undefined) as never;
-  });
-  const frame = vi.fn(),
-    error = vi.fn();
+  const {frame,error} = pendingStream("stream", value => { next = value; });
   renderHook(() =>
     useDeviceStream(true, "ssh", "id", "/private/idb.sock", frame, error),
   );
@@ -79,17 +69,7 @@ it("holds one pull and rejects a repeated sequence then stops the source", async
 });
 it("preserves the Android image on idle and cancels its pending poll on removal", async () => {
   let next!: (packet: unknown) => void;
-  vi.mocked(invoke).mockImplementation((name) => {
-    if (name === "device_stream_start")
-      return Promise.resolve("android") as never;
-    if (name === "device_stream_next")
-      return new Promise((resolve) => {
-        next = resolve;
-      }) as never;
-    return Promise.resolve(undefined) as never;
-  });
-  const frame = vi.fn(),
-    error = vi.fn();
+  const {frame,error} = pendingStream("android", value => { next = value; });
   const hook = renderHook(() =>
     useDeviceStream(true, "ssh", "device", "", frame, error, "android"),
   );
@@ -118,3 +98,12 @@ it("preserves the Android image on idle and cancels its pending poll on removal"
   expect(frame).toHaveBeenCalledOnce();
   expect(error).not.toHaveBeenCalled();
 });
+
+function pendingStream(streamId: string, registered: (next: (packet: unknown) => void) => void) {
+  vi.mocked(invoke).mockImplementation(name => {
+    if (name === "device_stream_start") return Promise.resolve(streamId) as never;
+    if (name === "device_stream_next") return new Promise(resolve => { registered(resolve); }) as never;
+    return Promise.resolve(undefined) as never;
+  });
+  return {frame: vi.fn(), error: vi.fn()};
+}

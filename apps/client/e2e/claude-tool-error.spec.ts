@@ -1,3 +1,4 @@
+import { openFollowTranscript } from './fixtures/chatTranscript';
 import {expect,test} from '@playwright/test';
 
 test('Claude follow replaces recorded tool errors without live controls or stale branch badges',async({page})=>{
@@ -10,11 +11,8 @@ test('Claude follow replaces recorded tool errors without live controls or stale
       return {schemaVersion:1,agent:'claude',view:'active_branch',branchId:failed?'old':'new',hasMore:false,nextOffset:100,
         messages:[{id:failed?'old':'new',role:'user',blocks:[{type:'tool_result',id:'original-call',text:failed?'Original failure output':'Replacement output',isError:failed}]}]};
     }}});
-    const {mountChatFollowHarness}=await import('/e2e/fixtures/ChatFollowHarness.tsx');mountChatFollowHarness();
   });
-  await page.getByLabel('Transcript path',{exact:true}).fill('/fixture/claude.jsonl');
-  await page.getByRole('combobox',{name:'View',exact:true}).selectOption('conversation');
-  await page.getByRole('button',{name:'Open transcript',exact:true}).click();
+  await openFollowTranscript(page);
   const summary=page.locator('.chat-message summary');
   await expect(summary).toHaveText('tool result · Recorded tool error · Tool ID: original-call');
   await summary.click();

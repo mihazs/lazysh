@@ -15,6 +15,20 @@ impl Drop for Fixture {
         self.upstream.abort();
     }
 }
+async fn local_listener() -> (
+    TcpListener,
+    u16,
+    watch::Sender<bool>,
+    watch::Receiver<bool>,
+    watch::Sender<bool>,
+    watch::Receiver<bool>,
+) {
+    let local = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = local.local_addr().unwrap().port();
+    let (cancel, cancelled) = watch::channel(false);
+    let (stop, stopped) = watch::channel(false);
+    (local, port, cancel, cancelled, stop, stopped)
+}
 async fn fixture(response: Vec<u8>, upgrade: bool) -> Fixture {
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let remote = upstream.local_addr().unwrap();
@@ -41,10 +55,7 @@ async fn fixture(response: Vec<u8>, upgrade: bool) -> Fixture {
             }
         }
     });
-    let local = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = local.local_addr().unwrap().port();
-    let (cancel, cancelled) = watch::channel(false);
-    let (stop, stopped) = watch::channel(false);
+    let (local, port, cancel, cancelled, stop, stopped) = local_listener().await;
     let task = tokio::spawn(async move {
         let _cancel = cancel;
         listener(
@@ -206,10 +217,7 @@ async fn declared_oversized_request_is_rejected_without_collecting_or_contacting
 async fn body_permits_remain_held_until_upstream_response_and_release_on_cancel() {
     let remote = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = remote.local_addr().unwrap();
-    let local = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = local.local_addr().unwrap().port();
-    let (cancel, cancelled) = watch::channel(false);
-    let (stop, stopped) = watch::channel(false);
+    let (local, port, cancel, cancelled, stop, stopped) = local_listener().await;
     let task = tokio::spawn(listener(
         local,
         cancelled,

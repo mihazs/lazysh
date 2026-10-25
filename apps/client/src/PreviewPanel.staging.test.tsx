@@ -26,10 +26,7 @@ it('stages a page note only after an explicit user action following initial navi
   const staged = vi.fn();
   window.addEventListener('lazysh-prompt-draft', staged);
   try {
-    await loadPreview();
-    fireEvent.change(screen.getByLabelText('Page path'), { target: { value: '/login' } });
-    fireEvent.change(screen.getByLabelText('Element selector (optional)'), { target: { value: '#submit' } });
-    fireEvent.change(screen.getByLabelText('Comment'), { target: { value: 'Increase contrast' } });
+    await draftLoginReview();
     expect(staged).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Stage note in prompt' }));
     expect(staged).toHaveBeenCalledOnce();
@@ -44,10 +41,7 @@ it('clears stale page and element context on later navigation without staging an
   const staged = vi.fn();
   window.addEventListener('lazysh-prompt-draft', staged);
   try {
-    await loadPreview();
-    fireEvent.change(screen.getByLabelText('Page path'), { target: { value: '/login' } });
-    fireEvent.change(screen.getByLabelText('Element selector (optional)'), { target: { value: '#submit' } });
-    fireEvent.change(screen.getByLabelText('Comment'), { target: { value: 'Increase contrast' } });
+    await draftLoginReview();
 
     act(() => navigation.loaded!());
     expect(screen.getByLabelText('Page path')).toHaveProperty('value', '/');
@@ -69,3 +63,10 @@ it('clears stale page and element context on later navigation without staging an
     expect(invoke).not.toHaveBeenCalledWith('write_stdin', expect.anything(), expect.anything());
   } finally { window.removeEventListener('lazysh-prompt-draft', staged); }
 });
+
+async function draftLoginReview() {
+    await loadPreview();
+    fireEvent.change(screen.getByLabelText('Page path'), { target: { value: '/login' } });
+    fireEvent.change(screen.getByLabelText('Element selector (optional)'), { target: { value: '#submit' } });
+    fireEvent.change(screen.getByLabelText('Comment'), { target: { value: 'Increase contrast' } });
+}

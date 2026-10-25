@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { installSpeechCapture } from "./test/speechCapture";
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
@@ -30,20 +31,7 @@ function fixture(options: {begin?:Promise<string>;decode?:Promise<unknown>;value
     if(command==='voice_cloud_cancel')return Promise.resolve({cancelled:true,cleanup:'confirmed'}) as never;
     return Promise.resolve() as never;
   });
-  const captures: Capture[]=[];
-  class Capture {
-    constructor(){captures.push(this);}
-    onerror:(()=>void)|undefined; ondataavailable:((event:{data:Blob})=>void)|undefined;
-    state='inactive';mimeType='audio/webm';onstop:(()=>void)|undefined;
-    start(){this.state='recording';} stop(){this.state='inactive';this.onstop?.();}
-  }
-  vi.stubGlobal('MediaRecorder',Capture);
-  vi.stubGlobal('Blob',class { async arrayBuffer(){return new ArrayBuffer(0);} });
-  const audio = {sampleRate:16000,numberOfChannels:1,getChannelData:()=>new Float32Array(1600)};
-  vi.stubGlobal('AudioContext',class { async decodeAudioData(){return options.decode ? await options.decode : audio;} async close(){} });
-  const stop = vi.fn();
-  const microphone = vi.fn().mockResolvedValue({getTracks:()=>[{stop}]});
-  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:microphone}});
+  const {captures, audio, stop, microphone} = installSpeechCapture(options.decode);
   return {value,result,microphone,stop,audio,captures,complete:async(text='hello',requestId=id)=>act(async()=>result.resolve({requestId,text,quota:value.quota,checkedAt:value.checkedAt+1000}))};
 }
 async function selectCloud() {

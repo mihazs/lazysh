@@ -2,20 +2,25 @@ use lazysh_agent::transcript::{
     conversation, discover, read_page, read_page_with_checkpoint, TranscriptAgent,
 };
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, process::Command};
+use std::{fs, io::Write, process::Command};
 const AGENT: TranscriptAgent = TranscriptAgent::AntigravityJsonl;
 const FIXTURE: &str = include_str!("fixtures/antigravity-jsonl/records.jsonl");
 fn row() -> Value {
     json!({"step_index":0,"source":"fixture","type":"UNKNOWN","status":"RECORDED","content":"text"})
 }
-fn write(path: &Path, rows: &[Value]) {
-    fs::write(
-        path,
-        rows.iter()
-            .map(|row| format!("{row}\n"))
-            .collect::<String>(),
-    )
-    .unwrap();
+#[path = "support/jsonl.rs"]
+mod jsonl;
+use jsonl::write;
+fn checkpoint_fixture() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    lazysh_agent::transcript::TranscriptPage,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("transcript.jsonl");
+    write(&path, &[row(), row()]);
+    let first = read_page(&path, AGENT, 0, 1).unwrap();
+    (dir, path, first)
 }
 #[test]
 fn pinned_shape_preserves_literal_record_labels_optional_zeros_reasoning_and_u64_precision() {
@@ -104,10 +109,7 @@ fn validates_exact_field_types_ranges_and_optional_absence_without_enum_role_gue
 }
 #[test]
 fn checkpoint_pages_allow_append_and_completion_of_a_partial_final_record() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("transcript.jsonl");
-    write(&path, &[row(), row()]);
-    let first = read_page(&path, AGENT, 0, 1).unwrap();
+    let (_dir, path, first) = checkpoint_fixture();
     assert!(first.has_more);
     let second = read_page_with_checkpoint(
         &path,
@@ -155,10 +157,7 @@ fn checkpoint_pages_allow_append_and_completion_of_a_partial_final_record() {
 #[test]
 fn changed_snapshot_bytes_reject_truncation_in_place_rewrite_and_replacement_between_pages() {
     for mode in ["truncate", "rewrite", "replace"] {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("transcript.jsonl");
-        write(&path, &[row(), row()]);
-        let first = read_page(&path, AGENT, 0, 1).unwrap();
+        let (dir, path, first) = checkpoint_fixture();
         let original = fs::read_to_string(&path).unwrap();
         if mode == "truncate" {
             fs::write(&path, "").unwrap();

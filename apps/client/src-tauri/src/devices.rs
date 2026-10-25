@@ -47,6 +47,20 @@ fn android_command(id: &str, action: &str) -> Result<String> {
         quote(id)
     ))
 }
+async fn remote_json(
+    state: &AppState,
+    access: &AccessLease,
+    session_id: &str,
+    command: Result<String>,
+) -> Result<serde_json::Value> {
+    let command = command?;
+    let session = state.session(session_id).await?;
+    access.check()?;
+    Ok(serde_json::from_str(
+        &exec_for_access(&session, command, access).await?,
+    )?)
+}
+
 #[tauri::command]
 pub async fn android_device_probe(
     access: AccessLease,
@@ -55,14 +69,12 @@ pub async fn android_device_probe(
     id: String,
 ) -> Protected<serde_json::Value> {
     access
-        .run(async {
-            let command = android_command(&id, "probe")?;
-            let session = state.session(&session_id).await?;
-            access.check()?;
-            Ok(serde_json::from_str(
-                &exec_for_access(&session, command, &access).await?,
-            )?)
-        })
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            android_command(&id, "probe"),
+        ))
         .await
 }
 #[tauri::command]
@@ -74,14 +86,12 @@ pub async fn ios_device_probe(
     socket: String,
 ) -> Protected<serde_json::Value> {
     access
-        .run(async {
-            let command = companion_command(&id, &socket, "probe")?;
-            let session = state.session(&session_id).await?;
-            access.check()?;
-            Ok(serde_json::from_str(
-                &exec_for_access(&session, command, &access).await?,
-            )?)
-        })
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            companion_command(&id, &socket, "probe"),
+        ))
         .await
 }
 #[tauri::command]
@@ -235,14 +245,12 @@ pub async fn device_action(
     action: DeviceAction,
 ) -> Protected<serde_json::Value> {
     access
-        .run(async {
-            let command = action_command(&device_platform, &id, action)?;
-            let session = state.session(&session_id).await?;
-            access.check()?;
-            Ok(serde_json::from_str(
-                &exec_for_access(&session, command, &access).await?,
-            )?)
-        })
+        .run(remote_json(
+            &state,
+            &access,
+            &session_id,
+            action_command(&device_platform, &id, action),
+        ))
         .await
 }
 #[cfg(test)]

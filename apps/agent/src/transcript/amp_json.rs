@@ -3,10 +3,7 @@ use serde_json::{json, Value};
 use std::{collections::HashSet, path::Path};
 
 pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<TranscriptPage> {
-    if !(1..=100).contains(&limit) {
-        return Err(Error::InvalidArgument);
-    }
-    let export = snapshot::read(path)?;
+    let export = snapshot::read_export(path, limit)?;
     if !export["id"]
         .as_str()
         .is_some_and(|id| id.starts_with("T-") && id.len() <= 256)
@@ -82,20 +79,16 @@ fn normalize(message: &Value) -> Result<Option<Value>> {
     }
     let mut output = json!({"id":identity(message)?,"role":role,"blocks":blocks});
     if role == "assistant" {
-        let mut usage = serde_json::Map::new();
-        for (source, target) in [
-            ("inputTokens", "inputTokens"),
-            ("outputTokens", "outputTokens"),
-            ("cacheReadInputTokens", "cacheReadTokens"),
-            ("cacheCreationInputTokens", "cacheWriteTokens"),
-        ] {
-            if let Some(count) = message["usage"][source].as_u64() {
-                usage.insert(target.into(), json!(count));
-            }
-        }
-        if !usage.is_empty() {
-            output["usage"] = json!(usage);
-        }
+        super::copy_usage(
+            &mut output,
+            &message["usage"],
+            &[
+                ("inputTokens", "inputTokens"),
+                ("outputTokens", "outputTokens"),
+                ("cacheReadInputTokens", "cacheReadTokens"),
+                ("cacheCreationInputTokens", "cacheWriteTokens"),
+            ],
+        );
     }
     Ok(Some(output))
 }

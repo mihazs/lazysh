@@ -7,11 +7,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
-- Optional repository pre-commit duplicate detection with pinned jscpd and Bun.
-  Run `bun run hooks:install` to enable it for the repository and linked
-  worktrees. New clones fail against a reviewed existing-clone baseline while
-  lint-staged preserves partial staging; dependency installation alone does not
-  activate hooks or change an existing hooks configuration.
+- Repository pre-commit duplicate detection with pinned jscpd and Bun now rejects
+  every detected clone, including pre-existing duplication; the previous baseline
+  allowance is removed. Refactor with DRY until the scan reports zero clones.
+  This instruction prints after successful and failed hook runs without changing
+  their exit status. `bun run hooks:install` still explicitly enables the hook
+  for the repository and linked worktrees, and lint-staged preserves partial
+  staging. Dependency installation does not change the hooks configuration.
 
 - Device-local iOS Home Screen icon selection with the original Default and
   new Amber artwork, UIKit support checks and actual selection readback. The

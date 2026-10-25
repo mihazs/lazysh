@@ -6,6 +6,7 @@ edition = "2021"
 description = "Local-only lifecycle event companion for lazysh"
 
 [dependencies]
+lazysh-common = { path = "../../packages/common" }
 clap = { version = "4.6", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7"

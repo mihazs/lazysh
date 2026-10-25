@@ -275,6 +275,23 @@ mod desktop {
         stopped: AtomicBool,
     }
     impl Inner {
+        fn with_sessions<T>(
+            &self,
+            action: impl FnOnce(
+                &mut HashMap<String, Arc<Session>>,
+                &mut HashMap<String, Arc<Session>>,
+            ) -> T,
+        ) -> T {
+            let mut active = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut retiring = self
+                .retiring
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            action(&mut active, &mut retiring)
+        }
         pub fn stop_all(&self) {
             self.stopped.store(true, Ordering::SeqCst);
             let sessions = {
@@ -328,21 +345,7 @@ mod desktop {
         pub(crate) async fn cancel_for_renderer_rebind(&self) {
             let inner = self.0.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
-                let sessions = {
-                    let mut active = inner
-                        .sessions
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    let mut retiring = inner
-                        .retiring
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    active
-                        .drain()
-                        .chain(retiring.drain())
-                        .map(|(_, session)| session)
-                        .collect::<Vec<_>>()
-                };
+                let sessions = inner.with_sessions(crate::ssh::drain_sessions);
                 for session in &sessions {
                     session.renderer_gone.send_replace(true);
                     session.stop();
@@ -732,14 +735,7 @@ mod desktop {
                     }
                 }
             })
-            .map_err(|error| {
-                stopped.store(true, Ordering::SeqCst);
-                disconnect(state, &id);
-                if let Ok(mut sessions) = state.0.sessions.lock() {
-                    sessions.remove(&id);
-                }
-                format!("Could not start local output worker: {error}")
-            })?;
+            .map_err(|error| worker_start_failed(state, &id, &stopped, "output", error))?;
         let write_stop = stopped.clone();
         #[cfg(unix)]
         let write_io = unix_io;
@@ -814,14 +810,7 @@ mod desktop {
                 })();
                 let _ = done.send(result);
             })
-            .map_err(|error| {
-                stopped.store(true, Ordering::SeqCst);
-                disconnect(state, &id);
-                if let Ok(mut sessions) = state.0.sessions.lock() {
-                    sessions.remove(&id);
-                }
-                format!("Could not start local input worker: {error}")
-            })?;
+            .map_err(|error| worker_start_failed(state, &id, &stopped, "input", error))?;
         let sessions = state.0.clone();
         let task_id = id.clone();
         tauri::async_runtime::spawn(async move {
@@ -871,42 +860,44 @@ mod desktop {
         });
         Ok(Connected { session_id: id })
     }
-    fn retire_session(inner: &Inner, id: &str, session: &Arc<Session>) {
-        let mut active = inner
-            .sessions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let mut retiring = inner
-            .retiring
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        active.remove(id);
-        if !*session.renderer_gone.borrow() {
-            retiring.insert(id.to_owned(), session.clone());
+    fn worker_start_failed(
+        state: &LocalState,
+        id: &str,
+        stopped: &AtomicBool,
+        role: &str,
+        error: std::io::Error,
+    ) -> String {
+        stopped.store(true, Ordering::SeqCst);
+        disconnect(state, id);
+        if let Ok(mut sessions) = state.0.sessions.lock() {
+            sessions.remove(id);
         }
+        format!("Could not start local {role} worker: {error}")
+    }
+    fn retire_session(inner: &Inner, id: &str, session: &Arc<Session>) {
+        inner.with_sessions(|active, retiring| {
+            active.remove(id);
+            if !*session.renderer_gone.borrow() {
+                retiring.insert(id.to_owned(), session.clone());
+            }
+        });
     }
     fn watch_adoption(state: &LocalState, id: &str, session: &Arc<Session>) {
         let inner = state.0.clone();
         let id = id.to_owned();
         let session = session.clone();
         tauri::async_runtime::spawn(async move {
-            if session.adopted.load(Ordering::SeqCst) {
-                return;
-            }
             let mut cancellation = session.cancel.subscribe();
-            if *cancellation.borrow() {
-                return;
-            }
-            tokio::select! {
-                biased;
-                _ = session.adoption.notified() => {},
-                _ = cancellation.changed() => {},
-                _ = session.creation.cancelled() => {
-                    if !session.adopted.load(Ordering::SeqCst) {
-                        session.stop();
-                        retire_session(&inner, &id, &session);
-                    }
-                }
+            if crate::ssh::adoption_revoked(
+                &session.adopted,
+                &session.adoption,
+                &mut cancellation,
+                &session.creation,
+            )
+            .await
+            {
+                session.stop();
+                retire_session(&inner, &id, &session);
             }
         });
     }
@@ -1021,6 +1012,8 @@ mod desktop {
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 mod tests {
+    #[cfg(unix)]
+    use crate::ssh::test_support::{ready_lease, replacement_lease, unlocked_access};
     fn access_lease() -> crate::app_lock::AccessLease {
         crate::app_lock::AccessState::disabled()
             .lease(None)
@@ -1074,6 +1067,46 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+    #[cfg(unix)]
+    async fn owned_pid(rx: &mut mpsc::UnboundedReceiver<serde_json::Value>) -> i32 {
+        until(rx, "__\r\n")
+            .await
+            .split("__PID_")
+            .nth(1)
+            .unwrap()
+            .split("__")
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+    #[cfg(unix)]
+    async fn wait_reaped(pid: i32) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned local child must be reaped");
+    }
+    #[cfg(unix)]
+    async fn start_owned_child(
+        state: &LocalState,
+    ) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>, i32) {
+        let (events, mut rx) = events();
+        let connected = desktop::start(
+            state,
+            shell("printf '__PID_%s__\\n' \"$$\"; exec sleep 120"),
+            80,
+            24,
+            events,
+        )
+        .await
+        .unwrap();
+        let pid = owned_pid(&mut rx).await;
+        (connected, rx, pid)
     }
     #[tokio::test]
     async fn failed_local_spawn_closes_its_unregistered_pty() {
@@ -1244,26 +1277,7 @@ mod tests {
     #[tokio::test]
     async fn local_disconnect_reaps_its_owned_running_process() {
         let state = LocalState::default();
-        let (event, mut rx) = events();
-        let connected = desktop::start(
-            &state,
-            shell("printf '__PID_%s__\\n' \"$$\"; exec sleep 120"),
-            80,
-            24,
-            event,
-        )
-        .await
-        .unwrap();
-        let output = until(&mut rx, "__\r\n").await;
-        let pid = output
-            .split("__PID_")
-            .nth(1)
-            .unwrap()
-            .split("__")
-            .next()
-            .unwrap()
-            .parse::<i32>()
-            .unwrap();
+        let (connected, mut rx, pid) = start_owned_child(&state).await;
         assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
         desktop::disconnect(&state, &connected.session_id);
         closed(&mut rx).await;
@@ -1277,26 +1291,7 @@ mod tests {
     #[tokio::test]
     async fn state_drop_reaps_local_child_without_waiting_for_async_supervisor() {
         let state = LocalState::default();
-        let (event, mut rx) = events();
-        desktop::start(
-            &state,
-            shell("printf '__PID_%s__\\n' \"$$\"; exec sleep 120"),
-            80,
-            24,
-            event,
-        )
-        .await
-        .unwrap();
-        let output = until(&mut rx, "__\r\n").await;
-        let pid = output
-            .split("__PID_")
-            .nth(1)
-            .unwrap()
-            .split("__")
-            .next()
-            .unwrap()
-            .parse::<i32>()
-            .unwrap();
+        let (_, mut rx, pid) = start_owned_child(&state).await;
         drop(state);
         assert_eq!(
             unsafe { libc::kill(pid, 0) },
@@ -1358,10 +1353,7 @@ mod tests {
         use tauri::ipc::IpcResponse;
         for retained in [false, true] {
             let state = LocalState::default();
-            let access = AccessState::default();
-            access.initialize(true, true, "test".into()).unwrap();
-            access.authorize(access.generation().unwrap()).unwrap();
-            access.ready(access.generation().unwrap()).unwrap();
+            let access = unlocked_access();
             let nonce = access.status().unwrap().nonce.unwrap();
             let creation = access.lease(Some(&nonce)).unwrap();
             let (events, mut rx) = events();
@@ -1376,16 +1368,7 @@ mod tests {
             .await
             .unwrap();
             let id = connected.session_id.clone();
-            let output = until(&mut rx, "__\r\n").await;
-            let pid = output
-                .split("__PID_")
-                .nth(1)
-                .unwrap()
-                .split("__")
-                .next()
-                .unwrap()
-                .parse::<i32>()
-                .unwrap();
+            let pid = owned_pid(&mut rx).await;
             assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
             if retained {
                 assert!(desktop::adopt(&state, &id, &creation).unwrap());
@@ -1394,13 +1377,7 @@ mod tests {
             access.lock().unwrap();
             assert!(desktop::adopt(&state, &id, &creation).is_err());
             if !retained {
-                tokio::time::timeout(Duration::from_secs(5), async {
-                    while unsafe { libc::kill(pid, 0) } == 0 {
-                        tokio::task::yield_now().await;
-                    }
-                })
-                .await
-                .expect("unadopted local child must be reaped while locked");
+                wait_reaped(pid).await;
             }
             access.authorize(access.generation().unwrap()).unwrap();
             access.ready(access.generation().unwrap()).unwrap();
@@ -1435,16 +1412,7 @@ mod tests {
             )
             .await
             .unwrap();
-            let output = until(&mut rx, "__\r\n").await;
-            let pid = output
-                .split("__PID_")
-                .nth(1)
-                .unwrap()
-                .split("__")
-                .next()
-                .unwrap()
-                .parse::<i32>()
-                .unwrap();
+            let pid = owned_pid(&mut rx).await;
             if adopted {
                 assert!(desktop::adopt(&state, &connected.session_id, &creation).unwrap());
             }
@@ -1465,13 +1433,7 @@ mod tests {
         }
         assert_eq!(state.available_slots(), 20);
         state.cancel_for_renderer_rebind().await; // Idempotent cleanup cannot stop a future renderer.
-        assert!(access.finish_renderer_replacement().unwrap());
-        access.foreground().unwrap();
-        access.ready(access.generation().unwrap()).unwrap();
-        assert!(access.lease(None).is_err());
-        let fresh = access
-            .lease(access.status().unwrap().nonce.as_deref())
-            .unwrap();
+        let fresh = replacement_lease(&access);
         let (events, mut rx) = events();
         let connected = desktop::start_with_access(
             &state,
@@ -1542,13 +1504,7 @@ mod tests {
                 .unwrap();
         }
         // Always clean the real child before asserting the red/green boundary.
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while unsafe { libc::kill(pid, 0) } == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        wait_reaped(pid).await;
         assert!(!alive_when_cleanup_returned,
             "cleanup returned while its held old child was still alive; available slots={available_while_held}");
         assert_eq!(
@@ -1562,10 +1518,7 @@ mod tests {
         assert_eq!(state.available_slots(), 20);
         assert!(access.finish_renderer_replacement().unwrap());
         access.foreground().unwrap();
-        access.ready(access.generation().unwrap()).unwrap();
-        let fresh = access
-            .lease(access.status().unwrap().nonce.as_deref())
-            .unwrap();
+        let fresh = ready_lease(&access);
         let (events, mut rx) = events();
         let connected = desktop::start_with_access(
             &state,

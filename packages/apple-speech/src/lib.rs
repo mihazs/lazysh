@@ -14,10 +14,7 @@ pub struct Capability {
     pub reserved_languages: Vec<String>,
 }
 pub struct AppleSpeech<R: Runtime> {
-    #[cfg(target_os = "ios")]
-    handle: tauri::plugin::PluginHandle<R>,
-    #[cfg(not(target_os = "ios"))]
-    runtime: std::marker::PhantomData<fn() -> R>,
+    handle: lazysh_common::IosHandle<tauri::plugin::PluginHandle<R>>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -189,7 +186,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let speech = {
                 let _ = api;
                 AppleSpeech::<R> {
-                    runtime: std::marker::PhantomData,
+                    handle: std::marker::PhantomData,
                 }
             };
             app.manage(speech);

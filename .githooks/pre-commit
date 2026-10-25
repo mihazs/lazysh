@@ -19,4 +19,7 @@ if [ "${1-}" = "--install" ]; then
   exit 0
 fi
 
-exec bun run --bun duplicates:staged
+status=0
+bun run --bun duplicates:staged || status=$?
+printf '%s\n' 'jscpd must report zero duplicates. Refactor duplicated code with DRY; do not bypass the gate, baseline clones, relax thresholds, or hide handwritten code/tests. Keep vendor, generated-artifact and legal-notice scope explicit and preserve third-party attribution.' >&2 || :
+exit "$status"

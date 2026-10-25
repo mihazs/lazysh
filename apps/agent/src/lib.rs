@@ -83,16 +83,8 @@ impl Error {
         }
     }
 }
-impl From<io::Error> for Error {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-impl From<rusqlite::Error> for Error {
-    fn from(error: rusqlite::Error) -> Self {
-        Self::Storage(error)
-    }
-}
+lazysh_common::impl_from_error!(Error, Io, io::Error);
+lazysh_common::impl_from_error!(Error, Storage, rusqlite::Error);
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -170,16 +162,19 @@ fn field(payload: &Value, name: &str, maximum: usize) -> Result<String> {
     text(value, maximum)?;
     Ok(value.to_owned())
 }
-pub fn read_event(mut input: impl Read, agent: Agent, pane: Option<&str>) -> Result<Option<Event>> {
+pub(crate) fn read_bounded_json(mut input: impl Read, maximum: usize) -> Result<Value> {
     let mut bytes = Vec::new();
     input
         .by_ref()
-        .take(MAX_INPUT as u64 + 1)
+        .take(maximum as u64 + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_INPUT {
+    if bytes.len() > maximum {
         return Err(Error::InvalidEvent);
     }
-    let payload: Value = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidEvent)?;
+    serde_json::from_slice(&bytes).map_err(|_| Error::InvalidEvent)
+}
+pub fn read_event(input: impl Read, agent: Agent, pane: Option<&str>) -> Result<Option<Event>> {
+    let payload = read_bounded_json(input, MAX_INPUT)?;
     normalize(&payload, agent, pane)
 }
 pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Option<Event>> {
@@ -251,22 +246,26 @@ pub fn state_directory() -> Result<PathBuf> {
         })
 }
 
+mod storage_schema;
+
 pub struct Store {
     connection: Connection,
 }
 
-fn validate_state_file(path: &Path) -> Result<()> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    if storage_namespace::is_link(&metadata) || !metadata.is_file() {
-        return Err(Error::Io(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "State must be a regular file",
-        )));
+fn regular_state_metadata(path: &Path, message: &'static str) -> io::Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if storage_namespace::is_link(&metadata) || !metadata.is_file() => {
+            Err(io::Error::new(io::ErrorKind::InvalidInput, message))
+        }
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
+}
+fn validate_state_file(path: &Path) -> Result<()> {
+    let Some(metadata) = regular_state_metadata(path, "State must be a regular file")? else {
+        return Ok(());
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -282,14 +281,9 @@ fn validate_state_file(path: &Path) -> Result<()> {
 }
 
 fn validate_sidecar(path: &Path) -> Result<()> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
+    let Some(metadata) = regular_state_metadata(path, "Invalid state sidecar")? else {
+        return Ok(());
     };
-    if storage_namespace::is_link(&metadata) || !metadata.is_file() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid state sidecar").into());
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -391,14 +385,8 @@ impl Store {
         if mode != "wal" {
             return Err(io::Error::other("WAL unavailable for companion state").into());
         }
-        connection.execute_batch(
-            "PRAGMA journal_size_limit=1048576;
-            CREATE TABLE IF NOT EXISTS sessions (
-                agent TEXT NOT NULL, session_id TEXT NOT NULL, project TEXT NOT NULL,
-                state TEXT NOT NULL, summary TEXT NOT NULL, pane_id TEXT,
-                updated_at REAL NOT NULL, event_count INTEGER NOT NULL,
-                PRIMARY KEY (agent,session_id));",
-        )?;
+        connection.execute_batch("PRAGMA journal_size_limit=1048576;")?;
+        connection.execute_batch(storage_schema::V1_SESSIONS)?;
         connection.busy_handler(Some(wait_for_storage))?;
         Ok(Self { connection })
     }
@@ -472,6 +460,9 @@ pub fn claude_config() -> Value {
     json!({"hooks":hooks})
 }
 
+#[cfg(all(test, unix))]
+#[path = "../tests/support/permissions.rs"]
+mod test_permissions;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,17 +561,7 @@ mod tests {
         assert_eq!(fs::read(&db).unwrap(), b"untouched synthetic legacy bytes");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
-                0o750
-            );
-            assert_eq!(
-                fs::metadata(db).unwrap().permissions().mode() & 0o777,
-                0o640
-            );
-        }
+        crate::test_permissions::assert_state_modes(dir.path(), 0o750, 0o640);
     }
     #[test]
     fn every_store_connection_has_full_synchronization_in_wal_mode() {

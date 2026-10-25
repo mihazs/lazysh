@@ -36,6 +36,13 @@ class VaultPlugin: Plugin {
     }
   }
   private var contexts: [UUID: (context: LAContext, authEpoch: UInt64)] = [:]
+  private func registerContext(_ context: LAContext, id: UUID, expected: UInt64, started: UInt64) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard contexts.isEmpty && expected >= epoch && started == lifecycle && foreground else { return false }
+    contexts[id] = (context, expected)
+    return true
+  }
   private var epoch: UInt64 = 0
   private var lifecycle: UInt64 = 0
   private var foreground = true
@@ -116,9 +123,7 @@ class VaultPlugin: Plugin {
         if biometric {
           context.touchIDAuthenticationAllowableReuseDuration = 0
           context.localizedReason = "Unlock lazysh credentials"
-          self.lock.lock()
-          if !self.contexts.isEmpty || expected < self.epoch || started != self.lifecycle || !self.foreground { self.lock.unlock(); invoke.reject("Credential authentication cancelled or another request is in progress"); return }
-          self.contexts[id] = (context, expected); self.lock.unlock()
+          guard self.registerContext(context, id: id, expected: expected, started: started) else { invoke.reject("Credential authentication cancelled or another request is in progress"); return }
           lookup[kSecUseAuthenticationContext as String] = context
         }
         defer { context.invalidate(); self.lock.lock(); self.contexts.removeValue(forKey: id); self.lock.unlock() }
@@ -161,9 +166,7 @@ class VaultPlugin: Plugin {
       if biometric {
         context.touchIDAuthenticationAllowableReuseDuration = 0
         context.localizedReason = "Protect lazysh credentials"
-        self.lock.lock()
-        if !self.contexts.isEmpty || expected < self.epoch || started != self.lifecycle || !self.foreground { self.lock.unlock(); invoke.reject("Credential authentication cancelled or another request is in progress"); return }
-        self.contexts[id] = (context, expected); self.lock.unlock()
+        guard self.registerContext(context, id: id, expected: expected, started: started) else { invoke.reject("Credential authentication cancelled or another request is in progress"); return }
         lookup[kSecUseAuthenticationContext as String] = context
       }
       defer { context.invalidate(); self.lock.lock(); self.contexts.removeValue(forKey: id); self.lock.unlock() }

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Owned synchronous CPU Parakeet runtime with a sealed pinned model bundle"
 
 [dependencies]
+lazysh-common = { path = "../common" }
 bzip2 = "0.6"
 sha2 = "0.10"
 tar = { version = "0.4", default-features = false }
@@ -18,4 +19,5 @@ libc = "0.2"
 cmake = "0.1"
 
 [dev-dependencies]
+lazysh-common = { path = "../common", features = ["test-support"] }
 hound = "3.5"

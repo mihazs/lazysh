@@ -73,9 +73,8 @@ async function fixture(legacyCopy = false, install = true): Promise<Fixture> {
   await put(f, 'source.ts', source);
   if (legacyCopy) await put(f, 'accepted legacy copy.ts', source);
   await binaries(repo);
-  await script(f, 'duplicates:baseline');
   await git(f, 'add', '.');
-  await git(f, 'commit', '--quiet', '-m', 'Owned hook fixture baseline');
+  await git(f, 'commit', '--quiet', '-m', 'Owned hook fixture setup');
   if (install) await script(f, 'hooks:install');
   return f;
 }
@@ -83,18 +82,17 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
-test('an actual clean commit accepts baseline clones and does not rewrite the baseline', async () => {
-  const f = await fixture(true);
-  const baseline = await readFile(join(f.repo, '.jscpd-baseline.json'), 'utf8');
+test('an actual unique commit succeeds and prints the zero-duplicate instruction', async () => {
+  const f = await fixture();
   await put(f, 'notes.md', 'A documentation-only staged change.\n');
   await git(f, 'add', 'notes.md');
-  await git(f, 'commit', '--quiet', '-m', 'Clean staged documentation');
-  expect(await readFile(join(f.repo, '.jscpd-baseline.json'), 'utf8')).toBe(baseline);
+  const result = await git(f, 'commit', '--quiet', '-m', 'Clean staged documentation');
+  expect(result.stdout + result.stderr).toContain('jscpd must report zero duplicates.');
   expect((await git(f, 'config', '--local', '--get', 'core.hooksPath')).stdout.trim()).toBe('.githooks');
 }, 20_000);
 
-test('a new third copy of unchanged source blocks commit and restores unrelated changes', async () => {
-  const f = await fixture(true);
+test('any duplicated source blocks commit and restores unrelated changes', async () => {
+  const f = await fixture();
   await put(f, 'new copy with spaces.ts', source);
   await git(f, 'add', 'new copy with spaces.ts');
   await put(f, 'source.ts', source + '// Keep this unstaged edit.\n');
@@ -102,7 +100,8 @@ test('a new third copy of unchanged source blocks commit and restores unrelated 
   const before = (await git(f, 'status', '--porcelain', '--untracked-files=all')).stdout;
   const result = await run(f, ['git', 'commit', '--quiet', '-m', 'Reject a new clone'], false);
   expect(result.code).not.toBe(0);
-  expect(result.stdout + result.stderr).toMatch(/new clone/i);
+  expect(result.stdout + result.stderr).toMatch(/threshold/i);
+  expect(result.stdout + result.stderr).toContain('jscpd must report zero duplicates.');
   expect((await git(f, 'status', '--porcelain', '--untracked-files=all')).stdout).toBe(before);
   expect(await readFile(join(f.repo, 'source.ts'), 'utf8')).toBe(source + '// Keep this unstaged edit.\n');
   expect(await readFile(join(f.repo, 'untracked notes with spaces.txt'), 'utf8')).toBe('Keep this untracked note.');
@@ -121,7 +120,7 @@ test('a linked worktree cannot hide an indexed clone with a clean unstaged repla
   const before = (await git(f, 'status', '--porcelain')).stdout;
   const result = await run(f, ['git', 'commit', '--quiet', '-m', 'Reject the indexed clone'], false);
   expect(result.code).not.toBe(0);
-  expect(result.stdout + result.stderr).toMatch(/new clone/i);
+  expect(result.stdout + result.stderr).toMatch(/threshold/i);
   expect((await git(f, 'show', ':partially staged.ts')).stdout).toBe(source);
   expect(await readFile(join(f.repo, 'partially staged.ts'), 'utf8')).toBe(replacement);
   expect((await git(f, 'status', '--porcelain')).stdout).toBe(before);
@@ -183,5 +182,28 @@ class NativeHookProbe {
   await git(f, 'add', copy);
   const result = await run(f, ['git', 'commit', '--quiet', '-m', 'Reject duplicated authored Android fixture'], false);
   expect(result.code).not.toBe(0);
-  expect(result.stdout + result.stderr).toMatch(/new clone/i);
+  expect(result.stdout + result.stderr).toMatch(/threshold/i);
+}, 20_000);
+
+test('historical clones cannot be accepted by introducing a baseline', async () => {
+  const f = await fixture(true);
+  await run(f, [Bun.which('bun')!, 'run', '--bun', 'jscpd', '--config', '.jscpd.json', '--baseline', '.jscpd-baseline.json', '--update-baseline', '.']);
+  await git(f, 'add', '.jscpd-baseline.json');
+  const result = await run(f, ['git', 'commit', '--quiet', '-m', 'Do not grandfather duplicates'], false);
+  expect(result.code).not.toBe(0);
+  expect(result.stdout + result.stderr).toContain('jscpd must report zero duplicates.');
+}, 20_000);
+
+test('post-hook instruction follows the task, preserves exact status and skips installation', async () => {
+  const f = await fixture();
+  const manifest = JSON.parse(await readFile(join(f.repo, 'package.json'), 'utf8'));
+  for (const status of [0, 37]) {
+    manifest.scripts['duplicates:staged'] = `echo task-completed >&2; exit ${status}`;
+    await put(f, 'package.json', JSON.stringify(manifest));
+    const result = await run(f, ['sh', '.githooks/pre-commit'], false);
+    expect(result.code).toBe(status);
+    expect(result.stderr).toMatch(/task-completed\n[\s\S]*jscpd must report zero duplicates\./);
+  }
+  const install = await script(f, 'hooks:install');
+  expect(install.stdout + install.stderr).not.toContain('jscpd must report zero duplicates.');
 }, 20_000);

@@ -1,29 +1,15 @@
 use super::{
-    block, content, open_transcript, string, validate_message, Error, Result, TranscriptAgent,
-    TranscriptPage, MAX_LINE, MAX_PAGE,
+    block, content, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage,
+    MAX_LINE, MAX_PAGE,
 };
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
-    fs::{File, Metadata},
+    fs::File,
     io::{BufRead, BufReader, Read},
     path::Path,
 };
 
-fn unchanged(path: &Path, before: &Metadata) -> Result<()> {
-    let after = open_transcript(path)?.metadata()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev() || before.ino() != after.ino() {
-            return Err(Error::InvalidEvent);
-        }
-    }
-    if before.len() != after.len() || before.modified()? != after.modified()? {
-        return Err(Error::InvalidEvent);
-    }
-    Ok(())
-}
 fn append_messages(
     messages: &mut Vec<Value>,
     seen: &mut HashSet<String>,
@@ -108,9 +94,9 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
             }
         }
     }
-    unchanged(path, &metadata)?;
+    super::unchanged_snapshot(path, &metadata)?;
     if let Some(metadata) = journal_metadata {
-        unchanged(&journal_path, &metadata)?;
+        super::unchanged_snapshot(&journal_path, &metadata)?;
     } else if journal_path.try_exists()? {
         return Err(Error::InvalidEvent);
     }
@@ -122,10 +108,7 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
     let mut next_offset = offset;
     for message in messages.iter().skip(offset as usize) {
         if let Some(message) = normalize(message) {
-            validate_message(&message)?;
-            let size = serde_json::to_vec(&message)
-                .map_err(|_| Error::InvalidEvent)?
-                .len();
+            let size = super::message_size(&message)?;
             if size > MAX_PAGE {
                 return Err(Error::InvalidEvent);
             }
@@ -191,7 +174,6 @@ fn normalize(message: &Value) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(unix)]
     #[test]
     fn checkpoint_replacement_is_detected_even_with_the_same_size() {
@@ -204,6 +186,6 @@ mod tests {
         #[cfg(windows)]
         std::fs::remove_file(&path).unwrap();
         std::fs::rename(replacement, &path).unwrap();
-        assert!(unchanged(&path, &before).is_err());
+        assert!(crate::transcript::unchanged_snapshot(&path, &before).is_err());
     }
 }

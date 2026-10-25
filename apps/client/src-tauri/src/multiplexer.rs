@@ -1,4 +1,4 @@
-use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::app_lock::AccessLease;
 use crate::ssh::{quote, AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -89,7 +89,7 @@ pub async fn multiplexer_sessions(
     session_id: String,
     kind: MultiplexerKind,
     access: AccessLease,
-) -> std::result::Result<Guarded<Vec<PersistentSession>>, GuardedError<crate::ssh::SshError>> {
+) -> crate::ssh::AccessResult<Vec<PersistentSession>> {
     access
         .run(async {
             let session = state.session(&session_id).await?;
@@ -157,15 +157,16 @@ fn id(value: &str, prefix: char) -> Result<()> {
     }
     Ok(())
 }
-fn text(value: &str, max: usize) -> Result<()> {
+pub(crate) fn validate_text(value: &str, max: usize, message: &str) -> Result<()> {
     if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
-        return Err(SshError::new(
-            "invalid_target",
-            "Enter nonempty text without control characters",
-        ));
+        return Err(SshError::new("invalid_target", message));
     }
     Ok(())
 }
+fn text(value: &str, max: usize) -> Result<()> {
+    validate_text(value, max, "Enter nonempty text without control characters")
+}
+
 fn name(value: &str) -> Result<()> {
     text(value, 200)?;
     if value.contains([':', '.']) {
@@ -387,7 +388,7 @@ pub async fn multiplexer_tree(
     state: State<'_, AppState>,
     session_id: String,
     access: AccessLease,
-) -> std::result::Result<Guarded<MultiplexerTree>, GuardedError<crate::ssh::SshError>> {
+) -> crate::ssh::AccessResult<MultiplexerTree> {
     access
         .run(async {
             let session = state.session(&session_id).await?;
@@ -395,20 +396,33 @@ pub async fn multiplexer_tree(
         })
         .await
 }
+// All multiplexer actions share the same immutable access lease through dispatch.
+pub(crate) async fn execute_action(
+    state: &AppState,
+    access: &AccessLease,
+    session_id: &str,
+    command: Result<String>,
+) -> Result<()> {
+    let command = command?;
+    let session = state.session(session_id).await?;
+    crate::ssh::exec_for_access(&session, command, access).await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn tmux_action(
     state: State<'_, AppState>,
     session_id: String,
     action: TmuxAction,
     access: AccessLease,
-) -> std::result::Result<Guarded<()>, GuardedError<crate::ssh::SshError>> {
+) -> crate::ssh::AccessResult<()> {
     access
-        .run(async {
-            let command = action_command(&action)?;
-            let session = state.session(&session_id).await?;
-            crate::ssh::exec_for_access(&session, command, &access).await?;
-            Ok(())
-        })
+        .run(crate::multiplexer::execute_action(
+            &state,
+            &access,
+            &session_id,
+            action_command(&action),
+        ))
         .await
 }
 
@@ -467,18 +481,13 @@ mod tests {
                 &format!("tmux -f /dev/null -S {} ", quote(socket.to_str().unwrap())),
                 1,
             );
-            let output = Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .env_remove("TMUX")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap()
+            lazysh_common::test_support::successful_output(
+                Command::new("sh").arg("-c").arg(command).env_remove("TMUX"),
+            )
+        };
+        let read_tree = || {
+            let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
+            parse_tree(&format!("tmux\t1\nherdr\t0\nzellij\t0\n{rows}")).unwrap()
         };
         struct Server(std::path::PathBuf);
         impl Drop for Server {
@@ -498,8 +507,7 @@ mod tests {
             directory: directory.clone(),
         })
         .unwrap());
-        let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
-        let tree = parse_tree(&format!("tmux\t1\nherdr\t0\nzellij\t0\n{rows}")).unwrap();
+        let tree = read_tree();
         assert_eq!(tree.sessions[0].name, name);
         assert!(!temp.path().join("nope").exists());
         let session = tree.sessions[0].id.clone();
@@ -526,8 +534,7 @@ mod tests {
             name: "renamed".into(),
         })
         .unwrap());
-        let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
-        let tree = parse_tree(&format!("tmux\t1\nherdr\t0\nzellij\t0\n{rows}")).unwrap();
+        let tree = read_tree();
         assert_eq!(tree.sessions[0].name, "renamed");
         assert_eq!(tree.sessions[0].windows.len(), 2);
         let window = &tree.sessions[0].windows[1].id;
@@ -540,8 +547,7 @@ mod tests {
             target: window.clone(),
         })
         .unwrap());
-        let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
-        let tree = parse_tree(&format!("tmux\t1\nherdr\t0\nzellij\t0\n{rows}")).unwrap();
+        let tree = read_tree();
         assert_eq!(
             tree.sessions[0].windows[1].name,
             "new #{session_name} title;"

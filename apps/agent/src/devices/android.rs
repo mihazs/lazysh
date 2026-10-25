@@ -220,11 +220,7 @@ fn pipeline(
         let result = (|| loop {
             let jpeg = next_jpeg(&mut reader)?;
             let frame = idb::jpeg_frame(Platform::Android, &id, jpeg, None)?;
-            serde_json::to_writer(&mut writer, &frame)
-                .map_err(|_| Error::Device("DeviceStreamClosed"))?;
-            writer.write_all(b"\n")?;
-            writer.flush()?;
-            if sender.send(Ok(())).is_err() {
+            if !super::write_frame(&mut writer, &frame, &sender)? {
                 return Ok(());
             }
         })();
@@ -239,13 +235,8 @@ fn pipeline(
         if capture_expired(start.elapsed(), first_frame, maximum) {
             return Err(Error::Device("DeviceTimeout"));
         }
-        match receiver.recv_timeout(Duration::from_millis(20)) {
-            Ok(Ok(())) => first_frame = true,
-            Ok(Err(error)) => return Err(error),
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(Error::Device("DeviceStreamClosed"))
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        if super::frame_ready(&receiver)? {
+            first_frame = true;
         }
     }
 }
@@ -253,10 +244,7 @@ fn capture_expired(elapsed: Duration, first_frame: bool, maximum: Duration) -> b
     elapsed >= maximum || (!first_frame && elapsed >= SDK_TIMEOUT)
 }
 pub fn stream(id: &str) -> Result<()> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let signal = cancel.clone();
-    ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
-        .map_err(|_| Error::Device("DeviceCancellationUnavailable"))?;
+    let cancel = super::cancellation_signal()?;
     let eof = cancel.clone();
     thread::spawn(move || {
         let mut byte = [0; 1];
