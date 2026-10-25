@@ -74,10 +74,71 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server gdb
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
-      - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
+      - name: Check native client and dependencies
+        id: native-checks
+        run: |
+          set -o pipefail
+          bunx turbo run build test:rust lint format:check --filter=@lazysh/client... 2>&1 | tee "$RUNNER_TEMP/lazysh-native-checks.log"
+      - name: Capture bounded original native crash evidence
+        if: ${{ failure() && steps.native-checks.outcome == 'failure' }}
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/lazysh-native-crash"
+          LAZYSH_DIAG_DIR="$RUNNER_TEMP/lazysh-native-crash"
+          tail -c 4194304 "$RUNNER_TEMP/lazysh-native-checks.log" > "$LAZYSH_DIAG_DIR/native-checks.tail.log"
+          LAZYSH_TEST_BINARY="$(sed -n 's@.*process didn.t exit successfully: `\([^`]*\/lazysh_lib-[0-9a-f]*\)`.*@\1@p' "$RUNNER_TEMP/lazysh-native-checks.log" | tail -n 1)"
+          if ! [[ "$LAZYSH_TEST_BINARY" =~ ^"$GITHUB_WORKSPACE"/target/debug/deps/lazysh_lib-[0-9a-f]{16}$ ]] || ! [[ -f "$LAZYSH_TEST_BINARY" && ! -L "$LAZYSH_TEST_BINARY" && -x "$LAZYSH_TEST_BINARY" ]]; then
+            printf '%s\n' 'No owned original failed client executable identified; capture is inconclusive.' > "$LAZYSH_DIAG_DIR/capture-status.txt"
+            exit 0
+          fi
+          sha256sum "$LAZYSH_TEST_BINARY" > "$LAZYSH_DIAG_DIR/executable.before.sha256"
+          set +e
+          timeout --kill-after=5s 90s cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib --no-run --message-format=json > "$RUNNER_TEMP/lazysh-native-artifacts.jsonl" 2> "$RUNNER_TEMP/lazysh-native-artifacts.stderr"
+          printf 'cargo_metadata_status=%s\n' "$?" > "$LAZYSH_DIAG_DIR/capture-status.txt"
+          tail -c 262144 "$RUNNER_TEMP/lazysh-native-artifacts.stderr" > "$LAZYSH_DIAG_DIR/cargo-metadata.stderr.tail.log"
+          jq -c 'select(.reason=="compiler-artifact" and .target.name=="lazysh_lib" and .executable!=null) | {package_id,target,profile,features,executable}' "$RUNNER_TEMP/lazysh-native-artifacts.jsonl" | tail -c 262144 > "$LAZYSH_DIAG_DIR/client-artifact.jsonl"
+          LAZYSH_JSON_BINARY="$(jq -r 'select(.reason=="compiler-artifact" and .target.name=="lazysh_lib" and .executable!=null) | .executable' "$RUNNER_TEMP/lazysh-native-artifacts.jsonl" | tail -n 1)"
+          sha256sum "$LAZYSH_TEST_BINARY" > "$LAZYSH_DIAG_DIR/executable.after.sha256"
+          if ! cmp --silent "$LAZYSH_DIAG_DIR/executable.before.sha256" "$LAZYSH_DIAG_DIR/executable.after.sha256" || [[ "$LAZYSH_JSON_BINARY" != "$LAZYSH_TEST_BINARY" ]]; then
+            printf '%s\n' 'Executable changed or Cargo metadata did not match; no original-binary/backtrace claim.' >> "$LAZYSH_DIAG_DIR/capture-status.txt"
+            exit 0
+          fi
+          printf '%s\n' 'Original executable SHA-256 unchanged and Cargo artifact path matches.' >> "$LAZYSH_DIAG_DIR/capture-status.txt"
+          timeout --kill-after=5s 90s gdb -nx -batch --return-child-result -ex "set cwd $GITHUB_WORKSPACE/apps/client/src-tauri" -ex 'set pagination off' -ex 'set debuginfod enabled off' -ex 'set print frame-arguments none' -ex 'handle SIGPIPE nostop noprint pass' -ex run -ex 'thread apply all bt 16' -ex 'bt 32' -ex 'info sharedlibrary' --args "$LAZYSH_TEST_BINARY" > "$RUNNER_TEMP/lazysh-native-gdb.raw.log" 2>&1
+          printf 'gdb_status=%s\n' "$?" >> "$LAZYSH_DIAG_DIR/capture-status.txt"
+          tail -c 262144 "$RUNNER_TEMP/lazysh-native-gdb.raw.log" > "$LAZYSH_DIAG_DIR/gdb.tail.log"
+          readelf --dynamic "$LAZYSH_TEST_BINARY" | head -c 262144 > "$LAZYSH_DIAG_DIR/executable.dynamic.txt"
+          nm --format=posix --extern-only "$LAZYSH_TEST_BINARY" | awk '/6google8protobuf|17lazysh_ort_google8protobuf|OrtGetApiBase/ { n++; if(n<=200)print } END { print "matched_symbols=" n }' | head -c 262144 > "$LAZYSH_DIAG_DIR/executable.protobuf-symbols.txt"
+          LAZYSH_RUNTIME_OUT="$(jq -r 'select(.reason=="build-script-executed" and (.package_id|contains("lazysh-parakeet-runtime"))) | .out_dir' "$RUNNER_TEMP/lazysh-native-artifacts.jsonl" | tail -n 1)"
+          if [[ "$LAZYSH_RUNTIME_OUT" =~ ^"$GITHUB_WORKSPACE"/target/debug/build/lazysh-parakeet-runtime-[0-9a-f]{16}/out$ ]]; then
+            for LAZYSH_SOURCE in "$LAZYSH_RUNTIME_OUT/lib/libonnxruntime.a" "$LAZYSH_RUNTIME_OUT/build/private-ort/libonnxruntime.a" "$LAZYSH_RUNTIME_OUT/build/_deps/onnxruntime-src/lib/libonnxruntime.a"; do
+              if [[ -f "$LAZYSH_SOURCE" && ! -L "$LAZYSH_SOURCE" ]]; then
+                sha256sum "$LAZYSH_SOURCE" >> "$LAZYSH_DIAG_DIR/archives.sha256"
+                printf 'archive=%s\n' "$LAZYSH_SOURCE" >> "$LAZYSH_DIAG_DIR/archive.protobuf-symbols.txt"
+                nm --format=posix --extern-only "$LAZYSH_SOURCE" | awk '/6google8protobuf|17lazysh_ort_google8protobuf|OrtGetApiBase/ { n++; if(n<=120)print } END { print "matched_symbols=" n }' | head -c 65536 >> "$LAZYSH_DIAG_DIR/archive.protobuf-symbols.txt"
+              fi
+            done
+            for LAZYSH_RELATIVE in native-libraries-Release.txt private-ort/protobuf-symbols.map CMakeFiles/parakeet-runtime-tests.dir/link.txt; do
+              if [[ -f "$LAZYSH_RUNTIME_OUT/build/$LAZYSH_RELATIVE" ]]; then
+                printf 'source=%s\n' "$LAZYSH_RELATIVE" >> "$LAZYSH_DIAG_DIR/native-link-provenance.txt"
+                head -c 65536 "$LAZYSH_RUNTIME_OUT/build/$LAZYSH_RELATIVE" >> "$LAZYSH_DIAG_DIR/native-link-provenance.txt"
+              fi
+            done
+          else
+            printf '%s\n' 'Matching runtime OUT_DIR unavailable; archive provenance is inconclusive.' >> "$LAZYSH_DIAG_DIR/capture-status.txt"
+          fi
+      - name: Upload bounded native crash evidence
+        if: ${{ !cancelled() && steps.native-checks.outcome == 'failure' }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-native-linux-crash
+          path: ${{ runner.temp }}/lazysh-native-crash/
+          if-no-files-found: warn
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Check combined native voice startup and clean shutdown without models
