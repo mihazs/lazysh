@@ -246,6 +246,33 @@ pub fn state_directory() -> Result<PathBuf> {
 pub struct Store {
     connection: Connection,
 }
+
+fn validate_state_file(path: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() {
+        return Err(Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "State must be a regular file",
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.nlink() != 1 {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "State must not have hard links",
+            )));
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 impl Store {
     pub fn open(directory: &Path) -> Result<Self> {
         match fs::symlink_metadata(directory) {
@@ -273,38 +300,19 @@ impl Store {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
         }
         let path = directory.join("events.sqlite3");
-        let mut options = fs::OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        }
-        let file = options.open(&path)?;
-        if !file.metadata()?.is_file() {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "State must be a regular file",
-            )));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            if file.metadata()?.nlink() != 1 {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "State must not have hard links",
-                )));
-            }
-            file.set_permissions(fs::Permissions::from_mode(0o600))?;
-        }
+        // Never open/close the database outside SQLite: on POSIX, closing any
+        // descriptor for this inode releases this process's SQLite locks.
+        // The private directory protects newly created files until chmod, and
+        // SQLite itself refuses leaf symlinks with SQLITE_OPEN_NOFOLLOW.
+        validate_state_file(&path)?;
         let mut connection = Connection::open_with_flags(
-            path,
+            &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
+        validate_state_file(&path)?;
         connection.busy_handler(Some(wait_for_storage))?;
         connection.execute_batch(
             "PRAGMA journal_size_limit=1048576;
