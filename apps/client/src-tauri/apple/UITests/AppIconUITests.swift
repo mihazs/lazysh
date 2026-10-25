@@ -5,6 +5,7 @@ final class AppIconUITests: XCTestCase {
   @MainActor
   func testActualHomeScreenIconRoundtripAndRelaunch() throws {
     let app = XCUIApplication(bundleIdentifier: "app.lazysh.client")
+    app.launchEnvironment["IDE_DISABLED_OS_ACTIVITY_DT_MODE"] = "1"
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
     let monitor = addUIInterruptionMonitor(withDescription: "Home Screen icon confirmation") { alert in
       let ok = alert.buttons["OK"].firstMatch
@@ -18,8 +19,10 @@ final class AppIconUITests: XCTestCase {
     let reported = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
       current.exists && ["Current icon: Default", "Current icon: Amber"].contains(current.label)
     }, object: nil)
-    XCTAssertEqual(XCTWaiter.wait(for: [reported], timeout: 20), .completed,
+    let readback = XCTWaiter.wait(for: [reported], timeout: 20)
+    XCTAssertEqual(readback, .completed,
       "A supported native icon readback must arrive before selection")
+    guard readback == .completed else { return }
     let original = current.label
     guard ["Current icon: Default", "Current icon: Amber"].contains(original) else {
       XCTFail("Actual native icon is unavailable or unknown; valid-change acceptance did not run"); return

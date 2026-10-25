@@ -41,12 +41,53 @@ final class AppIconIntegrationTests: XCTestCase {
     attachment.lifetime = .keepAlways
     add(attachment)
   }
+  private func prepareAccess(_ view: WKWebView) throws {
+    let ready = expectation(description: "Original native icon access lease")
+    let deadline = Date().addingTimeInterval(30)
+    var alive = true
+    var finished = false
+    var prepared = false
+    func poll() {
+      guard alive && !finished && deadline.timeIntervalSinceNow > 0 else { return }
+      view.callAsyncJavaScript("""
+        if (window.__lazyshIconInvoke) return true;
+        const state = await window.__TAURI_INTERNALS__.invoke('app_lock_status');
+        if (!state.initialized) return false;
+        if (state.enabled || state.locked || !/^[a-f0-9]{64}$/.test(state.nonce ?? '')) {
+          throw new Error('Clean icon fixture requires initialized unlocked access');
+        }
+        const headers = {'X-Lazysh-Access': state.nonce};
+        await window.__TAURI_INTERNALS__.invoke('app_lock_ready', {generation: state.generation});
+        // Capture once in the page. Never export, refresh or retry a protected request's nonce.
+        window.__lazyshIconInvoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args, {headers});
+        return true;
+        """, arguments: [:], in: nil, in: .page) { response in
+          DispatchQueue.main.async {
+            guard alive && !finished else { return }
+            switch response {
+            case .success(let value):
+              if value as? Bool == true { prepared = true; finished = true; ready.fulfill() }
+              else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() } }
+            case .failure:
+              finished = true; ready.fulfill()
+            }
+          }
+        }
+    }
+    poll()
+    let result = XCTWaiter.wait(for: [ready], timeout: 30)
+    alive = false
+    record("access-prepared", received: prepared)
+    XCTAssertEqual(result, .completed)
+    guard prepared else { throw IconAccessFailure.unavailable }
+  }
+  private enum IconAccessFailure: Error { case unavailable }
   private func preflight(_ view: WKWebView) throws {
     let replied = expectation(description: "Actual native icon status preflight")
     var status: [String: Any]?
     var received = false
     record("status-requested", received: false)
-    view.callAsyncJavaScript("return await window.__TAURI_INTERNALS__.invoke('app_icon_status');",
+    view.callAsyncJavaScript("return await window.__lazyshIconInvoke('app_icon_status');",
       arguments: [:], in: nil, in: .page) { response in
         received = true
         switch response {
@@ -101,14 +142,15 @@ final class AppIconIntegrationTests: XCTestCase {
       }
     }
     let view = try readyAppView()
+    try prepareAccess(view)
     try preflight(view)
     let replied = expectation(description: "Real icon IPC and invalid selection")
     view.callAsyncJavaScript("""
-      const status = await window.__TAURI_INTERNALS__.invoke('app_icon_status');
+      const status = await window.__lazyshIconInvoke('app_icon_status');
       let rejected = false;
-      try { await window.__TAURI_INTERNALS__.invoke('set_app_icon', {icon: '../unbundled'}); }
+      try { await window.__lazyshIconInvoke('set_app_icon', {icon: '../unbundled'}); }
       catch { rejected = true; }
-      const after = await window.__TAURI_INTERNALS__.invoke('app_icon_status');
+      const after = await window.__lazyshIconInvoke('app_icon_status');
       return {status, after, rejected};
       """, arguments: [:], in: nil, in: .page) { response in
         switch response {

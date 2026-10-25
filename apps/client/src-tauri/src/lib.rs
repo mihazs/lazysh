@@ -187,7 +187,6 @@ pub fn run() {
             ];
             handler(invoke)
         })
-
         .run(tauri::generate_context!())
         .expect("failed to start lazysh");
 }

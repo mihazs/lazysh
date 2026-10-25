@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import { isTauri } from '@tauri-apps/api/core';
+import { captureAccess, useProtectedInvoke } from './access';
 
 type Icon = 'default' | 'amber';
 type IconStatus = { available: boolean; current: Icon | 'unknown'; reason: string };
@@ -12,44 +13,50 @@ function parseStatus(value: unknown): IconStatus {
   return row as IconStatus;
 }
 export default function AppIconPanel() {
+  const invoke = useProtectedInvoke();
+  const lease = useRef(captureAccess()).current;
+  const alive = useRef(true);
   const [status, setStatus] = useState<IconStatus>();
   const [choice, setChoice] = useState<Icon>('default');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const generation = useRef(0);
   const changing = useRef(false);
+  const currentRequest = (request: number) => alive.current && lease.current() && generation.current === request;
   async function read() {
+    if (!alive.current || !lease.current()) return;
     const current = ++generation.current;
     try {
       const actual = isTauri() ? parseStatus(await invoke('app_icon_status')) : unavailable;
-      if (generation.current === current) { setStatus(actual); if (actual.current !== 'unknown') setChoice(actual.current); }
-    } catch { if (generation.current === current) { setStatus(undefined); setError('Cannot read the current app icon. Try refreshing.'); } }
+      if (currentRequest(current)) { setStatus(actual); if (actual.current !== 'unknown') setChoice(actual.current); }
+    } catch { if (currentRequest(current)) { setStatus(undefined); setError('Cannot read the current app icon. Try refreshing.'); } }
   }
   useEffect(() => {
+    alive.current = true;
     void read();
     const resumed = () => { if (!document.hidden && !changing.current) void read(); };
     window.addEventListener('focus', resumed);
     document.addEventListener('visibilitychange', resumed);
-    return () => { generation.current++; window.removeEventListener('focus', resumed); document.removeEventListener('visibilitychange', resumed); };
+    return () => { alive.current = false; generation.current++; window.removeEventListener('focus', resumed); document.removeEventListener('visibilitychange', resumed); };
   }, []);
   async function apply() {
-    if (changing.current || !status?.available) return;
+    if (!alive.current || !lease.current() || changing.current || !status?.available) return;
     changing.current = true; setBusy(true); setError('');
     const current = ++generation.current;
     try {
       const actual = parseStatus(await invoke('set_app_icon', {icon: choice}));
-      if (generation.current === current) { setStatus(actual); if (actual.current !== 'unknown') setChoice(actual.current); }
+      if (currentRequest(current)) { setStatus(actual); if (actual.current !== 'unknown') setChoice(actual.current); }
     } catch (error) {
-      if (generation.current === current) {
+      if (currentRequest(current)) {
         setError(error instanceof Error ? error.message : typeof error === 'string' ? error : 'iOS could not change the app icon.');
         await read();
       }
-    } finally { changing.current = false; setBusy(false); }
+    } finally { if (alive.current && lease.current()) { changing.current = false; setBusy(false); } }
   }
   return <fieldset><legend>App icon</legend>
     <p>{status?.reason ?? 'Reading the current iOS icon…'}</p>
     {error && <p role="alert">{error}</p>}
-    <p role="status">Current icon: {status ? {default: 'Default', amber: 'Amber', unknown: 'Unknown — refresh before changing'}[status.current] : 'Unknown'}</p>
+    <p role="status">{`Current icon: ${status ? {default: 'Default', amber: 'Amber', unknown: 'Unknown — refresh before changing'}[status.current] : 'Unknown'}`}</p>
     <label>Home Screen icon<select value={choice} disabled={!status?.available || busy} onChange={event => setChoice(event.target.value as Icon)}>
       <option value="default">Default</option><option value="amber">Amber</option>
     </select></label>

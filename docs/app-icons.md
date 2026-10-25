@@ -128,3 +128,31 @@ The native resource test instead reads the fixed bundled `Info.plist` with a
 256 KiB bound and validates both literal phone and pad declarations independently.
 This corrects API usage without dropping either declaration assertion. Actual
 phone UIKit roundtrip remains pending; no iPad UI execution is claimed.
+
+The corrected lookup run [40217999219](https://github.com/mihazs/lazysh/actions/runs/40217999219),
+head `e3d71cb`, passed hosted compiled-resource, native icon status and invalid-input
+checks. Its actual UI roundtrip failed before selection: the supported-current
+predicate expected a combined static text label, but retained native accessibility
+trees contain adjacent `Current icon:` and `Default` StaticText elements. This
+establishes rendered native readback, not a failed status request or a successful
+setter. [Artifact 12609107625](https://github.com/mihazs/lazysh/actions/runs/40217999219/artifacts/12609107625)
+retains that distinction. The paragraph now emits one coherent text node and the
+UI test stops after a failed predicate rather than querying a missing element.
+Full actual current-label and restore assertions remain unchanged.
+
+Main's merged resume protection is integrated: icon requests use the mounted
+view's original protected invoke lease, native commands wrap results/errors in
+`AccessLease.run`, and stale completion/error/finally callbacks cannot update a
+new view. Hosted icon tests capture one original initialized, unlocked lease
+inside the page, acknowledge native readiness, and never project its nonce or
+retry a protected request with a new nonce. The icon UI runner uses main's
+separate-app logging marker. A UIKit icon mutation already dispatched to the OS
+cannot be recalled on lock; its stale result is rejected, and it grants no access
+to protected data or lock-policy changes. New integrated native execution remains
+required. Physical iPhone/iPad Home Screen acceptance is still unexecuted.
+
+Focused same-mount regressions rotate lock/unlock before settling an old success
+or error, assert no stale repaint/error/refresh, then verify a new mount can read
+and change normally. Temporarily removing only the original-lease condition from
+the result guard made both regressions fail on a stale error alert; restoring it
+passed all 23 focused access/shell/icon/preferences tests. No mutation remains.
