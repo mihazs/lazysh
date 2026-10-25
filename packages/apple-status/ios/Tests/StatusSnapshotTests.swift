@@ -55,4 +55,37 @@ final class StatusSnapshotTests: XCTestCase {
     XCTAssertNil(decoded.outputTokens)
     XCTAssertEqual(decoded.freshnessAt(1900), .stale)
   }
+  func testReviewRejectsColdLaunchAndWaitsForForegroundReceiver() {
+    var gate = StatusReviewGate(); var cursor = StatusCursor()
+    XCTAssertFalse(gate.capture(subscriptionId: id, cursor: cursor, snapshot: nil, now: 1001))
+    XCTAssertTrue(cursor.configure(id, enabled: true))
+    XCTAssertFalse(gate.capture(subscriptionId: "b11c6ca6-e4f7-4f63-859c-d08e66df2240", cursor: cursor, snapshot: snapshot(), now: 1001))
+    XCTAssertTrue(gate.capture(subscriptionId: id, cursor: cursor, snapshot: snapshot(), now: 1001))
+    XCTAssertNil(gate.take(cursor: cursor, snapshot: snapshot(), now: 1002, foreground: false, receiverReady: true))
+    XCTAssertNil(gate.take(cursor: cursor, snapshot: snapshot(), now: 1002, foreground: true, receiverReady: false))
+    let route = gate.take(cursor: cursor, snapshot: snapshot(), now: 1002, foreground: true, receiverReady: true)
+    XCTAssertEqual(route?.subscriptionId, id); XCTAssertEqual(route?.sessionId, id); XCTAssertEqual(route?.expiresAt, 1060)
+    XCTAssertNil(gate.take(cursor: cursor, snapshot: snapshot(), now: 1003, foreground: true, receiverReady: true))
+  }
+  func testReviewCannotBeFreshenedByLaterPublicationOrMovedToAnotherSession() {
+    var gate = StatusReviewGate(); var cursor = StatusCursor(); XCTAssertTrue(cursor.configure(id, enabled: true))
+    XCTAssertTrue(gate.capture(subscriptionId: id, cursor: cursor, snapshot: snapshot(), now: 1001))
+    let newer = StatusSnapshot(subscriptionId: id, sessionId: id, sequence: 2, observedAt: 1050, expiresAt: 1110, running: 1, waiting: 1, usage: nil, approvals: [])
+    XCTAssertNil(gate.take(cursor: cursor, snapshot: newer, now: 1061, foreground: true, receiverReady: true))
+    XCTAssertTrue(gate.capture(subscriptionId: id, cursor: cursor, snapshot: snapshot(), now: 1001))
+    let changedSession = StatusSnapshot(subscriptionId: id, sessionId: "b11c6ca6-e4f7-4f63-859c-d08e66df2240", sequence: 2, observedAt: 1000, expiresAt: 1060, running: 1, waiting: 1, usage: nil, approvals: [])
+    XCTAssertNil(gate.take(cursor: cursor, snapshot: changedSession, now: 1002, foreground: true, receiverReady: true))
+    XCTAssertTrue(gate.capture(subscriptionId: id, cursor: cursor, snapshot: snapshot(), now: 1001))
+    XCTAssertTrue(cursor.configure(id, enabled: false))
+    XCTAssertNil(gate.take(cursor: cursor, snapshot: snapshot(), now: 1002, foreground: true, receiverReady: true))
+  }
+  func testWatchReviewIsBoundToAnApprovalStillPendingAtDelivery() {
+    var gate = StatusReviewGate(); var cursor = StatusCursor(); XCTAssertTrue(cursor.configure(id, enabled: true))
+    let pending = StatusSnapshot(subscriptionId: id, sessionId: id, sequence: 1, observedAt: 1000, expiresAt: 1060, running: 1, waiting: 1, usage: nil, approvals: [StatusApproval(id: id, expiresAt: 1010)])
+    XCTAssertTrue(gate.capture(subscriptionId: id, approvalId: id, cursor: cursor, snapshot: pending, now: 1001))
+    XCTAssertNil(gate.take(cursor: cursor, snapshot: snapshot(), now: 1002, foreground: true, receiverReady: true))
+    XCTAssertTrue(gate.capture(subscriptionId: id, approvalId: id, cursor: cursor, snapshot: pending, now: 1001))
+    let route = gate.take(cursor: cursor, snapshot: pending, now: 1002, foreground: true, receiverReady: true)
+    XCTAssertEqual(route?.approvalId, id); XCTAssertEqual(route?.expiresAt, 1010)
+  }
 }

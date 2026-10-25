@@ -7,23 +7,42 @@ import WatchConnectivity
 private struct ConfigureArgs: Decodable { let subscriptionId: String; let enabled: Bool }
 private struct PublishArgs: Decodable { let snapshot: StatusSnapshot; let startActivity: Bool }
 private struct ReviewArgs: Decodable { let review: Channel }
+private struct OpenReviewArgs: Decodable { let subscriptionId: String }
 
 class AppleStatusPlugin: Plugin, WCSessionDelegate {
   // Native operations serialize on main, including final delivery and disabling a subscription.
   private var cursor = StatusCursor()
   private var latest: StatusSnapshot?
   private var review: Channel?
+  private var reviewGate = StatusReviewGate()
+  private var foregroundObserver: NSObjectProtocol?
   private var activityTask: Task<Void, Never>?
   private let deliveryId = UUID().uuidString.lowercased()
   private var deliverySequence: UInt64 = 0
   private var enabled: Bool { cursor.subscriptionId != nil }
   override init() {
     super.init()
+    foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in _ = self?.deliverReview() }
     if WCSession.isSupported() { WCSession.default.delegate = self; WCSession.default.activate() }
   }
+  deinit { if let observer = foregroundObserver { NotificationCenter.default.removeObserver(observer) } }
   @objc public func registerReview(_ invoke: Invoke) throws {
     let args = try invoke.parseArgs(ReviewArgs.self)
-    DispatchQueue.main.async { self.review = args.review; invoke.resolve() }
+    DispatchQueue.main.async { self.review = args.review; _ = self.deliverReview(); invoke.resolve() }
+  }
+  @objc public func openReview(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(OpenReviewArgs.self)
+    guard UUID(uuidString: args.subscriptionId)?.uuidString.lowercased() == args.subscriptionId else { invoke.reject("Invalid review subscription"); return }
+    DispatchQueue.main.async {
+      guard self.reviewGate.capture(subscriptionId: args.subscriptionId, cursor: self.cursor, snapshot: self.latest, now: UInt64(Date().timeIntervalSince1970)) else { invoke.reject("Review subscription is stale or unavailable"); return }
+      _ = self.deliverReview(); invoke.resolve()
+    }
+  }
+  private func deliverReview() -> Bool {
+    guard let request = reviewGate.take(cursor: cursor, snapshot: latest, now: UInt64(Date().timeIntervalSince1970), foreground: UIApplication.shared.applicationState == .active, receiverReady: review != nil), let review = review else { return false }
+    var payload: JsonObject = ["subscriptionId": request.subscriptionId, "sessionId": request.sessionId, "expiresAt": request.expiresAt]
+    if let id = request.approvalId { payload["approvalId"] = id }
+    review.send(payload); return true
   }
   @objc public func capability(_ invoke: Invoke) {
     DispatchQueue.main.async {
@@ -43,6 +62,7 @@ class AppleStatusPlugin: Plugin, WCSessionDelegate {
       let previousId = self.cursor.subscriptionId
       guard self.cursor.configure(args.subscriptionId, enabled: args.enabled) else { invoke.reject("Status subscription cancelled"); return }
       if previousId == self.cursor.subscriptionId { invoke.resolve(); return }
+      self.reviewGate.clear()
       self.latest = nil
       self.sendWatch(nil)
       if #available(iOS 16.2, *) {
@@ -97,9 +117,9 @@ class AppleStatusPlugin: Plugin, WCSessionDelegate {
             message["subscriptionId"] as? String == latest.subscriptionId else { replyHandler(["ok": false]); return }
       if message["action"] as? String == "refresh" { self.sendWatch(latest); replyHandler(["ok": true]); return }
       guard message["action"] as? String == "review", let id = message["approvalId"] as? String,
-            latest.approvals.contains(where: { $0.id == id && $0.expiresAt > UInt64(Date().timeIntervalSince1970) }),
-            UIApplication.shared.applicationState == .active, let review = self.review else { replyHandler(["ok": false]); return }
-      review.send(["sessionId": latest.sessionId, "approvalId": id] as JsonObject); replyHandler(["ok": true])
+            UIApplication.shared.applicationState == .active, self.review != nil,
+            self.reviewGate.capture(subscriptionId: latest.subscriptionId, approvalId: id, cursor: self.cursor, snapshot: latest, now: UInt64(Date().timeIntervalSince1970)) else { replyHandler(["ok": false]); return }
+      replyHandler(["ok": self.deliverReview()])
     }
   }
 }

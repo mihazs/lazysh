@@ -80,6 +80,41 @@ pub struct Snapshot {
 fn valid_id(value: &str) -> bool {
     value.len() == 36 && uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value)
 }
+#[cfg(any(target_os = "ios", test))]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Review {
+    subscription_id: String,
+    session_id: String,
+    expires_at: u64,
+    approval_id: Option<String>,
+}
+#[cfg(any(target_os = "ios", test))]
+impl Review {
+    fn valid(&self, now: u64) -> bool {
+        valid_id(&self.subscription_id)
+            && valid_id(&self.session_id)
+            && self.expires_at > now
+            && self.expires_at <= now.saturating_add(65)
+            && self.approval_id.as_deref().is_none_or(valid_id)
+    }
+}
+#[cfg(any(target_os = "ios", test))]
+fn review_subscription(url: &tauri::Url) -> Option<String> {
+    if url.as_str().len() > 128
+        || url.scheme() != "lazysh"
+        || url.host_str() != Some("agents")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let id = url.path().strip_prefix('/')?;
+    valid_id(id).then(|| id.to_owned())
+}
 fn validate(snapshot: &Snapshot, now: u64) -> Result<(), String> {
     if !valid_id(&snapshot.subscription_id)
         || !valid_id(&snapshot.session_id)
@@ -203,11 +238,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 let app = app.clone();
                 let review = tauri::ipc::Channel::<serde_json::Value>::new(move |response| {
                     if let tauri::ipc::InvokeResponseBody::Json(json) = response {
-                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
-                            if value
-                                .get("sessionId")
-                                .and_then(|v| v.as_str())
-                                .is_some_and(valid_id)
+                        if let Ok(value) = serde_json::from_str::<Review>(&json) {
+                            if SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .is_ok_and(|now| value.valid(now.as_secs()))
                             {
                                 let _ = app.emit("lazysh-apple-review", value);
                             }
@@ -236,6 +270,26 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             app.manage(status);
             Ok(())
         })
+        .on_event(|app, event| {
+            #[cfg(target_os = "ios")]
+            if let tauri::RunEvent::Opened { urls } = event {
+                if let Some(subscription_id) = urls.iter().find_map(review_subscription) {
+                    if let Some(status) = app.try_state::<AppleStatus<R>>() {
+                        let handle = status.handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = handle
+                                .run_mobile_plugin_async::<()>(
+                                    "openReview",
+                                    serde_json::json!({"subscriptionId": subscription_id}),
+                                )
+                                .await;
+                        });
+                    }
+                }
+            }
+            #[cfg(not(target_os = "ios"))]
+            let _ = (app, event);
+        })
         .build()
 }
 #[cfg(test)]
@@ -253,6 +307,45 @@ mod tests {
             usage: None,
             approvals: vec![],
         }
+    }
+    #[test]
+    fn activity_urls_carry_only_canonical_subscription_ids() {
+        let id = "b11c6ca6-e4f7-4f63-859c-d08e66df2239";
+        assert_eq!(
+            review_subscription(&format!("lazysh://agents/{id}").parse().unwrap()).as_deref(),
+            Some(id)
+        );
+        for url in [
+            format!("https://agents/{id}"),
+            "lazysh://agents".into(),
+            format!("lazysh://agents/{id}/"),
+            format!("lazysh://agents/{id}?approve=true"),
+            format!("lazysh://agents/{id}#fragment"),
+            format!("lazysh://user@agents/{id}"),
+            format!("lazysh://agents:123/{id}"),
+            format!("lazysh://agents/{}", id.to_uppercase()),
+            "lazysh://agents/%2f".into(),
+        ] {
+            assert!(
+                review_subscription(&url.parse().unwrap()).is_none(),
+                "{url}"
+            );
+        }
+    }
+    #[test]
+    fn review_payloads_require_matching_identity_shape_and_bounded_deadline() {
+        let id = "b11c6ca6-e4f7-4f63-859c-d08e66df2239";
+        let mut review = Review {
+            subscription_id: id.into(),
+            session_id: id.into(),
+            expires_at: 1060,
+            approval_id: None,
+        };
+        assert!(review.valid(1001));
+        assert!(!review.valid(1060));
+        assert!(!review.valid(900));
+        review.approval_id = Some("allow".into());
+        assert!(!review.valid(1001));
     }
     #[test]
     fn rejects_stale_oversized_and_unbound_snapshots() {

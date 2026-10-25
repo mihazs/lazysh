@@ -80,9 +80,36 @@ struct StatusInbox: Codable {
     return true
   }
 }
-struct StatusReview: Codable {
+struct StatusReview: Codable, Equatable {
+  let subscriptionId: String
   let sessionId: String
+  let expiresAt: UInt64
   let approvalId: String?
+}
+struct StatusReviewGate {
+  private var pending: StatusReview?
+  mutating func clear() { pending = nil }
+  mutating func capture(subscriptionId: String, approvalId: String? = nil, cursor: StatusCursor, snapshot: StatusSnapshot?, now: UInt64) -> Bool {
+    pending = nil
+    guard cursor.subscriptionId == subscriptionId, let snapshot = snapshot,
+          snapshot.subscriptionId == subscriptionId, snapshot.valid(now: now) else { return false }
+    var expiry = snapshot.expiresAt
+    if let approvalId = approvalId {
+      guard let approval = snapshot.approvals.first(where: { $0.id == approvalId && $0.expiresAt > now }) else { return false }
+      expiry = min(expiry, approval.expiresAt)
+    }
+    pending = StatusReview(subscriptionId: subscriptionId, sessionId: snapshot.sessionId, expiresAt: expiry, approvalId: approvalId)
+    return true
+  }
+  mutating func take(cursor: StatusCursor, snapshot: StatusSnapshot?, now: UInt64, foreground: Bool, receiverReady: Bool) -> StatusReview? {
+    guard foreground && receiverReady else { return nil }
+    let request = pending; pending = nil
+    guard let request = request, request.expiresAt > now, cursor.subscriptionId == request.subscriptionId,
+          let snapshot = snapshot, snapshot.subscriptionId == request.subscriptionId,
+          snapshot.sessionId == request.sessionId, snapshot.valid(now: now) else { return nil }
+    if let id = request.approvalId, !snapshot.approvals.contains(where: { $0.id == id && $0.expiresAt > now }) { return nil }
+    return request
+  }
 }
 struct StatusCursor {
   private(set) var subscriptionId: String?

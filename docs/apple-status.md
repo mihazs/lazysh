@@ -12,6 +12,8 @@ After explicit opt-in, collection runs every ten seconds while the same connecte
 
 Watch **Refresh from iPhone** requests the phone's current cached snapshot. **Review on iPhone** opens the existing approval screen only while the matching iPhone session is selected and the app is active. Review never sends an approval decision. The approval screen fetches and confirms the exact request using the existing identity/hash safety gate. Unreachable, disabled, expired or mismatched requests fail closed. No approval is queued for later execution.
 
+Tapping a Live Activity opens `lazysh://agents/<subscription UUID>`. The URL carries no host, SSH session, approval decision or command. The registered `lazysh` URL scheme reaches the native plugin through Tauri's iOS `RunEvent::Opened` path. Native code accepts only the current subscription with a still-valid status snapshot. It captures the matching SSH session and expiry, waits for the app to become active, then sends a bounded review intent to the frontend. The frontend checks subscription, session and expiry again before opening Agents. A pending intent keeps its original deadline even if newer status arrives; switching sessions or disabling status invalidates it. Cold launches without a live in-memory subscription open the app without reconnecting or replaying an approval.
+
 ## Native project
 
 The source-controlled `apps/client/src-tauri/apple/project.yml.hbs` uses Tauri's official [`bundle.iOS.template`](https://v2.tauri.app/reference/config/) configuration. It extends the [locked CLI 2.12.4 template](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.4/crates/tauri-cli/templates/mobile/ios/project.yml); upgrading the CLI requires reviewing its Rust build/link/plugin placeholders. Generated `gen/apple` project files remain disposable. No project patch scripts are used.
@@ -26,7 +28,7 @@ Local ActivityKit updates use `pushType: nil`; this slice needs no APNs provider
 
 ## Verification
 
-Rust boundary tests use the workspace Cargo suite. Frontend tests use the client Vitest suite. Native XCTest tests compile the same `StatusSnapshot.swift` and `StatusCursor` implementation used by the plugin and Watch targets; they cover expiry, replay, disable/re-enable and delayed old-subscription cleanup.
+Rust boundary tests use the workspace Cargo suite, including strict review-URL grammar. Frontend tests use the client Vitest suite. Native XCTest tests compile the same shared snapshot, cursor and review-gate implementation used by the plugin and Watch targets; they cover expiry, replay, disable/re-enable, delayed old-subscription cleanup, cold-launch rejection, foreground delivery and approval/session changes. URL parsing tests establish input grammar; they do not establish actual iOS URL delivery. Scheme registration and Tauri/Tao callbacks are source-verified, while real Live Activity taps still require device acceptance.
 
 On macOS with Xcode and an installed iOS/watchOS simulator runtime:
 

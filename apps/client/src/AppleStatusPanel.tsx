@@ -8,6 +8,8 @@ import { sampleFreshness, type AppleUsageReport } from './UsagePanel';
 
 type Capability = {liveActivities:boolean; watchPaired:boolean; watchInstalled:boolean; watchReachable:boolean; reason:string};
 type Props = {sessionId:string; usage?:AppleUsageReport|null; onReview?:()=>void};
+type ReviewIntent = {subscriptionId:string;sessionId:string;expiresAt:number;approvalId?:string};
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props) {
   const [capability, setCapability] = useState<Capability>();
@@ -19,8 +21,10 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
   const running = useRef(false);
   const startActivity = useRef(false);
   const review = useRef(onReview); review.current = onReview;
+  const pendingReview = useRef<ReviewIntent|undefined>(undefined);
   function stop() {
     const id=active.current; active.current=undefined;
+    pendingReview.current=undefined;
     setSubscription(undefined); setBusy(false);
     if(id) void invoke('apple_status_configure',{subscriptionId:id, enabled:false}).catch(()=>setError('Could not clear native status. Existing snapshots expire within 60 seconds.'));
   }
@@ -29,11 +33,23 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
     void invoke<Capability>('apple_status_capability').then(value=>{
       if(alive && value && typeof value.liveActivities==='boolean' && typeof value.watchInstalled==='boolean' && typeof value.reason==='string') setCapability(value);
     }).catch(()=>{if(alive)setError('Apple status capability unavailable.');});
-    const unlisten=listen<{sessionId:string;approvalId?:string}>('lazysh-apple-review',event=>{
-      if(active.current && event.payload.sessionId===sessionId && !document.hidden) review.current?.();
+    const deliverReview=()=>{
+      const intent=pendingReview.current;
+      const now=Math.floor(Date.now()/1000);
+      if(!intent || intent.subscriptionId!==active.current || intent.sessionId!==sessionId || intent.expiresAt<=now || intent.expiresAt>now+65) {pendingReview.current=undefined;return;}
+      if(!document.hidden){pendingReview.current=undefined;review.current?.();}
+    };
+    const unlisten=listen<unknown>('lazysh-apple-review',event=>{
+      const value=event.payload as ReviewIntent|null;
+      if(!value || typeof value!=='object' || typeof value.subscriptionId!=='string' || !uuid.test(value.subscriptionId)
+        || typeof value.sessionId!=='string' || !uuid.test(value.sessionId) || !Number.isSafeInteger(value.expiresAt)
+        || (value.approvalId!==undefined && value.approvalId!==null && (typeof value.approvalId!=='string' || !uuid.test(value.approvalId))))return;
+      pendingReview.current={subscriptionId:value.subscriptionId,sessionId:value.sessionId,expiresAt:value.expiresAt};deliverReview();
     });
+    document.addEventListener('visibilitychange',deliverReview);
     return ()=>{
       alive=false;
+      pendingReview.current=undefined;document.removeEventListener('visibilitychange',deliverReview);
       void unlisten.then(remove=>remove()).catch(()=>{});
       const id=active.current; active.current=undefined;
       if(id) void invoke('apple_status_configure',{subscriptionId:id,enabled:false}).catch(()=>{});
