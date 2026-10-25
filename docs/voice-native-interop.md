@@ -75,6 +75,16 @@ These local checks used GCC 16.2.1 rather than Ubuntu's compiler; a fresh hosted
 run of the corrected source remains required. Original protobuf symbols in
 the final client are expected because Mosh still uses the system library.
 
+After integrating main `206d7f9`, the same Ubuntu-library setup passed all 186
+client library tests (nine existing ignores), and frontend tests/TypeScript
+passed (363 tests). The actual combined model fixtures also exited cleanly in
+both orders on that integrated source: Whisper then Parakeet in 111.44 seconds,
+and Parakeet then Whisper in 110.38 seconds, with unchanged WER values of
+0.058824 and zero respectively. These are bounded fixture results, not a
+device-performance or general transcription-accuracy claim. Temporary hosted
+crash-capture commands and branch-specific workflow routing were removed after
+retaining the evidence; ordinary PR/main checks and native regressions remain.
+
 Tool semantics: [GNU objcopy](https://sourceware.org/binutils/docs/binutils/objcopy.html)
 and [LLVM objcopy](https://llvm.org/docs/CommandGuide/llvm-objcopy.html). Linux
 execution does not establish this binary transformation for Apple/Windows; their
