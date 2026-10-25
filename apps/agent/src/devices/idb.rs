@@ -408,14 +408,18 @@ mod tests {
             net::UnixListener,
         };
         let directory = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let path = directory.path().join("idb.sock");
+        // Darwin temporary roots may use /var -> /private/var. The adapter
+        // deliberately rejects aliases, so bind the positive fixture through
+        // its real owned namespace rather than weaken that production check.
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("idb.sock");
         let _listener = UnixListener::bind(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(socket_path(path.to_str().unwrap()).is_ok());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert!(socket_path(path.to_str().unwrap()).is_err());
-        let link = directory.path().join("link");
+        let link = root.join("link");
         symlink(&path, &link).unwrap();
         assert!(socket_path(link.to_str().unwrap()).is_err());
         assert!(socket_path("localhost:1234").is_err());
@@ -427,21 +431,22 @@ mod tests {
             fs::{symlink, PermissionsExt},
             net::UnixListener,
         };
-        let root = tempfile::tempdir().unwrap();
-        let private = root.path().join("private");
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let private = root.join("private");
         std::fs::create_dir(&private).unwrap();
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
         let socket = private.join("idb.sock");
         let _listener = UnixListener::bind(&socket).unwrap();
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(socket_path(socket.to_str().unwrap()).is_ok());
-        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert!(socket_path(socket.to_str().unwrap()).is_err());
-        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(socket_path(socket.to_str().unwrap()).is_err());
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let alias = root.path().join("alias");
+        let alias = root.join("alias");
         symlink(&private, &alias).unwrap();
         assert!(socket_path(alias.join("idb.sock").to_str().unwrap()).is_err());
         assert!(socket_path(private.join("../private/idb.sock").to_str().unwrap()).is_err());
