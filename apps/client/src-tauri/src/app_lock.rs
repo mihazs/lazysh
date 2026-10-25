@@ -349,6 +349,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                                 let handle = callback.clone();
                                 tauri::async_runtime::spawn(async move {
                                     if let Err(error) = initialize(handle.clone()).await {
+                                        eprintln!("Native resume initialization failed: {error}");
                                         failure(handle.clone());
                                         let _ = handle.emit("lazysh-app-lock-error", error);
                                     }
@@ -397,6 +398,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = handle.vault().register_resume(events) {
+            eprintln!("Native resume registration failed: {error}");
             failure(handle.clone());
             let _ = handle.emit("lazysh-app-lock-error", error);
         }
