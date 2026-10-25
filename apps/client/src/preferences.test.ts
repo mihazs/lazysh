@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 import { defaults, decodeClipboardRequest, parseChord, parsePreferences, parseTheme, terminalOptions } from "./preferences";
 
 describe("terminal preferences trust boundary", () => {
+  it("preserves the list default for old or invalid stored layouts", () => {
+    for (const sessionLayout of [undefined, null, "grid", "__proto__", [], {cards: true}]) {
+      expect(parsePreferences({...defaults, sessionLayout}).sessionLayout).toBe("list");
+    }
+    expect(parsePreferences({...defaults, sessionLayout: "cards"}).sessionLayout).toBe("cards");
+  });
   it("rejects oversized settings, unknown actions and invalid colors", () => {
     const p = parsePreferences({...defaults, fontSize: Infinity, scrollback: 1e9, fontFamily: "monospace;url(evil)", cursorStyle: "invalid", toolbar: ["paste", "run-command", "paste", "esc"], customTheme: {background: "url(evil)", foreground: "#ffffff"}, snippets: [{label: "unsafe", text: "\x1b[31m"}, {label: "project", text: "cd project"}]});
     expect(p.fontSize).toBe(14);

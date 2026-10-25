@@ -19,6 +19,7 @@ export type Preferences = {
   version: 1;
   theme: keyof typeof themes;
   appTheme: keyof typeof themes;
+  sessionLayout: "list" | "cards";
   customTheme?: ITheme;
   fontSize: number;
   fontFamily: string;
@@ -39,7 +40,7 @@ export type Preferences = {
   autoHideToolbar: boolean;
 };
 export const defaults: Preferences = {
-  version: 1, theme: "forest", appTheme: "forest", fontSize: 14,
+  version: 1, theme: "forest", appTheme: "forest", sessionLayout: "list", fontSize: 14,
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
@@ -83,6 +84,7 @@ export function parsePreferences(value: unknown): Preferences {
   try { if (p.customTheme) customTheme = parseTheme(p.customTheme); } catch { /* Invalid stored themes fall back to a bundled theme. */ }
   return {
     version: 1,
+    sessionLayout: p.sessionLayout === "cards" ? "cards" : "list",
     theme: typeof p.theme === "string" && Object.hasOwn(themes, p.theme) ? p.theme as Preferences["theme"] : defaults.theme,
     appTheme: typeof p.appTheme === "string" && Object.hasOwn(themes, p.appTheme) ? p.appTheme as Preferences["appTheme"] : defaults.appTheme,
     ...(customTheme ? { customTheme } : {}),

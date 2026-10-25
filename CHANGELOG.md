@@ -7,6 +7,9 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Remembered list or cards layout for the active-session switcher. Existing
+  installations retain the list default; switching layout never reconnects sessions.
+
 - iOS app integration for the verified-SSH Mosh handoff, with original dependency
   privacy manifests embedded in separate resource bundles. Auto transport
   selection now considers Mosh on iOS, where it previously skipped it; host-key

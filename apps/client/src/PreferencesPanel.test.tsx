@@ -9,6 +9,9 @@ describe("terminal settings", () => {
   it("persists theme and reordered toolbar, rejects invalid theme import, and resets", () => {
     savePreferences({...defaults});
     render(<PreferencesPanel />);
+    expect(screen.getByLabelText<HTMLSelectElement>("Session switcher layout").value).toBe("list");
+    fireEvent.change(screen.getByLabelText("Session switcher layout"), {target: {value: "cards"}});
+    expect(getPreferences().sessionLayout).toBe("cards");
     fireEvent.change(screen.getByLabelText("Terminal theme"), {target: {value: "paper"}});
     expect(getPreferences().theme).toBe("paper");
     fireEvent.click(screen.getByRole("button", {name: "Move ctrl earlier"}));
