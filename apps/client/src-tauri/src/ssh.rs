@@ -1081,7 +1081,12 @@ pub async fn connect_mosh(
 ) -> Result<Connected> {
     let parent = state.session(&session_id).await?;
     let bootstrap = crate::mosh::bootstrap(&parent, options, cols, rows).await?;
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
     {
         spawn_native_terminal(
             &state,
@@ -1097,7 +1102,12 @@ pub async fn connect_mosh(
         )
         .await
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    )))]
     {
         let _ = (bootstrap, events);
         Err(SshError::new(
@@ -2188,7 +2198,12 @@ mod tests {
     async fn stalled_et_bootstrap_closes_its_channel_and_preserves_ssh_control() {
         assert_stalled_bootstrap_cleanup(true).await;
     }
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "ios"
+    ))]
     #[tokio::test]
     async fn stalled_mosh_bootstrap_closes_its_channel_and_preserves_ssh_control() {
         assert_stalled_bootstrap_cleanup(false).await;

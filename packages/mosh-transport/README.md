@@ -1,6 +1,6 @@
 # Headless Mosh transport
 
-This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux and macOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. The package supports Android target-native compilation and has an iOS target-native build under validation; mobile runtime/app acceptance remains separate. The app keeps iOS Mosh disabled pending proof, and Windows remains unavailable.
+This Cargo workspace package embeds the official Mosh protocol core behind a Rust API. The Tauri application offers an explicitly selected Mosh transport on Linux, macOS, Android and iOS, while SSH remains the default. Linux protocol and SSH-bootstrap interoperability are verified; macOS runtime behavior, network roaming, and battery behavior still require acceptance checks. Android and iOS library simulator interoperability are verified; the iOS app now enables the same native handoff and embeds the upstream privacy resources. Actual app IPC/resource tests and physical-device acceptance remain separate checks. Windows remains unavailable.
 
 The root Cargo workspace owns the lockfile. Bun/Turborepo tracks this package through `@lazysh/mosh-transport`; native build/test tasks use Cargo's cache and bypass Turbo artifact caching. Unsupported targets do not compile or link the C++ core.
 

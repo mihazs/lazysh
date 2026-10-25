@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- iOS app integration for the verified-SSH Mosh handoff, with original dependency
+  privacy manifests embedded in separate resource bundles. Auto transport
+  selection now considers Mosh on iOS, where it previously skipped it; host-key
+  verification and explicit fallback rules remain unchanged.
 - Explicit-file `grok-acp` transcript records, based on a pinned official Grok
   writer contract. Chunks, tool updates and plans remain separate records;
   automatic discovery, active-branch replay and live Grok control are not enabled.
@@ -44,6 +48,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Mobile workspace navigation reserves the full top safe area, keeping the
+  Hosts menu below the iOS status bar and its controls inside the toolbar.
+- Phone dialog inputs use readable text sizing to avoid WebKit focus zoom
+  cropping the host form, while preserving user-controlled pinch zoom.
 - Opening another companion event store no longer closes a separate database
   file descriptor that could release an existing SQLite writer's POSIX lock.
 - Concurrent companion event writes preserve durable storage within bounded
