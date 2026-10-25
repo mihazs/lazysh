@@ -6,6 +6,8 @@
     "check:rust": "cargo check --manifest-path Cargo.toml --locked",
     "test:rust": "cargo test --manifest-path Cargo.toml --locked",
     "test:parakeet-native": "cargo test --manifest-path Cargo.toml --locked --test native",
+    "test:parakeet-inference": "cargo test --manifest-path Cargo.toml --locked --test inference offline_public_speech_with_reused_recognizer -- --ignored --exact --nocapture",
+    "test:parakeet-inference:release": "cargo test --manifest-path Cargo.toml --release --locked --test inference offline_public_speech_with_reused_recognizer -- --ignored --exact --nocapture",
     "lint": "cargo clippy --manifest-path Cargo.toml --locked --all-targets -- -D warnings",
     "format:check": "cargo fmt --manifest-path Cargo.toml -- --check"
   },
