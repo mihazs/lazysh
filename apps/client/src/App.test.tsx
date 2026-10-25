@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   terminal: { write: vi.fn(), dispose: vi.fn() },
   invoke: vi.fn(),
   appleProps: vi.fn(),
+  voiceProps: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
@@ -42,6 +43,7 @@ vi.mock('./AppleStatusPanel',async()=>{
   }};
 });
 vi.mock('./UsagePanel',()=>({default:({onShareAppleUsage}:{onShareAppleUsage?:(report:unknown)=>void})=><button onClick={()=>onShareAppleUsage?.({recordedAt:'2026-10-25T12:00:00Z',freshness:'fresh',inputTokens:11,outputTokens:9,cacheReadTokens:null,cacheWriteTokens:2,observedAt:'2026-10-25T12:01:00Z',receivedAt:1792929660000})}>Use latest report for Watch</button>}));
+vi.mock('./VoicePanel',()=>({default:(props:{sessionId:string;onDirectDictation:(request:import('./voiceDelivery').DirectDictation)=>Promise<void>})=>{mocks.voiceProps(props);return <div>Voice for {props.sessionId}</div>;}}));
 import App, { validateHost } from "./App";
 
 const host: Host = {
@@ -892,4 +894,76 @@ it('keeps explicit Apple sharing mounted across tool navigation and binds the se
   await user.click(screen.getByRole('button',{name:'Connect to Home'}));await user.type(screen.getByLabelText('Password'),'second-secret');await user.click(screen.getByRole('button',{name:'Connect'}));
   await waitFor(()=>expect(mocks.appleProps).toHaveBeenLastCalledWith(expect.objectContaining({sessionId:'usage-two',usage:null})));
   expect(localStorage.setItem).not.toHaveBeenCalledWith('lazysh.workspace.v1',expect.stringContaining('inputTokens'));
+});
+
+async function voiceConnection(id='dictation-current'){
+  mocks.api.connect.mockResolvedValue({sessionId:id});mocks.api.write.mockResolvedValue(undefined);
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');await user.click(screen.getByRole('button',{name:'Dictate'}));
+  await screen.findByText(`Voice for ${id}`);
+  return {user,deliver:mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation as (request:import('./voiceDelivery').DirectDictation)=>Promise<void>};
+}
+it('delivers one bounded final payload to the exact current terminal and lets a failed write remain failed',async()=>{
+  const {deliver}=await voiceConnection();
+  const claim=vi.fn().mockReturnValue(true);
+  await deliver({sessionId:'dictation-current',text:'echo 世界',autoSend:true,claim});
+  expect(mocks.api.write).toHaveBeenCalledExactlyOnceWith('dictation-current','echo 世界\r');expect(claim).toHaveBeenCalledOnce();
+  mocks.api.write.mockRejectedValueOnce(new Error('queue full'));
+  await expect(deliver({sessionId:'dictation-current',text:'second',autoSend:false,claim})).rejects.toThrow('queue full');
+  expect(mocks.api.write).toHaveBeenCalledTimes(2);
+});
+it('rejects wrong sessions, unsafe input and foreground/generation changes before any write',async()=>{
+  const {deliver}=await voiceConnection();
+  const claim=vi.fn().mockReturnValue(true);
+  await expect(deliver({sessionId:'other-session',text:'wrong',autoSend:true,claim})).rejects.toThrow('no longer active');expect(claim).not.toHaveBeenCalled();
+  expect(()=>deliver({sessionId:'dictation-current',text:'bad\ncommand',autoSend:true,claim})).toThrow('one line');
+  Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});
+  await expect(deliver({sessionId:'dictation-current',text:'hidden',autoSend:true,claim})).rejects.toThrow('no longer active');
+  Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});
+  claim.mockReturnValue(false);
+  await expect(deliver({sessionId:'dictation-current',text:'cancelled',autoSend:true,claim})).rejects.toThrow('no longer active');
+  expect(mocks.api.write).not.toHaveBeenCalled();
+});
+it('rejects a held callback after navigation away, disconnect, or App unmount',async()=>{
+  const {deliver,user}=await voiceConnection();const request={sessionId:'dictation-current',text:'old command',autoSend:true,claim:()=>true};
+  await user.click(screen.getByRole('button',{name:'Terminal'}));
+  await expect(deliver(request)).rejects.toThrow('no longer active');
+  await user.click(screen.getByRole('button',{name:'Dictate'}));await screen.findByText('Voice for dictation-current');
+  await user.click(screen.getByRole('button',{name:'Disconnect Home'}));
+  await expect(deliver(request)).rejects.toThrow('no longer active');
+  cleanup();await expect(deliver(request)).rejects.toThrow('no longer active');expect(mocks.api.write).not.toHaveBeenCalled();
+});
+it('preserves local session identity for direct input',async()=>{
+  enableLocal();mocks.api.write.mockResolvedValue(undefined);const user=userEvent.setup();render(<App/>);
+  await user.click(await screen.findByRole('button',{name:'Open local terminal'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Dictate'}));await screen.findByText('Voice for local:desktop');
+  await mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation({sessionId:'local:desktop',text:'pwd',autoSend:false,claim:()=>true});
+  expect(mocks.api.write).toHaveBeenCalledExactlyOnceWith('local:desktop','pwd');
+});
+
+it('invalidates direct delivery synchronously on disconnect intent and never revives it after failure',async()=>{
+  const {deliver,user}=await voiceConnection();
+  let reject!:(error:Error)=>void;
+  mocks.api.disconnect.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+  const request={sessionId:'dictation-current',text:'late command',autoSend:true,claim:vi.fn().mockReturnValue(true)};
+  await user.click(screen.getByRole('button',{name:'Disconnect Home'}));
+  await expect(deliver(request)).rejects.toThrow('no longer active');expect(request.claim).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'Disconnect Home'}));expect(mocks.api.disconnect).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  const during=mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation;
+  await user.keyboard('{Escape}');
+  await act(async()=>reject(new Error('disconnect failed')));
+  await expect(deliver(request)).rejects.toThrow('no longer active');
+  await expect(during(request)).rejects.toThrow('no longer active');
+  expect(mocks.api.write).not.toHaveBeenCalled();
+  const fresh=mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation;
+  await fresh({...request,text:'new recording',autoSend:false});
+  expect(mocks.api.write).toHaveBeenCalledExactlyOnceWith('dictation-current','new recording');
+  let rejectAgain!:(error:Error)=>void;
+  mocks.api.disconnect.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{rejectAgain=fail;}));
+  await user.click(screen.getByRole('button',{name:'Disconnect Home'}));
+  await act(async()=>rejectAgain(new Error('disconnect failed')));
+  await expect(fresh(request)).rejects.toThrow('no longer active');
+  await mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation({...request,text:'recording after repeated failure',autoSend:false});
+  expect(mocks.api.write).toHaveBeenLastCalledWith('dictation-current','recording after repeated failure');
 });
