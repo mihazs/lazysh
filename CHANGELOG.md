@@ -12,6 +12,8 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   paused terminal delivery and cancellation of pending protected work. Windows
   and Linux report this option unavailable. Physical biometric acceptance remains
   a release gate; existing per-host credential protection stays independent.
+  Device-local durable intent preserves the lock on cold launch when its protected
+  proof is missing; cancelled enrollment restores off only after confirmed cleanup.
 
 - Remembered list or cards layout for the active-session switcher. Existing
   installations retain the list default; switching layout never reconnects sessions.

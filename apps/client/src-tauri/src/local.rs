@@ -40,7 +40,7 @@ pub use desktop::LocalState;
 pub struct LocalState;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 impl LocalState {
-    pub(crate) fn cancel_for_renderer_rebind(&self) {}
+    pub(crate) async fn cancel_for_renderer_rebind(&self) {}
 }
 
 #[tauri::command]
@@ -233,6 +233,7 @@ mod desktop {
         }
     }
     const WINDOW: usize = 256 * 1024;
+    const SESSION_LIMIT: u32 = 20;
     enum Input {
         Data(String, AccessLease),
         Resize(u32, u32, AccessLease),
@@ -251,7 +252,6 @@ mod desktop {
         stopped: Arc<AtomicBool>,
         #[cfg(unix)]
         wake: UnixStream,
-        _slot: Mutex<Option<OwnedSemaphorePermit>>,
         renderer_gone: watch::Sender<bool>,
     }
     impl Session {
@@ -317,57 +317,55 @@ mod desktop {
             Self(Arc::new(Inner {
                 sessions: Mutex::new(HashMap::new()),
                 retiring: Mutex::new(HashMap::new()),
-                slots: Arc::new(Semaphore::new(20)),
+                slots: Arc::new(Semaphore::new(SESSION_LIMIT as usize)),
                 stopped: AtomicBool::new(false),
             }))
         }
     }
     impl LocalState {
-        pub(crate) fn cancel_for_renderer_rebind(&self) {
-            let sessions = {
-                let mut active = self
-                    .0
-                    .sessions
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                let mut retiring = self
-                    .0
+        pub(crate) async fn cancel_for_renderer_rebind(&self) {
+            let inner = self.0.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let sessions = {
+                    let mut active = inner
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    let mut retiring = inner
+                        .retiring
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    active
+                        .drain()
+                        .chain(retiring.drain())
+                        .map(|(_, session)| session)
+                        .collect::<Vec<_>>()
+                };
+                for session in &sessions {
+                    session.renderer_gone.send_replace(true);
+                    session.stop();
+                }
+                // The caller runs this hook on a blocking worker. Reap every old PID
+                // before releasing its startup slot; do not set permanent shutdown.
+                for session in sessions {
+                    drop(
+                        session
+                            .process
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take(),
+                    );
+                }
+                inner
                     .retiring
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                active
-                    .drain()
-                    .chain(retiring.drain())
-                    .map(|(_, session)| session)
-                    .collect::<Vec<_>>()
-            };
-            for session in &sessions {
-                session.renderer_gone.send_replace(true);
-                session.stop();
-            }
-            // The caller runs this hook on a blocking worker. Reap every old PID
-            // before releasing its startup slot; do not set permanent shutdown.
-            for session in sessions {
-                drop(
-                    session
-                        .process
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .take(),
-                );
-                drop(
-                    session
-                        ._slot
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .take(),
-                );
-            }
-            self.0
-                .retiring
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .retain(|_, session| !*session.renderer_gone.borrow());
+                    .unwrap_or_else(|error| error.into_inner())
+                    .retain(|_, session| !*session.renderer_gone.borrow());
+            })
+            .await;
+            // Native admission is closed by the caller. Wait asynchronously for
+            // every admitted launch/returned Process, including cancelled callers.
+            let _all_processes = self.0.slots.clone().acquire_many_owned(SESSION_LIMIT).await;
         }
         #[cfg(test)]
         pub(super) fn available_slots(&self) -> usize {
@@ -406,6 +404,8 @@ mod desktop {
         }
     }
     struct Process {
+        // Fields drop after Process::drop finishes reaping; never release capacity first.
+        _slot: Option<OwnedSemaphorePermit>,
         child: Option<Box<dyn Child + Send + Sync>>,
         master: Option<Box<dyn MasterPty + Send>>,
         #[cfg(windows)]
@@ -486,6 +486,7 @@ mod desktop {
             .openpty(size(cols, rows)?)
             .map_err(|e| format!("Could not open local PTY: {e}"))?;
         let mut process = Process {
+            _slot: None,
             child: None,
             master: Some(pair.master),
             #[cfg(windows)]
@@ -563,20 +564,68 @@ mod desktop {
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
+        start_with_launcher(state, creation, command, cols, rows, events, launch).await
+    }
+    #[cfg(all(test, unix))]
+    pub(super) async fn start_with_held_launch(
+        state: &LocalState,
+        creation: AccessLease,
+        command: CommandBuilder,
+        events: Channel<SshEvent>,
+        held: impl FnOnce(u32) + Send + 'static,
+    ) -> Result<Connected, String> {
+        start_with_launcher(
+            state,
+            creation,
+            command,
+            80,
+            24,
+            events,
+            move |command, cols, rows| {
+                let parts = launch(command, cols, rows)?;
+                held(parts.0.child.as_ref().unwrap().process_id().unwrap());
+                Ok(parts)
+            },
+        )
+        .await
+    }
+    async fn start_with_launcher(
+        state: &LocalState,
+        creation: AccessLease,
+        command: CommandBuilder,
+        cols: u32,
+        rows: u32,
+        events: Channel<SshEvent>,
+        launcher: impl FnOnce(CommandBuilder, u32, u32) -> Result<PtyParts, String> + Send + 'static,
+    ) -> Result<Connected, String> {
         size(cols, rows)?;
         if state.0.stopped.load(Ordering::SeqCst) {
             return Err("Local terminals are shutting down".into());
         }
-        let slot = state
-            .0
-            .slots
-            .clone()
-            .try_acquire_owned()
+        let slot = creation
+            .with_current(|| state.0.slots.clone().try_acquire_owned())
+            .map_err(String::from)?
             .map_err(|_| "At most 20 local terminals may be open")?;
+        let launch_access = creation.clone();
+        let owner = state.0.clone();
         let (process, mut reader, mut writer) =
-            tauri::async_runtime::spawn_blocking(move || launch(command, cols, rows))
-                .await
-                .map_err(|_| "Local terminal worker failed")??;
+            tauri::async_runtime::spawn_blocking(move || -> Result<PtyParts, String> {
+                launch_access.check()?;
+                if owner.stopped.load(Ordering::SeqCst) {
+                    return Err("Local terminals are shutting down".into());
+                }
+                let (mut process, reader, writer) = launcher(command, cols, rows)?;
+                process._slot = Some(slot);
+                // Already-admitted OS work may finish after cancellation. Its own
+                // Process must be reaped before the cleanup barrier sees capacity.
+                launch_access.check()?;
+                if owner.stopped.load(Ordering::SeqCst) {
+                    return Err("Local terminals are shutting down".into());
+                }
+                Ok((process, reader, writer))
+            })
+            .await
+            .map_err(|_| "Local terminal worker failed")??;
         if state.0.stopped.load(Ordering::SeqCst) {
             tauri::async_runtime::spawn_blocking(move || drop(process));
             return Err("Local terminals are shutting down".into());
@@ -611,7 +660,6 @@ mod desktop {
             stopped: stopped.clone(),
             #[cfg(unix)]
             wake,
-            _slot: Mutex::new(Some(slot)),
             renderer_gone: watch::channel(false).0,
         });
         let id = format!("local:{}", uuid::Uuid::new_v4());
@@ -1225,7 +1273,7 @@ mod tests {
     async fn windows_conpty_executes_utf8_resizes_and_closes() {
         let state = LocalState::default();
         let (event, mut rx) = events();
-        let connected = desktop::connect(&state, 80, 24, event)
+        let connected = desktop::connect(&state, access_lease(), 80, 24, event)
             .await
             .expect("ConPTY startup failed on this Windows runner");
         let pid = desktop::process_id(&state, &connected.session_id);
@@ -1360,10 +1408,7 @@ mod tests {
         assert_eq!(state.available_slots(), 18);
         access.replace_renderer().unwrap();
         assert!(creation.check().is_err());
-        let retiring = state.clone();
-        tokio::task::spawn_blocking(move || retiring.cancel_for_renderer_rebind())
-            .await
-            .unwrap();
+        state.cancel_for_renderer_rebind().await;
         for pid in pids {
             assert_eq!(
                 unsafe { libc::kill(pid, 0) },
@@ -1372,7 +1417,7 @@ mod tests {
             );
         }
         assert_eq!(state.available_slots(), 20);
-        state.cancel_for_renderer_rebind(); // Idempotent cleanup cannot stop a future renderer.
+        state.cancel_for_renderer_rebind().await; // Idempotent cleanup cannot stop a future renderer.
         assert!(access.finish_renderer_replacement().unwrap());
         access.foreground().unwrap();
         access.ready(access.generation().unwrap()).unwrap();
@@ -1399,6 +1444,94 @@ mod tests {
                 "old callback namespace received replacement output"
             );
         }
+        desktop::disconnect(&state, &connected.session_id);
+        closed(&mut rx).await;
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rebind_waits_for_an_admitted_launch_after_its_caller_is_cancelled() {
+        use std::sync::Arc;
+        let state = Arc::new(LocalState::default());
+        let access = AccessState::disabled();
+        let creation = access.lease(None).unwrap();
+        let (began, started) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let caller_state = state.clone();
+        let caller_creation = creation.clone();
+        let caller = tokio::spawn(async move {
+            let (events, _rx) = events();
+            caller_creation
+                .run(desktop::start_with_held_launch(
+                    &caller_state,
+                    caller_creation.clone(),
+                    shell("exec sleep 120"),
+                    events,
+                    move |pid| {
+                        let _ = began.send(pid);
+                        let _ = held.recv();
+                    },
+                ))
+                .await
+        });
+        let pid = started.await.unwrap() as i32;
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+        access.replace_renderer().unwrap();
+        assert!(caller.await.unwrap().is_err());
+        let available_while_held = state.available_slots();
+        let cleanup_state = state.clone();
+        let mut cleanup = tokio::spawn(async move {
+            cleanup_state.cancel_for_renderer_rebind().await;
+        });
+        // The held native worker cannot finish until this test explicitly releases it.
+        let ended_early = tokio::time::timeout(Duration::from_millis(50), &mut cleanup)
+            .await
+            .is_ok();
+        let alive_when_cleanup_returned = ended_early && unsafe { libc::kill(pid, 0) } == 0;
+        let _ = release.send(());
+        if !ended_early {
+            tokio::time::timeout(Duration::from_secs(5), cleanup)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        // Always clean the real child before asserting the red/green boundary.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!alive_when_cleanup_returned,
+            "cleanup returned while its held old child was still alive; available slots={available_while_held}");
+        assert_eq!(
+            available_while_held, 19,
+            "launch permit must belong to the real native worker, not its cancelled caller"
+        );
+        assert!(
+            !ended_early,
+            "cleanup acknowledged while an admitted launch was held"
+        );
+        assert_eq!(state.available_slots(), 20);
+        assert!(access.finish_renderer_replacement().unwrap());
+        access.foreground().unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        let fresh = access
+            .lease(access.status().unwrap().nonce.as_deref())
+            .unwrap();
+        let (events, mut rx) = events();
+        let connected = desktop::start_with_access(
+            &state,
+            fresh.clone(),
+            shell("printf 'AFTER_HELD_LAUNCH\\n'; exec sleep 120"),
+            80,
+            24,
+            events,
+        )
+        .await
+        .unwrap();
+        assert!(desktop::adopt(&state, &connected.session_id, &fresh).unwrap());
+        until(&mut rx, "AFTER_HELD_LAUNCH").await;
         desktop::disconnect(&state, &connected.session_id);
         closed(&mut rx).await;
     }

@@ -11,6 +11,50 @@ use tauri_plugin_lazysh_vault::VaultExt;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 const ACCOUNT: &str = "resume-lock-proof-v1";
+mod policy;
+use policy::{PolicyStore, Proof};
+fn policy_store(app: &AppHandle) -> Result<PolicyStore, String> {
+    app.path()
+        .app_config_dir()
+        .map(|directory| PolicyStore::new(directory.join("resume-lock-policy.json")))
+        .map_err(|_| "Cannot locate native resume protection policy".into())
+}
+struct NativeProof<'a> {
+    app: &'a AppHandle,
+    operation: &'a tauri_plugin_lazysh_vault::CredentialOperation,
+}
+impl Proof for NativeProof<'_> {
+    fn exists(&self) -> Result<bool, String> {
+        self.app.vault().exists(ACCOUNT)
+    }
+    fn create_verified(&self) -> Result<(), String> {
+        self.operation.check()?;
+        let proof = Zeroizing::new(format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        self.app
+            .vault()
+            .set_protected_for(ACCOUNT, &proof, true, self.operation)?;
+        self.authenticate()
+    }
+    fn authenticate(&self) -> Result<(), String> {
+        let proof = self
+            .app
+            .vault()
+            .get_protected_for(ACCOUNT, true, self.operation)?
+            .map(Zeroizing::new)
+            .ok_or("Resume proof is unavailable")?;
+        if proof.len() != 64 || !proof.bytes().all(|value| value.is_ascii_hexdigit()) {
+            return Err("Resume proof is invalid".into());
+        }
+        self.operation.check()
+    }
+    fn remove(&self) -> Result<(), String> {
+        self.app.vault().delete(ACCOUNT)
+    }
+}
 #[derive(Default)]
 pub struct Runtime {
     native: AtomicU64,
@@ -20,6 +64,17 @@ pub struct Runtime {
     cleaned: tokio::sync::Notify,
     render_revision: AtomicU64,
     render: Arc<Mutex<()>>,
+}
+async fn owned_configuration<T: Send + 'static>(
+    guard: tokio::sync::OwnedMutexGuard<()>,
+    work: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+) -> Result<T, String> {
+    tokio::spawn(async move {
+        let _guard = guard;
+        work.await
+    })
+    .await
+    .map_err(|_| "Resume configuration stopped unexpectedly".to_owned())?
 }
 fn configuration_start(
     access: &AccessLease,
@@ -150,13 +205,10 @@ fn revoke_for(app: &AppHandle, replacement: bool, native: Option<u64>) {
                 .state::<crate::ssh::AppState>()
                 .cancel_for_renderer_rebind()
                 .await;
-            let local = handle.clone();
-            let _ = tauri::async_runtime::spawn_blocking(move || {
-                local
-                    .state::<crate::local::LocalState>()
-                    .cancel_for_renderer_rebind();
-            })
-            .await;
+            handle
+                .state::<crate::local::LocalState>()
+                .cancel_for_renderer_rebind()
+                .await;
         }
         let last = handle
             .state::<Runtime>()
@@ -188,7 +240,10 @@ async fn initialize(app: AppHandle) -> Result<(), String> {
             target_os = "ios",
             target_os = "macos"
         )) {
-            handle.vault().exists(ACCOUNT)?
+            policy_store(&handle)?.initialize(&NativeProof {
+                app: &handle,
+                operation: &handle.vault().operation(),
+            })?
         } else {
             false
         };
@@ -376,9 +431,9 @@ pub async fn app_lock_configure(
     let operation = app.vault().operation();
     let mut expected = access.generation();
     // This owner survives a dropped IPC caller through policy mutation and reconciliation.
-    tokio::spawn(async move {
-        let _guard = guard;
+    owned_configuration(guard, async move {
         configuration_start(&access, &operation)?;
+        let mut resolved_policy = None;
         let result = async {
             if enabled {
                 expected = app
@@ -396,33 +451,33 @@ pub async fn app_lock_configure(
                 .map_err(|_| "Cannot install native privacy cover")??;
             }
             let handle = app.clone();
-            tauri::async_runtime::spawn_blocking(move || {
+            // Unknown worker completion remains restrictive; the owner and its operation
+            // guard survive caller cancellation through proof and policy commits.
+            resolved_policy = Some(true);
+            let mutation = tauri::async_runtime::spawn_blocking(move || {
+                let store = policy_store(&handle).map_err(|message| policy::ChangeError {
+                    message,
+                    locked: true,
+                })?;
+                let proof = NativeProof {
+                    app: &handle,
+                    operation: &operation,
+                };
                 if enabled {
-                    let proof = Zeroizing::new(format!(
-                        "{}{}",
-                        uuid::Uuid::new_v4().simple(),
-                        uuid::Uuid::new_v4().simple()
-                    ));
-                    handle
-                        .vault()
-                        .set_protected_for(ACCOUNT, &proof, true, &operation)?;
+                    store.enable(&proof)
+                } else {
+                    store.disable(&proof)
                 }
-                let proof = handle
-                    .vault()
-                    .get_protected_for(ACCOUNT, true, &operation)?
-                    .map(Zeroizing::new)
-                    .ok_or("Resume proof is unavailable")?;
-                if proof.len() != 64 || !proof.bytes().all(|v| v.is_ascii_hexdigit()) {
-                    return Err("Resume proof is invalid".into());
-                }
-                operation.check()?;
-                if !enabled {
-                    handle.vault().delete(ACCOUNT)?;
-                }
-                Ok::<_, String>(())
             })
             .await
-            .map_err(|_| "Cannot update resume protection")??;
+            .map_err(|_| "Resume protection update stopped; its commit may have completed")?;
+            match mutation {
+                Ok(()) => resolved_policy = Some(enabled),
+                Err(error) => {
+                    resolved_policy = Some(error.locked);
+                    return Err(error.message);
+                }
+            }
             app.vault()
                 .access()
                 .configure_after_proof(expected, enabled)
@@ -431,12 +486,19 @@ pub async fn app_lock_configure(
         .await;
         if let Err(error) = result {
             let handle = app.clone();
-            // Presence inspection never unlocks an item. Unknown state stays restrictive.
             let present = tauri::async_runtime::spawn_blocking(move || {
+                let store = policy_store(&handle)?;
+                let enabled = match resolved_policy {
+                    Some(enabled) => enabled,
+                    None => store.initialize(&NativeProof {
+                        app: &handle,
+                        operation: &handle.vault().operation(),
+                    })?,
+                };
                 if enabled {
-                    let _ = handle.vault().delete(ACCOUNT);
+                    store.write(true)?;
                 }
-                handle.vault().exists(ACCOUNT)
+                Ok::<_, String>(enabled)
             })
             .await
             .ok()
@@ -448,7 +510,9 @@ pub async fn app_lock_configure(
                 .map_err(String::from)?;
             publish(&app);
             view(app.clone(), present);
-            return Err(error);
+            return Err(format!(
+                "{error}. The update may have committed; check the current protection state."
+            ));
         }
         publish(&app);
         if !enabled {
@@ -457,7 +521,6 @@ pub async fn app_lock_configure(
         app.vault().access().status().map_err(Into::into)
     })
     .await
-    .map_err(|_| "Resume configuration stopped unexpectedly".to_owned())?
 }
 #[tauri::command]
 pub fn app_lock_ready(app: AppHandle, generation: String) -> Result<(), String> {
@@ -517,6 +580,33 @@ pub fn allowed_while_locked(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn dropped_configuration_caller_keeps_commit_and_operation_owned() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("policy.json");
+        let operations = Arc::new(Mutex::new(()));
+        let guard = operations.clone().lock_owned().await;
+        let (started, waiting) = tokio::sync::oneshot::channel();
+        let (finish, proceed) = tokio::sync::oneshot::channel();
+        let policy = PolicyStore::new(path.clone());
+        let caller = tokio::spawn(owned_configuration(guard, async move {
+            started.send(()).unwrap();
+            proceed.await.unwrap();
+            tauri::async_runtime::spawn_blocking(move || policy.write(true))
+                .await
+                .unwrap()
+        }));
+        waiting.await.unwrap();
+        caller.abort();
+        assert!(operations.try_lock().is_err());
+        finish.send(()).unwrap();
+        let _completed = tokio::time::timeout(std::time::Duration::from_secs(2), operations.lock())
+            .await
+            .unwrap();
+        assert!(std::fs::read_to_string(path)
+            .unwrap()
+            .contains("\"enabled\":true"));
+    }
     #[test]
     fn repeated_native_ready_never_reinitializes_or_unlocks_a_recreated_view() {
         let authority = AccessState::default();

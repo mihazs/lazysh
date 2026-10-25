@@ -41,7 +41,15 @@ without cancelling that sheet's authentication. macOS covers and locks on hiding
 minimizing, display/system sleep and user-session deactivation. Simply focusing
 another desktop application does not lock this implementation. These are explicit
 lazysh policies; Moshi's documentation does not specify its desktop triggers.
-Enabled protection also starts locked after a cold launch.
+Enabled protection also starts locked after a cold launch. A separate nonsecret,
+device-local policy file records enable intent atomically with private permissions.
+Startup keeps recorded protection on even if the protected proof is missing. A
+legacy or interrupted-enrollment proof also conservatively records protection on;
+only absent/false intent together with an absent proof is the default-off case.
+Corrupt, unreadable or unknown policy formats keep the native cover closed. This
+file is excluded from sync and imports. Losing both app configuration and the OS
+proof cannot be distinguished from a fresh installation; this is not protection
+against operating-system compromise or wiping all local app state.
 
 Native code owns the lock, its foreground generation and opaque access nonce.
 Protected commands validate both the actual native state and the original nonce;
@@ -50,8 +58,14 @@ results and structured errors are checked again at serialization, and old fronte
 continuations are bound to their original view generation. The native cover remains
 until fresh authentication succeeds and the replacement UI acknowledges its reset.
 There is no frontend command that grants an unlock. Cancellation and missing or
-invalidated proof leave access locked. A failed enable cleans up only its own
-staged proof; failed or uncertain cleanup remains restrictive. Enrollment changes
+invalidated proof leave access locked. Before enable intent is committed, a cancelled enable can return to the prior off
+state only after its newly owned proof is successfully removed and absence is
+confirmed. Once the true-intent commit is attempted, failures retain the recovery
+proof and remain restrictive. Disabling first authenticates the proof, commits
+false intent, then removes and confirms absence of the proof; an interrupted delete
+or a remaining proof conservatively restores enabled intent. The owned operation
+continues through admitted commits after caller cancellation, so an error does not
+promise that the prior setting is unchanged. Enrollment changes
 can invalidate this proof. There is currently no in-app recovery bypass for a lost
 proof; do not treat this development preview as having recovery-key support.
 
