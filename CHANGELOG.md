@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Installed-app `lazysh://theme?data=…` links and selectable theme-link export.
+  Incoming links remain pending through resume locks and require explicit review
+  and apply or discard; manual import drafts and existing theme defaults are kept.
+  Desktop launches now share one app instance. QR scanning remains unavailable.
+
 - Advanced chords, compiled modified Simple shortcuts and multiplexer prefix
   shortcuts dispatch as one bounded native queue item with 50 ms between steps.
   The first step is immediate, literal text stays one write, and later input

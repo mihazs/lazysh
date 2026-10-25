@@ -15,6 +15,8 @@ export function subscribeAccess(listener: () => void) {
   return () => { listeners.delete(listener); };
 }
 export function accessSnapshot() { return snapshot; }
+/** Observe readiness without replacing an operation's originally captured lease. */
+export function isAccessReady() { return readyEpoch === snapshot.epoch && !!snapshot.status?.initialized && !snapshot.status.locked; }
 export function useAccessSnapshot() { return useSyncExternalStore(subscribeAccess, accessSnapshot, accessSnapshot); }
 
 export function parseAccessStatus(value: unknown): AccessStatus {

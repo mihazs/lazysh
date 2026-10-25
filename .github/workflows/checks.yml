@@ -139,6 +139,9 @@ jobs:
       - run: bun run build:android
       - run: ./gradlew :tauri-plugin-lazysh-vault:testDebugUnitTest --no-daemon
         working-directory: apps/client/src-tauri/gen/android
+      - name: Exercise bounded native Android deep-link ingress
+        run: ./gradlew :tauri-plugin-deep-link:testDebugUnitTest --no-daemon
+        working-directory: apps/client/src-tauri/gen/android
       - uses: actions/upload-artifact@v4
         with:
           name: lazysh-android-debug-arm64

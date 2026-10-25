@@ -3,6 +3,12 @@
   "productName": "lazysh",
   "version": "0.1.0",
   "identifier": "app.lazysh.client",
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["lazysh"] },
+      "mobile": [{ "scheme": ["lazysh"], "appLink": false }]
+    }
+  },
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://127.0.0.1:1420",
