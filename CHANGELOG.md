@@ -15,9 +15,14 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Device-local durable intent preserves the lock on cold launch when its protected
   proof is missing; cancelled enrollment restores off only after confirmed cleanup.
 
+- Opt-in Linux Parakeet inference acceptance with a licensed public speech
+  fixture, repeat-recognizer and model-file cleanup checks, and reported timing
+  and process peak memory. No client engine, automatic download or changed voice
+  default; device and platform acceptance remain pending.
+
 - Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
   model archive validation and native exception/ownership tests. It adds no
-  dictation UI or automatic model download; real-model and device validation
+  dictation UI or automatic model download; broader model and device validation
   remain pending, and Apple/Windows model loading fails closed pending native
   ACL validation.
 
@@ -82,6 +87,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   the standard home fallback. No Devin process or exporter is launched.
 
 ### Fixed
+
+- Linux Parakeet runtime startup now matches each pinned static ONNX Runtime
+  artifact's libstdc++ ABI. A real no-model ORT/regex regression catches the
+  invalid-free abort found by public-speech acceptance before model loading.
 
 - Retain bounded syscall excerpts from the actual concurrent companion hook test
   in Linux CI, without changing storage durability or its wait budget.
