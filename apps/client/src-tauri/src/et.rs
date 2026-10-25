@@ -196,6 +196,41 @@ fn startup_error(error: lazysh_et_transport::Error) -> SshError {
     SshError::new(kind, error)
 }
 
+async fn dispatch_input<F, Fut>(
+    mut data: crate::terminal_input::InputSequence,
+    lease: &crate::app_lock::AccessLease,
+    cancelled: &mut watch::Receiver<bool>,
+    losses: &mut watch::Receiver<Option<tokio::time::Instant>>,
+    mut send: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<u8>) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let paced = data.is_paced();
+    let lost = *losses.borrow_and_update();
+    // Discard queued chords as well as an in-flight remainder; ordinary input is unchanged.
+    if paced && lost.is_some_and(|when| data.admitted_at() <= when) {
+        return Ok(());
+    }
+    while !data.is_empty() && lease.check().is_ok() && !*cancelled.borrow() {
+        tokio::select! {biased;
+            _=lease.cancelled()=>break,
+            _=cancelled.changed()=>break,
+            _=losses.changed(),if paced=>break,
+            _=tokio::time::sleep_until(data.ready_at())=>{}
+        }
+        let count = data.bytes().len();
+        tokio::select! {biased;
+            _=lease.cancelled()=>break,
+            _=cancelled.changed()=>break,
+            _=losses.changed(),if paced=>break,
+            result=send(data.bytes().to_vec())=>{result?;data.advance(count);}
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run(
     bootstrap: Bootstrap,
@@ -217,13 +252,19 @@ async fn run(
             result = Client::connect(endpoint, bootstrap.secret, cols as u16, rows as u16) => result.map_err(startup_error)?,
         };
         let control = client.control(); let mut input_cancel = cancelled.clone();
+        let (losses,mut input_losses)=watch::channel(None);
         let mut input_job = tauri::async_runtime::spawn(async move {
+            let send_control=&control;
             loop {
+                if *input_cancel.borrow() {return Ok(());}
                 let value = tokio::select! { _ = input_cancel.changed() => return Ok(()), value = input.recv() => value };
                 let Some(value) = value else { return Ok(()) };
                 let result = match value {
                     Input::Data(data, _) if data.is_empty() => continue,
-                    Input::Data(data, lease) => { if lease.check().is_err() { continue; } tokio::select! { biased; _ = lease.cancelled() => continue, _ = input_cancel.changed() => return Ok(()), result = control.send(data.into_bytes()) => result } },
+                    Input::Data(data, lease) => {
+                        dispatch_input(data,&lease,&mut input_cancel,&mut input_losses,|bytes|async move{send_control.send(bytes).await.map_err(|error|SshError::new("et",error))}).await?;
+                        continue;
+                    },
                     Input::Resize(cols, rows, lease) => { if lease.check().is_err() { continue; } tokio::select! { biased; _ = lease.cancelled() => continue, _ = input_cancel.changed() => return Ok(()), result = control.resize(cols as u16, rows as u16) => result } },
                 };
                 result.map_err(|error| SshError::new("et", error))?;
@@ -254,7 +295,8 @@ async fn run(
                     result = &mut reconnect_job => return result.map_err(|_| SshError::new("et", "ET reconnect worker ended unexpectedly"))?,
                     event = client.next_event() => match event {
                         Some(Event::Output(bytes)) => { tokio::select! { _ = cancelled.changed() => return Ok(()), result = output.send(bytes) => if result.is_err() { return Ok(()); } } },
-                        Some(Event::Disconnected) => { reconnect.send_replace(true); },
+                        // Reconnected/duplicate connected updates never invalidate a fresh chord.
+                        Some(Event::Disconnected) => { losses.send_replace(Some(tokio::time::Instant::now())); reconnect.send_replace(true); },
                         Some(Event::Reconnected) => { reconnect.send_replace(false); },
                         Some(Event::Failed(error)) => return Err(SshError::new("et", error)),
                         None => return Ok(()),
@@ -283,6 +325,103 @@ pub(crate) mod tests {
             .unwrap()
     }
     use super::*;
+    #[tokio::test(start_paused = true)]
+    async fn paced_input_does_not_resume_after_connection_loss_and_new_input_can_start_fresh() {
+        let (cancel, mut cancelled) = watch::channel(false);
+        let (loss, mut losses) = watch::channel(None);
+        let (sent, mut received) = mpsc::unbounded_channel();
+        let mut input = crate::terminal_input::InputSequence::parse(
+            String::new(),
+            Some(vec!["A".into(), "B".into()]),
+        )
+        .unwrap();
+        let queued = crate::terminal_input::InputSequence::parse(
+            String::new(),
+            Some(vec!["old1".into(), "old2".into()]),
+        )
+        .unwrap();
+        let lease = access_lease();
+        let sender = sent.clone();
+        let first_dispatch = tokio::time::Instant::now();
+        let task = tokio::spawn(async move {
+            dispatch_input(input, &lease, &mut cancelled, &mut losses, |bytes| {
+                sender.send(bytes).unwrap();
+                std::future::ready(Ok(()))
+            })
+            .await
+            .unwrap();
+        });
+        assert_eq!(received.recv().await.unwrap(), b"A");
+        assert_eq!(tokio::time::Instant::now(), first_dispatch);
+        loss.send_replace(Some(tokio::time::Instant::now()));
+        task.await.unwrap();
+        tokio::time::advance(crate::terminal_input::STEP_DELAY).await;
+        assert!(received.try_recv().is_err());
+        let mut cancelled = cancel.subscribe();
+        let mut losses = loss.subscribe();
+        dispatch_input(
+            queued,
+            &access_lease(),
+            &mut cancelled,
+            &mut losses,
+            |bytes| {
+                sent.send(bytes).unwrap();
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            received.try_recv().is_err(),
+            "queued pre-loss chord must also be discarded"
+        );
+        // Reconnection does not change the loss marker. New input uses the new connection.
+        input = crate::terminal_input::InputSequence::parse(
+            String::new(),
+            Some(vec!["fresh1".into(), "fresh2".into()]),
+        )
+        .unwrap();
+        let fresh_dispatch = tokio::time::Instant::now();
+        dispatch_input(
+            input,
+            &access_lease(),
+            &mut cancelled,
+            &mut losses,
+            |bytes| {
+                sent.send(bytes).unwrap();
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            tokio::time::Instant::now() - fresh_dispatch,
+            crate::terminal_input::STEP_DELAY
+        );
+        assert_eq!(received.try_recv().unwrap(), b"fresh1");
+        assert_eq!(received.try_recv().unwrap(), b"fresh2");
+    }
+    #[tokio::test(start_paused = true)]
+    async fn ordinary_input_retains_its_existing_connection_loss_behavior() {
+        let (_cancel, mut cancelled) = watch::channel(false);
+        let (loss, mut losses) = watch::channel(None);
+        let input = crate::terminal_input::InputSequence::parse("literal".into(), None).unwrap();
+        loss.send_replace(Some(tokio::time::Instant::now()));
+        let mut sent = Vec::new();
+        dispatch_input(
+            input,
+            &access_lease(),
+            &mut cancelled,
+            &mut losses,
+            |bytes| {
+                sent.push(bytes);
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(sent, vec![b"literal".to_vec()]);
+    }
     #[test]
     fn startup_errors_keep_authentication_and_protocol_distinct_from_unreachable_transport() {
         use lazysh_et_transport::Error;
@@ -483,7 +622,11 @@ pub(crate) mod tests {
             access_lease(),
             app.state(),
             id.clone(),
-            "printf '\\n__ET_NATIVE_世界__\\n'; stty size\r".into(),
+            String::new(),
+            Some(vec![
+                "printf '\\n__ET_NATIVE_世界__\\n'; stty size".into(),
+                "\r".into(),
+            ]),
         )
         .await
         .unwrap()
@@ -509,11 +652,17 @@ pub(crate) mod tests {
         })
         .await
         .unwrap();
-        crate::ssh::write_stdin(access_lease(), app.state(), id.clone(), "exit\r".into())
-            .await
-            .unwrap()
-            .into_inner()
-            .unwrap();
+        crate::ssh::write_stdin(
+            access_lease(),
+            app.state(),
+            id.clone(),
+            "exit\r".into(),
+            None,
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
         crate::ssh::disconnect(app.state(), id.clone())
             .await
             .unwrap();
