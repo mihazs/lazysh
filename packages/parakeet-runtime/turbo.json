@@ -1,0 +1,75 @@
+{
+  "extends": [
+    "//"
+  ],
+  "tasks": {
+    "check:rust": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CMAKE_BUILD_PARALLEL_LEVEL",
+        "CMAKE_TOOLCHAIN_FILE",
+        "SHERPA_ONNXRUNTIME_INCLUDE_DIR",
+        "SHERPA_ONNXRUNTIME_LIB_DIR",
+        "CC",
+        "CXX",
+        "AR",
+        "SDKROOT",
+        "DEVELOPER_DIR",
+        "ANDROID_NDK_HOME",
+        "NDK_HOME"
+      ]
+    },
+    "test:rust": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CMAKE_BUILD_PARALLEL_LEVEL",
+        "CMAKE_TOOLCHAIN_FILE",
+        "SHERPA_ONNXRUNTIME_INCLUDE_DIR",
+        "SHERPA_ONNXRUNTIME_LIB_DIR",
+        "CC",
+        "CXX",
+        "AR",
+        "SDKROOT",
+        "DEVELOPER_DIR",
+        "ANDROID_NDK_HOME",
+        "NDK_HOME"
+      ]
+    },
+    "test:parakeet-native": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CMAKE_BUILD_PARALLEL_LEVEL",
+        "CMAKE_TOOLCHAIN_FILE",
+        "SHERPA_ONNXRUNTIME_INCLUDE_DIR",
+        "SHERPA_ONNXRUNTIME_LIB_DIR",
+        "CC",
+        "CXX",
+        "AR",
+        "SDKROOT",
+        "DEVELOPER_DIR",
+        "ANDROID_NDK_HOME",
+        "NDK_HOME"
+      ]
+    },
+    "lint": {
+      "cache": false,
+      "passThroughEnv": [
+        "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
+        "CMAKE_BUILD_PARALLEL_LEVEL",
+        "CMAKE_TOOLCHAIN_FILE",
+        "SHERPA_ONNXRUNTIME_INCLUDE_DIR",
+        "SHERPA_ONNXRUNTIME_LIB_DIR",
+        "CC",
+        "CXX",
+        "AR",
+        "SDKROOT",
+        "DEVELOPER_DIR",
+        "ANDROID_NDK_HOME",
+        "NDK_HOME"
+      ]
+    }
+  }
+}

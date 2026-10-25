@@ -65,6 +65,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
+      - name: Check standalone Parakeet runtime and native ownership boundary
+        run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - run: bun run build:native
       - run: bun run test:mosh
 

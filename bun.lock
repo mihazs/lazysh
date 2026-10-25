@@ -76,6 +76,10 @@
       "name": "@lazysh/mosh-transport",
       "version": "0.1.0",
     },
+    "packages/parakeet-runtime": {
+      "name": "@lazysh/parakeet-runtime",
+      "version": "0.1.0",
+    },
     "packages/push-registration": {
       "name": "@lazysh/push-registration",
       "version": "0.1.0",
@@ -219,6 +223,8 @@
     "@lazysh/et-transport": ["@lazysh/et-transport@workspace:packages/et-transport"],
 
     "@lazysh/mosh-transport": ["@lazysh/mosh-transport@workspace:packages/mosh-transport"],
+
+    "@lazysh/parakeet-runtime": ["@lazysh/parakeet-runtime@workspace:packages/parakeet-runtime"],
 
     "@lazysh/push-registration": ["@lazysh/push-registration@workspace:packages/push-registration"],
 

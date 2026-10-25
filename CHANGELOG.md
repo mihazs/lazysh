@@ -7,6 +7,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Standalone Parakeet CPU runtime foundation with pinned native sources, sealed
+  model archive validation and native exception/ownership tests. It adds no
+  dictation UI or automatic model download; real-model and device validation
+  remain pending, and Apple/Windows model loading fails closed pending native
+  ACL validation.
+
 - Reviewed whole-app custom themes with bounded JSON/share-code import and export,
   light/dark metadata, contrast-safe app chrome, and settings sync validation.
   Existing bundled choices and terminal-only palettes keep their behavior until
