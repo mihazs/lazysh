@@ -530,13 +530,32 @@ mod tests {
                 31
             );
         }
+        // Queue more than one native poll's 64-datagram budget before recovery.
+        // Each excess state must still be rejected by the retained-state bound.
+        for state in 101..=200 {
+            socket
+                .send_to(&packet(true, 0, state, 0, &host_bytes("EXCESS")), address)
+                .unwrap();
+        }
         socket
             .send_to(
-                &packet(true, 31, 101, 31, &host_bytes("\x1b[H\x1b[2JRECOVERED")),
+                &packet(true, 31, 201, 31, &host_bytes("\x1b[H\x1b[2JRECOVERED")),
                 address,
             )
             .unwrap();
-        assert!(String::from_utf8_lossy(&client.poll().unwrap().bytes).contains("RECOVERED"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        output.clear();
+        loop {
+            output.extend(client.poll().unwrap().bytes);
+            if String::from_utf8_lossy(&output).contains("RECOVERED") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "authenticated recovery must arrive after draining the bounded state flood"
+            );
+            client.wait(Duration::from_millis(10)).unwrap();
+        }
     }
     #[test]
     fn invalid_key_endpoint_dimensions_and_backlog_are_rejected() {
