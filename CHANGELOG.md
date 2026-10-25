@@ -7,6 +7,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Device-local iOS Home Screen icon selection with the original Default and
+  new Amber artwork, UIKit support checks and actual selection readback. The
+  default icon is unchanged; desktop, Android and browser builds report this
+  feature unavailable. Icon selection does not sync or affect terminal themes.
+
 - Claude transcript tool results retain explicit recorded error flags in paging
   and branch-follow views. Failed results show a recorded-error label with the
   original tool ID and output; no live status or retry action is inferred.
