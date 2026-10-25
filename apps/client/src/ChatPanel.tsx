@@ -10,6 +10,7 @@ type Block = {
   id?: string;
   name?: string;
   status?: 'pending' | 'in_progress' | 'completed' | 'failed';
+  isError?: boolean;
 };
 type Message = {
   id: string;
@@ -107,6 +108,8 @@ export function parseTranscript(value: unknown): Page {
         || !['pending','in_progress','completed','failed'].includes(block.status)
         || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
         throw new Error('Invalid recorded tool status.');
+      if (block.isError !== undefined && (page.agent !== 'claude' || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
+        throw new Error('Invalid recorded tool error.');
     }
     if (
       message.usage &&
@@ -473,6 +476,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
                   <summary>
                     {block.name || block.type.replaceAll("_", " ")}
                     {block.status && ` · Recorded status: ${block.status} · Tool ID: ${block.id}`}
+                    {block.isError === true && ` · Recorded tool error${block.id ? ` · Tool ID: ${block.id}` : ''}`}
                   </summary>
                   <pre>
                     {block.text || "View this content in the terminal."}

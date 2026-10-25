@@ -6,6 +6,7 @@
     "main"
   ],
   "permissions": [
+    "allow-theme-link-status", "allow-theme-link-read", "allow-theme-link-ack",
     "allow-app-lock-status", "allow-app-lock-configure", "allow-app-lock-ready",
     "allow-local-capability", "allow-local-connect", "allow-local-write", "allow-local-resize", "allow-local-ack", "allow-local-disconnect",
     "allow-share-thumbnail", "allow-share-thumbnail-cancel",
@@ -116,6 +117,8 @@
     "allow-agent-transcript",
     "allow-agent-transcripts",
     "allow-agent-usage",
+    "allow-app-icon-status",
+    "allow-set-app-icon",
     "allow-apple-status-capability",
     "allow-apple-status-configure",
     "allow-apple-status-publish",

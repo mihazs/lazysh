@@ -1,7 +1,10 @@
 [workspace]
 members = ["apps/client/src-tauri", "apps/agent", "apps/share-service", "apps/transcription-service", "packages/credential-vault", "packages/mosh-transport", "packages/et-transport", "packages/apple-speech", "packages/apple-status", "packages/push-registration", "packages/parakeet-runtime"]
 resolver = "2"
-exclude = ["packages/portable-pty-vendor"]
+exclude = ["packages/portable-pty-vendor", "packages/deep-link-vendor"]
+
+[patch.crates-io]
+tauri-plugin-deep-link = { path = "packages/deep-link-vendor" }
 
 [workspace.package]
 license = "GPL-3.0-or-later"

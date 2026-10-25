@@ -11,6 +11,7 @@ private struct OpenReviewArgs: Decodable { let subscriptionId: String }
 
 class AppleStatusPlugin: Plugin, WCSessionDelegate {
   // Native operations serialize on main, including final delivery and disabling a subscription.
+  lazy var icons = makeAppIconController()
   private var cursor = StatusCursor()
   private var latest: StatusSnapshot?
   private var review: Channel?

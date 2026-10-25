@@ -12,6 +12,10 @@ import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import androidx.lifecycle.Lifecycle
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.accessibility.AccessibilityNodeInfo
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
@@ -65,10 +69,67 @@ internal object NativeActivityFixture {
         }
         return result
     }
-    fun activeWindowPackage(): String {
+    private fun windowField(value: CharSequence?): String {
+        if (value == null) return "unavailable"
+        if (value.length <= 128) return value.toString()
+        val end = if (Character.isHighSurrogate(value[126])) 126 else 127
+        return value.subSequence(0, end).toString() + "…"
+    }
+
+    private fun rootIdentity(root: AccessibilityNodeInfo?): JSONObject {
+        val result = JSONObject()
+        if (root == null) return result.put("unavailable", true)
+        try {
+            result.put("package", windowField(root.packageName)).put("class", windowField(root.className))
+        } catch (_: Exception) { result.put("unavailable", true) }
+        finally {
+            try { root.recycle() } catch (_: Exception) { result.put("recycleUnavailable", true) }
+        }
+        return result
+    }
+
+    // Failure-only window metadata: no node text, descendants, DOM or input actions.
+    fun windowDiagnostics(): String {
         return try {
-            val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
-            try { root?.packageName?.toString() ?: "unavailable" } finally { root?.recycle() }
+            val result = JSONObject()
+            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            val info = automation.serviceInfo ?: return "unavailable"
+            val originalFlags = info.flags
+            val inspectionFlag = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            val restore = originalFlags and inspectionFlag == 0
+            try {
+                if (restore) {
+                    info.flags = originalFlags or inspectionFlag
+                    automation.serviceInfo = info
+                }
+                try { result.put("activeRoot", rootIdentity(automation.rootInActiveWindow)) }
+                catch (_: Exception) { result.put("activeRootUnavailable", true) }
+                val windows = automation.windows
+                try {
+                    val identities = JSONArray()
+                    for (window in windows.take(8)) {
+                        val identity = JSONObject()
+                        try {
+                            identity.put("type", window.type).put("title", windowField(window.title))
+                                .put("focused", window.isFocused).put("active", window.isActive)
+                                .put("root", rootIdentity(window.root))
+                        } catch (_: Exception) { identity.put("unavailable", true) }
+                        identities.put(identity)
+                    }
+                    result.put("windows", identities).put("truncated", windows.size > 8)
+                } finally {
+                    for (window in windows) {
+                        try { window.recycle() } catch (_: Exception) { result.put("recycleUnavailable", true) }
+                    }
+                }
+            } catch (_: Exception) { result.put("unavailable", true) }
+            finally {
+                if (restore) {
+                    try { info.flags = originalFlags; automation.serviceInfo = info }
+                    catch (_: Exception) { result.put("restorationUnavailable", true) }
+                }
+            }
+            result.toString()
         } catch (_: Exception) { "unavailable" }
     }
 }

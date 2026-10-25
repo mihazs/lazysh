@@ -619,6 +619,43 @@ pub(crate) struct Session {
     validate_size: fn(u32, u32) -> Result<()>,
     pub(crate) tmux: StdMutex<Option<crate::tmux_jump::Binding>>,
 }
+impl Session {
+    fn new(
+        handle: Arc<SshHandle>,
+        input: mpsc::Sender<Input>,
+        cancel: watch::Sender<bool>,
+        creation: AccessLease,
+        validate_size: fn(u32, u32) -> Result<()>,
+    ) -> Self {
+        Self {
+            handle,
+            input,
+            cancel,
+            validate_size,
+            tmux: StdMutex::new(None),
+            output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
+            output_inflight: StdMutex::new(0),
+            renderer_gone: watch::channel(false).0,
+            finished: watch::channel(false).0,
+            access: creation.state(),
+            creation,
+            adopted: std::sync::atomic::AtomicBool::new(false),
+            adoption: tokio::sync::Notify::new(),
+        }
+    }
+}
+
+async fn register_terminal(state: &AppState, session: &Arc<Session>) -> Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    {
+        let mut active = state.sessions.lock().await;
+        session
+            .creation
+            .with_current(|| active.insert(id.clone(), session.clone()))?;
+    }
+    watch_adoption(state, &id, session);
+    Ok(id)
+}
 async fn retire_session(
     active: &Mutex<HashMap<String, Arc<Session>>>,
     retiring: &Mutex<HashMap<String, Arc<Session>>>,
@@ -1367,29 +1404,8 @@ async fn spawn_terminal(
 ) -> Result<Connected> {
     let (input, mut rx) = mpsc::channel(32);
     let (cancel, mut cancellation) = watch::channel(false);
-    let session = Arc::new(Session {
-        handle,
-        input,
-        output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
-        output_inflight: StdMutex::new(0),
-        renderer_gone: watch::channel(false).0,
-        finished: watch::channel(false).0,
-        access: creation.state(),
-        creation,
-        adopted: std::sync::atomic::AtomicBool::new(false),
-        adoption: tokio::sync::Notify::new(),
-        cancel,
-        validate_size: check_size,
-        tmux: StdMutex::new(None),
-    });
-    let id = uuid::Uuid::new_v4().to_string();
-    {
-        let mut active = state.sessions.lock().await;
-        session
-            .creation
-            .with_current(|| active.insert(id.clone(), session.clone()))?;
-    }
-    watch_adoption(state, &id, &session);
+    let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
+    let id = register_terminal(state, &session).await?;
     let sessions = state.sessions.clone();
     let retiring = state.retiring.clone();
     let task_id = id.clone();
@@ -1521,33 +1537,18 @@ where
 {
     let (input, input_rx) = mpsc::channel(32);
     let (cancel, cancellation) = watch::channel(false);
-    let session = Arc::new(Session {
-        handle: parent.handle.clone(),
+    let session = Arc::new(Session::new(
+        parent.handle.clone(),
         input,
         cancel,
-        validate_size,
-        tmux: StdMutex::new(None),
-        output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
-        output_inflight: StdMutex::new(0),
-        renderer_gone: watch::channel(false).0,
-        finished: watch::channel(false).0,
-        access: creation.state(),
         creation,
-        adopted: std::sync::atomic::AtomicBool::new(false),
-        adoption: tokio::sync::Notify::new(),
-    });
+        validate_size,
+    ));
     let mut pending = PendingTerminal {
         session: session.clone(),
         armed: true,
     };
-    let id = uuid::Uuid::new_v4().to_string();
-    {
-        let mut active = state.sessions.lock().await;
-        session
-            .creation
-            .with_current(|| active.insert(id.clone(), session.clone()))?;
-    }
-    watch_adoption(state, &id, &session);
+    let id = register_terminal(state, &session).await?;
     let (output, mut output_rx) = mpsc::channel(1);
     let (ready, response) = tokio::sync::oneshot::channel();
     let initial_cancel = parent.cancel.subscribe();
@@ -2824,6 +2825,19 @@ mod tests {
     async fn stalled_mosh_bootstrap_closes_its_channel_and_preserves_ssh_control() {
         assert_stalled_bootstrap_cleanup(false).await;
     }
+    fn adopted_fixture_session(
+        handle: Arc<SshHandle>,
+        input: mpsc::Sender<Input>,
+        cancel: watch::Sender<bool>,
+    ) -> Session {
+        let mut session = Session::new(handle, input, cancel, access_lease(), check_size);
+        session.access = AccessState::disabled();
+        session
+            .adopted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        session.finished.send_replace(true);
+        session
+    }
     async fn assert_stalled_bootstrap_cleanup(et: bool) {
         let (host, server, task) = server(false).await;
         let dir = tempfile::tempdir().unwrap();
@@ -2835,21 +2849,7 @@ mod tests {
         );
         let (input, _) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
-        let session = Arc::new(Session {
-            handle: handle.clone(),
-            input,
-            cancel,
-            output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
-            output_inflight: StdMutex::new(0),
-            renderer_gone: watch::channel(false).0,
-            finished: watch::channel(true).0,
-            access: AccessState::disabled(),
-            creation: access_lease(),
-            adopted: std::sync::atomic::AtomicBool::new(true),
-            adoption: tokio::sync::Notify::new(),
-            validate_size: check_size,
-            tmux: StdMutex::new(None),
-        });
+        let session = Arc::new(adopted_fixture_session(handle.clone(), input, cancel));
         let bootstrap = tokio::spawn(async move {
             if et {
                 crate::et::bootstrap(&session, crate::et::Options::default(), 80, 24)
@@ -2932,21 +2932,7 @@ mod tests {
         );
         let (input, _) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
-        let session = Session {
-            handle,
-            input,
-            cancel,
-            output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
-            output_inflight: StdMutex::new(0),
-            renderer_gone: watch::channel(false).0,
-            finished: watch::channel(true).0,
-            access: AccessState::disabled(),
-            creation: access_lease(),
-            adopted: std::sync::atomic::AtomicBool::new(true),
-            adoption: tokio::sync::Notify::new(),
-            validate_size: check_size,
-            tmux: StdMutex::new(None),
-        };
+        let session = adopted_fixture_session(handle, input, cancel);
         let error = crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
             .await
             .err()
@@ -3028,21 +3014,7 @@ mod tests {
         );
         let (input, _) = mpsc::channel(32);
         let (cancel, _) = watch::channel(false);
-        let session = Arc::new(Session {
-            handle,
-            input,
-            cancel,
-            validate_size: check_size,
-            tmux: StdMutex::new(None),
-            output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
-            output_inflight: StdMutex::new(0),
-            renderer_gone: watch::channel(false).0,
-            finished: watch::channel(true).0,
-            access: AccessState::disabled(),
-            creation: access_lease(),
-            adopted: std::sync::atomic::AtomicBool::new(true),
-            adoption: tokio::sync::Notify::new(),
-        });
+        let session = Arc::new(adopted_fixture_session(handle, input, cancel));
         let received = Arc::new(AtomicUsize::new(0));
         let observed = received.clone();
         let events = Channel::new(move |body| {
@@ -4462,21 +4434,8 @@ mod tests {
         ) -> (String, Arc<Session>) {
             let (input, _) = mpsc::channel(1);
             let (cancel, _) = watch::channel(false);
-            let session = Arc::new(Session {
-                handle,
-                access: creation.state(),
-                creation,
-                adopted: std::sync::atomic::AtomicBool::new(false),
-                adoption: tokio::sync::Notify::new(),
-                input,
-                cancel,
-                output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
-                output_inflight: StdMutex::new(0),
-                renderer_gone: watch::channel(false).0,
-                finished: watch::channel(true).0,
-                validate_size: check_size,
-                tmux: StdMutex::new(None),
-            });
+            let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
+            session.finished.send_replace(true);
             let id = uuid::Uuid::new_v4().to_string();
             state
                 .sessions

@@ -8,6 +8,7 @@ import {
 } from "react";
 import { bindProtectedApi, captureAccess, useProtectedApi, useProtectedInvoke } from './access';
 import AccessShell, { type SessionRegistry } from './AccessShell';
+import ThemeLinkPanel from './ThemeLinkPanel';
 import AccessPanel from './AccessPanel';
 import { forgetSession, PendingSessions, retainSession } from './pendingSessions';
 import {
@@ -1072,6 +1073,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [jumpSession, setJumpSession] = useState<string | null>(null);
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
+  const [themeLinkTarget,setThemeLinkTarget] = useState<HTMLDivElement|null>(null);
   const [sync, setSync] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [mobileTools, setMobileTools] = useState(false);
@@ -1616,6 +1618,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         />
       )}
       <main className="workspace">
+        {native && <ThemeLinkPanel target={themeLinkTarget} />}
         <header className="workspace-header">
           <button
             className="icon-button mobile-menu"
@@ -2030,6 +2033,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       )}
       {preferences && (
         <Dialog title="Preferences" close={() => setPreferences(false)}>
+          <div ref={setThemeLinkTarget} />
           <PreferencesPanel />
           <AccessPanel />
           <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>Remote push settings</button>

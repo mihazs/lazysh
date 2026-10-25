@@ -9,6 +9,10 @@ use std::{
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
 
+fn fixture_key() -> russh::keys::PrivateKey {
+    russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()
+}
+
 struct Process(Child);
 impl Drop for Process {
     fn drop(&mut self) {
@@ -25,12 +29,9 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let host_key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
-        let user_key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
+        let state = AppState::new(dir.path().join("config")).unwrap();
+        let host_key = fixture_key();
+        let user_key = fixture_key();
         let host_file = dir.path().join("host_key");
         fs::write(
             &host_file,
@@ -88,7 +89,6 @@ impl Fixture {
         })
         .await
         .unwrap();
-        let state = AppState::new(dir.path().join("config")).unwrap();
         let host = Host {
             transport: None,
             mosh: None,

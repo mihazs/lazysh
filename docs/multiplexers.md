@@ -67,9 +67,11 @@ three-second deadlines; each response/notification allowance is at most 1 MiB,
 each line 64 KiB, and each command at most 4096 rows. Labels are delimiter-quoted,
 with control characters displayed as `?`; labels never become commands. Older
 tmux behavior is accepted only when binding and protocol validation succeed.
-Local native acceptance uses tmux 3.8; the Linux CI task also exercises its actual
-distro tmux. tmux 3.4/3.5a guard compatibility was source-checked, and runtime CI
-results must be recorded separately. Complete kernel PID+TTY reuse and a malicious
+Local native acceptance uses upstream tmux 3.4 and tmux 3.8; the Linux CI task also
+exercises its actual distro tmux. The retained parser accepts the official typed
+session/window-change notification; unknown events still retire navigation.
+tmux 3.5a guard compatibility remains source-checked only, and runtime CI results
+must be recorded separately. Complete kernel PID+TTY reuse and a malicious
 same-UID server are outside this identity proof. Physical device lifecycle and
 Herdr navigation remain separate acceptance work under issue #7.
 
