@@ -14,6 +14,80 @@ function contrast(foreground:string,background:string) {
   return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
 }
 
+test('light indexed palette renders both roles and inverse status lines without changing RGB or base ANSI',async({page},info)=>{
+  await mount(page);
+  await page.evaluate(()=>window.themeRenderer.write(
+    '\x1b[38;5;250;48;5;237mX\x1b[0m\r\n'+
+    '\x1b[7;38;5;237;48;5;250mY\x1b[0m\r\n'+
+    '\x1b[38;5;231mW\x1b[0m\r\n\x1b[38;5;226mU\x1b[0m\r\n'+
+    '\x1b[38;5;232mL\x1b[0m\r\n\x1b[38;5;255mH\x1b[0m\r\n'+
+    '\x1b[31mA\x1b[0m\r\n\x1b[38;2;188;188;188;48;2;58;58;58mT\x1b[0m\r\n'+
+    '\x1b[7mV\x1b[0m\r\n\x1b[38;5;9mE\x1b[0m\r\n'+
+    '\x1b[38;5;16mM\x1b[38;5;21mN\x1b[0m\r\n'));
+  const original=await page.evaluate(()=>window.themeRenderer.buffer());
+  const controls=await page.evaluate(()=>['A','T','E','M','N'].map(text=>window.themeRenderer.sample(text)));
+  await page.evaluate(()=>window.themeRenderer.light());
+  for(const text of ['X','Y']) {
+    const sample=await page.evaluate(text=>window.themeRenderer.sample(text),text);
+    expect(sample).toMatchObject({foreground:rgb('#3a3a3a'),background:rgb('#bcbcbc')});
+    expect(contrast(sample.foreground,sample.background)).toBeGreaterThan(4.5);
+  }
+  for(const [text,color] of [['W','#999999'],['U','#999900'],['L','#eeeeee'],['H','#080808']])expect(await page.evaluate(text=>window.themeRenderer.sample(text).foreground,text)).toBe(rgb(color));
+  expect(await page.evaluate(()=>['A','T','E','M','N'].map(text=>window.themeRenderer.sample(text)))).toEqual(controls);
+  expect(await page.evaluate(()=>window.themeRenderer.sample('V'))).toMatchObject({foreground:rgb('#fafafa'),background:rgb('#111111')});
+  expect(await page.evaluate(()=>window.themeRenderer.buffer())).toEqual(original);
+  await page.screenshot({path:info.outputPath('light-indexed-inverse.png')});
+  await page.evaluate(()=>window.themeRenderer.theme());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('X'))).toMatchObject({foreground:rgb('#bcbcbc'),background:rgb('#3a3a3a')});
+  await page.evaluate(()=>window.themeRenderer.paper());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('X').foreground)).toBe(rgb('#3a3a3a'));
+  await page.evaluate(()=>window.themeRenderer.legacy());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('X').foreground)).toBe(rgb('#bcbcbc'));
+  await page.evaluate(()=>window.themeRenderer.dispose());
+});
+
+test('light palette respects selection and decoration overrides alongside bold, dim and inverse',async({page})=>{
+  await mount(page);
+  await page.evaluate(()=>window.themeRenderer.light('#336699'));
+  await page.evaluate(()=>window.themeRenderer.write('\x1b[1;2;38;5;250;48;5;237mD\x1b[0m\r\n\x1b[1;7mABC\x1b[0m\r\n'));
+  expect(await page.evaluate(()=>window.themeRenderer.sample('D'))).toMatchObject({foreground:'rgba(58, 58, 58, 0.5)',background:rgb('#bcbcbc')});
+  expect(await page.evaluate(()=>window.themeRenderer.sample('ABC'))).toMatchObject({foreground:rgb('#fafafa'),background:rgb('#336699')});
+  await page.evaluate(()=>window.themeRenderer.select(0,0,1));
+  expect(await page.evaluate(()=>window.themeRenderer.sample('D'))).toMatchObject({foreground:rgb('#ffeecc'),background:rgb('#445566')});
+  await page.evaluate(()=>window.themeRenderer.decorate(0,1,'#abcdef','#234567'));
+  await page.evaluate(()=>window.themeRenderer.decorate(1,1,undefined,'#654321'));
+  await page.evaluate(()=>window.themeRenderer.select(0,1,3));
+  expect(await page.evaluate(()=>window.themeRenderer.sample('A'))).toMatchObject({foreground:rgb('#abcdef'),background:rgb('#234567')});
+  expect(await page.evaluate(()=>window.themeRenderer.sample('B').background)).toBe(rgb('#654321'));
+  expect(await page.evaluate(()=>window.themeRenderer.sample('C'))).toMatchObject({foreground:rgb('#ffeecc'),background:rgb('#445566')});
+  await page.evaluate(()=>window.themeRenderer.clearSelection());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('C'))).toMatchObject({foreground:rgb('#fafafa'),background:rgb('#336699')});
+  await page.evaluate(()=>window.themeRenderer.dispose());
+});
+
+test('indexed light changes redraw scrollback and alternate buffers and SGR reset restores defaults',async({page})=>{
+  await mount(page);
+  await page.evaluate(()=>window.themeRenderer.write('\x1b[38;5;250mhistory\x1b[0m\r\n'+Array.from({length:18},(_,i)=>`later${i}\r\n`).join('')));
+  await page.evaluate(()=>window.themeRenderer.light());
+  await page.evaluate(()=>window.themeRenderer.scrollTop());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('history').foreground)).toBe(rgb('#3a3a3a'));
+  const history=await page.evaluate(()=>window.themeRenderer.buffer());
+  await page.evaluate(()=>window.themeRenderer.theme());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('history').foreground)).toBe(rgb('#bcbcbc'));
+  expect(await page.evaluate(()=>window.themeRenderer.buffer())).toEqual(history);
+  await page.evaluate(()=>window.themeRenderer.write('\x1b[?1049h\x1b[H\x1b[38;5;250mQ\x1b[0mR\r\n'));
+  await page.evaluate(()=>window.themeRenderer.light());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('Q').foreground)).toBe(rgb('#3a3a3a'));
+  expect(await page.evaluate(()=>window.themeRenderer.sample('R').foreground)).toBe(rgb('#111111'));
+  await page.evaluate(()=>window.themeRenderer.theme());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('Q').foreground)).toBe(rgb('#bcbcbc'));
+  expect(await page.evaluate(()=>window.themeRenderer.sample('R').foreground)).toBe(rgb('#dddddd'));
+  await page.evaluate(()=>window.themeRenderer.write('\x1b[?1049l'));
+  await page.evaluate(()=>window.themeRenderer.scrollTop());
+  expect(await page.evaluate(()=>window.themeRenderer.sample('history').foreground)).toBe(rgb('#bcbcbc'));
+  await page.evaluate(()=>window.themeRenderer.dispose());
+});
+
 
 test('real DOM renderer keeps absent, bright and hex bold distinct without changing buffer attributes',async({page},info)=>{
   await mount(page);
