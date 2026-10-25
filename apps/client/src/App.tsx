@@ -76,6 +76,7 @@ const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
 const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
 const AppleStatusPanel = lazy(() => import('./AppleStatusPanel'));
+const TmuxJumpPanel = lazy(() => import('./TmuxJumpPanel'));
 
 function disposeTerminal(session?: LiveSession) {
   if (!session || session.disposed) return;
@@ -1068,6 +1069,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
   const [switcher, setSwitcher] = useState(false);
+  const [jumpSession, setJumpSession] = useState<string | null>(null);
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
   const [sync, setSync] = useState(false);
@@ -1104,6 +1106,18 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return api.write(live.id,data);
   }
   const active = sessions.find((session) => session.id === activeId);
+  useEffect(() => { setJumpSession(null); }, [activeId]);
+  function tmuxJumped(sessionId: string, snapshot: import('./bridge').TmuxJumpSnapshot) {
+    if (!mounted.current || currentView.current.activeId !== sessionId) return;
+    const session = sessionsRef.current.find(item => item.id === sessionId && item.connected && item.attached?.kind === 'tmux');
+    const destination = snapshot.sessions.find(item => item.id === snapshot.current.sessionId);
+    if (!session?.attached || !destination) return;
+    const suffix = ` / ${session.attached.name}`;
+    if (session.name.endsWith(suffix)) session.name = `${session.name.slice(0, -suffix.length)} / ${destination.name}`;
+    session.attached = {kind:'tmux', name:destination.name};
+    persistWorkspace(sessionsRef.current);
+    setSessions([...sessionsRef.current]);
+  }
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -1776,6 +1790,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   </button>
                 ))}
               </nav>
+              {active.connected && !active.local && active.attached?.kind === 'tmux' && <button className="subtle-button" onClick={() => setJumpSession(active.id)}>Jump To</button>}
               <button
                 className="icon-button disconnect-button"
                 aria-label={`End ${active.name} connection`}
@@ -2022,6 +2037,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       )}
       {pushSettings && <Dialog title="Remote push settings" close={()=>setPushSettings(false)}>
         <Suspense fallback={<p>Loading push settings…</p>}><PushSettingsPanel /></Suspense>
+      </Dialog>}
+      {jumpSession && active?.id === jumpSession && active.connected && active.attached?.kind === 'tmux' && <Dialog title="Jump To" close={() => setJumpSession(null)}>
+        <Suspense fallback={<p role="status">Reading tmux destinations…</p>}><TmuxJumpPanel key={jumpSession} sessionId={jumpSession} onClose={() => setJumpSession(null)} onJump={snapshot => tmuxJumped(jumpSession, snapshot)} /></Suspense>
       </Dialog>}
       {switcher && <Dialog title="Switch terminal session" close={()=>setSwitcher(false)}>
         <div className="session-switcher" data-layout={sessionLayout}>

@@ -48,6 +48,11 @@ export type Credentials = {
   passphrase?: string;
 };
 export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
+export type TmuxJumpSnapshot = {
+  generation: string;
+  current: { sessionId: string; windowId: string };
+  sessions: { id: string; name: string; windows: { id: string; index: number; name: string }[] }[];
+};
 
 export const native = isTauri();
 function remoteInvoke<T>(command:string, args:{sessionId:string}&Record<string,unknown>):Promise<T> {
@@ -119,6 +124,9 @@ export const api = {
     remoteInvoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId }),
+  tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
+  tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string) =>
+    remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId }),
   attachTmux: (
     sessionId: string,
     name: string,

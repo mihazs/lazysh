@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
     adoptSession: vi.fn(),
     muxSessions: vi.fn(),
     attachTmux: vi.fn(),
+    tmuxJumpSnapshot: vi.fn(),
+    tmuxJump: vi.fn(),
   },
   terminal: { write: vi.fn(), dispose: vi.fn() },
   invoke: vi.fn(),
@@ -397,6 +399,29 @@ describe("connection flow", () => {
     expect(mocks.api.disconnect).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: /^Home$/ }));
     expect(screen.getByText("Live SSH terminal")).toBeTruthy();
+  });
+
+  it('jumps inside the attached display and persists only its destination name for restoration', async () => {
+    mocks.api.connect.mockResolvedValue({sessionId:'source'});
+    mocks.invoke.mockResolvedValue({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]});
+    mocks.api.attachTmux.mockResolvedValue({sessionId:'display'});
+    const snapshot={generation:'native-only-generation',current:{sessionId:'$1',windowId:'@1'},sessions:[
+      {id:'$1',name:'work',windows:[{id:'@1',index:0,name:'agent'}]},
+      {id:'$2',name:'destination',windows:[{id:'@2',index:1,name:'build'}]},
+    ]};
+    mocks.api.tmuxJumpSnapshot.mockResolvedValue(snapshot);
+    mocks.api.tmuxJump.mockResolvedValue({...snapshot,current:{sessionId:'$2',windowId:'@2'}});
+    const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+    await screen.findByText('Live SSH terminal');expect(screen.queryByRole('button',{name:'Jump To'})).toBeNull();
+    await user.click(screen.getByRole('button',{name:'Sessions'}));
+    await user.click(await screen.findByRole('button',{name:'Attach work'}));
+    await user.click(await screen.findByRole('button',{name:'Jump To'}));
+    await user.click(await screen.findByRole('button',{name:'1: build'}));
+    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Jump To'})).toBeNull());
+    expect(mocks.api.tmuxJump).toHaveBeenCalledWith('display','native-only-generation','$2','@2');
+    expect(screen.getByRole('tab',{name:'Home / destination'})).toBeTruthy();
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home'},{hostId:'home',attached:{kind:'tmux',name:'destination'}}]));
+    expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
   });
 
   it("only returns output credit after the terminal has consumed a chunk", async () => {

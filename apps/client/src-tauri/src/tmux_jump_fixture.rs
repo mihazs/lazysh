@@ -133,13 +133,14 @@ impl Fixture {
     }
     fn prefix(&self) -> String {
         format!(
-            "{} -f /dev/null -S {}",
+            "{} -u -f /dev/null -S {}",
             quote(&self.tmux),
             quote(self.socket().to_str().unwrap())
         )
     }
     fn local(&self, args: &[&str]) -> String {
         let output = Command::new(&self.tmux)
+            .arg("-u")
             .arg("-f")
             .arg("/dev/null")
             .arg("-S")
@@ -627,4 +628,245 @@ async fn real_tmux_jump_identity_guard_and_replacement() {
     timeout(Duration::from_secs(30), jump_probe())
         .await
         .expect("bounded owned SSH/tmux experiment");
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux 3.4+; product actor acceptance"]
+async fn real_tmux_jump_product_actor_labels_and_leases() {
+    timeout(Duration::from_secs(30), product_actor_probe())
+        .await
+        .expect("bounded product actor fixture");
+}
+async fn product_actor_probe() {
+    let f = Fixture::new().await;
+    let a = f.local(&[
+        "new-session",
+        "-d",
+        "-s",
+        "alpha",
+        "-P",
+        "-F",
+        "#{session_id}",
+    ]);
+    let hostile = "a|b #{session_name} \\ ; ' $ %end 1 2 3 界";
+    let b = f.local(&[
+        "new-session",
+        "-d",
+        "-s",
+        &hostile.replace("#", "##"),
+        "-P",
+        "-F",
+        "#{session_id}:#{window_id}",
+    ]);
+    let (bid, bwid) = b.split_once(':').unwrap();
+    let expected_name = f.local(&["display-message", "-p", "-t", bid, "#{session_name}"]);
+    assert!(expected_name.contains("a|b #{session_name}"));
+    let window_name = "next|\\tab; '#{pane_id}'";
+    f.local(&["rename-window", "-t", bwid, &window_name.replace("#", "##")]);
+    let expected_window = f.local(&["display-message", "-p", "-t", bwid, "#{window_name}"]);
+    let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
+    let command = crate::tmux_jump::attach_with_prefix("alpha", &marker, &f.prefix());
+    let command = format!("printf 'owned startup banner\\r\\n'; {command}");
+    let (mut channel, mut initial) = open_terminal(&f.handle, 80, 24, Some(command))
+        .await
+        .unwrap();
+    let identity = crate::tmux_jump::handshake(&mut channel, &mut initial, &marker)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&initial).contains("owned startup banner"));
+    assert!(!String::from_utf8_lossy(&initial).contains(&marker));
+    let access = AccessState::default();
+    access.initialize(true, true, String::new()).unwrap();
+    access.authorize(access.generation().unwrap()).unwrap();
+    access.ready(access.generation().unwrap()).unwrap();
+    let nonce = access.status().unwrap().nonce.unwrap();
+    let lease = access.lease(Some(&nonce)).unwrap();
+    let control = crate::tmux_jump::prepare_command(
+        &f.handle,
+        identity.clone(),
+        format!(
+            "{} -C attach-session -f no-output,ignore-size -t {}",
+            f.prefix(),
+            quote(&a)
+        ),
+        &lease,
+    )
+    .await
+    .unwrap();
+    let (cancel, mut cancellation) = watch::channel(false);
+    let binding = crate::tmux_jump::start(control, cancellation.clone());
+    let snapshot = binding.call(&lease, &mut cancellation, None).await.unwrap();
+    let json = serde_json::to_value(snapshot).unwrap();
+    let target = json["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == bid)
+        .unwrap();
+    assert_eq!(target["name"], expected_name);
+    assert_eq!(target["windows"][0]["name"], expected_window);
+    let generation = json["generation"].as_str().unwrap().to_owned();
+    let queued = binding.queue_fixture_request(lease.clone());
+    // No await between enqueue and revocation: the actor must examine the
+    // captured lease when it dequeues, not replace it with an unlocked one.
+    access.lock().unwrap();
+    assert!(queued.await.is_err());
+    assert!(binding
+        .call(
+            &lease,
+            &mut cancellation,
+            Some((generation.clone(), bid.into(), bwid.into()))
+        )
+        .await
+        .is_err());
+    access.authorize(access.generation().unwrap()).unwrap();
+    access.ready(access.generation().unwrap()).unwrap();
+    let nonce = access.status().unwrap().nonce.unwrap();
+    let fresh = access.lease(Some(&nonce)).unwrap();
+    let moved = binding
+        .call(
+            &fresh,
+            &mut cancellation,
+            Some((generation, bid.into(), bwid.into())),
+        )
+        .await
+        .unwrap();
+    let moved = serde_json::to_value(moved).unwrap();
+    assert_eq!(moved["current"]["sessionId"], bid);
+    assert_eq!(moved["current"]["windowId"], bwid);
+    cancel.send_replace(true);
+    assert!(binding.call(&fresh, &mut cancellation, None).await.is_err());
+    timeout(BOUND, binding.retired()).await.unwrap();
+
+    let retained = crate::tmux_jump::prepare_command(
+        &f.handle,
+        identity.clone(),
+        format!(
+            "{} -C attach-session -f no-output,ignore-size -t {}",
+            f.prefix(),
+            quote(&a)
+        ),
+        &fresh,
+    )
+    .await
+    .unwrap();
+    let (_epoch_cancel, mut epoch_cancel) = watch::channel(false);
+    let retained = crate::tmux_jump::start(retained, epoch_cancel.clone());
+    let prior = serde_json::to_value(
+        retained
+            .call(&fresh, &mut epoch_cancel, None)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    f.local(&["kill-server"]);
+    timeout(BOUND, retained.retired()).await.unwrap();
+    let reused = f.local(&[
+        "new-session",
+        "-d",
+        "-s",
+        "alpha",
+        "-P",
+        "-F",
+        "#{session_id}",
+    ]);
+    assert_eq!(
+        reused, a,
+        "fixture must reuse session identity on server replacement"
+    );
+    assert!(retained
+        .call(
+            &fresh,
+            &mut epoch_cancel,
+            Some((
+                prior["generation"].as_str().unwrap().into(),
+                reused,
+                "@0".into()
+            ))
+        )
+        .await
+        .is_err());
+    assert_eq!(f.local(&["list-clients", "-F", "#{client_pid}"]), "");
+
+    // A partial command response must never be reused after a lease is
+    // revoked. The owned remote fixture marks that it sent the prefix;
+    // there is no arbitrary sleep or mutation retry to arrange the race.
+    let phase = f.dir.path().join("partial-control-ready");
+    let command=format!("IFS= read -r request; printf '%s\\n' '%begin 1 2 3'; printf partial; printf ready > {}; IFS= read -r next",quote(phase.to_str().unwrap()));
+    let mut stub = f.handle.channel_open_session().await.unwrap();
+    stub.exec(true, command).await.unwrap();
+    request_ok(&mut stub).await.unwrap();
+    let (_stub_cancel, mut stub_cancellation) = watch::channel(false);
+    let partial = crate::tmux_jump::start(
+        crate::tmux_jump::fixture_control(stub, identity),
+        stub_cancellation.clone(),
+    );
+    let caller = partial.clone();
+    let old = fresh.clone();
+    let pending =
+        tokio::spawn(async move { caller.call(&old, &mut stub_cancellation, None).await });
+    timeout(BOUND, async {
+        while !phase.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    access.lock().unwrap();
+    assert!(pending.await.unwrap().is_err());
+    timeout(BOUND, partial.retired()).await.unwrap();
+    access.authorize(access.generation().unwrap()).unwrap();
+    access.ready(access.generation().unwrap()).unwrap();
+    let nonce = access.status().unwrap().nonce.unwrap();
+    let fresh = access.lease(Some(&nonce)).unwrap();
+    let (_live, mut live) = watch::channel(false);
+    assert!(partial.call(&fresh, &mut live, None).await.is_err());
+    let _ = channel.eof().await;
+    let _ = channel.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd; native negative control-stream acceptance"]
+async fn real_tmux_jump_malformed_stream_and_absolute_deadline() {
+    timeout(Duration::from_secs(30), malformed_stream_probe())
+        .await
+        .expect("bounded malformed-stream fixture");
+}
+async fn malformed_stream_probe() {
+    let f = Fixture::new().await;
+    let lease = AccessState::disabled().lease(None).unwrap();
+    let cases=[
+        "IFS= read -r request; printf '%s\\n' '%begin 1 2 3' '$0|bad|@0|0|x' '%end 1 2 4'",
+        "IFS= read -r request; printf '%s\\n' '%begin 1 2 3' '%begin 1 3 3' '%end 1 2 3'",
+        "IFS= read -r request; printf '%s\\n' '%begin 1 2 3'; printf '%65537s\\n' x; printf '%s\\n' '%end 1 2 3'",
+        // Individual messages arrive well inside the deadline; they must
+        // not refresh it and allow an endless unsolicited response stream.
+        "IFS= read -r request; i=0; while [ \"$i\" -lt 50 ]; do printf '%s\\n' '%sessions-changed'; sleep 0.1; i=$((i+1)); done",
+    ];
+    for command in cases {
+        let mut channel = f.handle.channel_open_session().await.unwrap();
+        channel.exec(true, command).await.unwrap();
+        request_ok(&mut channel).await.unwrap();
+        let (_cancel, mut cancellation) = watch::channel(false);
+        let identity = crate::tmux_jump::Identity {
+            pid: 1,
+            tty: "/dev/fixture".into(),
+        };
+        let binding = crate::tmux_jump::start(
+            crate::tmux_jump::fixture_control(channel, identity),
+            cancellation.clone(),
+        );
+        assert!(timeout(
+            Duration::from_secs(4),
+            binding.call(&lease, &mut cancellation, None)
+        )
+        .await
+        .expect("absolute three-second actor deadline")
+        .is_err());
+        timeout(BOUND, binding.retired()).await.unwrap();
+        assert!(
+            binding.call(&lease, &mut cancellation, None).await.is_err(),
+            "malformed/partial stream must never be reused"
+        );
+    }
 }

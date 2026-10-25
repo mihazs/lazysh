@@ -7,6 +7,14 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- In-session tmux Jump To session/window trees with saved list, accordion and
+  grid layouts and an exact Current marker. Navigation uses a display-owned
+  retained control connection, validates its generation and captured PID/TTY,
+  and stops on cancellation, server loss or interrupted/ambiguous responses.
+  An unavailable binding disables navigation without replacing the terminal.
+  The extra control client affects tmux attached counts/hooks; switching a
+  window also changes the destination session's shared current window.
+
 - Advanced chords, compiled modified Simple shortcuts and multiplexer prefix
   shortcuts dispatch as one bounded native queue item with 50 ms between steps.
   The first step is immediate, literal text stays one write, and later input

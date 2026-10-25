@@ -110,6 +110,8 @@
     "allow-get-diff",
     "allow-list-multiplexer-sessions",
     "allow-attach-tmux",
+    "allow-tmux-jump-snapshot",
+    "allow-tmux-jump",
     "allow-agent-snapshot",
     "allow-agent-transcript",
     "allow-agent-transcripts",

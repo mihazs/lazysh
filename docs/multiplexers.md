@@ -36,6 +36,43 @@ Choose a list, accordion or grid layout; the client remembers it. Load recent pr
 
 Shell quoting alone does not protect tmux arguments: tmux parses trailing semicolons and expands format strings. lazysh separately escapes those layers to preserve literal names and directories. Control characters in names/paths are rejected because the discovery protocol is tab/line delimited. A response exceeding 1 MiB or 4096 panes fails explicitly.
 
+### In-session Jump To
+
+A tmux terminal attached through lazysh offers **Jump To** with its session/window
+tree and an exact **Current** marker. Choosing Current closes the panel without
+sending a command. List, accordion and grid share the existing saved layout
+preference. A successful switch remembers the destination's human session name;
+numeric IDs and navigation generations are never saved for reconnect.
+
+lazysh captures PID/TTY metadata on its own SSH attach channel immediately before
+`exec tmux`, retaining other startup banners and terminal bytes. A separate,
+verified SSH control channel confirms that exact attached normal client. Every
+jump uses its captured generation and exact session/window IDs with a synchronous
+server-side client guard. It never reopens a control connection to follow a
+restarted server with reused IDs. Plain shells, externally attached/unbound
+terminals and Zellij do not gain this tmux tree. An absent or malformed handshake
+leaves the terminal usable and navigation unavailable rather than guessing.
+
+The extra `no-output,ignore-size` control client affects attached/client counts
+and may trigger configured tmux hooks. Switching a window changes the destination
+session's **shared** current window, which other clients in that session may see.
+Closing the local display revokes navigation immediately, independently of the
+remote close acknowledgement. Idle control clients can survive a resume lock;
+queued requests retain their original access lease and are discarded after
+revocation. Interruption during command I/O, unexpected framing, timeout, or
+server loss permanently retires that binding. Reattach to obtain a fresh binding.
+
+The queue holds at most four requests. Bootstrap/control operations have absolute
+three-second deadlines; each response/notification allowance is at most 1 MiB,
+each line 64 KiB, and each command at most 4096 rows. Labels are delimiter-quoted,
+with control characters displayed as `?`; labels never become commands. Older
+tmux behavior is accepted only when binding and protocol validation succeed.
+Local native acceptance uses tmux 3.8; the Linux CI task also exercises its actual
+distro tmux. tmux 3.4/3.5a guard compatibility was source-checked, and runtime CI
+results must be recorded separately. Complete kernel PID+TTY reuse and a malicious
+same-UID server are outside this identity proof. Physical device lifecycle and
+Herdr navigation remain separate acceptance work under issue #7.
+
 ## Herdr
 
 List running named servers, then attach or browse one. The Herdr tree preserves server/workspace/tab/pane identity and displays reported agent states. Create and rename workspaces/tabs, focus workspaces/tabs, split and zoom exact panes, and focus reported agents. Plain panes can be selected through the terminal; Herdr's `agent focus` command only accepts agent panes.
@@ -57,6 +94,18 @@ With tmux, Herdr and Zellij installed on PATH:
 ```sh
 cargo test --locked -p lazysh '::tests::real_' -- --ignored
 ```
+
+The display-owned Jump To checks additionally need local OpenSSH `sshd` and tmux:
+
+```sh
+bunx turbo run test:tmux --filter=@lazysh/client
+```
+
+`LAZYSH_TEST_TMUX` optionally selects a tmux binary. These native Cargo fixtures
+create only owned loopback SSH listeners, keys and temporary tmux sockets. They
+cover display/server replacement and ID reuse, hostile labels, startup bytes,
+queued lease revocation, partial-response cancellation, malformed/oversized
+framing and a notification stream that cannot refresh the absolute deadline.
 
 These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 

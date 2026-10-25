@@ -617,6 +617,7 @@ pub(crate) struct Session {
     finished: watch::Sender<bool>,
     pub(crate) cancel: watch::Sender<bool>,
     validate_size: fn(u32, u32) -> Result<()>,
+    pub(crate) tmux: StdMutex<Option<crate::tmux_jump::Binding>>,
 }
 async fn retire_session(
     active: &Mutex<HashMap<String, Arc<Session>>>,
@@ -1115,7 +1116,7 @@ pub async fn connect(
         })
         .await
 }
-async fn request_ok(channel: &mut russh::Channel<client::Msg>) -> Result<Vec<u8>> {
+pub(crate) async fn request_ok(channel: &mut russh::Channel<client::Msg>) -> Result<Vec<u8>> {
     timeout(OP_TIMEOUT, async {
         let mut initial = Vec::new();
         loop {
@@ -1379,6 +1380,7 @@ async fn spawn_terminal(
         adoption: tokio::sync::Notify::new(),
         cancel,
         validate_size: check_size,
+        tmux: StdMutex::new(None),
     });
     let id = uuid::Uuid::new_v4().to_string();
     {
@@ -1524,6 +1526,7 @@ where
         input,
         cancel,
         validate_size,
+        tmux: StdMutex::new(None),
         output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
         output_inflight: StdMutex::new(0),
         renderer_gone: watch::channel(false).0,
@@ -2288,6 +2291,20 @@ pub async fn attach_multiplexer(
 ) -> AccessResult<Connected> {
     lease
         .run(async {
+            // Both public tmux attachment entry points must establish the same
+            // native display binding; frontend routing is not the authority.
+            if matches!(kind, crate::multiplexer::MultiplexerKind::Tmux) {
+                return attach_tmux_inner(
+                    &state,
+                    lease.clone(),
+                    session_id,
+                    name,
+                    cols,
+                    rows,
+                    events,
+                )
+                .await;
+            }
             check_size(cols, rows)?;
             let command = crate::multiplexer::attach_command(kind, &name)?;
             let parent = state.session(&session_id).await?;
@@ -2322,12 +2339,18 @@ async fn attach_tmux_inner(
         ));
     }
     let parent = state.session(&session_id).await?;
-    let command = format!(
-        "tmux attach-session -t {}",
-        crate::multiplexer::tmux_arg(&format!("={name}"))
-    );
-    let (channel, initial) = open_terminal(&parent.handle, cols, rows, Some(command)).await?;
-    spawn_terminal(
+    let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
+    let command = crate::tmux_jump::attach_command(&name, &marker);
+    let (mut channel, mut initial) =
+        open_terminal(&parent.handle, cols, rows, Some(command)).await?;
+    let identity = crate::tmux_jump::handshake(&mut channel, &mut initial, &marker).await;
+    let control = match identity {
+        Some(identity) => {
+            crate::tmux_jump::prepare(&parent.handle, identity, &name, &creation).await
+        }
+        None => None,
+    };
+    let connected = spawn_terminal(
         state,
         creation,
         parent.handle.clone(),
@@ -2335,7 +2358,16 @@ async fn attach_tmux_inner(
         initial,
         events,
     )
-    .await
+    .await?;
+    if let Some(control) = control {
+        let child = state.session(&connected.session_id).await?;
+        *child
+            .tmux
+            .lock()
+            .map_err(|_| SshError::new("tmux_unavailable", "Cannot bind tmux display"))? =
+            Some(crate::tmux_jump::start(control, child.cancel.subscribe()));
+    }
+    Ok(connected)
 }
 
 #[cfg(test)]
@@ -2816,6 +2848,7 @@ mod tests {
             adopted: std::sync::atomic::AtomicBool::new(true),
             adoption: tokio::sync::Notify::new(),
             validate_size: check_size,
+            tmux: StdMutex::new(None),
         });
         let bootstrap = tokio::spawn(async move {
             if et {
@@ -2912,6 +2945,7 @@ mod tests {
             adopted: std::sync::atomic::AtomicBool::new(true),
             adoption: tokio::sync::Notify::new(),
             validate_size: check_size,
+            tmux: StdMutex::new(None),
         };
         let error = crate::mosh::bootstrap(&session, crate::mosh::Options::default(), 80, 24)
             .await
@@ -2999,6 +3033,7 @@ mod tests {
             input,
             cancel,
             validate_size: check_size,
+            tmux: StdMutex::new(None),
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
             renderer_gone: watch::channel(false).0,
@@ -3048,6 +3083,7 @@ mod tests {
 
     #[tokio::test]
     async fn tmux_uses_a_separate_pty_and_preserves_the_parent_shell() {
+        use tauri::Manager;
         let (host, server, server_task) = server(false).await;
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::new(dir.path().into()).unwrap();
@@ -3071,23 +3107,32 @@ mod tests {
         )
         .await
         .unwrap();
-        let child = attach_tmux_inner(
-            &state,
+        let app = tauri::test::mock_app();
+        app.manage(state.clone());
+        // Exercise the generic public entry point too: it must establish the
+        // same owned metadata/binding path as attach_tmux, not a bare attach.
+        let child = attach_multiplexer(
             access_lease(),
+            app.state(),
             parent.session_id.clone(),
+            crate::multiplexer::MultiplexerKind::Tmux,
             "safe'name;touch /tmp/nope".into(),
             80,
             24,
             Channel::new(|_| Ok(())),
         )
         .await
+        .unwrap()
+        .into_inner()
         .unwrap();
         assert_ne!(parent.session_id, child.session_id);
         assert_eq!(state.sessions.lock().await.len(), 2);
-        assert_eq!(
-            *server.commands.lock().unwrap(),
-            vec!["tmux attach-session -t '=safe'\\''name;touch /tmp/nope'"]
-        );
+        let commands = server.commands.lock().unwrap().clone();
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].starts_with("exec sh -c 'printf "));
+        assert!(commands[0].contains("LAZYSH_ATTACH_"));
+        assert!(commands[0].contains("; exec tmux attach-session -t "));
+        assert!(commands[0].contains("name;touch /tmp/nope"));
         assert!(server.input_data.lock().unwrap().is_empty());
         let child = state.session(&child.session_id).await.unwrap();
         child.cancel.send(true).unwrap();
@@ -4430,6 +4475,7 @@ mod tests {
                 renderer_gone: watch::channel(false).0,
                 finished: watch::channel(true).0,
                 validate_size: check_size,
+                tmux: StdMutex::new(None),
             });
             let id = uuid::Uuid::new_v4().to_string();
             state

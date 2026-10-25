@@ -14,6 +14,7 @@
     "test:openssh": { "cache": false, "passThroughEnv": ["USER"] },
     "test:local": { "cache": false, "passThroughEnv": ["HOME", "USERPROFILE", "SHELL", "ComSpec", "COMSPEC", "SystemRoot", "SYSTEMROOT", "WINDIR"] },
     "test:multiplexers": { "cache": false, "passThroughEnv": ["PATH"] },
+    "test:tmux": { "cache": false, "passThroughEnv": ["USER", "LAZYSH_TEST_TMUX"] },
     "test:voice": { "cache": false, "passThroughEnv": ["LAZYSH_WHISPER_TEST_MODEL", "LAZYSH_WHISPER_TEST_WAV"] },
     "test:mosh": { "cache": false, "passThroughEnv": ["USER"] },
     "test:android-mosh": { "cache": false, "passThroughEnv": ["USER", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME", "LAZYSH_ANDROID_ADB", "LAZYSH_ANDROID_TEST_BINARY", "LAZYSH_ANDROID_CXX_RUNTIME", "LAZYSH_ANDROID_UNIT_BINARY"] },
