@@ -57,6 +57,7 @@ import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, type SessionIntent } from "./workspace";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
 import {appShortcut} from './keyboard';
+import { dictationInput, type DirectDictation } from './voiceDelivery';
 
 const TerminalPane = lazy(() => import("./TerminalPane"));
 const ChatPanel = lazy(() => import("./ChatPanel"));
@@ -1052,6 +1053,25 @@ export default function App() {
   const [loaded, setLoaded] = useState(!native);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const currentView = useRef({activeId,view});
+  currentView.current = {activeId,view};
+  const closingSessions=useRef(new Set<string>());
+  const [closingIds,setClosingIds]=useState<string[]>([]);
+  const directContext = useRef({sessionId:activeId,generation:0});
+  if(directContext.current.sessionId!==activeId)
+    directContext.current={sessionId:activeId,generation:directContext.current.generation+1};
+  const directGeneration=directContext.current.generation;
+  const directBlocked=closingSessions.current.has(activeId ?? "");
+  function deliverDictation(request: DirectDictation): Promise<void> {
+    const data = dictationInput(request.text,request.autoSend);
+    const live = sessionsRef.current.find(session=>session.id===request.sessionId && session.connected);
+    if (!mounted.current || !live || currentView.current.activeId!==request.sessionId
+      || currentView.current.view!=='voice' || document.visibilityState!=='visible'
+      || directBlocked || closingSessions.current.has(request.sessionId)
+      || directContext.current.generation!==directGeneration || !request.claim())
+      return Promise.reject(new Error('Direct dictation cancelled because this session is no longer active. The result remains in the draft.'));
+    return api.write(live.id,data);
+  }
   const active = sessions.find((session) => session.id === activeId);
   useEffect(() => {
     mounted.current = true;
@@ -1336,8 +1356,14 @@ export default function App() {
     }
   }
   async function closeSession(session: LiveSession) {
+    if(closingSessions.current.has(session.id))return;
+    closingSessions.current.add(session.id);
+    setClosingIds([...closingSessions.current]);
+    const context=directContext.current;
+    if(context.sessionId===session.id)context.generation++;
     try {
       await api.disconnect(session.id);
+      session.connected=false;
       session.terminal.dispose();
       setAppleUsage(previous=>{const next={...previous};delete next[session.id];return next;});
       persistWorkspace(
@@ -1352,6 +1378,9 @@ export default function App() {
         );
     } catch (e) {
       setError(errorMessage(e));
+    } finally {
+      closingSessions.current.delete(session.id);
+      if(mounted.current)setClosingIds([...closingSessions.current]);
     }
   }
   function chooseHost(host: Host) {
@@ -1668,6 +1697,7 @@ export default function App() {
                 <button
                   className="icon-button"
                   aria-label={`Disconnect ${session.name}`}
+                  disabled={closingIds.includes(session.id)}
                   onClick={() => void closeSession(session)}
                 >
                   <X size={13} />
@@ -1701,6 +1731,7 @@ export default function App() {
               <button
                 className="icon-button disconnect-button"
                 aria-label={`End ${active.name} connection`}
+                disabled={closingIds.includes(active.id)}
                 onClick={() => void closeSession(active)}
               >
                 <Unplug size={16} />
@@ -1743,7 +1774,7 @@ export default function App() {
                   <AttachmentPanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && view === "voice" && (
-                  <VoicePanel key={active.id} sessionId={active.id} />
+                  <VoicePanel key={active.id} sessionId={active.id} onDirectDictation={deliverDictation} />
                 )}
                 {active.connected && !active.local && view === "devices" && (
                   <DevicePanel key={active.id} sessionId={active.id} />
