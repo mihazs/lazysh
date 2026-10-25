@@ -105,6 +105,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - name: Build pinned Parakeet runtime and exercise native macOS ACL storage
+        if: runner.os == 'macOS'
+        run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
 

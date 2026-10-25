@@ -1,9 +1,15 @@
+#[cfg(not(target_os = "macos"))]
 use crate::Error;
+#[cfg(not(target_os = "macos"))]
 use std::path::{Path, PathBuf};
 
-/// Model loading is disabled where POSIX mode checks do not establish the ACL boundary.
-/// Apple extended ACL and Windows ACL validation need separate native acceptance work.
-#[cfg(any(not(unix), target_vendor = "apple"))]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::{created_directory, created_file, trusted_parent};
+
+/// These platforms remain disabled until their own native storage acceptance exists.
+#[cfg(any(not(unix), target_os = "ios"))]
 pub(crate) fn trusted_parent(_: &Path) -> Result<PathBuf, Error> {
     Err(Error::Storage)
 }
@@ -54,6 +60,15 @@ fn validate_canonical(parent: &Path, current: u32, android: bool) -> Result<(), 
             return Err(Error::Storage);
         }
     }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn created_directory(_: &Path) -> Result<(), Error> {
+    Ok(())
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn created_file(_: &std::fs::File) -> Result<(), Error> {
     Ok(())
 }
 
