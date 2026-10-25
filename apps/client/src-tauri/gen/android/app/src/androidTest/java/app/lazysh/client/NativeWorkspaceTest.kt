@@ -44,10 +44,14 @@ class NativeWorkspaceTest {
 
     private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
-        while (evaluate(scenario, expression) != "true") {
+        while (true) {
+            val native = NativeActivityFixture.readiness(scenario)
+            if (native.ready && evaluate(scenario, expression) == "true") return
             val error = evaluate(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
             assertTrue("Native workspace failed at $stage: $error", error == "\"\"")
-            assertTrue("The bundled native workspace did not become ready at $stage", System.nanoTime() < deadline)
+            if (System.nanoTime() >= deadline) {
+                throw AssertionError("Native workspace not ready at $stage: $native; activeWindowPackage=${NativeActivityFixture.activeWindowPackage()}")
+            }
             Thread.sleep(200)
         }
     }
