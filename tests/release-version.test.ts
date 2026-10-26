@@ -47,13 +47,15 @@ async function debianVersion(directory: string, archive: string) {
   return [...extracted.stdout.matchAll(/^Version: (.+)$/gm)].map(match => match[1]);
 }
 
-async function fixture(fragment?: string) {
+async function fixture(fragment?: string, sourceVersion?: string) {
   const parent = join(homedir(), 'dev', '.worktrees');
   await mkdir(parent, { recursive: true });
   const directory = await mkdtemp(join(parent, 'lazysh-release-'));
   temporary.push(directory);
   await writeFile(join(directory, 'empty.gitconfig'), '');
   const tooling = await json(source, 'package.json');
+  if (sourceVersion !== undefined) tooling.version = sourceVersion;
+  tooling.version = '0.1.0';
   tooling.devDependencies = { '@changesets/cli': '3.0.3' };
   const members = (Bun.TOML.parse(await Bun.file(join(source, 'Cargo.toml')).text()) as any).workspace.members as string[];
   await writeFile(join(directory, 'package.json'), JSON.stringify(tooling, null, 2));
@@ -94,6 +96,14 @@ async function fixture(fragment?: string) {
 }
 
 const fragment = (impact: string) => `---\n"@lazysh/client": ${impact}\n---\n\nOwned release fixture entry.\n`;
+
+test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source tooling version %s', async sourceVersion => {
+  const directory = await fixture(fragment('patch'), sourceVersion);
+  const initial = (await json(directory, 'package.json')).version;
+  await successful(directory, ['bun', 'run', 'release:version']);
+  expect(initial).toBe('0.1.0');
+  expect((await json(directory, 'package.json')).version).toBe('0.1.1');
+}, 60_000);
 
 test.each([['patch', '0.1.1'], ['minor', '0.2.0'], ['major', '1.0.0']])(
   'real Changesets + Bun + cargo-edit synchronize a %s release', async (impact, expected) => {
