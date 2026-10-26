@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit, bounded PNG/JPEG previews for Grok recorded image chunks. Including image bytes and viewing decoded pixels are separate opt-in actions; defaults, transcript files, paging and live terminal controls remain unchanged.
+
 - Reject replaced transcript and Codex usage sources on Windows using retained file handles and volume/file identity, including same-content, same-size and same-timestamp replacements. Shared snapshot readers fail closed when identity is unavailable; Unix inode checks and append-only Follow behavior are preserved.
 
 - Keep retained app-icon validation and local failure messages in the current interface language without repeating native icon reads or changes. Native diagnostics, device-local settings, defaults and permissions are unchanged.

@@ -9,6 +9,25 @@ pub fn read_page(
     limit: u8,
     checkpoint: Option<&str>,
 ) -> Result<TranscriptPage> {
+    read_page_options(path, offset, limit, checkpoint, false)
+}
+
+pub(super) fn read_page_images(
+    path: &Path,
+    offset: u64,
+    limit: u8,
+    checkpoint: Option<&str>,
+) -> Result<TranscriptPage> {
+    read_page_options(path, offset, limit, checkpoint, true)
+}
+
+fn read_page_options(
+    path: &Path,
+    offset: u64,
+    limit: u8,
+    checkpoint: Option<&str>,
+    inline_images: bool,
+) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
@@ -22,10 +41,10 @@ pub fn read_page(
         return Err(Error::InvalidArgument);
     }
     #[cfg(unix)]
-    return capture(path, offset, limit, receipt.as_ref(), |_| {});
+    return capture(path, offset, limit, receipt.as_ref(), inline_images, |_| {});
     #[cfg(not(unix))]
     {
-        let _ = (path, receipt);
+        let _ = (path, receipt, inline_images);
         Err(Error::Device("TranscriptIdentityUnsupported"))
     }
 }
@@ -57,6 +76,7 @@ fn capture(
     offset: u64,
     limit: u8,
     receipt: Option<&RecordCheckpoint>,
+    inline_images: bool,
     mut observe: impl FnMut(CapturePoint),
 ) -> Result<TranscriptPage> {
     use sha2::{Digest, Sha256};
@@ -121,6 +141,7 @@ fn capture(
         offset,
         bytes.len() as u64,
         limit,
+        inline_images,
     )?;
     page.checkpoint = Some(
         RecordCheckpoint {
@@ -149,24 +170,31 @@ mod tests {
                 let initial = read_page(&path, 0, 1, None).unwrap();
                 let receipt =
                     RecordCheckpoint::parse(initial.checkpoint.as_ref().unwrap()).unwrap();
-                let result = capture(&path, initial.next_offset, 1, Some(&receipt), |point| {
-                    if std::mem::discriminant(&point) != std::mem::discriminant(&stage) {
-                        return;
-                    }
-                    match mutation {
-                        "rename" => {
-                            fs::rename(&path, dir.path().join("original")).unwrap();
-                            fs::write(&path, b"{}\n").unwrap();
+                let result = capture(
+                    &path,
+                    initial.next_offset,
+                    1,
+                    Some(&receipt),
+                    false,
+                    |point| {
+                        if std::mem::discriminant(&point) != std::mem::discriminant(&stage) {
+                            return;
                         }
-                        "truncate" => fs::write(&path, b"").unwrap(),
-                        _ => fs::OpenOptions::new()
-                            .append(true)
-                            .open(&path)
-                            .unwrap()
-                            .write_all(b"{}\n")
-                            .unwrap(),
-                    }
-                });
+                        match mutation {
+                            "rename" => {
+                                fs::rename(&path, dir.path().join("original")).unwrap();
+                                fs::write(&path, b"{}\n").unwrap();
+                            }
+                            "truncate" => fs::write(&path, b"").unwrap(),
+                            _ => fs::OpenOptions::new()
+                                .append(true)
+                                .open(&path)
+                                .unwrap()
+                                .write_all(b"{}\n")
+                                .unwrap(),
+                        }
+                    },
+                );
                 assert_eq!(
                     result.unwrap_err().class(),
                     if mutation == "append" {

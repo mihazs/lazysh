@@ -19,6 +19,7 @@ mod event_adapters;
 mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
+mod inline_image;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
 #[cfg(test)]
@@ -113,6 +114,39 @@ pub fn read_page_with_checkpoint(
     limit: u8,
     checkpoint: Option<&str>,
 ) -> Result<TranscriptPage> {
+    read_page_options(path, agent, offset, limit, checkpoint, false)
+}
+
+/// Explicit media admission is separate from legacy paging and only for Grok Records.
+pub fn read_grok_images(
+    path: &Path,
+    offset: u64,
+    limit: u8,
+    checkpointed: bool,
+    checkpoint: Option<&str>,
+) -> Result<TranscriptPage> {
+    if checkpointed {
+        grok_checkpoint::read_page_images(path, offset, limit, checkpoint)
+    } else {
+        read_page_options(
+            path,
+            TranscriptAgent::GrokAcp,
+            offset,
+            limit,
+            checkpoint,
+            true,
+        )
+    }
+}
+
+fn read_page_options(
+    path: &Path,
+    agent: TranscriptAgent,
+    offset: u64,
+    limit: u8,
+    checkpoint: Option<&str>,
+    inline_images: bool,
+) -> Result<TranscriptPage> {
     if matches!(agent, TranscriptAgent::AntigravityJsonl) {
         return antigravity::read_page(path, offset, limit, checkpoint);
     }
@@ -137,7 +171,14 @@ pub fn read_page_with_checkpoint(
     let metadata = file.metadata()?;
     seek_record(&mut file, offset, metadata.len())?;
     let mut reader = BufReader::new(file.take(metadata.len() - offset));
-    read_records(&mut reader, agent, offset, metadata.len(), limit)
+    read_records(
+        &mut reader,
+        agent,
+        offset,
+        metadata.len(),
+        limit,
+        inline_images,
+    )
 }
 
 fn read_records(
@@ -146,6 +187,7 @@ fn read_records(
     offset: u64,
     length: u64,
     limit: u8,
+    inline_images: bool,
 ) -> Result<TranscriptPage> {
     let mut next_offset = offset;
     let mut messages = Vec::new();
@@ -175,7 +217,12 @@ fn read_records(
         if matches!(agent, TranscriptAgent::GrokAcp) {
             grok_acp::validate_bounds(&record)?;
         }
-        if let Some(message) = normalize(&record, agent, next_offset) {
+        let message = if inline_images && matches!(agent, TranscriptAgent::GrokAcp) {
+            grok_acp::normalize_images(&record, next_offset)
+        } else {
+            normalize(&record, agent, next_offset)
+        };
+        if let Some(message) = message {
             let size = message_size(&message)?;
             if size > MAX_PAGE {
                 return Err(Error::InvalidEvent);

@@ -104,6 +104,22 @@ pub(super) fn normalize(record: &Value, offset: u64) -> Option<Value> {
     )
 }
 
+pub(super) fn normalize_images(record: &Value, offset: u64) -> Option<Value> {
+    let mut message = normalize(record, offset)?;
+    let update = &record["params"]["update"];
+    if record["method"] == "session/update"
+        && matches!(
+            update["sessionUpdate"].as_str(),
+            Some("user_message_chunk" | "agent_message_chunk")
+        )
+    {
+        if let Some(preview) = super::inline_image::admit(&update["content"]) {
+            message["blocks"][0]["imagePreview"] = preview;
+        }
+    }
+    Some(message)
+}
+
 fn content(value: &Value, kind: &str) -> Option<Value> {
     Some(match value["type"].as_str()? {
         "text" => block(kind, string(value, "text")?, None, None),

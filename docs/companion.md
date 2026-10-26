@@ -351,6 +351,54 @@ The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Un
 
 `--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged.
 
+#### Optional inline Grok record images
+
+In Grok **Recorded messages**, enable **Include recorded images** before opening
+or starting Follow. This option defaults off. The companion CLI equivalent is
+`lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --inline-images`;
+it also composes with `--checkpointed` and its existing continuation receipt.
+The native `inlineImages` argument defaults false. Other agents, conversation
+views and a transcript session selector reject this option before SSH execution.
+Existing manual output without the option remains unchanged.
+
+Only top-level recorded user/assistant image chunks with inline PNG/JPEG data
+can gain a **View recorded image** action. Tool media, audio, resource/terminal
+references and external URIs stay inert; no referenced file or URL is fetched.
+The original base64 and on-disk transcript bytes are preserved. Invalid,
+animated PNG, unsupported or oversized images retain their attachment metadata
+without admitted preview bytes, so valid neighboring text remains readable.
+Existing raw record limits still apply to the whole JSONL line.
+
+Admission requires canonical standard base64 of at most 64 KiB (48 KiB decoded),
+at most 2048 pixels on either axis and at most 1,048,576 total pixels. Native
+static raster validation requests an advisory 8 MiB decoder allocation budget
+and rejects APNG before raster decoding. This is not an enforced peak-memory
+cap: JPEG progressive coefficient buffers and other decoder allocations may
+exceed that setting. Encoded byte, decoded byte, axis and pixel limits above
+are enforced. Existing line, scan, page, checkpoint and IPC budgets still
+apply; page charging includes admitted base64. Returned preview fields are
+validated again by the client before display. These checks are resource limits,
+not a promise that every decoder accepts every PNG/JPEG variant.
+
+**View recorded image** explicitly decodes one image with the browser bitmap
+decoder into a canvas. JPEG EXIF orientation is respected while independently
+checking raw encoded dimensions and actual oriented bitmap dimensions. No
+object URL, image cache, auto decode or persistent media store is created.
+Closing the preview, changing its source, losing access, evicting its row or
+unmounting clears its canvas; a late bitmap is closed without painting. Only
+one decode may be in flight across Chat panel remounts and source/session
+changes, with no queue or automatic retry. Devices without the
+required bitmap/canvas support report that preview is unavailable.
+
+Owned native fixtures cover static PNG, ordinary/progressive JPEG admission,
+placeholders, legacy output, paging and checkpoint composition. The small
+progressive fixture is acceptance evidence, not a peak-memory measurement.
+Chromium desktop/phone tests decode original PNG and
+rectangular EXIF-rotated JPEG pixels and exercise cleanup and stale completions.
+These are recorded-file tests, not provider/account execution, native Android/iOS
+WebView acceptance or proof of live terminal binding. Other recorded formats,
+including Claude media, remain separate work under issue #5.
+
 #### Opt-in checkpointed Grok Records
 
 Legacy Grok Records paging/output stays unchanged. Unix companions also accept
