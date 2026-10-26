@@ -82,3 +82,25 @@ it('does not freshen a held preview or later actions after original access is re
   await act(async()=>{authorize(true);authorize();});await act(async()=>finish(syncPreview()));await screen.findByRole('alert');
   await languages(()=>expect(screen.queryByRole('button',{name:t('syncApply')})).toBeNull());fireEvent.click(screen.getByRole('button',{name:t('syncUploadCredentials')}));await act(async()=>{});expect(vi.mocked(invoke).mock.calls).toHaveLength(2);
 });
+it.each(['storage','controller'] as const)('localizes only the real %s preference-acknowledgement failure after the host callback',async mode=>{
+  const order:string[]=[];const preferences={version:1,fontSize:19,...(mode==='controller'?{uiLanguage:'es'}:{})};
+  const intent=vi.spyOn(preferenceIntent,'applyPreferenceIntent');
+  if(mode==='storage')vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{order.push('storage');throw new Error('Synthetic storage denial');});
+  else {
+    const controller=preferenceIntent.createLocaleController({native:true,commit:vi.fn(),async invoke<T>(command:string){if(command==='ui_locale_status')return {nativeAuthority:true,choice:'en',resolvedLocale:'en',revision:'0'} as T;order.push('language-write');throw new Error('RAW native language failure');}});
+    await controller.refresh();intent.mockImplementation((_value,_explicit,current)=>controller.change('es',current));
+  }
+  vi.mocked(invoke).mockImplementation(async command=>command==='sync_status'?syncStatus:command==='sync_preview'?syncPreview():{hostsAdded:1,credentialsAdded:0,preferences});
+  render(<SyncPanel onHostsChanged={()=>order.push('hosts')}/>);fireEvent.click(await screen.findByRole('button',{name:t('syncPreviewSettings')}));fireEvent.click(await screen.findByRole('button',{name:t('syncApply')}));
+  const alert=await screen.findByRole('alert');expect(order).toEqual(['hosts',mode==='storage'?'storage':'language-write']);
+  if(mode==='storage'){expect(intent.mock.results[0].type).toBe('throw');expect(intent.mock.results[0].value).toBeInstanceOf(preferenceIntent.PreferenceStorageError);}
+  else await expect(intent.mock.results[0].value).rejects.toThrow('Native interface language could not be saved');
+  await languages(()=>{expect(alert.textContent).toBe(t(mode==='storage'?'preferencesSettingsCouldNotBeSavedOnThisDevice':'nativeLocaleSaveFailed'));expect(screen.queryByRole('status')).toBeNull();});
+  expect(intent).toHaveBeenCalledOnce();expect(vi.mocked(invoke).mock.calls.map(([command])=>command)).toEqual(['sync_status','sync_preview','sync_apply']);
+});
+it('preserves a raw sync_apply rejection outside the preference catch and still runs the original host callback',async()=>{
+  const raw='nativeLocaleSaveFailed <raw sync apply> {{literal}}';const changed=vi.fn();
+  vi.mocked(invoke).mockImplementation(async command=>{if(command==='sync_status')return syncStatus;if(command==='sync_preview')return syncPreview();throw {name:'PreferenceStorageError',message:raw};});
+  const intent=vi.spyOn(preferenceIntent,'applyPreferenceIntent');render(<SyncPanel onHostsChanged={changed}/>);fireEvent.click(await screen.findByRole('button',{name:t('syncPreviewSettings')}));fireEvent.click(await screen.findByRole('button',{name:t('syncApply')}));const alert=await screen.findByRole('alert');
+  await languages(()=>expect(alert.textContent).toBe(raw));expect(changed).toHaveBeenCalledOnce();expect(intent).not.toHaveBeenCalled();
+});

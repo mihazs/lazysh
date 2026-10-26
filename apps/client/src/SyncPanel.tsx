@@ -1,7 +1,7 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
-import {applyPreferenceIntent} from './i18n/nativeLocale';
+import {applyPreferenceIntent,PreferenceStorageError} from './i18n/nativeLocale';
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -191,7 +191,12 @@ export default function SyncPanel({
     if (!alive.current) return;
     if (result.preferences !== undefined) {
       const explicitLanguage=!!result.preferences && typeof result.preferences==='object' && Object.hasOwn(result.preferences,'uiLanguage');
-      await applyPreferenceIntent(result.preferences,explicitLanguage,()=>alive.current);
+      try {
+        await applyPreferenceIntent(result.preferences,explicitLanguage,()=>alive.current);
+      } catch (error) {
+        throw new LocalUiError(error instanceof PreferenceStorageError
+          ? 'preferencesSettingsCouldNotBeSavedOnThisDevice' : 'nativeLocaleSaveFailed');
+      }
     }
     if (!alive.current) return;
     setPreview(undefined);
