@@ -2480,7 +2480,7 @@ pub async fn agent_transcripts(
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            if matches!(agent.as_str(), "grok-acp" | "antigravity-jsonl") {
+            if matches!(agent.as_str(), "antigravity-jsonl") {
                 return Err(SshError::new(
                     "invalid_input",
                     "This adapter requires an explicitly selected transcript file",
@@ -2503,6 +2503,7 @@ pub async fn agent_transcripts(
                     | "omo"
                     | "devin-atif"
                     | "amp-json"
+                    | "grok-acp"
             ) {
                 return Err(SshError::new(
                     "invalid_input",

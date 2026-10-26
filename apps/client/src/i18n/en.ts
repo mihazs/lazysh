@@ -470,7 +470,7 @@ export const english = {
   chatRecordedMessages: "Recorded messages",
   chatLatestBranch: "Latest conversation branch",
   chatFind: "Find transcripts",
-  chatGrokExplanation: "Grok reads only an explicitly selected updates.jsonl file. Recorded chunks and tool snapshots remain separate; rewinds are not filtered into an active conversation branch.",
+  chatGrokExplanation: "Find existing Grok updates.jsonl files, then explicitly select and open one. Discovery reads file metadata only and does not bind a file to this live terminal. Recorded chunks and tool snapshots remain separate; rewinds are not filtered into an active conversation branch.",
   chatAntigravityExplanation: "Antigravity reads only an explicitly selected JSONL file. Step records preserve literal source, type, status and compact truncation flags; repeated indices remain separate. This is not a reconstructed conversation. If the file is rewritten, open it again from the start.",
   chatPath: "Transcript path",
   chatPathHint: "Absolute host path to session.jsonl",
