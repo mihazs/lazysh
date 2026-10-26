@@ -157,7 +157,9 @@ impl MacVault {
         let context = unsafe { LAContext::new() };
         unsafe {
             context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
-            context.setLocalizedReason(&NSString::from_str("Unlock lazysh credentials"));
+            context.setLocalizedReason(&NSString::from_str(&crate::macos_ui_locale::text(
+                "auth.unlock",
+            )));
         }
         let mut active = self
             .active

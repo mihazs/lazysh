@@ -641,6 +641,8 @@ pub fn allowed_while_locked(command: &str) -> bool {
     matches!(
         command,
         "app_lock_status"
+            | "ui_locale_status"
+            | "ui_locale_set"
             | "app_lock_ready"
             | "app_lock_configure"
             | "ack_output"

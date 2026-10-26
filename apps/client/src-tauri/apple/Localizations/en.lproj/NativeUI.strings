@@ -1,0 +1,7 @@
+"resume.title" = "lazysh is locked";
+"resume.message" = "Unlock with this device's biometrics to continue.";
+"resume.unlock" = "Unlock lazysh";
+"resume.failure" = "Unlock failed or was cancelled. lazysh remains locked. Check device biometrics and retry.";
+"auth.unlock" = "Unlock lazysh credentials";
+"auth.protect" = "Protect lazysh credentials";
+"action.cancel" = "Cancel";

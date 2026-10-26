@@ -37,6 +37,7 @@ import javax.crypto.spec.GCMParameterSpec
 @InvokeArg class VaultCancellation { var authEpoch: Long = 0 }
 @InvokeArg class VaultResumeRegistration { lateinit var events: Channel }
 @InvokeArg class VaultResumeView { var covered: Boolean = true; var enabled: Boolean = true; var generation: Long = -1; var nativeGeneration: Long = -1 }
+@InvokeArg class VaultUiLocale { lateinit var choice: String; lateinit var expectedRevision: String }
 @TauriPlugin
 class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
     private var activity: Activity = initialActivity
@@ -79,6 +80,27 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
     }
     override fun onPause(activity: AppCompatActivity) { if (activity === this.activity) resumeCover.pause() }
     @Command fun resumeFailure(invoke: Invoke) = activity.runOnUiThread { resumeCover.failure(); invoke.resolve() }
+    private fun localeWork(invoke: Invoke, failure: String, action: (NativeUiLocale) -> JSObject) {
+        val application = activity.applicationContext
+        if (!NativeUiLocale.worker.execute {
+            val result = runCatching { action(NativeUiLocale(application)) }
+            ContextCompat.getMainExecutor(application).execute {
+                // A replacement Activity owns the current cover; never relabel its old wrapper.
+                current.get()?.resumeCover?.relabel()
+                result.onSuccess { invoke.resolve(it) }.onFailure { invoke.reject(failure) }
+            }
+        }) invoke.reject("Native interface language is busy; refresh and retry")
+    }
+    @Command fun uiLocaleStatus(invoke: Invoke) =
+        localeWork(invoke, "Cannot read native interface language") { it.status() }
+    @Command fun uiLocaleSet(invoke: Invoke) {
+        val args = try { invoke.parseArgs(VaultUiLocale::class.java) } catch (_: Exception) {
+            invoke.reject("Invalid interface language"); return
+        }
+        localeWork(invoke, "Cannot save native interface language; refresh and retry") {
+            it.set(args.choice, args.expectedRevision)
+        }
+    }
     @Command fun resumeCapability(invoke: Invoke) = activity.runOnUiThread {
         val result = JSObject(); val supported = available() && resumeCover.ready
         result.put("available", supported); result.put("reason", if (supported) "Native biometric privacy cover is ready" else "Strong enrolled biometrics and a native privacy cover are required")
@@ -133,7 +155,8 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
         })
         cancelPending = { reject(); prompt.cancelAuthentication() }
         pendingAuthEpoch = authEpoch
-        try { prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock lazysh credentials").setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText("Cancel").build(), BiometricPrompt.CryptoObject(cipher)) }
+        val strings = NativeUiLocale.presentationContext(activity)
+        try { prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle(strings.getString(R.string.lazysh_biometric_unlock)).setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText(strings.getString(R.string.lazysh_action_cancel)).build(), BiometricPrompt.CryptoObject(cipher)) }
         catch (_: Exception) { reject() }
     }
     @Command fun capability(invoke: Invoke) = activity.runOnUiThread {
