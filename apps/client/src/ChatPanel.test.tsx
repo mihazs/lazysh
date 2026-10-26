@@ -86,7 +86,7 @@ it("rejects invalid transcript boundaries and executable host content remains in
   expect(parseTranscript(page)).toEqual(page);
 });
 
-it("opens explicit Grok record files without discovery or conversation claims", async () => {
+it("retains explicit Grok file reads without automatic discovery or conversation claims", async () => {
   const grok = { ...page, agent: "grok-acp", view: "record_stream" };
   expect(parseTranscript(grok)).toEqual(grok);
   expect(() => parseTranscript({ ...grok, view: "active_branch" })).toThrow();
@@ -98,7 +98,7 @@ it("opens explicit Grok record files without discovery or conversation claims", 
   });
   expect(
     screen.getByRole("button", { name: "Find transcripts" }),
-  ).toHaveProperty("disabled", true);
+  ).toHaveProperty("disabled", false);
   expect(screen.queryByLabelText("View")).toBeNull();
   expect(screen.getByText(/rewinds are not filtered/)).toBeTruthy();
   expect(invoke).not.toHaveBeenCalled();
@@ -317,4 +317,29 @@ it('rejects invalid Antigravity metadata, checkpoint boundaries and rounded or o
       .map(message=>({...antigravityPage,messages:[message]})),
     {...page,messages:[{...message,record:antigravityRecord.record}]},
   ]) expect(()=>parseTranscript(value)).toThrow();
+});
+it('lists Grok metadata only and requires explicit selection and opening through the record reader',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:1,agent:'grok-acp',sessions:[{path:'/host/.grok/sessions/cwd/id/updates.jsonl',name:'id',bytes:100,modifiedAt:'2026-10-26T00:00:00Z'}]});
+  render(<ChatPanel sessionId="grok-discovery"/>);
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'grok-acp'}});
+  fireEvent.click(screen.getByRole('button',{name:'Find transcripts'}));
+  const picker=await screen.findByLabelText('Recent transcripts');
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('agent_transcripts',{sessionId:'grok-discovery',agent:'grok-acp'},{headers:{'X-Lazysh-Access':expect.any(String)}});
+  fireEvent.change(picker,{target:{value:'0'}});
+  expect(invoke).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText('Transcript path')).toHaveProperty('value','/host/.grok/sessions/cwd/id/updates.jsonl');
+  vi.mocked(invoke).mockResolvedValueOnce({...page,agent:'grok-acp',view:'record_stream'});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  await screen.findByText('world');
+  expect(invoke).toHaveBeenLastCalledWith('agent_transcript',{sessionId:'grok-discovery',agent:'grok-acp',path:'/host/.grok/sessions/cwd/id/updates.jsonl',offset:0},{headers:{'X-Lazysh-Access':expect.any(String)}});
+  expect(screen.queryByLabelText('View')).toBeNull();
+  expect(screen.queryByRole('checkbox',{name:'Follow selected Claude branch'})).toBeNull();
+});
+it('rejects malformed Grok discovery metadata without opening any record file',async()=>{
+  vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:1,agent:'grok-acp',sessions:[{path:4,name:'unsafe'}]});
+  render(<ChatPanel sessionId="grok-invalid"/>);
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'grok-acp'}});
+  fireEvent.click(screen.getByRole('button',{name:'Find transcripts'}));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Invalid transcript list.');
+  expect(invoke).toHaveBeenCalledTimes(1);
 });
