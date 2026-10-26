@@ -9,6 +9,7 @@ mod et;
 mod forward_agent;
 mod herdr;
 mod identities;
+mod keep_awake;
 mod links;
 mod local;
 mod mosh;
@@ -37,6 +38,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_lazysh_apple_status::init())
+        .plugin(tauri_plugin_lazysh_display_idle::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -47,6 +49,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_lazysh_vault::init())
         .manage(app_lock::Runtime::default())
+        .manage(keep_awake::Runtime::default())
         .manage(theme_links::ThemeLinks::default())
         .manage(previews::PreviewState::default())
         .manage(devices::DeviceStreams::default())
@@ -73,6 +76,9 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                keep_awake::board_keep_awake_status,
+                keep_awake::board_keep_awake_acquire,
+                keep_awake::board_keep_awake_release,
                 app_lock::app_lock_status,
                 app_lock::app_lock_configure,
                 app_lock::app_lock_ready,

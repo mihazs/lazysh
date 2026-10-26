@@ -17,6 +17,7 @@ parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+tauri-plugin-lazysh-display-idle = { path = "../../../packages/display-idle" }
 lazysh-common = { path = "../../../packages/common" }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }

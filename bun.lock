@@ -22,6 +22,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@lazysh/common": "workspace:*",
+        "@lazysh/display-idle": "workspace:*",
         "@lazysh/et-transport": "workspace:*",
         "@lazysh/mosh-transport": "workspace:*",
         "@tauri-apps/api": "^2.8.0",
@@ -90,6 +91,10 @@
     },
     "packages/credential-vault": {
       "name": "@lazysh/credential-vault",
+      "version": "0.1.0",
+    },
+    "packages/display-idle": {
+      "name": "@lazysh/display-idle",
       "version": "0.1.0",
     },
     "packages/et-transport": {
@@ -251,6 +256,8 @@
     "@lazysh/common": ["@lazysh/common@workspace:packages/common"],
 
     "@lazysh/credential-vault": ["@lazysh/credential-vault@workspace:packages/credential-vault"],
+
+    "@lazysh/display-idle": ["@lazysh/display-idle@workspace:packages/display-idle"],
 
     "@lazysh/et-transport": ["@lazysh/et-transport@workspace:packages/et-transport"],
 

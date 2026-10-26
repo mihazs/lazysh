@@ -159,6 +159,7 @@ fn revoke(app: &AppHandle) {
     revoke_for(app, false, None);
 }
 fn revoke_for(app: &AppHandle, replacement: bool, native: Option<u64>) {
+    crate::keep_awake::revoke(app);
     let protected = if replacement {
         app.vault()
             .access()
@@ -647,6 +648,7 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "local_ack"
             | "disconnect"
             | "local_disconnect"
+            | "board_keep_awake_release"
             | "stop_preview"
             | "device_stream_stop"
             | "voice_cancel"

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux explicitly remains unavailable pending bounded asynchronous desktop-portal ownership; physical idle-timeout and battery validation remain pending.
+
 This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
 
