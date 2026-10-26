@@ -353,20 +353,22 @@ The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Un
 
 #### Optional inline recorded images
 
-In Claude Records/current branch or Grok **Recorded messages**, enable
+In Claude Records/current branch, Codex Records or Grok **Recorded messages**, enable
 **Include recorded images** before opening or starting supported Follow. This
 option defaults off. The Grok companion CLI equivalent is
 `lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --inline-images`;
 it also composes with `--checkpointed` and its existing continuation receipt.
 Claude accepts the same flag with `--agent claude --view records` or
-`--agent claude --view conversation`. Checkpointed mode remains Grok Records
-only. The native `inlineImages` argument defaults false. Other agents, Grok
+`--agent claude --view conversation`; Codex accepts `--agent codex --view records`.
+Checkpointed mode remains Grok Records only. The native `inlineImages` argument
+defaults false. Other agents, Grok/Codex
 conversation and transcript session selectors reject image opt-in before SSH
 execution; Claude conversation also retains its zero-offset/no-checkpoint rule.
 Existing manual output without the option remains unchanged.
 
 Only top-level recorded Grok user/assistant image chunks and Claude user
-`content[]` images with a `source.type=base64` PNG/JPEG payload
+`content[]` images with a `source.type=base64` PNG/JPEG payload, plus top-level
+Codex user `input_image` blocks with exact PNG/JPEG base64 data-URL prefixes,
 can gain a **View recorded image** action. Tool media, audio, resource/terminal
 references and external URIs stay inert; no referenced file or URL is fetched.
 The original base64 and on-disk transcript bytes are preserved. Invalid,
@@ -402,7 +404,34 @@ Chromium desktop/phone tests decode original PNG and
 rectangular EXIF-rotated JPEG pixels and exercise cleanup and stale completions.
 These are recorded-file tests, not provider/account execution, native Android/iOS
 WebView acceptance or proof of live terminal binding. Other recorded formats,
-including assistant/nested-tool Claude media, remain separate work under issue #5.
+including assistant/tool/generated media, remain separate work under issue #5.
+
+Codex Records admits only `response_item` → `payload.type=message` → `role=user`
+→ `content[].type=input_image` with `image_url` beginning exactly
+`data:image/png;base64,` or `data:image/jpeg;base64,`. The suffix remains subject
+to canonical base64 and all existing image limits. No percent-decoding,
+alternate MIME parameters or image-type aliases are inferred. `file_id`, local
+paths, HTTP URLs and all unknown variants remain inert; no reference is resolved.
+Selecting Codex from Claude conversation establishes Records and clears image
+opt-in. This does not enable Codex conversation reconstruction or Follow.
+
+The source contract is official Codex **0.164.0**, tag `rust-v0.164.0`, pinned at
+[`6aaac694803004a63c6f393d153c96d22521a6b9`](https://github.com/openai/codex/tree/6aaac694803004a63c6f393d153c96d22521a6b9).
+This is selected source inspection, not execution of a provider or private
+rollout. [User conversion](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/protocol/src/models.rs#L2155)
+and [preparation before persistence](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/core/src/session/mod.rs#L3652)
+establish this beyond generic API types. Image storage can retain processed data
+URLs or replace them with file references; upload failure can retain inline
+bytes. Retention is conditional on the originating store/configuration, not
+guaranteed for every rollout. The [durable policy](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/rollout/src/policy.rs#L22)
+preserves message content and the [JSONL writer](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/rollout/src/recorder.rs#L2112)
+serializes it without an image scrub on that path. The inspected text-based
+compaction path omits images from replacement model context and appends a
+compaction checkpoint. Records can therefore contain historical images no
+longer in active context; this reader does not reconstruct compaction/rollback
+history or inspect nested checkpoints. Other versions/variants, actual SSH
+image transport, provider compatibility and native WebView acceptance remain
+unverified.
 
 Claude's source contract here is the **shipped npm Claude Code 2.1.81 artifact**,
 not an inference from generic Anthropic API types. Its input processing creates

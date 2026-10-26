@@ -1,10 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use lazysh_agent::transcript::{read_grok_images, read_page, TranscriptAgent};
 use serde_json::{json, Value};
-use std::{fs, io::Cursor, process::Command};
-const PNG: &[u8] = include_bytes!("../../client/e2e/fixtures/recorded-images/regions.png");
-const JPEG: &[u8] =
-    include_bytes!("../../client/e2e/fixtures/recorded-images/regions-orientation6.jpg");
+use std::{fs, io::Cursor};
 const PROGRESSIVE: &[u8] =
     include_bytes!("../../client/e2e/fixtures/recorded-images/regions-progressive.jpg");
 const APNG: &[u8] =
@@ -19,6 +16,7 @@ fn event(content: Value) -> Value {
 mod jsonl;
 #[path = "support/recorded_image.rs"]
 mod recorded_image;
+use recorded_image::{JPEG, PNG};
 
 fn source() -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
@@ -127,66 +125,35 @@ fn admitted_data_is_charged_to_existing_page_budget_without_skipping_images() {
     let row = event(image(&recorded_image::noisy_png(), "image/png"));
     let (_directory, path) = source();
     jsonl::write(&path, &vec![row; 30]);
-    let mut cursor = 0;
-    let mut total = 0;
-    loop {
-        let page = read_grok_images(&path, cursor, 100, false, None).unwrap();
-        recorded_image::assert_image_page(&page.messages);
-        total += page.messages.len();
-        assert!(page.next_offset > cursor);
-        cursor = page.next_offset;
-        if !page.has_more {
-            break;
-        }
-    }
-    assert_eq!(total, 30);
+    let (ids, cursor) = recorded_image::collect_image_ids(&path, TranscriptAgent::GrokAcp);
+    assert_eq!(ids.len(), 30);
+    assert_eq!(cursor, fs::metadata(&path).unwrap().len());
 }
 
 #[test]
 fn cli_rejects_unsupported_options_and_legacy_json_is_unchanged() {
     let (_directory, path) = source();
     jsonl::write(&path, &[event(image(PNG, "image/png"))]);
-    let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
-            .args(["transcript", "--path"])
-            .arg(&path)
-            .args(args)
-            .output()
-            .unwrap()
-    };
-    let legacy = run(&["--agent", "grok-acp"]);
+
+    let legacy = recorded_image::transcript("grok-acp", &path, &[]);
     assert!(legacy.status.success());
     let parsed: Value = serde_json::from_slice(&legacy.stdout).unwrap();
     assert_eq!(
         parsed,
         serde_json::to_value(read_page(&path, TranscriptAgent::GrokAcp, 0, 50).unwrap()).unwrap()
     );
-    let included = run(&["--agent", "grok-acp", "--inline-images"]);
+    let included = recorded_image::transcript("grok-acp", &path, &["--inline-images"]);
     assert!(included.status.success());
     assert!(
         serde_json::from_slice::<Value>(&included.stdout).unwrap()["messages"][0]["blocks"][0]
             ["imagePreview"]
             .is_object()
     );
-    for args in [
-        vec!["--agent", "codex", "--inline-images"],
-        vec![
-            "--agent",
-            "grok-acp",
-            "--inline-images",
-            "--view",
-            "conversation",
-        ],
-        vec![
-            "--agent",
-            "grok-acp",
-            "--inline-images",
-            "--session-id",
-            "recording",
-        ],
+    for (agent, extra) in [
+        ("pi", vec![]),
+        ("grok-acp", vec!["--view", "conversation"]),
+        ("grok-acp", vec!["--session-id", "recording"]),
     ] {
-        let result = run(&args);
-        assert!(!result.status.success());
-        assert!(result.stdout.is_empty());
+        recorded_image::assert_rejected(agent, &path, &extra);
     }
 }

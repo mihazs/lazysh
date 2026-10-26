@@ -98,7 +98,7 @@ enum Command {
         /// Require a source-bound consistency receipt (Grok Records only).
         #[arg(long)]
         checkpointed: bool,
-        /// Admit bounded static PNG/JPEG previews (Grok Records or Claude user images).
+        /// Admit bounded static PNG/JPEG previews (Grok/Codex Records or Claude user images).
         #[arg(long)]
         inline_images: bool,
         #[arg(long)]
@@ -252,8 +252,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             if inline_images
                 && (session_id.is_some()
                     || !(matches!(agent, lazysh_agent::transcript::TranscriptAgent::Claude)
-                        || (matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
-                            && matches!(view, lazysh_agent::transcript::TranscriptView::Records))))
+                        || (matches!(
+                            agent,
+                            lazysh_agent::transcript::TranscriptAgent::GrokAcp
+                                | lazysh_agent::transcript::TranscriptAgent::Codex
+                        ) && matches!(
+                            view,
+                            lazysh_agent::transcript::TranscriptView::Records
+                        ))))
             {
                 return Err(Error::InvalidArgument);
             }

@@ -81,7 +81,8 @@ export function parseTranscript(value: unknown): Page {
     for (const block of message.blocks) {
       if (block?.imagePreview !== undefined) {
         const imageContext = (page.agent==='grok-acp' && page.view==='record_stream' && ['user','assistant'].includes(message.role))
-          || (page.agent==='claude' && ['record_stream','active_branch'].includes(page.view??'') && message.role==='user');
+          || ((page.agent==='claude' && ['record_stream','active_branch'].includes(page.view??'')
+            || page.agent==='codex' && page.view==='record_stream') && message.role==='user');
         if (!imageContext || block.type!=='image' || block.id!==undefined || block.status!==undefined)
           throw new LocalUiError('chatImageInvalid');
         recordedImage(block.imagePreview);
@@ -142,7 +143,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
   const [path, setPath] = useState("");
   const [view, setView] = useState("records");
   const [inlineImages,setInlineImages]=useState(false);
-  const canIncludeImages = (agent==='claude' && ['records','conversation'].includes(view)) || (agent==='grok-acp' && view==='records');
+  const canIncludeImages = (agent==='claude' && ['records','conversation'].includes(view)) || (['grok-acp','codex'].includes(agent) && view==='records');
   const [preview,setPreview]=useState<{image:RecordedImage;messageId:string;blockIndex:number;source:string;attempt:number}>();
   const previewAttempt=useRef(0);
   const [previewBusy,setPreviewBusy]=useState(false);
@@ -345,7 +346,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             value={agent}
             onChange={(event) => {
               setAgent(event.target.value);setInlineImages(false);
-              if (event.target.value === "grok-acp") setView("records");
+              if (["grok-acp","codex"].includes(event.target.value)) setView("records");
               setDiscovered([]);
               setTranscriptSessionId("");
             }}
