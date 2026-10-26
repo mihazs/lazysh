@@ -281,7 +281,11 @@ mod tests {
     #[test]
     fn literal_directory_forms_resolve_only_against_the_callers_directory() {
         let base = tempfile::tempdir().unwrap();
-        let child = base.path().join("project 世界 $(touch NO) \"); literal");
+        let child = base.path().join(if cfg!(windows) {
+            "project 世界 $(touch NO) & literal"
+        } else {
+            "project 世界 $(touch NO) \"); literal"
+        });
         std::fs::create_dir(&child).unwrap();
         for flag in ["-dir", "--dir"] {
             let selected = parse(

@@ -45,7 +45,7 @@ it('does not spend admission in a StrictMode setup that is immediately cleaned u
   render(<StrictMode><Harness open={open}/></StrictMode>);
   await waitFor(()=>expect(open).toHaveBeenCalledExactlyOnceWith(receipt));
 });
-it.each(['preparation failed before local_connect','LOCAL_LAUNCH_UNAVAILABLE'])('does not reinterpret or retry a rejected open callback across busy cycles: %s',async raw=>{
+it.each(['preparation failed before local_connect','LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED'])('does not reinterpret or retry a rejected open callback across busy cycles: %s',async raw=>{
   vi.mocked(invoke).mockResolvedValue({directoryReceipt:receipt,notice:null});
   const open=vi.fn(async()=>{throw raw;});
   const view=render(<Harness open={open}/>);
@@ -97,6 +97,16 @@ it('shows a finite warm rejection without opening a terminal and translates the 
   expect(screen.getByRole('status').textContent).toMatch(/^Abrir un directorio requiere/);
   expect(uiErrorText(new LocalUiError('desktopLaunchWarmUnsupported'))).toMatch(/^Abrir un directorio requiere/);
   expect(captureLaunchError('raw filesystem error')).toBe('raw filesystem error');
+});
+it('translates a finite native Windows directory refusal across all UI locales',async()=>{
+  vi.mocked(invoke).mockRejectedValue('LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED');
+  const open=vi.fn(async()=>{}); render(<Harness open={open}/>);
+  await screen.findByText(/^This directory is not supported by the Windows local shell/);
+  for(const [locale,expected] of [['pt-BR','Este diretório não é compatível'],['es','El shell local de Windows no admite']] as const) {
+    await act(async()=>{await uiI18n.changeLanguage(locale);});
+    expect(screen.getByRole('status').textContent).toMatch(new RegExp(`^${expected}`));
+  }
+  expect(open).not.toHaveBeenCalled();
 });
 it('rejects malformed native metadata instead of guessing a successful or empty launch',async()=>{
   vi.mocked(invoke).mockResolvedValue({directoryReceipt:'not-a-receipt',notice:null});

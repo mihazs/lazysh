@@ -37,7 +37,9 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   normal unlock, using the literal requested directory. Warm directory requests
   show a localized unsupported notice; host/multiplexer CLI targets remain
   unavailable. Explicit missing directories now fail instead of falling back to
-  HOME; manual local terminals and restoration retain their HOME default.
+  HOME; manual local terminals and restoration retain their HOME default. Windows
+  directory launches use a verified compatible drive-path spelling and refuse
+  UNC, device and verbatim-only paths instead of letting the shell change cwd.
 - Localize agent-board activity, one-request approval controls and companion
   settings in English, Brazilian Portuguese and Spanish. Language changes retain
   reported agent content, pending decisions and unsaved settings; Keep Awake

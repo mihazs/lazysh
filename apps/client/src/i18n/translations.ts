@@ -3,6 +3,7 @@ import type {english} from './en';
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
   desktopLaunchWarmUnsupported: ['Abrir um diretório exige uma nova instância do aplicativo. Feche o lazysh e execute o comando de diretório novamente. Nenhum terminal novo foi aberto.', 'Abrir un directorio requiere una nueva instancia de la aplicación. Cierra lazysh y ejecuta de nuevo el comando de directorio. No se abrió ningún terminal nuevo.'],
+  desktopLaunchWindowsUnsupported: ['Este diretório não é compatível com o shell local do Windows. Escolha um diretório comum em uma unidade local, com nome e tamanho compatíveis.', 'El shell local de Windows no admite este directorio. Elige un directorio normal en una unidad local, con un nombre y una longitud compatibles.'],
   desktopLaunchUnavailable: ['Esta abertura de diretório não está mais disponível. Execute o comando de diretório novamente.', 'Esta apertura de directorio ya no está disponible. Ejecuta de nuevo el comando de directorio.'],
   appUnsupportedTmuxRestoreName: ['Este destino do tmux não pode ser restaurado automaticamente porque seu nome exato não é compatível. O terminal ativo e Ir para continuam disponíveis.', 'Este destino de tmux no se puede restaurar automáticamente porque su nombre exacto no es compatible. El terminal activo e Ir a siguen disponibles.'],
   appJumpTo: ['Ir para', 'Ir a'],

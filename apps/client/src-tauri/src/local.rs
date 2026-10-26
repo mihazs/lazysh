@@ -541,13 +541,36 @@ mod desktop {
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
-        let command = shell_command(directory);
+        let command = shell_command(directory)?;
         start_with_access(state, creation, command, cols, rows, events).await
     }
-    pub(super) fn shell_command(directory: Option<std::path::PathBuf>) -> CommandBuilder {
+    pub(super) fn shell_command(
+        directory: Option<std::path::PathBuf>,
+    ) -> Result<CommandBuilder, String> {
         let mut command = CommandBuilder::new_default_prog();
         command.env("TERM", "xterm-256color");
         if let Some(directory) = directory {
+            #[cfg(windows)]
+            let directory = {
+                // cmd.exe treats canonical verbatim drive paths as UNC and silently
+                // changes cwd. Simplify only names representable without DOS ambiguity.
+                let compatible = dunce::simplified(&directory);
+                const UNSUPPORTED: &str = "LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED";
+                if !compatible.is_absolute()
+                    || !matches!(compatible.components().next(),
+                    Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
+                {
+                    return Err(UNSUPPORTED.into());
+                }
+                if compatible
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?
+                    != directory
+                {
+                    return Err(UNSUPPORTED.into());
+                }
+                compatible.to_owned()
+            };
             command.cwd(directory);
         } else if let Some(home) =
             std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -555,7 +578,7 @@ mod desktop {
         {
             command.cwd(home);
         }
-        command
+        Ok(command)
     }
     #[cfg(test)]
     pub(super) async fn start(
@@ -1166,9 +1189,51 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let command = desktop::shell_command(Some(selected.clone()));
+        let command = desktop::shell_command(Some(selected.clone())).unwrap();
         assert!(command.is_default_prog());
         (base, selected, command)
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_command_preserves_canonical_identity_with_ordinary_drive_spelling() {
+        let (_base, selected, command) = directory_fixture("workspace 世界 �");
+        let cwd = std::path::Path::new(command.get_cwd().unwrap());
+        assert!(cwd.is_absolute());
+        assert!(
+            matches!(cwd.components().next(), Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(),std::path::Prefix::Disk(_)))
+        );
+        assert_eq!(cwd.canonicalize().unwrap(), selected);
+        assert!(command.is_default_prog());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_command_refuses_unrepresentable_paths_without_starting_a_shell() {
+        for path in [
+            r"\\server\share\project",
+            r"\\?\UNC\server\share\project",
+            r"\\.\C:\project",
+            r"\\?\C:\NUL",
+            r"\\?\C:\trailing.",
+            r"\\?\C:\trailing ",
+        ] {
+            assert_eq!(
+                desktop::shell_command(Some(path.into())).err().as_deref(),
+                Some("LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED"),
+                "{path}"
+            );
+        }
+        let long = format!("{}{}\\{}", r"\\?\C:\", "x".repeat(150), "y".repeat(150));
+        assert!(desktop::shell_command(Some(long.into())).is_err());
+        let base = tempfile::tempdir().unwrap();
+        let literal = base.path().canonicalize().unwrap().join("trailing.");
+        std::fs::create_dir(&literal).unwrap();
+        let result = desktop::shell_command(Some(literal.canonicalize().unwrap()));
+        std::fs::remove_dir(&literal).unwrap();
+        assert!(
+            result.is_err(),
+            "a literal trailing dot must not silently select another directory"
+        );
     }
     #[cfg(unix)]
     fn isolated_login(command: &mut portable_pty::CommandBuilder, home: &std::path::Path) {

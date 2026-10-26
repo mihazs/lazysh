@@ -115,7 +115,7 @@ async function openConnection() {
   return user;
 }
 
-it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED'])('keeps an unrelated raw global sentinel lookalike verbatim: %s',async raw=>{
+it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED','LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED'])('keeps an unrelated raw global sentinel lookalike verbatim: %s',async raw=>{
   render(<App/>);
   await screen.findByRole('button',{name:'Connect to Home'});
   try {

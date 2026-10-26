@@ -6,7 +6,8 @@ import {captureUiError, LocalUiError, type UiErrorCause} from './i18n/localError
 type Snapshot = {directoryReceipt:string|null; notice:{receipt:string}|null};
 /** Interpret native codes only at the directory-launch operation boundary. */
 export function captureLaunchError(error:unknown):UiErrorCause {
-  return error === 'LOCAL_LAUNCH_UNAVAILABLE' ? new LocalUiError('desktopLaunchUnavailable') : captureUiError(error);
+  return error === 'LOCAL_LAUNCH_UNAVAILABLE' ? new LocalUiError('desktopLaunchUnavailable')
+    : error === 'LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED' ? new LocalUiError('desktopLaunchWindowsUnsupported') : captureUiError(error);
 }
 function snapshot(value:unknown):Snapshot {
   const uuid=(value:unknown)=>typeof value==='string' && /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/.test(value);
