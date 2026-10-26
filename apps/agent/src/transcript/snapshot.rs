@@ -21,7 +21,7 @@ pub(super) fn read_export(path: &Path, limit: u8) -> Result<Value> {
 }
 pub(super) fn read(path: &Path) -> Result<Value> {
     let file = open_transcript(path)?;
-    let before = file.metadata()?;
+    let before = super::SourceSnapshot::capture(&file)?;
     if before.len() > 16 * 1024 * 1024 {
         return Err(Error::InvalidArgument);
     }

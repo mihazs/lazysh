@@ -4,7 +4,7 @@ use super::{
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fs::{File, Metadata},
+    fs::File,
     io::{BufReader, Cursor, Read},
     path::Path,
 };
@@ -96,7 +96,7 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
 // Changed metadata requires one exact prefix comparison, never a capture retry.
 fn capture(path: &Path) -> Result<Vec<u8>> {
     let mut file = open_transcript(path)?;
-    let before = file.metadata()?;
+    let before = super::SourceSnapshot::capture(&file)?;
     drop(selected_source(path, &file, &before)?);
     #[cfg(test)]
     let source = super::mutation_observer::ObservedRead(&mut file);
@@ -137,10 +137,11 @@ fn capture(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn selected_source(path: &Path, file: &File, before: &Metadata) -> Result<File> {
+fn selected_source(path: &Path, file: &File, before: &super::SourceSnapshot) -> Result<File> {
     let selected = open_transcript(path)?;
-    for after in [file.metadata()?, selected.metadata()?] {
-        super::same_file(before, &after)?;
+    for source in [file, &selected] {
+        before.same_file(source)?;
+        let after = source.metadata()?;
         if after.len() < before.len() {
             return Err(Error::InvalidEvent);
         }
@@ -549,7 +550,7 @@ mod snapshot_audit {
         }
     }
     #[test]
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn same_size_same_mtime_rename_is_rejected_by_original_identity() {
         mutation("rename_same_mtime");
     }
