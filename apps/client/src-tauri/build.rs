@@ -8,6 +8,9 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,--exclude-libs,libonnxruntime.a");
     }
     let app = tauri_build::AppManifest::new().commands(&[
+        "board_keep_awake_status",
+        "board_keep_awake_acquire",
+        "board_keep_awake_release",
         "app_lock_status",
         "ui_locale_status",
         "ui_locale_set",

@@ -3420,6 +3420,7 @@ dependencies = [
  "tauri-plugin-deep-link",
  "tauri-plugin-lazysh-apple-speech",
  "tauri-plugin-lazysh-apple-status",
+ "tauri-plugin-lazysh-display-idle",
  "tauri-plugin-lazysh-push",
  "tauri-plugin-lazysh-vault",
  "tauri-plugin-notification",
@@ -6683,6 +6684,18 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "uuid",
+]
+
+[[package]]
+name = "tauri-plugin-lazysh-display-idle"
+version = "0.1.0"
+dependencies = [
+ "core-foundation-sys",
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
