@@ -2,6 +2,8 @@ pub mod audio;
 pub mod fs;
 #[cfg(feature = "service")]
 pub mod server;
+pub mod storage_filesystem;
+pub mod storage_namespace;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
