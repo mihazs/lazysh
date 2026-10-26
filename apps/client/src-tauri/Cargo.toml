@@ -22,7 +22,7 @@ path = "../../../packages/deep-link-vendor/tests/manifest.rs"
 
 [dependencies]
 tauri-plugin-lazysh-display-idle = { path = "../../../packages/display-idle" }
-lazysh-common = { path = "../../../packages/common" }
+lazysh-common = { path = "../../../packages/common", features = ["url"] }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
 tauri = { version = "2", features = [] }
