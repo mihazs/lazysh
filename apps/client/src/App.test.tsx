@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Host } from "./bridge";
-import {uiI18n} from './i18n/core';
 
 const mocks = vi.hoisted(() => ({
   api: {
