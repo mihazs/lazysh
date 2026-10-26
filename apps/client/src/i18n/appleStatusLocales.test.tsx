@@ -24,6 +24,23 @@ async function cycle(assertion:(labels:typeof appleStatusLocales[number])=>void)
   const calls=vi.mocked(invoke).mock.calls.slice();
   for(const labels of appleStatusLocales){await act(()=>uiI18n.changeLanguage(labels.locale));assertion(labels);expect(vi.mocked(invoke).mock.calls).toEqual(calls);}
 }
+async function clickWhenEnabled(button:HTMLElement){
+  await waitFor(()=>expect(button).toHaveProperty('disabled',false));
+  fireEvent.click(button);
+}
+it('waits for delayed capability before activating an already-rendered control',async()=>{
+  let resolve!:(value:unknown)=>void;
+  setup(command=>command==='apple_status_capability'?new Promise(value=>{resolve=value;}):undefined);
+  render(<AppleStatusPanel sessionId={appleStatusSession}/>);
+  const button=await screen.findByRole('button',{name:'Start Live Activity'});
+  expect(button).toHaveProperty('disabled',true);
+  const starting=clickWhenEnabled(button);
+  expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='apple_status_configure')).toBe(false);
+  await act(async()=>{resolve(appleStatusCapability);});
+  await starting;
+  expect(await screen.findByRole('button',{name:'Stop Apple status'})).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.filter(([command,args])=>command==='apple_status_configure'&&(args as {enabled:boolean}).enabled)).toHaveLength(1);
+});
 it('keeps a pending capability request and focused explicit control through same-mount language changes',async()=>{
   let resolve!:(value:unknown)=>void;setup(command=>command==='apple_status_capability'?new Promise(value=>{resolve=value;}):undefined);
   render(<AppleStatusPanel sessionId={appleStatusSession}/>);
@@ -54,7 +71,7 @@ it.each(['capability','stop'] as const)('translates a retained finite %s fallbac
   setup((command,args)=>command==='apple_status_capability'&&failure==='capability'?Promise.reject('ignored native capability detail'):command==='apple_status_configure'&&args.enabled===false?Promise.reject('ignored native cleanup detail'):undefined);
   render(<AppleStatusPanel sessionId={appleStatusSession}/>);
   if(failure==='stop'){
-    fireEvent.click(await screen.findByRole('button',{name:'Start Live Activity'}));
+    await clickWhenEnabled(await screen.findByRole('button',{name:'Start Live Activity'}));
     fireEvent.click(await screen.findByRole('button',{name:'Stop Apple status'}));
   }
   await screen.findByRole('alert');
