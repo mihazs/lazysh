@@ -3,6 +3,7 @@ mod app_lock;
 mod apple_speech;
 mod apple_status;
 mod approvals;
+mod attachment_upload;
 mod companion_settings;
 mod desktop_launch;
 mod devices;
@@ -219,7 +220,9 @@ pub fn run() {
                 ssh::disconnect,
                 ssh::list_directory,
                 ssh::read_file,
-                ssh::upload_file,
+                attachment_upload::upload_reserve,
+                attachment_upload::upload_cancel,
+                attachment_upload::upload_file,
                 ssh::get_diff,
                 ssh::list_multiplexer_sessions,
                 ssh::attach_tmux,

@@ -181,6 +181,7 @@ impl Config {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub(crate) uploads: crate::attachment_upload::Uploads,
     config: Arc<StdMutex<Config>>,
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     retiring: Arc<Mutex<HashMap<String, Arc<Session>>>>,
@@ -196,6 +197,7 @@ impl AppState {
             Err(e) => return Err(e),
         };
         Ok(Self {
+            uploads: Default::default(),
             config: Arc::new(StdMutex::new(Config {
                 path,
                 hosts,
@@ -2064,53 +2066,88 @@ pub async fn read_file(
         })
         .await
 }
-#[tauri::command]
-pub async fn upload_file(
+#[cfg(test)]
+async fn upload_file(
     lease: AccessLease,
-
     state: State<'_, AppState>,
     session_id: String,
     path: String,
     data: Vec<u8>,
 ) -> AccessResult<()> {
-    lease
-        .run(async {
-            check_path(&path)?;
-            if data.len() > UPLOAD_LIMIT {
-                return Err(SshError::new(
-                    "file_too_large",
-                    "Upload is limited to 10 MiB",
-                ));
-            }
-            let session = state.session(&session_id).await?;
-            timeout(OP_TIMEOUT, async {
-                let sftp = sftp(&session, &lease).await?;
-                let mut file = sftp
-                    .open_with_flags(
-                        path.clone(),
-                        OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
-                    )
-                    .await?;
-                let result = file.write_all(&data).await;
-                if let Err(e) = result {
-                    let _ = file.shutdown().await;
-                    return Err(SshError::new(
-                        "upload_failed",
-                        format!("{e}. A partial new file may remain at {path}."),
-                    ));
-                }
-                file.shutdown().await?;
-                Ok(())
-            })
-            .await
-            .map_err(|_| {
-                SshError::new(
-                    "timeout",
-                    "Upload timed out; check for a partial remote file",
-                )
-            })?
-        })
+    let reserved = crate::attachment_upload::upload_reserve(
+        lease.clone(),
+        state.clone(),
+        session_id.clone(),
+        data.len(),
+    )
+    .await?
+    .into_inner()
+    .map_err(GuardedError::from)?;
+    crate::attachment_upload::upload_file(lease, state, session_id, reserved.upload_id, path, data)
         .await
+}
+// Closing the raw SFTP session drops its close-owned channel even when the
+// transfer future is dropped by cancellation, access revocation or timeout.
+struct UploadSftp(Option<SftpSession>);
+impl Drop for UploadSftp {
+    fn drop(&mut self) {
+        if let Some(sftp) = self.0.take() {
+            tauri::async_runtime::spawn(async move {
+                let _ = timeout(Duration::from_secs(2), sftp.close()).await;
+            });
+        }
+    }
+}
+pub(crate) async fn transfer_file(
+    session: &Session,
+    lease: &AccessLease,
+    path: String,
+    data: Vec<u8>,
+    ownership: &crate::attachment_upload::Work,
+) -> Result<()> {
+    check_path(&path)?;
+    if data.len() > UPLOAD_LIMIT {
+        return Err(SshError::new(
+            "file_too_large",
+            "Upload is limited to 10 MiB",
+        ));
+    }
+    timeout(OP_TIMEOUT, async {
+        let stream = crate::sftp_stream::SftpStream::with_cancellation(
+            sftp_channel(session, lease).await?,
+            ownership.cancellation(),
+            ownership.retention(),
+        );
+        transfer_sftp(SftpSession::new(stream).await?, path, data).await
+    })
+    .await
+    .map_err(|_| {
+        SshError::new(
+            "timeout",
+            "Upload timed out; check for a partial remote file",
+        )
+    })?
+}
+pub(crate) async fn transfer_sftp(sftp: SftpSession, path: String, data: Vec<u8>) -> Result<()> {
+    let sftp = UploadSftp(Some(sftp));
+    let mut file = sftp
+        .0
+        .as_ref()
+        .unwrap()
+        .open_with_flags(
+            path.clone(),
+            OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+        )
+        .await?;
+    if let Err(error) = file.write_all(&data).await {
+        let _ = file.shutdown().await;
+        return Err(SshError::new(
+            "upload_failed",
+            format!("{error}. A partial new file may remain at {path}."),
+        ));
+    }
+    file.shutdown().await?;
+    Ok(())
 }
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))

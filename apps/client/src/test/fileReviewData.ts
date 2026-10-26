@@ -1,3 +1,4 @@
+import {attachmentReceipt} from './attachmentData';
 /** Synthetic file/revision records shared by renderer and browser acceptance. */
 export const fileReviewSession = 'ssh:literal-file-review';
 export const fileReviewRoot = '/literal/repositório';
@@ -8,6 +9,7 @@ export const fileReviewPatch = '@@ -1 +1 @@\n-before literal\n+after literal';
 export function fileReviewReply(command: string): unknown {
   if (command === 'list_directory') return [{name:fileReviewName,isDir:false,size:12500}];
   if (command === 'read_file') return fileReviewSource;
+  if (command === 'upload_reserve') return {uploadId:attachmentReceipt};
   if (command === 'upload_file') return undefined;
   if (command === 'get_diff') return fileReviewPatch;
   if (command === 'repository_status') return {path:fileReviewRoot,changes:[{path:fileReviewName,originalPath:null,index:'M',worktree:'M'}]};

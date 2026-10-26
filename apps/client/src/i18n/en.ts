@@ -1,5 +1,7 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  uploadCancelling: "Stopping upload…",
+  uploadCancelledWarning: "Upload cancelled locally. If sending started, a partial or completed new remote file may remain. Cancellation does not remove remote files.",
   desktopLaunchWarmUnsupported: "Directory launch requires a new app instance. Close lazysh, then run the directory command again. No new terminal was opened.",
   desktopLaunchWindowsUnsupported: "This directory is not supported by the Windows local shell. Choose an ordinary local drive directory with a compatible name and length.",
   desktopLaunchUnavailable: "This directory launch is no longer available. Run the directory command again.",

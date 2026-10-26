@@ -1,6 +1,7 @@
 import {captureUiError, errorMessage, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi } from './access';
+import {useHostUpload} from './useHostUpload';
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -32,7 +33,9 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
     null,
   );
   const [error, setError] = useState<FileErrorState>("");
-  const [busy, setBusy] = useState(false);
+  const [loading, setBusy] = useState(false);
+  const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
+  const busy=loading||uploadJob.busy;
   const [upload, setUpload] = useState<File | null>(null);
   const [destination, setDestination] = useState("");
   const request = useRef(0);
@@ -88,22 +91,12 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   }
 
   async function sendFile() {
-    if (!upload || !destination.trim()) return;
-    setBusy(true);
+    if (!upload || !destination.trim() || busy) return;
     setError("");
-    try {
-      await api.uploadFile(
-        sessionId,
-        destination,
-        Array.from(new Uint8Array(await upload.arrayBuffer())),
-      );
+    await uploadJob.start(async()=>({path:destination,bytes:new Uint8Array(await upload.arrayBuffer())}),()=>{
       setUpload(null);
-      await load(path);
-    } catch (e) {
-      setError(captureUiError(e));
-    } finally {
-      setBusy(false);
-    }
+      void load(path);
+    });
   }
 
   return (
@@ -171,6 +164,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           }}
         />
       </form>
+      {uploadJob.cancelled && <p role="status">{t('uploadCancelledWarning')}</p>}
       {error && (
         <p className="inline-error" role="alert">
           {fileErrorText(error)}
@@ -185,6 +179,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             {t('filesDestination')}
             <input
               value={destination}
+              disabled={busy}
               onChange={(e) => setDestination(e.target.value)}
             />
           </label>
@@ -198,10 +193,10 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             </button>
             <button
               className="subtle-button"
-              disabled={busy}
-              onClick={() => setUpload(null)}
+              disabled={loading || uploadJob.cancelling}
+              onClick={() => uploadJob.busy ? uploadJob.cancel() : setUpload(null)}
             >
-              {t('filesCancel')}
+              {uploadJob.cancelling?t('uploadCancelling'):t('filesCancel')}
             </button>
           </div>
         </div>

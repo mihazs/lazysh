@@ -2,6 +2,8 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  uploadCancelling: ["Interrompendo envio…", "Deteniendo subida…"],
+  uploadCancelledWarning: ["Envio cancelado localmente. Se a transferência começou, um arquivo remoto novo pode permanecer parcial ou completo. O cancelamento não remove arquivos remotos.", "Subida cancelada localmente. Si la transferencia comenzó, puede quedar un archivo remoto nuevo parcial o completo. La cancelación no elimina archivos remotos."],
   desktopLaunchWarmUnsupported: ['Abrir um diretório exige uma nova instância do aplicativo. Feche o lazysh e execute o comando de diretório novamente. Nenhum terminal novo foi aberto.', 'Abrir un directorio requiere una nueva instancia de la aplicación. Cierra lazysh y ejecuta de nuevo el comando de directorio. No se abrió ningún terminal nuevo.'],
   desktopLaunchWindowsUnsupported: ['Este diretório não é compatível com o shell local do Windows. Escolha um diretório comum em uma unidade local, com nome e tamanho compatíveis.', 'El shell local de Windows no admite este directorio. Elige un directorio normal en una unidad local, con un nombre y una longitud compatibles.'],
   desktopLaunchUnavailable: ['Esta abertura de diretório não está mais disponível. Execute o comando de diretório novamente.', 'Esta apertura de directorio ya no está disponible. Ejecuta de nuevo el comando de directorio.'],

@@ -1,0 +1,21 @@
+import {expect,test} from '@playwright/test';
+import {openLocalizedApp} from './fixtures/localizedApp';
+for(const files of [false,true])for(const stage of ['reserve','sending'])test(`${files?'remote files':'attachment editor'} cancels ${stage} without late publication`,async({page})=>{
+  await openLocalizedApp(page,'en');
+  await page.evaluate(async({files,stage})=>{const{mountAttachment}=await import('/e2e/fixtures/AttachmentHarness.tsx');window.attachment=mountAttachment({files,holdReserve:stage==='reserve'});},{files,stage});
+  const owner=page.locator('.attachment-fixture');
+  await owner.getByLabel(files?'Choose a file to upload':'Choose attachment',{exact:true}).setInputFiles({name:'private-note.txt',mimeType:'text/plain',buffer:Buffer.from('synthetic attachment bytes')});
+  await owner.getByRole('button',{name:files?'Upload file':'Upload attachment',exact:true}).click();
+  await expect.poll(()=>page.evaluate(stage=>window.attachment.calls.some(call=>call.command===(stage==='reserve'?'upload_reserve':'upload_file')),stage)).toBe(true);
+  await owner.getByRole('button',{name:files?'Cancel':'Cancel attachment',exact:true}).click();
+  await expect(owner.getByText('Upload cancelled locally.',{exact:false})).toBeVisible();
+  if(stage==='reserve')await page.evaluate(()=>window.attachment.acknowledge());
+  await expect.poll(()=>page.evaluate(()=>window.attachment.calls.some(call=>call.command==='upload_cancel'))).toBe(true);
+  if(stage==='sending')await page.evaluate(()=>window.attachment.complete());
+  await expect(owner.getByRole('button',{name:files?'Cancel':'Cancel attachment',exact:true})).toBeEnabled();
+  expect(await page.evaluate(()=>window.attachment.calls.filter(call=>call.command==='upload_file').length)).toBe(stage==='reserve'?0:1);
+  expect(await page.evaluate(()=>window.attachment.calls.filter(call=>call.command==='list_directory').length)).toBe(files?1:0);
+  await expect(owner.getByRole('textbox',{name:'Host path',exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>window.attachment.staged)).toEqual([]);
+  await page.evaluate(()=>window.attachment.dispose());
+});
