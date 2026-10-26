@@ -1,32 +1,12 @@
-import {readFileSync} from 'node:fs';
 import {expect,test,type Page} from '@playwright/test';
 import {openFollowTranscript} from './fixtures/chatTranscript';
-import type {mountChatFollowHarness} from './fixtures/ChatFollowHarness';
-
-declare global {interface Window {
-  chatFollow:ReturnType<typeof mountChatFollowHarness>;
-  recordedImageFixture:{calls:Record<string,unknown>[];decodes:number;orientations:unknown[];closed:number;urls:number;drafts:number;canvas?:HTMLCanvasElement;hold?:boolean;release?:()=>void};
-}}
-const preview=(file:string)=>({mimeType:file.endsWith('.jpg')?'image/jpeg':'image/png',
-  data:readFileSync(new URL(`./fixtures/recorded-images/${file}`,import.meta.url)).toString('base64'),width:32,height:16});
+import {preview,prepareRecordedImages,optIn,view,show,counters,expectCleared,closeWithoutSideEffects} from './fixtures/recorded-images/browser';
 
 async function setup(page:Page,file='regions.png') {
-  await page.goto('/');
+  await prepareRecordedImages(page);
   await page.evaluate(async(imagePreview)=>{
     const {grokFollowPage}=await import('/src/test/recordedFollowData.ts');
-    const f=window.recordedImageFixture={calls:[],decodes:0,orientations:[],closed:0,urls:0,drafts:0} as Window['recordedImageFixture'];
-    window.addEventListener('lazysh-prompt-draft',()=>{f.drafts++;});
-    const decode=window.createImageBitmap.bind(window);
-    window.createImageBitmap=async(...args:Parameters<typeof createImageBitmap>)=>{
-      f.decodes++;
-      f.orientations.push(args[1]);
-      const bitmap=await decode(...args),close=bitmap.close.bind(bitmap);
-      bitmap.close=()=>{f.closed++;close();};
-      if(f.hold)await new Promise<void>(resolve=>{f.release=resolve;});
-      return bitmap;
-    };
-    const createUrl=URL.createObjectURL.bind(URL);
-    URL.createObjectURL=(blob)=>{f.urls++;return createUrl(blob);};
+    const f=window.recordedImageFixture;
     Object.defineProperty(window,'__TAURI_INTERNALS__',{configurable:true,value:{invoke:async(command:string,args:Record<string,unknown>)=>{
       if(command!=='agent_transcript')throw new Error('Unexpected image fixture command');
       f.calls.push(args);
@@ -38,34 +18,6 @@ async function setup(page:Page,file='regions.png') {
   await openFollowTranscript(page,'grok-acp');
   await expect(page.getByText('Owned recorded image',{exact:true})).toHaveCount(1);
 }
-async function optIn(page:Page) {
-  await page.getByLabel('Include recorded images',{exact:true}).check();
-  await page.getByRole('button',{name:'Open transcript',exact:true}).click();
-}
-async function view(page:Page) {
-  const button=page.getByRole('button',{name:'View recorded image',exact:true});
-  if(!await button.isVisible())await page.locator('summary').filter({hasText:/^image$/}).click();
-  await button.click();
-}
-async function show(page:Page) {
-  await view(page);
-  const canvas=page.getByRole('img',{name:'Recorded image preview',exact:true});
-  await expect(canvas).toBeVisible();
-  await canvas.evaluate(element=>{window.recordedImageFixture.canvas=element as HTMLCanvasElement;});
-  return canvas;
-}
-const counters=(page:Page)=>page.evaluate(()=>{
-  const {calls,decodes,orientations,closed,urls,drafts}=window.recordedImageFixture;
-  return {calls,decodes,orientations,closed,urls,drafts};
-});
-async function expectCleared(page:Page) {
-  await expect(page.getByRole('img',{name:'Recorded image preview',exact:true})).toHaveCount(0);
-  await expect.poll(()=>page.evaluate(()=>{
-    const f=window.recordedImageFixture;
-    return f.closed>0&&f.canvas?.width===0&&f.canvas.height===0;
-  })).toBe(true);
-}
-
 test('recorded PNG decoding requires opt-in and View; canvas has original pixels without URLs or prompt writes',async({page})=>{
   await setup(page);
   expect((await counters(page)).calls[0]).not.toHaveProperty('inlineImages');
@@ -81,10 +33,7 @@ test('recorded PNG decoding requires opt-in and View; canvas has original pixels
     const c=element as HTMLCanvasElement,context=c.getContext('2d')!;
     return {width:c.width,height:c.height,left:[...context.getImageData(4,8,1,1).data],right:[...context.getImageData(28,8,1,1).data]};
   })).toEqual({width:32,height:16,left:[255,0,0,255],right:[0,0,255,255]});
-  await page.getByRole('button',{name:'Close image preview',exact:true}).click();
-  await expectCleared(page);
-  expect(await counters(page)).toMatchObject({decodes:1,orientations:[{imageOrientation:'from-image'}],urls:0,drafts:0});
-  expect(external).toEqual([]);
+  await closeWithoutSideEffects(page,external);
   await page.getByRole('button',{name:'Start following recorded file',exact:true}).click();
   await expect(page.getByLabel('Follow recorded file',{exact:true})).toBeChecked();
   expect((await counters(page)).calls.at(-1)).toMatchObject({inlineImages:true,checkpointed:true});

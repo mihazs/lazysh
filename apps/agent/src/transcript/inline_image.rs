@@ -1,4 +1,4 @@
-//! Admission for explicitly requested inline Grok PNG/JPEG bytes; never follows URIs.
+//! Admission for explicitly requested inline PNG/JPEG bytes; never follows URIs.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::ImageDecoder;
 use serde_json::{json, Value};
@@ -11,8 +11,10 @@ pub(super) fn admit(content: &Value) -> Option<Value> {
     if content["type"] != "image" {
         return None;
     }
-    let mime = content["mimeType"].as_str()?;
-    let data = content["data"].as_str()?;
+    admit_base64(content["mimeType"].as_str()?, content["data"].as_str()?)
+}
+
+pub(super) fn admit_base64(mime: &str, data: &str) -> Option<Value> {
     if data.is_empty() || data.len() > MAX_ENCODED {
         return None;
     }

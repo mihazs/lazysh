@@ -351,17 +351,22 @@ The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Un
 
 `--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged.
 
-#### Optional inline Grok record images
+#### Optional inline recorded images
 
-In Grok **Recorded messages**, enable **Include recorded images** before opening
-or starting Follow. This option defaults off. The companion CLI equivalent is
+In Claude Records/current branch or Grok **Recorded messages**, enable
+**Include recorded images** before opening or starting supported Follow. This
+option defaults off. The Grok companion CLI equivalent is
 `lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --inline-images`;
 it also composes with `--checkpointed` and its existing continuation receipt.
-The native `inlineImages` argument defaults false. Other agents, conversation
-views and a transcript session selector reject this option before SSH execution.
+Claude accepts the same flag with `--agent claude --view records` or
+`--agent claude --view conversation`. Checkpointed mode remains Grok Records
+only. The native `inlineImages` argument defaults false. Other agents, Grok
+conversation and transcript session selectors reject image opt-in before SSH
+execution; Claude conversation also retains its zero-offset/no-checkpoint rule.
 Existing manual output without the option remains unchanged.
 
-Only top-level recorded user/assistant image chunks with inline PNG/JPEG data
+Only top-level recorded Grok user/assistant image chunks and Claude user
+`content[]` images with a `source.type=base64` PNG/JPEG payload
 can gain a **View recorded image** action. Tool media, audio, resource/terminal
 references and external URIs stay inert; no referenced file or URL is fetched.
 The original base64 and on-disk transcript bytes are preserved. Invalid,
@@ -397,7 +402,33 @@ Chromium desktop/phone tests decode original PNG and
 rectangular EXIF-rotated JPEG pixels and exercise cleanup and stale completions.
 These are recorded-file tests, not provider/account execution, native Android/iOS
 WebView acceptance or proof of live terminal binding. Other recorded formats,
-including Claude media, remain separate work under issue #5.
+including assistant/nested-tool Claude media, remain separate work under issue #5.
+
+Claude's source contract here is the **shipped npm Claude Code 2.1.81 artifact**,
+not an inference from generic Anthropic API types. Its input processing creates
+base64 user image blocks (possibly resized/re-encoded); its retained-record
+writer serializes message content to session JSONL without an image-redaction
+step on the inspected path. This does not promise images exist in every session
+or survive every retention setting. Tool-result media is a separate nested
+shape and remains inert. Conversation image admission occurs only during final
+normalization of the existing selected chain, without changing capture, branch
+selection or parallel-tool recovery. When that exact row/image disappears, its
+preview selection is retired; a later branch returning it needs a new View.
+
+The [official package](https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.81.tgz)
+matches its registry SHA-512 integrity. SHA-256: tarball
+`875acc67241a94a6220b559712aff0b2c226458507648c308c73c9788bc45b2f`;
+`cli.js` `66d05774a73a5abea90ee27cc42f1f9c0f28302bd59c90b5bbb352cd7dff0a4e`.
+Bounded REA analysis parsed 14,560 bytes of exact selected functions/classes;
+parent evidence `ev_4e2e06dfb4d7e0a48d9fb9e74cbb3c9164a965490217c02319bf876df694dd42`
+retains partial graph coverage and 881 explicit unknowns. Original `cli.js`
+UTF-8 byte ranges supporting input/constructor/record filtering/writer/serializer
+are respectively `[11674187,11676420)`, `[10998218,10998820)`,
+`[10934292,10934571)`, `[10900382,10909787)` and `[54034,54176)`.
+These are static observations, not provider execution, full-path runtime or
+current-version compatibility proof. Current 2.1.310 persistence is uninspected.
+Owned fixtures model this schema without copying vendor implementation or
+accessing private transcripts.
 
 #### Opt-in checkpointed Grok Records
 

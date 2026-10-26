@@ -17,6 +17,8 @@ fn event(content: Value) -> Value {
 }
 #[path = "support/jsonl.rs"]
 mod jsonl;
+#[path = "support/recorded_image.rs"]
+mod recorded_image;
 
 fn source() -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
@@ -40,12 +42,7 @@ fn preview_admission_is_explicit_keeps_original_bytes_and_legacy_output_inert() 
             .is_none());
         let admitted = read_grok_images(&path, 0, 50, false, None).unwrap();
         let preview = &admitted.messages[0]["blocks"][0]["imagePreview"];
-        assert_eq!(preview["data"], STANDARD.encode(bytes));
-        assert_eq!(preview["mimeType"], mime);
-        assert_eq!(
-            (preview["width"].as_u64(), preview["height"].as_u64()),
-            (Some(32), Some(16))
-        );
+        recorded_image::assert_regions_preview(preview, bytes, mime);
         assert!(preview.get("uri").is_none());
         assert_eq!(fs::read(&path).unwrap(), before);
     }
@@ -127,30 +124,14 @@ fn image_records_preserve_checkpoint_offsets_and_continuation() {
 
 #[test]
 fn admitted_data_is_charged_to_existing_page_budget_without_skipping_images() {
-    let mut seed = 0x12345678u32;
-    let pixels = image::RgbImage::from_fn(120, 100, |_, _| {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        image::Rgb([seed as u8, (seed >> 8) as u8, (seed >> 16) as u8])
-    });
-    let mut encoded = Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgb8(pixels)
-        .write_to(&mut encoded, image::ImageFormat::Png)
-        .unwrap();
-    let row = event(image(&encoded.into_inner(), "image/png"));
+    let row = event(image(&recorded_image::noisy_png(), "image/png"));
     let (_directory, path) = source();
     jsonl::write(&path, &vec![row; 30]);
     let mut cursor = 0;
     let mut total = 0;
     loop {
         let page = read_grok_images(&path, cursor, 100, false, None).unwrap();
-        assert!(!page.messages.is_empty());
-        assert!(serde_json::to_vec(&page.messages).unwrap().len() < 512 * 1024);
-        assert!(page
-            .messages
-            .iter()
-            .all(|row| row["blocks"][0]["imagePreview"].is_object()));
+        recorded_image::assert_image_page(&page.messages);
         total += page.messages.len();
         assert!(page.next_offset > cursor);
         cursor = page.next_offset;
@@ -188,7 +169,7 @@ fn cli_rejects_unsupported_options_and_legacy_json_is_unchanged() {
             .is_object()
     );
     for args in [
-        vec!["--agent", "claude", "--inline-images"],
+        vec!["--agent", "codex", "--inline-images"],
         vec![
             "--agent",
             "grok-acp",
