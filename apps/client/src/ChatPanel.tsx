@@ -333,7 +333,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             </select>
           </label>
         )}
-        <button type="button" disabled={busy || ["grok-acp", "antigravity-jsonl"].includes(agent)} onClick={() => void discover()}>
+        <button type="button" disabled={busy || agent === "antigravity-jsonl"} onClick={() => void discover()}>
           {t("chatFind")}
         </button>
         {agent === "grok-acp" && (
