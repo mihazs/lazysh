@@ -2,6 +2,19 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  appleStatusPrivacy: ["Compartilhe contagens genéricas de relatórios de agentes recebidos no último minuto. Nomes de hosts, prompts, comandos e credenciais não são enviados a essas superfícies.", "Comparte recuentos genéricos de informes de agentes recibidos en el último minuto. Los nombres de servidores, prompts, comandos y credenciales no se envían a estas superficies."],
+  appleStatusWatchReachable: ["Watch acessível.", "Watch accesible."],
+  appleStatusWatchUnavailable: ["Watch indisponível; o status em cache expira.", "Watch no disponible; el estado en caché caduca."],
+  appleStatusWatchMissing: ["Aplicativo complementar do Watch não instalado.", "Aplicación complementaria del Watch no instalada."],
+  appleStatusEnableWatch: ["Ativar status no Watch", "Activar estado en el Watch"],
+  appleStatusStartActivity: ["Iniciar Atividade ao Vivo", "Iniciar Actividad en Vivo"],
+  appleStatusSharing: ["Compartilhando status genérico enquanto esta sessão SSH está selecionada. A coleta pausa em segundo plano; o último registro expira após um minuto.", "Compartiendo estado genérico mientras esta sesión SSH está seleccionada. La recopilación se pausa en segundo plano; el último registro caduca después de un minuto."],
+  appleStatusStop: ["Parar status Apple", "Detener estado Apple"],
+  appleStatusReview: ["A opção Revisar no Watch abre a tela de aprovação no iPhone ativo. As ações de aprovar e negar exigem essa tela. Selecione um relatório inspecionado em Uso para compartilhar seus contadores separados e o horário de registro original. Relatórios mantêm sua condição de desatualizados ou de atualização desconhecida.", "La opción Revisar en el Watch abre la pantalla de aprobación en tu iPhone activo. Las acciones de aprobar y denegar requieren esa pantalla. Selecciona un informe inspeccionado en Uso para compartir sus contadores separados y la hora de registro original. Los informes conservan su condición de desactualizados o de actualización desconocida."],
+  appleStatusCapabilityUnavailable: ["Recurso de status Apple indisponível.", "La función de estado Apple no está disponible."],
+  appleStatusStopFailed: ["Não foi possível limpar o status nativo. Os registros existentes expiram em até 60 segundos.", "No se pudo borrar el estado nativo. Los registros existentes caducan en un máximo de 60 segundos."],
+
+
   aboutDescription: ["Espaço independente para SSH e agentes de IA. Versão {{version}}, em desenvolvimento.", "Espacio independiente de SSH y agentes de IA. Versión {{version}}, en desarrollo."],
   aboutCopyright: ["Copyright dos colaboradores do lazysh. Licenciado sob GNU GPL versão 3 ou, à sua escolha, qualquer versão posterior. Fornecido sem garantia.", "Copyright de los colaboradores de lazysh. Bajo licencia GNU GPL versión 3 o, a tu elección, cualquier versión posterior. Se proporciona sin garantía."],
   aboutSource: ["Ver o código-fonte correspondente e o histórico da compilação", "Ver el código fuente correspondiente y el historial de compilación"],

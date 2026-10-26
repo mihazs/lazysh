@@ -1,5 +1,18 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  appleStatusPrivacy: "Share generic counts from agent reports received in the last minute. Host names, prompts, commands and credentials stay off these surfaces.",
+  appleStatusWatchReachable: "Watch reachable.",
+  appleStatusWatchUnavailable: "Watch unavailable; cached status expires.",
+  appleStatusWatchMissing: "Watch companion not installed.",
+  appleStatusEnableWatch: "Enable Watch status",
+  appleStatusStartActivity: "Start Live Activity",
+  appleStatusSharing: "Sharing generic status while this SSH session is selected. Collection pauses in the background; the last snapshot expires after one minute.",
+  appleStatusStop: "Stop Apple status",
+  appleStatusReview: "Watch Review opens the approval screen on your active iPhone. Approve and deny actions require that screen. Select an inspected report in Usage to share its separate counters and original recording time. Reports retain their stale or unknown freshness.",
+  appleStatusCapabilityUnavailable: "Apple status capability unavailable.",
+  appleStatusStopFailed: "Could not clear native status. Existing snapshots expire within 60 seconds.",
+
+
   aboutDescription: "Independent SSH and AI-agent workspace. Version {{version}}, in development.",
   aboutCopyright: "Copyright lazysh contributors. Licensed under GNU GPL version 3 or, at your option, any later version. Provided without warranty.",
   aboutSource: "View corresponding source and build history",

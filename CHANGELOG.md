@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Localize Apple status controls, accessibility labels and privacy/review explanations in English, Brazilian Portuguese and Spanish. Language changes preserve subscription ownership, publication timing, raw native diagnostics and snapshot freshness.
+
 - Add owned OpenSSH/Herdr 0.9.3 acceptance coverage for explicit session selection,
   separate child PTYs, durable detach and original-lease revocation. GUI startup
   and biometric launch acceptance remain separate; runtime defaults do not change.
