@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep dialog keyboard focus on visible, enabled controls, including expanded/collapsed notice summaries and ordinary links; preserve initial field focus, Escape and opener restoration.
+
 - Disable Turbo caching for client production builds so About/source metadata always embeds the current Git revision and dirty state. Other packages keep their existing cache behavior; source URL and metadata rules are unchanged.
 
 - Add default-off companion publishing of new normalized lifecycle transitions to an explicitly bound self-hosted webhook relay. Admission is atomic with local ingest; bounded flush is explicitly invoked, with stable retry identities and persistent disable. No sender schedule, APNs/FCM delivery or deployment is installed.
