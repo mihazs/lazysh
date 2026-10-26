@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Add cold saved-host CLI composition with `--mux tmux`, `tmux:SERVER` or
+  `herdr`. After explicit normal authentication, lazysh opens that fixed picker
+  on the new SSH control session; choosing an exact row attaches through the
+  existing native child PTY. Mux launches explicitly use SSH without changing
+  saved host transport preferences. Warm CLI delivery remains unsupported.
+
 - Add cold desktop `--host SAVED_ID` / `-host SAVED_ID` launch into the normal
   saved-host connection dialog, with original unlock ownership across explicit
   credential and key-trust retries. The host editor now offers **Copy host ID**.

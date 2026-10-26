@@ -2,6 +2,9 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  desktopLaunchMuxSsh: ["Aberturas de multiplexador usam SSH na conexão de controle. O transporte salvo do host permanece inalterado.", "Las aperturas de multiplexor usan SSH para la conexión de control. El transporte guardado del host no cambia."],
+  desktopLaunchMuxPicker: ["Escolha uma sessão em execução para anexar em um novo terminal. Esta solicitação mantém o tipo e o servidor originais.", "Elige una sesión en ejecución para adjuntarla en un nuevo terminal. Esta solicitud conserva su tipo y servidor originales."],
+  desktopLaunchMuxUnavailable: ["{{kind}} não está instalado neste host. O terminal SSH continua disponível.", "{{kind}} no está instalado en este host. El terminal SSH sigue disponible."],
   desktopLaunchHostMissing: ["Este host salvo não existe mais. Copie o ID de um host existente e execute o comando novamente.", "Este host guardado ya no existe. Copia el ID de un host existente y ejecuta de nuevo el comando."],
   desktopLaunchHostAmbiguous: ["Mais de um host salvo tem este ID. Corrija a duplicidade antes de tentar novamente.", "Más de un host guardado tiene este ID. Corrige el duplicado antes de intentarlo de nuevo."],
   desktopLaunchHostChanged: ["A identidade ou a proteção do host salvo mudou. Cancele esta solicitação e execute o comando novamente.", "La identidad o la protección del host guardado cambió. Cancela esta solicitud y ejecuta de nuevo el comando."],

@@ -20,11 +20,41 @@ pub(crate) const HOST_INVALID: &str = "HOST_LAUNCH_INVALID";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LaunchTarget {
     Directory(PathBuf),
-    Host(String),
+    Host { id: String, mux: Option<MuxTarget> },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub(crate) enum MuxTarget {
+    Tmux {
+        #[serde(rename = "tmuxServer")]
+        server: String,
+    },
+    Herdr,
+}
+impl MuxTarget {
+    #[cfg(desktop)]
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "herdr" => Ok(Self::Herdr),
+            "tmux" => Ok(Self::Tmux {
+                server: "default".into(),
+            }),
+            value if value.starts_with("tmux:") => {
+                let server = crate::tmux_server::TmuxServer::parse(Some(&value[5..]))
+                    .map_err(|_| "Invalid tmux server name for --mux.".to_owned())?;
+                let server = match server {
+                    crate::tmux_server::TmuxServer::Default => "default".into(),
+                    crate::tmux_server::TmuxServer::Named(name) => name,
+                };
+                Ok(Self::Tmux { server })
+            }
+            _ => Err("Use --mux tmux, tmux:SERVER or herdr with --host SAVED_ID.".into()),
+        }
+    }
 }
 #[cfg(desktop)]
 const USAGE: &str =
-    "Use -dir PATH / --dir PATH or -host SAVED_ID / --host SAVED_ID alone. Multiplexer launch options are not supported yet.";
+    "Use --dir PATH alone, or --host SAVED_ID with optional --mux tmux|tmux:SERVER|herdr. Single-dash forms are also accepted.";
 
 #[cfg(desktop)]
 fn owned_flag(value: &str) -> bool {
@@ -42,6 +72,7 @@ pub(crate) fn parse(
     let mut args = args.into_iter().skip(1);
     let mut directory = None;
     let mut host = None;
+    let mut mux = None;
     let mut legacy = false;
     while let Some(arg) = args.next() {
         // ASCII option boundaries remain recognizable even if an inline path
@@ -51,47 +82,64 @@ pub(crate) fn parse(
             .split(|byte| *byte == b'=')
             .next()
             .unwrap();
-        if matches!(head, b"-mux" | b"--mux") {
-            return Err(USAGE.into());
-        }
-        if matches!(head, b"-dir" | b"--dir" | b"-host" | b"--host") {
-            if legacy || directory.is_some() || host.is_some() {
+        if matches!(
+            head,
+            b"-dir" | b"--dir" | b"-host" | b"--host" | b"-mux" | b"--mux"
+        ) {
+            if legacy {
                 return Err(USAGE.into());
             }
             let text = arg
                 .to_str()
-                .ok_or("Directory paths must be valid Unicode.")?;
+                .ok_or("Launch option values must be valid Unicode.")?;
             let value = match text.split_once('=') {
                 Some((_, value)) => OsString::from(value),
                 None => args.next().ok_or(USAGE)?,
             };
-            let path = value
+            let text = value
                 .to_str()
-                .ok_or("Directory paths must be valid Unicode.")?;
-            if matches!(head, b"-host" | b"--host") {
-                if path.is_empty() || path.len() > 100 || path.chars().any(char::is_control) {
-                    return Err(
-                        "Saved host IDs must contain 1–100 UTF-8 bytes without control characters."
-                            .into(),
-                    );
+                .ok_or("Launch option values must be valid Unicode.")?;
+            match head {
+                b"-host" | b"--host" => {
+                    if host.is_some() || directory.is_some() {
+                        return Err(USAGE.into());
+                    }
+                    if text.is_empty() || text.len() > 100 || text.chars().any(char::is_control) {
+                        return Err("Saved host IDs must contain 1–100 UTF-8 bytes without control characters.".into());
+                    }
+                    host = Some(text.to_owned());
                 }
-                host = Some(path.to_owned());
-                continue;
+                b"-mux" | b"--mux" => {
+                    if mux.is_some() || directory.is_some() {
+                        return Err(USAGE.into());
+                    }
+                    mux = Some(MuxTarget::parse(text)?);
+                }
+                _ => {
+                    if directory.is_some() || host.is_some() || mux.is_some() {
+                        return Err(USAGE.into());
+                    }
+                    if text.is_empty() || text.len() > 4096 || text.contains('\0') {
+                        return Err(
+                            "Directory paths must contain 1–4096 UTF-8 bytes without NUL.".into(),
+                        );
+                    }
+                    directory = Some(PathBuf::from(value));
+                }
             }
-            if path.is_empty() || path.len() > 4096 || path.contains('\0') {
-                return Err("Directory paths must contain 1–4096 UTF-8 bytes without NUL.".into());
-            }
-            directory = Some(PathBuf::from(value));
         } else {
-            if directory.is_some() || host.is_some() {
+            if directory.is_some() || host.is_some() || mux.is_some() {
                 return Err(USAGE.into());
             }
             // Preserve framework flags and existing desktop protocol ingress.
             legacy = true;
         }
     }
-    if let Some(host) = host {
-        return Ok(Some(LaunchTarget::Host(host)));
+    if let Some(id) = host {
+        return Ok(Some(LaunchTarget::Host { id, mux }));
+    }
+    if mux.is_some() {
+        return Err(USAGE.into());
     }
     let Some(mut path) = directory else {
         return Ok(None);
@@ -131,6 +179,7 @@ struct Intent {
 #[derive(Clone, Serialize)]
 pub(crate) struct PreparedHost {
     pub(crate) hosts: Vec<Host>,
+    pub(crate) mux: Option<MuxTarget>,
 }
 impl PreparedHost {
     pub(crate) fn check_host(&self, host: &Host) -> crate::ssh::Result<()> {
@@ -259,7 +308,7 @@ impl LaunchState {
                         LaunchTarget::Directory(_) => {
                             directory_receipt = Some(intent.receipt.clone())
                         }
-                        LaunchTarget::Host(_) => host_receipt = Some(intent.receipt.clone()),
+                        LaunchTarget::Host { .. } => host_receipt = Some(intent.receipt.clone()),
                     }
                 }
                 Ok(Snapshot {
@@ -276,11 +325,13 @@ impl LaunchState {
         receipt: &str,
         access: &AccessLease,
     ) -> Result<PreparedHost, String> {
-        let id = self.with_owned(receipt, access, |pending| {
+        let (id, mux) = self.with_owned(receipt, access, |pending| {
             let intent = pending.as_ref().unwrap();
             match &intent.target {
-                LaunchTarget::Host(id) if intent.prepared.is_none() && !intent.connecting => {
-                    Ok(id.clone())
+                LaunchTarget::Host { id, mux }
+                    if intent.prepared.is_none() && !intent.connecting =>
+                {
+                    Ok((id.clone(), mux.clone()))
                 }
                 _ => Err(HOST_BUSY.into()),
             }
@@ -299,7 +350,7 @@ impl LaunchState {
             if intent.prepared.is_some() || intent.connecting {
                 return Err(HOST_BUSY.into());
             }
-            let prepared = PreparedHost { hosts };
+            let prepared = PreparedHost { hosts, mux };
             intent.prepared = Some(prepared.clone());
             Ok(prepared)
         })
@@ -336,7 +387,7 @@ impl LaunchState {
         let prepared = self
             .with_owned(receipt, access, |pending| {
                 let intent = pending.as_mut().unwrap();
-                if !matches!(&intent.target,LaunchTarget::Host(id) if id==host_id) {
+                if !matches!(&intent.target,LaunchTarget::Host { id, .. } if id==host_id) {
                     return Err(HOST_CHANGED.into());
                 }
                 if intent.connecting {
@@ -582,6 +633,131 @@ mod tests {
         (dir, state)
     }
     #[test]
+    fn cold_host_mux_composition_is_admitted_in_both_option_orders() {
+        for (mux, expected) in [
+            (
+                "tmux",
+                MuxTarget::Tmux {
+                    server: "default".into(),
+                },
+            ),
+            (
+                "tmux:default",
+                MuxTarget::Tmux {
+                    server: "default".into(),
+                },
+            ),
+            (
+                "tmux:世界 '$(printf NO);",
+                MuxTarget::Tmux {
+                    server: "世界 '$(printf NO);".into(),
+                },
+            ),
+            ("herdr", MuxTarget::Herdr),
+        ] {
+            for args in [
+                arguments(&["--host", "saved", "--mux", mux]),
+                arguments(&["-mux", mux, "-host=saved"]),
+                arguments(&["--host=saved", &format!("--mux={mux}")]),
+            ] {
+                assert_eq!(
+                    parse(args, || panic!("remote launch must not inspect cwd")).unwrap(),
+                    Some(LaunchTarget::Host {
+                        id: "saved".into(),
+                        mux: Some(expected.clone())
+                    })
+                );
+            }
+        }
+    }
+    #[test]
+    fn malformed_mux_composition_and_invalid_native_server_names_fail_before_startup() {
+        for args in [
+            vec!["--mux", "tmux"],
+            vec!["--host", "saved", "--mux"],
+            vec!["--host", "saved", "--mux="],
+            vec!["--mux", "herdr", "--dir", "."],
+            vec!["--dir", ".", "--mux", "tmux"],
+            vec!["--host", "saved", "--mux", "tmux", "--mux", "herdr"],
+            vec!["--mux", "herdr", "--host", "saved", "--host", "other"],
+            vec!["--host", "saved", "--mux", "zellij"],
+            vec![
+                "--mux",
+                "herdr",
+                "lazysh://theme?data=YWJj",
+                "--host",
+                "saved",
+            ],
+        ] {
+            assert!(
+                parse(arguments(&args), || panic!(
+                    "invalid selector must not read cwd"
+                ))
+                .is_err(),
+                "{args:?}"
+            );
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            "/tmp/socket",
+            "a/b",
+            "line\nbreak",
+            &"a".repeat(65),
+            &"世".repeat(22),
+        ] {
+            assert!(parse(
+                arguments(&["--host", "saved", "--mux", &format!("tmux:{name}")]),
+                || unreachable!()
+            )
+            .is_err());
+        }
+    }
+    #[test]
+    fn prepared_mux_context_survives_explicit_retry_without_writing_saved_profiles() {
+        use crate::ssh::test_support::{ready_lease, unlocked_access};
+        for (mux, expected) in [
+            (
+                "tmux",
+                serde_json::json!({"kind":"tmux","tmuxServer":"default"}),
+            ),
+            (
+                "tmux:世界 '$(printf NO);",
+                serde_json::json!({"kind":"tmux","tmuxServer":"世界 '$(printf NO);"}),
+            ),
+            ("herdr", serde_json::json!({"kind":"herdr"})),
+        ] {
+            let (dir, hosts) = saved_hosts(&["saved"]);
+            let before = std::fs::read(dir.path().join("hosts.json")).unwrap();
+            let access = unlocked_access();
+            let lease = ready_lease(&access);
+            let target = parse(
+                arguments(&["--host", "saved", "--mux", mux]),
+                || unreachable!(),
+            )
+            .unwrap();
+            let launch = LaunchState::new(target);
+            let receipt = launch.read(&lease).unwrap().host_receipt.unwrap();
+            let prepared = launch.prepare_host(&hosts, &receipt, &lease).unwrap();
+            assert_eq!(serde_json::to_value(&prepared).unwrap()["mux"], expected);
+            let attempt = launch.begin_host(&receipt, &lease, "saved").unwrap();
+            attempt.check_host(&prepared.hosts[0]).unwrap();
+            drop(attempt);
+            let retry = launch.begin_host(&receipt, &lease, "saved").unwrap();
+            assert_eq!(
+                serde_json::to_value(&retry.prepared).unwrap()["mux"],
+                expected
+            );
+            retry.finish();
+            assert!(launch.begin_host(&receipt, &lease, "saved").is_err());
+            assert_eq!(
+                std::fs::read(dir.path().join("hosts.json")).unwrap(),
+                before
+            );
+        }
+    }
+    #[test]
     fn saved_host_arguments_are_opaque_bounded_and_never_resolve_as_directories() {
         for id in [
             "legacy=host 世界",
@@ -595,7 +771,10 @@ mod tests {
             ] {
                 assert_eq!(
                     parse(args, || panic!("host selection must not read cwd")).unwrap(),
-                    Some(LaunchTarget::Host(id.into()))
+                    Some(LaunchTarget::Host {
+                        id: id.into(),
+                        mux: None
+                    })
                 );
             }
         }
@@ -606,7 +785,7 @@ mod tests {
             vec!["--host", "a", "--dir", "."],
             vec!["--dir", ".", "--host", "a"],
             vec!["--mux", "tmux"],
-            vec!["--host", "a", "--mux", "herdr"],
+            vec!["--host", "a", "--mux", "herdr:other"],
             vec!["lazysh://theme?data=YWJj", "--host", "a"],
             vec!["--host", "line\nbreak"],
             vec!["--host", &"x".repeat(101)],
@@ -815,6 +994,31 @@ mod tests {
             ))
             .unwrap()
             .is_none());
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn all_owned_option_values_reject_non_unicode_without_lossy_replacement() {
+        use std::os::unix::ffi::OsStringExt;
+        for flag in ["--host", "--mux", "--dir"] {
+            for args in [
+                vec![
+                    OsString::from("lazysh"),
+                    OsString::from(flag),
+                    OsString::from_vec(vec![0xff]),
+                ],
+                vec![
+                    OsString::from("lazysh"),
+                    OsString::from_vec([flag.as_bytes(), b"=", &[0xff]].concat()),
+                ],
+            ] {
+                assert_eq!(
+                    parse(args, || panic!("invalid option must not read cwd"))
+                        .err()
+                        .as_deref(),
+                    Some("Launch option values must be valid Unicode.")
+                );
+            }
         }
     }
     #[cfg(unix)]
