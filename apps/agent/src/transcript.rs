@@ -143,8 +143,10 @@ pub fn read_inline_images(
     checkpointed: bool,
     checkpoint: Option<&str>,
 ) -> Result<TranscriptPage> {
-    if !matches!(agent, TranscriptAgent::Claude | TranscriptAgent::GrokAcp)
-        || (checkpointed && !matches!(agent, TranscriptAgent::GrokAcp))
+    if !matches!(
+        agent,
+        TranscriptAgent::Claude | TranscriptAgent::GrokAcp | TranscriptAgent::Codex
+    ) || (checkpointed && !matches!(agent, TranscriptAgent::GrokAcp))
     {
         return Err(Error::InvalidArgument);
     }
@@ -359,9 +361,13 @@ fn block(kind: &str, text: String, id: Option<String>, name: Option<String>) -> 
     value
 }
 fn content(value: &Value) -> Vec<Value> {
-    content_with_errors(value, false, false)
+    content_with_errors(value, false, None)
 }
-fn content_with_errors(value: &Value, claude_errors: bool, inline_images: bool) -> Vec<Value> {
+fn content_with_errors(
+    value: &Value,
+    claude_errors: bool,
+    image_agent: Option<TranscriptAgent>,
+) -> Vec<Value> {
     if let Some(text) = value.as_str() {
         return vec![block("text", text.into(), None, None)];
     }
@@ -383,14 +389,22 @@ fn content_with_errors(value: &Value, claude_errors: bool, inline_images: bool) 
                         None,
                         None,
                     );
-                    if inline_images && kind == "image" && part["source"]["type"] == "base64" {
-                        if let Some(preview) = part["source"]["media_type"]
-                            .as_str()
-                            .zip(part["source"]["data"].as_str())
-                            .and_then(|(mime, data)| inline_image::admit_base64(mime, data))
+                    let preview = match (image_agent, kind) {
+                        (Some(TranscriptAgent::Claude), "image")
+                            if part["source"]["type"] == "base64" =>
                         {
-                            attachment["imagePreview"] = preview;
+                            part["source"]["media_type"]
+                                .as_str()
+                                .zip(part["source"]["data"].as_str())
+                                .and_then(|(mime, data)| inline_image::admit_base64(mime, data))
                         }
+                        (Some(TranscriptAgent::Codex), "input_image") => part["image_url"]
+                            .as_str()
+                            .and_then(inline_image::admit_data_url),
+                        _ => None,
+                    };
+                    if let Some(preview) = preview {
+                        attachment["imagePreview"] = preview;
                     }
                     attachment
                 }
@@ -512,7 +526,8 @@ fn normalize_options(
             let blocks = content_with_errors(
                 message.get("content")?,
                 matches!(agent, TranscriptAgent::Claude),
-                inline_images && matches!(agent, TranscriptAgent::Claude) && role == "user",
+                (inline_images && matches!(agent, TranscriptAgent::Claude) && role == "user")
+                    .then_some(TranscriptAgent::Claude),
             );
             let mut usage = serde_json::Map::new();
             for (source, target) in [
@@ -538,7 +553,14 @@ fn normalize_options(
                     if role != "user" && role != "assistant" {
                         return None;
                     }
-                    (role, content(payload.get("content")?))
+                    (
+                        role,
+                        content_with_errors(
+                            payload.get("content")?,
+                            false,
+                            (inline_images && role == "user").then_some(TranscriptAgent::Codex),
+                        ),
+                    )
                 }
                 "function_call" | "custom_tool_call" => (
                     "assistant",
