@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep About source revisions and expanded legal notices within mobile dialog bounds, including clean builds. Long tokens wrap and preserved notice indentation scrolls within keyboard-focusable legal blocks; legal bytes and source links remain unchanged.
+
 - Disable Turbo caching for client production builds so About/source metadata always embeds the current Git revision and dirty state. Other packages keep their existing cache behavior; source URL and metadata rules are unchanged.
 
 - Add default-off companion publishing of new normalized lifecycle transitions to an explicitly bound self-hosted webhook relay. Admission is atomic with local ingest; bounded flush is explicitly invoked, with stable retry identities and persistent disable. No sender schedule, APNs/FCM delivery or deployment is installed.

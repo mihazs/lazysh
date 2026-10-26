@@ -30,7 +30,15 @@ for(const labels of aboutLocales)test(`${labels.locale} About preserves legal by
   const document=await session.send('DOM.getDocument');const codeNode=await session.send('DOM.querySelector',{nodeId:document.root.nodeId,selector:'[role="dialog"] code'});
   const fonts=await session.send('CSS.getPlatformFontsForNode',{nodeId:codeNode.nodeId});await session.detach();
   await testInfo.attach('about-layout.json',{body:JSON.stringify({geometry,fonts},null,2),contentType:'application/json'});
+  expect(await english.locator('code').locator('..').evaluate(element=>element.scrollWidth<=element.clientWidth),'The full source revision must fit its paragraph, including in dirty development builds.').toBe(true);
   for(const panel of [english,page.getByRole('dialog')])expect(await panel.evaluate(element=>element.scrollWidth<=element.clientWidth),JSON.stringify({geometry,fonts})).toBe(true);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  for(const notice of await english.locator('pre').all()) {
+    if(await notice.evaluate(element=>element.scrollWidth>element.clientWidth)) {
+      await notice.focus();await page.keyboard.press('ArrowRight');
+      await expect.poll(()=>notice.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
+    }
+  }
+  expect(await english.locator('pre').allTextContents()).toEqual(bodies);
   expect(external).toEqual([]);expect(await page.locator('[role=dialog] img,[role=dialog] iframe').count()).toBe(0);
 });
