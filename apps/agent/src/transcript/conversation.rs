@@ -10,6 +10,19 @@ use std::{
 };
 
 pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, agent, limit, false)
+}
+
+pub fn claude_conversation_images(path: &Path, limit: u8) -> Result<TranscriptPage> {
+    conversation_options(path, TranscriptAgent::Claude, limit, true)
+}
+
+fn conversation_options(
+    path: &Path,
+    agent: TranscriptAgent,
+    limit: u8,
+    inline_images: bool,
+) -> Result<TranscriptPage> {
     if matches!(agent, TranscriptAgent::GrokAcp) {
         return super::grok_conversation::conversation(path, limit);
     }
@@ -68,7 +81,12 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
     let mut truncated = false;
     for index in chain.into_iter().rev() {
         let (position, record) = &records[index];
-        if let Some(message) = normalize(record, agent, *position) {
+        let message = if inline_images {
+            super::normalize_images(record, agent, *position)
+        } else {
+            normalize(record, agent, *position)
+        };
+        if let Some(message) = message {
             let size = super::message_size(&message)?;
             if messages.len() == usize::from(limit) || output_bytes + size > MAX_PAGE {
                 truncated = true;

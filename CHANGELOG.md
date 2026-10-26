@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Extend explicit recorded PNG/JPEG previews to Claude user images in Records and current branch. Retire selections when their row/image leaves the retained branch, so returning history needs a fresh View action. Image inclusion stays off by default; disk bytes, legacy output and live terminal controls are unchanged.
+
 - Add explicit, bounded PNG/JPEG previews for Grok recorded image chunks. Including image bytes and viewing decoded pixels are separate opt-in actions; defaults, transcript files, paging and live terminal controls remain unchanged.
 
 - Reject replaced transcript and Codex usage sources on Windows using retained file handles and volume/file identity, including same-content, same-size and same-timestamp replacements. Shared snapshot readers fail closed when identity is unavailable; Unix inode checks and append-only Follow behavior are preserved.

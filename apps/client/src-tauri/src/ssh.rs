@@ -2478,9 +2478,12 @@ fn transcript_request_command(
     if !flags.checkpointed && !flags.inline_images {
         return transcript_view_command(agent, path, offset, checkpoint, view);
     }
-    if agent != "grok-acp"
-        || !matches!(view, None | Some("records"))
-        || transcript_session_id.is_some()
+    let grok_records = agent == "grok-acp" && matches!(view, None | Some("records"));
+    let claude_images =
+        agent == "claude" && matches!(view, None | Some("records" | "conversation"));
+    if transcript_session_id.is_some()
+        || (flags.checkpointed && !grok_records)
+        || (flags.inline_images && !grok_records && !claude_images)
     {
         return Err(SshError::new(
             "invalid_input",
@@ -3276,22 +3279,37 @@ mod tests {
 
     #[test]
     fn inline_image_options_are_explicit_and_rejected_before_ssh_for_other_sources() {
-        for (agent, view, recorded_id, accepted) in [
-            ("grok-acp", None, None, true),
-            ("grok-acp", Some("records"), None, true),
-            ("claude", None, None, false),
-            ("grok-acp", Some("conversation"), None, false),
-            ("grok-acp", None, Some("recording"), false),
+        for (agent, view, recorded_id, offset, checkpoint, checkpointed, accepted) in [
+            ("grok-acp", None, None, 0, None, false, true),
+            ("grok-acp", Some("records"), None, 0, None, false, true),
+            ("claude", None, None, 0, None, false, true),
+            ("claude", Some("records"), None, 10, None, false, true),
+            ("claude", Some("conversation"), None, 0, None, false, true),
+            ("claude", Some("conversation"), None, 1, None, false, false),
+            ("claude", None, None, 0, Some("invalid"), false, false),
+            ("claude", None, None, 0, None, true, false),
+            ("claude", None, Some("recording"), 0, None, false, false),
+            ("codex", None, None, 0, None, false, false),
+            (
+                "grok-acp",
+                Some("conversation"),
+                None,
+                0,
+                None,
+                false,
+                false,
+            ),
+            ("grok-acp", None, Some("recording"), 0, None, false, false),
         ] {
             let result = transcript_request_command(
                 agent,
                 "/owned/a'b.png.jsonl",
-                0,
-                None,
+                offset,
+                checkpoint,
                 view,
                 recorded_id,
                 TranscriptFlags {
-                    checkpointed: false,
+                    checkpointed,
                     inline_images: true,
                 },
             );
