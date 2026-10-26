@@ -6,7 +6,7 @@ declare global {interface Window {
   awakeFixture:{calls:string[];active:number|null;epoch:string;ticket:number;closed:number};
 }}
 async function fixture(page:Page) {
-  await installNativeBridge(page);
+  await installNativeBridge(page,undefined,{nativeEvents:true});
   await page.addInitScript(()=>{
     const f=window.awakeFixture={calls:[] as string[],active:null as number|null,epoch:'0/11111111-1111-4111-8111-111111111111',ticket:0,closed:0};
     const status=(ticket:number)=>({epoch:f.epoch,ticket,available:true,active:f.active!==null,reason:'Synthetic native display ownership; no OS inhibitor is acquired.'});
@@ -43,10 +43,10 @@ test('visible agent board defaults off and leaving releases its exact native own
   const checkbox=page.getByRole('checkbox',{name:'Keep display awake while this board is open'});
   await expect(checkbox).toBeEnabled();await expect(checkbox).not.toBeChecked();
   expect(await page.evaluate(()=>window.awakeFixture.calls.includes('board_keep_awake_acquire'))).toBe(false);
-  await checkbox.check();await expect(page.getByText('Native display keep-awake is active.',{exact:true})).toBeVisible();
+  await checkbox.check();await expect(page.getByText('This board owns an acknowledged idle-inhibition request.',{exact:true})).toBeVisible();
   const snapshotCalls=await page.evaluate(()=>window.awakeFixture.calls.filter(name=>name==='agent_snapshot').length);
   await checkbox.uncheck();await expect.poll(()=>page.evaluate(()=>window.awakeFixture.active)).toBeNull();
-  await checkbox.check();await expect(page.getByText('Native display keep-awake is active.',{exact:true})).toBeVisible();
+  await checkbox.check();await expect(page.getByText('This board owns an acknowledged idle-inhibition request.',{exact:true})).toBeVisible();
   expect(await page.evaluate(()=>window.awakeFixture.calls.filter(name=>name==='agent_snapshot').length)).toBe(snapshotCalls);
   await page.evaluate(()=>window.awakeHarness.close());await expect.poll(()=>page.evaluate(()=>window.awakeFixture.active)).toBeNull();
   expect(await page.evaluate(()=>window.awakeFixture.calls.some(name=>['connect','disconnect','write_stdin'].includes(name)))).toBe(false);
@@ -54,11 +54,30 @@ test('visible agent board defaults off and leaving releases its exact native own
 test('revoking and unlocking does not refresh an old mounted board lease',async({page})=>{
   await fixture(page);const checkbox=page.getByRole('checkbox',{name:'Keep display awake while this board is open'});
   await expect(checkbox).toBeEnabled();await checkbox.check();
-  await expect(page.getByText('Native display keep-awake is active.',{exact:true})).toBeVisible();
+  await expect(page.getByText('This board owns an acknowledged idle-inhibition request.',{exact:true})).toBeVisible();
   const acquisitions=await page.evaluate(()=>window.awakeFixture.calls.filter(name=>name==='board_keep_awake_acquire').length);
   await page.evaluate(()=>window.awakeHarness.revoke());await expect.poll(()=>page.evaluate(()=>window.awakeFixture.active)).toBeNull();
   expect(await page.evaluate(()=>window.awakeFixture.calls.filter(name=>name==='board_keep_awake_acquire').length)).toBe(acquisitions);
-  await expect(page.getByText('Native display keep-awake is active.',{exact:true})).toHaveCount(0);
+  await expect(page.getByText('This board owns an acknowledged idle-inhibition request.',{exact:true})).toHaveCount(0);
   await expect(checkbox).toBeDisabled();
+  await page.evaluate(()=>window.awakeHarness.close());
+});
+test('native loss while focused clears only its original owner without automatic retry',async({page})=>{
+  await fixture(page);const checkbox=page.getByRole('checkbox',{name:'Keep display awake while this board is open'});
+  await expect(checkbox).toBeEnabled();await checkbox.check();
+  const active=page.getByText('This board owns an acknowledged idle-inhibition request.',{exact:true});await expect(active).toBeVisible();
+  const acquired=await page.evaluate(()=>window.awakeFixture.calls.filter(name=>name==='board_keep_awake_acquire').length);
+  await page.evaluate(()=>{
+    const f=window.awakeFixture;window.nativeFixtureEmit('lazysh-board-keep-awake-lost',{available:true,active:false,epoch:`99/${f.epoch.split('/')[1]}`,ticket:f.active,reason:'Stale document event'});
+  });
+  await expect(active).toBeVisible();
+  await page.evaluate(()=>{
+    const f=window.awakeFixture;window.nativeFixtureEmit('lazysh-board-keep-awake-lost',{available:true,active:false,epoch:f.epoch,ticket:f.active,reason:'Owned portal connection closed.'});
+  });
+  await expect(active).toHaveCount(0);await expect(page.getByRole('alert')).toContainText('Owned portal connection closed.');
+  await page.evaluate(()=>{window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));});
+  expect(await page.evaluate(()=>window.awakeFixture.calls.filter(name=>name==='board_keep_awake_acquire').length)).toBe(acquired);
+  await expect(page.getByText('Turn this off and on to request ownership again.')).toBeVisible();
+  await checkbox.uncheck();await checkbox.check();await expect(active).toBeVisible();
   await page.evaluate(()=>window.awakeHarness.close());
 });
