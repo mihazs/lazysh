@@ -4,7 +4,7 @@ import {act, cleanup, render, screen, waitFor} from '@testing-library/react';
 import {StrictMode, useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {acknowledgeAccessReady, accessSnapshot, applyAccessStatus} from './access';
-import {captureLaunchError, useDesktopLaunch} from './useDesktopLaunch';
+import {captureLaunchError, useDesktopLaunch, type DesktopHostLaunch} from './useDesktopLaunch';
 import {LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {uiI18n, useUi} from './i18n/core';
 
@@ -19,9 +19,9 @@ function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked,reason:'',generation:String(++generation),...(locked?{}:{nonce:'a'.repeat(64)})});
   if(!locked)acknowledgeAccessReady(accessSnapshot().epoch);
 }
-function Harness({open,available=true,busy=false}:{open:(receipt:string)=>Promise<void>;available?:boolean;busy?:boolean}) {
+function Harness({open,available=true,busy=false,openHost}:{open:(receipt:string)=>Promise<void>;available?:boolean;busy?:boolean;openHost?:(launch:DesktopHostLaunch)=>Promise<void>}) {
   useUi(); const [notice,setNotice]=useState<UiErrorCause>('');
-  useDesktopLaunch(true,available,busy,open,setNotice);
+  useDesktopLaunch(true,available,busy,open,setNotice,openHost);
   return <p role="status">{notice && uiErrorText(notice)}</p>;
 }
 beforeEach(()=>{generation+=10;access();vi.mocked(invoke).mockReset();void uiI18n.changeLanguage('en');});
@@ -88,14 +88,14 @@ it('shows a finite warm rejection without opening a terminal and translates the 
     return {directoryReceipt:null,notice};
   });
   const open=vi.fn(async()=>{}); render(<Harness open={open}/>);
-  await screen.findByText(/Directory launch requires a new app instance/);
+  await screen.findByText(/This launch requires a new app instance/);
   expect(open).not.toHaveBeenCalled();
   await waitFor(()=>expect(invoke).toHaveBeenCalledWith('desktop_launch_ack',{receipt},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
   await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
-  expect(screen.getByRole('status').textContent).toMatch(/^Abrir um diretório exige/);
+  expect(screen.getByRole('status').textContent).toMatch(/^Esta abertura exige/);
   await act(async()=>{await uiI18n.changeLanguage('es');});
-  expect(screen.getByRole('status').textContent).toMatch(/^Abrir un directorio requiere/);
-  expect(uiErrorText(new LocalUiError('desktopLaunchWarmUnsupported'))).toMatch(/^Abrir un directorio requiere/);
+  expect(screen.getByRole('status').textContent).toMatch(/^Esta apertura requiere/);
+  expect(uiErrorText(new LocalUiError('desktopLaunchWarmUnsupported'))).toMatch(/^Esta apertura requiere/);
   expect(captureLaunchError('raw filesystem error')).toBe('raw filesystem error');
 });
 it('translates a finite native Windows directory refusal across all UI locales',async()=>{
@@ -111,6 +111,44 @@ it('translates a finite native Windows directory refusal across all UI locales',
 it('rejects malformed native metadata instead of guessing a successful or empty launch',async()=>{
   vi.mocked(invoke).mockResolvedValue({directoryReceipt:'not-a-receipt',notice:null});
   const open=vi.fn(async()=>{}); render(<Harness open={open}/>);
-  await screen.findByText('This directory launch is no longer available. Run the directory command again.');
+  await screen.findByText('This launch request is no longer available. Run the command again.');
   expect(open).not.toHaveBeenCalled();
+});
+
+const launchHost={id:'legacy-host 世界',name:'Saved host',hostname:'host.test',port:22,username:'owner'};
+it('defers host admission until desktop capability and prepares once with its original lease under StrictMode',async()=>{
+  let offered=false;
+  vi.mocked(invoke).mockImplementation(async command=>command==='desktop_launch_prepare_host'?{hosts:[launchHost]}:{directoryReceipt:null,hostReceipt:offered?null:(offered=true,receipt),notice:null});
+  const open=vi.fn(async()=>{}),openHost=vi.fn(async(_launch:DesktopHostLaunch)=>{});
+  const view=render(<StrictMode><Harness open={open} openHost={openHost} available={false}/></StrictMode>);
+  await act(async()=>{});expect(invoke).not.toHaveBeenCalled();
+  view.rerender(<StrictMode><Harness open={open} openHost={openHost}/></StrictMode>);
+  await waitFor(()=>expect(openHost).toHaveBeenCalledTimes(1));
+  const handoff=openHost.mock.calls[0][0];expect(handoff.receipt).toBe(receipt);expect(handoff.hosts).toEqual([launchHost]);
+  expect(Object.isFrozen(handoff)).toBe(true);expect(Object.isFrozen(handoff.hosts[0])).toBe(true);
+  expect(handoff.lease.headers).toEqual({'X-Lazysh-Access':'a'.repeat(64)});
+  expect(open).not.toHaveBeenCalled();
+});
+it.each(['HOST_LAUNCH_MISSING','HOST_LAUNCH_AMBIGUOUS'])('does not retry native host preparation failure after busy cycles: %s',async code=>{
+  vi.mocked(invoke).mockImplementation(async command=>{if(command==='desktop_launch_prepare_host')throw code;return {directoryReceipt:null,hostReceipt:receipt,notice:null};});
+  const openHost=vi.fn(async()=>{}),open=vi.fn(async()=>{});const view=render(<Harness open={open} openHost={openHost}/>);
+  await waitFor(()=>expect(screen.getByRole('status').textContent).not.toBe(''));
+  view.rerender(<Harness open={open} openHost={openHost} busy/>);view.rerender(<Harness open={open} openHost={openHost}/>);
+  await act(async()=>{event.refresh?.();});
+  expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='desktop_launch_prepare_host')).toHaveLength(1);
+  expect(openHost).not.toHaveBeenCalled();expect(open).not.toHaveBeenCalled();
+});
+it.each(['success','failure'] as const)('drops a stale prepared-host %s on the same old mount after revoke/reunlock',async outcome=>{
+  let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
+  vi.mocked(invoke).mockImplementation(async command=>command==='desktop_launch_prepare_host'?new Promise((yes,no)=>{finish=yes;fail=no;}):{directoryReceipt:null,hostReceipt:receipt,notice:null});
+  const openHost=vi.fn(async()=>{}),open=vi.fn(async()=>{});render(<Harness open={open} openHost={openHost}/>);
+  await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(2));
+  await act(async()=>{access(true);access();});
+  await act(async()=>{if(outcome==='success')finish({hosts:[launchHost]});else fail('HOST_LAUNCH_CHANGED');});
+  expect(openHost).not.toHaveBeenCalled();expect(screen.getByRole('status').textContent).toBe('');
+});
+it('keeps a raw host callback sentinel verbatim while native-owned failures remain branded',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='desktop_launch_prepare_host'?{hosts:[launchHost]}:{directoryReceipt:null,hostReceipt:receipt,notice:null});
+  render(<Harness open={vi.fn(async()=>{})} openHost={vi.fn(async()=>{throw 'HOST_LAUNCH_CHANGED';})}/>);
+  await screen.findByText('HOST_LAUNCH_CHANGED');
 });
