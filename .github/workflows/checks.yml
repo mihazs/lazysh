@@ -198,8 +198,10 @@ jobs:
           sudo chown "$(id -u):$(id -g)" /dev/kvm
           sudo chmod 0600 /dev/kvm
       - name: Run native Android instrumentation
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b
         with:
+          # NativeActivityFixture owns screen/keyguard readiness; avoid early MENU input.
+          unlock-screen: false
           api-level: 36
           target: default
           arch: x86_64
