@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep an already-visible App Lock authentication failure in the current interface language without repeating native configuration or changing opt-in, access authority or defaults.
+
 - Reject observed truncated, replaced or mixed Claude conversation captures while preserving ordinary append-only growth during Follow. Parse an admitted bounded prefix without retries; defaults, polling, raw Records and Grok behavior are unchanged.
 
 - Keep retained shortcut-parser validation errors in the current interface language while preserving literal key/step data, drafts and exact input bytes. Accepted grammar, stored bindings, defaults and native behavior are unchanged.
