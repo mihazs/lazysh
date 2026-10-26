@@ -43,6 +43,10 @@ impl Job {
 pub struct Reserved {
     pub upload_id: String,
 }
+#[derive(Debug, Serialize)]
+pub struct Uploaded {
+    pub path: String,
+}
 #[derive(Serialize)]
 pub struct Cancellation {
     pub outcome: &'static str,
@@ -344,9 +348,10 @@ pub(crate) struct Work {
     job: Arc<Job>,
 }
 impl Work {
-    async fn run(&self, transfer: impl std::future::Future<Output = Result<()>>) -> Result<()> {
-        tokio::select! {biased; _=self.cancelled()=>return Err(cancelled()),result=transfer=>result?}
-        self.finish()
+    async fn run<T>(&self, transfer: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+        let result = tokio::select! {biased; _=self.cancelled()=>return Err(cancelled()),result=transfer=>result?};
+        self.finish()?;
+        Ok(result)
     }
     async fn cancelled(&self) {
         self.cancellation().await;
@@ -423,7 +428,7 @@ pub async fn upload_file(
     upload_id: String,
     path: String,
     data: Vec<u8>,
-) -> AccessResult<()> {
+) -> AccessResult<Uploaded> {
     lease
         .run(async {
             let work = state

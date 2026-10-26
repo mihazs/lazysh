@@ -123,7 +123,7 @@ export const api = {
   cancelUpload: (sessionId: string, uploadId: string) =>
     remoteInvoke<{outcome:'cancellation_requested'|'unknown_or_settled'}>("upload_cancel", { sessionId, uploadId }),
   uploadFile: (sessionId: string, path: string, data: number[], uploadId: string) =>
-    remoteInvoke<void>("upload_file", { sessionId, path, data, uploadId }),
+    remoteInvoke<{path:string}>("upload_file", { sessionId, path, data, uploadId }),
   diff: (sessionId: string, path: string, staged = false) =>
     remoteInvoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>

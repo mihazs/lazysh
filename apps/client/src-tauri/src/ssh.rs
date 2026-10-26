@@ -1,3 +1,5 @@
+#[path = "ssh/upload_path.rs"]
+mod upload_path;
 use crate::app_lock::{AccessLease, AccessState, Guarded, GuardedError};
 use russh::{
     client,
@@ -2172,7 +2174,7 @@ async fn upload_file(
     session_id: String,
     path: String,
     data: Vec<u8>,
-) -> AccessResult<()> {
+) -> AccessResult<crate::attachment_upload::Uploaded> {
     let reserved = crate::attachment_upload::upload_reserve(
         lease.clone(),
         state.clone(),
@@ -2203,7 +2205,7 @@ pub(crate) async fn transfer_file(
     path: String,
     data: Vec<u8>,
     ownership: &crate::attachment_upload::Work,
-) -> Result<()> {
+) -> Result<crate::attachment_upload::Uploaded> {
     check_path(&path)?;
     if data.len() > UPLOAD_LIMIT {
         return Err(SshError::new(
@@ -2228,8 +2230,13 @@ pub(crate) async fn transfer_file(
         )
     })?
 }
-pub(crate) async fn transfer_sftp(sftp: SftpSession, path: String, data: Vec<u8>) -> Result<()> {
+pub(crate) async fn transfer_sftp(
+    sftp: SftpSession,
+    path: String,
+    data: Vec<u8>,
+) -> Result<crate::attachment_upload::Uploaded> {
     let sftp = UploadSftp(Some(sftp));
+    let path = upload_path::destination(sftp.0.as_ref().unwrap(), path).await?;
     let mut file = sftp
         .0
         .as_ref()
@@ -2247,7 +2254,7 @@ pub(crate) async fn transfer_sftp(sftp: SftpSession, path: String, data: Vec<u8>
         ));
     }
     file.shutdown().await?;
-    Ok(())
+    Ok(crate::attachment_upload::Uploaded { path })
 }
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -4659,7 +4666,7 @@ mod tests {
         let port = socket.local_addr().unwrap().port();
         drop(socket);
         let config = dir.path().join("sshd_config");
-        fs::write(&config,format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\nSubsystem sftp internal-sftp\n",key_path.display(),authorized.display(),dir.path().join("sshd.pid").display())).unwrap();
+        fs::write(&config,format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\nSubsystem sftp internal-sftp -d {}\n",key_path.display(),authorized.display(),dir.path().join("sshd.pid").display(),dir.path().display())).unwrap();
         let sshd = std::process::Command::new("sh")
             .args(["-c", "command -v sshd"])
             .output()
@@ -4956,6 +4963,51 @@ mod tests {
             )
             .await
             .unwrap();
+        let agent_directory = dir.path().join("agent-workspace");
+        fs::create_dir(&agent_directory).unwrap();
+        for relative_name in ["relative image' 世界.txt", "literal\\filename.txt"] {
+            let relative_upload = upload_file(
+                access_lease(),
+                app.state(),
+                id.clone(),
+                format!("./{relative_name}"),
+                b"relative fixture".to_vec(),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            let expected_destination = dir
+                .path()
+                .join(relative_name)
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(
+                fs::read(&expected_destination).unwrap(),
+                b"relative fixture"
+            );
+            assert!(!agent_directory.join(relative_name).exists());
+            let destination = serde_json::to_value(relative_upload).unwrap();
+            assert_eq!(
+                destination["path"], expected_destination,
+                "upload result must identify the SFTP destination independently of agent CWD"
+            );
+            let command = format!(
+                "cd {} && cat -- {}",
+                quote(&agent_directory.to_string_lossy()),
+                quote(destination["path"].as_str().unwrap())
+            );
+            assert_eq!(
+                exec_for_access(
+                    &app.state::<AppState>().session(&id).await.unwrap(),
+                    command,
+                    &access_lease()
+                )
+                .await
+                .unwrap(),
+                "relative fixture"
+            );
+        }
         let upload = dir
             .path()
             .join("new file' safe.txt")

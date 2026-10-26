@@ -5,7 +5,7 @@ import {invoke} from '@tauri-apps/api/core';
 import AttachmentPanel from './AttachmentPanel';
 import {FilesPanel} from './SessionTools';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from './access';
-import {attachmentFile,attachmentReceipt,attachmentSession} from './test/attachmentData';
+import {attachmentFile,attachmentPath,attachmentReceipt,attachmentSession} from './test/attachmentData';
 import {t} from './i18n/core';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCore(original));
 beforeEach(()=>{
@@ -34,7 +34,7 @@ it.each(['attachment','files'] as const)('%s cancels an exact late reserve ackno
 });
 it.each(['attachment','files'] as const)('%s cancellation cannot publish a late successful transfer or refresh the directory',async kind=>{
   let complete!:()=>void;
-  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:command==='upload_file'?new Promise<void>(resolve=>{complete=resolve;}):command==='list_directory'?[]:{outcome:'cancellation_requested'});
+  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:command==='upload_file'?new Promise(resolve=>{complete=()=>resolve({path:attachmentPath});}):command==='list_directory'?[]:{outcome:'cancellation_requested'});
   const owner=await mount(kind);await waitFor(()=>expect(complete).toBeTypeOf('function'));
   owner.cancel();await waitFor(()=>expect(commands()).toContain('upload_cancel'));
   await act(async()=>{complete();});
@@ -48,7 +48,7 @@ it.each([['attachment',false],['files',false],['attachment',true],['files',true]
     if(command==='upload_reserve')return {uploadId:attachmentReceipt};
     if(command==='list_directory')return [];
     if(command==='upload_cancel')return new Promise((_yes,no)=>{rejectCancel=no;});
-    return new Promise<void>(resolve=>{complete=resolve;});
+    return new Promise(resolve=>{complete=()=>resolve({path:attachmentPath});});
   });
   const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
   try{
@@ -82,7 +82,7 @@ it.each(['attachment','files'] as const)('%s unmount cleans a late receipt using
 });
 it('a held transfer cannot publish or freshen authority after lock and unlock in the old mounted view',async()=>{
   let complete!:()=>void;
-  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:new Promise<void>(resolve=>{complete=resolve;}));
+  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:new Promise(resolve=>{complete=()=>resolve({path:attachmentPath});}));
   await mount('attachment');await waitFor(()=>expect(complete).toBeTypeOf('function'));
   await act(async()=>{
     const generation=BigInt(accessSnapshot().status!.generation)+1n;
@@ -92,4 +92,16 @@ it('a held transfer cannot publish or freshen authority after lock and unlock in
   });
   expect(screen.queryByLabelText(t('attachmentHostPath'))).toBeNull();expect(screen.queryByRole('alert')).toBeNull();
   for(const call of vi.mocked(invoke).mock.calls)expect(call[2]).toEqual({headers:{'X-Lazysh-Access':'d'.repeat(64)}});
+});
+
+it.each(['attachment','files'] as const)('%s consumes only the native canonical upload destination',async kind=>{
+  const canonical="/sftp/home/image's 世界.txt";
+  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:command==='upload_file'?{path:canonical}:[]);
+  await mount(kind);
+  if(kind==='attachment'){
+    expect(await screen.findByLabelText(t('attachmentHostPath'))).toHaveProperty('value',"'/sftp/home/image'\\''s 世界.txt'");
+    expect(screen.getByLabelText(t('attachmentPrompt'))).toHaveProperty('value',t('attachmentPromptTemplate',{path:"'/sftp/home/image'\\''s 世界.txt'"}));
+  }else{
+    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('list_directory',{sessionId:attachmentSession,path:'/sftp/home'},expect.anything()));
+  }
 });

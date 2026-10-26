@@ -1,5 +1,6 @@
 export const attachmentReceipt='4d1c9ace-94cf-4588-8775-3888061a05bd';
 export const attachmentSession='ssh:attachment-locale';
+export const attachmentUploadedPath="/sftp/home/actual {{path}}'s <file>.png";
 export const attachmentPath="/work/raw {{path}}'s <file>.txt";
 export const attachmentDraft='My exact prompt {{name}} <img src=secret> 中文';
 export const attachmentBytes=[0,255,10,39,128,65];
