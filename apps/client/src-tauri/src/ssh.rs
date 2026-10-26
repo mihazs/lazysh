@@ -4526,7 +4526,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = tauri::test::mock_builder()
             .plugin(tauri_plugin_lazysh_vault::init())
-            .invoke_handler(tauri::generate_handler![list_hosts])
+            .invoke_handler(tauri::generate_handler![
+                list_hosts,
+                crate::attachment_upload::upload_cancel,
+                crate::attachment_upload::upload_reserve
+            ])
             .build(tauri::generate_context!(test = true))
             .unwrap();
         app.manage(AppState::new(dir.path().into()).unwrap());
@@ -4548,25 +4552,61 @@ mod tests {
         )
         .build()
         .unwrap();
-        let request = |url: &str| tauri::webview::InvokeRequest {
-            cmd: "list_hosts".into(),
-            callback: tauri::ipc::CallbackFn(0),
-            error: tauri::ipc::CallbackFn(1),
-            url: url.parse().unwrap(),
-            body: Default::default(),
-            headers: Default::default(),
-            invoke_key: tauri::test::INVOKE_KEY.to_string(),
-        };
-        let local = tauri::test::get_ipc_response(&main, request("http://127.0.0.1:1420"));
-        assert!(local.is_ok(), "{local:?}");
-        assert!(local
-            .unwrap()
-            .deserialize::<Vec<Host>>()
-            .unwrap()
-            .is_empty());
-        assert!(tauri::test::get_ipc_response(&other, request("http://127.0.0.1:1420")).is_err());
-        assert!(tauri::test::get_ipc_response(&main, request("https://example.com")).is_err());
-        assert!(tauri::test::get_ipc_response(&main, request("http://127.0.0.1:41234")).is_err());
+        let request =
+            |url: &str, command: &str, body: serde_json::Value| tauri::webview::InvokeRequest {
+                cmd: command.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: url.parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            };
+        let local_url = "http://127.0.0.1:1420";
+        let hosts = tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "list_hosts", serde_json::json!({})),
+        )
+        .unwrap();
+        assert!(hosts.deserialize::<Vec<Host>>().unwrap().is_empty());
+        let cancel = serde_json::json!({"sessionId":"not-connected","uploadId":"unknown-receipt"});
+        let reserve = serde_json::json!({"sessionId":"not-connected","size":0});
+        let response = tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "upload_cancel", cancel.clone()),
+        )
+        .expect("the allowed webview must reach the real cancellation handler");
+        assert_eq!(
+            response.deserialize::<serde_json::Value>().unwrap()["outcome"],
+            "unknown_or_settled"
+        );
+        let error = tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "upload_reserve", reserve.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error["kind"], "disconnected",
+            "the real reserve handler must return its session error, not an ACL denial: {error}"
+        );
+        for (command, body) in [
+            ("list_hosts", serde_json::json!({})),
+            ("upload_cancel", cancel),
+            ("upload_reserve", reserve),
+        ] {
+            assert!(tauri::test::get_ipc_response(
+                &other,
+                request(local_url, command, body.clone())
+            )
+            .is_err());
+            for remote in ["https://example.com", "http://127.0.0.1:41234"] {
+                assert!(tauri::test::get_ipc_response(
+                    &main,
+                    request(remote, command, body.clone())
+                )
+                .is_err());
+            }
+        }
     }
 
     #[cfg(unix)]
