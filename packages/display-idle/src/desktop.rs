@@ -1,6 +1,6 @@
 use crate::{policy::Policy, Request, Status};
 use std::{cell::RefCell, sync::mpsc};
-use tauri::{Manager, Runtime};
+use tauri::Runtime;
 mod platform;
 thread_local! { static OWNERSHIP: RefCell<Policy<platform::Hold>> = RefCell::new(Policy::default()); }
 
@@ -44,15 +44,7 @@ pub(super) fn command<R: Runtime>(
                 "acquire" => {
                     state.admit(&request)?;
                     clear(&mut state)?;
-                    let window = handle
-                        .get_webview_window("main")
-                        .ok_or("The display owner no longer exists.")?;
-                    if !window.is_visible().map_err(|e| e.to_string())?
-                        || !window.is_focused().map_err(|e| e.to_string())?
-                        || window.is_minimized().map_err(|e| e.to_string())?
-                    {
-                        return Err("Keep awake requires a visible, focused board.".into());
-                    }
+                    let window = crate::visible_board(&handle)?;
                     state.active = Some((request.ticket, platform::Hold::acquire(&window)?));
                 }
                 "release" => {
