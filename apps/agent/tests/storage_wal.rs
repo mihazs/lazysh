@@ -23,6 +23,106 @@ fn event() -> Event {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn short_lived_writers_keep_private_sidecar_inodes_and_recover_commits() {
+    use std::os::unix::fs::MetadataExt;
+    let directory = tempfile::tempdir().unwrap();
+    let paths =
+        ["-wal", "-shm"].map(|suffix| directory.path().join(format!("events.sqlite3{suffix}")));
+    let inspect = || {
+        paths
+            .iter()
+            .map(|path| {
+                let metadata =
+                    fs::symlink_metadata(path).expect("successful Store close removed a sidecar");
+                assert!(lazysh_common::fs::owner_only(&metadata, false));
+                assert_eq!(metadata.mode() & 0o777, 0o600);
+                (metadata.dev(), metadata.ino())
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut first = Store::open(directory.path()).unwrap();
+    first.ingest(&event(), Utc::now()).unwrap();
+    let original = inspect();
+    drop(first);
+    assert_eq!(inspect(), original);
+    for _ in 0..16 {
+        let mut writer = Store::open(directory.path()).unwrap();
+        writer.ingest(&event(), Utc::now()).unwrap();
+        drop(writer);
+        assert_eq!(inspect(), original);
+    }
+    // A fresh process must recover the acknowledged rows from retained WAL.
+    let output = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path())
+        .args(["snapshot", "--limit", "50"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(snapshot["sessions"][0]["eventCount"], 17);
+    assert_eq!(inspect(), original);
+
+    // Disabling automatic close checkpoints must not disable explicit checkpoints.
+    let checkpoint = Connection::open(directory.path().join("events.sqlite3")).unwrap();
+    assert!(checkpoint
+        .set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+            true
+        )
+        .unwrap());
+    let result: (i32, i32, i32) = checkpoint
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(result, (0, 0, 0));
+    assert_eq!(fs::metadata(&paths[0]).unwrap().len(), 0);
+    drop(checkpoint);
+    let mut reopened = Store::open(directory.path()).unwrap();
+    assert_eq!(
+        reopened.snapshot(50, Utc::now()).unwrap().sessions[0].event_count,
+        17
+    );
+}
+
+#[test]
+fn normal_automatic_checkpoints_recycle_retained_wal_after_many_commits() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut writer = Store::open(directory.path()).unwrap();
+    let wal = directory.path().join("events.sqlite3-wal");
+    let mut previous = 0;
+    let mut maximum = 0;
+    let mut recycled = false;
+    // Cross the unchanged 1000-page automatic checkpoint threshold. Only
+    // metadata is inspected: no sidecar descriptor may disturb SQLite locks.
+    for _ in 0..1100 {
+        writer.ingest(&event(), Utc::now()).unwrap();
+        let bytes = fs::metadata(&wal).unwrap().len();
+        recycled |= bytes < previous;
+        maximum = maximum.max(bytes);
+        previous = bytes;
+    }
+    eprintln!("WAL recycling: max_bytes={maximum}, final_bytes={previous}");
+    assert!(
+        maximum > 1024 * 1024,
+        "fixture never reached the journal-size limit"
+    );
+    assert!(
+        recycled,
+        "normal commit checkpoints failed to recycle retained WAL"
+    );
+    assert_eq!(
+        writer.snapshot(50, Utc::now()).unwrap().sessions[0].event_count,
+        1100
+    );
+}
+
 #[test]
 fn parent_traversal_after_missing_prefix_is_rejected_before_creation() {
     let dir = tempfile::tempdir().unwrap();

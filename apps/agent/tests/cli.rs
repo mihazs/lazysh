@@ -516,8 +516,15 @@ fn lifecycle_events_update_status_without_executing_actions() {
         fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name() != "events.sqlite3"
-                && e.file_name() != "events.sqlite3-init-lock")
+            .filter(|e| !matches!(
+                e.file_name().to_str(),
+                Some(
+                    "events.sqlite3"
+                        | "events.sqlite3-init-lock"
+                        | "events.sqlite3-wal"
+                        | "events.sqlite3-shm"
+                )
+            ))
             .count(),
         0
     );
