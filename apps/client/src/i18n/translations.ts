@@ -2,6 +2,16 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  aboutDescription: ["Espaço independente para SSH e agentes de IA. Versão {{version}}, em desenvolvimento.", "Espacio independiente de SSH y agentes de IA. Versión {{version}}, en desarrollo."],
+  aboutCopyright: ["Copyright dos colaboradores do lazysh. Licenciado sob GNU GPL versão 3 ou, à sua escolha, qualquer versão posterior. Fornecido sem garantia.", "Copyright de los colaboradores de lazysh. Bajo licencia GNU GPL versión 3 o, a tu elección, cualquier versión posterior. Se proporciona sin garantía."],
+  aboutSource: ["Ver o código-fonte correspondente e o histórico da compilação", "Ver el código fuente correspondiente y el historial de compilación"],
+  aboutRevision: ["Revisão do código-fonte:", "Revisión del código fuente:"],
+  aboutDirty: ["com alterações de desenvolvimento não commitadas", "con cambios de desarrollo sin confirmar"],
+  aboutDistributedSource: ["Para uma compilação distribuída, use sua versão ou commit de CI para identificar o código-fonte correspondente. Os componentes de terceiros mantêm seus próprios avisos de copyright e licença.", "Para una compilación distribuida, usa su versión o commit de CI para identificar el código fuente correspondiente. Los componentes de terceros conservan sus propios avisos de copyright y licencia."],
+  aboutLicense: ["Licença: {{component}}", "Licencia: {{component}}"],
+  aboutMoshNotices: ["Avisos do Mosh", "Avisos de Mosh"],
+  aboutMoshExplanation: ["Mosh é copyright de seus colaboradores e licenciado sob GPL-3.0-or-later, com a exceção aplicável de vinculação com OpenSSL nos cabeçalhos do código-fonte. As modificações do lazysh, a versão original e os checksums são registrados junto ao código-fonte do transporte.", "Mosh es copyright de sus colaboradores y tiene licencia GPL-3.0-or-later, con la excepción aplicable de vinculación con OpenSSL en las cabeceras de su código fuente. Las modificaciones de lazysh, la versión original y las sumas de verificación se registran junto al código fuente del transporte."],
+  aboutMoshSource: ["Código-fonte e avisos do Mosh", "Código fuente y avisos de Mosh"],
   desktopLaunchMuxSsh: ["Aberturas de multiplexador usam SSH na conexão de controle. O transporte salvo do host permanece inalterado.", "Las aperturas de multiplexor usan SSH para la conexión de control. El transporte guardado del host no cambia."],
   desktopLaunchMuxPicker: ["Escolha uma sessão em execução para anexar em um novo terminal. Esta solicitação mantém o tipo e o servidor originais.", "Elige una sesión en ejecución para adjuntarla en un nuevo terminal. Esta solicitud conserva su tipo y servidor originales."],
   desktopLaunchMuxUnavailable: ["{{kind}} não está instalado neste host. O terminal SSH continua disponível.", "{{kind}} no está instalado en este host. El terminal SSH sigue disponible."],
