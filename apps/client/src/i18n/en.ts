@@ -415,7 +415,7 @@ export const english = {
   "appEditValue1": "Edit {{value1}}",
   "appDeleteValue1": "Delete {{value1}}",
   "appDirectConnectionLocalFirst": "Direct connection. Local first.",
-  "appAboutLazysh010": "About lazysh · 0.1.0",
+  "appAboutLazyshVersion": "About lazysh · {{version}}",
   "appCloseHostMenu": "Close host menu",
   "appOpenHosts": "Open hosts",
   "appWorkspace": "Workspace",

@@ -1,5 +1,6 @@
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
+import {appVersion} from './version';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
 import {NativeLocaleNotice} from './i18n/NativeLocaleNotice';
@@ -1608,7 +1609,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               setAbout(true);
               setSidebar(false);
             }}
-          >{t("appAboutLazysh010")}</button>
+          >{t("appAboutLazyshVersion", {version: appVersion})}</button>
         </div>
       </aside>
       {sidebar && (

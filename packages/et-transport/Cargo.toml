@@ -1,6 +1,6 @@
 [package]
 name = "lazysh-et-transport"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 license.workspace = true
 description = "Bounded in-process client transport for the released Eternal Terminal protocol"

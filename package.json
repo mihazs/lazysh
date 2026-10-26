@@ -8,6 +8,11 @@
     "packages/*"
   ],
   "scripts": {
+    "changeset": "bun ./node_modules/@changesets/cli/bin.js",
+    "release:check": "bun test ./tests/release-consistency.test.ts",
+    "release:prepare": "bun run release:version && bun run duplicates:check",
+    "release:version": "bun run release:check && bun run changeset version && LAZYSH_RELEASE_VERSION=$(bun -p \"require('./apps/client/package.json').version\") && bun pm version \"$LAZYSH_RELEASE_VERSION\" --no-git-tag-version && cargo set-version --workspace \"$LAZYSH_RELEASE_VERSION\" && bun .changeset/bun-lock.ts && bun run release:check",
+    "test:release": "bun test ./tests/release-consistency.test.ts ./tests/release-version.test.ts",
     "hooks:install": "sh .githooks/pre-commit --install",
     "duplicates:check": "jscpd --config .jscpd.json --threshold 0 --fail-on-empty .",
     "duplicates:staged": "lint-staged --hide-all --config lint-staged.config.mjs",
@@ -39,6 +44,7 @@
     "test:android-ssh": "turbo run test:android-ssh --filter=@lazysh/client"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "jscpd": "5.4.2",
     "lint-staged": "17.6.0",
     "turbo": "^2.11.10"

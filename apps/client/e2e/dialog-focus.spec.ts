@@ -1,10 +1,11 @@
 import {expect,test} from '@playwright/test';
+import clientPackage from '../package.json' with {type:'json'};
 import {installNativeBridge} from './fixtures/nativeBridge';
 
 test('closed About notices wrap through visible summaries and restore their opener',async({page})=>{
   await page.goto('/');
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  const opener=page.getByRole('button',{name:'About lazysh · 0.1.0',exact:true});await opener.click();
+  const opener=page.getByRole('button',{name:`About lazysh · ${clientPackage.version}`,exact:true});await opener.click();
   const dialog=page.getByRole('dialog',{name:'About lazysh',exact:true});
   const lastSummary=dialog.locator('summary').last();await expect(lastSummary).toBeVisible();
   const close=dialog.getByRole('button',{name:'Close About lazysh',exact:true});await close.focus();

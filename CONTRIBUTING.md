@@ -67,6 +67,14 @@ All changes target `main`; release impact does not select a different branch.
 Breaking changes must explain migration and compatibility in the PR and changelog.
 No release is published merely by merging a PR.
 
+Add a Changesets fragment with `bun run changeset` for the selected release
+impact, alongside the required root changelog entry below. The private workspace
+packages release together; generated package changelogs and synchronized
+Bun/Cargo/Tauri versions are prepared in a separate reviewed release PR. See
+[versioning without publishing](docs/versioning.md) for tooling, native version
+inheritance and the GitHub PR-creation/CI-approval prerequisites. This does not
+configure registry or application-store publishing.
+
 User-facing changes require an entry under `[Unreleased]` in `CHANGELOG.md`.
 Explicitly identify changed defaults. Internal refactors, dead-code removal and
 test-only changes are exempt. Pure repository workflow documentation is also

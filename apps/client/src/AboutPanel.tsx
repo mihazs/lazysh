@@ -1,4 +1,5 @@
 import {t, useUi} from './i18n/core';
+import {appVersion} from './version';
 import { useProtectedApi } from './access';
 import { useState } from "react";
 import license from "../../../LICENSE?raw";
@@ -27,7 +28,7 @@ export default function AboutPanel() {
     <section className="preferences-panel about-panel" aria-label={t('appAboutLazysh')}>
       <h2>lazysh</h2>
       <p>
-        {t('aboutDescription', {version: '0.1.0'})}
+        {t('aboutDescription', {version: appVersion})}
       </p>
       <p>
         {t('aboutCopyright')}

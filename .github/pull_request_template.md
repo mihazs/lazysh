@@ -47,6 +47,9 @@
       internal refactors, dead-code removal, and test-only churn.)
 - [ ] Any changed **default** (flag behaviour, config default, env var,
       response shape) is called out explicitly in "What changed" above.
+- [ ] I added the corresponding Changesets fragment (`bun run changeset`),
+      or an empty fragment for internal/test-only work. Version PRs consume
+      these fragments; they do not publish packages or applications.
 
 Reviewers treat a missing entry as blocking, so add it up front if you want
 your PR to merge on the first pass.

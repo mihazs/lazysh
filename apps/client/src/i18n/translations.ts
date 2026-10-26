@@ -438,7 +438,7 @@ const translations = {
   appEditValue1: ['Editar {{value1}}', 'Editar {{value1}}'],
   appDeleteValue1: ['Excluir {{value1}}', 'Eliminar {{value1}}'],
   appDirectConnectionLocalFirst: ['Conexão direta. Local em primeiro lugar.', 'Conexión directa. Primero lo local.'],
-  appAboutLazysh010: ['Sobre o lazysh · 0.1.0', 'Acerca de lazysh · 0.1.0'],
+  appAboutLazyshVersion: ['Sobre o lazysh · {{version}}', 'Acerca de lazysh · {{version}}'],
   appCloseHostMenu: ['Fechar menu de servidores', 'Cerrar menú de servidores'],
   appOpenHosts: ['Abrir servidores', 'Abrir servidores'],
   appWorkspace: ['Espaço de trabalho', 'Espacio de trabajo'],
