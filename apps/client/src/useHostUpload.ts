@@ -33,7 +33,7 @@ export function useHostUpload(api:Api,sessionId:string,onError:(error:unknown)=>
     alive.current=true;
     return ()=>{alive.current=false;const job=operation.current;if(job){job.abandoned=true;void sendCancel(job);}};
   },[sessionId]);
-  async function start(prepare:()=>Promise<Prepared>,complete:(path:string)=>void){
+  async function start(prepare:()=>Promise<Prepared>,complete:(path:string,uploadId:string)=>void){
     if(operation.current||!mounted())return;
     const job:Operation={abandoned:false};operation.current=job;
     setBusy(true);setCancelling(false);setCancelled(false);
@@ -48,7 +48,7 @@ export function useHostUpload(api:Api,sessionId:string,onError:(error:unknown)=>
       if(!current()){await sendCancel(job);return;}
       const uploaded=await api.uploadFile(sessionId,prepared.path,Array.from(prepared.bytes),job.receipt);
       job.settled=true;
-      if(current())complete(uploaded.path);
+      if(current())complete(uploaded.path,job.receipt);
     }catch(error){if(current())onError(error);}
     finally{
       // Keep the original operation responsible for its pending cancellation,

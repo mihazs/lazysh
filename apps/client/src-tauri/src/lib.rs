@@ -10,6 +10,7 @@ mod devices;
 mod et;
 mod forward_agent;
 mod herdr;
+mod host_clipboard;
 mod identities;
 mod keep_awake;
 mod links;
@@ -225,6 +226,7 @@ pub fn run() {
                 attachment_upload::upload_reserve,
                 attachment_upload::upload_cancel,
                 attachment_upload::upload_file,
+                host_clipboard::host_clipboard_copy,
                 ssh::get_diff,
                 ssh::list_multiplexer_sessions,
                 ssh::attach_tmux,

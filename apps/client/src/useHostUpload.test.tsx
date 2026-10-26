@@ -105,3 +105,58 @@ it.each(['attachment','files'] as const)('%s consumes only the native canonical 
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('list_directory',{sessionId:attachmentSession,path:'/sftp/home'},expect.anything()));
   }
 });
+
+it('Mac host copying is a separate exact-receipt action and never falls back to the client clipboard',async()=>{
+  const clientCopy=vi.fn();Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:clientCopy}});
+  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:command==='upload_file'?{path:attachmentPath}:undefined);
+  await mount('attachment');await screen.findByLabelText(t('attachmentHostPath'));
+  expect(commands()).toEqual(['upload_reserve','upload_file']);
+  fireEvent.click(screen.getByRole('button',{name:t('attachmentHostCopy')}));
+  await screen.findByText(t('attachmentHostCopied'));
+  expect(invoke).toHaveBeenCalledWith('host_clipboard_copy',{sessionId:attachmentSession,uploadId:attachmentReceipt},{headers:{'X-Lazysh-Access':'d'.repeat(64)}});
+  expect(clientCopy).not.toHaveBeenCalled();
+  expect(screen.getByLabelText(t('attachmentHostPath'))).toHaveProperty('value',"'/work/raw {{path}}'\\''s <file>.txt'");
+});
+it('a failed Mac host copy preserves the canonical file and draft with no automatic retry',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='upload_reserve')return {uploadId:attachmentReceipt};if(command==='upload_file')return {path:attachmentPath};
+    if(command==='host_clipboard_copy')throw new Error('Host copy unconfirmed');return undefined;
+  });
+  await mount('attachment');await screen.findByLabelText(t('attachmentHostPath'));
+  fireEvent.click(screen.getByRole('button',{name:t('attachmentHostCopy')}));
+  await screen.findByText('Host copy unconfirmed');expect(screen.getByLabelText(t('attachmentPrompt'))).toBeTruthy();
+  expect(commands().filter(command=>command==='host_clipboard_copy')).toHaveLength(1);
+});
+it.each([true,false])('cancelled Mac host copy retains cancellation errors and ignores late success, copy first=%s',async copyFirst=>{
+  let finish!:()=>void;let rejectCancel!:(error:unknown)=>void;
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='upload_reserve')return {uploadId:attachmentReceipt};if(command==='upload_file')return {path:attachmentPath};
+    if(command==='host_clipboard_copy')return new Promise<void>(resolve=>{finish=resolve;});
+    return new Promise((_resolve,reject)=>{rejectCancel=reject;});
+  });
+  await mount('attachment');await screen.findByLabelText(t('attachmentHostPath'));
+  fireEvent.click(screen.getByRole('button',{name:t('attachmentHostCopy')}));await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  fireEvent.click(screen.getByRole('button',{name:t('attachmentHostCancel')}));await waitFor(()=>expect(rejectCancel).toBeTypeOf('function'));
+  if(copyFirst)await act(async()=>{finish();});
+  await act(async()=>{rejectCancel(new Error('Copy cancellation not confirmed'));});
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Copy cancellation not confirmed');
+  if(!copyFirst)await act(async()=>{finish();});
+  expect(screen.getByText(t('attachmentHostCopyCancelled'))).toBeTruthy();expect(screen.queryByText(t('attachmentHostCopied'))).toBeNull();
+  expect(screen.getByLabelText(t('attachmentHostPath'))).toBeTruthy();
+});
+it('source edits retire only their original completed receipt before another host copy can start',async()=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:command==='upload_file'?{path:attachmentPath}:{outcome:'unknown_or_settled'});
+  await mount('attachment');await screen.findByLabelText(t('attachmentHostPath'));
+  fireEvent.change(screen.getByLabelText(t('attachmentDestination')),{target:{value:'/new/source'}});
+  expect(screen.getByRole('button',{name:t('attachmentHostCopy')})).toHaveProperty('disabled',true);
+  expect(invoke).toHaveBeenCalledWith('upload_cancel',{sessionId:attachmentSession,uploadId:attachmentReceipt},{headers:{'X-Lazysh-Access':'d'.repeat(64)}});
+  expect(commands()).not.toContain('host_clipboard_copy');
+});
+it('unmounting a pending Mac host copy cancels only its original receipt without late UI publication',async()=>{
+  let finish!:()=>void;
+  vi.mocked(invoke).mockImplementation(async command=>command==='upload_reserve'?{uploadId:attachmentReceipt}:command==='upload_file'?{path:attachmentPath}:command==='host_clipboard_copy'?new Promise<void>(resolve=>{finish=resolve;}):{outcome:'unknown_or_settled'});
+  const owner=await mount('attachment');await screen.findByLabelText(t('attachmentHostPath'));
+  fireEvent.click(screen.getByRole('button',{name:t('attachmentHostCopy')}));await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  owner.view.unmount();await act(async()=>{finish();});
+  expect(invoke).toHaveBeenLastCalledWith('upload_cancel',{sessionId:attachmentSession,uploadId:attachmentReceipt},{headers:{'X-Lazysh-Access':'d'.repeat(64)}});
+});

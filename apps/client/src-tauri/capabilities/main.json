@@ -118,6 +118,7 @@
     "allow-upload-reserve",
     "allow-upload-cancel",
     "allow-upload-file",
+    "allow-host-clipboard-copy",
     "allow-get-diff",
     "allow-list-multiplexer-sessions",
     "allow-attach-tmux",

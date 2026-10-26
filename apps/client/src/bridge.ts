@@ -118,6 +118,8 @@ export const api = {
     remoteInvoke<FileEntry[]>("list_directory", { sessionId, path }),
   readFile: (sessionId: string, path: string) =>
     remoteInvoke<string>("read_file", { sessionId, path }),
+  hostClipboardCopy: (sessionId: string, uploadId: string) =>
+    remoteInvoke<void>("host_clipboard_copy", {sessionId,uploadId}),
   reserveUpload: (sessionId: string, size: number) =>
     remoteInvoke<{uploadId:string}>("upload_reserve", { sessionId, size }),
   cancelUpload: (sessionId: string, uploadId: string) =>

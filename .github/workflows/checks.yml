@@ -126,6 +126,11 @@ jobs:
         run: "cargo test --locked -p lazysh --lib desktop_launch::"
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
+      - name: Verify uploaded paths through the owned Mac host clipboard
+        if: runner.os == 'macOS'
+        env:
+          LAZYSH_TEST_OWNED_MAC_CLIPBOARD: "1"
+        run: bunx turbo run test:host-clipboard --filter=@lazysh/client
       - name: Exercise native display-idle ownership and platform API release
         run: bunx turbo run test:rust --filter=@lazysh/display-idle
       - name: Exercise native resume policy persistence and cancellation
