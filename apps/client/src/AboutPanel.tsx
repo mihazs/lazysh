@@ -23,7 +23,7 @@ export default function AboutPanel() {
     else window.open(url, "_blank", "noopener,noreferrer");
   }
   return (
-    <section className="preferences-panel" aria-label={t('appAboutLazysh')}>
+    <section className="preferences-panel about-panel" aria-label={t('appAboutLazysh')}>
       <h2>lazysh</h2>
       <p>
         {t('aboutDescription', {version: '0.1.0'})}
@@ -49,7 +49,7 @@ export default function AboutPanel() {
       </p>
       <details>
         <summary>{t('aboutLicense', {component: 'GNU General Public License'})}</summary>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{license}</pre>
+        <pre tabIndex={0} style={{ whiteSpace: "pre-wrap" }}>{license}</pre>
       </details>
       <details>
         <summary>{t('aboutMoshNotices')}</summary>
@@ -57,7 +57,7 @@ export default function AboutPanel() {
           {t('aboutMoshExplanation')}
         </p>
         <button onClick={() => open(source)}>{t('aboutMoshSource')}</button>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{moshIos}</pre>
+        <pre tabIndex={0} style={{ whiteSpace: "pre-wrap" }}>{moshIos}</pre>
       </details>
       {[
         ["Protocol Buffers", protobufLicense],
@@ -69,7 +69,7 @@ export default function AboutPanel() {
       ].map(([name, text]) => (
         <details key={name}>
           <summary>{t('aboutLicense', {component: name})}</summary>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{text}</pre>
+          <pre tabIndex={0} style={{ whiteSpace: "pre-wrap" }}>{text}</pre>
         </details>
       ))}
     </section>

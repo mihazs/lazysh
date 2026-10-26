@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep About source revisions and expanded legal notices within mobile dialog bounds, including clean builds. Long tokens wrap and preserved notice indentation scrolls within keyboard-focusable legal blocks; legal bytes and source links remain unchanged.
+
 - Add explicit opt-in companion storage failure phase diagnostics and same-worker trace summaries. Default output, SQLite errors, durability and wait budgets remain unchanged; this adds evidence rather than repairing contention.
 
 - Keep dialog keyboard focus on visible, enabled controls, including expanded/collapsed notice summaries and ordinary links; preserve initial field focus, Escape and opener restoration.
