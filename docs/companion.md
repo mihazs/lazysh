@@ -461,3 +461,11 @@ no actual Antigravity conversation/account file or provider CLI was used. Full
 enum normalization, branch/update reconstruction, tool-result associations,
 producer truncation thresholds, crash consistency, cross-version behavior and
 real-file/device acceptance remain open integration work.
+
+### Same-invocation storage failure diagnostics
+
+Set `LAZYSH_STORAGE_DIAGNOSTICS=1` explicitly to add one bounded stderr record when a Store constructor or ingest operation fails. Only the exact value `1` enables it. Successful storage operations and default stderr remain unchanged. The original error, exit status and numeric SQLite code are preserved; failure to write the extra diagnostic does not replace the original error.
+
+The `lazysh-storage-diagnostic ` prefix is followed by a finite JSON record containing `phase`, `result` and optional numeric `sqliteCode` (null when unavailable). Phases distinguish non-SQL preparation, native bootstrap locking, SQLite open/configuration and individual constructor/ingest boundaries, including commit. Extensible error strings are classified as `OtherError`; no error text, SQL, paths, descriptors, timestamps, command arguments or lifecycle content enters this record. A phase names the call that returned the error, not an asserted underlying cause. Errors outside the instrumented Store constructor/ingest boundaries have no phase record; there is no retained last-phase state.
+
+The existing Linux concurrent-hooks syscall fixture opts in only its traced child processes. Its bounded manifest retains at most one validated finite record per worker alongside the existing worker/PID trace association, never arbitrary child stderr. This observes the same CLI invocation; the separate ignored fresh-store profiler remains a different experiment. Diagnostics do not add retries, alter validation, increase deadlines or weaken FULL synchronization. Syscall observation can itself affect scheduling, and a new phase record does not establish the cause of earlier unobserved failures.
