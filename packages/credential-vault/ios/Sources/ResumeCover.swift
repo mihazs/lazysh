@@ -7,10 +7,14 @@ final class ResumeCover: NSObject {
   private var overlay: UIView?
   private var button: UIButton?
   private var status: UILabel?
+  private var title: UILabel?
+  private var failed = false
+  private let locale: NativeUiLocale
   private var events: ((String, UInt64) -> Void)?
   private var observers: [NSObjectProtocol] = []
   var ready: Bool { overlay != nil && webview != nil }
-  override init() {
+  init(locale: NativeUiLocale = .shared) {
+    self.locale = locale
     super.init()
     let center = NotificationCenter.default
     observers.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -34,14 +38,14 @@ final class ResumeCover: NSObject {
     guard let host = host, host !== webview else { return }
     let panel = UIView(frame: host.bounds); panel.backgroundColor = UIColor(red: 0.07, green: 0.08, blue: 0.09, alpha: 1)
     panel.autoresizingMask = [.flexibleWidth, .flexibleHeight]; panel.accessibilityViewIsModal = true
-    let title = UILabel(); title.text = "lazysh is locked"; title.textColor = .white; title.font = .preferredFont(forTextStyle: .title1)
-    let detail = UILabel(); detail.text = "Unlock with this device's biometrics to continue."; detail.textColor = .white; detail.numberOfLines = 0; status = detail
-    let unlock = UIButton(type: .system); unlock.setTitle("Unlock lazysh", for: .normal); unlock.tintColor = .white
+    let title = UILabel(); title.textColor = .white; title.font = .preferredFont(forTextStyle: .title1); self.title = title
+    let detail = UILabel(); detail.textColor = .white; detail.numberOfLines = 0; status = detail; failed = false
+    let unlock = UIButton(type: .system); unlock.tintColor = .white
     unlock.isEnabled = events != nil; unlock.addTarget(self, action: #selector(unlockRequested), for: .touchUpInside); button = unlock
     let stack = UIStackView(arrangedSubviews: [title, detail, unlock]); stack.axis = .vertical; stack.spacing = 24; stack.alignment = .center
     stack.translatesAutoresizingMaskIntoConstraints = false; panel.addSubview(stack)
     NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: panel.centerXAnchor), stack.centerYAnchor.constraint(equalTo: panel.centerYAnchor), stack.widthAnchor.constraint(lessThanOrEqualTo: panel.widthAnchor, constant: -48)])
-    host.addSubview(panel); overlay = panel; render(); if events != nil { send("ready") }
+    host.addSubview(panel); overlay = panel; refreshLocale(); render(); if events != nil { send("ready") }
   }
   func register(_ callback: @escaping (String, UInt64) -> Void) {
     events = callback; button?.isEnabled = true
@@ -54,7 +58,13 @@ final class ResumeCover: NSObject {
     guard ready, gate.apply(covered: args.covered, enabled: args.enabled, generation: args.generation, nativeGeneration: args.nativeGeneration) else { return false }
     render(); return true
   }
-  func failure() { if gate.covered { status?.text = "Unlock failed or was cancelled. lazysh remains locked. Check device biometrics and retry." } }
+  func failure() { if gate.covered { failed = true; refreshLocale() } }
+  func refreshLocale() {
+    precondition(Thread.isMainThread)
+    title?.text = locale.text("resume.title")
+    status?.text = locale.text(failed ? "resume.failure" : "resume.message")
+    button?.setTitle(locale.text("resume.unlock"), for: .normal)
+  }
   @objc private func unlockRequested() { if gate.covered { send("unlock") } }
   private func send(_ kind: String) {
     #if DEBUG
@@ -63,6 +73,7 @@ final class ResumeCover: NSObject {
     events?(kind, gate.nativeGeneration)
   }
   private func render() {
+    refreshLocale()
     let covered = gate.covered
     webview?.isHidden = covered; webview?.isUserInteractionEnabled = !covered; webview?.accessibilityElementsHidden = covered
     overlay?.isHidden = !covered

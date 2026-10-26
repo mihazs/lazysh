@@ -9,12 +9,8 @@ import { validateCloudSnapshot, type CloudSnapshot } from './cloudVoice';
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn() }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
 const id = '12345678-1234-4234-8234-123456789abc';
-function snapshot(): CloudSnapshot {
-  return { origin: 'https://voice.example.com', checkedAt: 1792900000000,
-    capabilities: {schemaVersion:1, model:'gpt-transcribe', languages:['auto','pt'],maxWavBytes:960044,sampleRate:16000,maxSamples:480000},
-    quota: {windowStart:1792800000,windowEnd:1792886400,deviceLimitSamples:480000,deviceUsedSamples:0,deviceRemainingSamples:480000,
-      globalLimitSamples:960000,globalUsedSamples:0,globalRemainingSamples:960000} };
-}
+import {cloudSnapshot as snapshot} from './test/cloudVoiceData';
+
 function deferred<T>() {
   let resolve!: (value:T) => void; let reject!: (reason:Error) => void;
   const promise = new Promise<T>((yes,no)=>{resolve=yes;reject=no;});

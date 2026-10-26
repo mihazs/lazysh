@@ -1,10 +1,10 @@
 import { useProtectedInvoke } from './access';
+import {applyPreferenceIntent} from './i18n/nativeLocale';
 import { useEffect, useRef, useState } from "react";
 
 import {
   getPreferences,
   parsePreferences,
-  savePreferences,
 } from "./preferences";
 import { errorMessage } from "./SessionTools";
 
@@ -186,8 +186,11 @@ export default function SyncPanel({
       if (alive.current) onHostsChanged();
     }
     if (!alive.current) return;
-    if (result.preferences !== undefined)
-      savePreferences(parsePreferences(result.preferences));
+    if (result.preferences !== undefined) {
+      const explicitLanguage=!!result.preferences && typeof result.preferences==='object' && Object.hasOwn(result.preferences,'uiLanguage');
+      await applyPreferenceIntent(result.preferences,explicitLanguage,()=>alive.current);
+    }
+    if (!alive.current) return;
     setPreview(undefined);
     setMessage(
       `Imported ${result.hostsAdded} hosts and ${result.credentialsAdded} credential entries.`,

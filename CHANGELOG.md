@@ -2,10 +2,16 @@
 
 ## [Unreleased]
 
+- Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux explicitly remains unavailable pending bounded asynchronous desktop-portal ownership; physical idle-timeout and battery validation remain pending.
+
 This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
+
+- The dictation-history opt-in checkbox uses bounded sizing and a wrapping label
+  instead of inheriting full-width text-input sizing, keeping history controls
+  within the panel at desktop and phone widths.
 
 - Visible file-size and repository validation errors now follow interface language
   changes, including history errors with local causes. Host diagnostics remain
@@ -32,6 +38,21 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   show a localized unsupported notice; host/multiplexer CLI targets remain
   unavailable. Explicit missing directories now fail instead of falling back to
   HOME; manual local terminals and restoration retain their HOME default.
+
+- Cloud dictation enrollment/quota settings and dictation history controls now
+  support English, Brazilian Portuguese and Spanish, including visible local
+  errors. Language changes preserve pending transcription, drafts and history
+  consent/entries. The main Voice engine/recording controls remain a follow-up;
+  defaults and native diagnostics are unchanged.
+
+- App language choices now also cover native lock screens and newly created
+  biometric prompts on Android, iOS and macOS, including cold launch. Native
+  preferences own the choice on those platforms; startup never overwrites it
+  with a stale browser value. The first upgrade without a native choice uses
+  System rather than automatically migrating a browser-only choice. Reset and
+  explicit settings imports use the same
+  serialized native update. Existing OS permission-language selection and access
+  policy are unchanged; Windows, Linux and browser storage keep their defaults.
 
 - Browser preview controls, forwarding/discovery validation and element-picker
   captions/statuses now support English, Brazilian Portuguese and Spanish.

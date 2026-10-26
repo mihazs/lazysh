@@ -215,6 +215,8 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: ../../apple/MoshTests
+      - path: ../../../../../packages/display-idle/ios/Sources/DisplayIdleState.swift
+      - path: ../../../../../packages/display-idle/ios/Tests
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}.moshapptests
@@ -359,6 +361,7 @@ targets:
     deploymentTarget: "16.2"
     sources:
       - path: ../../../../../packages/credential-vault/ios/Sources/ResumeGate.swift
+      - path: ../../../../../packages/credential-vault/ios/Sources/NativeUiLocale.swift
       - path: ../../../../../packages/credential-vault/ios/Sources/ResumeCover.swift
       - path: ../../../../../packages/credential-vault/ios/Tests
     settings:

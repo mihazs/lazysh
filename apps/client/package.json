@@ -38,6 +38,7 @@
     "test:android-theme-links": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshThemeLinkAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview"
   },
   "dependencies": {
+    "@lazysh/display-idle": "workspace:*",
     "@lazysh/common": "workspace:*",
     "@lazysh/et-transport": "workspace:*",
     "@lazysh/mosh-transport": "workspace:*",

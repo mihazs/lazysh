@@ -6,6 +6,8 @@
     "main"
   ],
   "permissions": [
+    "allow-board-keep-awake-status", "allow-board-keep-awake-acquire", "allow-board-keep-awake-release",
+    "allow-ui-locale-status", "allow-ui-locale-set",
     "allow-theme-link-status", "allow-theme-link-read", "allow-theme-link-ack",
     "allow-desktop-launch-read", "allow-desktop-launch-ack",
     "allow-app-lock-status", "allow-app-lock-configure", "allow-app-lock-ready",

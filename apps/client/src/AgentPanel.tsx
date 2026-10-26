@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { Bot, RefreshCw } from 'lucide-react';
 import ApprovalPanel from './ApprovalPanel';
+import KeepAwakeControl from './KeepAwakeControl';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
 
 type AgentState = 'working' | 'needs_attention' | 'done';
@@ -59,6 +60,7 @@ export function AgentPanel({ sessionId }: { sessionId: string }) {
   useEffect(() => { setSessions([]); setLoaded(false); void refresh(); return () => { request.current++; }; }, [sessionId]);
 
   return <section className="tool-panel" aria-label="Agent activity">
+    <KeepAwakeControl sessionId={sessionId} />
     <ApprovalPanel sessionId={sessionId} />
     {loaded && loadedSessionId === sessionId && !error && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} />}
     <div className="tool-bar"><h3>Agent activity</h3><button className="subtle-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />{busy ? 'Refreshing…' : 'Refresh'}</button></div>

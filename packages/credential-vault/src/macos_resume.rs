@@ -37,6 +37,9 @@ struct NativeState {
     webviews: Vec<usize>,
     window: usize,
     notice: usize,
+    title: usize,
+    button: usize,
+    failed: bool,
     events: Option<Channel<Value>>,
     owned: Vec<usize>,
     observers: Vec<(usize, usize)>,
@@ -107,6 +110,7 @@ fn render(state: &NativeState) {
         return;
     }
     MainThreadMarker::new().expect("AppKit cover must run on the main thread");
+    refresh_labels(state);
     // The pointers are retained in `owned` until destroy(), and this function only runs on the main thread.
     unsafe {
         let cover = &*(state.view as *const NSView);
@@ -119,6 +123,24 @@ fn render(state: &NativeState) {
         if covered {
             window.makeFirstResponder(Some(cover));
         }
+    }
+}
+fn refresh_labels(state: &NativeState) {
+    // All three fields retain Cocoa objects in `owned`; callers run on the main thread.
+    unsafe {
+        (&*(state.title as *const NSTextField)).setStringValue(&NSString::from_str(
+            &crate::macos_ui_locale::text("resume.title"),
+        ));
+        (&*(state.button as *const NSButton)).setTitle(&NSString::from_str(
+            &crate::macos_ui_locale::text("resume.unlock"),
+        ));
+        (&*(state.notice as *const NSTextField)).setStringValue(&NSString::from_str(
+            &crate::macos_ui_locale::text(if state.failed {
+                "resume.failure"
+            } else {
+                "resume.message"
+            }),
+        ));
     }
 }
 impl MacResume {
@@ -158,7 +180,10 @@ impl MacResume {
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
         let size = parent.bounds().size;
-        let title = NSTextField::labelWithString(&NSString::from_str("lazysh is locked"), mtm);
+        let title = NSTextField::labelWithString(
+            &NSString::from_str(&crate::macos_ui_locale::text("resume.title")),
+            mtm,
+        );
         title.setTextColor(Some(&NSColor::whiteColor()));
         title.setFrame(NSRect::new(
             NSPoint::new(30.0, size.height / 2.0 + 45.0),
@@ -170,9 +195,10 @@ impl MacResume {
                 | NSAutoresizingMaskOptions::ViewMaxYMargin,
         );
         view.addSubview(&title);
+        state.title = keep(&mut state, title);
         let button = unsafe {
             NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Unlock lazysh"),
+                &NSString::from_str(&crate::macos_ui_locale::text("resume.unlock")),
                 Some(&view),
                 Some(sel!(unlockResume:)),
                 mtm,
@@ -186,8 +212,9 @@ impl MacResume {
             NSAutoresizingMaskOptions::ViewMinYMargin | NSAutoresizingMaskOptions::ViewMaxYMargin,
         );
         view.addSubview(&button);
+        state.button = keep(&mut state, button);
         let notice = NSTextField::labelWithString(
-            &NSString::from_str("Unlock with this device's biometrics to continue."),
+            &NSString::from_str(&crate::macos_ui_locale::text("resume.message")),
             mtm,
         );
         notice.setTextColor(Some(&NSColor::whiteColor()));
@@ -203,6 +230,7 @@ impl MacResume {
         );
         view.addSubview(&notice);
         state.notice = keep(&mut state, notice);
+        state.failed = false;
         parent.addSubview(&view);
         state.window = keep(&mut state, window);
         keep(&mut state, parent);
@@ -351,15 +379,25 @@ impl MacResume {
         if MainThreadMarker::new().is_none() {
             return;
         }
-        let Ok(state) = self.state.lock() else {
+        let Ok(mut state) = self.state.lock() else {
             return;
         };
         if state.ready && state.covered() && state.notice != 0 {
-            // The text field owns a retain in `owned`; all access is on the main thread.
-            unsafe {
-                (&*(state.notice as *const NSTextField)).setStringValue(&NSString::from_str("Unlock failed or was cancelled. lazysh remains locked. Check device biometrics and retry."));
-            }
+            state.failed = true;
+            refresh_labels(&state);
         }
+    }
+    pub fn refresh_locale(&self) {
+        if MainThreadMarker::new().is_none() {
+            return;
+        }
+        let Ok(state) = self.state.lock() else {
+            return;
+        };
+        if !state.ready {
+            return;
+        }
+        refresh_labels(&state);
     }
     pub fn destroy(&self) {
         if MainThreadMarker::new().is_none() {
@@ -375,6 +413,9 @@ impl MacResume {
             state.view = 0;
             state.window = 0;
             state.notice = 0;
+            state.title = 0;
+            state.button = 0;
+            state.failed = false;
             state.unlocked = false;
             (
                 std::mem::take(&mut state.observers),
