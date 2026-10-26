@@ -311,7 +311,7 @@ The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Un
 #### Opt-in checkpointed Grok Records
 
 Legacy Grok Records paging/output stays unchanged. Unix companions also accept
-an explicit consistency mode (the client does not yet offer Grok Follow):
+an explicit consistency mode (the client offers explicit recorded-file Follow in Records view):
 
 ```sh
 lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --checkpointed --offset 0
@@ -354,13 +354,48 @@ No stateless receipt can detect an unseen truncate/regrow restoring identical
 bytes/identity, or eventual inode reuse. This does not establish journal continuity,
 Grok release compatibility, model replay, live prompt targeting or provider access.
 
+#### Follow Grok recorded files
+
+Select Grok and Recorded messages, then choose **Start following recorded file**.
+The client explicitly requests a verified first page from zero. Existing manual
+pages remain visible until that request succeeds with a supported receipt; only
+then does the verified page replace them and following begin. An older companion
+or unsupported host pauses the attempt and preserves existing pages with its raw
+diagnostic. There is no version guessing, legacy fallback or automatic restart.
+
+**Follow recorded file** pauses/resumes the original verified view. Each read uses
+its exact SSH session, selected source, original access lease and receipt. Reads
+start two seconds after the previous request completes, one at a time; EOF and
+incomplete tails are polled even when no more complete records are reported.
+Cursor/source regressions, changed same-length prefix or rows without cursor
+progress stop reads without mixing records. Verified pages must also use canonical,
+strictly increasing physical record IDs within the newly consumed byte range;
+a forward cursor cannot replay an earlier ID and overwrite its verified text. Errors keep the last verified view
+and receipt. Resume retries that receipt; **Start following recorded file** is a
+separate explicit action that verifies a new view before replacing it and starting
+following. Manual Next/Refresh on a paused verified view also uses its receipt and
+stays paused. Explicit Open returns to manual Records only after a successful read.
+
+Hidden pages pause automatic reads, and a response invalidated while hidden cannot
+reappear after showing the page. Source/view/session changes stop following;
+original-lease loss and unmount suppress late results/errors without acquiring new
+authority. The display keeps at most 500 rows. Scrolling into history preserves
+reader position until **Jump to latest**. Controls/status/errors are localized in
+English, Brazilian Portuguese and Spanish; remote diagnostics remain verbatim.
+
+This reads raw recorded-file appends, not reconstructed model context or a proven
+live agent pane. Rewinds do not remove older displayed records. Following does not
+stage/send prompts, write terminal input, execute approvals or fetch recorded media.
+Browser fixtures establish UI/IPC scheduling, not actual provider or OS WebView
+acceptance. The native consistency limits documented above still apply.
+
 #### Optional Grok recorded conversation
 
 ```sh
 lazysh-agent transcript --agent grok-acp --view conversation --path /absolute/path/updates.jsonl --limit 50
 ```
 
-Records remain the default. Selecting Grok in the client resets its view to Records; choosing Latest conversation branch is explicit. Refresh replaces the displayed branch. Claude Follow is unchanged and is not offered for Grok. Rejected reconstruction leaves the Records selector available and displays the original diagnostic alongside an explanation; it does not silently fall back and pretend the records form a conversation.
+Records remain the default. Selecting Grok in the client resets its view to Records; choosing Latest conversation branch is explicit. Refresh replaces the displayed branch. Claude Follow is unchanged. Grok Follow is available only for Records, never this reconstructed conversation view. Rejected reconstruction leaves the Records selector available and displays the original diagnostic alongside an explanation; it does not silently fall back and pretend the records form a conversation.
 
 This view scans the selected file from byte zero: at most 16 MiB, 10,000 complete nonempty records and 256 KiB per line. It retains only normalized message actions and selected normalized tool patches, with a cumulative 16 MiB reconstruction budget (also charged for subsequently abandoned actions). All tool IDs retain the existing 256-byte limit; final cards allow at most 1,000 blocks and assembled text at most 256 KiB. Output is the latest 1–100 messages within 512 KiB, using schema v1 `active_branch`, `hasMore:false` and truthful `truncated`. An incomplete final line is left unconsumed for a later refresh. Bounds fail explicitly rather than returning an incorrectly reconstructed suffix.
 
