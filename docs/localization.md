@@ -4,7 +4,10 @@ The bundled catalogs cover English (`en`), Brazilian Portuguese (`pt-BR`) and
 Spanish (`es`) for the shell, host editor and connection dialogs, Preferences
 and its theme, font, icon and shortcut controls, and renderer access settings.
 Transcript, Usage and the notification inbox also have app-owned labels, controls
-and validation in all three catalogs. Remote file browsing, upload consent, Git
+and validation in all three catalogs. Recorded-usage validation, discovery and
+continuity errors retain finite causes and translate when rendered, including
+after a language change. Raw host diagnostics stay literal; changing language
+does not repeat a request or replace the selected transcript. Remote file browsing, upload consent, Git
 working-tree/history review, side-by-side diffs, line-comment controls and syntax
 highlighting controls are covered too. File contents, paths, commit subjects,
 patches and annotation payloads remain verbatim. Browser preview controls, listener

@@ -74,17 +74,61 @@ class NativeWorkspaceTest {
         return result.get()
     }
 
-    private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String) {
+    private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String,
+        observe: ((Long) -> String)? = null) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+        var firstObservation: String? = null
+        var lastObservation: String? = null
         while (true) {
             val native = NativeActivityFixture.readiness(scenario)
             if (native.ready && evaluate(scenario, expression) == "true") return
             val error = evaluate(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
             assertTrue("Native workspace failed at $stage: $error", error == "\"\"")
+            val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+            if (observe != null && remaining > 0) {
+                lastObservation = try { observe(remaining.coerceAtMost(1_000)) } catch (_: Throwable) { "unavailable" }
+                if (firstObservation == null) firstObservation = lastObservation
+            }
             if (System.nanoTime() >= deadline) {
-                throw AssertionError("Native workspace not ready at $stage: $native; windows=${NativeActivityFixture.windowDiagnostics()}")
+                val observations = if (observe == null) "" else "; first=$firstObservation; last=$lastObservation"
+                throw AssertionError("Native workspace not ready at $stage: $native; windows=${NativeActivityFixture.windowDiagnostics()}$observations")
             }
             Thread.sleep(200)
+        }
+    }
+
+    // QR-only public state, never frame pixels, track labels, payloads or renderer globals.
+    private fun qrVideoObservation(scenario: ActivityScenario<MainActivity>): (Long) -> String {
+        var firstReady: JSONObject? = null
+        return { remaining ->
+            val encoded = evaluate(scenario, """JSON.stringify((() => {
+              const q=document.querySelector('.theme-qr-panel'), v=q?.querySelector('video');
+              const statuses=Array.from(q?.querySelectorAll('[role=status]')??[]).map(x=>x.textContent);
+              const bounded=n=>Number.isFinite(n)?Math.min(1000000,Math.max(0,n)):null;
+              const stream=v?.srcObject, tracks=stream instanceof MediaStream?stream.getVideoTracks():[];
+              return {present:!!v,visible:document.visibilityState==='visible',hidden:v?.hidden??null,
+                detailsOpen:v?.closest('details')?.open??null,readyState:bounded(v?.readyState),
+                width:bounded(v?.videoWidth),height:bounded(v?.videoHeight),paused:v?.paused??null,
+                timeMs:bounded(Math.round((v?.currentTime??NaN)*1000)),
+                frames:bounded(v?.getVideoPlaybackQuality?.().totalVideoFrames),src:!!stream,
+                liveTracks:bounded(tracks.filter(x=>x.readyState==='live').length),
+                endedTracks:bounded(tracks.filter(x=>x.readyState==='ended').length),
+                permission:statuses.includes('Waiting for camera permission…'),
+                scanning:statuses.includes('Looking for a theme QR code…'),
+                decoding:statuses.includes('Decoding QR image…'),
+                finishing:statuses.includes('The stopped request is still finishing. Wait before scanning again.'),
+                cancelled:statuses.includes('QR scan stopped.'),timeout:statuses.includes('QR scan stopped after 30 seconds.'),
+                busy:Array.from(q?.querySelectorAll('[role=alert]')??[]).some(x=>x.textContent==='Another QR request is still finishing. Try again when it finishes.'),
+                alert:!!q?.querySelector('[role=alert]')};
+            })())""", remaining)
+            val sample = JSONObject(JSONArray("[$encoded]").getString(0))
+            assertTrue("QR diagnostics contain only finite public state", sample.keys().asSequence().all {
+                val value = sample.get(it); value == JSONObject.NULL || value is Boolean || value is Number
+            })
+            if (firstReady == null && sample.optInt("readyState") >= 2) firstReady = sample
+            JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample).toString().also {
+                require(it.length <= 2_048) { "QR diagnostic bound" }
+            }
         }
     }
 
@@ -471,7 +515,7 @@ class NativeWorkspaceTest {
                 capture = observe()
                 button("Scan QR with camera")
             }
-            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'")
+            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", qrVideoObservation(scenario))
             assertEquals("QR preview must preserve the manual draft", "true", evaluate(scenario,
                 "document.querySelector(${JSONObject.quote(draftSelector)})?.value===${JSONObject.quote(draft)}"))
             assertTrue("QR preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
@@ -490,7 +534,7 @@ class NativeWorkspaceTest {
             cleanup {
                 val device = UiDevice.getInstance(instrumentation)
                 permissionController?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
-                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close preferences']")).perform(webClick())
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
             }
             cleanup { observation?.let { camera.unregisterAvailabilityCallback(it) } }
             cleanup { observer.quitSafely(); observer.join(5_000); assertTrue("Camera observer must retire", !observer.isAlive) }
