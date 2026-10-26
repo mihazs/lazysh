@@ -8,7 +8,7 @@ import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type { LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
-import { fontFamilyFor, useDeviceFonts } from "./fonts";
+import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
 
@@ -348,7 +348,7 @@ export default function TerminalPane({ session, active, reportError }: {
     gesture.current = null;
   }
   return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
-    {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={warning}>{warning}</div>)}
+    {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>}
     {clipboard !== null && <div className="terminal-consent" role="region" aria-label={t('terminalClipboardRegion')}>
       <p>{t("terminalClipboardPrompt",{count:clipboard.length,characters:formatNumber(clipboard.length)})}</p>

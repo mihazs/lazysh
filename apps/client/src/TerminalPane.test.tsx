@@ -504,3 +504,21 @@ it('retains a held paste and the same link operation without translating raw dia
   await act(async()=>{await uiI18n.changeLanguage('en');});
   expect(screen.getByRole('alert').textContent).toBe(raw);expect(mocks.openWebUrl).toHaveBeenCalledTimes(1);
 });
+
+it('rerenders retained font warning data without recreating its node or terminal handlers',async()=>{
+  const fonts=await import('./fonts');
+  const snapshot={...fonts.getDeviceFonts(),selection:{primary:'11111111-1111-4111-8111-111111111111'},warnings:[{kind:'missing',role:'primary'} as const]};
+  const subscription=vi.spyOn(fonts,'useDeviceFonts').mockReturnValue(snapshot);
+  try {
+    mount();const note=screen.getByRole('note');const addons=terminal.loadAddon.mock.calls.length;
+    const handlers=terminal.parser.registerOscHandler.mock.calls.length;
+    for(const locale of ['pt-BR','es','en']){
+      await act(async()=>{await uiI18n.changeLanguage(locale);});
+      expect(screen.getByRole('note')).toBe(note);
+      expect(note.textContent).toBe(fonts.fontWarningText(snapshot.warnings[0]));
+      expect(terminal.loadAddon).toHaveBeenCalledTimes(addons);
+      expect(terminal.parser.registerOscHandler).toHaveBeenCalledTimes(handlers);
+      expect(mocks.write).not.toHaveBeenCalled();expect(mocks.writeSequence).not.toHaveBeenCalled();
+    }
+  }finally{subscription.mockRestore();}
+});
