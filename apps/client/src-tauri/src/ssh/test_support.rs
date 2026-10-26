@@ -66,7 +66,10 @@ pub(crate) fn host_offer(
     access: &AccessLease,
 ) -> (crate::desktop_launch::LaunchState, String) {
     use crate::desktop_launch::{LaunchState, LaunchTarget};
-    let launch = LaunchState::new(Some(LaunchTarget::Host(id.into())));
+    let launch = LaunchState::new(Some(LaunchTarget::Host {
+        id: id.into(),
+        mux: None,
+    }));
     let receipt = launch.read(access).unwrap().host_receipt.unwrap();
     (launch, receipt)
 }

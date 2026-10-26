@@ -4,7 +4,8 @@ import {t,uiI18n} from './i18n/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Host } from "./bridge";
+import type { Host, TransportMode } from "./bridge";
+import type {DesktopMux} from './useDesktopLaunch';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     adoptSession: vi.fn(),
     muxSessions: vi.fn(),
     attachTmux: vi.fn(),
+    attachMultiplexer: vi.fn(),
     tmuxJumpSnapshot: vi.fn(),
     tmuxJump: vi.fn(),
   },
@@ -34,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   launchReceipt: null as string|null,
   hostLaunchReceipt: null as string|null,
   prepareError: null as string|null,
+  launchEvent: undefined as undefined|((event:{payload:unknown})=>void),
   lockEvent: undefined as undefined | ((event: { payload: unknown }) => void),
 }));
 let generationBase=0;
@@ -48,7 +51,8 @@ vi.mock("@tauri-apps/api/core", () => ({ isTauri:()=>true, invoke: (...request:[
 } }));
 vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(event:{payload:unknown})=>void)=>{
   if(name==='lazysh-app-lock')mocks.lockEvent=callback;
-  return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;};
+  if(name==='lazysh-desktop-launch')mocks.launchEvent=callback;
+  return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;if(mocks.launchEvent===callback)mocks.launchEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
@@ -133,16 +137,23 @@ it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED','LOCAL_LAUNC
 });
 
 const hostLaunchReceipt='7b6d0fc9-a755-4e10-b2e3-0dbdc1259326';
-function enableHostLaunch(selected:Host=host, jump?:Host) {
+function enableHostLaunch(selected:Host=host, jump?:Host, mux:unknown=null) {
   mocks.hostLaunchReceipt=hostLaunchReceipt;
   mocks.api.listHosts.mockResolvedValue([selected]);
   mocks.invoke.mockImplementation(async(command:string)=>{
     if(command==='local_capability')return {available:true,reason:'Desktop fixture'};
-    if(command==='desktop_launch_prepare_host')return {hosts:jump?[selected,jump]:[selected]};
+    if(command==='desktop_launch_prepare_host')return {hosts:jump?[selected,jump]:[selected],mux};
     if(command==='desktop_launch_cancel')return;
     if(command==='transport_capabilities')return {mosh:true,et:true};
     return false;
   });
+}
+function enableMuxLaunch(mux:DesktopMux,transport:TransportMode='ssh') {
+  enableHostLaunch({...host,transport},undefined,mux);
+  const invoke=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation(async(command,...args)=>command==='multiplexer_tree'?{tmuxAvailable:true,herdrAvailable:true,zellijAvailable:true,sessions:[{id:'$1',name:'chosen',windows:[]}]}:command==='multiplexer_sessions'?[{name:'herd'}]:invoke(command,...args));
+  mocks.api.connect.mockResolvedValue({sessionId:'mux-control'});
+  mocks.api.attachTmux.mockResolvedValue({sessionId:'mux-attached'});mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'mux-attached'});
 }
 it('opens the exact saved host through its normal dialog and binds the native receipt to explicit authentication',async()=>{
   enableHostLaunch({...host,id:'legacy=host 世界'});
@@ -183,8 +194,63 @@ it.each(['preparation','native'] as const)('brands a finite saved-host failure o
   if(origin==='preparation')expect(mocks.api.connect).not.toHaveBeenCalled();
 });
 
-it('reuses the original saved-host receipt only after an explicit host-key trust retry',async()=>{
-  enableHostLaunch();
+it.each([
+  ['mosh',{kind:'tmux',tmuxServer:'default'}],
+  ['et',{kind:'tmux',tmuxServer:"世界 '$(touch NO);"}],
+  ['auto',{kind:'herdr'}],
+] as const)('opens a cold mux picker on its exact SSH source without applying saved %s transport',async(transport,mux)=>{
+  enableMuxLaunch(mux,transport);
+  const user=userEvent.setup();render(<App/>);const selector=await screen.findByLabelText('Transport');
+  expect(selector).toHaveProperty('value','ssh');expect(selector).toHaveProperty('disabled',true);
+  await user.type(screen.getByLabelText('Password'),'explicit-entry');await user.click(screen.getByRole('button',{name:'Connect'}));
+  const label=mux.kind==='herdr'?'Attach herdr herd':'Attach chosen';
+  const row=await screen.findByRole('button',{name:label});
+  expect(mocks.api.connect).toHaveBeenCalledExactlyOnceWith('home',{password:'explicit-entry'},expect.any(Function),{launchReceipt:hostLaunchReceipt});
+  expect(mocks.api.attachTmux).not.toHaveBeenCalled();expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  expect(mocks.api.connectMosh).not.toHaveBeenCalled();expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  await user.click(row);await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
+  if(mux.kind==='herdr')expect(mocks.api.attachMultiplexer).toHaveBeenCalledWith('mux-control','herdr','herd',expect.any(Function));
+  else expect(mocks.api.attachTmux).toHaveBeenCalledWith('mux-control','chosen',expect.any(Function),mux.tmuxServer==='default'?undefined:mux.tmuxServer);
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.saveHost).not.toHaveBeenCalled();
+});
+
+it('binds a newly offered mux picker to its new SSH control rather than the already active session',async()=>{
+  enableMuxLaunch({kind:'tmux',tmuxServer:'agents'});mocks.hostLaunchReceipt=null;
+  mocks.api.connect.mockResolvedValueOnce({sessionId:'old-active'}).mockResolvedValueOnce({sessionId:'new-exact-source'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  mocks.hostLaunchReceipt=hostLaunchReceipt;await act(async()=>{mocks.launchEvent!({payload:null});});
+  await screen.findByLabelText('Password');await user.type(screen.getByLabelText('Password'),'second-entry');
+  await user.click(screen.getByRole('button',{name:'Connect'}));const row=await screen.findByRole('button',{name:'Attach chosen'});
+  expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'new-exact-source',tmuxServer:'agents'},expect.anything());
+  await user.click(screen.getByRole('button',{name:'Terminal'}));await screen.findByText('Live SSH terminal');
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.attachTmux).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'Sessions'}));await screen.findByRole('button',{name:'Attach chosen'});
+  expect(screen.getByLabelText('tmux server')).toHaveProperty('value','agents');
+  await user.click(screen.getByRole('button',{name:'Attach chosen'}));
+  await waitFor(()=>expect(mocks.api.attachTmux).toHaveBeenCalledWith('new-exact-source','chosen',expect.any(Function),'agents'));
+  expect(mocks.api.write).not.toHaveBeenCalled();
+  expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home'},{hostId:'home'},{hostId:'home',attached:{kind:'tmux',name:'chosen',tmuxServer:'agents'}}]));
+});
+it.each(['success','failure'] as const)('drops a held cold-mux SSH %s across lock/reunlock without starting a picker or child',async outcome=>{
+  enableMuxLaunch({kind:'herdr'});
+  let finish!:(value:{sessionId:string})=>void,fail!:(reason:unknown)=>void;
+  mocks.api.connect.mockImplementationOnce(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));
+  const user=userEvent.setup();render(<App/>);await screen.findByLabelText('Password');await user.type(screen.getByLabelText('Password'),'entry');
+  await user.click(screen.getByRole('button',{name:'Connect'}));await waitFor(()=>expect(mocks.api.connect).toHaveBeenCalledTimes(1));
+  await act(async()=>{
+    mocks.lockEvent!({payload:{...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined}});
+    mocks.lockEvent!({payload:{...unlockedStatus(),enabled:true,generation:String(generationBase+2),nonce:'b'.repeat(64)}});
+    if(outcome==='success')finish({sessionId:'obsolete-mux-control'});else fail({kind:'unknown_host_key',fingerprint:'SHA256:obsolete',message:'Old key'});
+  });
+  await screen.findByRole('button',{name:'Connect to Home'});
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='multiplexer_tree'||command==='multiplexer_sessions')).toHaveLength(0);
+  expect(mocks.api.attachTmux).not.toHaveBeenCalled();expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  expect(screen.queryByRole('dialog')).toBeNull();expect(screen.queryByRole('alert')).toBeNull();
+  if(outcome==='success')await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'obsolete-mux-control'}));
+});
+
+it.each([null,{kind:'tmux',tmuxServer:'trusted-server'}] as const)('reuses the original saved-host receipt only after an explicit host-key trust retry with mux %j',async mux=>{
+  if(mux)enableMuxLaunch(mux);else enableHostLaunch();
   mocks.api.connect.mockRejectedValueOnce({kind:'unknown_host_key',fingerprint:'SHA256:launch',message:'Verify key'}).mockResolvedValue({sessionId:'host-trusted'});
   const user=userEvent.setup();render(<App/>);
   await screen.findByRole('dialog',{name:'Connect to Home'});
@@ -192,10 +258,12 @@ it('reuses the original saved-host receipt only after an explicit host-key trust
   await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('SHA256:launch');
   expect(mocks.api.connect).toHaveBeenCalledTimes(1);
+  if(mux)expect(mocks.invoke.mock.calls.filter(([command])=>command==='multiplexer_tree'||command==='multiplexer_sessions')).toHaveLength(0);
   expect(mocks.api.trustHostKey).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button',{name:'Trust key and connect'}));
-  await screen.findByText('Live SSH terminal');
+  if(mux)await screen.findByRole('button',{name:'Attach chosen'});else await screen.findByText('Live SSH terminal');
   expect(mocks.api.trustHostKey).toHaveBeenCalledWith(host.id,'SHA256:launch',hostLaunchReceipt);
+  if(mux)expect(mocks.invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'host-trusted',tmuxServer:'trusted-server'},expect.anything());
   expect(mocks.api.connect).toHaveBeenCalledTimes(2);
   for(const call of mocks.api.connect.mock.calls)expect(call[3]).toEqual({launchReceipt:hostLaunchReceipt});
 });
@@ -280,7 +348,7 @@ it.each([
   {kind:'auth',message:'Obsolete credential failure'},
 ])('does not publish a stale $kind result into the same mounted launch dialog',async failure=>{
   applyAccessStatus(unlockedStatus());
-  const launch={receipt:hostLaunchReceipt,lease:captureAccess(),hosts:[host]};
+  const launch={receipt:hostLaunchReceipt,lease:captureAccess(),hosts:[host],mux:null};
   let reject!:(error:unknown)=>void;
   mocks.api.connect.mockImplementation(()=>new Promise((_yes,no)=>{reject=no;}));
   const connected=vi.fn(),close=vi.fn();

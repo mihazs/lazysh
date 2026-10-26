@@ -2,10 +2,13 @@ import {useEffect, useMemo, useRef} from 'react';
 import {listen} from '@tauri-apps/api/event';
 import {bindProtectedInvoke, captureAccess, isAccessReady, subscribeAccess, type AccessLease} from './access';
 import type {Host} from './bridge';
+import {validTmuxServer} from './workspace';
 import {captureUiError, LocalUiError, type UiErrorCause} from './i18n/localError';
 
 type Snapshot = {directoryReceipt:string|null; hostReceipt?:string|null; notice:{receipt:string}|null};
-export type DesktopHostLaunch = Readonly<{receipt:string;lease:AccessLease;hosts:readonly Host[]}>;
+export type DesktopMux = Readonly<{kind:'tmux';tmuxServer:string}|{kind:'herdr'}>;
+export type DesktopMuxRequest = Readonly<{sessionId:string;lease:AccessLease;mux:DesktopMux}>;
+export type DesktopHostLaunch = Readonly<{receipt:string;lease:AccessLease;hosts:readonly Host[];mux:DesktopMux|null}>;
 /** Only a native launch await may brand these finite failures. */
 export function ownedLaunchError(error:unknown):LocalUiError|undefined {
   const code=typeof error==='string' ? error : error && typeof error==='object' && 'kind' in error ? error.kind : undefined;
@@ -43,6 +46,15 @@ function preparedHosts(value:unknown):readonly Host[] {
   return Object.freeze(hosts.map(host=>Object.freeze({...host})));
 }
 
+function preparedMux(value:unknown):DesktopMux|null {
+  if(value==null)return null;
+  if(typeof value!=='object' || !('kind' in value))throw new LocalUiError('desktopLaunchHostInvalid');
+  if(value.kind==='herdr' && Object.keys(value).length===1)return Object.freeze({kind:'herdr'});
+  if(value.kind==='tmux' && 'tmuxServer' in value && validTmuxServer(value.tmuxServer) && Object.keys(value).length===2)
+    return Object.freeze({kind:'tmux',tmuxServer:value.tmuxServer});
+  throw new LocalUiError('desktopLaunchHostInvalid');
+}
+
 /** A locked or replaced mount cannot start an initial intent or show old errors. */
 export function useDesktopLaunch(native:boolean, available:boolean, busy:boolean,
   open:(receipt:string)=>Promise<void>, notice:(message:UiErrorCause)=>void, openHost?:(launch:DesktopHostLaunch)=>Promise<void>) {
@@ -69,10 +81,12 @@ export function useDesktopLaunch(native:boolean, available:boolean, busy:boolean
           }
           if(value.hostReceipt && !attempted.current) {
             attempted.current=true;
-            const hosts=preparedHosts(await invoke<unknown>('desktop_launch_prepare_host',{receipt:value.hostReceipt}).catch(error=>{throw captureLaunchError(error);}));
+            const prepared=await invoke<unknown>('desktop_launch_prepare_host',{receipt:value.hostReceipt}).catch(error=>{throw captureLaunchError(error);});
+            const hosts=preparedHosts(prepared);
+            const mux=preparedMux((prepared as {mux?:unknown}).mux);
             if(!current())return;
             if(!callbacks.current.openHost)throw new LocalUiError('desktopLaunchHostInvalid');
-            await callbacks.current.openHost(Object.freeze({receipt:value.hostReceipt,lease,hosts}));
+            await callbacks.current.openHost(Object.freeze({receipt:value.hostReceipt,lease,hosts,mux}));
           }
           if(value.notice && current()) {
             callbacks.current.notice(new LocalUiError('desktopLaunchWarmUnsupported'));

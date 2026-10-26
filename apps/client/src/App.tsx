@@ -15,7 +15,7 @@ import {
 import { bindProtectedApi, bindProtectedInvoke, captureAccess, useProtectedInvoke, type AccessLease } from './access';
 import AccessShell, { type SessionRegistry } from './AccessShell';
 import ThemeLinkPanel from './ThemeLinkPanel';
-import {captureLaunchError, ownedLaunchError, useDesktopLaunch, type DesktopHostLaunch} from './useDesktopLaunch';
+import {captureLaunchError, ownedLaunchError, useDesktopLaunch, type DesktopHostLaunch, type DesktopMuxRequest} from './useDesktopLaunch';
 import AccessPanel from './AccessPanel';
 import { forgetSession, PendingSessions, retainSession } from './pendingSessions';
 import {
@@ -599,7 +599,7 @@ export function ConnectDialog({
   const [savedJump, setSavedJump] = useState(true);
   const [jumpPassword, setJumpPassword] = useState("");
   const [exportedIdentity, setExportedIdentity] = useState("");
-  const [transport, setTransport] = useState<TransportMode>(host.transport ?? "ssh");
+  const [transport, setTransport] = useState<TransportMode>(launch?.mux ? "ssh" : host.transport ?? "ssh");
   const [moshAvailable, setMoshAvailable] = useState(false);
   const [etAvailable, setEtAvailable] = useState(false);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
@@ -699,7 +699,7 @@ export function ConnectDialog({
           : await api.connect(host.id, credentials, pending.onEvent);
       pending.establish(result.sessionId);
       connectingSessions.current.add(result.sessionId);
-      if (!alive.current) {
+      if (!alive.current || !lease.current()) {
         await connectingSessions.current.close(result.sessionId);
         disposeTerminal(session);
         return;
@@ -711,7 +711,7 @@ export function ConnectDialog({
       (id) => connectingSessions.current.add(id),
       (id) => connectingSessions.current.delete(id));
       session = selected.session;
-      if (!alive.current) {
+      if (!alive.current || !lease.current()) {
         await connectingSessions.current.close(session.id);
         disposeTerminal(session);
         return;
@@ -800,7 +800,7 @@ export function ConnectDialog({
           </p>
           <label>{t("appTransport")}<select
               value={transport}
-              disabled={busy}
+              disabled={busy || !!launch?.mux}
               onChange={(event) =>
                 setTransport(event.target.value as TransportMode)
               }
@@ -816,6 +816,7 @@ export function ConnectDialog({
               </option>
             </select>
           </label>
+          {launch?.mux && <p className="security-note">{t('desktopLaunchMuxSsh')}</p>}
           <TransportOptions mode={transport} busy={busy}
             options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
             change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />
@@ -1042,6 +1043,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
+  const [muxLaunch, setMuxLaunch] = useState<DesktopMuxRequest>();
   const [deleting, setDeleting] = useState<Host | null>(null);
   const [error, setError] = useState<UiErrorCause>("");
   const [search, setSearch] = useState("");
@@ -1427,12 +1429,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     setPalette(false);
     setSidebar(false);
   }
-  function sessionConnected(session: LiveSession) {
+  function sessionConnected(session: LiveSession, launch?:DesktopHostLaunch) {
+    launch?.lease.assert();
     persistWorkspace([...sessionsRef.current, session]);
     setSessions((previous) => [...previous, session]);
     adoptRetained(session);
     setActiveId(session.id);
-    setView("terminal");
+    if(launch?.mux)setMuxLaunch(Object.freeze({sessionId:session.id,lease:launch.lease,mux:launch.mux}));
+    setView(launch?.mux ? "sessions" : "terminal");
     setConnectingHost(null);setHostLaunch(undefined);
     if(!session.local)void loadHosts();
   }
@@ -1449,22 +1453,25 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     name: string,
     kind: "tmux" | "herdr" | "zellij" = "tmux",
     tmuxServer?: string,
+    owner:AccessLease=lease,
   ) {
+    const sourceApi=bindProtectedApi(nativeApi,owner);
     const pending = await prepareSession(
       source.hostId,
       `${source.name} / ${name}`,
       source.destination,
-      lease,
+      owner,
     );
     const ownership = new PendingSessions();
     try {
       const result =
         kind === "tmux"
-          ? await api.attachTmux(source.id, name, pending.onEvent, tmuxServer)
-          : await api.attachMultiplexer(source.id, kind, name, pending.onEvent);
+          ? await sourceApi.attachTmux(source.id, name, pending.onEvent, tmuxServer)
+          : await sourceApi.attachMultiplexer(source.id, kind, name, pending.onEvent);
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
       pending.session.attached = { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) };
+      owner.assert();
       sessionConnected(pending.session);
       ownership.delete(result.sessionId);
     } catch (error) {
@@ -1831,7 +1838,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     key={active.id}
                     sessionId={active.id}
                     attached={active.attached}
-                    onAttach={(name, kind, server) => attachTmux(active, name, kind, server)}
+                    requested={muxLaunch?.sessionId===active.id ? muxLaunch : undefined}
+                    onAttach={(name, kind, server) => attachTmux(active, name, kind, server,
+                      muxLaunch?.sessionId===active.id ? muxLaunch.lease : lease)}
                   />
                 )}
                 {!active.connected && view !== "terminal" && (
@@ -1905,7 +1914,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           hosts={hostLaunch ? [...hostLaunch.hosts] : hosts}
           host={connectingHost}
           launch={hostLaunch}
-          connected={sessionConnected}
+          connected={session=>sessionConnected(session,hostLaunch)}
           close={() => {setConnectingHost(null);setHostLaunch(undefined);}}
         />
       )}

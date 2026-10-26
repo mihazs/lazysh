@@ -152,3 +152,21 @@ it('keeps a raw host callback sentinel verbatim while native-owned failures rema
   render(<Harness open={vi.fn(async()=>{})} openHost={vi.fn(async()=>{throw 'HOST_LAUNCH_CHANGED';})}/>);
   await screen.findByText('HOST_LAUNCH_CHANGED');
 });
+
+it.each([
+  {kind:'tmux',tmuxServer:'default'},
+  {kind:'tmux',tmuxServer:"世界 '$(touch NO);"},
+  {kind:'herdr'},
+  null,
+])('preserves finite immutable native mux metadata %j without choosing a session',async mux=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='desktop_launch_prepare_host'?{hosts:[launchHost],mux}:{directoryReceipt:null,hostReceipt:receipt,notice:null});
+  const openHost=vi.fn(async(_launch:DesktopHostLaunch)=>{});
+  render(<Harness open={vi.fn()} openHost={openHost}/>);await waitFor(()=>expect(openHost).toHaveBeenCalledTimes(1));
+  const handoff=openHost.mock.calls[0][0];expect(handoff.mux).toEqual(mux);if(mux)expect(Object.isFrozen(handoff.mux)).toBe(true);
+});
+it.each([{kind:'zellij'},{kind:'tmux',tmuxServer:'/socket/path'},{kind:'herdr',tmuxServer:'ignored'},{kind:'tmux',tmuxServer:''}])('rejects unsupported native mux metadata rather than opening a different picker: %j',async mux=>{
+  vi.mocked(invoke).mockImplementation(async command=>command==='desktop_launch_prepare_host'?{hosts:[launchHost],mux}:{directoryReceipt:null,hostReceipt:receipt,notice:null});
+  const openHost=vi.fn();render(<Harness open={vi.fn()} openHost={openHost}/>);
+  await screen.findByText('This saved-host launch request is invalid. Run the command again with an existing host ID.');
+  expect(openHost).not.toHaveBeenCalled();
+});

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Add cold saved-host CLI composition with `--mux tmux`, `tmux:SERVER` or
+  `herdr`. After explicit normal authentication, lazysh opens that fixed picker
+  on the new SSH control session; choosing an exact row attaches through the
+  existing native child PTY. Mux launches explicitly use SSH without changing
+  saved host transport preferences. Warm CLI delivery remains unsupported.
+
 - Allow active host-local uploads to be cancelled from Attachments and the remote Files browser. New reservation defaults allow two occupied jobs (pending, sending or retiring), each up to 10 MiB (20 MiB total); unused reservations expire after 30 seconds, separately from the existing 30-second transfer deadline. Cancellation never deletes a remote pathname: a partial or completed new file may remain. Existing files remain protected against replacement.
 
 - Add an optional self-hosted authenticated webhook relay with private source capabilities, a durable bounded outbox and one fixed HTTPS destination. Delivery is disabled by default; native APNs/FCM delivery remains unavailable.
