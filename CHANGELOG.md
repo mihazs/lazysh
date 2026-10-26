@@ -4,6 +4,8 @@
 
 - Localize Apple status controls, accessibility labels and privacy/review explanations in English, Brazilian Portuguese and Spanish. Language changes preserve subscription ownership, publication timing, raw native diagnostics and snapshot freshness.
 
+- Localize About interface labels and explanatory text in English, Brazilian Portuguese and Spanish. Imported legal notices, component names, source links and build metadata remain unchanged; locale defaults are unchanged.
+
 - Localize tmux workspace, Herdr and Zellij controls and accessible names in English, Brazilian Portuguese and Spanish; preserve literal remote identities, errors and launch-picker ownership when changing language.
 
 - Add an explicit opt-in Grok ACP recorded-conversation view with bounded chunk grouping, tool replacement and proven prompt-index rewinds. Unsupported controls or ambiguous histories fail visibly with Records available. Records remain the default; Claude Follow, media no-fetch and live-session binding restrictions are unchanged.

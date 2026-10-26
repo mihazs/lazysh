@@ -12,6 +12,17 @@ export const english = {
   appleStatusCapabilityUnavailable: "Apple status capability unavailable.",
   appleStatusStopFailed: "Could not clear native status. Existing snapshots expire within 60 seconds.",
 
+
+  aboutDescription: "Independent SSH and AI-agent workspace. Version {{version}}, in development.",
+  aboutCopyright: "Copyright lazysh contributors. Licensed under GNU GPL version 3 or, at your option, any later version. Provided without warranty.",
+  aboutSource: "View corresponding source and build history",
+  aboutRevision: "Source revision:",
+  aboutDirty: "with uncommitted development changes",
+  aboutDistributedSource: "For a distributed build, use its release or CI commit to identify the matching source. Third-party components retain their own copyright and license notices.",
+  aboutLicense: "License: {{component}}",
+  aboutMoshNotices: "Mosh notices",
+  aboutMoshExplanation: "Mosh is copyright its contributors and licensed under GPL-3.0-or-later, with the applicable OpenSSL linking exception in its source headers. lazysh modifications, upstream version and checksums are recorded with the transport source.",
+  aboutMoshSource: "Mosh source and notices",
   muxTitle: "Multiplexer workspaces",
   muxServer: "tmux server",
   muxBrowseServer: "Browse server",
