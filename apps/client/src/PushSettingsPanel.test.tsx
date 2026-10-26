@@ -6,7 +6,7 @@ import PushSettingsPanel from './PushSettingsPanel';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
-const off = { provider: 'fcm', supported: true, configured: true, enabled: false, tokenPresent: false, busy: false, reason: 'Registration off' };
+import {pushStatus as off} from './test/pushData';
 
 it('requires explicit external-service consent and never registers during mount', async () => {
   vi.mocked(invoke).mockResolvedValue(off);

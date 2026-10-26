@@ -1055,6 +1055,21 @@ const translations = {
   jumpCurrent: ["Atual", "Actual"],
   jumpUnavailable: ["Ir para indisponível:", "Ir a no está disponible:"],
   jumpHint: ["Ir para outro destino altera a sessão deste cliente e a janela atual da sessão de destino.", "Elegir un destino cambia la sesión de este cliente y la ventana actual de la sesión de destino."],
+  pushTitle: ["Registro de push remoto", "Registro de push remoto"],
+  pushScope: ["Registre este dispositivo no {{provider}} somente se esta compilação nativa estiver configurada para push remoto. O registro por si só não conecta um serviço de entrega nem envia eventos do servidor.", "Registra este dispositivo con {{provider}} solo si esta compilación nativa está configurada para push remoto. El registro por sí solo no conecta un servicio de entrega ni envía eventos del servidor."],
+  pushNativeRequired: ["O registro de push remoto exige o aplicativo nativo.", "El registro de push remoto requiere la aplicación nativa."],
+  pushInspecting: ["Verificando configuração nativa de push…", "Comprobando la configuración nativa de push…"],
+  pushPrivacy: ["Este controle não envia credenciais SSH, transcrições, prompts nem endereços de servidores. {{provider}} recebe informações de registro do dispositivo e do aplicativo. As notificações da caixa de entrada local funcionam separadamente.", "Este control no envía credenciales SSH, transcripciones, prompts ni direcciones de servidores. {{provider}} recibe información de registro del dispositivo y de la aplicación. Las notificaciones de la bandeja local funcionan por separado."],
+  pushConsent: ["Concordo em contatar {{provider}} para registrar este dispositivo.", "Acepto contactar con {{provider}} para registrar este dispositivo."],
+  pushRefresh: ["Atualizar status do registro", "Actualizar estado del registro"],
+  pushRefreshDevice: ["Atualizar registro do dispositivo", "Actualizar registro del dispositivo"],
+  pushRegister: ["Registrar este dispositivo", "Registrar este dispositivo"],
+  pushDisableApns: ["Desativar registro APNs", "Desactivar registro de APNs"],
+  pushPause: ["Pausar e revogar token", "Pausar y revocar el token"],
+  pushRetryRevocation: ["Tentar revogar o token novamente", "Reintentar revocación del token"],
+  pushApnsHint: ["Desativar remove a associação APNs local deste aplicativo e seu token em memória. Isso não invalida um token globalmente nem revoga uma conta futura no servidor de entrega.", "Desactivar elimina la asociación APNs local de esta aplicación y su token en memoria. No invalida un token globalmente ni revoca una futura cuenta en un servidor de entrega."],
+  pushPauseFailed: ["Não foi possível concluir a pausa do registro. Atualize o status e tente novamente quando estiver online.", "No se pudo completar la pausa del registro. Actualiza el estado y vuelve a intentarlo cuando tengas conexión."],
+  pushOperationFailed: ["O registro nativo de push está indisponível ou a operação falhou. Atualize o status e tente novamente.", "El registro nativo de push no está disponible o la operación falló. Actualiza el estado y vuelve a intentarlo."],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;
