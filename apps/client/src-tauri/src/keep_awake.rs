@@ -100,9 +100,10 @@ pub async fn board_keep_awake_acquire(
                     request.clone(),
                     cancel,
                     |admitted| {
+                        let original = worker_access.clone();
                         app.display_idle().acquire(
                             &request,
-                            || worker_access.check().map_err(String::from),
+                            move || original.check().map_err(String::from),
                             admitted,
                         )
                     },
