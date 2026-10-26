@@ -1,4 +1,5 @@
 import {t, useUi} from './i18n/core';
+import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useId, useState } from 'react';
 import { parseChord } from './preferences';
 import { compileSimpleChord } from './simpleChord';
@@ -16,7 +17,7 @@ export default function ChordBuilder({ label, binding = '', onSave, disabled = f
   const [keys, setKeys] = useState(binding);
   const [text, setText] = useState('');
   const [modifiers, setModifiers] = useState({ctrl:false, meta:false, shift:false});
-  const [error, setError] = useState('');
+  const [error, setError] = useState<UiErrorCause>('');
   const name = (field: 'builder' | 'text') => label ? t(field === 'builder' ? 'shortcutBuilderForLabel' : 'shortcutTextForLabel', {label}) : t(field === 'builder' ? 'shortcutShortcutBuilder' : 'shortcutCustomShortcutText');
   function save() {
     try {
@@ -26,7 +27,7 @@ export default function ChordBuilder({ label, binding = '', onSave, disabled = f
         setError(''); setKeys(clearAfterSave ? '' : compiled);
         if (clearAfterSave) setText('');
       }
-    } catch (error) { setError(String(error)); }
+    } catch (error) { setError(error instanceof LocalUiError?error:String(error)); }
   }
   return <div>
     <label htmlFor={`${id}-builder`}>{name('builder')}</label><select id={`${id}-builder`} value={mode} onChange={event => {setMode(event.target.value as 'advanced' | 'simple'); setError('');}}><option value="advanced">{t("shortcutAdvancedBinding")}</option><option value="simple">{t("shortcutSimpleCustomText")}</option></select>
@@ -39,7 +40,7 @@ export default function ChordBuilder({ label, binding = '', onSave, disabled = f
       })}
       <label htmlFor={`${id}-text`}>{name('text')}</label><textarea id={`${id}-text`} rows={2} value={text} onChange={event => setText(event.target.value)} />
     </>}
-    {error && <p role="alert">{error}</p>}
+    {error && <p role="alert">{uiErrorText(error)}</p>}
     <button disabled={disabled || !(mode === 'simple' ? text : keys.trim())} onClick={save}>{label ? t("shortcutSaveValue1Chord", {value1: label}) : t("shortcutAddChord")}</button>
   </div>;
 }

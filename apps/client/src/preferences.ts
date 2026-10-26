@@ -1,4 +1,5 @@
-import {t, isUiLanguage, type UiLanguage} from './i18n/core';
+import {LocalUiError} from './i18n/localError';
+import {isUiLanguage, type UiLanguage} from './i18n/core';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import type { ITheme, ITerminalOptions } from "@xterm/xterm";
@@ -171,15 +172,15 @@ export function decodeClipboardRequest(data: string): string | undefined {
 export function parseChord(source: string): string { return parseChordSteps(source).join(""); }
 
 export function parseChordSteps(source: string): string[] {
-  if (!source.trim() || source.length > 128) throw new Error(t("validationEnterUpTo8KeyStepsForExampleCtrl"));
+  if (!source.trim() || source.length > 128) throw new LocalUiError('validationEnterUpTo8KeyStepsForExampleCtrl');
   if (source.startsWith("text:")) {
     const text = source.slice(5);
-    if (!text || /[\x00-\x1f\x7f]/.test(text)) throw new Error(t("validationLiteralShortcutsNeedPrintableTextAddAnEnterKey"));
+    if (!text || /[\x00-\x1f\x7f]/.test(text)) throw new LocalUiError('validationLiteralShortcutsNeedPrintableTextAddAnEnterKey');
     return [text];
   }
-  if (/^\s*,|,\s*$|,\s*,/.test(source)) throw new Error(t("validationEveryChordStepNeedsAKeyUseTextFor"));
+  if (/^\s*,|,\s*$|,\s*,/.test(source)) throw new LocalUiError('validationEveryChordStepNeedsAKeyUseTextFor');
   const steps = source.trim().split(/[\s,]+/);
-  if (steps.length > 8) throw new Error(t("validationAChordCanContainAtMost8Steps"));
+  if (steps.length > 8) throw new LocalUiError('validationAChordCanContainAtMost8Steps');
   return steps.map(step => {
     let remainder = step;
     const modifiers: string[] = [];
@@ -191,7 +192,7 @@ export function parseChordSteps(source: string): string[] {
     }
     const aliases: Record<string, string> = {Esc: "Escape", BSpace: "Backspace", dash: "-", plus: "+", comma: ","};
     const key = Object.hasOwn(aliases, remainder) ? aliases[remainder] : remainder;
-    if (new Set(modifiers).size !== modifiers.length || modifiers.some(modifier => !["ctrl", "alt", "shift"].includes(modifier))) throw new Error(t("validationInvalidModifiersInValue1", {value1: step}));
+    if (new Set(modifiers).size !== modifiers.length || modifiers.some(modifier => !["ctrl", "alt", "shift"].includes(modifier))) throw new LocalUiError('validationInvalidModifiersInValue1', step);
     const ctrl = modifiers.includes("ctrl"), alt = modifiers.includes("alt"), shift = modifiers.includes("shift");
     const modifier = 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0);
     const arrows: Record<string, string> = {Left: "D", Right: "C", Up: "A", Down: "B", Home: "H", End: "F"};
@@ -205,17 +206,17 @@ export function parseChordSteps(source: string): string[] {
     const named: Record<string, string> = {Enter: "\r", Escape: "\x1b", Tab: "\t", Backspace: "\x7f", Space: " "};
     const isNamed = Object.hasOwn(named, key);
     let value = isNamed ? named[key] : key;
-    if (!isNamed && (key.length !== 1 || !/^[!-~]$/.test(key))) throw new Error(t("validationUnknownKeyValue1", {value1: key}));
+    if (!isNamed && (key.length !== 1 || !/^[!-~]$/.test(key))) throw new LocalUiError('validationUnknownKeyValue1', key);
     if (shift && key === "Tab") return alt ? "\x1b\x1b[Z" : "\x1b[Z";
     if (shift && /^[a-z]$/i.test(value)) value = value.toUpperCase();
-    else if (shift && !isNamed) throw new Error(t("validationUseTheResultingCharacterInsteadOfShiftValue1", {value1: key}));
+    else if (shift && !isNamed) throw new LocalUiError('validationUseTheResultingCharacterInsteadOfShiftValue1', key);
     if (ctrl) {
       if (key === "Backspace") value = "\b";
       else if (key === "-") value = "\x1f";
       else if (value === " " || value === "@") value = "\x00";
       else if (/^[a-z\[\\\]\^_]$/i.test(value)) value = String.fromCharCode(value.toUpperCase().charCodeAt(0) & 31);
       else if (value === "?") value = "\x7f";
-      else if (!isNamed) throw new Error(t("validationCtrlIsUnsupportedForValue1", {value1: key}));
+      else if (!isNamed) throw new LocalUiError('validationCtrlIsUnsupportedForValue1', key);
     }
     return alt ? `\x1b${value}` : value;
   });

@@ -4,7 +4,8 @@ use super::{
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    io::{BufReader, Read},
+    fs::{File, Metadata},
+    io::{BufReader, Cursor, Read},
     path::Path,
 };
 
@@ -15,12 +16,9 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
     if !(1..=100).contains(&limit) || !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }
-    let file = open_transcript(path)?;
-    let size = file.metadata()?.len();
-    if size > 16 * 1024 * 1024 {
-        return Err(Error::InvalidArgument);
-    }
-    let mut reader = BufReader::new(file.take(size));
+    let bytes = capture(path)?;
+    let size = bytes.len() as u64;
+    let mut reader = Cursor::new(&bytes);
     let mut records = Vec::new();
     let mut offset = 0;
     while offset < size {
@@ -47,6 +45,7 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
         }
         offset += bytes as u64;
     }
+    drop(bytes);
     let latest: HashMap<String, usize> = records
         .iter()
         .enumerate()
@@ -91,6 +90,62 @@ pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<Tr
         truncated,
         checkpoint: None,
     })
+}
+
+// Observe one initial prefix, allowing append-only growth without pausing Follow.
+// Changed metadata requires one exact prefix comparison, never a capture retry.
+fn capture(path: &Path) -> Result<Vec<u8>> {
+    let mut file = open_transcript(path)?;
+    let before = file.metadata()?;
+    drop(selected_source(path, &file, &before)?);
+    #[cfg(test)]
+    let source = super::mutation_observer::ObservedRead(&mut file);
+    #[cfg(not(test))]
+    let source = &mut file;
+    let bytes = super::snapshot::read_bytes(&mut BufReader::new(source), before.len())?;
+    if bytes.len() as u64 != before.len() {
+        return Err(Error::InvalidEvent);
+    }
+    let mut selected = selected_source(path, &file, &before)?;
+    let after = file.metadata()?;
+    let selected_metadata = selected.metadata()?;
+    if after.len() != before.len()
+        || selected_metadata.len() != before.len()
+        || after.modified()? != before.modified()?
+        || selected_metadata.modified()? != before.modified()?
+    {
+        let mut chunk = [0; 8192];
+        for expected in bytes.chunks(chunk.len()) {
+            selected
+                .read_exact(&mut chunk[..expected.len()])
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                        Error::InvalidEvent
+                    } else {
+                        error.into()
+                    }
+                })?;
+            #[cfg(test)]
+            snapshot_audit::verify_observer();
+            if chunk[..expected.len()] != *expected {
+                return Err(Error::InvalidEvent);
+            }
+        }
+        selected_source(path, &selected, &before)?;
+        selected_source(path, &file, &before)?;
+    }
+    Ok(bytes)
+}
+
+fn selected_source(path: &Path, file: &File, before: &Metadata) -> Result<File> {
+    let selected = open_transcript(path)?;
+    for after in [file.metadata()?, selected.metadata()?] {
+        super::same_file(before, &after)?;
+        if after.len() < before.len() {
+            return Err(Error::InvalidEvent);
+        }
+    }
+    Ok(selected)
 }
 
 fn candidate_results<'a>(
@@ -312,4 +367,241 @@ fn recover_parallel(
         result.extend(inserts.remove(index).unwrap_or_default());
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod snapshot_audit {
+    use super::*;
+    use serde_json::json;
+    use std::{
+        cell::RefCell,
+        fs::{self, File, OpenOptions},
+        io::Write,
+    };
+
+    thread_local! {
+        static VERIFY: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+    pub(super) fn verify_observer() {
+        VERIFY.with(|slot| {
+            if let Some(mutate) = slot.borrow_mut().take() {
+                mutate();
+            }
+        });
+    }
+    fn row(id: &str, parent: Option<&str>, text: &str) -> String {
+        format!(
+            "{}\n",
+            json!({"type":"assistant","uuid":id,"parentUuid":parent,"message":{"content":text}})
+        )
+    }
+    fn source(fill: char) -> String {
+        row("root", None, "owned root")
+            + &row("answer", Some("root"), &fill.to_string().repeat(18000))
+    }
+    fn mutation(case: &'static str) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("owned.jsonl");
+        fs::write(&path, source('Q')).unwrap();
+        let selected = path.clone();
+        let detached = directory.path().join("detached.jsonl");
+        let original_at = fs::metadata(&path).unwrap().modified().unwrap();
+        let verify_path = path.clone();
+        if case.ends_with("_verifying") {
+            let verify_detached = directory.path().join("verify-detached.jsonl");
+            VERIFY.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || match case {
+                    "rename_verifying" => {
+                        fs::rename(&verify_path, verify_detached).unwrap();
+                        fs::write(&verify_path, source('Q')).unwrap();
+                    }
+                    "truncate_verifying" => fs::write(&verify_path, "").unwrap(),
+                    "rewrite_verifying" => fs::write(&verify_path, source('Z')).unwrap(),
+                    _ => OpenOptions::new()
+                        .append(true)
+                        .open(verify_path)
+                        .unwrap()
+                        .write_all(row("later", Some("new"), "later append").as_bytes())
+                        .unwrap(),
+                }))
+            });
+        }
+        super::super::mutation_observer::set(move || {
+            match case {
+                "truncate" => fs::write(&selected, "").unwrap(),
+                "rename" => {
+                    fs::rename(&selected, detached).unwrap();
+                    fs::write(&selected, source('Z')).unwrap();
+                }
+                "rename_same_mtime" => {
+                    fs::rename(&selected, detached).unwrap();
+                    fs::write(&selected, source('Z')).unwrap();
+                    File::options()
+                        .write(true)
+                        .open(&selected)
+                        .unwrap()
+                        .set_modified(original_at)
+                        .unwrap();
+                }
+                "rewrite" | "rewrite_append" => {
+                    OpenOptions::new()
+                        .write(true)
+                        .open(&selected)
+                        .unwrap()
+                        .write_all(source('Z').as_bytes())
+                        .unwrap();
+                    if case == "rewrite_append" {
+                        OpenOptions::new()
+                            .append(true)
+                            .open(&selected)
+                            .unwrap()
+                            .write_all(
+                                row("new", Some("answer"), "new appended message").as_bytes(),
+                            )
+                            .unwrap();
+                    }
+                }
+                "truncate_regrow" => {
+                    fs::write(
+                        &selected,
+                        source('Z') + &row("new", Some("answer"), "new appended message"),
+                    )
+                    .unwrap();
+                }
+                case if case == "append" || case.ends_with("_verifying") => OpenOptions::new()
+                    .append(true)
+                    .open(&selected)
+                    .unwrap()
+                    .write_all(row("new", Some("answer"), "new appended message").as_bytes())
+                    .unwrap(),
+                _ => unreachable!(),
+            }
+            if case != "rename_same_mtime" {
+                File::options()
+                    .write(true)
+                    .open(&selected)
+                    .unwrap()
+                    .set_modified(original_at + std::time::Duration::from_secs(2))
+                    .unwrap();
+            }
+        });
+        let result = conversation(&path, TranscriptAgent::Claude, 50);
+        super::super::mutation_observer::clear();
+        VERIFY.with(|slot| {
+            assert!(
+                slot.borrow_mut().take().is_none(),
+                "verification mutation must actually run"
+            );
+        });
+        if let Ok(page) = &result {
+            let text = page
+                .messages
+                .iter()
+                .flat_map(|message| message["blocks"].as_array().unwrap())
+                .filter_map(|block| block["text"].as_str())
+                .collect::<String>();
+            eprintln!(
+                "Claude mutation={case} accepted rows={} branch={:?} mixed_old_new={}",
+                page.messages.len(),
+                page.branch_id,
+                text.contains('Q') && text.contains('Z')
+            );
+        }
+        if matches!(case, "append" | "append_verifying") {
+            let captured = result.unwrap();
+            assert_eq!(captured.branch_id.as_deref(), Some("answer"));
+            let next = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+            assert_eq!(
+                next.branch_id.as_deref(),
+                Some(if case == "append_verifying" {
+                    "later"
+                } else {
+                    "new"
+                })
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "mutated Claude conversation accepted: {case}"
+            );
+        }
+    }
+    #[test]
+    fn truncate_must_not_publish_shorter_branch() {
+        mutation("truncate");
+    }
+    #[test]
+    fn rename_must_not_publish_detached_branch() {
+        mutation("rename");
+    }
+    #[test]
+    fn rewrite_must_not_publish_mixed_text() {
+        mutation("rewrite");
+    }
+    #[test]
+    fn ordinary_append_keeps_captured_prefix_useful_for_follow() {
+        mutation("append");
+    }
+    #[test]
+    fn growth_does_not_hide_rewritten_or_truncated_prefix() {
+        for case in ["rewrite_append", "truncate_regrow"] {
+            mutation(case);
+        }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn same_size_same_mtime_rename_is_rejected_by_original_identity() {
+        mutation("rename_same_mtime");
+    }
+    #[test]
+    fn append_during_comparison_is_accepted_without_recapture() {
+        mutation("append_verifying");
+    }
+    #[test]
+    fn comparison_cannot_admit_a_later_replacement_truncation_or_rewrite() {
+        for case in [
+            "rename_verifying",
+            "truncate_verifying",
+            "rewrite_verifying",
+        ] {
+            mutation(case);
+        }
+    }
+    #[test]
+    fn incomplete_tail_waits_for_newline_and_split_utf8_before_next_follow_read() {
+        for split_utf8 in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("partial.jsonl");
+            let first = row("root", None, "owned root");
+            let second = row("answer", Some("root"), "owned é answer");
+            let split = if split_utf8 {
+                second
+                    .as_bytes()
+                    .iter()
+                    .position(|byte| *byte == 0xc3)
+                    .unwrap()
+                    + 1
+            } else {
+                second.len() - 1
+            };
+            let mut bytes = first.as_bytes().to_vec();
+            bytes.extend_from_slice(&second.as_bytes()[..split]);
+            fs::write(&path, &bytes).unwrap();
+            let partial = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+            assert_eq!(partial.branch_id.as_deref(), Some("root"));
+            assert_eq!(partial.next_offset, first.len() as u64);
+            assert!(!partial.has_more);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .write_all(&second.as_bytes()[split..])
+                .unwrap();
+            let completed = conversation(&path, TranscriptAgent::Claude, 50).unwrap();
+            assert_eq!(completed.branch_id.as_deref(), Some("answer"));
+            assert_eq!(completed.next_offset, (first.len() + second.len()) as u64);
+            assert_eq!(completed.messages[1]["blocks"][0]["text"], "owned é answer");
+        }
+    }
 }

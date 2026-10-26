@@ -147,3 +147,54 @@ test('invalid slot drafts survive other-slot saves and builder switches never re
   await expect(page.getByLabel('D-pad right corner chord',{exact:true})).toHaveValue('text: trailing ');
   expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
 });
+
+for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} retained parser causes keep literal data and both builder drafts without replaying input`,async({page})=>{
+  await fixture(page);
+  const setLocale=async(locale:string)=>page.evaluate(async locale=>{
+    const{uiI18n}=await import('/src/i18n/core.ts');
+    if(locale==='en-XA'){const{enablePseudoLocale}=await import('/src/test/pseudoLocale.ts');await enablePseudoLocale(uiI18n);}else await uiI18n.changeLanguage(locale);
+  },locale);
+  const labels=()=>page.evaluate(async()=>{const{t}=await import('/src/i18n/core.ts');return {name:t('preferencesChordName'),keys:t('shortcutKeySequence'),builder:t('shortcutShortcutBuilder'),text:t('shortcutCustomShortcutText'),control:t('shortcutControl'),add:t('shortcutAddChord'),unknown:t('validationUnknownKeyValue1',{value1:'{{<key>}}'}),ascii:t('validationWithModifiersUsePrintableASCIIOnlyRemoveModifiersFor')};});
+  await setLocale(initial);let names=await labels();
+  const rawLabel='RAW {{label}} 中文';
+  await page.getByLabel(names.name,{exact:true}).fill(rawLabel);
+  const keys=page.getByLabel(names.keys,{exact:true});await keys.fill('Ctrl+{{<key>}}');
+  await page.getByRole('button',{name:names.add,exact:true}).click();await keys.focus();
+  const keysNode=await keys.elementHandle(),alert=await page.getByRole('alert').elementHandle();
+  const before=await page.evaluate(()=>localStorage.getItem('lazysh.preferences.v1'));
+  for(const locale of ['en','pt-BR','es','en-XA']){
+    await setLocale(locale);names=await labels();
+    await expect(page.getByRole('alert')).toHaveText(names.unknown);
+    await expect(page.getByLabel(names.keys,{exact:true})).toHaveValue('Ctrl+{{<key>}}');
+    expect(await keysNode!.evaluate(node=>node===document.activeElement)).toBe(true);
+    expect(await alert!.evaluate(node=>node.isConnected)).toBe(true);
+    expect(await page.evaluate(()=>localStorage.getItem('lazysh.preferences.v1'))).toBe(before);
+  }
+  await page.getByLabel(names.builder,{exact:true}).selectOption('simple');
+  await page.getByLabel(names.control,{exact:true}).check();
+  const text=page.getByLabel(names.text,{exact:true});await text.fill('世界<{{raw}}>');
+  await page.getByRole('button',{name:names.add,exact:true}).click();await text.focus();
+  const textNode=await text.elementHandle();
+  for(const locale of ['pt-BR','es','en-XA']){
+    await setLocale(locale);names=await labels();
+    await expect(page.getByRole('alert')).toHaveText(names.ascii);
+    await expect(page.getByLabel(names.text,{exact:true})).toHaveValue('世界<{{raw}}>');
+    await expect(page.getByLabel(names.control,{exact:true})).toBeChecked();
+    expect(await textNode!.evaluate(node=>node===document.activeElement)).toBe(true);
+    expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+    const size=await page.locator('.preferences-panel').evaluate(node=>({width:node.clientWidth,scroll:node.scrollWidth}));expect(size.scroll).toBeLessThanOrEqual(size.width);
+  }
+  await page.getByLabel(names.builder,{exact:true}).selectOption('advanced');
+  await expect(page.getByLabel(names.keys,{exact:true})).toHaveValue('Ctrl+{{<key>}}');
+  await page.getByLabel(names.builder,{exact:true}).selectOption('simple');
+  await page.getByLabel(names.text,{exact:true}).fill('a,,b');
+  await page.getByRole('button',{name:names.add,exact:true}).click();
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).chords)).toEqual([{label:rawLabel,keys:'C-a comma b'}]);
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await setLocale('en');await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await page.getByLabel('Terminal keys',{exact:true}).getByRole('button',{name:rawLabel,exact:true}).click();
+  expect(await page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x01',',','b']]);
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x01,b']);
+});

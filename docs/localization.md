@@ -81,9 +81,19 @@ and native error strings remain verbatim. Retained device-font validation errors
 and fallback warnings also translate when rendered, including missing font roles
 and names in load warnings. Language changes do not repeat IndexedDB transactions,
 FontFace loading, import or deletion. Font bytes, IDs, families and persisted names
-stay unchanged, and raw browser/storage diagnostics stay literal. Shared chord-parser
-messages retain their existing owning-module behavior; this does not claim a
-complete audit of all retained messages elsewhere in the application.
+stay unchanged, and raw browser/storage diagnostics stay literal. Shared advanced
+and simple chord-parser validation errors also retain finite causes and literal
+key/step data. ChordBuilder and synchronous terminal parser-error paths translate
+these causes when rendered, preserving drafts, modifiers, focus, existing raw-error
+formatting and exact dispatch bytes. Grammar, aliases, limits and stored bindings
+are unchanged; language changes do not save or replay input. This does not claim
+a complete audit of all retained messages elsewhere in the application.
+Theme import/share validation and retained manual/linked-theme notices also render
+in the current language, including literal invalid color-key data. Theme names,
+palettes and exported JSON/share-code/link bytes remain unchanged. Language changes
+preserve editable fallback names, previews, original linked receipts/access leases
+and held clipboard/read/acknowledgement operations; they do not apply, save, copy
+or acknowledge a theme by themselves.
 This is a partial milestone under issue #79. Other feature panels still require
 their own localization and acceptance.
 Native lock-cover/biometric-reason resources on
@@ -256,3 +266,10 @@ preserving interpolation. The coverage test audits static text in the covered
 workflow; it does not claim all application strings are localized. Synthetic
 browser tests do not establish physical-device permission or system-language
 behavior.
+
+`bun run test src/i18n/accessLocales.test.tsx src/AccessShell.test.tsx` checks
+that a retained App Lock authentication failure follows English, Brazilian
+Portuguese and Spanish without another configuration request. Held configuration
+retains its original access header, checkbox identity and opt-in; later access
+authority still wins. Native unsupported-platform reasons stay literal. These
+are component fixtures, not proof of OS authentication or device prompts.
