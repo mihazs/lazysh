@@ -134,15 +134,14 @@ pub async fn start_preview(
                     let access = connect_access.clone();
                     async move {
                         access.check()?;
-                        let channel = handle
-                            .channel_open_direct_tcpip(
-                                remote_address,
-                                u32::from(remote_port),
-                                "127.0.0.1",
-                                0,
-                            )
-                            .await?;
-                        Ok(channel.into_stream())
+                        remote_stream(
+                            &handle,
+                            &access,
+                            &remote_address,
+                            remote_port,
+                            tokio::time::Instant::now() + Duration::from_secs(15),
+                        )
+                        .await
                     }
                 };
                 tokio::select! { biased;
@@ -160,6 +159,27 @@ pub async fn start_preview(
             Ok(preview)
         })
         .await
+}
+
+pub(crate) async fn remote_stream(
+    handle: &crate::ssh::SshHandle,
+    access: &AccessLease,
+    address: &str,
+    port: u16,
+    deadline: tokio::time::Instant,
+) -> Result<russh::ChannelStream<russh::client::Msg>> {
+    let channel = crate::ssh::open_owned(
+        handle,
+        access,
+        deadline,
+        crate::ssh::ChannelRequest::DirectTcp {
+            host: address.into(),
+            port: u32::from(port),
+        },
+    )
+    .await?;
+    access.check()?;
+    Ok(channel.into_stream())
 }
 
 // One owner enforces the connection cap and drains all children before returning.
@@ -403,8 +423,8 @@ pub async fn discover_preview_ports(
             let port = listener.port;
             let probe = async {
                 worker_access.check()?;
-                let channel = session.handle.channel_open_direct_tcpip(address, u32::from(port), "127.0.0.1", 0).await?;
-                read_http_status(channel.into_stream(), address, port).await
+                let stream = remote_stream(&session.handle, &worker_access, address, port, tokio::time::Instant::now() + Duration::from_millis(1500)).await?;
+                read_http_status(stream, address, port).await
             };
             listener.http = Some(if *cancel.borrow() { false } else {
                 tokio::select! {

@@ -1,3 +1,4 @@
+import {t} from './i18n/core';
 import { useSyncExternalStore } from 'react';
 import { parseSnapshot } from './AgentPanel';
 
@@ -30,7 +31,7 @@ export function getInbox(): InboxState {
 export function updateInbox(change: Partial<InboxState>, persist = true) {
   cached = { ...getInbox(), ...change };
   try { if (persist) { const { error: _error, ...stored } = cached; const encoded = JSON.stringify(stored); if (encoded !== serialized) { localStorage.setItem(storageKey, encoded); serialized = encoded; } } }
-  catch { cached = { ...cached, error: 'The inbox could not be saved on this device.' }; }
+  catch { cached = { ...cached, error: t("inboxSaveFailed") }; }
   window.dispatchEvent(new Event(eventName));
 }
 function subscribe(listener: () => void) {

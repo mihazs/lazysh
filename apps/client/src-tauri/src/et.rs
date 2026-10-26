@@ -99,12 +99,10 @@ pub(crate) async fn read_bootstrap(
 
 pub(crate) async fn bootstrap(
     session: &Session,
+    lease: &crate::app_lock::AccessLease,
     options: Options,
-    cols: u32,
-    rows: u32,
 ) -> Result<Bootstrap> {
     options.validate()?;
-    crate::ssh::check_size(cols, rows)?;
     if session.handle.agent_forwarding_enabled() {
         return Err(SshError::new("et_agent_forwarding", "Selected-identity forwarding is available in SSH terminals. Disable forwarding before using Eternal Terminal."));
     }
@@ -116,7 +114,7 @@ pub(crate) async fn bootstrap(
     }
     let mut channel = tokio::select! {
         _ = cancelled.changed() => return Err(SshError::new("cancelled", "ET connection was cancelled")),
-        result = timeout(Duration::from_secs(15), session.handle.channel_open_session()) => result.map_err(|_| SshError::new("et_bootstrap", "Opening ET bootstrap channel timed out"))??,
+        result = crate::ssh::open_owned_channel(&session.handle, lease, tokio::time::Instant::now() + Duration::from_secs(15)) => result?,
     };
     let key = Zeroizing::new(Alphanumeric.sample_string(&mut rand::rng(), 32));
     let input = Zeroizing::new(format!(
@@ -125,6 +123,7 @@ pub(crate) async fn bootstrap(
         key.as_str()
     ));
     let operation = async {
+        lease.check()?;
         channel.exec(true, options.command()).await?;
         channel.data(input.as_bytes()).await?;
         channel.eof().await?;
@@ -165,7 +164,8 @@ pub async fn connect_et(
     lease
         .run(async {
             let parent = state.session(&session_id).await?;
-            let bootstrap = bootstrap(&parent, options, cols, rows).await?;
+            crate::ssh::check_size(cols, rows)?;
+            let bootstrap = bootstrap(&parent, &lease, options).await?;
             crate::ssh::spawn_native_terminal(
                 &state,
                 lease.clone(),

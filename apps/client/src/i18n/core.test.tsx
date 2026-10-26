@@ -6,10 +6,14 @@ import {english} from './en';
 import {enablePseudoLocale} from '../test/pseudoLocale';
 
 afterEach(async () => {cleanup(); await uiI18n.changeLanguage('en');});
-it('negotiates only supported English tags and falls back without trusting persisted or system strings', () => {
-  expect(resolveUiLocale('system',['pt-BR','en-GB'])).toBe('en-GB');
+it('negotiates supported language tags and falls back without trusting persisted or system strings', () => {
+  expect(resolveUiLocale('system',['pt-BR','en-GB'])).toBe('pt-BR');
+  expect(resolveUiLocale('system',['pt-PT'])).toBe('pt-BR');
+  expect(resolveUiLocale('system',['es-MX'])).toBe('es-MX');
+  expect(resolveUiLocale('pt-BR',['en-GB'])).toBe('pt-BR');
+  expect(resolveUiLocale('es',['pt-BR'])).toBe('es');
   expect(resolveUiLocale('en',['en-GB'])).toBe('en');
-  for (const requested of [['pt-BR'],['en_US'],['__proto__'],['x'.repeat(81)],[]]) expect(resolveUiLocale('system',requested)).toBe('en');
+  for (const requested of [['fr'],['en_US'],['__proto__'],['x'.repeat(81)],[]]) expect(resolveUiLocale('system',requested)).toBe('en');
   expect(resolveUiLocale('system',[...Array(16).fill('fr'),'en-GB'])).toBe('en');
 });
 it('uses English for missing resources and a safe English message for unknown keys', async () => {
@@ -44,6 +48,9 @@ it('expands catalog copy without changing interpolation values or offering a pro
 });
 // TypeScript checks these contracts; executing deliberately invalid calls is unnecessary.
 function typedCatalogContracts() {
+  t("usageMinutes",{minutes:"1",count:1});
+  // @ts-expect-error Plural selection requires a numeric count, distinct from formatted display text.
+  t("usageMinutes",{minutes:"1",count:"1"});
   // @ts-expect-error Unknown catalog keys are rejected.
   t('aKeyThatDoesNotExist');
   // @ts-expect-error Interpolation values are required.

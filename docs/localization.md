@@ -1,21 +1,42 @@
 # Interface localization
 
-The first localization milestone bundles English for the shell, host editor and
-connection dialogs, Preferences and its theme, font, icon and shortcut controls,
-and the app access cover/settings. It does not complete issue #79. Other feature
-panels, native platform permission explanations and additional translated
-languages still require their own coverage and acceptance.
+The bundled catalogs cover English (`en`), Brazilian Portuguese (`pt-BR`) and
+Spanish (`es`) for the shell, host editor and connection dialogs, Preferences
+and its theme, font, icon and shortcut controls, and renderer access settings.
+Transcript, Usage and the notification inbox also have app-owned labels, controls
+and validation in all three catalogs. Remote file browsing, upload consent, Git
+working-tree/history review, side-by-side diffs, line-comment controls and syntax
+highlighting controls are covered too. File contents, paths, commit subjects,
+patches and annotation payloads remain verbatim. The browser preview/DOM-picker
+controls remain a separate follow-up.
+This is a partial milestone under issue #79. Other feature panels and native
+lock-cover/biometric-reason text still require their own localization and
+acceptance. Apple permission purposes have separate bundled resources below;
+selecting an interface language does not change native OS controls.
 
-App language offers **System** (the default) and **English**. System selects a
-supported English language tag from `navigator.languages`, preserving regional
-`Intl` number/date formatting. Other or malformed languages fall back to English.
-Explicit English uses `en`. The validated `uiLanguage` setting persists with
-preferences and is accepted by settings sync; older backups default to System.
-Reset preferences restores System. No language resources are fetched remotely.
+App language offers **System** (the unchanged default), **English**,
+**Português (Brasil)** and **Español**. System uses the first supported language
+in the first 16 `navigator.languages` entries. Portuguese tags use the Brazilian
+catalog and `pt-BR` formatting; no Portuguese-from-Portugal catalog is included.
+English and Spanish regional tags preserve regional `Intl` number/date
+formatting. Other or malformed languages fall back to English. Explicit choices
+use `en`, `pt-BR` or `es`. The validated `uiLanguage` preference persists and syncs;
+older backups default to System. Reset preferences restores System. No language
+resources are fetched remotely.
 
 ## Adding interface text
 
-Keep app-local English keys in `apps/client/src/i18n/en.ts`. Import `t` and call
+Keep app-local English keys in `apps/client/src/i18n/en.ts`. Supply Brazilian
+Portuguese and Spanish in `translations.ts`: each key has a required
+`[Brazilian Portuguese, Spanish]` pair. TypeScript rejects missing/unknown keys;
+the catalog test verifies every placeholder and required CLDR plural category.
+Technical terms, key names and commands inside explanations must stay exact.
+Use the zero plural override for zero sessions and supply one/many/other forms.
+For a formatted quantity, pass its display text as a separate interpolation value
+and the original numeric `count` for plural selection (for example `usageMinutes`).
+These catalogs are authored interface text, not a machine-translation service.
+
+Import `t` and call
 `useUi()` inside rendering components so language changes update existing views.
 `t` requires known keys and the interpolation names declared in that key. Use a
 complete sentence rather than concatenating fragments, and plural resources with
@@ -34,9 +55,34 @@ reconnect sessions or refetch credentials.
 
 The catalog deliberately stays app-local until a real native consumer requires a
 shared contract. Native permission text and OS language selection are not governed
-by this TypeScript catalog. A new supported translation must include English
-fallback, interpolation/plural validation, native permission-label coverage and
-platform acceptance before being advertised.
+by this TypeScript catalog. English fallback and interpolation/plural validation are required for every
+catalog. Native permission-label coverage and platform acceptance are required
+before claiming end-to-end language support. Notification action titles use the
+active interface language when the existing listener registration runs; changing
+language does not restart polling/listeners or request OS permission again.
+Native notification body/permission text remains outside this renderer catalog.
+
+## Apple permission explanations
+
+The main Apple app bundles English, Brazilian Portuguese and Spanish
+`InfoPlist.strings` tables from `src-tauri/apple/Localizations`. They localize the
+existing Face ID and microphone purposes; the base `Info.plist` supplies English
+fallback. The microphone text covers the selected dictation engine. This adds no
+new permission request or change to the selected engine.
+
+Apple resolves these resources using its app/OS language selection. The in-app
+language preference does not force system permission sheets into another
+language. See Apple's [localized property-list guidance](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/AboutInformationPropertyListFiles.html)
+and Tauri's [macOS localization packaging](https://v2.tauri.app/distribute/macos-application-bundle/#infoplist-localization).
+XcodeGen includes the localization group in the iOS app; the macOS-specific Tauri
+resource map preserves each `.lproj` directory at the bundle resource root.
+
+The existing actual-app XCTest target checks the installed iOS host's three
+literal resource paths, purpose keys, fallback values and Foundation lookups. It
+does not display a permission prompt or verify physical-device OS language
+behavior. The macOS hosted gate runs Tauri's app bundler and Apple's `plutil` on
+the three packaged tables; compilation without bundling does not verify resources.
+Native lock-cover and biometric-reason localization remain separate issue #79 work.
 
 ## Verification
 
@@ -46,7 +92,17 @@ Run the existing project tasks from `apps/client`:
   fallback, safe text, pluralization, formatting and preference persistence.
 - `bun run test:e2e e2e/i18n.spec.ts` checks desktop and phone widths, a live
   synthetic terminal, preserved host drafts, diagnostics, keyboard focus and
-  expanded labels.
+  expanded labels, plus actual Brazilian Portuguese and Spanish UI workflows.
+- `bun run test src/i18n/recordedPanels.test.tsx` exercises translated staging,
+  usage inspection and explicit inbox actions with synthetic native responses,
+  unchanged original access headers and preserved renderer identities.
+- `bun run test:e2e e2e/recorded-panel-locales.spec.ts` checks real panel rendering
+  and long labels at desktop/phone widths, raw records and exact action targets.
+- `bun run test src/i18n/fileReview.test.tsx` verifies original file/revision
+  targets, request headers, pending labels and editable annotation identity.
+- `bun run test:e2e e2e/file-review-locales.spec.ts` checks all three locales at
+  desktop/phone widths, explicit upload consent, syntax highlighting, comment
+  focus, historical selection and verbatim diff contents across language changes.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
