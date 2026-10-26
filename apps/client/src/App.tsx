@@ -1,3 +1,4 @@
+import {LocalUiError} from './i18n/localError';
 import {t, useUi} from './i18n/core';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
@@ -1048,7 +1049,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       || currentView.current.view!=='voice' || document.visibilityState!=='visible'
       || directBlocked || closingSessions.current.has(request.sessionId)
       || directContext.current.generation!==directGeneration || !request.claim())
-      return Promise.reject(new Error(t("appDirectDictationCancelledBecauseThisSessionIsNoLonger")));
+      return Promise.reject(new LocalUiError("appDirectDictationCancelledBecauseThisSessionIsNoLonger"));
     return api.write(live.id,data);
   }
   const active = sessions.find((session) => session.id === activeId);

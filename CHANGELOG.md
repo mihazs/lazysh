@@ -31,6 +31,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Main Voice engine/model/recording and direct-delivery controls now support
+  English, Brazilian Portuguese and Spanish, including retained download/import,
+  asset, transcription, delivery and local-error messages. Language changes keep
+  the same recording, request IDs, selected models/languages and editable draft;
+  native diagnostics and transcription content remain verbatim. Defaults are
+  unchanged, including review-first dictation and opt-in Enter delivery.
+
 - Cloud dictation enrollment/quota settings and dictation history controls now
   support English, Brazilian Portuguese and Spanish, including visible local
   errors. Language changes preserve pending transcription, drafts and history
