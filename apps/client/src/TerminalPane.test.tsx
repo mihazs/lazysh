@@ -522,3 +522,30 @@ it('rerenders retained font warning data without recreating its node or terminal
     }
   }finally{subscription.mockRestore();}
 });
+
+it.each(['key','chord'] as const)('retains a synchronous %s parser cause without repeating terminal dispatch',async(branch)=>{
+  const parser=await import('./preferences');const{LocalUiError}=await import('./i18n/localError');
+  savePreferences({...defaults,chords:[{label:'Parser fixture',keys:'C-z 2'}]});render(<LocaleTerminal/>);
+  if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
+  const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw new LocalUiError('validationUnknownKeyValue1','{{<literal>}}');});
+  try{
+    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'c':'Parser fixture'}));
+    expect(parse).toHaveBeenCalledTimes(1);
+    for(const locale of ['pt-BR','es','en']){
+      await act(async()=>{await uiI18n.changeLanguage(locale);});
+      expect(screen.getByRole('alert').textContent).toBe((await import('./i18n/core')).t('validationUnknownKeyValue1',{value1:'{{<literal>}}'}));
+      expect(parse).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();expect(mocks.writeSequence).not.toHaveBeenCalled();
+    }
+  }finally{parse.mockRestore();}
+});
+it.each(['key','chord'] as const)('preserves the original raw formatting of the synchronous %s parser catch',async(branch)=>{
+  const parser=await import('./preferences');const raw=new Error('RAW parser <{{literal}}>');
+  savePreferences({...defaults,chords:[{label:'Raw parser fixture',keys:'F4'}]});render(<LocaleTerminal/>);
+  if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
+  const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw raw;});
+  try{
+    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'c':'Raw parser fixture'}));
+    await act(async()=>{await uiI18n.changeLanguage('es');});
+    expect(screen.getByRole('alert').textContent).toBe(branch==='key'?String(raw):raw.message);
+  }finally{parse.mockRestore();}
+});
