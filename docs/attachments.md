@@ -52,3 +52,31 @@ OpenSSH interoperability fixture uses this reservation path for real transfer,
 existing-file preservation and retained SSH control. Renderer and desktop/phone
 browser fixtures use synthetic native replies; they do not access user files or
 certify physical-device network/lifecycle behavior.
+
+## Remote destination paths
+
+Host-local uploads resolve the existing parent through SFTP REALPATH before
+exclusive file creation, then return the exact bounded absolute SFTP name used
+for OPEN. Attachments copies/stages that returned name; Files refreshes its
+returned parent. A relative input such as `./photo.png` therefore no longer
+points into the terminal agent's unrelated working directory. No prompt is sent
+automatically. Resolution remains inside the existing cancellable 30-second
+transfer deadline and does not change receipt capacity or no-overwrite rules.
+
+Path operations use SFTP `/` separators independently of the client's OS, as
+specified in [SFTP v3 sections 6.2 and 6.11](https://www.ietf.org/archive/id/draft-ietf-secsh-filexfer-02.txt).
+[Win32-OpenSSH's pinned realpath implementation](https://github.com/PowerShell/openssh-portable/blob/274893f8d1fe86c4d128b514c3af4bc10cdc0c99/contrib/win32/win32compat/misc.c#L954)
+returns `/C:/...` or a slash-rooted chroot name; both are preserved. A server's
+fully qualified `C:/...` response is also accepted without rewriting it. For an
+input containing backslashes, the server first resolves the whole input, avoiding
+a guess between a Unix literal filename and a Windows separator. Servers that
+cannot canonicalize such a missing final name fail before creating a file.
+Malformed, relative, control-containing or over-4096-byte destinations likewise
+fail before OPEN. No overwrite fallback, pathname removal or retry is added.
+
+The owned Linux OpenSSH fixture verifies a distinct SFTP initial directory and
+agent CWD, including quotes, Unicode and a literal Unix backslash. Native fake
+SFTP fixtures exercise Windows-shaped replies; these are not real Windows-server
+acceptance. An absolute SFTP name does not prove the terminal shell sees the same
+filesystem namespace: independently chrooted SFTP/shell paths may differ. No
+mapping, immutable file identity or remote-filesystem race protection is claimed.
