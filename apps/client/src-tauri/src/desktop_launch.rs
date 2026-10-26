@@ -92,6 +92,7 @@ pub(crate) fn parse(
 
 struct Directory {
     receipt: String,
+    owner: Option<AccessLease>,
     #[cfg(desktop)]
     path: PathBuf,
 }
@@ -109,18 +110,24 @@ pub(crate) struct LaunchState(Mutex<Pending>);
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Snapshot {
-    directory_receipt: Option<String>,
+    pub(crate) directory_receipt: Option<String>,
     notice: Option<Notice>,
 }
 impl LaunchState {
     #[cfg(test)]
     pub(crate) fn queued_receipt(&self) -> Option<String> {
-        self.snapshot().unwrap().directory_receipt
+        self.0
+            .lock()
+            .unwrap()
+            .directory
+            .as_ref()
+            .map(|value| value.receipt.clone())
     }
     pub(crate) fn new(path: Option<PathBuf>) -> Self {
         Self(Mutex::new(Pending {
             directory: path.map(|_path| Directory {
                 receipt: uuid::Uuid::new_v4().to_string(),
+                owner: None,
                 #[cfg(desktop)]
                 path: _path,
             }),
@@ -128,29 +135,63 @@ impl LaunchState {
         }))
     }
     #[cfg(desktop)]
-    pub(crate) fn claim(&self, receipt: &str) -> Result<PathBuf, String> {
+    pub(crate) fn claim(&self, receipt: &str, request: &AccessLease) -> Result<PathBuf, String> {
         if uuid::Uuid::parse_str(receipt).is_err() {
             return Err(UNAVAILABLE.into());
         }
-        let mut pending = self.0.lock().map_err(|_| UNAVAILABLE)?;
-        if pending
-            .directory
-            .as_ref()
-            .is_none_or(|value| value.receipt != receipt)
-        {
-            return Err(UNAVAILABLE.into());
-        }
-        Ok(pending.directory.take().unwrap().path)
-    }
-    fn snapshot(&self) -> Result<Snapshot, String> {
-        let pending = self.0.lock().map_err(|_| UNAVAILABLE)?;
-        Ok(Snapshot {
-            directory_receipt: pending
+        request.check().map_err(String::from)?;
+        // Clone under Pending, then release it before acquiring the authority.
+        let owner = {
+            let pending = self.0.lock().map_err(|_| UNAVAILABLE)?;
+            pending
                 .directory
                 .as_ref()
-                .map(|value| value.receipt.clone()),
-            notice: pending.notice.clone(),
-        })
+                .filter(|value| value.receipt == receipt)
+                .and_then(|value| value.owner.clone())
+                .ok_or(UNAVAILABLE)?
+        };
+        if owner.generation() != request.generation() {
+            return Err(UNAVAILABLE.into());
+        }
+        owner
+            .with_current(|| {
+                let mut pending = self.0.lock().map_err(|_| UNAVAILABLE)?;
+                if pending
+                    .directory
+                    .as_ref()
+                    .is_none_or(|value| value.receipt != receipt)
+                {
+                    return Err(UNAVAILABLE.into());
+                }
+                Ok(pending.directory.take().unwrap().path)
+            })
+            .map_err(String::from)?
+    }
+    pub(crate) fn read(&self, access: &AccessLease) -> Result<Snapshot, String> {
+        access
+            .with_current(|| {
+                let mut pending = self.0.lock().map_err(|_| UNAVAILABLE)?;
+                if pending
+                    .directory
+                    .as_ref()
+                    .and_then(|value| value.owner.as_ref())
+                    .is_some_and(|owner| owner.generation() != access.generation())
+                {
+                    pending.directory = None;
+                }
+                let directory_receipt = pending.directory.as_mut().and_then(|value| {
+                    if value.owner.is_some() {
+                        return None;
+                    }
+                    value.owner = Some(access.clone());
+                    Some(value.receipt.clone())
+                });
+                Ok(Snapshot {
+                    directory_receipt,
+                    notice: pending.notice.clone(),
+                })
+            })
+            .map_err(String::from)?
     }
     #[cfg(desktop)]
     fn reject_secondary(&self, args: &[String]) -> bool {
@@ -178,7 +219,7 @@ pub(crate) fn desktop_launch_read(
     state: tauri::State<'_, LaunchState>,
     access: AccessLease,
 ) -> Result<Guarded<Snapshot>, GuardedError<String>> {
-    access.run_sync(|| state.snapshot())
+    access.run_sync(|| state.read(&access))
 }
 #[tauri::command]
 pub(crate) fn desktop_launch_ack(
@@ -214,6 +255,28 @@ mod tests {
             .chain(values.iter().copied())
             .map(OsString::from)
             .collect()
+    }
+    #[test]
+    fn a_read_admitted_directory_is_not_passively_offered_after_revoke_before_claim() {
+        use crate::ssh::test_support::{ready_lease, unlocked_access};
+        let directory = tempfile::tempdir().unwrap();
+        let state = LaunchState::new(Some(directory.path().to_owned()));
+        let authority = unlocked_access();
+        let original = ready_lease(&authority);
+        let receipt = state.read(&original).unwrap().directory_receipt.unwrap();
+        authority.lock().unwrap();
+        authority
+            .authorize(authority.generation().unwrap())
+            .unwrap();
+        let fresh = ready_lease(&authority);
+        assert!(
+            state.read(&fresh).unwrap().directory_receipt.is_none(),
+            "a new lease must not automatically retry preparation for an old admitted request"
+        );
+        assert!(
+            state.claim(&receipt, &fresh).is_err(),
+            "the revoked admission must not remain claimable"
+        );
     }
     #[test]
     fn literal_directory_forms_resolve_only_against_the_callers_directory() {
@@ -344,49 +407,41 @@ mod tests {
     }
     #[test]
     fn cold_receipt_is_one_shot_and_warm_arguments_never_choose_or_overwrite_a_path() {
+        use crate::ssh::test_support::{ready_lease, unlocked_access};
         let base = tempfile::tempdir().unwrap();
         let state = LaunchState::new(Some(base.path().to_owned()));
-        let receipt = state.queued_receipt().unwrap();
+        let authority = unlocked_access();
+        let access = ready_lease(&authority);
+        let receipt = state.read(&access).unwrap().directory_receipt.unwrap();
         for args in [
             vec!["lazysh", "--dir", "lossy-�"],
             vec!["lazysh", "--dir=/another/path"],
         ] {
             assert!(state.reject_secondary(&args.into_iter().map(String::from).collect::<Vec<_>>()));
-            assert_eq!(
-                state.snapshot().unwrap().directory_receipt.as_deref(),
-                Some(receipt.as_str())
-            );
+            assert_eq!(state.queued_receipt().as_deref(), Some(receipt.as_str()));
+            assert!(state.read(&access).unwrap().directory_receipt.is_none());
         }
-        let notice = state.snapshot().unwrap().notice.unwrap().receipt;
+        let notice = state.read(&access).unwrap().notice.unwrap().receipt;
         assert!(state.reject_secondary(&["lazysh".into(), "-dir=third".into()]));
-        assert_eq!(state.snapshot().unwrap().notice.unwrap().receipt, notice);
+        assert_eq!(state.read(&access).unwrap().notice.unwrap().receipt, notice);
         assert!(!state.reject_secondary(&["lazysh".into(), "lazysh://theme?data=YWJj".into()]));
-        assert_eq!(state.claim(&receipt).unwrap(), base.path());
-        assert!(state.claim(&receipt).is_err());
-        assert!(state.snapshot().unwrap().directory_receipt.is_none());
+        assert_eq!(state.claim(&receipt, &access).unwrap(), base.path());
+        assert!(state.claim(&receipt, &access).is_err());
+        assert!(state.read(&access).unwrap().directory_receipt.is_none());
     }
     #[test]
     fn a_revoked_original_lease_cannot_claim_a_directory_after_unlock() {
         use crate::ssh::test_support::{ready_lease, unlocked_access};
         let base = tempfile::tempdir().unwrap();
         let state = LaunchState::new(Some(base.path().to_owned()));
-        let receipt = state.snapshot().unwrap().directory_receipt.unwrap();
         let access = unlocked_access();
         let lease = ready_lease(&access);
+        let receipt = state.read(&lease).unwrap().directory_receipt.unwrap();
         access.lock().unwrap();
         access.authorize(access.generation().unwrap()).unwrap();
         let fresh = ready_lease(&access);
-        assert!(lease.with_current(|| state.claim(&receipt)).is_err());
-        assert_eq!(
-            state.snapshot().unwrap().directory_receipt.as_deref(),
-            Some(receipt.as_str())
-        );
-        assert_eq!(
-            fresh
-                .with_current(|| state.claim(&receipt))
-                .unwrap()
-                .unwrap(),
-            base.path()
-        );
+        assert!(state.claim(&receipt, &lease).is_err());
+        assert!(state.claim(&receipt, &fresh).is_err());
+        assert!(state.read(&fresh).unwrap().directory_receipt.is_none());
     }
 }

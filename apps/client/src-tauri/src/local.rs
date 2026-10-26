@@ -59,11 +59,7 @@ pub async fn local_connect(
             #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
             {
                 let directory = match launch_receipt {
-                    Some(receipt) => Some(
-                        lease
-                            .with_current(|| launch.claim(&receipt))
-                            .map_err(String::from)??,
-                    ),
+                    Some(receipt) => Some(launch.claim(&receipt, &lease)?),
                     None => None,
                 };
                 desktop::connect(&state, lease.clone(), directory, cols, rows, events).await
@@ -1608,7 +1604,6 @@ mod tests {
             let pending = crate::desktop_launch::LaunchState::new(
                 directory_launch.then(|| directory.path().to_owned()),
             );
-            let receipt = pending.queued_receipt();
             let state = Arc::new(LocalState::default());
             let access = if directory_launch {
                 unlocked_access()
@@ -1616,12 +1611,10 @@ mod tests {
                 AccessState::disabled()
             };
             let creation = ready_lease(&access);
+            let receipt = pending.read(&creation).unwrap().directory_receipt;
             let mut command = shell("exec sleep 120");
             if let Some(receipt) = &receipt {
-                let path = creation
-                    .with_current(|| pending.claim(receipt))
-                    .unwrap()
-                    .unwrap();
+                let path = pending.claim(receipt, &creation).unwrap();
                 command.cwd(path);
             }
             let (began, started) = tokio::sync::oneshot::channel();
@@ -1689,10 +1682,7 @@ mod tests {
             assert!(pending.queued_receipt().is_none());
             if let Some(receipt) = &receipt {
                 assert!(
-                    fresh
-                        .with_current(|| pending.claim(receipt))
-                        .unwrap()
-                        .is_err(),
+                    pending.claim(receipt, &fresh).is_err(),
                     "a cancelled launch receipt must not replay after unlock"
                 );
             }

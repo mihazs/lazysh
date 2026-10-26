@@ -1,4 +1,4 @@
-import {LocalUiError} from './i18n/localError';
+import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
@@ -14,7 +14,7 @@ import {
 import { bindProtectedApi, captureAccess, useProtectedApi, useProtectedInvoke } from './access';
 import AccessShell, { type SessionRegistry } from './AccessShell';
 import ThemeLinkPanel from './ThemeLinkPanel';
-import {localLaunchError, useDesktopLaunch} from './useDesktopLaunch';
+import {captureLaunchError, useDesktopLaunch} from './useDesktopLaunch';
 import AccessPanel from './AccessPanel';
 import { forgetSession, PendingSessions, retainSession } from './pendingSessions';
 import {
@@ -1012,7 +1012,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
   const [deleting, setDeleting] = useState<Host | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiErrorCause>("");
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
   const [switcher, setSwitcher] = useState(false);
@@ -1094,7 +1094,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     try {
       pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"));
       pending.session.local=true;
-      const result=await (launchReceipt ? api.connectLocal(pending.onEvent,launchReceipt) : api.connectLocal(pending.onEvent));
+      const result=await (launchReceipt ? api.connectLocal(pending.onEvent,launchReceipt).catch(error=>{throw captureLaunchError(error);}) : api.connectLocal(pending.onEvent));
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
       if(!mounted.current){await ownership.close(result.sessionId);disposeTerminal(pending.session);return;}
@@ -1103,7 +1103,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     }catch(error){
       await ownership.closeAll().catch(()=>{});
       disposeTerminal(pending?.session);
-      if(mounted.current)setError(errorMessage(error));
+      if(mounted.current)setError(launchReceipt ? captureUiError(error) : errorMessage(error));
     }finally{localOpening.current=false;if(mounted.current)setOpeningLocal(false);}
   }
 
@@ -1660,7 +1660,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )}
         {error && (
           <div className="global-error" role="alert">
-            <span>{localLaunchError(error)}</span>
+            <span>{uiErrorText(error)}</span>
             <button
               className="icon-button"
               aria-label={t("appDismissError")}

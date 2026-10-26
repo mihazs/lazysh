@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Host } from "./bridge";
+import {uiI18n} from './i18n/core';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -28,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
+  launchReceipt: null as string|null,
+  prepareError: null as string|null,
   lockEvent: undefined as undefined | ((event: { payload: unknown }) => void),
 }));
 let generationBase=0;
@@ -36,7 +39,7 @@ vi.mock("@tauri-apps/api/core", () => ({ isTauri:()=>true, invoke: (...request:[
   const [command]=request;
   if(command==='app_lock_status')return Promise.resolve(unlockedStatus());
   if(command==='app_lock_ready')return Promise.resolve();
-  if(command==='desktop_launch_read')return Promise.resolve({directoryReceipt:null,notice:null});
+  if(command==='desktop_launch_read'){const directoryReceipt=mocks.launchReceipt;mocks.launchReceipt=null;return Promise.resolve({directoryReceipt,notice:null});}
   if(command==='ui_locale_status')return Promise.resolve({nativeAuthority:false});
   return mocks.invoke(...request);
 } }));
@@ -45,7 +48,7 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
   return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
-vi.mock("./terminal", () => ({ createTerminal: () => mocks.terminal }));
+vi.mock("./terminal", () => ({ createTerminal: () => {if(mocks.prepareError)throw mocks.prepareError;return mocks.terminal;} }));
 vi.mock("./TerminalPane", () => ({
   default: ({ active }: { active: boolean }) =>
     active ? <div>Live SSH terminal</div> : null,
@@ -74,6 +77,7 @@ const host: Host = {
 beforeEach(() => {
   generationBase+=10;
   vi.clearAllMocks();
+  mocks.launchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
     getItem: vi.fn(),
@@ -110,6 +114,18 @@ async function openConnection() {
   await user.type(screen.getByLabelText("Password"), "temporary-secret");
   return user;
 }
+
+it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED'])('keeps an unrelated raw global sentinel lookalike verbatim: %s',async raw=>{
+  render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  try {
+    await act(async()=>{window.dispatchEvent(new CustomEvent('lazysh-error',{detail:raw}));});
+    for(const locale of ['en','pt-BR','es']) {
+      await act(async()=>{await uiI18n.changeLanguage(locale);});
+      expect(screen.getByRole('alert').querySelector('span')?.textContent).toBe(raw);
+    }
+  } finally { await act(async()=>{await uiI18n.changeLanguage('en');}); }
+});
 
 it('keeps the existing terminal session while clearing tool views across native lock', async () => {
   mocks.api.connect.mockResolvedValue({sessionId:'retained-ssh'});
@@ -924,6 +940,18 @@ function enableLocal() {
   mocks.invoke.mockImplementation(async(command:string)=>command==='local_capability'?{available:true,reason:'Local desktop shell'}:false);
   mocks.api.connectLocal.mockResolvedValue({sessionId:'local:desktop'});
 }
+it.each(['preparation','native'] as const)('interprets launch codes only at the native connect boundary: %s',async source=>{
+  enableLocal();
+  const receipt='7b6d0fc9-a755-4e10-b2e3-0dbdc1259326';
+  mocks.launchReceipt=receipt;
+  if(source==='preparation')mocks.prepareError='LOCAL_LAUNCH_UNAVAILABLE';
+  else mocks.api.connectLocal.mockRejectedValueOnce('LOCAL_LAUNCH_UNAVAILABLE');
+  render(<App/>);
+  const alert=await screen.findByRole('alert');
+  expect(alert.querySelector('span')?.textContent).toBe(source==='preparation'?'LOCAL_LAUNCH_UNAVAILABLE':'This directory launch is no longer available. Run the directory command again.');
+  if(source==='preparation')expect(mocks.api.connectLocal).not.toHaveBeenCalled();
+  else expect(mocks.api.connectLocal).toHaveBeenCalledExactlyOnceWith(expect.any(Function),receipt);
+});
 it('opens an explicit local terminal without SSH authentication and hides remote tools',async()=>{
   enableLocal();const user=userEvent.setup();render(<App/>);
   await user.click(await screen.findByRole('button',{name:'Open local terminal'}));

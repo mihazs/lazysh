@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {act, cleanup, render, screen, waitFor} from '@testing-library/react';
-import {useState} from 'react';
+import {StrictMode, useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {acknowledgeAccessReady, accessSnapshot, applyAccessStatus} from './access';
-import {localLaunchError, useDesktopLaunch, WARM_UNSUPPORTED} from './useDesktopLaunch';
+import {captureLaunchError, useDesktopLaunch} from './useDesktopLaunch';
+import {LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {uiI18n, useUi} from './i18n/core';
 
 const event=vi.hoisted(()=>({refresh:undefined as undefined|(()=>void)}));
@@ -19,9 +20,9 @@ function access(locked=false) {
   if(!locked)acknowledgeAccessReady(accessSnapshot().epoch);
 }
 function Harness({open,available=true,busy=false}:{open:(receipt:string)=>Promise<void>;available?:boolean;busy?:boolean}) {
-  useUi(); const [notice,setNotice]=useState('');
+  useUi(); const [notice,setNotice]=useState<UiErrorCause>('');
   useDesktopLaunch(true,available,busy,open,setNotice);
-  return <p role="status">{notice && localLaunchError(notice)}</p>;
+  return <p role="status">{notice && uiErrorText(notice)}</p>;
 }
 beforeEach(()=>{generation+=10;access();vi.mocked(invoke).mockReset();void uiI18n.changeLanguage('en');});
 afterEach(cleanup);
@@ -33,6 +34,27 @@ it('starts a cold request once from a fresh ready mount and preserves its origin
   render(<Harness open={open}/>);
   await waitFor(()=>expect(open).toHaveBeenCalledExactlyOnceWith(receipt));
   expect(invoke).toHaveBeenCalledWith('desktop_launch_read',undefined,{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+});
+it('does not spend admission in a StrictMode setup that is immediately cleaned up',async()=>{
+  let pending:string|null=receipt;
+  vi.mocked(invoke).mockImplementation(async()=>{
+    const directoryReceipt=pending; pending=null;
+    return {directoryReceipt,notice:null};
+  });
+  const open=vi.fn(async()=>{});
+  render(<StrictMode><Harness open={open}/></StrictMode>);
+  await waitFor(()=>expect(open).toHaveBeenCalledExactlyOnceWith(receipt));
+});
+it.each(['preparation failed before local_connect','LOCAL_LAUNCH_UNAVAILABLE'])('does not reinterpret or retry a rejected open callback across busy cycles: %s',async raw=>{
+  vi.mocked(invoke).mockResolvedValue({directoryReceipt:receipt,notice:null});
+  const open=vi.fn(async()=>{throw raw;});
+  const view=render(<Harness open={open}/>);
+  await screen.findByText(raw);
+  view.rerender(<Harness open={open} busy/>);
+  view.rerender(<Harness open={open}/>);
+  await waitFor(()=>expect(vi.mocked(invoke).mock.calls.length).toBeGreaterThan(1));
+  await act(async()=>{});
+  expect(open).toHaveBeenCalledTimes(1);
 });
 it('keeps a locked or unsupported mount from reading directory metadata',async()=>{
   access(true); const open=vi.fn(async()=>{});
@@ -73,8 +95,8 @@ it('shows a finite warm rejection without opening a terminal and translates the 
   expect(screen.getByRole('status').textContent).toMatch(/^Abrir um diretório exige/);
   await act(async()=>{await uiI18n.changeLanguage('es');});
   expect(screen.getByRole('status').textContent).toMatch(/^Abrir un directorio requiere/);
-  expect(localLaunchError(WARM_UNSUPPORTED)).toMatch(/^Abrir un directorio requiere/);
-  expect(localLaunchError('raw filesystem error')).toBe('raw filesystem error');
+  expect(uiErrorText(new LocalUiError('desktopLaunchWarmUnsupported'))).toMatch(/^Abrir un directorio requiere/);
+  expect(captureLaunchError('raw filesystem error')).toBe('raw filesystem error');
 });
 it('rejects malformed native metadata instead of guessing a successful or empty launch',async()=>{
   vi.mocked(invoke).mockResolvedValue({directoryReceipt:'not-a-receipt',notice:null});
