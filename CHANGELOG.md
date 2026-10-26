@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an optional self-hosted authenticated webhook relay with private source capabilities, a durable bounded outbox and one fixed HTTPS destination. Delivery is disabled by default; native APNs/FCM delivery remains unavailable.
+
 - Add metadata-only discovery of existing Grok ACP `updates.jsonl` candidates in the pinned source store layout, honoring literal nonempty `GROK_HOME` overrides. Selecting and opening a file remains explicit; record-stream, conversation-replay and live-binding restrictions are unchanged.
 
 - Add explicit named tmux server selection throughout discovery, attachment, controls, Jump To and saved workspace restoration. Commands now explicitly select `-L default` when no named server is chosen; an inherited `TMUX` environment variable no longer redirects legacy/default operations to another server. Client invocations now force UTF-8 (`-u`) so discovery framing and Unicode metadata are independent of the remote locale.
