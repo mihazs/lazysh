@@ -2459,6 +2459,12 @@ fn transcript_view_command(
     Ok(command)
 }
 
+#[derive(Default)]
+struct TranscriptFlags {
+    checkpointed: bool,
+    inline_images: bool,
+}
+
 // Keep legacy requests byte-for-byte unchanged unless explicitly opted in.
 fn transcript_request_command(
     agent: &str,
@@ -2467,9 +2473,9 @@ fn transcript_request_command(
     checkpoint: Option<&str>,
     view: Option<&str>,
     transcript_session_id: Option<&str>,
-    checkpointed: bool,
+    flags: TranscriptFlags,
 ) -> Result<String> {
-    if !checkpointed {
+    if !flags.checkpointed && !flags.inline_images {
         return transcript_view_command(agent, path, offset, checkpoint, view);
     }
     if agent != "grok-acp"
@@ -2480,6 +2486,10 @@ fn transcript_request_command(
             "invalid_input",
             "Unsupported checkpointed transcript request",
         ));
+    }
+    if !flags.checkpointed {
+        let command = transcript_view_command(agent, path, offset, checkpoint, view)?;
+        return Ok(format!("{command} --inline-images"));
     }
     let mut command = transcript_command(agent, path, offset, None)?;
     let receipt = checkpoint
@@ -2498,6 +2508,9 @@ fn transcript_request_command(
     command.push_str(" --checkpointed");
     if let Some(receipt) = receipt {
         command.push_str(&format!(" --checkpoint={}", quote(&receipt.to_string())));
+    }
+    if flags.inline_images {
+        command.push_str(" --inline-images");
     }
     Ok(command)
 }
@@ -2560,6 +2573,7 @@ pub async fn agent_transcript(
     view: Option<String>,
     checkpoint: Option<String>,
     checkpointed: Option<bool>,
+    inline_images: Option<bool>,
     transcript_session_id: Option<String>,
 ) -> AccessResult<serde_json::Value> {
     lease
@@ -2571,7 +2585,10 @@ pub async fn agent_transcript(
                 checkpoint.as_deref(),
                 view.as_deref(),
                 transcript_session_id.as_deref(),
-                checkpointed.unwrap_or(false),
+                TranscriptFlags {
+                    checkpointed: checkpointed.unwrap_or(false),
+                    inline_images: inline_images.unwrap_or(false),
+                },
             )?;
             transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
@@ -3241,7 +3258,10 @@ mod tests {
                 checkpoint,
                 view,
                 session,
-                enabled,
+                TranscriptFlags {
+                    checkpointed: enabled,
+                    inline_images: false,
+                },
             );
             assert_eq!(result.is_ok(), accepted, "{agent} {offset} {enabled}");
             if let Ok(command) = result {
@@ -3252,6 +3272,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn inline_image_options_are_explicit_and_rejected_before_ssh_for_other_sources() {
+        for (agent, view, recorded_id, accepted) in [
+            ("grok-acp", None, None, true),
+            ("grok-acp", Some("records"), None, true),
+            ("claude", None, None, false),
+            ("grok-acp", Some("conversation"), None, false),
+            ("grok-acp", None, Some("recording"), false),
+        ] {
+            let result = transcript_request_command(
+                agent,
+                "/owned/a'b.png.jsonl",
+                0,
+                None,
+                view,
+                recorded_id,
+                TranscriptFlags {
+                    checkpointed: false,
+                    inline_images: true,
+                },
+            );
+            assert_eq!(result.is_ok(), accepted);
+            if let Ok(command) = result {
+                assert!(command.ends_with(" --inline-images"));
+            }
+        }
+        let hash = "a".repeat(64);
+        let token = format!("g1:{hash}:10:20:{hash}");
+        let enabled = transcript_request_command(
+            "grok-acp",
+            "/owned/updates",
+            10,
+            Some(&token),
+            None,
+            None,
+            TranscriptFlags {
+                checkpointed: true,
+                inline_images: true,
+            },
+        )
+        .unwrap();
+        assert!(enabled.contains(&format!(" --checkpoint='{token}'")));
+        assert!(enabled.ends_with(" --inline-images"));
+        let legacy = transcript_request_command(
+            "grok-acp",
+            "/owned/updates",
+            0,
+            None,
+            None,
+            None,
+            TranscriptFlags::default(),
+        )
+        .unwrap();
+        assert!(!legacy.contains("inline-images"));
     }
 
     #[test]

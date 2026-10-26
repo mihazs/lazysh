@@ -1,11 +1,13 @@
 import {t, useUi} from './i18n/core';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
 import { captureAccess, useAccessSnapshot, useProtectedInvoke } from './access';
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import Markdown from "react-markdown";
-import {errorMessage, captureUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
+import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
 import {validateRecordedPage} from './recordedFollow';
+import {recordedImage,type RecordedImage} from './recordedImage';
+import RecordedImagePreview from './RecordedImagePreview';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -14,6 +16,7 @@ type Block = {
   name?: string;
   status?: 'pending' | 'in_progress' | 'completed' | 'failed';
   isError?: boolean;
+  imagePreview?: RecordedImage;
 };
 type Message = {
   id: string;
@@ -76,6 +79,12 @@ export function parseTranscript(value: unknown): Page {
         throw new Error(t("chatInvalidRecordMetadata"));
     } else if (message.record !== undefined) throw new Error(t("chatUnexpectedRecordMetadata"));
     for (const block of message.blocks) {
+      if (block?.imagePreview !== undefined) {
+        if (page.agent!=='grok-acp' || page.view!=='record_stream' || block.type!=='image'
+          || !['user','assistant'].includes(message.role) || block.id!==undefined || block.status!==undefined)
+          throw new LocalUiError('chatImageInvalid');
+        recordedImage(block.imagePreview);
+      }
       if (
         !block ||
         !["text", "thinking", "tool_use", "tool_result", "image"].includes(
@@ -131,6 +140,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
   const [agent, setAgent] = useState("claude");
   const [path, setPath] = useState("");
   const [view, setView] = useState("records");
+  const [inlineImages,setInlineImages]=useState(false);
+  const [preview,setPreview]=useState<{image:RecordedImage;messageId:string;blockIndex:number;source:string;attempt:number}>();
+  const previewAttempt=useRef(0);
+  const [previewBusy,setPreviewBusy]=useState(false);
+  const updatePreviewBusy=useCallback((value:boolean)=>{if(mounted.current)setPreviewBusy(value);},[]);
+  const previewSource=JSON.stringify([sessionId,agent,path,view,inlineImages]);
+  useEffect(()=>{setPreview(undefined);},[previewSource]);
   const [discovered, setDiscovered] = useState<
     { path: string; name: string; sessionId?: string }[]
   >([]);
@@ -141,6 +157,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     view?: string;
     transcriptSessionId?: string;
     checkpointed?: boolean;
+    inlineImages?: boolean;
   }>();
   const [messages, setMessages] = useState<Message[]>([]);
   const [offset, setOffset] = useState(0);
@@ -155,7 +172,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
   const conversation = opened?.agent === 'claude' && opened.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
   const followable = conversation || recorded;
-  const canFollow = followable && agent === opened.agent && view === (opened.view ?? 'records') && path.trim() === opened.path;
+  const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && path.trim()===opened.path && (agent==='grok-acp'&&view==='records'&&inlineImages)===!!opened.inlineImages;
+  const canFollow = followable && sourceMatches;
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
     setDraft(''); setDraftStatus(''); composing.current = false;
@@ -163,7 +181,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
-  useEffect(() => {setFollowing(false); followRef.current = false; request.current++;}, [agent,path,view,transcriptSessionId]);
+  useEffect(() => {setFollowing(false); followRef.current = false; request.current++;}, [agent,path,view,transcriptSessionId,inlineImages]);
   useEffect(() => {
     if (!access.current()) {setFollowing(false); followRef.current = false; request.current++;}
   }, [accessState.epoch,access]);
@@ -231,6 +249,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           agent,
           path: path.trim(),
           ...(prepare ? {checkpointed:true} : {}),
+          ...(inlineImages && agent==='grok-acp' && view==='records' ? {inlineImages:true} : {}),
           ...(["hermes", "opencode"].includes(agent)
             ? { transcriptSessionId }
             : {}),
@@ -238,6 +257,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         }
       : opened;
     if (!source) return;
+    if(reset)setPreview(undefined);
     if (reset && source.agent === 'grok-acp') {setFollowing(false); followRef.current = false;}
     flight.current = true;
     automaticRequest.current = automatic;
@@ -255,6 +275,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           ...(!replace && (source.agent === "antigravity-jsonl" || source.checkpointed) ? { checkpoint } : {}),
         }),
       );
+      if (!source.inlineImages && page.messages.some(message=>message.blocks.some(block=>block.imagePreview!==undefined)))
+        throw new LocalUiError('chatImageInvalid');
       if (source.checkpointed) validateRecordedPage(page,cursor,replace ? undefined : checkpoint);
       if (source.view === "conversation" && page.view !== "active_branch")
         throw new Error(
@@ -318,7 +340,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             disabled={busy}
             value={agent}
             onChange={(event) => {
-              setAgent(event.target.value);
+              setAgent(event.target.value);setInlineImages(false);
               if (event.target.value === "grok-acp") setView("records");
               setDiscovered([]);
               setTranscriptSessionId("");
@@ -346,6 +368,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         <button type="button" disabled={busy || agent === "antigravity-jsonl"} onClick={() => void discover()}>
           {t("chatFind")}
         </button>
+        {agent==='grok-acp' && view==='records' && <label><input type="checkbox" checked={inlineImages} onChange={event=>setInlineImages(event.target.checked)} />{t('chatImageInclude')}</label>}
         {agent === "grok-acp" && view !== "conversation" && (
           <p>
             {t("chatGrokExplanation")}
@@ -466,6 +489,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
                   <pre>
                     {block.text || t("chatViewInTerminal")}
                   </pre>
+                  {block.imagePreview && opened?.inlineImages && <button type="button" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('chatImageView')}</button>}
                 </details>
               ),
             )}
@@ -479,6 +503,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           </article>
         ))}
       </div>
+      {preview && preview.source===previewSource && access.current() && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data) && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
       {opened && (
         <button disabled={busy} onClick={() => void read(false)}>
           {busy

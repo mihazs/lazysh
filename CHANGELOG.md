@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit, bounded PNG/JPEG previews for Grok recorded image chunks. Including image bytes and viewing decoded pixels are separate opt-in actions; defaults, transcript files, paging and live terminal controls remain unchanged.
+
 - Reject observed truncated, replaced or mixed Claude conversation captures while preserving ordinary append-only growth during Follow. Parse an admitted bounded prefix without retries; defaults, polling, raw Records and Grok behavior are unchanged.
 
 - Keep retained shortcut-parser validation errors in the current interface language while preserving literal key/step data, drafts and exact input bytes. Accepted grammar, stored bindings, defaults and native behavior are unchanged.
