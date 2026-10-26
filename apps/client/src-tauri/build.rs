@@ -22,6 +22,8 @@ fn main() {
         "local_capability",
         "desktop_launch_read",
         "desktop_launch_ack",
+        "desktop_launch_prepare_host",
+        "desktop_launch_cancel",
         "local_connect",
         "local_write",
         "local_resize",

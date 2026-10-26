@@ -107,7 +107,27 @@ pub struct Host {
 fn is_false(value: &bool) -> bool {
     !value
 }
+pub(crate) type CredentialBinding<'a> = (
+    &'a str,
+    u16,
+    &'a str,
+    Option<&'a str>,
+    Option<&'a str>,
+    bool,
+    bool,
+);
 impl Host {
+    pub(crate) fn credential_binding(&self) -> CredentialBinding<'_> {
+        (
+            &self.hostname,
+            self.port,
+            &self.username,
+            self.fingerprint.as_deref(),
+            self.jump_host_id.as_deref(),
+            self.forward_agent,
+            self.biometric_unlock,
+        )
+    }
     pub(crate) fn validate(&self) -> Result<()> {
         if let Some(options) = &self.mosh {
             options.validate()?;
@@ -263,6 +283,31 @@ impl AppState {
             .find(|h| h.id == id)
             .cloned()
             .ok_or_else(|| SshError::new("missing_host", "Host no longer exists"))
+    }
+    pub(crate) fn launch_hosts(&self, id: &str) -> std::result::Result<Vec<Host>, String> {
+        let config = self
+            .config()
+            .map_err(|_| crate::desktop_launch::HOST_INVALID)?;
+        let find = |id: &str| {
+            let mut matches = config.hosts.iter().filter(|host| host.id == id);
+            let host = matches.next().ok_or(crate::desktop_launch::HOST_MISSING)?;
+            if matches.next().is_some() {
+                return Err(crate::desktop_launch::HOST_AMBIGUOUS);
+            }
+            host.validate()
+                .map_err(|_| crate::desktop_launch::HOST_INVALID)?;
+            Ok(host.clone())
+        };
+        let host = find(id)?;
+        let mut result = vec![host.clone()];
+        if let Some(jump_id) = &host.jump_host_id {
+            let jump = find(jump_id)?;
+            if jump.id == host.id || jump.jump_host_id.is_some() {
+                return Err(crate::desktop_launch::HOST_INVALID.into());
+            }
+            result.push(jump);
+        }
+        Ok(result)
     }
     pub(crate) fn sync_snapshot(&self) -> Result<Vec<Host>> {
         Ok(self.config()?.hosts.clone())
@@ -509,20 +554,44 @@ fn remove_host_metadata(state: &AppState, host_id: &str) -> Result<()> {
 #[tauri::command]
 pub fn trust_host_key(
     lease: AccessLease,
-
     state: State<'_, AppState>,
+    launch: State<'_, crate::desktop_launch::LaunchState>,
+    launch_receipt: Option<String>,
     host_id: String,
     fingerprint: String,
 ) -> AccessResult<()> {
-    lease.run_sync(|| trust_host_key_inner(&state, host_id, fingerprint))
+    lease.run_sync(|| {
+        let expected = launch_receipt
+            .as_deref()
+            .map(|receipt| launch.trust_binding(receipt, &lease, &host_id))
+            .transpose()?;
+        trust_host_key_inner(&state, host_id, fingerprint.clone(), expected.as_ref())?;
+        if let (Some(receipt), Some(expected)) = (launch_receipt.as_deref(), expected) {
+            launch.accepted_trust(receipt, &lease, &expected, &fingerprint)?;
+        }
+        Ok(())
+    })
 }
-fn trust_host_key_inner(state: &AppState, host_id: String, fingerprint: String) -> Result<()> {
+fn trust_host_key_inner(
+    state: &AppState,
+    host_id: String,
+    fingerprint: String,
+    expected: Option<&Host>,
+) -> Result<()> {
     let mut config = state.config()?;
     let host = config
         .hosts
         .iter()
         .find(|h| h.id == host_id)
         .ok_or_else(|| SshError::new("missing_host", "Host no longer exists"))?;
+    if expected.is_some_and(|expected| {
+        expected.id != host.id || expected.credential_binding() != host.credential_binding()
+    }) {
+        return Err(SshError::new(
+            crate::desktop_launch::HOST_CHANGED,
+            crate::desktop_launch::HOST_CHANGED,
+        ));
+    }
     let pending = config
         .pending
         .get(&host_id)
@@ -1039,6 +1108,21 @@ pub(crate) async fn authenticate_for_operation(
     Ok(handle)
 }
 
+async fn locked_connect_host(
+    state: &AppState,
+    host_id: &str,
+    attempt: Option<&crate::desktop_launch::HostAttempt>,
+    cols: u32,
+    rows: u32,
+) -> Result<(Host, crate::vault::CredentialGuard)> {
+    let guard = state.credential_guard(host_id).await;
+    check_size(cols, rows)?;
+    let host = state.host(host_id)?;
+    if let Some(attempt) = attempt {
+        attempt.check_host(&host)?;
+    }
+    Ok((host, guard))
+}
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn connect(
@@ -1046,6 +1130,8 @@ pub async fn connect(
 
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    launch: State<'_, crate::desktop_launch::LaunchState>,
+    launch_receipt: Option<String>,
     host_id: String,
     password: Option<String>,
     private_key: Option<String>,
@@ -1059,18 +1145,21 @@ pub async fn connect(
 ) -> AccessResult<Connected> {
     lease
         .run(async {
+            let attempt = launch_receipt
+                .as_deref()
+                .map(|receipt| launch.begin_host(receipt, &lease, &host_id))
+                .transpose()?;
             let operation = app.vault().operation();
             let entered = crate::vault::Credentials {
                 password,
                 private_key,
                 passphrase,
             };
-            let _guard = during_connect(&operation, async {
-                Ok(state.credential_guard(&host_id).await)
-            })
+            let (host, _guard) = during_connect(
+                &operation,
+                locked_connect_host(&state, &host_id, attempt.as_ref(), cols, rows),
+            )
             .await?;
-            check_size(cols, rows)?;
-            let host = state.host(&host_id)?;
             let handle = during_connect(
                 &operation,
                 crate::routing::verified_target(
@@ -1080,6 +1169,7 @@ pub async fn connect(
                     jump_credentials,
                     &operation,
                     &lease,
+                    attempt.as_ref(),
                 ),
             )
             .await?;
@@ -1175,11 +1265,20 @@ pub async fn connect(
                 close_failed_connect(&handle).await;
                 return Err(connection_cancelled());
             }
+            if let Some(attempt) = &attempt {
+                if let Err(error) = attempt.check_host(&host) {
+                    close_failed_connect(&handle).await;
+                    return Err(error);
+                }
+            }
             let connected =
                 spawn_terminal(&state, lease.clone(), handle, channel, initial, events).await?;
             if operation.check().is_err() {
                 let _ = disconnect_inner(&state, connected.session_id).await;
                 return Err(connection_cancelled());
+            }
+            if let Some(attempt) = attempt {
+                attempt.finish();
             }
             Ok(connected)
         })
@@ -4000,6 +4099,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn launch_changed_saved_endpoint_never_authenticates_replacement_peer() {
+        let (host, original, original_task) = server(false).await;
+        let (mut replacement, changed, changed_task) = server(false).await;
+        replacement.id = "replacement-peer".into();
+        let (_dir, state) = fixture_state();
+        state
+            .config()
+            .unwrap()
+            .hosts
+            .extend([host.clone(), replacement.clone()]);
+        let (_access, lease, launch, receipt) = prepared_host_offer(&state, &host.id);
+        replacement.id = host.id.clone();
+        save_host_inner(&state, replacement).unwrap();
+        let attempt = launch.begin_host(&receipt, &lease, &host.id).unwrap();
+        let result = match locked_connect_host(&state, &host.id, Some(&attempt), 80, 24).await {
+            Ok((current, _guard)) => {
+                authenticate(&state, &current, Some("test-password".into()), None, None)
+                    .await
+                    .map(drop)
+            }
+            Err(error) => Err(error),
+        };
+        original_task.abort();
+        changed_task.abort();
+        assert_eq!(
+            result.err().map(|error| error.kind),
+            Some(crate::desktop_launch::HOST_CHANGED)
+        );
+        assert_eq!(original.auth_attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(changed.auth_attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn launch_unknown_key_explicit_trust_retry_keeps_original_frozen_profile() {
+        let (mut host, peer, task) = server(false).await;
+        let fingerprint = host.fingerprint.take().unwrap();
+        let (_dir, state) = fixture_state();
+        save_host_inner(&state, host.clone()).unwrap();
+        let (_access, lease, launch, receipt) = prepared_host_offer(&state, &host.id);
+        let attempt = launch.begin_host(&receipt, &lease, &host.id).unwrap();
+        let (current, guard) = locked_connect_host(&state, &host.id, Some(&attempt), 80, 24)
+            .await
+            .unwrap();
+        let error = password_error(&state, &current).await;
+        drop(guard);
+        drop(attempt);
+        assert_eq!(error.kind, "unknown_host_key");
+        assert_eq!(peer.auth_attempts.load(Ordering::SeqCst), 0);
+        let expected = launch.trust_binding(&receipt, &lease, &host.id).unwrap();
+        assert!(trust_host_key_inner(
+            &state,
+            host.id.clone(),
+            "SHA256:forged".into(),
+            Some(&expected)
+        )
+        .is_err());
+        trust_host_key_inner(
+            &state,
+            host.id.clone(),
+            fingerprint.clone(),
+            Some(&expected),
+        )
+        .unwrap();
+        launch
+            .accepted_trust(&receipt, &lease, &expected, &fingerprint)
+            .unwrap();
+        let retry = launch.begin_host(&receipt, &lease, &host.id).unwrap();
+        let (current, guard) = locked_connect_host(&state, &host.id, Some(&retry), 80, 24)
+            .await
+            .unwrap();
+        let handle = authenticate(&state, &current, Some("test-password".into()), None, None)
+            .await
+            .unwrap();
+        drop(handle);
+        drop(guard);
+        retry.finish();
+        task.abort();
+        assert_eq!(peer.auth_attempts.load(Ordering::SeqCst), 1);
+        assert!(launch.begin_host(&receipt, &lease, &host.id).is_err());
+    }
+
+    #[tokio::test]
+    async fn launch_waiting_for_credential_guard_cannot_renew_after_reunlock() {
+        let (host, peer, task) = server(false).await;
+        let (_dir, state) = fixture_state();
+        state.config().unwrap().hosts.push(host.clone());
+        let (access, lease, launch, receipt) = prepared_host_offer(&state, &host.id);
+        let attempt = launch.begin_host(&receipt, &lease, &host.id).unwrap();
+        let guard = state.credential_guard(&host.id).await;
+        let (result, fresh) = {
+            let work = locked_connect_host(&state, &host.id, Some(&attempt), 80, 24);
+            tokio::pin!(work);
+            assert_pending(work.as_mut()).await;
+            access.lock().unwrap();
+            access.authorize(access.generation().unwrap()).unwrap();
+            let fresh = ready_lease(&access);
+            drop(guard);
+            (work.await, fresh)
+        };
+        task.abort();
+        assert_eq!(
+            result.err().map(|error| error.kind),
+            Some(crate::desktop_launch::UNAVAILABLE)
+        );
+        assert_eq!(peer.auth_attempts.load(Ordering::SeqCst), 0);
+        drop(attempt);
+        assert!(launch.read(&fresh).unwrap().host_receipt.is_none());
+        assert!(launch.begin_host(&receipt, &fresh, &host.id).is_err());
+    }
+
+    #[tokio::test]
     async fn untrusted_and_changed_keys_never_receive_credentials() {
         let (mut host, server, task) = server(false).await;
         let expected = host.fingerprint.take().unwrap();
@@ -4009,8 +4219,10 @@ mod tests {
         assert_eq!(error.kind, "unknown_host_key");
         assert_eq!(error.fingerprint, Some(expected.clone()));
         assert_eq!(server.auth_attempts.load(Ordering::SeqCst), 0);
-        assert!(trust_host_key_inner(&state, host.id.clone(), "SHA256:forged".into()).is_err());
-        trust_host_key_inner(&state, host.id.clone(), expected.clone()).unwrap();
+        assert!(
+            trust_host_key_inner(&state, host.id.clone(), "SHA256:forged".into(), None).is_err()
+        );
+        trust_host_key_inner(&state, host.id.clone(), expected.clone(), None).unwrap();
         let persisted = AppState::new(dir.path().into())
             .unwrap()
             .host(&host.id)
@@ -4062,7 +4274,7 @@ mod tests {
             .unwrap()
             .pending
             .insert(host.id.clone(), ("server".into(), 22, "observed".into()));
-        trust_host_key_inner(&state, host.id.clone(), "observed".into()).unwrap();
+        trust_host_key_inner(&state, host.id.clone(), "observed".into(), None).unwrap();
         host.fingerprint = None;
         assert_eq!(
             save_host_inner(&state, host.clone()).unwrap().fingerprint,

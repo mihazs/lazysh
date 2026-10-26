@@ -36,6 +36,7 @@ pub(crate) async fn verified_target(
     jump_credentials: Option<Credentials>,
     operation: &tauri_plugin_lazysh_vault::CredentialOperation,
     access: &crate::app_lock::AccessLease,
+    expected: Option<&crate::desktop_launch::HostAttempt>,
 ) -> Result<SshHandle> {
     let Some(jump_id) = host.jump_host_id.as_deref() else {
         if jump_credentials.is_some() {
@@ -52,6 +53,9 @@ pub(crate) async fn verified_target(
             "invalid_route",
             "Bastion routes support one hop and cannot contain cycles",
         ));
+    }
+    if let Some(expected) = expected {
+        expected.check_host(&jump)?;
     }
     let handle = crate::ssh::verified_connection(state, &jump).await?;
     let credentials = match jump_credentials {

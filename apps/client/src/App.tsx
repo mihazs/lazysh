@@ -7,14 +7,15 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { bindProtectedApi, captureAccess, useProtectedApi, useProtectedInvoke } from './access';
+import { bindProtectedApi, bindProtectedInvoke, captureAccess, useProtectedInvoke, type AccessLease } from './access';
 import AccessShell, { type SessionRegistry } from './AccessShell';
 import ThemeLinkPanel from './ThemeLinkPanel';
-import {captureLaunchError, useDesktopLaunch} from './useDesktopLaunch';
+import {captureLaunchError, ownedLaunchError, useDesktopLaunch, type DesktopHostLaunch} from './useDesktopLaunch';
 import AccessPanel from './AccessPanel';
 import { forgetSession, PendingSessions, retainSession } from './pendingSessions';
 import {
@@ -94,8 +95,8 @@ async function prepareSession(
   hostId: string,
   name: string,
   destination: string,
+  lease: AccessLease,
 ) {
-  const lease = captureAccess();
   const { createTerminal } = await import("./terminal");
   lease.assert();
   const session: LiveSession = {
@@ -155,11 +156,12 @@ type Prepared = Awaited<ReturnType<typeof prepareSession>>;
 async function selectTransport(
   shell: Prepared, host: Host, mode: TransportMode, options: AutoOptions,
   capabilities: {mosh: boolean; et: boolean; reason?: string},
+  lease: AccessLease,
   alive: () => boolean,
   track: (id: string) => void = () => {},
   untrack: (id: string) => void = () => {},
 ): Promise<Prepared> {
-  const api = bindProtectedApi(nativeApi, captureAccess());
+  const api = bindProtectedApi(nativeApi, lease);
   const pending = new PendingSessions(); pending.add(shell.session.id);
   const reasons: string[] = [];
   const ensureAlive = () => { if (!alive()) throw {kind:'cancelled', message:t("appConnectionCancelled")}; };
@@ -170,7 +172,7 @@ async function selectTransport(
       const skip = host.jumpHostId ? t("appBastionRoutesUseSSH") : host.forwardAgent ? t("appSelectedIdentityForwardingRequiresSSH") : !capabilities[kind] ? capabilities.reason || t("appUnavailableInThisAppBuild") : '';
       if (skip) { reasons.push(`${name}: ${skip}`); continue; }
     }
-    const child = await prepareSession(host.id, host.name, `${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`);
+    const child = await prepareSession(host.id, host.name, `${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
     try {
       ensureAlive();
       const result = kind === 'mosh'
@@ -363,6 +365,20 @@ function HostEditor({
 }) {
   useUi();
   const invoke = useProtectedInvoke();
+  const [editorLease] = useState(captureAccess);
+  const [idCopy, setIdCopy] = useState<'copied'|'failed'|null>(null);
+  const copyGeneration=useRef(0);
+  useEffect(()=>()=>{copyGeneration.current++;},[]);
+  async function copyHostId() {
+    if(!initial || !editorLease.current())return;
+    const current=++copyGeneration.current;
+    try {
+      await navigator.clipboard.writeText(initial.id);
+      if(current===copyGeneration.current && editorLease.current())setIdCopy('copied');
+    } catch {
+      if(current===copyGeneration.current && editorLease.current())setIdCopy('failed');
+    }
+  }
   const [host, setHost] = useState<Host>(
     initial ?? {
       id: crypto.randomUUID(),
@@ -432,6 +448,9 @@ function HostEditor({
     >
       <form onSubmit={(event) => void submit(event)} className="form-stack">
         <p className="muted">{t("appConnectDirectlyToAMachineYouControlNoRelay")}</p>
+        {initial && <><label>{t('desktopLaunchHostId')}<input readOnly value={initial.id}/></label>
+          <button type="button" className="subtle-button" onClick={()=>{void copyHostId();}}>{t('desktopLaunchCopyHostId')}</button>
+          {idCopy && <p role="status">{t(idCopy==='copied'?'desktopLaunchHostIdCopied':'desktopLaunchHostIdCopyFailed')}</p>}</>}
         <label>{t("appName")}<input
             value={host.name}
             onChange={(e) => setHost({ ...host, name: e.target.value })}
@@ -546,20 +565,23 @@ function HostEditor({
   );
 }
 
-function ConnectDialog({
+export function ConnectDialog({
   host,
   hosts,
   connected,
   close,
+  launch,
 }: {
   host: Host;
   hosts: Host[];
   connected: (session: LiveSession) => void;
   close: () => void;
+  launch?: DesktopHostLaunch;
 }) {
   useUi();
-  const invoke = useProtectedInvoke();
-  const api = useProtectedApi(nativeApi);
+  const [lease] = useState(() => launch?.lease ?? captureAccess());
+  const invoke = useMemo(() => bindProtectedInvoke(lease), [lease]);
+  const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   const [method, setMethod] = useState<"password" | "key">("password");
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
@@ -571,7 +593,7 @@ function ConnectDialog({
   );
   const [useSavedCredentials, setUseSavedCredentials] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiErrorCause>("");
   const [trust, setTrust] = useState<string | null>(null);
   const [trustHostId, setTrustHostId] = useState(host.id);
   const [savedJump, setSavedJump] = useState(true);
@@ -647,7 +669,8 @@ function ConnectDialog({
     let session: LiveSession | undefined;
     try {
       if (accept && trust) {
-        await api.trustHostKey(trustHostId, trust);
+        await (launch ? api.trustHostKey(trustHostId, trust, launch.receipt).catch(error=>{throw ownedLaunchError(error) ?? error;})
+          : api.trustHostKey(trustHostId, trust));
         setTrust(null);
       }
       const credentials: Credentials = useSavedCredentials
@@ -659,19 +682,20 @@ function ConnectDialog({
         host.id,
         host.name,
         `${host.username}@${host.hostname}`,
+        lease,
       );
       session = pending.session;
       const result =
         rememberCredentials ||
         useSavedCredentials ||
-        (host.jumpHostId && !savedJump)
+        (host.jumpHostId && !savedJump) || launch
           ? await api.connect(host.id, credentials, pending.onEvent, {
-              rememberCredentials,
-              useSavedCredentials,
+              ...((rememberCredentials || useSavedCredentials || (host.jumpHostId && !savedJump)) ? {rememberCredentials,useSavedCredentials} : {}),
+              ...(launch ? {launchReceipt:launch.receipt} : {}),
               ...(host.jumpHostId && !savedJump
                 ? { jumpCredentials: { password: jumpPassword } }
                 : {}),
-            })
+            }).catch(error=>{throw launch ? ownedLaunchError(error) ?? error : error;})
           : await api.connect(host.id, credentials, pending.onEvent);
       pending.establish(result.sessionId);
       connectingSessions.current.add(result.sessionId);
@@ -683,7 +707,7 @@ function ConnectDialog({
       const selected = await selectTransport(pending, host, transport, {
         mosh: {serverPath: moshServer, portMin: moshPortMin, portMax: moshPortMax},
         et: {serverPath: etServer, port: etPort},
-      }, {mosh: moshAvailable, et: etAvailable, reason:capabilityReason}, () => alive.current,
+      }, {mosh: moshAvailable, et: etAvailable, reason:capabilityReason}, lease, () => alive.current && lease.current(),
       (id) => connectingSessions.current.add(id),
       (id) => connectingSessions.current.delete(id));
       session = selected.session;
@@ -700,6 +724,7 @@ function ConnectDialog({
     } catch (e) {
       await connectingSessions.current.closeAll().catch(() => {});
       disposeTerminal(session);
+      if (!alive.current || !lease.current()) return;
       const detail = e as SshError;
       if (detail?.kind === "unknown_host_key" && detail.fingerprint) {
         setTrustHostId(detail.hostId || host.id);
@@ -709,23 +734,27 @@ function ConnectDialog({
         setError(
           detail?.kind === "host_key_changed"
             ? t("appHostKeyChanged")
-            : errorMessage(e),
+            : captureUiError(e),
         );
       }
     } finally {
       connectingSessions.current.clear();
       connecting.current = false;
-      if (alive.current) setBusy(false);
+      if (alive.current && lease.current()) setBusy(false);
     }
   }
 
+  async function cancel() {
+    void invoke("cancel_credential_auth").catch(() => {});
+    try {
+      if(launch)await invoke('desktop_launch_cancel',{receipt:launch.receipt}).catch(error=>{throw captureLaunchError(error);});
+      if(alive.current && lease.current())close();
+    } catch(error) { if(alive.current && lease.current())setError(captureUiError(error)); }
+  }
   return (
     <Dialog
       title={trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
-      close={() => {
-        void invoke("cancel_credential_auth").catch(() => {});
-        close();
-      }}
+      close={() => {void cancel();}}
     >
       {trust ? (
         <div className="form-stack">
@@ -743,11 +772,11 @@ function ConnectDialog({
           <p className="muted">{t("appLazyshWillPinThisKeyAndRejectFutureConnections")}</p>
           {error && (
             <p className="inline-error" role="alert">
-              {error}
+              {uiErrorText(error)}
             </p>
           )}
           <div className="dialog-actions">
-            <button className="subtle-button" disabled={busy} onClick={close}>{t("appCancel")}</button>
+            <button className="subtle-button" disabled={busy} onClick={()=>{void cancel();}}>{t("appCancel")}</button>
             <button
               className="primary-button"
               disabled={busy}
@@ -965,11 +994,11 @@ function ConnectDialog({
           )}
           {error && (
             <p className="inline-error" role="alert">
-              {error}
+              {uiErrorText(error)}
             </p>
           )}
           <div className="dialog-actions">
-            <button type="button" className="subtle-button" onClick={close}>{t("appCancel")}</button>
+            <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
             <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
               {busy ? t("appConnecting") : t("appConnect")}
               <ChevronRight size={16} />
@@ -993,7 +1022,8 @@ export default function App() {
 function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   useUi();
   const invoke = useProtectedInvoke();
-  const api = useProtectedApi(nativeApi);
+  const [lease] = useState(captureAccess);
+  const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   useClientAppearance();
   const {sessionLayout} = usePreferences();
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -1011,6 +1041,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [view, setView] = useState<View>("terminal");
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
+  const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
   const [deleting, setDeleting] = useState<Host | null>(null);
   const [error, setError] = useState<UiErrorCause>("");
   const [search, setSearch] = useState("");
@@ -1085,14 +1116,17 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   },[]);
   useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
   useDesktopLaunch(native,localCapability.available,openingLocal,
-    receipt=>openLocalTerminal(receipt),setError);
+    receipt=>openLocalTerminal(receipt),setError,async launch=>{
+      launch.lease.assert();
+      setHostLaunch(launch);setConnectingHost(launch.hosts[0]);setPalette(false);setSidebar(false);
+    });
   async function openLocalTerminal(launchReceipt?:string) {
     if(localOpening.current || !localCapability.available)return;
     localOpening.current=true;setOpeningLocal(true);setError('');
     let pending:Prepared|undefined;
     const ownership = new PendingSessions();
     try {
-      pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"));
+      pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);
       pending.session.local=true;
       const result=await (launchReceipt ? api.connectLocal(pending.onEvent,launchReceipt).catch(error=>{throw captureLaunchError(error);}) : api.connectLocal(pending.onEvent));
       pending.establish(result.sessionId);
@@ -1128,7 +1162,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         let pending:Prepared|undefined;
         try {
           if(!localCapability.available)throw new Error(localCapability.reason);
-          pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"));pending.session.local=true;
+          pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"),lease);pending.session.local=true;
           const result=await api.connectLocal(pending.onEvent);pending.establish(result.sessionId);
           restoringSessions.current.add(result.sessionId);
           if(!mounted.current)throw new Error(t("appLocalRestorationCancelled"));
@@ -1151,6 +1185,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           host.id,
           host.name,
           `${host.username}@${host.hostname}`,
+          lease,
         );
         const connected = await api.connect(host.id, {}, shell.onEvent, {
           useSavedCredentials: true,
@@ -1161,7 +1196,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         if (intent.auto || intent.et || intent.mosh) {
           const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
           child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
-            intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, ()=>mounted.current,
+            intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, lease, ()=>mounted.current && lease.current(),
             id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id));
           restored.push(child.session);
         } else if (intent.attached) {
@@ -1169,6 +1204,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             host.id,
             `${host.name} / ${intent.attached.name}`,
             shell.session.destination,
+            lease,
           );
           const attached =
             intent.attached.kind === "tmux"
@@ -1386,6 +1422,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     }
   }
   function chooseHost(host: Host) {
+    setHostLaunch(undefined);
     setConnectingHost(host);
     setPalette(false);
     setSidebar(false);
@@ -1396,7 +1433,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     adoptRetained(session);
     setActiveId(session.id);
     setView("terminal");
-    setConnectingHost(null);
+    setConnectingHost(null);setHostLaunch(undefined);
     if(!session.local)void loadHosts();
   }
   function adoptRetained(session: LiveSession) {
@@ -1417,6 +1454,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       source.hostId,
       `${source.name} / ${name}`,
       source.destination,
+      lease,
     );
     const ownership = new PendingSessions();
     try {
@@ -1863,10 +1901,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       )}
       {connectingHost && (
         <ConnectDialog
-          hosts={hosts}
+          key={connectingHost.id}
+          hosts={hostLaunch ? [...hostLaunch.hosts] : hosts}
           host={connectingHost}
+          launch={hostLaunch}
           connected={sessionConnected}
-          close={() => setConnectingHost(null)}
+          close={() => {setConnectingHost(null);setHostLaunch(undefined);}}
         />
       )}
       {deleting && (

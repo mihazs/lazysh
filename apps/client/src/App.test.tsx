@@ -27,10 +27,12 @@ const mocks = vi.hoisted(() => ({
     tmuxJump: vi.fn(),
   },
   terminal: { write: vi.fn(), dispose: vi.fn() },
+  createTerminal: vi.fn(),
   invoke: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
   launchReceipt: null as string|null,
+  hostLaunchReceipt: null as string|null,
   prepareError: null as string|null,
   lockEvent: undefined as undefined | ((event: { payload: unknown }) => void),
 }));
@@ -40,7 +42,7 @@ vi.mock("@tauri-apps/api/core", () => ({ isTauri:()=>true, invoke: (...request:[
   const [command]=request;
   if(command==='app_lock_status')return Promise.resolve(unlockedStatus());
   if(command==='app_lock_ready')return Promise.resolve();
-  if(command==='desktop_launch_read'){const directoryReceipt=mocks.launchReceipt;mocks.launchReceipt=null;return Promise.resolve({directoryReceipt,notice:null});}
+  if(command==='desktop_launch_read'){const directoryReceipt=mocks.launchReceipt,hostReceipt=mocks.hostLaunchReceipt;mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;return Promise.resolve({directoryReceipt,hostReceipt,notice:null});}
   if(command==='ui_locale_status')return Promise.resolve({nativeAuthority:false});
   return mocks.invoke(...request);
 } }));
@@ -49,7 +51,7 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
   return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
-vi.mock("./terminal", () => ({ createTerminal: () => {if(mocks.prepareError)throw mocks.prepareError;return mocks.terminal;} }));
+vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
 vi.mock("./TerminalPane", () => ({
   default: ({ active }: { active: boolean }) =>
     active ? <div>Live SSH terminal</div> : null,
@@ -65,7 +67,8 @@ vi.mock('./AppleStatusPanel',async()=>{
 });
 vi.mock('./UsagePanel',()=>({default:({onShareAppleUsage}:{onShareAppleUsage?:(report:unknown)=>void})=><button onClick={()=>onShareAppleUsage?.({recordedAt:'2026-10-25T12:00:00Z',freshness:'fresh',inputTokens:11,outputTokens:9,cacheReadTokens:null,cacheWriteTokens:2,observedAt:'2026-10-25T12:01:00Z',receivedAt:1792929660000})}>Use latest report for Watch</button>}));
 vi.mock('./VoicePanel',()=>({default:(props:{sessionId:string;onDirectDictation:(request:import('./voiceDelivery').DirectDictation)=>Promise<void>})=>{mocks.voiceProps(props);return <div>Voice for {props.sessionId}</div>;}}));
-import App, { validateHost } from "./App";
+import App, { ConnectDialog, validateHost } from "./App";
+import {applyAccessStatus, captureAccess} from './access';
 
 const host: Host = {
   id: "home",
@@ -78,7 +81,7 @@ const host: Host = {
 beforeEach(() => {
   generationBase+=10;
   vi.clearAllMocks();
-  mocks.launchReceipt=null;mocks.prepareError=null;
+  mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
     getItem: vi.fn(),
@@ -91,6 +94,7 @@ beforeEach(() => {
     removeItem: vi.fn(),
     length: 0,
   });
+  mocks.createTerminal.mockImplementation(()=>{if(mocks.prepareError)throw mocks.prepareError;return mocks.terminal;});
   mocks.api.listHosts.mockResolvedValue([host]);
   mocks.invoke.mockResolvedValue(false);
   mocks.api.disconnect.mockResolvedValue(undefined);
@@ -116,7 +120,7 @@ async function openConnection() {
   return user;
 }
 
-it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED','LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED'])('keeps an unrelated raw global sentinel lookalike verbatim: %s',async raw=>{
+it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED','LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED','HOST_LAUNCH_MISSING','HOST_LAUNCH_AMBIGUOUS','HOST_LAUNCH_CHANGED','HOST_LAUNCH_BUSY','HOST_LAUNCH_INVALID'])('keeps an unrelated raw global sentinel lookalike verbatim: %s',async raw=>{
   render(<App/>);
   await screen.findByRole('button',{name:'Connect to Home'});
   try {
@@ -126,6 +130,186 @@ it.each(['LOCAL_LAUNCH_UNAVAILABLE','LOCAL_LAUNCH_WARM_UNSUPPORTED','LOCAL_LAUNC
       expect(screen.getByRole('alert').querySelector('span')?.textContent).toBe(raw);
     }
   } finally { await act(async()=>{await uiI18n.changeLanguage('en');}); }
+});
+
+const hostLaunchReceipt='7b6d0fc9-a755-4e10-b2e3-0dbdc1259326';
+function enableHostLaunch(selected:Host=host, jump?:Host) {
+  mocks.hostLaunchReceipt=hostLaunchReceipt;
+  mocks.api.listHosts.mockResolvedValue([selected]);
+  mocks.invoke.mockImplementation(async(command:string)=>{
+    if(command==='local_capability')return {available:true,reason:'Desktop fixture'};
+    if(command==='desktop_launch_prepare_host')return {hosts:jump?[selected,jump]:[selected]};
+    if(command==='desktop_launch_cancel')return;
+    if(command==='transport_capabilities')return {mosh:true,et:true};
+    return false;
+  });
+}
+it('opens the exact saved host through its normal dialog and binds the native receipt to explicit authentication',async()=>{
+  enableHostLaunch({...host,id:'legacy=host 世界'});
+  mocks.api.connect.mockResolvedValue({sessionId:'host-launch-ssh'});
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('dialog',{name:'Connect to Home'});
+  expect(mocks.api.connect).not.toHaveBeenCalled();
+  await user.type(screen.getByLabelText('Password'),'entered-only-here');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.connect).toHaveBeenCalledWith('legacy=host 世界',{password:'entered-only-here'},expect.any(Function),{launchReceipt:hostLaunchReceipt});
+});
+
+it.each([
+  ['HOST_LAUNCH_MISSING','This saved host no longer exists. Copy an existing host ID and run the command again.'],
+  ['HOST_LAUNCH_AMBIGUOUS','More than one saved host has this ID. Resolve the duplicate before trying again.'],
+])('reports native host preparation failure without opening a connection: %s',async(code,message)=>{
+  enableHostLaunch();
+  const prepare=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='desktop_launch_prepare_host'?Promise.reject(code):prepare(command,...args));
+  render(<App/>);expect((await screen.findByRole('alert')).textContent).toContain(message);
+  expect(screen.queryByRole('dialog')).toBeNull();expect(mocks.api.connect).not.toHaveBeenCalled();
+});
+
+it.each(['preparation','native'] as const)('brands a finite saved-host failure only at its native await, preserving raw %s errors',async origin=>{
+  enableHostLaunch();
+  if(origin==='preparation')mocks.prepareError='HOST_LAUNCH_CHANGED';
+  else mocks.api.connect.mockRejectedValue({kind:'HOST_LAUNCH_CHANGED',message:'HOST_LAUNCH_CHANGED'});
+  const user=userEvent.setup();render(<App/>);await screen.findByLabelText('Password');
+  await user.type(screen.getByLabelText('Password'),'entry');await user.click(screen.getByRole('button',{name:'Connect'}));
+  try {
+    for(const locale of ['en','pt-BR','es']) {
+      await act(async()=>{await uiI18n.changeLanguage(locale);});
+      const expected=origin==='preparation'?'HOST_LAUNCH_CHANGED':t('desktopLaunchHostChanged');
+      expect((await screen.findByRole('alert')).textContent).toBe(expected);
+    }
+  } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+  if(origin==='preparation')expect(mocks.api.connect).not.toHaveBeenCalled();
+});
+
+it('reuses the original saved-host receipt only after an explicit host-key trust retry',async()=>{
+  enableHostLaunch();
+  mocks.api.connect.mockRejectedValueOnce({kind:'unknown_host_key',fingerprint:'SHA256:launch',message:'Verify key'}).mockResolvedValue({sessionId:'host-trusted'});
+  const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('dialog',{name:'Connect to Home'});
+  await user.type(screen.getByLabelText('Password'),'entered-credential');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('SHA256:launch');
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1);
+  expect(mocks.api.trustHostKey).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'Trust key and connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.trustHostKey).toHaveBeenCalledWith(host.id,'SHA256:launch',hostLaunchReceipt);
+  expect(mocks.api.connect).toHaveBeenCalledTimes(2);
+  for(const call of mocks.api.connect.mock.calls)expect(call[3]).toEqual({launchReceipt:hostLaunchReceipt});
+});
+it('retires a saved-host request only on explicit cancellation, not mount setup',async()=>{
+  enableHostLaunch();const user=userEvent.setup();render(<App/>);
+  await screen.findByRole('dialog',{name:'Connect to Home'});
+  expect(mocks.invoke.mock.calls.some(([name])=>name==='desktop_launch_cancel')).toBe(false);
+  await user.click(screen.getByRole('button',{name:'Cancel'}));
+  await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
+  expect(mocks.invoke).toHaveBeenCalledWith('desktop_launch_cancel',{receipt:hostLaunchReceipt},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(mocks.api.connect).not.toHaveBeenCalled();
+});
+it.each(['mosh','et','auto','ssh'] as const)('retains the saved %s transport and the receipt on initial native authentication',async transport=>{
+  enableHostLaunch({...host,transport});
+  mocks.api.connect.mockResolvedValue({sessionId:'bound-ssh-control'});
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'bound-mosh'});
+  mocks.api.connectEt.mockResolvedValue({sessionId:'bound-et'});
+  const user=userEvent.setup();render(<App/>);
+  const selector=await screen.findByLabelText('Transport');
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled).toBe(false));
+  expect((selector as HTMLSelectElement).value).toBe(transport);
+  await user.type(screen.getByLabelText('Password'),'entered');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.connect).toHaveBeenCalledWith(host.id,{password:'entered'},expect.any(Function),{launchReceipt:hostLaunchReceipt});
+  expect(mocks.api.connectMosh).toHaveBeenCalledTimes(transport==='mosh'||transport==='auto'?1:0);
+  expect(mocks.api.connectEt).toHaveBeenCalledTimes(transport==='et'?1:0);
+});
+it.each(['remember','saved','jump'] as const)('keeps the launch receipt in the %s credential option branch',async branch=>{
+  const selected=branch==='jump'?{...host,jumpHostId:'bastion'}:host;
+  enableHostLaunch(selected,branch==='jump'?{...host,id:'bastion',name:'Bastion',hostname:'jump.local'}:undefined);
+  if(branch==='saved')mocks.invoke.mockImplementation(async command=>command==='local_capability'?{available:true,reason:''}:command==='desktop_launch_prepare_host'?{hosts:[host]}:command==='has_credentials'?true:{mosh:true,et:true});
+  mocks.api.connect.mockResolvedValue({sessionId:'branch-session'});
+  const user=userEvent.setup();render(<App/>);await screen.findByRole('dialog',{name:'Connect to Home'});
+  if(branch==='remember')await user.click(screen.getByLabelText('Save credentials on this device after connecting'));
+  else if(branch==='saved')await user.click(await screen.findByLabelText('Use saved credentials'));
+  else {await user.click(screen.getByLabelText('Use bastion’s saved credentials'));await user.type(screen.getByLabelText('Bastion password'),'jump-entry');}
+  if(branch!=='saved')await user.type(screen.getByLabelText('Password'),'target-entry');
+  await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const options=mocks.api.connect.mock.calls[0][3];expect(options.launchReceipt).toBe(hostLaunchReceipt);
+  expect(options).toMatchObject(branch==='remember'?{rememberCredentials:true}:branch==='saved'?{useSavedCredentials:true}:{jumpCredentials:{password:'jump-entry'}});
+});
+function holdSshAcrossRevocation() {
+  let finish!:(value:{sessionId:string})=>void;
+  mocks.api.connect.mockImplementation((_id,_credentials,onEvent)=>{
+    onEvent({type:'data',data:[120]});
+    return new Promise(resolve=>{finish=resolve;});
+  });
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'forbidden-mosh-child'});
+  mocks.api.connectEt.mockResolvedValue({sessionId:'forbidden-et-child'});
+  mocks.api.ackOutput.mockImplementationOnce(async()=>{
+    mocks.lockEvent!({payload:{...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined}});
+    mocks.lockEvent!({payload:{...unlockedStatus(),enabled:true,locked:false,generation:String(generationBase+2),nonce:'b'.repeat(64)}});
+  });
+  return async()=>{
+    await act(async()=>{finish({sessionId:'held-original-ssh'});});
+    await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'held-original-ssh'}));
+    expect(mocks.createTerminal).toHaveBeenCalledTimes(1);
+    expect(mocks.api.connectMosh).not.toHaveBeenCalled();expect(mocks.api.connectEt).not.toHaveBeenCalled();
+    expect(mocks.api.adoptSession).not.toHaveBeenCalled();
+  };
+}
+it.each(['mosh','et'] as const)('does not renew a held saved-host SSH result before %s child work after revoke/reunlock',async transport=>{
+  enableHostLaunch({...host,transport});
+  const complete=holdSshAcrossRevocation();
+  const user=userEvent.setup();render(<App/>);await screen.findByLabelText('Password');
+  await user.type(screen.getByLabelText('Password'),'entry');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(mocks.api.connect).toHaveBeenCalledTimes(1));
+  await complete();
+});
+it('keeps workspace restoration receipt-free and stops transport child work under its original lease',async()=>{
+  enableTransports();
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'home',auto:autoOptions}]):null);
+  const complete=holdSshAcrossRevocation();
+  const user=userEvent.setup();render(<App/>);await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
+  await waitFor(()=>expect(mocks.api.connect).toHaveBeenCalledWith('home',{},expect.any(Function),{useSavedCredentials:true}));
+  await complete();
+});
+
+it.each([
+  {kind:'unknown_host_key',fingerprint:'SHA256:obsolete-launch-key',message:'Obsolete key prompt'},
+  {kind:'auth',message:'Obsolete credential failure'},
+])('does not publish a stale $kind result into the same mounted launch dialog',async failure=>{
+  applyAccessStatus(unlockedStatus());
+  const launch={receipt:hostLaunchReceipt,lease:captureAccess(),hosts:[host]};
+  let reject!:(error:unknown)=>void;
+  mocks.api.connect.mockImplementation(()=>new Promise((_yes,no)=>{reject=no;}));
+  const connected=vi.fn(),close=vi.fn();
+  const user=userEvent.setup();render(<ConnectDialog host={host} hosts={[host]} launch={launch} connected={connected} close={close}/>);
+  await user.type(screen.getByLabelText('Password'),'original-entry');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(mocks.api.connect).toHaveBeenCalledTimes(1));
+  await act(async()=>{
+    applyAccessStatus({...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined});
+    applyAccessStatus({...unlockedStatus(),enabled:true,generation:String(generationBase+2),nonce:'b'.repeat(64)});
+    reject(failure);
+  });
+  await waitFor(()=>expect(mocks.terminal.dispose).toHaveBeenCalled());
+  expect(screen.getByRole('dialog',{name:'Connect to Home'})).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();expect(screen.queryByText('SHA256:obsolete-launch-key')).toBeNull();
+  expect((screen.getByRole('button',{name:t('appConnecting')}) as HTMLButtonElement).disabled).toBe(true);
+  expect(connected).not.toHaveBeenCalled();expect(close).not.toHaveBeenCalled();
+  expect(mocks.api.trustHostKey).not.toHaveBeenCalled();expect(mocks.api.connect).toHaveBeenCalledTimes(1);
+});
+
+it('copies only the saved host ID on an explicit edit-dialog action and translates its status',async()=>{
+  const user=userEvent.setup();
+  const write=vi.fn().mockResolvedValue(undefined);Object.defineProperty(navigator,'clipboard',{value:{writeText:write},configurable:true});
+  render(<App/>);
+  await user.click(await screen.findByRole('button',{name:'Edit Home'}));
+  expect((screen.getByLabelText('Host ID') as HTMLInputElement).value).toBe(host.id);
+  expect(write).not.toHaveBeenCalled();await user.click(screen.getByRole('button',{name:'Copy host ID'}));
+  await screen.findByText('Host ID copied.');expect(write).toHaveBeenCalledExactlyOnceWith(host.id);
+  try {await act(async()=>{await uiI18n.changeLanguage('pt-BR');});expect(screen.getByRole('status').textContent).toBe('ID do host copiado.');}
+  finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
 });
 
 it('keeps the existing terminal session while clearing tool views across native lock', async () => {
@@ -970,7 +1154,7 @@ it.each(['preparation','native'] as const)('interprets launch codes only at the 
   else mocks.api.connectLocal.mockRejectedValueOnce('LOCAL_LAUNCH_UNAVAILABLE');
   render(<App/>);
   const alert=await screen.findByRole('alert');
-  expect(alert.querySelector('span')?.textContent).toBe(source==='preparation'?'LOCAL_LAUNCH_UNAVAILABLE':'This directory launch is no longer available. Run the directory command again.');
+  expect(alert.querySelector('span')?.textContent).toBe(source==='preparation'?'LOCAL_LAUNCH_UNAVAILABLE':'This launch request is no longer available. Run the command again.');
   if(source==='preparation')expect(mocks.api.connectLocal).not.toHaveBeenCalled();
   else expect(mocks.api.connectLocal).toHaveBeenCalledExactlyOnceWith(expect.any(Function),receipt);
 });

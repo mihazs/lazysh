@@ -85,13 +85,13 @@ export const api = {
   listHosts: () => invoke<Host[]>("list_hosts"),
   saveHost: (host: Host) => invoke<Host>("save_host", { host }),
   deleteHost: (hostId: string) => invoke<void>("delete_host", { hostId }),
-  trustHostKey: (hostId: string, fingerprint: string) =>
-    invoke<void>("trust_host_key", { hostId, fingerprint }),
+  trustHostKey: (hostId: string, fingerprint: string, launchReceipt?:string) =>
+    invoke<void>("trust_host_key", { hostId, fingerprint, ...(launchReceipt ? {launchReceipt} : {}) }),
   connect: (
     hostId: string,
     credentials: Credentials,
     onEvent: (event: SshEvent) => void,
-    options: { rememberCredentials?: boolean; useSavedCredentials?: boolean; jumpCredentials?: Credentials } = {},
+    options: { rememberCredentials?: boolean; useSavedCredentials?: boolean; jumpCredentials?: Credentials; launchReceipt?:string } = {},
   ) => {
     return createSession("connect", {
       hostId,

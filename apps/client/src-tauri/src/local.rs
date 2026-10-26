@@ -1179,16 +1179,20 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let directory = base.path().join(name);
         std::fs::create_dir(&directory).unwrap();
-        let selected = crate::desktop_launch::parse(
-            [
-                std::ffi::OsString::from("lazysh"),
-                "--dir".into(),
-                directory.to_owned().into_os_string(),
-            ],
-            || unreachable!(),
-        )
-        .unwrap()
-        .unwrap();
+        let crate::desktop_launch::LaunchTarget::Directory(selected) =
+            crate::desktop_launch::parse(
+                [
+                    std::ffi::OsString::from("lazysh"),
+                    "--dir".into(),
+                    directory.to_owned().into_os_string(),
+                ],
+                || unreachable!(),
+            )
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected directory intent");
+        };
         let command = desktop::shell_command(Some(selected.clone())).unwrap();
         assert!(command.is_default_prog());
         (base, selected, command)
@@ -1708,9 +1712,9 @@ mod tests {
         use std::sync::Arc;
         for directory_launch in [false, true] {
             let directory = tempfile::tempdir().unwrap();
-            let pending = crate::desktop_launch::LaunchState::new(
-                directory_launch.then(|| directory.path().to_owned()),
-            );
+            let pending = crate::desktop_launch::LaunchState::new(directory_launch.then(|| {
+                crate::desktop_launch::LaunchTarget::Directory(directory.path().to_owned())
+            }));
             let state = Arc::new(LocalState::default());
             let access = if directory_launch {
                 unlocked_access()
