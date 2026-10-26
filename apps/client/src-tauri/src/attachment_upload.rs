@@ -144,24 +144,40 @@ impl Uploads {
             })
         })?
     }
+    #[cfg(test)]
     fn cancel(&self, id: &str, session_id: &str, access: &AccessLease) -> Result<Cancellation> {
+        self.cancel_with(id, session_id, access, || false)
+    }
+    fn cancel_with(
+        &self,
+        id: &str,
+        session_id: &str,
+        access: &AccessLease,
+        completed: impl FnOnce() -> bool,
+    ) -> Result<Cancellation> {
         access.with_current(|| {
             let mut entries = self.0.lock().map_err(|_| unavailable())?;
-            let Some(entry) = entries.get(id).filter(|entry| {
+            let mut requested = false;
+            if let Some(entry) = entries.get(id).filter(|entry| {
                 !entry.settled
                     && entry.job.session_id == session_id
                     && entry.job.access.generation() == access.generation()
-            }) else {
-                return Ok(Cancellation {
-                    outcome: "unknown_or_settled",
-                });
-            };
-            entry.job.cancel.send_replace(true);
-            if !entry.claimed {
-                entries.remove(id);
+            }) {
+                entry.job.cancel.send_replace(true);
+                requested = true;
+                if !entry.claimed {
+                    entries.remove(id);
+                }
             }
+            // Outcome describes only the original file job. Revoking clipboard
+            // authority must not turn a settled file into a cancelled transfer.
+            completed();
             Ok(Cancellation {
-                outcome: "cancellation_requested",
+                outcome: if requested {
+                    "cancellation_requested"
+                } else {
+                    "unknown_or_settled"
+                },
             })
         })?
     }
@@ -296,6 +312,68 @@ mod tests {
         assert!(uploads.0.lock().unwrap().is_empty());
     }
     #[tokio::test]
+    async fn cancellation_before_or_after_completion_cannot_resurrect_clipboard_authority_or_relabel_a_settled_file(
+    ) {
+        for cancel_first in [true, false] {
+            let (uploads, _authority, lease, disconnect) = fixture();
+            let id = reserve(&uploads, &lease, &disconnect, 1);
+            let work = uploads.claim(&id, "same-session", &lease, 1).unwrap();
+            let clipboard = Arc::new(crate::host_clipboard::UploadSlot::default());
+            let (release, waiting) = tokio::sync::oneshot::channel();
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let pending = {
+                let clipboard = clipboard.clone();
+                let id = id.clone();
+                let lease = lease.clone();
+                let entered = entered.clone();
+                tokio::spawn(async move {
+                    work.run_published(
+                        async {
+                            entered.notify_one();
+                            waiting.await.unwrap();
+                            Ok("/original".to_owned())
+                        },
+                        |path| clipboard.publish(id, path.clone(), lease),
+                    )
+                    .await
+                })
+            };
+            entered.notified().await;
+            if cancel_first {
+                assert_eq!(
+                    uploads
+                        .cancel_with(&id, "same-session", &lease, || clipboard
+                            .cancel(&id, lease.generation()))
+                        .unwrap()
+                        .outcome,
+                    "cancellation_requested"
+                );
+                release.send(()).unwrap();
+                assert!(pending.await.unwrap().is_err());
+                assert!(!clipboard.cancel(&id, lease.generation()));
+            } else {
+                release.send(()).unwrap();
+                assert_eq!(pending.await.unwrap().unwrap(), "/original");
+                let mut revoked = false;
+                let result = uploads
+                    .cancel_with(&id, "same-session", &lease, || {
+                        revoked = clipboard.cancel(&id, lease.generation());
+                        revoked
+                    })
+                    .unwrap();
+                assert!(
+                    revoked,
+                    "a completed receipt must be revoked even after its file resource retires"
+                );
+                assert_eq!(
+                    result.outcome, "unknown_or_settled",
+                    "clipboard revocation cannot claim that the completed file was cancelled"
+                );
+                assert!(!clipboard.cancel(&id, lease.generation()));
+            }
+        }
+    }
+    #[tokio::test]
     async fn lease_revocation_and_disconnect_retire_lost_receipts_and_active_work() {
         for revoke in [false, true] {
             let (uploads, access, lease, disconnect) = fixture();
@@ -348,9 +426,17 @@ pub(crate) struct Work {
     job: Arc<Job>,
 }
 impl Work {
+    #[cfg(test)]
     async fn run<T>(&self, transfer: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+        self.run_published(transfer, |_| {}).await
+    }
+    async fn run_published<T>(
+        &self,
+        transfer: impl std::future::Future<Output = Result<T>>,
+        publish: impl FnOnce(&T),
+    ) -> Result<T> {
         let result = tokio::select! {biased; _=self.cancelled()=>return Err(cancelled()),result=transfer=>result?};
-        self.finish()?;
+        self.finish_with(|| publish(&result))?;
         Ok(result)
     }
     async fn cancelled(&self) {
@@ -373,7 +459,11 @@ impl Work {
             }
         })
     }
+    #[cfg(test)]
     fn finish(&self) -> Result<()> {
+        self.finish_with(|| {})
+    }
+    fn finish_with(&self, publish: impl FnOnce()) -> Result<()> {
         self.job.access.with_current(|| {
             let registry = self.permit.registry.upgrade().ok_or_else(unavailable)?;
             let mut entries = registry.lock().map_err(|_| unavailable())?;
@@ -384,6 +474,7 @@ impl Work {
                 .get_mut(&self.permit.id)
                 .ok_or_else(unavailable)?
                 .settled = true;
+            publish();
             self.job.cancel.send_replace(true);
             Ok(())
         })?
@@ -412,13 +503,24 @@ pub async fn upload_reserve(
         .await
 }
 #[tauri::command]
-pub fn upload_cancel(
+pub async fn upload_cancel(
     lease: AccessLease,
     state: State<'_, AppState>,
     session_id: String,
     upload_id: String,
 ) -> AccessResult<Cancellation> {
-    lease.run_sync(|| state.uploads.cancel(&upload_id, &session_id, &lease))
+    lease
+        .run(async {
+            let session = state.session(&session_id).await.ok();
+            state
+                .uploads
+                .cancel_with(&upload_id, &session_id, &lease, || {
+                    session.is_some_and(|session| {
+                        session.clipboard.cancel(&upload_id, lease.generation())
+                    })
+                })
+        })
+        .await
 }
 #[tauri::command]
 pub async fn upload_file(
@@ -435,13 +537,14 @@ pub async fn upload_file(
                 .uploads
                 .claim(&upload_id, &session_id, &lease, data.len())?;
             let session = state.session(&session_id).await?;
-            work.run(ssh::transfer_file(
-                &session,
-                &work.job.access,
-                path,
-                data,
-                &work,
-            ))
+            work.run_published(
+                ssh::transfer_file(&session, &work.job.access, path, data, &work),
+                |uploaded| {
+                    session
+                        .clipboard
+                        .publish(upload_id, uploaded.path.clone(), lease.clone())
+                },
+            )
             .await
         })
         .await

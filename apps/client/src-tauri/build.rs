@@ -141,6 +141,7 @@ fn main() {
         "upload_reserve",
         "upload_cancel",
         "upload_file",
+        "host_clipboard_copy",
         "get_diff",
         "list_multiplexer_sessions",
         "attach_tmux",
