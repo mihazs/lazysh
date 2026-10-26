@@ -1,0 +1,16 @@
+[package]
+name = "lazysh-notification-client"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Shared bounded webhook protocol and private HTTPS capability client"
+
+[dependencies]
+lazysh-common = { path = "../common", features = ["secrets", "url"] }
+rand = "0.10"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = "1"
