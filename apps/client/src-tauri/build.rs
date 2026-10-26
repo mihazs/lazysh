@@ -137,6 +137,8 @@ fn main() {
         "disconnect",
         "list_directory",
         "read_file",
+        "upload_reserve",
+        "upload_cancel",
         "upload_file",
         "get_diff",
         "list_multiplexer_sessions",
