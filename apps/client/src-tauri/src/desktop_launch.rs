@@ -372,7 +372,8 @@ mod tests {
         let invalid = base
             .path()
             .join(OsString::from_vec(b"project-\xff".to_vec()));
-        std::fs::create_dir(&invalid).unwrap();
+        // The raw argument must fail before touching the filesystem. A real
+        // replacement-character directory above exposes accidental lossy decoding.
         assert!(parse(
             [
                 OsString::from("lazysh"),
@@ -391,6 +392,10 @@ mod tests {
         )
         .is_err());
         let invalid_cwd = base.path().join(OsString::from_vec(b"cwd-\xff".to_vec()));
+        // Keep actual invalid-byte cwd coverage on Linux. The macOS runner's
+        // temporary filesystem rejects its creation with EILSEQ; the synthetic
+        // invalid cwd must still fail closed there.
+        #[cfg(target_os = "linux")]
         std::fs::create_dir(&invalid_cwd).unwrap();
         assert!(parse(arguments(&["--dir", "."]), || Ok(invalid_cwd)).is_err());
     }
