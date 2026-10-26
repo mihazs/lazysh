@@ -2,7 +2,7 @@ import {validTmuxServer, type SessionAttachment} from './workspace';
 import { observeCurrent } from "./asyncState";
 import {bindProtectedInvoke, captureAccess} from './access';
 import type {DesktopMuxRequest} from './useDesktopLaunch';
-import {t,useUi} from './i18n/core';
+import {t,useUi,formatNumber} from './i18n/core';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { Layers, RefreshCw } from 'lucide-react';
@@ -120,49 +120,49 @@ export function MuxPanel({ sessionId, onAttach, attached, requested }: { session
     else if (edit.type === 'createWindow') void run({ type: 'createWindow', target: edit.target, name, directory });
     else void run({ type: edit.type, target: edit.target, name });
   }
-  return <section className="tool-panel multiplexer-panel" aria-label="Multiplexer workspaces">
+  return <section className="tool-panel multiplexer-panel" aria-label={t('muxTitle')}>
     {requested && <p className="security-note">{t('desktopLaunchMuxPicker')}</p>}
-    {!requestedHerdr && <div className="tool-bar"><label>tmux server<input value={fixedServer ?? serverDraft} disabled={busy || fixedServer!==undefined} onChange={event=>setServerDraft(event.target.value)} placeholder="default" /></label>
-      {fixedServer===undefined && <button className="subtle-button" disabled={busy || !validTmuxServer(serverDraft)} onClick={()=>{setError('');setSelectedServer(serverDraft);}}>Browse server</button>}<span>Server: {tmuxServer}</span></div>}
-    <div className="tool-bar"><h3>Workspaces</h3><button className="subtle-button" disabled={busy} onClick={() => void run()}><RefreshCw size={15} /> Refresh</button>
-      {!requested && tree?.tmuxAvailable && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createSession' })}>New session</button>}</div>
-    {!requested && <div className="tool-bar"><label>Workspace layout<select value={layout} onChange={e => setLayout(e.target.value)}><option value="list">List</option><option value="accordion">Accordion</option><option value="grid">Grid</option></select></label><button className="subtle-button" disabled={busy} onClick={() => void loadProjects()}>Load recent projects</button></div>}
-    {projects.length > 0 && <label>Recent project directory<select value={projects.includes(directory) ? directory : ''} onChange={e => setDirectory(e.target.value)}><option value="" disabled>Choose a project</option>{projects.map(project => <option key={project} value={project}>{project}</option>)}</select></label>}
-    {projectsLoaded && projects.length === 0 && <p>No recent projects in this host's agent history.</p>}
+    {!requestedHerdr && <div className="tool-bar"><label>{t('muxServer')}<input value={fixedServer ?? serverDraft} disabled={busy || fixedServer!==undefined} onChange={event=>setServerDraft(event.target.value)} placeholder="default" /></label>
+      {fixedServer===undefined && <button className="subtle-button" disabled={busy || !validTmuxServer(serverDraft)} onClick={()=>{setError('');setSelectedServer(serverDraft);}}>{t('muxBrowseServer')}</button>}<span>{t('muxServerValue',{server:tmuxServer})}</span></div>}
+    <div className="tool-bar"><h3>{t('muxWorkspaces')}</h3><button className="subtle-button" disabled={busy} onClick={() => void run()}><RefreshCw size={15} /> {t('agentsRefresh')}</button>
+      {!requested && tree?.tmuxAvailable && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createSession' })}>{t('muxNewSession')}</button>}</div>
+    {!requested && <div className="tool-bar"><label>{t('muxLayout')}<select value={layout} onChange={e => setLayout(e.target.value)}><option value="list">{t('muxList')}</option><option value="accordion">{t('jumpAccordion')}</option><option value="grid">{t('jumpGrid')}</option></select></label><button className="subtle-button" disabled={busy} onClick={() => void loadProjects()}>{t('muxProjects')}</button></div>}
+    {projects.length > 0 && <label>{t('muxRecentDirectory')}<select value={projects.includes(directory) ? directory : ''} onChange={e => setDirectory(e.target.value)}><option value="" disabled>{t('muxChooseProject')}</option>{projects.map(project => <option key={project} value={project}>{project}</option>)}</select></label>}
+    {projectsLoaded && projects.length === 0 && <p>{t('muxNoProjects')}</p>}
     {attached && attached.kind !== 'zellij' && <MultiplexerShortcuts key={`${sessionId}:${attached.kind}`} sessionId={sessionId} kind={attached.kind} />}
     {error && <p className="inline-error" role="alert">{error}</p>}
-    {busy && <p className="loading" role="status">Reading workspaces…</p>}
+    {busy && <p className="loading" role="status">{t('muxReading')}</p>}
     {requested && tree && !(requestedHerdr ? tree.herdrAvailable : tree.tmuxAvailable) && <p role="status">{t('desktopLaunchMuxUnavailable',{kind:requested.mux.kind})}</p>}
-    {!requested && tree && <p className="muted">tmux {tree.tmuxAvailable ? 'available' : 'not installed'} · Herdr {tree.herdrAvailable ? 'detected' : 'not installed'} · Zellij {tree.zellijAvailable ? 'detected' : 'not installed'}</p>}
-    {(requestedHerdr ? tree?.herdrAvailable : !requested && (tree?.herdrAvailable || tree?.zellijAvailable)) && <div>{!requested && <label>Persistent session name<input value={persistentName} onChange={e => setPersistentName(e.target.value)} maxLength={200} disabled={busy} /></label>}
+    {!requested && tree && <p className="muted">tmux {tree.tmuxAvailable ? t('muxAvailable') : t('muxMissing')} · Herdr {tree.herdrAvailable ? t('muxDetected') : t('muxMissing')} · Zellij {tree.zellijAvailable ? t('muxDetected') : t('muxMissing')}</p>}
+    {(requestedHerdr ? tree?.herdrAvailable : !requested && (tree?.herdrAvailable || tree?.zellijAvailable)) && <div>{!requested && <label>{t('muxPersistentName')}<input value={persistentName} onChange={e => setPersistentName(e.target.value)} maxLength={200} disabled={busy} /></label>}
       {(['herdr', 'zellij'] as const).filter(kind => (!requested || kind==='herdr') && (kind === 'herdr' ? tree!.herdrAvailable : tree!.zellijAvailable)).map(kind => <div key={kind}>
-        {!requested && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void loadPersistent(kind)}>List {kind} sessions</button>
-          <button className="subtle-button" disabled={busy || !persistentName.trim()} onClick={() => void run(undefined, persistentName, kind)}>Open/create {kind} session</button></div>}
-        {persistent[kind]?.length === 0 && <p>No running {kind} sessions.</p>}
-        {persistent[kind]?.map(session => <div className="mux-row" key={session.name}><strong>{kind}: {session.name}</strong><button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name, kind)}>Attach {kind} {session.name}</button>{!requested && (kind === 'herdr' ? <button className="subtle-button" disabled={busy} onClick={() => setHerdr(session.name)}>Browse Herdr {session.name}</button> : <button className="subtle-button" disabled={busy} onClick={() => setZellij(session.name)}>Control Zellij {session.name}</button>)}</div>)}
-      </div>)}{!requested && <p>Browse a Herdr session for its workspace tree, or choose a Zellij session for its shortcut panel.</p>}</div>}
+        {!requested && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void loadPersistent(kind)}>{t('muxListSessions',{kind})}</button>
+          <button className="subtle-button" disabled={busy || !persistentName.trim()} onClick={() => void run(undefined, persistentName, kind)}>{t('muxOpenSession',{kind})}</button></div>}
+        {persistent[kind]?.length === 0 && <p>{t('muxNoSessions',{kind})}</p>}
+        {persistent[kind]?.map(session => <div className="mux-row" key={session.name}><strong>{kind}: {session.name}</strong><button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name, kind)}>{t('muxAttachKind',{kind,name:session.name})}</button>{!requested && (kind === 'herdr' ? <button className="subtle-button" disabled={busy} onClick={() => setHerdr(session.name)}>{t('muxBrowseHerdr',{name:session.name})}</button> : <button className="subtle-button" disabled={busy} onClick={() => setZellij(session.name)}>{t('muxControlZellij',{name:session.name})}</button>)}</div>)}
+      </div>)}{!requested && <p>{t('muxPersistentHint')}</p>}</div>}
     {herdr && <HerdrPanel sessionId={sessionId} name={herdr} projectDirectory={directory} />}
     {zellij && <ZellijPanel key={`${sessionId}:${zellij}`} sessionId={sessionId} name={zellij} projectDirectory={directory} />}
-    {edit && <form onSubmit={submit} aria-label="Workspace details"><label>Name<input autoFocus maxLength={200} value={name} onChange={e => setName(e.target.value)} required disabled={busy} /></label>
-      {(edit.type === 'createSession' || edit.type === 'createWindow') && <label>Project directory<input value={directory} onChange={e => setDirectory(e.target.value)} required disabled={busy} placeholder="/home/user/project" /></label>}
-      <button className="subtle-button" type="submit" disabled={busy || !name.trim()}>Save workspace</button><button className="subtle-button" type="button" disabled={busy} onClick={() => setEdit(null)}>Cancel</button></form>}
-    {!requestedHerdr && tree?.sessions.length === 0 && !busy && <div className="panel-empty"><Layers size={28} /><h3>No tmux sessions found.</h3>{!requested && <p>Create a session to keep agents running when you disconnect.</p>}</div>}
+    {edit && <form onSubmit={submit} aria-label={t('muxDetails')}><label>{t('appName')}<input autoFocus maxLength={200} value={name} onChange={e => setName(e.target.value)} required disabled={busy} /></label>
+      {(edit.type === 'createSession' || edit.type === 'createWindow') && <label>{t('muxDirectory')}<input value={directory} onChange={e => setDirectory(e.target.value)} required disabled={busy} placeholder="/home/user/project" /></label>}
+      <button className="subtle-button" type="submit" disabled={busy || !name.trim()}>{t('muxSave')}</button><button className="subtle-button" type="button" disabled={busy} onClick={() => setEdit(null)}>{t('appCancel')}</button></form>}
+    {!requestedHerdr && tree?.sessions.length === 0 && !busy && <div className="panel-empty"><Layers size={28} /><h3>{t('muxNoTmux')}</h3>{!requested && <p>{t('muxCreateHint')}</p>}</div>}
     <div className={`mux-list mux-layout-${layout}`}>{!requestedHerdr && tree?.sessions.map(session => <details key={`${layout}:${session.id}`} open={layout !== 'accordion'}>
-      <summary>{session.name} · {session.windows.length} windows</summary>
-      <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name)}>Attach {session.name}</button>
-        {!requested && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameSession', target: session.id }, session.name)}>Rename session</button>}
-        {!requested && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createWindow', target: session.id })}>New window</button>}</div>
-      {!requested && session.windows.map(window => <details key={window.id} open><summary>{window.index}: {window.name}{window.active ? ' · active' : ''}</summary>
-        <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'selectWindow', target: window.id })}>Select window {window.index}</button>
-          <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameWindow', target: window.id }, window.name)}>Rename window</button></div>
-        {window.panes.map(pane => <div className="mux-row" key={pane.id}><div><strong>{pane.command} · {pane.id}{pane.active ? ' · active' : ''}</strong><small>{pane.path}</small></div>
-          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'selectPane', target: pane.id })}>Select {pane.id}</button>
-          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'zoomPane', target: pane.id })}>Zoom {pane.id}</button>
-          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.id, horizontal: true, directory: pane.path })}>Split {pane.id} left/right</button>
-          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.id, horizontal: false, directory: pane.path })}>Split {pane.id} top/bottom</button>
+      <summary>{session.name} · {t('muxWindows',{total:formatNumber(session.windows.length),count:session.windows.length})}</summary>
+      <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run(undefined, session.name)}>{t('muxAttach',{name:session.name})}</button>
+        {!requested && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameSession', target: session.id }, session.name)}>{t('muxRenameSession')}</button>}
+        {!requested && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createWindow', target: session.id })}>{t('muxNewWindow')}</button>}</div>
+      {!requested && session.windows.map(window => <details key={window.id} open><summary>{formatNumber(window.index)}: {window.name}{window.active ? ` · ${t('muxActive')}` : ''}</summary>
+        <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'selectWindow', target: window.id })}>{t('muxSelectWindow',{index:formatNumber(window.index)})}</button>
+          <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameWindow', target: window.id }, window.name)}>{t('muxRenameWindow')}</button></div>
+        {window.panes.map(pane => <div className="mux-row" key={pane.id}><div><strong>{pane.command} · {pane.id}{pane.active ? ` · ${t('muxActive')}` : ''}</strong><small>{pane.path}</small></div>
+          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'selectPane', target: pane.id })}>{t('muxSelect',{id:pane.id})}</button>
+          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'zoomPane', target: pane.id })}>{t('muxZoom',{id:pane.id})}</button>
+          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.id, horizontal: true, directory: pane.path })}>{t('muxSplitHorizontal',{id:pane.id})}</button>
+          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.id, horizontal: false, directory: pane.path })}>{t('muxSplitVertical',{id:pane.id})}</button>
         </div>)}
       </details>)}
     </details>)}</div>
-    <p>Close the attached terminal tab to detach your client. Sessions and agents keep running on the host.</p>
+    <p>{t('muxDetachHint')}</p>
   </section>;
 }
