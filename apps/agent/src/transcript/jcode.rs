@@ -5,7 +5,6 @@ use super::{
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
-    fs::File,
     io::{BufRead, BufReader, Read},
     path::Path,
 };
@@ -34,7 +33,7 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
         return Err(Error::InvalidArgument);
     }
     let file = open_transcript(path)?;
-    let metadata = file.metadata()?;
+    let metadata = super::SourceSnapshot::capture(&file)?;
     if metadata.len() > 16 * 1024 * 1024 {
         return Err(Error::InvalidArgument);
     }
@@ -56,7 +55,10 @@ pub(super) fn read_page(path: &Path, offset: u64, limit: u8) -> Result<Transcrip
         Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
-    let journal_metadata = journal.as_ref().map(File::metadata).transpose()?;
+    let journal_metadata = journal
+        .as_ref()
+        .map(super::SourceSnapshot::capture)
+        .transpose()?;
     if let (Some(file), Some(metadata)) = (journal, journal_metadata.as_ref()) {
         if metadata.len() > 16 * 1024 * 1024 {
             return Err(Error::InvalidArgument);
@@ -174,17 +176,17 @@ fn normalize(message: &Value) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_replacement_is_detected_even_with_the_same_size() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.json");
         std::fs::write(&path, b"old").unwrap();
-        let before = std::fs::metadata(&path).unwrap();
+        let file = super::open_transcript(&path).unwrap();
+        let before = super::super::SourceSnapshot::capture(&file).unwrap();
         let replacement = dir.path().join("replacement.json");
         std::fs::write(&replacement, b"new").unwrap();
-        #[cfg(windows)]
-        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&path, dir.path().join("detached.json")).unwrap();
         std::fs::rename(replacement, &path).unwrap();
         assert!(crate::transcript::unchanged_snapshot(&path, &before).is_err());
     }
