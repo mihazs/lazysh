@@ -1,2 +1,3 @@
 "NSFaceIDUsageDescription" = "Desbloqueie as credenciais SSH salvas com o Face ID ao ativar a proteção biométrica.";
 "NSMicrophoneUsageDescription" = "Grave sua voz para ditado usando o mecanismo que você selecionar.";
+"NSCameraUsageDescription" = "Use a câmera ao ler um QR de tema ou escolher capturar uma foto para anexar. As imagens dos QR de tema ficam neste dispositivo.";

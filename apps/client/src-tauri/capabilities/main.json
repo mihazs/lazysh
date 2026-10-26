@@ -9,6 +9,7 @@
     "allow-board-keep-awake-status", "allow-board-keep-awake-acquire", "allow-board-keep-awake-release",
     "allow-ui-locale-status", "allow-ui-locale-set",
     "allow-theme-link-status", "allow-theme-link-read", "allow-theme-link-ack",
+    "allow-theme-qr-decode",
     "allow-desktop-launch-read", "allow-desktop-launch-ack", "allow-desktop-launch-prepare-host", "allow-desktop-launch-cancel",
     "allow-app-lock-status", "allow-app-lock-configure", "allow-app-lock-ready",
     "allow-local-capability", "allow-local-connect", "allow-local-write", "allow-local-resize", "allow-local-ack", "allow-local-disconnect",

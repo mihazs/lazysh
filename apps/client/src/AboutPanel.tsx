@@ -9,6 +9,7 @@ import utf8License from "../../../packages/mosh-transport/vendor-android/protobu
 import abseilLicense from "../../../packages/mosh-transport/vendor-android/abseil/LICENSE?raw";
 import etLicense from "../../../packages/et-transport/LICENSE-MIT?raw";
 import moshIos from "../../../packages/mosh-transport/vendor/COPYING.iOS?raw";
+import quircsLicense from "../src-tauri/licenses/quircs-LICENSE?raw";
 import { api as nativeApi, native } from "./bridge";
 import { errorMessage } from "./SessionTools";
 
@@ -66,6 +67,7 @@ export default function AboutPanel() {
         ["OpenSSL", opensslLicense],
         ["Eternal Terminal adapter", etLicense],
         ["Portable PTY", ptyLicense],
+        ["quircs", quircsLicense],
       ].map(([name, text]) => (
         <details key={name}>
           <summary>{t('aboutLicense', {component: name})}</summary>

@@ -19,6 +19,7 @@ fn main() {
         "theme_link_status",
         "theme_link_read",
         "theme_link_ack",
+        "theme_qr_decode",
         "local_capability",
         "desktop_launch_read",
         "desktop_launch_ack",
