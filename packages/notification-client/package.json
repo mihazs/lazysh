@@ -1,0 +1,13 @@
+{
+  "name": "@lazysh/notification-client",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "dependencies": { "@lazysh/common": "workspace:*" },
+  "scripts": {
+    "check:rust": "cargo check --locked --package lazysh-notification-client",
+    "test:rust": "cargo test --locked --package lazysh-notification-client",
+    "lint": "cargo clippy --locked --package lazysh-notification-client --all-targets -- -D warnings",
+    "format:check": "cargo fmt --package lazysh-notification-client -- --check"
+  }
+}

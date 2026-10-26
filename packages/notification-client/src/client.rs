@@ -1,4 +1,5 @@
-use crate::{digest, https, secret, store::validate_output_parent, Event, Source, Status};
+use crate::private_files::validate_output_parent;
+use crate::{digest, https, secret, Event, Source, Status};
 use serde::{Deserialize, Serialize};
 use std::{io::Write, path::Path};
 use uuid::Uuid;

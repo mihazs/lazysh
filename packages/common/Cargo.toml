@@ -6,7 +6,8 @@ license.workspace = true
 description = "Shared private storage and bounded service primitives"
 
 [features]
-service = ["dep:axum", "dep:hyper-util", "dep:tokio", "dep:zeroize"]
+service = ["dep:axum", "dep:hyper-util", "dep:tokio", "secrets"]
+secrets = ["dep:zeroize"]
 test-support = []
 url = ["dep:url"]
 
