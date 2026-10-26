@@ -7,8 +7,12 @@ Transcript, Usage and the notification inbox also have app-owned labels, control
 and validation in all three catalogs. Remote file browsing, upload consent, Git
 working-tree/history review, side-by-side diffs, line-comment controls and syntax
 highlighting controls are covered too. File contents, paths, commit subjects,
-patches and annotation payloads remain verbatim. The browser preview/DOM-picker
-controls remain a separate follow-up.
+patches and annotation payloads remain verbatim. Browser preview controls, listener
+discovery and port validation, manual notes and DOM-picker captions/statuses also
+use these catalogs. Language changes preserve the iframe and picker channel; page
+content and staged annotation payloads are never translated. App-owned validation
+and persistent picker statuses translate when rendered, including errors already
+visible when the language changes. Raw native diagnostics remain verbatim.
 This is a partial milestone under issue #79. Other feature panels and native
 lock-cover/biometric-reason text still require their own localization and
 acceptance. Apple permission purposes have separate bundled resources below;
@@ -103,6 +107,12 @@ Run the existing project tasks from `apps/client`:
 - `bun run test:e2e e2e/file-review-locales.spec.ts` checks all three locales at
   desktop/phone widths, explicit upload consent, syntax highlighting, comment
   focus, historical selection and verbatim diff contents across language changes.
+- `bun run test src/i18n/previewLocales.test.tsx` exercises held preview operations,
+  retained validation/raw errors, authenticated picker transitions and original
+  access headers without extra requests on a language change.
+- `bun run test:e2e e2e/preview-locales.spec.ts e2e/previews.spec.ts` checks actual
+  cross-origin selection, iframe/focus/channel identity, security-policy fallback,
+  and unchanged annotation payloads at desktop/phone widths.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a

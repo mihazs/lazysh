@@ -16,6 +16,10 @@ parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[[test]]
+name = "deep_link_manifest"
+path = "../../../packages/deep-link-vendor/tests/manifest.rs"
+
 [dependencies]
 tauri-plugin-lazysh-display-idle = { path = "../../../packages/display-idle" }
 lazysh-common = { path = "../../../packages/common" }

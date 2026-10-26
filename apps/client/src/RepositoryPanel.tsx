@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import Markdown from 'react-markdown';
 import { api as nativeApi } from './bridge';
-import { errorMessage } from './SessionTools';
+import {fileErrorText, type FileErrorState} from './SessionTools';
+import {captureUiError, LocalUiError} from './i18n/localError';
 import CodePreview from './CodePreview';
 
 type Change = { path: string; originalPath: string | null; index: string; worktree: string };
@@ -21,7 +22,7 @@ type Line = { before?: number; after?: number; left?: string; right?: string; ki
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object';
 const validText = (value: unknown, limit = 4096): value is string => typeof value === 'string' && value.length <= limit && !value.includes('\0');
 const validOid = (value: unknown): value is string => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
-function invalidResponse(): never { throw new Error(t('repoInvalid')); }
+function invalidResponse(): never { throw new LocalUiError('repoInvalid'); }
 export function parseRepositoryStatus(value: unknown): { path: string; changes: Change[] } {
   if (!isObject(value) || !validText(value.path) || !Array.isArray(value.changes) || value.changes.length > 10000) return invalidResponse();
   for (const row of value.changes) if (!isObject(row) || !validText(row.path) || !(row.originalPath === null || validText(row.originalPath)) || typeof row.index !== 'string' || !/^[ MADRCU?!T]$/.test(row.index) || typeof row.worktree !== 'string' || !/^[ MADRCU?!T]$/.test(row.worktree)) return invalidResponse();
@@ -102,7 +103,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
   const [commentLine, setCommentLine] = useState(1);
   const [markdown, setMarkdown] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<FileErrorState>('');
   const request = useRef(0);
   useEffect(() => {
     const saved = readReview(sessionId);
@@ -124,8 +125,8 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
           if (saved.revision) await browse(saved.revision, result.path, saved);
           else await open(saved.file, saved.staged, undefined, result.path, '');
         }
-      } catch (e) { if (current === request.current) { setHistory([]); setError(t('repoHistoryUnavailable',{error:errorMessage(e)})); } }
-    } catch (e) { if (current === request.current) setError(errorMessage(e)); }
+      } catch (e) { if (current === request.current) { setHistory([]); setError({history:captureUiError(e)}); } }
+    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
   async function browse(value: string, repositoryPath = path, saved?: Review, targetDirectory = '') {
@@ -141,7 +142,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
         const entry = tree.find(entry => entry.path === saved.file);
         if (entry) await open(entry.path, undefined, entry, repositoryPath, value);
       }
-    } catch (e) { if (current === request.current) setError(errorMessage(e)); }
+    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
   async function open(filePath: string, staged?: boolean, entry?: Entry, repositoryPath = path, selectedRevision = revision) {
@@ -153,12 +154,12 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
         const value = imageUrl(await invoke('repository_image', { sessionId, path: repositoryPath, filePath, objectId: entry?.oid || null }));
         if (current === request.current) setPreview(value);
       } else if (entry) {
-        if (entry.kind !== 'blob' && entry.kind !== 'symlink') throw new Error(t('repoSubmodule'));
+        if (entry.kind !== 'blob' && entry.kind !== 'symlink') throw new LocalUiError('repoSubmodule');
         const value = parseBlob(await invoke('repository_blob', { sessionId, path: repositoryPath, objectId: entry.oid }));
         if (current === request.current) setContent(value);
       } else if (staged === undefined) {
         const text = await api.readFile(sessionId, `${repositoryPath.replace(/\/$/, '')}/${filePath}`);
-        if (typeof text !== 'string' || text.length > 1048576) throw new Error(t('repoInvalidFile'));
+        if (typeof text !== 'string' || text.length > 1048576) throw new LocalUiError('repoInvalidFile');
         if (current === request.current) setContent({ text: text.includes('\0') ? null : text, binary: text.includes('\0'), bytes: new TextEncoder().encode(text).length });
       } else {
         const value = parseDiff(await invoke('repository_diff', { sessionId, path: repositoryPath, filePath, staged }));
@@ -167,7 +168,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
       if (current === request.current) {
         try { sessionStorage.setItem(`lazysh-review:${sessionId}`, JSON.stringify({ path: repositoryPath, revision: selectedRevision, file: filePath, staged })); } catch { /* Storage is optional. */ }
       }
-    } catch (e) { if (current === request.current) setError(errorMessage(e)); }
+    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
   const visibleEntries = entries.filter(entry => entry.path.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
@@ -184,7 +185,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
     try {
       const commits = parseHistory(await invoke('repository_history', { sessionId, path, offset: historyOffset, revision: history[0]?.oid }));
       if (current === request.current) { setHistory(previous => [...new Map([...previous, ...commits].map(commit => [commit.oid, commit])).values()]); setHistoryOffset(historyOffset + commits.length); setOlderHistory(commits.length === 50); }
-    } catch (e) { if (current === request.current) setError(errorMessage(e)); }
+    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
   return <section className="tool-panel repository-panel" aria-label={t('repoTitle')}>
@@ -195,7 +196,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
       <label>{t('repoRevision')}<select aria-label={t('repoRevisionLabel')} disabled={busy} value={revision} onChange={event => void browse(event.target.value)}><option value="">{t('repoWorkingTree')}</option>{revision && !history.some(commit => commit.oid === revision) && <option value={revision}>{t('repoSelectedCommit',{commit:revision.slice(0,8)})}</option>}{history.map(commit => <option key={commit.oid} value={commit.oid}>{commit.oid.slice(0, 8)} {commit.subject}</option>)}</select></label>
       {olderHistory && <button type="button" disabled={busy || historyOffset >= 100000} onClick={() => void older()}>{t('repoOlder')}</button>}
     </form>
-    {error && <p className="inline-error" role="alert">{error}</p>}
+    {error && <p className="inline-error" role="alert">{fileErrorText(error)}</p>}
     {busy && <p role="status">{t('repoReading')}</p>}
     <div className="repository-layout"><div className="repository-list">
       <label>{t('repoFind')}<input value={filter} onChange={event => setFilter(event.target.value)} /></label>
@@ -219,6 +220,6 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
       </>)}
       {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffLines(diff.patch).map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{line.before}</td><td><pre>{line.left}</pre></td><td>{line.after}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
     </div></div>
-    {annotations.length > 0 && <section className="repository-comments" aria-label={t('repoComments')}><h4>{t('repoNextPrompt')}</h4>{annotations.map((note, index) => <label key={`${note.repository}:${note.file}:${note.revision}:${note.line}`}>{note.repository}/{note.file}:{note.line}<textarea maxLength={2000} value={note.text} onChange={event => setAnnotations(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => setAnnotations(current => current.filter((_, i) => i !== index))}>{t('repoRemoveComment')}</button></label>)}{annotationText.length > 65536 && <p>{t('repoShorten')}</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: annotationText } })); setDraftStatus('repoCommentsStaged'); }}>{t('repoUsePrompt')}</button><button disabled={!annotationText} onClick={() => void navigator.clipboard.writeText(annotationText).then(() => setDraftStatus('repoCommentsCopied')).catch(e => setError(errorMessage(e)))}>{t('repoCopyComments')}</button>{draftStatus && <p role="status">{t(draftStatus)}</p>}</section>}
+    {annotations.length > 0 && <section className="repository-comments" aria-label={t('repoComments')}><h4>{t('repoNextPrompt')}</h4>{annotations.map((note, index) => <label key={`${note.repository}:${note.file}:${note.revision}:${note.line}`}>{note.repository}/{note.file}:{note.line}<textarea maxLength={2000} value={note.text} onChange={event => setAnnotations(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => setAnnotations(current => current.filter((_, i) => i !== index))}>{t('repoRemoveComment')}</button></label>)}{annotationText.length > 65536 && <p>{t('repoShorten')}</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: annotationText } })); setDraftStatus('repoCommentsStaged'); }}>{t('repoUsePrompt')}</button><button disabled={!annotationText} onClick={() => void navigator.clipboard.writeText(annotationText).then(() => setDraftStatus('repoCommentsCopied')).catch(e => setError(captureUiError(e)))}>{t('repoCopyComments')}</button>{draftStatus && <p role="status">{t(draftStatus)}</p>}</section>}
   </section>;
 }

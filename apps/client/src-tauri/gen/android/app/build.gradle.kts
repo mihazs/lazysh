@@ -70,6 +70,11 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    testOptions.unitTests.all {
+        // This JUnit fixture reads authored XML rather than packaged resources.
+        // Register it so incremental checks cannot reuse a stale passing result.
+        it.inputs.file(file("src/main/AndroidManifest.xml"))
+    }
 }
 
 kotlin {

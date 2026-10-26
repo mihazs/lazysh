@@ -9,6 +9,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Visible file-size and repository validation errors now follow interface language
+  changes, including history errors with local causes. Host diagnostics remain
+  verbatim, and changing language does not refetch files or change selections.
+
+- Keep Android `lazysh://` link routing in the canonical manifest so cached
+  incremental APK builds retain cold and warm theme-link delivery.
+
 - Cancelled exec, SFTP, preview/probe, bastion, Mosh/ET bootstrap and device-stream
   channel openings retain ownership until peer confirmation and close late results
   without tearing down the parent SSH connection. They now share the existing
@@ -21,6 +28,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   locks still fail closed. Separate SQLite contention failures remain under review.
 
 ### Added
+
+- Browser preview controls, forwarding/discovery validation and element-picker
+  captions/statuses now support English, Brazilian Portuguese and Spanish.
+  Language changes preserve the live iframe, selection and editable note; page
+  data and staged annotation payloads remain verbatim. Defaults are unchanged.
 
 - Remote file browsing, uploads, repository history, side-by-side diffs and line
   comments now have English, Brazilian Portuguese and Spanish controls. Language

@@ -1,3 +1,4 @@
+import {captureUiError, errorMessage, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi } from './access';
 import { useEffect, useRef, useState } from "react";
@@ -12,10 +13,10 @@ import {
 import { api as nativeApi, type FileEntry } from "./bridge";
 export { MuxPanel } from "./MultiplexerPanel";
 
-export function errorMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error)
-    return String(error.message);
-  return String(error);
+export {errorMessage} from './i18n/localError';
+export type FileErrorState = UiErrorCause | {history: UiErrorCause};
+export function fileErrorText(error: FileErrorState): string {
+  return typeof error === 'object' && 'history' in error ? t('repoHistoryUnavailable', {error:uiErrorText(error.history)}) : uiErrorText(error);
 }
 
 const join = (parent: string, child: string) =>
@@ -30,7 +31,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   const [content, setContent] = useState<{ path: string; text: string } | null>(
     null,
   );
-  const [error, setError] = useState("");
+  const [error, setError] = useState<FileErrorState>("");
   const [busy, setBusy] = useState(false);
   const [upload, setUpload] = useState<File | null>(null);
   const [destination, setDestination] = useState("");
@@ -54,7 +55,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       setDraft(next);
       setContent(null);
     } catch (e) {
-      if (current === request.current) setError(errorMessage(e));
+      if (current === request.current) setError(captureUiError(e));
     } finally {
       if (current === request.current) setBusy(false);
     }
@@ -80,7 +81,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       const text = await api.readFile(sessionId, next);
       if (current === request.current) setContent({ path: next, text });
     } catch (e) {
-      if (current === request.current) setError(errorMessage(e));
+      if (current === request.current) setError(captureUiError(e));
     } finally {
       if (current === request.current) setBusy(false);
     }
@@ -99,7 +100,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       setUpload(null);
       await load(path);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(captureUiError(e));
     } finally {
       setBusy(false);
     }
@@ -162,7 +163,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             e.target.value = "";
             if (!file) return;
             if (file.size > 10 * 1024 * 1024) {
-              setError(t('filesTooLarge'));
+              setError(new LocalUiError('filesTooLarge'));
               return;
             }
             setUpload(file);
@@ -172,7 +173,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       </form>
       {error && (
         <p className="inline-error" role="alert">
-          {error}
+          {fileErrorText(error)}
         </p>
       )}
       {upload && (
