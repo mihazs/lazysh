@@ -1,3 +1,4 @@
+import {LocalUiError} from './i18n/localError';
 export const CLOUD_LANGUAGES: Record<string, string> = {
   auto: 'Detect language', en: 'English', es: 'Español', fr: 'Français',
   de: 'Deutsch', pt: 'Português', ja: '日本語', zh: '中文',
@@ -27,7 +28,7 @@ export function validateCloudQuota(value: CloudQuota): CloudQuota {
     }) || value.windowStart > 8_640_000_000_000 || value.windowEnd > 8_640_000_000_000 || value.windowEnd <= value.windowStart
     || value.deviceRemainingSamples !== Math.max(0, value.deviceLimitSamples - value.deviceUsedSamples)
     || value.globalRemainingSamples !== Math.max(0, value.globalLimitSamples - value.globalUsedSamples))
-    throw new Error('Invalid Cloud service quota response.');
+    throw new LocalUiError('cloudInvalidQuota');
   return value;
 }
 export function validateCloudSnapshot(value: CloudSnapshot): CloudSnapshot {
@@ -37,7 +38,7 @@ export function validateCloudSnapshot(value: CloudSnapshot): CloudSnapshot {
     || caps.maxSamples !== 480000 || caps.maxWavBytes !== 960044 || !Array.isArray(caps.languages)
     || caps.languages.length < 1 || caps.languages.length > 8 || new Set(caps.languages).size !== caps.languages.length
     || caps.languages.some(code => typeof code !== 'string' || !Object.hasOwn(CLOUD_LANGUAGES, code)))
-    throw new Error('Invalid Cloud service capabilities response.');
+    throw new LocalUiError('cloudInvalidCapabilities');
   validateCloudQuota(value.quota);
   return value;
 }

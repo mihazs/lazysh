@@ -13,6 +13,10 @@ use these catalogs. Language changes preserve the iframe and picker channel; pag
 content and staged annotation payloads are never translated. App-owned validation
 and persistent picker statuses translate when rendered, including errors already
 visible when the language changes. Raw native diagnostics remain verbatim.
+Cloud dictation enrollment and quota settings, and dictation history controls and
+local errors, are also covered. These changes preserve transcription content,
+engine/model identifiers, native diagnostics, capture revisions and storage
+epochs. The main Voice engine/model/recording/delivery controls remain a follow-up.
 This is a partial milestone under issue #79. Other feature panels and native
 lock-cover/biometric-reason text still require their own localization and
 acceptance. Apple permission purposes have separate bundled resources below;
@@ -113,6 +117,13 @@ Run the existing project tasks from `apps/client`:
 - `bun run test:e2e e2e/preview-locales.spec.ts e2e/previews.spec.ts` checks actual
   cross-origin selection, iframe/focus/channel identity, security-policy fallback,
   and unchanged annotation payloads at desktop/phone widths.
+- `bun run test src/i18n/cloudHistoryLocales.test.tsx` checks held enrollment and
+  transcription, original protected request headers, retained errors and history
+  entry/capture identity across all three locales.
+- `bun run test:e2e e2e/cloud-history-locales.spec.ts e2e/cloud-voice.spec.ts e2e/voice-history.spec.ts`
+  checks translated actions in the real Voice view, in-flight transcription and
+  draft continuity, saved-history consent/retry and no IndexedDB transactions
+  caused by language changes.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
