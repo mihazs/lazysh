@@ -2459,6 +2459,49 @@ fn transcript_view_command(
     Ok(command)
 }
 
+// Keep legacy requests byte-for-byte unchanged unless explicitly opted in.
+fn transcript_request_command(
+    agent: &str,
+    path: &str,
+    offset: u64,
+    checkpoint: Option<&str>,
+    view: Option<&str>,
+    transcript_session_id: Option<&str>,
+    checkpointed: bool,
+) -> Result<String> {
+    if !checkpointed {
+        return transcript_view_command(agent, path, offset, checkpoint, view);
+    }
+    if agent != "grok-acp"
+        || !matches!(view, None | Some("records"))
+        || transcript_session_id.is_some()
+    {
+        return Err(SshError::new(
+            "invalid_input",
+            "Unsupported checkpointed transcript request",
+        ));
+    }
+    let mut command = transcript_command(agent, path, offset, None)?;
+    let receipt = checkpoint
+        .map(|token| {
+            lazysh_common::record_checkpoint::RecordCheckpoint::parse(token)
+                .filter(|receipt| receipt.next_offset == offset)
+                .ok_or_else(|| SshError::new("invalid_input", "Invalid transcript checkpoint"))
+        })
+        .transpose()?;
+    if receipt.is_none() && offset != 0 {
+        return Err(SshError::new(
+            "invalid_input",
+            "Start checkpointed records from zero",
+        ));
+    }
+    command.push_str(" --checkpointed");
+    if let Some(receipt) = receipt {
+        command.push_str(&format!(" --checkpoint={}", quote(&receipt.to_string())));
+    }
+    Ok(command)
+}
+
 async fn transcript_result(
     lease: &AccessLease,
     state: &AppState,
@@ -2516,16 +2559,19 @@ pub async fn agent_transcript(
     offset: u64,
     view: Option<String>,
     checkpoint: Option<String>,
+    checkpointed: Option<bool>,
     transcript_session_id: Option<String>,
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let command = transcript_view_command(
+            let command = transcript_request_command(
                 &agent,
                 &path,
                 offset,
                 checkpoint.as_deref(),
                 view.as_deref(),
+                transcript_session_id.as_deref(),
+                checkpointed.unwrap_or(false),
             )?;
             transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
@@ -3137,6 +3183,75 @@ mod tests {
         assert!(transcript_command("codex", "/a\0b", 0, None).is_err());
         assert!(transcript_command("codex", "/a", u64::MAX, None).is_err());
         assert_eq!(transcript_command("claude", "/a'b;$(cmd)", 17, None).unwrap(), "lazysh-agent transcript --agent claude --path '/a'\\''b;$(cmd)' --offset 17 --limit 50");
+    }
+
+    #[test]
+    fn checkpointed_records_guard_requests_before_any_session_or_ssh_work() {
+        let hash = "a".repeat(64);
+        let token = format!("g1:{hash}:10:20:{hash}");
+        for (agent, offset, checkpoint, view, session, enabled, accepted) in [
+            ("grok-acp", 0, None, None, None, true, true),
+            (
+                "grok-acp",
+                10,
+                Some(token.as_str()),
+                Some("records"),
+                None,
+                true,
+                true,
+            ),
+            ("grok-acp", 0, None, None, None, false, true),
+            ("claude", 0, None, None, None, true, false),
+            ("antigravity-jsonl", 0, None, None, None, true, false),
+            ("grok-acp", 0, None, Some("conversation"), None, true, false),
+            ("grok-acp", 0, None, None, Some(""), true, false),
+            ("grok-acp", 1, None, None, None, true, false),
+            (
+                "grok-acp",
+                11,
+                Some(token.as_str()),
+                None,
+                None,
+                true,
+                false,
+            ),
+            (
+                "grok-acp",
+                10,
+                Some(token.as_str()),
+                None,
+                None,
+                false,
+                false,
+            ),
+            (
+                "grok-acp",
+                0,
+                Some("g1:$(execute)"),
+                None,
+                None,
+                true,
+                false,
+            ),
+        ] {
+            let result = transcript_request_command(
+                agent,
+                "/a'b;$(cmd)",
+                offset,
+                checkpoint,
+                view,
+                session,
+                enabled,
+            );
+            assert_eq!(result.is_ok(), accepted, "{agent} {offset} {enabled}");
+            if let Ok(command) = result {
+                assert_eq!(command.contains(" --checkpointed"), enabled);
+                assert!(command.contains("--path '/a'\\''b;$(cmd)'"));
+                if let Some(token) = checkpoint {
+                    assert!(command.ends_with(&format!(" --checkpoint='{token}'")));
+                }
+            }
+        }
     }
 
     #[test]

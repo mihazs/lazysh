@@ -2,7 +2,16 @@ use super::{
     open_transcript, validate_message, Error, Result, TranscriptAgent, TranscriptPage, MAX_PAGE,
 };
 use serde_json::Value;
-use std::{io::Read, path::Path};
+use std::{fs::File, io::Read, path::Path};
+
+pub(super) fn read_bytes(file: &mut File, length: u64) -> Result<Vec<u8>> {
+    if length > lazysh_common::record_checkpoint::MAX_SNAPSHOT {
+        return Err(Error::InvalidArgument);
+    }
+    let mut bytes = Vec::new();
+    file.take(length).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
 
 pub(super) fn read_export(path: &Path, limit: u8) -> Result<Value> {
     if !(1..=100).contains(&limit) {

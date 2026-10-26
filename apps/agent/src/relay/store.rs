@@ -161,13 +161,7 @@ pub(super) fn claim(connection: &mut Connection, revision: i64, now: i64) -> Res
         transaction.commit()?;
         return Ok(None);
     }
-    transaction.execute("UPDATE relay_outbox SET state='failed_unknown' WHERE state IN ('queued','sending') AND attempts>=?1",[RETRY_LIMIT])?;
-    transaction.execute("UPDATE relay_outbox SET state=CASE WHEN may_sent=1 THEN 'expired_unknown' ELSE 'expired' END WHERE state IN ('queued','sending') AND expires<=?1",[now])?;
-    // A lost process may have admitted a POST. Its stable UUID is retained for reconciliation.
-    transaction.execute(
-        "UPDATE relay_outbox SET state='queued' WHERE state='sending' AND revision=?1",
-        [revision],
-    )?;
+    recover(&transaction, revision, now)?;
     let row:Option<(String,String,String,i64)>=transaction.query_row("SELECT id,config,kind,attempts FROM relay_outbox WHERE revision=?1 AND state='queued' AND next_attempt<=?2 AND attempts<?3 ORDER BY rowid LIMIT 1",params![revision,now,RETRY_LIMIT],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
     let Some((id, config, kind, attempts)) = row else {
         trim_terminal(&transaction)?;
@@ -198,6 +192,48 @@ pub(super) fn claim(connection: &mut Connection, revision: i64, now: i64) -> Res
         attempts: attempts + 1,
     }))
 }
+fn recover(transaction: &Connection, revision: i64, now: i64) -> Result<()> {
+    transaction.execute("UPDATE relay_outbox SET state='failed_unknown' WHERE state IN ('queued','sending') AND attempts>=?1",[RETRY_LIMIT])?;
+    transaction.execute("UPDATE relay_outbox SET state=CASE WHEN may_sent=1 THEN 'expired_unknown' ELSE 'expired' END WHERE state IN ('queued','sending') AND expires<=?1",[now])?;
+    // A lost process may have admitted a POST. Its stable UUID is retained for reconciliation.
+    transaction.execute(
+        "UPDATE relay_outbox SET state='queued' WHERE state='sending' AND revision=?1",
+        [revision],
+    )?;
+    Ok(())
+}
+
+pub(super) fn has_blocked(connection: &Connection, revision: i64) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM relay_outbox WHERE revision=?1 AND state='blocked')",
+        [revision],
+        |r| r.get(0),
+    )?)
+}
+pub(super) struct Schedule {
+    pub maintenance: bool,
+    pub next_attempt: Option<i64>,
+}
+pub(super) fn schedule(connection: &Connection, revision: i64, now: i64) -> Result<Schedule> {
+    let (maintenance,next_attempt)=connection.query_row(
+        "SELECT coalesce(max(state='sending' OR attempts>=3 OR expires<=?2),0),min(CASE WHEN state='queued' AND attempts<3 AND expires>?2 THEN next_attempt END) FROM relay_outbox WHERE revision=?1 AND state IN ('queued','sending')",
+        params![revision,now],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    Ok(Schedule {
+        maintenance,
+        next_attempt,
+    })
+}
+pub(super) fn maintain(connection: &mut Connection, revision: i64, now: i64) -> Result<()> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current = policy(&transaction)?;
+    if current.enabled && current.revision == revision {
+        recover(&transaction, revision, now)?;
+        trim_terminal(&transaction)?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 pub(super) enum Completion<'a> {
     Recorded(&'a str),
     Retry,
