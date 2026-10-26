@@ -125,6 +125,28 @@ Use `lazysh-agent transcript --agent claude --view conversation --path /absolute
 
 The response uses `view: "active_branch"`, optional `branchId`, `hasMore: false`, and `truncated: true` when older selected messages exceed the requested limit or output budget. Refresh replaces the whole conversation snapshot, including when the selected branch changes. `--offset` must be zero in this mode. It accepts at most 16 MiB and 10,000 linked records; larger files return an error and remain available through record paging/the terminal. Conversation mode is supported only for Claude.
 
+Claude captures exactly the initially observed prefix into an owned buffer of at
+most 16 MiB before parsing. Short reads, observed truncation and Unix file identity
+replacement fail without publishing a shorter or detached branch. If observed
+size or modification time changes, one bounded, chunked comparison checks that
+the selected file still contains the exact captured prefix. Matching append-only
+growth remains useful during Follow: this read returns the original prefix and
+the next read can include the appended messages. An incomplete final line,
+including split UTF-8 or JSON awaiting its newline, stays unconsumed.
+
+There is no capture retry or new deadline. The changed-metadata path reads at most
+one additional original-length prefix, using an 8 KiB comparison buffer rather
+than another full snapshot allocation. The captured buffer is released after
+parsing, before branch reconstruction. This is observational consistency, not a
+file lock. The single comparison observes chunks sequentially: a later change
+to an already-compared chunk during verification can escape detection, so it
+cannot certify that all captured bytes coexist at one instant. Unseen changes
+restored before checks, metadata-preserving rewrites, and mutations after the
+final observation also remain outside the guarantee. Unix
+checks device/inode identity; other platforms retain weaker metadata checks and
+cannot reliably distinguish a same-metadata replacement. Raw record readers,
+Grok capture policy, Follow polling and error handling are unchanged.
+
 After opening a Claude transcript in **Latest conversation branch**, optionally
 enable **Follow selected Claude branch**. Following is off by default, is not
 saved, and applies only to that explicitly opened source. Each read requests a
