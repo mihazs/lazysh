@@ -1,3 +1,4 @@
+import {shareOrigin as origin,shareId as id,sharedFile as share,sharePng as png,shareThumbnail as thumbnail} from './test/shareData';
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -5,22 +6,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke, isTauri: () => true }));
 import SharePanel, { parseShare, thumbnailBlob } from "./SharePanel";
-const origin = "https://files.example.test";
-const id = "a".repeat(64);
-const share = {
-  id,
-  name: "notes.txt",
-  mime: "text/plain",
-  size: 10,
-  createdAt: 1800000000,
-  expiresAt: 1800003600,
-  url: `${origin}/s/${id}`,
-};
 const NativeURL = URL;
 const makeObjectUrl = vi.fn();
 const revokeObjectUrl = vi.fn();
-const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j97kAAAAASUVORK5CYII='), char => char.charCodeAt(0));
-const thumbnail = { mime: 'image/png', data: Array.from(png), width: 1, height: 1 };
 beforeEach(() => {
   makeObjectUrl.mockReset().mockReturnValue('blob:thumbnail'); revokeObjectUrl.mockReset();
   vi.stubGlobal('URL', class extends NativeURL { static createObjectURL = makeObjectUrl; static revokeObjectURL = revokeObjectUrl; });
