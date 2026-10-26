@@ -1,7 +1,7 @@
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import type {mountAttachment} from './fixtures/AttachmentHarness';
-import {attachmentDraft,attachmentPath,attachmentUploadedPath,attachmentSession} from '../src/test/attachmentData';
+import {attachmentDraft,attachmentPath,attachmentUploadedPath,attachmentSession,attachmentReceipt} from '../src/test/attachmentData';
 import {shellPath} from '../src/attachment';
 declare global{interface Window{attachment:ReturnType<typeof mountAttachment>;}}
 for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the real crop/drawing, held upload and editable draft across languages`,async({page})=>{
@@ -28,6 +28,10 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the rea
   await page.evaluate(async()=>{const {savePreferences,getPreferences}=await import('/src/preferences.ts');savePreferences({...getPreferences(),uiLanguage:'pt-BR'});});await expect(root.getByRole('button',{name:'Enviando…',exact:true})).toBeDisabled();expect(await page.evaluate(()=>window.attachment.calls)).toEqual(upload);
   await page.evaluate(()=>window.attachment.complete());const prompt=root.getByRole('textbox',{name:'Prompt editável',exact:true});await expect(prompt).toHaveValue(`Revise o arquivo anexado ${shellPath(attachmentUploadedPath)}.`);await prompt.fill(attachmentDraft);await prompt.focus();const draftNode=await prompt.elementHandle();
   await page.evaluate(async()=>{const {savePreferences,getPreferences}=await import('/src/preferences.ts');savePreferences({...getPreferences(),uiLanguage:'es'});});expect(await draftNode!.evaluate(node=>node===document.activeElement)).toBe(true);await expect(root.getByRole('textbox',{name:'Prompt editable',exact:true})).toHaveValue(attachmentDraft);
-  expect(await page.evaluate(()=>window.attachment.copied)).toEqual([]);expect(await page.evaluate(()=>window.attachment.staged)).toEqual([]);await root.getByRole('button',{name:'Copiar ruta del servidor',exact:true}).click();await root.getByRole('button',{name:'Copiar prompt',exact:true}).click();expect(await page.evaluate(()=>window.attachment.copied)).toEqual([shellPath(attachmentUploadedPath),attachmentDraft]);
+  expect(await page.evaluate(()=>window.attachment.calls.filter(call=>call.command==='host_clipboard_copy'))).toEqual([]);
+  await root.getByRole('button',{name:'Copiar ruta sin formato en el Mac remoto',exact:true}).click();
+  await expect(root.getByText('Se completó la copia al portapapeles del Mac remoto.',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>window.attachment.calls.filter(call=>call.command==='host_clipboard_copy'))).toEqual([{command:'host_clipboard_copy',args:{sessionId:attachmentSession,uploadId:attachmentReceipt}}]);
+  expect(await page.evaluate(()=>window.attachment.copied)).toEqual([]);expect(await page.evaluate(()=>window.attachment.staged)).toEqual([]);await expect(root.getByRole('textbox',{name:'Prompt editable',exact:true})).toHaveValue(attachmentDraft);await root.getByRole('button',{name:'Copiar ruta del servidor',exact:true}).click();await root.getByRole('button',{name:'Copiar prompt',exact:true}).click();expect(await page.evaluate(()=>window.attachment.copied)).toEqual([shellPath(attachmentUploadedPath),attachmentDraft]);
   await root.getByRole('button',{name:'Preparar en el terminal',exact:true}).click();expect(await page.evaluate(()=>window.attachment.staged)).toEqual([{sessionId:attachmentSession,text:attachmentDraft}]);expect(await page.evaluate(()=>window.attachment.resources)).toEqual({created:1,revoked:0,reads:0});expect(await root.textContent()).not.toContain('c'.repeat(64));expect(await root.locator('img,script').count()).toBe(0);expect(external.filter(url=>!url.startsWith('blob:http://127.0.0.1:1420/'))).toEqual([]);
 });

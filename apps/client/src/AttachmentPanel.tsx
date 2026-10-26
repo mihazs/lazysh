@@ -2,6 +2,7 @@ import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedApi } from './access';
 import {useHostUpload} from './useHostUpload';
+import {useHostClipboard} from './useHostClipboard';
 import { useEffect, useRef, useState } from 'react';
 import { api as nativeApi } from './bridge';
 import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageSize, shellPath, validateCrop, type Crop, type ImageSize, type Point } from './attachment';
@@ -22,17 +23,19 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
 
   const [uploaded, setUploaded] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [notice, setNotice] = useState<UiErrorCause | {key:'attachmentUploaded'|'attachmentCopied'|'attachmentStaged'}>('');
+  const [notice, setNotice] = useState<UiErrorCause | {key:'attachmentUploaded'|'attachmentCopied'|'attachmentStaged'|'attachmentHostCopied'|'attachmentHostCopyCancelled'}>('');
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLImageElement | null>(null);
   const generation = useRef(0);
   const stroke = useRef<Stroke | null>(null);
   const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
-  const busy=uploadJob.busy;
+  const hostClipboard=useHostClipboard(api,sessionId,error=>setError(captureUiError(error)),kind=>setNotice({key:kind==='copied'?'attachmentHostCopied':'attachmentHostCopyCancelled'}));
+  const busy=uploadJob.busy||hostClipboard.busy;
   useEffect(() => () => { generation.current++; source.current = null; }, [sessionId]);
 
   async function choose(file: File) {
-    if (uploadJob.active()) return;
+    if (uploadJob.active()||hostClipboard.active()) return;
+    hostClipboard.clear();
     const current = ++generation.current;
     setError(''); setNotice(''); setSelected(null); setUploaded(''); setStrokes([]); setEditing(false); source.current = null;
     try {
@@ -105,6 +108,7 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
   }
   async function upload() {
     if (!selected || busy) return;
+    hostClipboard.clear();
     setError(''); setNotice('');
     await uploadJob.start(async()=>{
       checkDestination(destination);
@@ -123,7 +127,8 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
         } finally {output.width = 0; output.height = 0;}
       }
       return {path:destination,bytes};
-    },path=>{
+    },(path,uploadId)=>{
+      hostClipboard.completed(uploadId);
       setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
     });
   }
@@ -142,17 +147,17 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
     {uploadJob.cancelled && <p role="status">{t('uploadCancelledWarning')}</p>}
     {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}{notice && <p role="status">{typeof notice==='object'&&!(notice instanceof LocalUiError)?t(notice.key):uiErrorText(notice)}</p>}
     {selected && <div className="form-stack"><p>{t('attachmentMetadata',{name:selected.file.name,bytes:formatNumber(selected.file.size)})}</p>
-      <label>{t('attachmentDestination')}<input value={destination} disabled={busy} onChange={event => setDestination(event.target.value)} /></label>
-      {selected.size && <label><input type="checkbox" checked={editing} disabled={busy} onChange={event => { setEditing(event.target.checked); setDestination(event.target.checked ? `./${selected.file.name.replace(/\.[^/.]+$/, '')}-edited.png` : `./${selected.file.name}`); }} />{t('attachmentEditing')}</label>}
+      <label>{t('attachmentDestination')}<input value={destination} disabled={busy} onChange={event => {hostClipboard.clear();setDestination(event.target.value);}} /></label>
+      {selected.size && <label><input type="checkbox" checked={editing} disabled={busy} onChange={event => { hostClipboard.clear();setEditing(event.target.checked); setDestination(event.target.checked ? `./${selected.file.name.replace(/\.[^/.]+$/, '')}-edited.png` : `./${selected.file.name}`); }} />{t('attachmentEditing')}</label>}
       {editing && selected.size && <div className="attachment-editor"><p>{t('attachmentDrawingHint')}</p>
-        <div className="button-row">{(['x', 'y', 'width', 'height'] as const).map(field => <label key={field}>{t(({x:'attachmentCropX',y:'attachmentCropY',width:'attachmentCropWidth',height:'attachmentCropHeight'} as const)[field])}<input type="number" min={field === 'width' || field === 'height' ? 1 : 0} max={field === 'x' || field === 'width' ? selected.size!.width : selected.size!.height} disabled={busy} value={crop[field]} onChange={event => setCrop({ ...crop, [field]: Number(event.target.value) })} /></label>)}<label>{t('attachmentColor')}<input type="color" disabled={busy} value={color} onChange={event => setColor(event.target.value)} /></label><button type="button" disabled={busy || !strokes.length} onClick={() => setStrokes(values => values.slice(0, -1))}>{t('attachmentUndo')}</button></div>
+        <div className="button-row">{(['x', 'y', 'width', 'height'] as const).map(field => <label key={field}>{t(({x:'attachmentCropX',y:'attachmentCropY',width:'attachmentCropWidth',height:'attachmentCropHeight'} as const)[field])}<input type="number" min={field === 'width' || field === 'height' ? 1 : 0} max={field === 'x' || field === 'width' ? selected.size!.width : selected.size!.height} disabled={busy} value={crop[field]} onChange={event => {hostClipboard.clear();setCrop({ ...crop, [field]: Number(event.target.value) });}} /></label>)}<label>{t('attachmentColor')}<input type="color" disabled={busy} value={color} onChange={event => {hostClipboard.clear();setColor(event.target.value);}} /></label><button type="button" disabled={busy || !strokes.length} onClick={() => {hostClipboard.clear();setStrokes(values => values.slice(0, -1));}}>{t('attachmentUndo')}</button></div>
         <canvas ref={canvas} width={selected.size.width} height={selected.size.height} aria-label={t('attachmentCanvas')} style={{ width: '100%', height: 'auto', maxWidth: '800px', touchAction: 'none', display: 'block' }}
-          onPointerDown={event => { if (busy || event.isPrimary === false || !source.current || strokes.length >= 100) return; const point = imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), selected.size!); stroke.current = { points: [point], color, width: Math.max(2, selected.size!.width / 150) }; event.currentTarget.setPointerCapture(event.pointerId); }}
+          onPointerDown={event => { if (busy || event.isPrimary === false || !source.current || strokes.length >= 100) return; hostClipboard.clear();const point = imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), selected.size!); stroke.current = { points: [point], color, width: Math.max(2, selected.size!.width / 150) }; event.currentTarget.setPointerCapture(event.pointerId); }}
           onPointerMove={event => { if (!stroke.current || !selected.size || stroke.current.points.length >= 1000) return; stroke.current.points.push(imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), selected.size)); redraw(stroke.current); }}
           onPointerUp={() => { if (stroke.current) { const completed = stroke.current; stroke.current = null; setStrokes(values => [...values, completed]); } }} onPointerCancel={() => { stroke.current = null; redraw(); }} />
       </div>}
-      <div className="button-row"><button type="button" className="primary-button" disabled={busy || !destination.trim()} onClick={() => void upload()}>{busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={uploadJob.cancelling} onClick={() => { generation.current++; if(busy){uploadJob.cancel();setUploaded('');setPrompt('');}else{setSelected(null);setUploaded('');setNotice('');} }}>{uploadJob.cancelling?t('uploadCancelling'):t('attachmentCancel')}</button></div>
+      <div className="button-row"><button type="button" className="primary-button" disabled={busy || !destination.trim()} onClick={() => void upload()}>{busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={uploadJob.cancelling} onClick={() => { generation.current++; hostClipboard.clear();if(busy){uploadJob.cancel();setUploaded('');setPrompt('');}else{setSelected(null);setUploaded('');setNotice('');} }}>{uploadJob.cancelling?t('uploadCancelling'):t('attachmentCancel')}</button></div>
     </div>}
-    {uploaded && <div className="form-stack"><label>{t('attachmentHostPath')}<input readOnly value={shellPath(uploaded)} /></label><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button><label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></div>}
+    {uploaded && <div className="form-stack"><label>{t('attachmentHostPath')}<input readOnly value={shellPath(uploaded)} /></label><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button><div className="button-row"><button type="button" disabled={!hostClipboard.ready||busy} onClick={()=>{setError('');setNotice('');void hostClipboard.copy();}}>{hostClipboard.busy?t('attachmentHostCopying'):t('attachmentHostCopy')}</button>{hostClipboard.busy&&<button type="button" onClick={()=>hostClipboard.clear()}>{t('attachmentHostCancel')}</button>}</div><label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></div>}
   </section>;
 }

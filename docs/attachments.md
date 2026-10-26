@@ -80,3 +80,42 @@ SFTP fixtures exercise Windows-shaped replies; these are not real Windows-server
 acceptance. An absolute SFTP name does not prove the terminal shell sees the same
 filesystem namespace: independently chrooted SFTP/shell paths may differ. No
 mapping, immutable file identity or remote-filesystem race protection is claimed.
+
+## Explicit Mac-host clipboard
+
+After a successful attachment upload, **Copy raw path on Mac host** explicitly
+writes its raw canonical destination to the host clipboard. The existing Copy
+button separately copies shell-quoted text to this device's clipboard. Neither
+operation runs automatically, sends terminal input or changes the editable prompt.
+The host action uses only the original upload's verified SSH control connection
+and fixed `LC_CTYPE=UTF-8 exec /usr/bin/pbcopy`, passing the path through stdin.
+It never redirects to another active session or falls back to this device's
+clipboard. The host login must have access to the Mac clipboard; a missing tool,
+headless-login failure or unavailable clipboard is reported without discarding
+the uploaded path. Linux and Windows host tools remain an issue12 parity gap.
+
+Native eligibility is one bounded latest-upload receipt per SSH session, bound
+to its original upload ID, canonical path and access generation. Selecting or
+editing a source, starting another upload, cancelling, leaving Attachments or
+revoking that access abandons the exact old action. The original authority is
+never refreshed. The bounded native path metadata remains in memory until its
+receipt is cancelled/replaced or its session is dropped; it is not persisted.
+Files uploads keep their existing canonical-path callback behavior.
+
+One clipboard request per session is admitted at a time, including channel
+opening and retirement. The operation has a five-second absolute budget, followed
+by separately bounded channel cleanup. Cancelling revokes eligibility and closes
+the request as best effort. Bytes already delivered may still change the remote
+clipboard: cancellation does not undo that effect, and an unconfirmed result must
+not be interpreted as proof the clipboard stayed unchanged. Cancelling a completed
+upload remains an unknown/already-settled **file** outcome, even when it revokes
+clipboard eligibility. No remote pathname is removed.
+
+Native synthetic SSH peers verify fixed command/raw stdin, exact receipt/session
+binding, cancellation, ownership loss, late channel confirmation, retirement
+capacity and the absolute deadline. This is fake-helper protocol evidence, not
+Mac clipboard acceptance. The explicitly gated macOS Cargo test uses a temporary
+owned OpenSSH server and system pbcopy/pbpaste on a disposable CI runner; it is
+never intended to run against a user's clipboard. Its hosted execution is required
+before claiming actual Mac-host capability acceptance. SFTP/shell namespace
+identity and GUI-session clipboard availability remain host-specific limits.

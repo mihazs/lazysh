@@ -1,6 +1,10 @@
 {
   "extends": ["//"],
   "tasks": {
+    "test:host-clipboard": {
+      "cache": false,
+      "passThroughEnv": ["USER", "LAZYSH_TEST_OWNED_MAC_CLIPBOARD"]
+    },
     "build": { "cache": false },
     "test:parakeet-product": {
       "cache": false,

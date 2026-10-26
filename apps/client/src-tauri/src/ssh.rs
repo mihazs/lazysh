@@ -675,6 +675,7 @@ impl Drop for SshHandle {
 }
 pub(crate) struct Session {
     pub(crate) handle: Arc<SshHandle>,
+    pub(crate) clipboard: crate::host_clipboard::UploadSlot,
     pub(crate) access: AccessState,
     creation: AccessLease,
     adopted: std::sync::atomic::AtomicBool,
@@ -699,6 +700,7 @@ impl Session {
     ) -> Self {
         Self {
             handle,
+            clipboard: crate::host_clipboard::UploadSlot::default(),
             input,
             cancel,
             validate_size,
@@ -1349,12 +1351,14 @@ const OUTPUT_WINDOW: u32 = 256 * 1024;
 pub(crate) struct OwnedChannel {
     channel: Option<russh::Channel<client::Msg>>,
     closed: std::sync::atomic::AtomicBool,
+    retained: Option<Arc<dyn Send + Sync>>,
 }
 impl From<russh::Channel<client::Msg>> for OwnedChannel {
     fn from(channel: russh::Channel<client::Msg>) -> Self {
         Self {
             channel: Some(channel),
             closed: std::sync::atomic::AtomicBool::new(false),
+            retained: None,
         }
     }
 }
@@ -1370,6 +1374,9 @@ impl std::ops::DerefMut for OwnedChannel {
     }
 }
 impl OwnedChannel {
+    pub(crate) fn retain(&mut self, owner: Arc<dyn Send + Sync>) {
+        self.retained = Some(owner);
+    }
     pub(crate) fn into_stream(mut self) -> russh::ChannelStream<client::Msg> {
         // russh transfers this confirmed channel to ChannelCloseOnDrop.
         self.channel.take().unwrap().into_stream()
@@ -1387,7 +1394,9 @@ impl Drop for OwnedChannel {
     fn drop(&mut self) {
         if !self.closed.load(std::sync::atomic::Ordering::SeqCst) {
             if let Some(channel) = self.channel.take() {
+                let retained = self.retained.take();
                 tauri::async_runtime::spawn(async move {
+                    let _retained = retained;
                     let _ = tokio::time::timeout(Duration::from_secs(3), channel.close()).await;
                 });
             }
@@ -1423,11 +1432,35 @@ pub(crate) async fn open_owned_channel(
 ) -> Result<OwnedChannel> {
     open_owned(handle, lease, deadline, ChannelRequest::Session).await
 }
+pub(crate) async fn open_owned_channel_retained(
+    handle: &SshHandle,
+    lease: &AccessLease,
+    deadline: tokio::time::Instant,
+    retained: Arc<dyn Send + Sync>,
+) -> Result<OwnedChannel> {
+    open_owned_retained(
+        handle,
+        lease,
+        deadline,
+        ChannelRequest::Session,
+        Some(retained),
+    )
+    .await
+}
 pub(crate) async fn open_owned(
     handle: &SshHandle,
     lease: &AccessLease,
     deadline: tokio::time::Instant,
     request: ChannelRequest,
+) -> Result<OwnedChannel> {
+    open_owned_retained(handle, lease, deadline, request, None).await
+}
+async fn open_owned_retained(
+    handle: &SshHandle,
+    lease: &AccessLease,
+    deadline: tokio::time::Instant,
+    request: ChannelRequest,
+    mut retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<OwnedChannel> {
     lease.check()?;
     if tokio::time::Instant::now() >= deadline {
@@ -1449,7 +1482,11 @@ pub(crate) async fn open_owned(
         }
         let result = tokio::select! {biased;
             _=owner_gone.changed()=>return,
-            result=request.open(&transport)=>result.map(OwnedChannel::from).map_err(SshError::from),
+            result=request.open(&transport)=>result.map(|channel| {
+                let mut channel=OwnedChannel::from(channel);
+                if let Some(retained)=retained.take() { channel.retain(retained); }
+                channel
+            }).map_err(SshError::from),
         };
         // A rejected/stale/late result drops its already-close-owned channel here.
         let _ = original.with_current(|| {
@@ -2827,6 +2864,8 @@ async fn attach_tmux_inner(
 
 #[cfg(test)]
 mod tests {
+    #[path = "host_clipboard_fixture.rs"]
+    mod host_clipboard_fixture;
     use super::test_support::*;
     fn fixture_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();
@@ -3382,6 +3421,8 @@ mod tests {
 
     #[derive(Clone)]
     struct TestServer {
+        clipboard_mode: Arc<AtomicUsize>,
+        clipboard_eof: Arc<tokio::sync::Notify>,
         auth_attempts: Arc<AtomicUsize>,
         sizes: Arc<StdMutex<Vec<(u32, u32)>>>,
         reject_pty: bool,
@@ -3501,7 +3542,35 @@ mod tests {
             session: &mut server::Session,
         ) -> std::result::Result<(), Self::Error> {
             self.input_data.lock().unwrap().extend_from_slice(data);
-            session.data(channel, data.to_vec())?;
+            if self.clipboard_mode.load(Ordering::SeqCst) == 0 {
+                session.data(channel, data.to_vec())?;
+            }
+            Ok(())
+        }
+        async fn channel_eof(
+            &mut self,
+            channel: ChannelId,
+            session: &mut server::Session,
+        ) -> std::result::Result<(), Self::Error> {
+            let mode = self.clipboard_mode.load(Ordering::SeqCst);
+            if mode > 0 {
+                self.clipboard_eof.notify_one();
+                if mode != 2 {
+                    if mode == 3 {
+                        session.extended_data(
+                            channel,
+                            1,
+                            b"private clipboard diagnostic".to_vec(),
+                        )?;
+                    }
+                    if mode == 4 {
+                        session.data(channel, vec![b'x'; 5000])?;
+                    }
+                    session.exit_status_request(channel, if mode == 3 { 1 } else { 0 })?;
+                    session.eof(channel)?;
+                    session.close(channel)?;
+                }
+            }
             Ok(())
         }
         fn adjust_window(&mut self, _: ChannelId, current: u32) -> u32 {
@@ -3524,6 +3593,12 @@ mod tests {
                 .unwrap()
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
+            if self.clipboard_mode.load(Ordering::SeqCst) > 0
+                && text == crate::host_clipboard::COMMAND
+            {
+                self.executed.notify_one();
+                return Ok(());
+            }
             if self.tmux_metadata.load(Ordering::SeqCst) {
                 if let Some(start) = text.find("LAZYSH_ATTACH_") {
                     let marker = &text[start..start + 46];
@@ -3744,6 +3819,8 @@ mod tests {
             forward_agent: false,
         };
         let test_server = TestServer {
+            clipboard_mode: Arc::new(AtomicUsize::new(0)),
+            clipboard_eof: Arc::new(tokio::sync::Notify::new()),
             auth_attempts: Arc::new(AtomicUsize::new(0)),
             sizes: Arc::new(StdMutex::new(Vec::new())),
             reject_pty,
@@ -4794,7 +4871,8 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 list_hosts,
                 crate::attachment_upload::upload_cancel,
-                crate::attachment_upload::upload_reserve
+                crate::attachment_upload::upload_reserve,
+                crate::host_clipboard::host_clipboard_copy
             ])
             .build(tauri::generate_context!(test = true))
             .unwrap();
@@ -4854,10 +4932,20 @@ mod tests {
             error["kind"], "disconnected",
             "the real reserve handler must return its session error, not an ACL denial: {error}"
         );
+        let error = tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "host_clipboard_copy", cancel.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error["kind"], "disconnected",
+            "the real clipboard handler must be reached, not denied by ACL"
+        );
         for (command, body) in [
             ("list_hosts", serde_json::json!({})),
-            ("upload_cancel", cancel),
+            ("upload_cancel", cancel.clone()),
             ("upload_reserve", reserve),
+            ("host_clipboard_copy", cancel.clone()),
         ] {
             assert!(tauri::test::get_ipc_response(
                 &other,
@@ -4878,25 +4966,37 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local OpenSSH sshd; run explicitly for interoperability"]
     async fn openssh_sftp_and_command_interoperability() {
-        openssh_interoperability(false, false).await;
+        openssh_interoperability(false, false, false).await;
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     #[ignore = "requires local OpenSSH sshd and official mosh-server; run explicitly for interoperability"]
     async fn openssh_mosh_bootstrap_and_control_interoperability() {
-        openssh_interoperability(true, false).await;
+        openssh_interoperability(true, false, false).await;
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "requires OpenSSH and official ET_SERVER_BIN/ET_TERMINAL_BIN; run explicitly"]
     async fn openssh_et_bootstrap_and_control_interoperability() {
-        openssh_interoperability(false, true).await;
+        openssh_interoperability(false, true, false).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "writes only an explicitly owned CI Mac pasteboard over temporary OpenSSH"]
+    async fn macos_host_clipboard_roundtrip() {
+        assert_eq!(
+            std::env::var("LAZYSH_TEST_OWNED_MAC_CLIPBOARD").as_deref(),
+            Ok("1"),
+            "Requires an explicitly owned disposable Mac clipboard, never a user's clipboard"
+        );
+        openssh_interoperability(false, false, true).await;
     }
 
     #[cfg(unix)]
-    async fn openssh_interoperability(mosh: bool, et: bool) {
+    async fn openssh_interoperability(mosh: bool, et: bool, mac_clipboard: bool) {
         use std::os::unix::fs::PermissionsExt;
         use tauri::Manager;
         struct Process(std::process::Child);
@@ -5233,9 +5333,8 @@ mod tests {
             .unwrap()
             .into_inner()
             .unwrap();
-            let expected_destination = dir
-                .path()
-                .join(relative_name)
+            let expected_destination = fs::canonicalize(dir.path().join(relative_name))
+                .unwrap()
                 .to_string_lossy()
                 .into_owned();
             assert_eq!(
@@ -5263,6 +5362,92 @@ mod tests {
                 .unwrap(),
                 "relative fixture"
             );
+        }
+        if mac_clipboard {
+            #[cfg(not(target_os = "macos"))]
+            panic!("system Mac clipboard acceptance requires macOS");
+            #[cfg(target_os = "macos")]
+            {
+                use std::io::Read;
+                let destination = dir
+                    .path()
+                    .join("--clipboard 世界'$(literal).txt")
+                    .to_string_lossy()
+                    .into_owned();
+                let data = b"owned Mac clipboard fixture".to_vec();
+                let reserved = crate::attachment_upload::upload_reserve(
+                    access_lease(),
+                    app.state(),
+                    id.clone(),
+                    data.len(),
+                )
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap();
+                let uploaded = crate::attachment_upload::upload_file(
+                    access_lease(),
+                    app.state(),
+                    id.clone(),
+                    reserved.upload_id.clone(),
+                    destination,
+                    data,
+                )
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap();
+                crate::host_clipboard::host_clipboard_copy(
+                    access_lease(),
+                    app.state(),
+                    id.clone(),
+                    reserved.upload_id,
+                )
+                .await
+                .unwrap()
+                .into_inner()
+                .unwrap();
+                // The opt-in test above is CI-owned only. Read back only our own
+                // synthetic value, never print unexpected clipboard contents.
+                let mut readback = Process(
+                    std::process::Command::new("/usr/bin/pbpaste")
+                        .env("LC_CTYPE", "UTF-8")
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .unwrap(),
+                );
+                let stdout = readback.0.stdout.take().unwrap();
+                let bytes = std::thread::spawn(move || {
+                    let mut bytes = Vec::new();
+                    stdout.take(4097).read_to_end(&mut bytes).unwrap();
+                    bytes
+                });
+                timeout(Duration::from_secs(5), async {
+                    loop {
+                        if let Some(status) = readback.0.try_wait().unwrap() {
+                            assert!(
+                                status.success(),
+                                "owned Mac clipboard readback did not succeed"
+                            );
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("owned Mac clipboard readback deadline");
+                let bytes = bytes.join().unwrap();
+                assert!(
+                    bytes == uploaded.path.as_bytes(),
+                    "owned Mac clipboard must contain exact raw canonical path (observed {} bytes)",
+                    bytes.len()
+                );
+                assert_eq!(
+                    fs::read(&uploaded.path).unwrap(),
+                    b"owned Mac clipboard fixture"
+                );
+            }
         }
         let upload = dir
             .path()

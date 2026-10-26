@@ -20,6 +20,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
     "test:resume-policy": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib app_lock:: -- --nocapture",
     "test:openssh": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_sftp_and_command_interoperability -- --ignored",
+    "test:host-clipboard": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib ssh::tests::macos_host_clipboard_roundtrip -- --ignored --exact --nocapture",
     "test:local": "cargo test --manifest-path src-tauri/Cargo.toml --locked local:: -- --nocapture",
     "test:mosh": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_mosh_bootstrap_and_control_interoperability -- --ignored",
     "test:et": "cargo test --manifest-path src-tauri/Cargo.toml --locked openssh_et_bootstrap_and_control_interoperability -- --ignored",
