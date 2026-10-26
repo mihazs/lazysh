@@ -111,8 +111,12 @@ fn take_frame(bytes: &mut Vec<u8>, marker: &str) -> Option<Identity> {
     }
     None
 }
-pub(crate) fn attach_command(name: &str, marker: &str) -> String {
-    attach_with_prefix(name, marker, "tmux")
+pub(crate) fn attach_command(
+    name: &str,
+    marker: &str,
+    server: &crate::tmux_server::TmuxServer,
+) -> String {
+    attach_with_prefix(name, marker, &server.prefix())
 }
 pub(crate) fn attach_with_prefix(name: &str, marker: &str, prefix: &str) -> String {
     // Keep POSIX metadata syntax inside sh rather than the user's login shell.
@@ -404,13 +408,15 @@ pub(crate) async fn prepare(
     handle: &Arc<SshHandle>,
     identity: Identity,
     name: &str,
+    server: &crate::tmux_server::TmuxServer,
     lease: &AccessLease,
 ) -> Option<Control> {
     prepare_command(
         handle,
         identity,
         format!(
-            "tmux -u -C attach-session -f no-output,ignore-size -t {}",
+            "{} -C attach-session -f no-output,ignore-size -t {}",
+            server.prefix(),
             crate::multiplexer::tmux_arg(&format!("={name}"))
         ),
         lease,

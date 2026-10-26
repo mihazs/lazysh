@@ -29,6 +29,12 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
+        let tmux = std::env::var("LAZYSH_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
+        let tmux_path = std::path::Path::new(&tmux)
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(|path| format!("{}:/usr/bin:/bin", path.display()))
+            .unwrap_or_else(|| "/usr/bin:/bin".into());
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host_key = fixture_key();
         let user_key = fixture_key();
@@ -47,7 +53,7 @@ impl Fixture {
         let config = dir.path().join("sshd_config");
         // Use isolated HOME/ZDOTDIR; identity comes from the owned exec frame,
         // never a user prompt, process-list timing or guessed newest client.
-        fs::write(&config, format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nLogLevel ERROR\nSetEnv HOME={} ZDOTDIR={}\n", host_file.display(), authorized.display(), dir.path().join("sshd.pid").display(),dir.path().display(),dir.path().display())).unwrap();
+        fs::write(&config, format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nLogLevel ERROR\nSetEnv HOME={} ZDOTDIR={} TMUX_TMPDIR={} PATH={}\n", host_file.display(), authorized.display(), dir.path().join("sshd.pid").display(),dir.path().display(),dir.path().display(),dir.path().display(),tmux_path)).unwrap();
         let sshd = Command::new("sh")
             .args(["-c", "command -v sshd"])
             .output()
@@ -120,7 +126,6 @@ impl Fixture {
             .await
             .unwrap(),
         );
-        let tmux = std::env::var("LAZYSH_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
         Self {
             dir,
             daemon,
@@ -920,4 +925,353 @@ async fn malformed_stream_probe() {
             "malformed/partial stream must never be reused"
         );
     }
+}
+
+/// Direct argv cleanup intentionally does not reuse the production selector.
+struct NamedServers<'a> {
+    fixture: &'a Fixture,
+    names: Vec<String>,
+}
+impl NamedServers<'_> {
+    fn direct(&self, name: &str, args: &[&str]) -> String {
+        lazysh_common::test_support::successful_output(
+            Command::new(&self.fixture.tmux)
+                .args(["-f", "/dev/null", "-L", name])
+                .args(args)
+                .env("TMUX_TMPDIR", self.fixture.dir.path())
+                .env_remove("TMUX")
+                .env("HOME", self.fixture.dir.path())
+                .env("SHELL", "/bin/sh"),
+        )
+        .trim_end_matches('\n')
+        .to_owned()
+    }
+}
+impl Drop for NamedServers<'_> {
+    fn drop(&mut self) {
+        for name in &self.names {
+            let _ = Command::new(&self.fixture.tmux)
+                .args(["-L", name, "kill-server"])
+                .env("TMUX_TMPDIR", self.fixture.dir.path())
+                .env_remove("TMUX")
+                .output();
+        }
+    }
+}
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux; two named-server context acceptance"]
+async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
+    use crate::{
+        multiplexer::{self, TmuxAction},
+        tmux_server::TmuxServer,
+    };
+    use tauri::Manager;
+    let f = Fixture::new().await;
+    // If quoting regresses, substitution changes the socket label without writing outside the fixture.
+    let hostile = "世界 '$(printf NO);";
+    let servers = NamedServers {
+        fixture: &f,
+        names: vec!["default".into(), hostile.into(), "other".into()],
+    };
+    for name in &servers.names {
+        assert_eq!(
+            servers.direct(
+                name,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "same",
+                    "-P",
+                    "-F",
+                    "#{session_id}:#{window_id}:#{pane_id}",
+                    "sleep 120"
+                ]
+            ),
+            "$0:@0:%0"
+        );
+    }
+    let state = AppState::new(f.dir.path().join("named-config")).unwrap();
+    let app = tauri::test::mock_app();
+    app.manage(state.clone());
+    let authority = AccessState::disabled();
+    let lease = authority.lease(None).unwrap();
+    let (channel, initial) =
+        open_terminal_for(&f.handle, &lease, 80, 24, Some("exec sleep 120".into()))
+            .await
+            .unwrap();
+    let parent = spawn_terminal(
+        &state,
+        lease.clone(),
+        f.handle.clone(),
+        channel,
+        initial,
+        Channel::new(|_| Ok(())),
+    )
+    .await
+    .unwrap();
+    let neutral = state.session(&parent.session_id).await.unwrap();
+    let inherited = format!("{}/tmux-{}/other,1,0", f.dir.path().display(), unsafe {
+        libc::geteuid()
+    });
+    let isolated_default = exec_for_access(
+        &neutral,
+        format!(
+            "TMUX={} {} display-message -p -t '$0' '#{{socket_path}}'",
+            quote(&inherited),
+            TmuxServer::Default.prefix()
+        ),
+        &lease,
+    )
+    .await
+    .unwrap();
+    assert!(
+        isolated_default.trim_end().ends_with("/default"),
+        "{isolated_default}"
+    );
+    let child = attach_tmux(
+        lease.clone(),
+        app.state(),
+        parent.session_id.clone(),
+        Some(hostile.into()),
+        "same".into(),
+        80,
+        24,
+        Channel::new(|_| Ok(())),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let native = state.session(&child.session_id).await.unwrap();
+    assert_eq!(
+        TmuxServer::for_session(&native, None).unwrap(),
+        TmuxServer::parse(Some(hostile)).unwrap()
+    );
+    assert!(TmuxServer::for_session(&native, Some("other")).is_err());
+    for (name, expected) in [
+        (hostile, "selected"),
+        ("other", "same"),
+        ("default", "same"),
+    ] {
+        if name == hostile {
+            multiplexer::tmux_action(
+                app.state(),
+                child.session_id.clone(),
+                TmuxAction::RenameSession {
+                    target: "$0".into(),
+                    name: "selected".into(),
+                },
+                None,
+                lease.clone(),
+            )
+            .await
+            .unwrap();
+            multiplexer::tmux_action(
+                app.state(),
+                child.session_id.clone(),
+                TmuxAction::SplitPane {
+                    target: "%0".into(),
+                    horizontal: true,
+                    directory: f.dir.path().to_str().unwrap().into(),
+                },
+                Some(hostile.into()),
+                lease.clone(),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            servers.direct(
+                name,
+                &["display-message", "-p", "-t", "$0", "#{session_name}"]
+            ),
+            expected
+        );
+        assert_eq!(
+            servers
+                .direct(name, &["list-panes", "-a", "-F", "#{pane_id}"])
+                .lines()
+                .count(),
+            if name == hostile { 2 } else { 1 }
+        );
+    }
+    let tree =
+        multiplexer::multiplexer_tree(app.state(), child.session_id.clone(), None, lease.clone())
+            .await
+            .unwrap_or_else(|error| panic!("tree: {:?}", error.into_inner().unwrap()))
+            .into_inner()
+            .unwrap();
+    assert_eq!(
+        serde_json::to_value(tree).unwrap()["sessions"][0]["name"],
+        "selected"
+    );
+    assert!(multiplexer::tmux_action(
+        app.state(),
+        child.session_id.clone(),
+        TmuxAction::SelectPane {
+            target: "%0".into()
+        },
+        Some("default".into()),
+        lease.clone()
+    )
+    .await
+    .is_err());
+    let snapshot =
+        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+    let snapshot = serde_json::to_value(snapshot).unwrap();
+    assert_eq!(snapshot["sessions"][0]["name"], "selected");
+    multiplexer::tmux_action(
+        app.state(),
+        child.session_id.clone(),
+        TmuxAction::CreateWindow {
+            target: "$0".into(),
+            name: "added".into(),
+            directory: f.dir.path().to_str().unwrap().into(),
+        },
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap();
+    multiplexer::tmux_action(
+        app.state(),
+        child.session_id.clone(),
+        TmuxAction::CreateSession {
+            name: "destination".into(),
+            directory: f.dir.path().to_str().unwrap().into(),
+        },
+        None,
+        lease.clone(),
+    )
+    .await
+    .unwrap();
+    let navigation = serde_json::to_value(
+        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    let destination = navigation["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "destination")
+        .unwrap();
+    let jumped = crate::tmux_jump::tmux_jump(
+        lease.clone(),
+        app.state(),
+        child.session_id.clone(),
+        navigation["generation"].as_str().unwrap().into(),
+        destination["id"].as_str().unwrap().into(),
+        destination["windows"][0]["id"].as_str().unwrap().into(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(jumped).unwrap()["current"]["sessionId"],
+        destination["id"]
+    );
+    assert_eq!(
+        servers
+            .direct("other", &["list-windows", "-a", "-F", "#{window_id}"])
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        servers
+            .direct("default", &["list-windows", "-a", "-F", "#{window_id}"])
+            .lines()
+            .count(),
+        1
+    );
+    // Reattachment from the neutral parent models restoration to the exact server/name.
+    let restored = attach_tmux(
+        lease.clone(),
+        app.state(),
+        parent.session_id.clone(),
+        Some(hostile.into()),
+        "selected".into(),
+        80,
+        24,
+        Channel::new(|_| Ok(())),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let binding = serde_json::to_value(
+        crate::tmux_jump::tmux_jump_snapshot(
+            lease.clone(),
+            app.state(),
+            restored.session_id.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(binding["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["name"] == "selected"));
+    // Old retained control must never follow a replacement server with reused IDs.
+    let server_pid: i32 = servers
+        .direct(hostile, &["display-message", "-p", "#{pid}"])
+        .parse()
+        .unwrap();
+    servers.direct(hostile, &["kill-server"]);
+    timeout(BOUND, async {
+        loop {
+            if unsafe { libc::kill(server_pid, 0) } == -1 {
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::ESRCH)
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the owned old tmux server did not exit before replacement");
+    servers.direct(
+        hostile,
+        &["new-session", "-d", "-s", "replacement", "sleep 120"],
+    );
+    assert!(crate::tmux_jump::tmux_jump_snapshot(
+        lease.clone(),
+        app.state(),
+        child.session_id.clone()
+    )
+    .await
+    .is_err());
+    for id in [child.session_id, restored.session_id, parent.session_id] {
+        disconnect(app.state(), id).await.unwrap();
+    }
+    assert_eq!(
+        servers.direct(
+            "other",
+            &["display-message", "-p", "-t", "$0", "#{session_name}"]
+        ),
+        "same"
+    );
+    assert_eq!(
+        servers.direct(
+            "default",
+            &["display-message", "-p", "-t", "$0", "#{session_name}"]
+        ),
+        "same"
+    );
 }

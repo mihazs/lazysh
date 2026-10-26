@@ -120,3 +120,15 @@ it('persists local intent without inventing an SSH host or retaining output',()=
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
   }
 });
+it('preserves named server identity with the exact restored session and rejects dropped or invalid contexts',()=>{
+  const attached={kind:'tmux' as const,name:'label',restoreName:'actual',tmuxServer:"世界 '$(touch NO);"};
+  saveWorkspace([{hostId:'host',attached}]);
+  expect(readWorkspace()).toEqual([{hostId:'host',attached:{kind:'tmux',name:'actual',tmuxServer:attached.tmuxServer}}]);
+  for(const item of [
+    {...attached,tmuxServer:'/tmp/socket'}, {...attached,tmuxServer:'.'},
+    {...attached,tmuxServer:'世'.repeat(22)}, {...attached,kind:'herdr' as const},
+  ]) {
+    saveWorkspace([{hostId:'host',attached:item}]);expect(readWorkspace()).toEqual([]);
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'host',attached:item}]));expect(readWorkspace()).toEqual([]);
+  }
+});

@@ -26,7 +26,11 @@ pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<Strin
     text(value, 200)?;
     Ok(match kind {
         MultiplexerKind::Tmux => {
-            format!("tmux attach-session -t {}", tmux_arg(&format!("={value}")))
+            format!(
+                "{} attach-session -t {}",
+                crate::tmux_server::TmuxServer::Default.prefix(),
+                tmux_arg(&format!("={value}"))
+            )
         }
         MultiplexerKind::Herdr => format!("herdr --session {}", quote(value)),
         MultiplexerKind::Zellij => {
@@ -177,8 +181,9 @@ fn name(value: &str) -> Result<()> {
     }
     Ok(())
 }
-fn discovery_command() -> String {
-    format!("for tool in tmux herdr zellij; do if command -v \"$tool\" >/dev/null 2>&1; then printf '%s\\t1\\n' \"$tool\"; else printf '%s\\t0\\n' \"$tool\"; fi; done; if command -v tmux >/dev/null 2>&1 && tmux has-session 2>/dev/null; then tmux list-panes -a -F {}; fi", quote(PANE_FORMAT))
+fn discovery_command(server: &crate::tmux_server::TmuxServer) -> String {
+    let tmux = server.prefix();
+    format!("for tool in tmux herdr zellij; do if command -v \"$tool\" >/dev/null 2>&1; then printf '%s\\t1\\n' \"$tool\"; else printf '%s\\t0\\n' \"$tool\"; fi; done; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", quote(PANE_FORMAT))
 }
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
     let mut lines = output.lines();
@@ -310,7 +315,14 @@ pub enum TmuxAction {
         target: String,
     },
 }
+#[cfg(test)]
 fn action_command(action: &TmuxAction) -> Result<String> {
+    action_command_for(action, &crate::tmux_server::TmuxServer::Default)
+}
+pub(crate) fn action_command_for(
+    action: &TmuxAction,
+    server: &crate::tmux_server::TmuxServer,
+) -> Result<String> {
     let quote = |value: &str| tmux_arg(&value.replace('#', "##"));
     let directory = |value: &str| -> Result<String> {
         text(value, 4096)?;
@@ -380,19 +392,24 @@ fn action_command(action: &TmuxAction) -> Result<String> {
             format!("resize-pane -Z -t {}", quote(target))
         }
     };
-    Ok(format!("tmux {command}"))
+    Ok(format!("{} {command}", server.prefix()))
 }
 
 #[tauri::command]
 pub async fn multiplexer_tree(
     state: State<'_, AppState>,
     session_id: String,
+    tmux_server: Option<String>,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<MultiplexerTree> {
     access
         .run(async {
             let session = state.session(&session_id).await?;
-            parse_tree(&crate::ssh::exec_for_access(&session, discovery_command(), &access).await?)
+            let server =
+                crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
+            let output =
+                crate::ssh::exec_for_access(&session, discovery_command(&server), &access).await?;
+            parse_tree(&output)
         })
         .await
 }
@@ -414,15 +431,18 @@ pub async fn tmux_action(
     state: State<'_, AppState>,
     session_id: String,
     action: TmuxAction,
+    tmux_server: Option<String>,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<()> {
     access
-        .run(crate::multiplexer::execute_action(
-            &state,
-            &access,
-            &session_id,
-            action_command(&action),
-        ))
+        .run(async {
+            let session = state.session(&session_id).await?;
+            let server =
+                crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
+            let command = action_command_for(&action, &server)?;
+            crate::ssh::exec_for_access(&session, command, &access).await?;
+            Ok(())
+        })
         .await
 }
 
@@ -466,7 +486,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             command,
-            "tmux new-session -d -s 'a'\\''$(touch nope)' -c '/work/##(touch nope)'"
+            "tmux -u -L 'default' new-session -d -s 'a'\\''$(touch nope)' -c '/work/##(touch nope)'"
         );
     }
     #[test]

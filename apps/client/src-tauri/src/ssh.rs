@@ -614,6 +614,7 @@ pub(crate) struct Session {
     pub(crate) cancel: watch::Sender<bool>,
     validate_size: fn(u32, u32) -> Result<()>,
     pub(crate) tmux: StdMutex<Option<crate::tmux_jump::Binding>>,
+    pub(crate) tmux_server: StdMutex<Option<crate::tmux_server::TmuxServer>>,
 }
 impl Session {
     fn new(
@@ -629,6 +630,7 @@ impl Session {
             cancel,
             validate_size,
             tmux: StdMutex::new(None),
+            tmux_server: StdMutex::new(None),
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
             renderer_gone: watch::channel(false).0,
@@ -2433,11 +2435,13 @@ pub async fn list_multiplexer_sessions(
 
     state: State<'_, AppState>,
     session_id: String,
+    tmux_server: Option<String>,
 ) -> AccessResult<Vec<MuxSession>> {
     lease.run(async {
 
     let session = state.session(&session_id).await?;
-    let text=exec(&session, &lease,"tmux list-sessions -F '#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}'".into()).await?;
+    let server = crate::tmux_server::TmuxServer::for_session(&session, tmux_server.as_deref())?;
+    let text=exec(&session, &lease,format!("{} list-sessions -F '#{{session_id}}\t#{{session_name}}\t#{{session_windows}}\t#{{session_attached}}'", server.prefix())).await?;
     Ok(text
         .lines()
         .filter_map(|line| {
@@ -2456,11 +2460,13 @@ pub async fn list_multiplexer_sessions(
     }).await
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn attach_tmux(
     lease: AccessLease,
 
     state: State<'_, AppState>,
     session_id: String,
+    tmux_server: Option<String>,
     name: String,
     cols: u32,
     rows: u32,
@@ -2468,7 +2474,17 @@ pub async fn attach_tmux(
 ) -> AccessResult<Connected> {
     lease
         .run(async {
-            attach_tmux_inner(&state, lease.clone(), session_id, name, cols, rows, events).await
+            attach_tmux_inner(
+                &state,
+                lease.clone(),
+                session_id,
+                tmux_server,
+                name,
+                cols,
+                rows,
+                events,
+            )
+            .await
         })
         .await
 }
@@ -2479,6 +2495,7 @@ pub async fn attach_multiplexer(
 
     state: State<'_, AppState>,
     session_id: String,
+    tmux_server: Option<String>,
     kind: crate::multiplexer::MultiplexerKind,
     name: String,
     cols: u32,
@@ -2494,12 +2511,19 @@ pub async fn attach_multiplexer(
                     &state,
                     lease.clone(),
                     session_id,
+                    tmux_server,
                     name,
                     cols,
                     rows,
                     events,
                 )
                 .await;
+            }
+            if tmux_server.is_some() {
+                return Err(SshError::new(
+                    "invalid_tmux_server",
+                    "tmux server context is only valid for tmux",
+                ));
             }
             check_size(cols, rows)?;
             let command = crate::multiplexer::attach_command(kind, &name)?;
@@ -2518,10 +2542,12 @@ pub async fn attach_multiplexer(
         })
         .await
 }
+#[allow(clippy::too_many_arguments)]
 async fn attach_tmux_inner(
     state: &AppState,
     creation: AccessLease,
     session_id: String,
+    tmux_server: Option<String>,
     name: String,
     cols: u32,
     rows: u32,
@@ -2535,14 +2561,15 @@ async fn attach_tmux_inner(
         ));
     }
     let parent = state.session(&session_id).await?;
+    let server = crate::tmux_server::TmuxServer::parse(tmux_server.as_deref())?;
     let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
-    let command = crate::tmux_jump::attach_command(&name, &marker);
+    let command = crate::tmux_jump::attach_command(&name, &marker, &server);
     let (mut channel, mut initial) =
         open_terminal_for(&parent.handle, &creation, cols, rows, Some(command)).await?;
     let identity = crate::tmux_jump::handshake(&mut channel, &mut initial, &marker).await;
     let control = match identity {
         Some(identity) => {
-            crate::tmux_jump::prepare(&parent.handle, identity, &name, &creation).await
+            crate::tmux_jump::prepare(&parent.handle, identity, &name, &server, &creation).await
         }
         None => None,
     };
@@ -2555,8 +2582,12 @@ async fn attach_tmux_inner(
         events,
     )
     .await?;
+    let child = state.session(&connected.session_id).await?;
+    *child
+        .tmux_server
+        .lock()
+        .map_err(|_| SshError::new("tmux_unavailable", "Cannot bind tmux server"))? = Some(server);
     if let Some(control) = control {
-        let child = state.session(&connected.session_id).await?;
         *child
             .tmux
             .lock()
@@ -3418,6 +3449,7 @@ mod tests {
                     &worker_state,
                     creation.clone(),
                     parent_id,
+                    None,
                     "owned".into(),
                     80,
                     24,
@@ -3817,6 +3849,7 @@ mod tests {
             access_lease(),
             app.state(),
             parent.session_id.clone(),
+            None,
             crate::multiplexer::MultiplexerKind::Tmux,
             "safe'name;touch /tmp/nope".into(),
             80,
@@ -3833,7 +3866,7 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert!(commands[0].starts_with("exec sh -c 'printf "));
         assert!(commands[0].contains("LAZYSH_ATTACH_"));
-        assert!(commands[0].contains("; exec tmux attach-session -t "));
+        assert!(commands[0].contains(r"; exec tmux -u -L '\''default'\'' attach-session -t "));
         assert!(commands[0].contains("name;touch /tmp/nope"));
         assert!(server.input_data.lock().unwrap().is_empty());
         let child = state.session(&child.session_id).await.unwrap();
