@@ -1237,38 +1237,80 @@ mod tests {
     async fn directory_launch_conpty_records_its_actual_default_shell_working_directory() {
         let (base, selected, mut command) = directory_fixture("selected-workspace");
         command.env("USERPROFILE", base.path());
+        let report = base.path().join("lazysh-working-directory.txt");
+        command.env("LAZYSH_CWD_REPORT", &report);
+        let shell: String = command.get_shell().chars().take(512).collect();
         let state = LocalState::default();
         let (event, mut rx) = events();
         let connected = desktop::start(&state, command, 240, 24, event)
             .await
             .unwrap();
-        desktop::write(
+        let write = desktop::write(
             &state,
             &connected.session_id,
-            "cd > lazysh-working-directory.txt\r\n".into(),
+            "cd > \"%LAZYSH_CWD_REPORT%\"\r\n".into(),
             access_lease(),
-        )
-        .unwrap();
+        );
+        let mut output = Vec::new();
+        let mut file_state = String::from("not inspected");
+        let mut saw_closed = false;
         let observed = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if let Ok(text) =
-                    tokio::fs::read_to_string(selected.join("lazysh-working-directory.txt")).await
-                {
-                    if !text.trim().is_empty() {
-                        break std::path::PathBuf::from(text.trim()).canonicalize();
+                // Only this owned fixture's PTY, bounded independently of its deadline.
+                for _ in 0..32 {
+                    let Ok(event) = rx.try_recv() else {
+                        break;
+                    };
+                    saw_closed |= event["type"] == "closed";
+                    if let Some(data) = event["data"].as_array() {
+                        output.extend(
+                            data.iter()
+                                .take((16 * 1024usize).saturating_sub(output.len()))
+                                .filter_map(|value| value.as_u64().map(|value| value as u8)),
+                        );
                     }
+                }
+                match tokio::fs::File::open(&report).await {
+                    Ok(file) => {
+                        use tokio::io::AsyncReadExt;
+                        let mut bytes = Vec::new();
+                        let result = file.take(8193).read_to_end(&mut bytes).await;
+                        file_state = format!("read={result:?}; bytes={}", bytes.len());
+                        if result.is_ok() && bytes.len() <= 8192 {
+                            if let Ok(text) = String::from_utf8(bytes) {
+                                if !text.trim().is_empty() {
+                                    break std::path::PathBuf::from(text.trim()).canonicalize();
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => file_state = format!("open={error}"),
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
         .await;
         desktop::disconnect(&state, &connected.session_id);
-        closed(&mut rx).await;
+        if !saw_closed {
+            closed(&mut rx).await;
+        }
+        // Cleanup must finish even when write, observation or cwd equality fails.
+        let diagnostic = format!(
+            "shell={shell:?}; configured_cwd={selected:?}; expected_file={file_state}; owned_pty={:?}",
+            String::from_utf8_lossy(&output)
+        );
+        assert!(
+            write.is_ok(),
+            "owned shell write failed: {write:?}; {diagnostic}"
+        );
         assert_eq!(
             observed
-                .expect("the chosen shell did not report its cwd")
-                .unwrap(),
-            selected
+                .expect(&format!(
+                    "the chosen shell did not report its cwd; {diagnostic}"
+                ))
+                .expect(&diagnostic),
+            selected,
+            "{diagnostic}"
         );
     }
     #[cfg(unix)]

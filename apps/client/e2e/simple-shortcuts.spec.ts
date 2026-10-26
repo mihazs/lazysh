@@ -7,6 +7,7 @@ async function fixture(page:Page) {
     window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
     Object.defineProperty(window,'isTauri',{value:true});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
+      if (command==='desktop_launch_read') return {directoryReceipt:null,notice:null};
       if (command==='ui_locale_status') return {nativeAuthority:false};
       if (command==='app_lock_status') return {initialized:true,supported:false,reason:'Synthetic shortcut access fixture.',enabled:false,locked:false,generation:'0'};
       if (command==='app_lock_ready' || command==='adopt_session') return;
