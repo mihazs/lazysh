@@ -2,16 +2,20 @@
 import {beforeEach, afterEach, expect, it, vi} from 'vitest';
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {invoke, isTauri} from '@tauri-apps/api/core';
+import {listen} from '@tauri-apps/api/event';
 import {cleanupNativeMocks} from './test/nativeCoreMock';
 import {accessSnapshot, applyAccessStatus} from './access';
 import KeepAwakeControl, {boardAwakeKey, parseKeepAwakeStatus} from './KeepAwakeControl';
 vi.mock('@tauri-apps/api/core', async original=>({...await (await import('./test/nativeCoreMock')).mockNativeCore(original),isTauri:vi.fn()}));
+vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn()}));
+let nativeLoss:(payload:unknown)=>void;
 function authority(locked=false,enabled=true) {
   applyAccessStatus({initialized:true,supported:true,enabled,locked,reason:'fixture',
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),...(locked?{}:{nonce:'b'.repeat(64)})});
 }
 beforeEach(()=>{
   authority();vi.mocked(isTauri).mockReturnValue(true);
+  vi.mocked(listen).mockImplementation(async(_name,handler)=>{nativeLoss=payload=>handler({payload} as never);return()=>{};});
   vi.spyOn(document,'hasFocus').mockReturnValue(true);
   vi.spyOn(document,'visibilityState','get').mockReturnValue('visible');
 });
@@ -49,7 +53,7 @@ it('defaults off, strictly parses the opt-in, and never acquires from metadata a
 });
 it('acquires only on opt-in and releases the exact ticket on disabling',async()=>{
   const native=backend();render(<KeepAwakeControl sessionId="a"/>);await optIn();
-  expect(await screen.findByText('Native display keep-awake is active.')).toBeTruthy();
+  expect(await screen.findByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
   const owner=native.active();expect(owner).toBeTruthy();expect(localStorage.getItem(boardAwakeKey)).toBe('true');
   fireEvent.click(toggle());await waitFor(()=>expect(native.active()).toBeUndefined());
   expect(invoke).toHaveBeenCalledWith('board_keep_awake_release',{request:owner});
@@ -58,7 +62,7 @@ it('acquires only on opt-in and releases the exact ticket on disabling',async()=
 for(const action of ['background','blur','unmount'] as const) {
   it(`releases native ownership on ${action} without changing agent or network lifetimes`,async()=>{
     const native=backend();localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="a"/>);
-    await screen.findByText('Native display keep-awake is active.');const owner=native.active();
+    await screen.findByText('This board owns an acknowledged idle-inhibition request.');const owner=native.active();
     if(action==='unmount')view.unmount();
     else if(action==='blur')fireEvent(window,new Event('blur'));
     else {vi.spyOn(document,'visibilityState','get').mockReturnValue('hidden');fireEvent(document,new Event('visibilitychange'));}
@@ -69,14 +73,15 @@ for(const action of ['background','blur','unmount'] as const) {
 }
 it('changes board session ownership without letting old cleanup release the newer owner',async()=>{
   const native=backend();localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="a"/>);
-  await screen.findByText('Native display keep-awake is active.');const first=native.active();view.rerender(<KeepAwakeControl sessionId="b"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const first=native.active();view.rerender(<KeepAwakeControl sessionId="b"/>);
   await waitFor(()=>expect(native.active()?.ticket).toBeGreaterThan(first!.ticket));
   expect(invoke).toHaveBeenCalledWith('board_keep_awake_release',{request:first});
 });
 it('never acquires when an old status response arrives after leaving the board',async()=>{
   const native=backend();let finish!:(value:unknown)=>void;
   vi.mocked(invoke).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}) as never);
-  localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="a"/>);view.unmount();
+  localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="a"/>);
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));view.unmount();
   await act(async()=>finish(native.status(1)));
   expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='board_keep_awake_acquire')).toBe(false);
 });
@@ -91,15 +96,15 @@ it('fences a delayed native acquire with release when disabled before confirmati
   render(<KeepAwakeControl sessionId="a"/>);await optIn();await waitFor(()=>expect(finish).toBeTypeOf('function'));
   fireEvent.click(toggle());await waitFor(()=>expect(invoke).toHaveBeenCalledWith('board_keep_awake_release',{request:expect.anything()}));
   await act(async()=>finish());expect(native.active()).toBeUndefined();
-  expect(screen.queryByText('Native display keep-awake is active.')).toBeNull();
+  expect(screen.queryByText('This board owns an acknowledged idle-inhibition request.')).toBeNull();
 });
 it('releases after access revocation and never refreshes the original mounted authority on unlock',async()=>{
   const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
-  await screen.findByText('Native display keep-awake is active.');
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');
   await act(async()=>authority(true));await waitFor(()=>expect(native.active()).toBeUndefined());
   const calls=vi.mocked(invoke).mock.calls.length;await act(async()=>authority(false));
   expect(invoke).toHaveBeenCalledTimes(calls);
-  expect(screen.queryByText('Native display keep-awake is active.')).toBeNull();
+  expect(screen.queryByText('This board owns an acknowledged idle-inhibition request.')).toBeNull();
   expect(toggle()).toHaveProperty('disabled',true);
   for(const [command,,options] of vi.mocked(invoke).mock.calls)if(command!=='board_keep_awake_release')
     expect(options).toEqual({headers:{'X-Lazysh-Access':'b'.repeat(64)}});
@@ -113,9 +118,9 @@ for(const operation of ['acquire','release'] as const)it(`does not claim success
   backend();const original=vi.mocked(invoke).getMockImplementation()!;
   vi.mocked(invoke).mockImplementation((command,args,options)=>command===`board_keep_awake_${operation}`?Promise.reject(new Error(`Native ${operation} failed`)):original(command,args,options));
   render(<KeepAwakeControl sessionId="a"/>);await optIn();
-  if(operation==='release'){await screen.findByText('Native display keep-awake is active.');fireEvent.click(toggle());}
+  if(operation==='release'){await screen.findByText('This board owns an acknowledged idle-inhibition request.');fireEvent.click(toggle());}
   expect(await screen.findByRole('alert')).toHaveProperty('textContent',`Native ${operation} failed`);
-  expect(screen.queryByText(operation==='acquire'?'Native display keep-awake is active.':'Keep awake is off.')).toBeNull();
+  expect(screen.queryByText(operation==='acquire'?'This board owns an acknowledged idle-inhibition request.':'Keep awake is off.')).toBeNull();
 });
 it('browser mode is explicit and makes no native request',()=>{
   vi.mocked(isTauri).mockReturnValue(false);render(<KeepAwakeControl sessionId="a"/>);
@@ -124,11 +129,11 @@ it('browser mode is explicit and makes no native request',()=>{
 
 it('reacquires a fresh native ticket after a batched background/foreground cycle with app lock off',async()=>{
   authority(false,false);const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
-  await screen.findByText('Native display keep-awake is active.');const first=native.active();
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const first=native.active();
   await act(async()=>{native.invalidate();fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));});
   await waitFor(()=>expect(native.active()).toBeTruthy());
   expect(native.active()?.epoch).not.toBe(first!.epoch);
-  expect(screen.getByText('Native display keep-awake is active.')).toBeTruthy();
+  expect(screen.getByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
 });
 it('reports an off preference with retained native ownership truthfully instead of paused or off',async()=>{
   const native=backend();vi.mocked(invoke).mockImplementationOnce(async()=>({...native.status(1),active:true}) as never);
@@ -147,7 +152,7 @@ it('keeps a visible cleanup failure when a concurrent old status reply arrives a
     if(command==='board_keep_awake_status' && holdStatus)return new Promise(resolve=>{finishStatus=()=>resolve({...native.status(3),active:false});}) as never;
     return original(command,args,options);
   });
-  render(<KeepAwakeControl sessionId="a"/>);await optIn();await screen.findByText('Native display keep-awake is active.');
+  render(<KeepAwakeControl sessionId="a"/>);await optIn();await screen.findByText('This board owns an acknowledged idle-inhibition request.');
   holdStatus=true;fireEvent.click(toggle());await screen.findByText('Native release failed');
   await act(async()=>finishStatus());
   expect(screen.getByRole('alert').textContent).toContain('Native release failed');
@@ -160,7 +165,7 @@ for(const outcome of ['rejected','still-active','malformed'] as const)it(`report
   vi.mocked(invoke).mockImplementation((command,args,options)=>command==='board_keep_awake_release'?
     outcome==='rejected'?Promise.reject(new Error(failure)):Promise.resolve(outcome==='still-active'?{...native.status(2),active:true}:null) as never:original(command,args,options));
   localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
-  await screen.findByText('Native display keep-awake is active.');fireEvent(window,new Event('blur'));
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');fireEvent(window,new Event('blur'));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent',failure);
   expect(toggle()).toHaveProperty('checked',true);
   expect(screen.getByRole('status').textContent).toContain('could not be confirmed');
@@ -168,7 +173,7 @@ for(const outcome of ['rejected','still-active','malformed'] as const)it(`report
 });
 it('disables and releases even when saving the off preference fails',async()=>{
   const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
-  await screen.findByText('Native display keep-awake is active.');const owner=native.active();
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const owner=native.active();
   vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new Error('Storage unavailable');});
   fireEvent.click(toggle());
   await waitFor(()=>expect(native.active()).toBeUndefined());
@@ -183,9 +188,67 @@ it('does not attribute an old release acknowledgement to a newer active owner',a
     return original(command,args,options);
   });
   localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="a"/>);
-  await screen.findByText('Native display keep-awake is active.');const first=native.active();view.rerender(<KeepAwakeControl sessionId="b"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const first=native.active();view.rerender(<KeepAwakeControl sessionId="b"/>);
   await waitFor(()=>expect(native.active()?.ticket).toBeGreaterThan(first!.ticket));
   await act(async()=>finish());
   expect(screen.queryByRole('alert')).toBeNull();
-  expect(screen.getByText('Native display keep-awake is active.')).toBeTruthy();
+  expect(screen.getByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
+});
+it('clears acknowledged ownership on exact native loss without retrying while focused',async()=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const owner=native.active()!;
+  const acquired=vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_acquire').length;
+  await act(async()=>nativeLoss({...native.status(owner.ticket),epoch:owner.epoch,active:false,reason:'Portal connection closed.'}));
+  expect(screen.queryByText('This board owns an acknowledged idle-inhibition request.')).toBeNull();
+  expect(screen.getByRole('alert').textContent).toContain('Portal connection closed.');
+  await act(async()=>{fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));});
+  expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_acquire')).toHaveLength(acquired);
+  expect(screen.getByText('Turn this off and on to request ownership again.')).toBeTruthy();
+  fireEvent.click(toggle());await screen.findByText('Keep awake is off.');await optIn();
+  expect(await screen.findByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
+});
+it('a matching loss before the acquire reply cannot be overwritten by late success',async()=>{
+  const native=backend();const original=vi.mocked(invoke).getMockImplementation()!;let finish!:()=>void;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    if(command==='board_keep_awake_acquire')return new Promise(resolve=>{const owner=(args as {request:Owner}).request;native.acquire(owner);finish=()=>resolve({...native.status(owner.ticket),active:true});}) as never;
+    return original(command,args,options);
+  });
+  render(<KeepAwakeControl sessionId="a"/>);await optIn();await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  await act(async()=>nativeLoss({...native.status(native.active()!.ticket),active:false,reason:'Owner disappeared before delivery.'}));
+  await act(async()=>finish());
+  expect(screen.queryByText('This board owns an acknowledged idle-inhibition request.')).toBeNull();
+  expect(screen.getByRole('alert').textContent).toContain('Owner disappeared before delivery.');
+});
+it('ignores loss from an older document or ticket and discards callbacks after revocation',async()=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const owner=native.active()!;
+  await act(async()=>{
+    nativeLoss({...native.status(owner.ticket+1),active:false,reason:'Wrong ticket'});
+    nativeLoss({...native.status(owner.ticket),epoch:`99/${owner.epoch.split('/')[1]}`,active:false,reason:'Wrong document'});
+  });
+  expect(screen.getByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
+  await act(async()=>authority(true));
+  await act(async()=>nativeLoss({...native.status(owner.ticket),epoch:owner.epoch,active:false,reason:'Old mount event'}));
+  expect(screen.queryByText('Old mount event')).toBeNull();
+});
+for(const outcome of ['rejected','malformed','inactive'] as const)it(`requires explicit opt-in after a fresh ${outcome} acquisition failure`,async()=>{
+  const native=backend();const original=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    if(command==='board_keep_awake_acquire')return outcome==='rejected'?Promise.reject(new Error('Portal denied this request')):Promise.resolve(outcome==='malformed'?null:{...native.status((args as {request:Owner}).request.ticket),active:false}) as never;
+    return original(command,args,options);
+  });
+  render(<KeepAwakeControl sessionId="a"/>);await optIn();await screen.findByRole('alert');
+  const calls=()=>vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_acquire').length;
+  expect(calls()).toBe(1);
+  await act(async()=>{fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));});
+  expect(calls()).toBe(1);
+  fireEvent.click(toggle());await screen.findByText('Keep awake is off.');await optIn();await screen.findByRole('alert');
+  expect(calls()).toBe(2);
+});
+it('read-only metadata failure does not block a later foreground metadata refresh',async()=>{
+  backend();vi.mocked(invoke).mockImplementationOnce(()=>Promise.reject(new Error('Metadata unavailable')));
+  localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);await screen.findByRole('alert');
+  await act(async()=>{fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));});
+  expect(await screen.findByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_status')).toHaveLength(2);
 });
