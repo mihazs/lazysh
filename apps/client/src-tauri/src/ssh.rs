@@ -2436,6 +2436,29 @@ fn transcript_command(
     Ok(command)
 }
 
+fn transcript_view_command(
+    agent: &str,
+    path: &str,
+    offset: u64,
+    checkpoint: Option<&str>,
+    view: Option<&str>,
+) -> Result<String> {
+    let mut command = transcript_command(agent, path, offset, checkpoint)?;
+    match view {
+        None | Some("records") => {}
+        Some("conversation") if matches!(agent, "claude" | "grok-acp") && offset == 0 => {
+            command.push_str(" --view conversation")
+        }
+        _ => {
+            return Err(SshError::new(
+                "invalid_input",
+                "Unsupported transcript view",
+            ))
+        }
+    }
+    Ok(command)
+}
+
 async fn transcript_result(
     lease: &AccessLease,
     state: &AppState,
@@ -2497,19 +2520,13 @@ pub async fn agent_transcript(
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let mut command = transcript_command(&agent, &path, offset, checkpoint.as_deref())?;
-            match view.as_deref() {
-                None | Some("records") => {}
-                Some("conversation") if agent == "claude" && offset == 0 => {
-                    command.push_str(" --view conversation")
-                }
-                _ => {
-                    return Err(SshError::new(
-                        "invalid_input",
-                        "Unsupported transcript view",
-                    ))
-                }
-            }
+            let command = transcript_view_command(
+                &agent,
+                &path,
+                offset,
+                checkpoint.as_deref(),
+                view.as_deref(),
+            )?;
             transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
         .await
@@ -3120,6 +3137,38 @@ mod tests {
         assert!(transcript_command("codex", "/a\0b", 0, None).is_err());
         assert!(transcript_command("codex", "/a", u64::MAX, None).is_err());
         assert_eq!(transcript_command("claude", "/a'b;$(cmd)", 17, None).unwrap(), "lazysh-agent transcript --agent claude --path '/a'\\''b;$(cmd)' --offset 17 --limit 50");
+    }
+
+    #[test]
+    fn transcript_views_only_admit_proven_conversation_readers_from_zero() {
+        for (agent, offset, view, accepted) in [
+            ("grok-acp", 0, Some("conversation"), true),
+            ("claude", 0, Some("conversation"), true),
+            ("grok-acp", 1, Some("conversation"), false),
+            ("claude", 1, Some("conversation"), false),
+            ("codex", 0, Some("conversation"), false),
+            ("antigravity-jsonl", 0, Some("conversation"), false),
+            ("grok-acp", 0, Some("conversation; execute"), false),
+            ("grok-acp", 7, Some("records"), true),
+            ("grok-acp", 7, None, true),
+        ] {
+            let result = transcript_view_command(agent, "/owned/updates.jsonl", offset, None, view);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "agent={agent} offset={offset} view={view:?}"
+            );
+            match result {
+                Ok(command) => assert_eq!(
+                    command.ends_with(" --view conversation"),
+                    view == Some("conversation")
+                ),
+                Err(error) => {
+                    assert_eq!(error.kind, "invalid_input");
+                    assert_eq!(error.message, "Unsupported transcript view");
+                }
+            }
+        }
     }
 
     #[derive(Clone)]

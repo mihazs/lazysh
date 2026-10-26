@@ -89,7 +89,7 @@ it("rejects invalid transcript boundaries and executable host content remains in
 it("retains explicit Grok file reads without automatic discovery or conversation claims", async () => {
   const grok = { ...page, agent: "grok-acp", view: "record_stream" };
   expect(parseTranscript(grok)).toEqual(grok);
-  expect(() => parseTranscript({ ...grok, view: "active_branch" })).toThrow();
+  expect(() => parseTranscript({ ...grok, view: "future_view" })).toThrow();
   expect(() => parseTranscript({ ...grok, view: undefined })).toThrow();
   vi.mocked(invoke).mockResolvedValue(grok);
   render(<ChatPanel sessionId="grok-host" />);
@@ -99,7 +99,7 @@ it("retains explicit Grok file reads without automatic discovery or conversation
   expect(
     screen.getByRole("button", { name: "Find transcripts" }),
   ).toHaveProperty("disabled", false);
-  expect(screen.queryByLabelText("View")).toBeNull();
+  expect(screen.getByLabelText("View")).toHaveProperty("value","records");
   expect(screen.getByText(/rewinds are not filtered/)).toBeTruthy();
   expect(invoke).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText("Transcript path"), {
@@ -332,7 +332,7 @@ it('lists Grok metadata only and requires explicit selection and opening through
   fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
   await screen.findByText('world');
   expect(invoke).toHaveBeenLastCalledWith('agent_transcript',{sessionId:'grok-discovery',agent:'grok-acp',path:'/host/.grok/sessions/cwd/id/updates.jsonl',offset:0},{headers:{'X-Lazysh-Access':expect.any(String)}});
-  expect(screen.queryByLabelText('View')).toBeNull();
+  expect(screen.getByLabelText('View')).toHaveProperty('value','records');
   expect(screen.queryByRole('checkbox',{name:'Follow selected Claude branch'})).toBeNull();
 });
 it('rejects malformed Grok discovery metadata without opening any record file',async()=>{

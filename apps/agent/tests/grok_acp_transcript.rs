@@ -294,7 +294,7 @@ fn oversized_rows_fail_and_unknown_rows_advance_within_scan_budget() {
     assert!(page.next_offset > 0 && page.next_offset <= 4 * 1024 * 1024);
 }
 #[test]
-fn records_still_reject_conversation_cli_views() {
+fn unsupported_controls_reject_conversation_without_changing_cli_records() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("updates.jsonl");
     fs::write(&path, FIXTURE).unwrap();
