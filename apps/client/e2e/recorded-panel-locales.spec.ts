@@ -1,3 +1,4 @@
+import {openLocalizedApp} from './fixtures/localizedApp';
 import {expect,test} from '@playwright/test';
 import type {mountRecordedPanels} from './fixtures/RecordedPanelsHarness';
 import {panelRawText,panelSession,panelTimestamp} from '../src/test/recordedPanelData';
@@ -6,11 +7,7 @@ for(const labels of [
   {locale:'pt-BR',transcript:'Transcrição do agente',path:'Caminho da transcrição',open:'Abrir transcrição',draft:'Rascunho para este terminal',stage:'Preparar no terminal',usage:'Uso de tokens registrado',usageAgent:'Agente dos dados de uso',usagePath:'Caminho da transcrição de uso',inspect:'Inspecionar uso',inbox:'Caixa de entrada dos agentes',connected:'Abrir sessão conectada',archive:'Arquivar',minute:'1 minuto'},
   {locale:'es',transcript:'Transcripción del agente',path:'Ruta de la transcripción',open:'Abrir transcripción',draft:'Borrador para este terminal',stage:'Preparar en el terminal',usage:'Uso de tokens registrado',usageAgent:'Agente de los datos de uso',usagePath:'Ruta de la transcripción de uso',inspect:'Inspeccionar uso',inbox:'Bandeja de entrada de agentes',connected:'Abrir sesión conectada',archive:'Archivar',minute:'1 minuto'},
 ]) test(`${labels.locale} recorded panels keep long labels readable and actions tied to original records`,async({page})=>{
-  const external:string[]=[];page.on('request',request=>{if(!request.url().startsWith('http://127.0.0.1:1420'))external.push(request.url());});
-  await page.goto('/');
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
-  await page.getByRole('combobox',{name:'App language',exact:true}).selectOption(labels.locale);
-  await page.keyboard.press('Escape');
+  const external=await openLocalizedApp(page,labels.locale);
   await page.evaluate(async()=>{const {mountRecordedPanels}=await import('/e2e/fixtures/RecordedPanelsHarness.tsx');window.recordedPanels=mountRecordedPanels();});
   const root=page.locator('.recorded-panels-fixture');
   await expect(root.getByRole('heading',{name:labels.transcript,exact:true})).toBeVisible();

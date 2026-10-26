@@ -4,7 +4,11 @@ The bundled catalogs cover English (`en`), Brazilian Portuguese (`pt-BR`) and
 Spanish (`es`) for the shell, host editor and connection dialogs, Preferences
 and its theme, font, icon and shortcut controls, and renderer access settings.
 Transcript, Usage and the notification inbox also have app-owned labels, controls
-and validation in all three catalogs.
+and validation in all three catalogs. Remote file browsing, upload consent, Git
+working-tree/history review, side-by-side diffs, line-comment controls and syntax
+highlighting controls are covered too. File contents, paths, commit subjects,
+patches and annotation payloads remain verbatim. The browser preview/DOM-picker
+controls remain a separate follow-up.
 This is a partial milestone under issue #79. Other feature panels and native
 lock-cover/biometric-reason text still require their own localization and
 acceptance. Apple permission purposes have separate bundled resources below;
@@ -94,6 +98,11 @@ Run the existing project tasks from `apps/client`:
   unchanged original access headers and preserved renderer identities.
 - `bun run test:e2e e2e/recorded-panel-locales.spec.ts` checks real panel rendering
   and long labels at desktop/phone widths, raw records and exact action targets.
+- `bun run test src/i18n/fileReview.test.tsx` verifies original file/revision
+  targets, request headers, pending labels and editable annotation identity.
+- `bun run test:e2e e2e/file-review-locales.spec.ts` checks all three locales at
+  desktop/phone widths, explicit upload consent, syntax highlighting, comment
+  focus, historical selection and verbatim diff contents across language changes.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a

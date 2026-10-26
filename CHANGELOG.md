@@ -20,6 +20,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Remote file browsing, uploads, repository history, side-by-side diffs and line
+  comments now have English, Brazilian Portuguese and Spanish controls. Language
+  changes preserve selected files, revisions and editable drafts; file contents
+  and staged annotation payloads stay verbatim. Defaults are unchanged.
+
 - English, Brazilian Portuguese and Spanish interface text for Transcript, Usage
   and the notification inbox, including accessibility labels and validation.
   Usage and inbox dates/numbers follow the selected interface locale. Recorded
