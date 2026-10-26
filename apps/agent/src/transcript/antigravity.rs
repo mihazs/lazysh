@@ -7,9 +7,8 @@ use crate::{Error, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::{io::Read, path::Path};
+use std::path::Path;
 
-const MAX_SNAPSHOT: usize = 16 * 1024 * 1024;
 #[derive(Deserialize)]
 struct ToolCall {
     name: String,
@@ -131,11 +130,7 @@ pub(super) fn read_page(
     }
     let mut file = open_transcript(path)?;
     let before = file.metadata()?;
-    if before.len() > MAX_SNAPSHOT as u64 {
-        return Err(Error::InvalidArgument);
-    }
-    let mut bytes = Vec::new();
-    (&mut file).take(before.len()).read_to_end(&mut bytes)?;
+    let bytes = super::snapshot::read_bytes(&mut file, before.len())?;
     let after = open_transcript(path)?.metadata()?;
     crate::transcript::same_file(&before, &after)?;
     if before.len() != bytes.len() as u64

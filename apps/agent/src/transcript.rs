@@ -17,7 +17,9 @@ mod discovery;
 mod droid;
 mod event_adapters;
 mod grok_acp;
+mod grok_checkpoint;
 mod grok_conversation;
+pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
 mod snapshot;
 pub use conversation::conversation;
@@ -131,15 +133,25 @@ pub fn read_page_with_checkpoint(
     let metadata = file.metadata()?;
     seek_record(&mut file, offset, metadata.len())?;
     let mut reader = BufReader::new(file.take(metadata.len() - offset));
+    read_records(&mut reader, agent, offset, metadata.len(), limit)
+}
+
+fn read_records(
+    reader: &mut impl BufRead,
+    agent: TranscriptAgent,
+    offset: u64,
+    length: u64,
+    limit: u8,
+) -> Result<TranscriptPage> {
     let mut next_offset = offset;
     let mut messages = Vec::new();
     let mut output_bytes = 0;
     let mut pending_tail = false;
-    while next_offset < metadata.len()
+    while next_offset < length
         && next_offset - offset < MAX_SCAN
         && messages.len() < usize::from(limit)
     {
-        let line = read_record_line(&mut reader)?;
+        let line = read_record_line(reader)?;
         let bytes = line.len();
         if line.last() != Some(&b'\n') {
             pending_tail = true;
@@ -178,7 +190,7 @@ pub fn read_page_with_checkpoint(
         agent,
         messages,
         next_offset,
-        has_more: !pending_tail && next_offset < metadata.len(),
+        has_more: !pending_tail && next_offset < length,
         branch_id: None,
         truncated: false,
         checkpoint: None,

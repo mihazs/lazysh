@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod fs;
 pub mod private_state;
+pub mod record_checkpoint;
 #[cfg(feature = "service")]
 pub mod server;
 #[cfg(feature = "secrets")]
@@ -38,3 +39,10 @@ pub type IosHandle<T> = std::marker::PhantomData<fn() -> T>;
 
 #[cfg(feature = "url")]
 pub mod urls;
+
+pub fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}

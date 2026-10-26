@@ -1,6 +1,7 @@
 //! Captured credentials for the dedicated bound protocol; never downgrade to manual publish.
 use super::{base, bounded_body, capture_capability, captured_transport, hex_digest, Capability};
 use crate::{BoundEvent, BoundReceipt, BoundStatus, Event, Source};
+use lazysh_common::valid_sha256 as valid_hash;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::Path;
 use uuid::Uuid;
@@ -32,12 +33,7 @@ fn canonical_origin<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error>
         Err(serde::de::Error::custom("invalid publisher origin"))
     }
 }
-fn valid_hash(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
+
 fn hash<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let value = String::deserialize(d)?;
     if valid_hash(&value) {
