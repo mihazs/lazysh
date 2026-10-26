@@ -10,6 +10,17 @@ Routing uses an SSH `direct-tcpip` channel to the destination address and port, 
 
 This implementation supports SSH routing. Bastion routes and selected-identity forwarding are SSH-terminal features. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
 
+## SSH identity interface language
+
+The identity generator/import inspector uses English, Brazilian Portuguese and
+Spanish for its controls, encrypted-key/passphrase explanation and local public-key
+clipboard failure. Changing interface language preserves focused private-key and
+passphrase drafts, pending generation/inspection and returned public metadata.
+It never generates, inspects, copies, selects or saves an identity automatically.
+Cryptographic identifiers, key bytes, fingerprints and native errors remain verbatim.
+The 12-byte UTF-8 generation requirement and explicit connection/OS-store actions
+are unchanged. The panel keeps keys in memory; localization does not add storage.
+
 ## Cold saved-host desktop launch
 
 With lazysh fully closed, run `lazysh --host SAVED_ID` (or `-host`, including
@@ -101,9 +112,17 @@ OpenSSH/named-tmux fixture feeds the parsed/prepared server into the existing
 native child attachment and retains colliding-ID/server-isolation assertions.
 Isolated tmux and Herdr lifecycle fixtures also pass. Actual App/picker tests
 cover saved transport overrides, exact new-source ownership, explicit trust,
-closing/reopening and stale results after lock. Desktop GUI CLI invocation, platform credential/biometric prompts, and SSH
-Herdr child-PTY acceptance remain unexecuted local gates. The isolated Herdr
-lifecycle fixture does not establish its SSH attachment behavior.
+closing/reopening and stale results after lock. The owned OpenSSH/Herdr 0.9.3 fixture additionally verifies explicit non-first
+session selection, a separate child TUI while its source foreground stays usable,
+and the same pane's advancing workload after detach and pending-child revocation.
+The adopted source retains its normal lock policy; the revoked pending worker
+finishes while locked, then its generic cancellation notice drains after unlock.
+Both owned Herdr servers, the workload and SSH listener are stopped at teardown.
+
+This fixture prepares the Rust launch intent and manually assembles its native
+control session over the fixture's freshly authenticated transport. It does not
+exercise actual OS argv delivery, GUI startup or credential/biometric prompts;
+those remain unexecuted acceptance gates. See the [native command and scope](multiplexers.md#native-checks).
 
 ## Transport selection
 

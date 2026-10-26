@@ -1,10 +1,11 @@
+import {t,useUi} from './i18n/core';
+import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
 
 import { listen } from '@tauri-apps/api/event';
 import { parseSnapshot } from './AgentPanel';
 import { parseApprovals } from './ApprovalPanel';
-import { errorMessage } from './SessionTools';
 import { sampleFreshness, type AppleUsageReport } from './UsagePanel';
 
 type Capability = {liveActivities:boolean; watchPaired:boolean; watchInstalled:boolean; watchReachable:boolean; reason:string};
@@ -13,10 +14,11 @@ type ReviewIntent = {subscriptionId:string;sessionId:string;expiresAt:number;app
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props) {
+  useUi();
   const invoke = useProtectedInvoke();
   const [capability, setCapability] = useState<Capability>();
   const [subscription, setSubscription] = useState<string>();
-  const [error, setError] = useState('');
+  const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const active = useRef<string|undefined>(undefined);
   const sequence = useRef(0);
@@ -28,13 +30,13 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
     const id=active.current; active.current=undefined;
     pendingReview.current=undefined;
     setSubscription(undefined); setBusy(false);
-    if(id) void invoke('apple_status_configure',{subscriptionId:id, enabled:false}).catch(()=>setError('Could not clear native status. Existing snapshots expire within 60 seconds.'));
+    if(id) void invoke('apple_status_configure',{subscriptionId:id, enabled:false}).catch(()=>setError(new LocalUiError('appleStatusStopFailed')));
   }
   useEffect(()=>{
     let alive=true;
     void invoke<Capability>('apple_status_capability').then(value=>{
       if(alive && value && typeof value.liveActivities==='boolean' && typeof value.watchInstalled==='boolean' && typeof value.reason==='string') setCapability(value);
-    }).catch(()=>{if(alive)setError('Apple status capability unavailable.');});
+    }).catch(()=>{if(alive)setError(new LocalUiError('appleStatusCapabilityUnavailable'));});
     const deliverReview=()=>{
       const intent=pendingReview.current;
       const now=Math.floor(Date.now()/1000);
@@ -63,7 +65,7 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
     try {
       await invoke('apple_status_configure',{subscriptionId:id,enabled:true});
       if(active.current===id) {setSubscription(id);setBusy(false);}
-    } catch(e) {if(active.current===id){active.current=undefined;setBusy(false);setError(errorMessage(e));}}
+    } catch(e) {if(active.current===id){active.current=undefined;setBusy(false);setError(captureUiError(e));}}
   }
   useEffect(()=>{
     if(!subscription)return;
@@ -94,22 +96,22 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
         await invoke('apple_status_publish',{snapshot,startActivity:start});
         if(active.current===subscription && start)startActivity.current=false;
         if(alive)setError('');
-      }catch(e){if(alive)setError(errorMessage(e));}
+      }catch(e){if(alive)setError(captureUiError(e));}
       finally{running.current=false;}
     }
     void publish(); const timer=window.setInterval(()=>void publish(),10000);
     return()=>{alive=false;window.clearInterval(timer);};
   },[subscription,sessionId,usage]);
-  return <section className="tool-panel" aria-label="Apple status">
-    <h3>Apple status</h3>
-    <p>Share generic counts from agent reports received in the last minute. Host names, prompts, commands and credentials stay off these surfaces.</p>
-    {capability && <p>{capability.reason} {capability.watchInstalled?(capability.watchReachable?'Watch reachable.':'Watch unavailable; cached status expires.'): 'Watch companion not installed.'}</p>}
+  return <section className="tool-panel" aria-label={t('appAppleStatus')}>
+    <h3>{t('appAppleStatus')}</h3>
+    <p>{t('appleStatusPrivacy')}</p>
+    {capability && <p>{capability.reason} {capability.watchInstalled?(capability.watchReachable?t('appleStatusWatchReachable'):t('appleStatusWatchUnavailable')): t('appleStatusWatchMissing')}</p>}
     {!subscription && <div className="tool-bar">
-      <button disabled={!capability?.watchInstalled || busy} onClick={()=>void enable(false)}>Enable Watch status</button>
-      <button disabled={!capability?.liveActivities || busy} onClick={()=>void enable(true)}>Start Live Activity</button>
+      <button disabled={!capability?.watchInstalled || busy} onClick={()=>void enable(false)}>{t('appleStatusEnableWatch')}</button>
+      <button disabled={!capability?.liveActivities || busy} onClick={()=>void enable(true)}>{t('appleStatusStartActivity')}</button>
     </div>}
-    {subscription && <><p role="status">Sharing generic status while this SSH session is selected. Collection pauses in the background; the last snapshot expires after one minute.</p><button onClick={stop}>Stop Apple status</button></>}
-    <p>Watch Review opens the approval screen on your active iPhone. Approve and deny actions require that screen. Select an inspected report in Usage to share its separate counters and original recording time. Reports retain their stale or unknown freshness.</p>
-    {error && <p role="alert" className="inline-error">{error}</p>}
+    {subscription && <><p role="status">{t('appleStatusSharing')}</p><button onClick={stop}>{t('appleStatusStop')}</button></>}
+    <p>{t('appleStatusReview')}</p>
+    {error && <p role="alert" className="inline-error">{uiErrorText(error)}</p>}
   </section>;
 }

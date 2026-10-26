@@ -1,3 +1,5 @@
+#[path = "ssh/upload_path.rs"]
+mod upload_path;
 use crate::app_lock::{AccessLease, AccessState, Guarded, GuardedError};
 use russh::{
     client,
@@ -2172,7 +2174,7 @@ async fn upload_file(
     session_id: String,
     path: String,
     data: Vec<u8>,
-) -> AccessResult<()> {
+) -> AccessResult<crate::attachment_upload::Uploaded> {
     let reserved = crate::attachment_upload::upload_reserve(
         lease.clone(),
         state.clone(),
@@ -2203,7 +2205,7 @@ pub(crate) async fn transfer_file(
     path: String,
     data: Vec<u8>,
     ownership: &crate::attachment_upload::Work,
-) -> Result<()> {
+) -> Result<crate::attachment_upload::Uploaded> {
     check_path(&path)?;
     if data.len() > UPLOAD_LIMIT {
         return Err(SshError::new(
@@ -2228,8 +2230,13 @@ pub(crate) async fn transfer_file(
         )
     })?
 }
-pub(crate) async fn transfer_sftp(sftp: SftpSession, path: String, data: Vec<u8>) -> Result<()> {
+pub(crate) async fn transfer_sftp(
+    sftp: SftpSession,
+    path: String,
+    data: Vec<u8>,
+) -> Result<crate::attachment_upload::Uploaded> {
     let sftp = UploadSftp(Some(sftp));
+    let path = upload_path::destination(sftp.0.as_ref().unwrap(), path).await?;
     let mut file = sftp
         .0
         .as_ref()
@@ -2247,7 +2254,7 @@ pub(crate) async fn transfer_sftp(sftp: SftpSession, path: String, data: Vec<u8>
         ));
     }
     file.shutdown().await?;
-    Ok(())
+    Ok(crate::attachment_upload::Uploaded { path })
 }
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -2429,6 +2436,29 @@ fn transcript_command(
     Ok(command)
 }
 
+fn transcript_view_command(
+    agent: &str,
+    path: &str,
+    offset: u64,
+    checkpoint: Option<&str>,
+    view: Option<&str>,
+) -> Result<String> {
+    let mut command = transcript_command(agent, path, offset, checkpoint)?;
+    match view {
+        None | Some("records") => {}
+        Some("conversation") if matches!(agent, "claude" | "grok-acp") && offset == 0 => {
+            command.push_str(" --view conversation")
+        }
+        _ => {
+            return Err(SshError::new(
+                "invalid_input",
+                "Unsupported transcript view",
+            ))
+        }
+    }
+    Ok(command)
+}
+
 async fn transcript_result(
     lease: &AccessLease,
     state: &AppState,
@@ -2490,19 +2520,13 @@ pub async fn agent_transcript(
 ) -> AccessResult<serde_json::Value> {
     lease
         .run(async {
-            let mut command = transcript_command(&agent, &path, offset, checkpoint.as_deref())?;
-            match view.as_deref() {
-                None | Some("records") => {}
-                Some("conversation") if agent == "claude" && offset == 0 => {
-                    command.push_str(" --view conversation")
-                }
-                _ => {
-                    return Err(SshError::new(
-                        "invalid_input",
-                        "Unsupported transcript view",
-                    ))
-                }
-            }
+            let command = transcript_view_command(
+                &agent,
+                &path,
+                offset,
+                checkpoint.as_deref(),
+                view.as_deref(),
+            )?;
             transcript_result(&lease, &state, &session_id, command, transcript_session_id).await
         })
         .await
@@ -3113,6 +3137,38 @@ mod tests {
         assert!(transcript_command("codex", "/a\0b", 0, None).is_err());
         assert!(transcript_command("codex", "/a", u64::MAX, None).is_err());
         assert_eq!(transcript_command("claude", "/a'b;$(cmd)", 17, None).unwrap(), "lazysh-agent transcript --agent claude --path '/a'\\''b;$(cmd)' --offset 17 --limit 50");
+    }
+
+    #[test]
+    fn transcript_views_only_admit_proven_conversation_readers_from_zero() {
+        for (agent, offset, view, accepted) in [
+            ("grok-acp", 0, Some("conversation"), true),
+            ("claude", 0, Some("conversation"), true),
+            ("grok-acp", 1, Some("conversation"), false),
+            ("claude", 1, Some("conversation"), false),
+            ("codex", 0, Some("conversation"), false),
+            ("antigravity-jsonl", 0, Some("conversation"), false),
+            ("grok-acp", 0, Some("conversation; execute"), false),
+            ("grok-acp", 7, Some("records"), true),
+            ("grok-acp", 7, None, true),
+        ] {
+            let result = transcript_view_command(agent, "/owned/updates.jsonl", offset, None, view);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "agent={agent} offset={offset} view={view:?}"
+            );
+            match result {
+                Ok(command) => assert_eq!(
+                    command.ends_with(" --view conversation"),
+                    view == Some("conversation")
+                ),
+                Err(error) => {
+                    assert_eq!(error.kind, "invalid_input");
+                    assert_eq!(error.message, "Unsupported transcript view");
+                }
+            }
+        }
     }
 
     #[derive(Clone)]
@@ -4657,7 +4713,7 @@ mod tests {
         let port = socket.local_addr().unwrap().port();
         drop(socket);
         let config = dir.path().join("sshd_config");
-        fs::write(&config,format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\nSubsystem sftp internal-sftp\n",key_path.display(),authorized.display(),dir.path().join("sshd.pid").display())).unwrap();
+        fs::write(&config,format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\nSubsystem sftp internal-sftp -d {}\n",key_path.display(),authorized.display(),dir.path().join("sshd.pid").display(),dir.path().display())).unwrap();
         let sshd = std::process::Command::new("sh")
             .args(["-c", "command -v sshd"])
             .output()
@@ -4954,6 +5010,51 @@ mod tests {
             )
             .await
             .unwrap();
+        let agent_directory = dir.path().join("agent-workspace");
+        fs::create_dir(&agent_directory).unwrap();
+        for relative_name in ["relative image' 世界.txt", "literal\\filename.txt"] {
+            let relative_upload = upload_file(
+                access_lease(),
+                app.state(),
+                id.clone(),
+                format!("./{relative_name}"),
+                b"relative fixture".to_vec(),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            let expected_destination = dir
+                .path()
+                .join(relative_name)
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(
+                fs::read(&expected_destination).unwrap(),
+                b"relative fixture"
+            );
+            assert!(!agent_directory.join(relative_name).exists());
+            let destination = serde_json::to_value(relative_upload).unwrap();
+            assert_eq!(
+                destination["path"], expected_destination,
+                "upload result must identify the SFTP destination independently of agent CWD"
+            );
+            let command = format!(
+                "cd {} && cat -- {}",
+                quote(&agent_directory.to_string_lossy()),
+                quote(destination["path"].as_str().unwrap())
+            );
+            assert_eq!(
+                exec_for_access(
+                    &app.state::<AppState>().session(&id).await.unwrap(),
+                    command,
+                    &access_lease()
+                )
+                .await
+                .unwrap(),
+                "relative fixture"
+            );
+        }
         let upload = dir
             .path()
             .join("new file' safe.txt")
