@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Localize terminal controls, clipboard consent, link confirmation, search/composer status and terminal-owned local errors in English, Brazilian Portuguese and Spanish. Language changes preserve live terminal handlers, raw content, drafts, explicit consent and input bytes; locale defaults and permissions are unchanged.
+
 - Keep About source revisions and expanded legal notices within mobile dialog bounds, including clean builds. Long tokens wrap and preserved notice indentation scrolls within keyboard-focusable legal blocks; legal bytes and source links remain unchanged.
 
 - Add explicit opt-in companion storage failure phase diagnostics and same-worker trace summaries. Default output, SQLite errors, durability and wait budgets remain unchanged; this adds evidence rather than repairing contention.

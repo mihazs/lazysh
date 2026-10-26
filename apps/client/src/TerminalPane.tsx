@@ -1,9 +1,11 @@
+import {t,useUi,formatNumber} from './i18n/core';
+import {LocalUiError,type UiErrorCause} from './i18n/localError';
 import { useMountedAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { api as nativeApi } from "./bridge";
-import { decodeClipboardRequest, parseChord, parseChordSteps, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
+import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type { LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, useDeviceFonts } from "./fonts";
@@ -11,6 +13,7 @@ import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
+const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
 const labels: Partial<Record<ToolbarKey, string>> = {left: "←", up: "↑", down: "↓", right: "→"};
 
 export function terminalWebUrl(value: string): string | undefined {
@@ -26,8 +29,9 @@ export function terminalWebUrl(value: string): string | undefined {
 export default function TerminalPane({ session, active, reportError }: {
   session: LiveSession;
   active: boolean;
-  reportError: (message: string) => void;
+  reportError: (message: UiErrorCause) => void;
 }) {
+  useUi();
   const api = useProtectedApi(nativeApi);
   const { access, mounted } = useMountedAccess();
   const container = useRef<HTMLDivElement>(null);
@@ -51,7 +55,7 @@ export default function TerminalPane({ session, active, reportError }: {
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const searchLine = useRef(-1);
-  const [searchStatus, setSearchStatus] = useState("");
+  const [searchStatus, setSearchStatus] = useState<number | "none" | null>(null);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
   const draftRef = useRef(draft);
@@ -76,7 +80,7 @@ export default function TerminalPane({ session, active, reportError }: {
       const { sessionId, text } = detail as Record<string, unknown>;
       if (sessionId !== session.id || typeof text !== "string" || text.length === 0 || text.length > 65536) return;
       const next = draftRef.current ? `${draftRef.current}\n\n${text}` : text;
-      if (next.length > 65536) {reportError("The combined draft exceeds 65,536 characters. Shorten the current draft first."); return;}
+      if (next.length > 65536) {reportError(new LocalUiError('terminalDraftLimit')); return;}
       draftRef.current = next;
       setDraft(next); setComposing(true);
     };
@@ -191,14 +195,14 @@ export default function TerminalPane({ session, active, reportError }: {
     if (!mounted.current || !access.current()) return;
     // An OS clipboard write already dispatched cannot be undone on lock.
     try { await navigator.clipboard.writeText(text); }
-    catch { if (mounted.current && access.current()) reportError("Clipboard access was unavailable. Use your system copy menu."); }
+    catch { if (mounted.current && access.current()) reportError(new LocalUiError('terminalCopyUnavailable')); }
   }
   async function openLink() {
     if (!link || openingLink) return;
     const selected = link;
     setOpeningLink(true);
     try { await api.openWebUrl(selected); setLink(current => current === selected ? null : current); }
-    catch (error) { reportError(typeof error === 'string' ? error : 'The system browser could not open this link. Copy its URL instead.'); }
+    catch (error) { reportError(typeof error === 'string' ? error : new LocalUiError('terminalBrowserUnavailable')); }
     finally { setOpeningLink(false); }
   }
   async function paste() {
@@ -209,7 +213,7 @@ export default function TerminalPane({ session, active, reportError }: {
       if (!mounted.current || !access.current()) return;
       session.terminal.paste(text); session.terminal.focus();
     }
-    catch { if (mounted.current && access.current()) reportError("Clipboard access was unavailable. Paste using your keyboard or system menu."); }
+    catch { if (mounted.current && access.current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
   }
   function search(direction: number) {
     if (!query) return;
@@ -223,16 +227,16 @@ export default function TerminalPane({ session, active, reportError }: {
         searchLine.current = line;
         session.terminal.scrollToLine(line);
         session.terminal.select(0, line, text.length);
-        setSearchStatus(`Match on line ${line + 1}`);
+        setSearchStatus(line + 1);
         return;
       }
     }
-    setSearchStatus("No match in retained history.");
+    setSearchStatus("none");
   }
   function sendChord(keys: string | undefined): boolean {
     const current = () => mounted.current && access.current() && activeRef.current && session.connected;
     if (!current()) return false;
-    if (!keys) {reportError("Configure and save a valid chord for this gesture first."); return false;}
+    if (!keys) {reportError(new LocalUiError('terminalChordRequired')); return false;}
     try {
       void api.writeSequence(session.id, parseChordSteps(keys)).catch(error => {if (current()) reportError(errorMessage(error));});
       return true;
@@ -242,7 +246,7 @@ export default function TerminalPane({ session, active, reportError }: {
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
     if (Object.hasOwn(zellijActions, action)) {
       if (!mounted.current || !access.current() || !activeRef.current || !session.connected || zellijBusy.current || imeComposing.current || session.terminal.hasSelection()) return;
-      if (session.local || session.attached?.kind !== 'zellij') {reportError('This gesture requires a terminal attached to Zellij through lazysh.'); return;}
+      if (session.local || session.attached?.kind !== 'zellij') {reportError(new LocalUiError('terminalZellijRequired')); return;}
       zellijBusy.current = true;
       void api.zellijNavigate(session.id, session.attached.name, zellijActions[action as keyof typeof zellijActions])
         .catch(error => {if (mounted.current && access.current() && activeRef.current && session.connected) reportError(errorMessage(error));})
@@ -311,7 +315,7 @@ export default function TerminalPane({ session, active, reportError }: {
       if (event.cancelable) event.preventDefault();
       const fontSize = Math.max(10, Math.min(32, Math.round(gesture.current.fontSize * scale)));
       if (fontSize !== preferences.fontSize) {
-        try {savePreferences({...preferences, fontSize});} catch {reportError("Font size could not be saved.");}
+        try {savePreferences({...preferences, fontSize});} catch {reportError(new LocalUiError('terminalFontSaveFailed'));}
       }
     }
   }
@@ -332,7 +336,7 @@ export default function TerminalPane({ session, active, reportError }: {
       const dx = (a.x + b.x) / 2 - start.x, dy = (a.y + b.y) / 2 - start.y;
       const scale = Math.hypot(a.x - b.x, a.y - b.y) / start.distance;
       if (preferences.pinchZoom && Math.abs(scale - 1) >= .08) {
-        try {savePreferences({...preferences, fontSize: Math.max(10, Math.min(32, Math.round(start.fontSize * scale)))});} catch {reportError("Font size could not be saved.");}
+        try {savePreferences({...preferences, fontSize: Math.max(10, Math.min(32, Math.round(start.fontSize * scale)))});} catch {reportError(new LocalUiError('terminalFontSaveFailed'));}
       } else if (Math.max(Math.abs(dx), Math.abs(dy)) >= 60) {
         const direction = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up");
         const slot = {left: "twoLeft", right: "twoRight", up: "twoUp", down: "twoDown"}[direction] as GestureSlot;
@@ -345,46 +349,46 @@ export default function TerminalPane({ session, active, reportError }: {
   }
   return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={warning}>{warning}</div>)}
-    {!session.connected && <div className="session-notice" role="status">Session ended{session.message ? ` · ${session.message}` : ""}. Close this tab or connect again from Hosts.</div>}
-    {clipboard !== null && <div className="terminal-consent" role="region" aria-label="Remote clipboard request">
-      <p>The remote program wants to replace your clipboard ({clipboard.length} characters).</p>
+    {!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>}
+    {clipboard !== null && <div className="terminal-consent" role="region" aria-label={t('terminalClipboardRegion')}>
+      <p>{t("terminalClipboardPrompt",{count:clipboard.length,characters:formatNumber(clipboard.length)})}</p>
       <pre>{clipboard.slice(0, 500)}{clipboard.length > 500 ? "…" : ""}</pre>
-      <button onClick={() => { void copy(clipboard); setClipboard(null); pendingClipboard.current = false; }}>Allow this copy</button>
-      <button onClick={() => { setClipboard(null); pendingClipboard.current = false; }}>Deny</button>
+      <button onClick={() => { void copy(clipboard); setClipboard(null); pendingClipboard.current = false; }}>{t('terminalAllowCopy')}</button>
+      <button onClick={() => { setClipboard(null); pendingClipboard.current = false; }}>{t('terminalDeny')}</button>
     </div>}
-    {link && <div className="terminal-consent" role="region" aria-label="Terminal link">
-      <p>{link}</p><button disabled={openingLink} onClick={() => void openLink()}>{openingLink ? 'Opening…' : 'Open in browser'}</button><button onClick={() => void copy(link)}>Copy URL</button><button onClick={() => setLink(null)}>Dismiss link</button>
+    {link && <div className="terminal-consent" role="region" aria-label={t('terminalLinkRegion')}>
+      <p>{link}</p><button disabled={openingLink} onClick={() => void openLink()}>{openingLink ? t('terminalOpening') : t('terminalOpenBrowser')}</button><button onClick={() => void copy(link)}>{t('terminalCopyUrl')}</button><button onClick={() => setLink(null)}>{t('terminalDismissLink')}</button>
     </div>}
     {searching && <form className="terminal-search" onSubmit={event => {event.preventDefault(); search(1);}}>
-      <input ref={searchInput} aria-label="Search terminal history" maxLength={256} value={query} onChange={event => {setQuery(event.target.value); searchLine.current = -1; setSearchStatus("");}} />
-      <button>Next</button><button type="button" onClick={() => search(-1)}>Previous</button><button type="button" onClick={() => {setSearching(false); session.terminal.focus();}}>Close search</button>
-      <span role="status">{searchStatus}</span>
+      <input ref={searchInput} aria-label={t('terminalSearch')} maxLength={256} value={query} onChange={event => {setQuery(event.target.value); searchLine.current = -1; setSearchStatus(null);}} />
+      <button>{t('terminalNext')}</button><button type="button" onClick={() => search(-1)}>{t('terminalPrevious')}</button><button type="button" onClick={() => {setSearching(false); session.terminal.focus();}}>{t('terminalCloseSearch')}</button>
+      <span role="status">{typeof searchStatus === "number" ? t("terminalMatch",{line:formatNumber(searchStatus)}) : searchStatus === "none" ? t("terminalNoMatch") : ""}</span>
     </form>}
-    <div ref={container} className="terminal-canvas" style={{touchAction: customTouch ? "none" : "auto"}} aria-label={`Terminal for ${session.name}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
-    {composing && <div className="terminal-compose"><label>Compose text<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
-      <button disabled={!session.connected || !draft} onClick={() => {session.terminal.paste(draft); setDraft(""); session.terminal.focus();}}>Paste draft</button><button onClick={() => setComposing(false)}>Close composer</button>
+    <div ref={container} className="terminal-canvas" style={{touchAction: customTouch ? "none" : "auto"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
+    {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
+      <button disabled={!session.connected || !draft} onClick={() => {session.terminal.paste(draft); setDraft(""); session.terminal.focus();}}>{t('terminalPasteDraft')}</button><button onClick={() => setComposing(false)}>{t('terminalCloseComposer')}</button>
     </div>}
-    <div className="terminal-toolbar-toggle"><button onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? "Hide terminal keys" : "Show terminal keys"}</button></div>
-    {ctrlLocked && <div className="session-notice" role="status">Control is locked. Tap ctrl to release it.</div>}
-    {toolbarVisible && dpadOpen && preferences.toolbar.includes("dpad") && <div className="terminal-dpad" role="group" aria-label="Terminal D-pad">
-      {preferences.dpadCorners.left === "none" ? <span /> : <button disabled={!session.connected} aria-label="D-pad left corner" title={preferences.gestureChords.cornerLeft ?? preferences.dpadCorners.left} onClick={() => runGesture(preferences.dpadCorners.left, "cornerLeft")}>{preferences.dpadCorners.left === "interrupt" ? "^C" : preferences.dpadCorners.left === "backspace" ? "⌫" : "1"}</button>}
-      <button disabled={!session.connected} aria-label="D-pad up" onClick={() => sendKey("\x1b[A")}>↑</button>
-      {preferences.dpadCorners.right === "none" ? <span /> : <button disabled={!session.connected} aria-label="D-pad right corner" title={preferences.gestureChords.cornerRight ?? preferences.dpadCorners.right} onClick={() => runGesture(preferences.dpadCorners.right, "cornerRight")}>{preferences.dpadCorners.right === "backspace" ? "⌫" : preferences.dpadCorners.right === "interrupt" ? "^C" : "2"}</button>}
-      <button disabled={!session.connected} aria-label="D-pad left" onClick={() => sendKey("\x1b[D")}>←</button><button disabled={!session.connected} aria-label="D-pad down" onClick={() => sendKey("\x1b[B")}>↓</button><button disabled={!session.connected} aria-label="D-pad right" onClick={() => sendKey("\x1b[C")}>→</button>
+    <div className="terminal-toolbar-toggle"><button onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")}</button></div>
+    {ctrlLocked && <div className="session-notice" role="status">{t('terminalControlLocked')}</div>}
+    {toolbarVisible && dpadOpen && preferences.toolbar.includes("dpad") && <div className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')}>
+      {preferences.dpadCorners.left === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadLeftCorner')} title={preferences.gestureChords.cornerLeft ?? t(gestureLabelKeys[preferences.dpadCorners.left])} onClick={() => runGesture(preferences.dpadCorners.left, "cornerLeft")}>{preferences.dpadCorners.left === "interrupt" ? "^C" : preferences.dpadCorners.left === "backspace" ? "⌫" : "1"}</button>}
+      <button disabled={!session.connected} aria-label={t('terminalDpadUp')} onClick={() => sendKey("\x1b[A")}>↑</button>
+      {preferences.dpadCorners.right === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadRightCorner')} title={preferences.gestureChords.cornerRight ?? t(gestureLabelKeys[preferences.dpadCorners.right])} onClick={() => runGesture(preferences.dpadCorners.right, "cornerRight")}>{preferences.dpadCorners.right === "backspace" ? "⌫" : preferences.dpadCorners.right === "interrupt" ? "^C" : "2"}</button>}
+      <button disabled={!session.connected} aria-label={t('terminalDpadLeft')} onClick={() => sendKey("\x1b[D")}>←</button><button disabled={!session.connected} aria-label={t('terminalDpadDown')} onClick={() => sendKey("\x1b[B")}>↓</button><button disabled={!session.connected} aria-label={t('terminalDpadRight')} onClick={() => sendKey("\x1b[C")}>→</button>
     </div>}
-    {toolbarVisible && <div className="terminal-keys" aria-label="Terminal keys">
-      {preferences.toolbar.map(key => <button key={key} disabled={!session.connected && key !== "dpad"} aria-pressed={key === "ctrl" ? ctrl : key === "meta" ? meta : key === "dpad" ? dpadOpen : undefined} aria-label={labels[key] ? `Arrow ${key}` : undefined} title={key === "ctrl" ? ctrlLocked ? "Control locked; tap to release" : "Double-tap to lock Control" : undefined} onDoubleClick={() => {if (key === "ctrl") {setCtrl(true); setCtrlLocked(true);}}} onClick={() => {
+    {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')}>
+      {preferences.toolbar.map(key => <button key={key} disabled={!session.connected && key !== "dpad"} aria-pressed={key === "ctrl" ? ctrl : key === "meta" ? meta : key === "dpad" ? dpadOpen : undefined} aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined} title={key === "ctrl" ? ctrlLocked ? t("terminalControlRelease") : t("terminalControlLock") : undefined} onDoubleClick={() => {if (key === "ctrl") {setCtrl(true); setCtrlLocked(true);}}} onClick={() => {
         if (key === "ctrl") {if (ctrlLocked) {setCtrlLocked(false); setCtrl(false);} else setCtrl(!ctrl);}
         else if (key === "meta") setMeta(!meta);
         else if (key === "paste") void paste();
         else if (key === "dpad") setDpadOpen(!dpadOpen);
         else sendKey(sequences[key] ?? key);
-      }}>{labels[key] ?? key}{key === "ctrl" && ctrlLocked ? " · lock" : ""}</button>)}
+      }}>{labels[key] ?? (key === "paste" ? t("terminalPaste") : key === "dpad" ? t("terminalDpad") : key)}{key === "ctrl" && ctrlLocked ? ` · ${t("terminalLock")}` : ""}</button>)}
       {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) session.terminal.focus();}}>{chord.label}</button>)}
-      <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => searchInput.current?.focus());}}>Find</button>
-      <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError("Select terminal text before copying.");}}>Copy</button>
-      <button onClick={() => setComposing(!composing)}>Compose</button>
+      <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => searchInput.current?.focus());}}>{t('terminalFind')}</button>
+      <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
+      <button onClick={() => setComposing(!composing)}>{t('terminalCompose')}</button>
     </div>}
   </div>;
 }
