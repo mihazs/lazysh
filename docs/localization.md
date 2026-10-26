@@ -47,6 +47,11 @@ reported SDK states/warnings, socket paths and native errors remain verbatim.
 Changing language does not restart a stream, replace its pending pull or frame,
 reset input opt-in, refetch inventory or submit a lifecycle action. Reboot and
 shutdown retain their explicit confirmation; protocol key names stay unchanged.
+tmux Jump To also translates its layout controls, current-window marker and
+navigation guidance. Native error text remains a separate raw text node beside
+the translated unavailable prefix. Window indexes use locale-aware formatting;
+session/window names, native generations and target IDs remain unchanged.
+Language changes retain the layout, focused control and in-flight requests.
 Remote push registration controls and their
 client-owned contact/privacy/error messages now use all three catalogs too.
 Changing language preserves checked consent and pending native operation/recovery
