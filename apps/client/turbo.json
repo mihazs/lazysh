@@ -1,6 +1,7 @@
 {
   "extends": ["//"],
   "tasks": {
+    "build": { "cache": false },
     "test:parakeet-product": {
       "cache": false,
       "passThroughEnv": ["LAZYSH_PARAKEET_TEST_ARCHIVE", "LAZYSH_PARAKEET_SOURCE_ARCHIVE", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL"]
