@@ -21,6 +21,8 @@ mod grok_checkpoint;
 mod grok_conversation;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
+#[cfg(test)]
+mod mutation_observer;
 mod snapshot;
 pub use conversation::conversation;
 pub use database::read_database_page;

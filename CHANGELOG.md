@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Reject observed truncated, replaced or mixed Claude conversation captures while preserving ordinary append-only growth during Follow. Parse an admitted bounded prefix without retries; defaults, polling, raw Records and Grok behavior are unchanged.
+
 - Keep retained local font errors and fallback warnings in the current interface language without reloading fonts or repeating storage operations. Font data, stored names, raw device diagnostics and defaults are unchanged.
 
 - Localize Keep Awake controls and multiplexer prefix shortcuts in English, Brazilian Portuguese and Spanish while preserving native ownership, opt-in state, retained errors and exact input bytes. Keep the board checkbox within narrow layouts; defaults and permissions are unchanged.

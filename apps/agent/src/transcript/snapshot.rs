@@ -2,9 +2,9 @@ use super::{
     open_transcript, validate_message, Error, Result, TranscriptAgent, TranscriptPage, MAX_PAGE,
 };
 use serde_json::Value;
-use std::{fs::File, io::Read, path::Path};
+use std::{io::Read, path::Path};
 
-pub(super) fn read_bytes(file: &mut File, length: u64) -> Result<Vec<u8>> {
+pub(super) fn read_bytes(file: &mut impl Read, length: u64) -> Result<Vec<u8>> {
     if length > lazysh_common::record_checkpoint::MAX_SNAPSHOT {
         return Err(Error::InvalidArgument);
     }
