@@ -17,6 +17,26 @@ SSH/frontend delivery, latency, battery use or physical devices. Those remain
 under issue #19. A passing synthetic inventory/image fixture alone does not
 establish the real SDK gate's result.
 
+The initial [API 36 emulator run](https://github.com/mihazs/lazysh/actions/runs/40268377280/job/121395629728)
+passed the exact case at source `cb9be42`: a 1080×1920 screen became a valid
+720×1280 JPEG. This is screenshot/discovery evidence for that owned emulator,
+separate from the synthetic interface checks below.
+
+## Interface language
+
+Device controls and client validation use English, Brazilian Portuguese or Spanish
+without changing the selected device/platform, SDK request IDs, frame bytes,
+source dimensions or coordinate mapping. A language change does not start/stop a
+stream, capture a screenshot or grant input permission. The iOS companion socket
+draft remains editable data; reported names, SDK states, native warnings/errors
+and socket paths are not translated. Reboot/shutdown keep their explicit confirmation.
+
+Synthetic Vitest/Playwright fixtures cover held startup and pulls, late cleanup,
+retained errors, the screenshot timer, exact Android pixels/iOS points and key
+values, plus real browser JPEG decoding and stable frame/draft identity while
+changing language. These renderer checks do not execute SDK commands or establish
+real-device input, video, latency, battery use or physical mobile WebView acceptance.
+
 The optional Rust companion can inspect Android devices/emulators and iOS Simulators on the connected host. It invokes the host's installed SDK tools through the existing authenticated SSH connection. It does not install SDKs, pair devices, change debugging authorization, or expose a control server.
 
 Android requires `adb` from platform-tools and, for virtual-device discovery/boot, the Android Emulator package with an existing AVD. `ANDROID_HOME` or `ANDROID_SDK_ROOT` selects the SDK; otherwise tools must be on the host's noninteractive `PATH`. A device must already authorize that host's debugging key. iOS requires macOS and an installed Xcode toolchain providing `xcrun simctl`.

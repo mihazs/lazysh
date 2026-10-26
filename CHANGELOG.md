@@ -38,6 +38,16 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Device discovery, screenshot/video controls and client-owned validation now
+  support English, Brazilian Portuguese and Spanish. Interface changes preserve
+  stream ownership, frame data, socket drafts and explicit device-input choices;
+  native SDK warnings and device identities remain verbatim. Defaults are unchanged.
+
+- Localize optional public-sharing configuration, expiring uploads/history,
+  thumbnails, copying and revocation in English, Brazilian Portuguese and Spanish.
+  Language changes preserve credential/file drafts and in-flight requests; defaults
+  and explicit upload/revoke consent are unchanged.
+
 - Localize host attachment selection, crop/annotation controls, upload/copy/staging
   notices and local validation in English, Brazilian Portuguese and Spanish.
   Language changes preserve file bytes, edits, paths and editable prompts; defaults

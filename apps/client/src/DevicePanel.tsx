@@ -1,7 +1,8 @@
+import {t,useUi} from './i18n/core';
+import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { errorMessage } from "./SessionTools";
 import { useDeviceStream } from "./useDeviceStream";
 type Device = {
   id: string;
@@ -10,6 +11,7 @@ type Device = {
   kind: string;
   capabilities: Record<string, boolean>;
 };
+const keyLabels={back:'devicesBack',home:'devicesHome',enter:'devicesEnter',power:'devicesPower','volume-up':'devicesVolumeUp','volume-down':'devicesVolumeDown'} as const;
 type Frame = {
   schemaVersion: number;
   platform: string;
@@ -35,7 +37,7 @@ export function parseFrame(value: unknown): Frame {
     frame.base64.length > 720000 ||
     !/^[A-Za-z0-9+/]*={0,2}$/.test(frame.base64)
   )
-    throw new Error("Invalid device frame.");
+    throw new LocalUiError('devicesInvalidFrame');
   for (const number of [
     frame.width,
     frame.height,
@@ -43,12 +45,12 @@ export function parseFrame(value: unknown): Frame {
     frame.imageHeight,
   ])
     if (!Number.isInteger(number) || number < 1 || number > 32768)
-      throw new Error("Invalid device dimensions.");
+      throw new LocalUiError('devicesInvalidDimensions');
   if (
     frame.width * frame.height > 40000000 ||
     frame.imageWidth * frame.imageHeight > 4000000
   )
-    throw new Error("Device image exceeds limits.");
+    throw new LocalUiError('devicesImageLimit');
   return frame;
 }
 export function framePoint(
@@ -70,6 +72,7 @@ export function framePoint(
   };
 }
 export default function DevicePanel({ sessionId }: { sessionId: string }) {
+  useUi();
   const invoke = useProtectedInvoke();
   const [platform, setPlatform] = useState("android");
   const [devices, setDevices] = useState<Device[]>([]);
@@ -87,7 +90,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   }>();
   const [input, setInput] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiErrorCause>("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const current = useRef(0);
   const running = useRef(false);
@@ -120,13 +123,13 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     (value: unknown) => {
       const result = parseFrame(value);
       if (result.id !== selected || result.platform !== platform)
-        throw new Error("Device stream identity changed.");
+        throw new LocalUiError('devicesStreamIdentity');
       setFrame(result);
     },
     [selected, platform],
   );
   const streamError = useCallback((error: unknown) => {
-    setError(errorMessage(error));
+    setError(captureUiError(error));
     setContinuous(false);
     setInput(false);
   }, []);
@@ -147,7 +150,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     try {
       await action();
     } catch (e) {
-      setError(errorMessage(e));
+      setError(captureUiError(e));
       setLive(false);
       setInput(false);
     } finally {
@@ -176,7 +179,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
             (warning) => typeof warning !== "string" || warning.length > 4096,
           )))
     )
-      throw new Error("Invalid device list.");
+      throw new LocalUiError('devicesInvalidList');
     for (const item of [...result.devices, ...result.avds])
       if (
         !item ||
@@ -185,7 +188,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
         typeof item.name !== "string" ||
         item.name.length > 1024
       )
-        throw new Error("Invalid device identity.");
+        throw new LocalUiError('devicesInvalidIdentity');
     for (const item of result.devices)
       if (
         typeof item.state !== "string" ||
@@ -198,7 +201,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
           (value) => typeof value !== "boolean",
         )
       )
-        throw new Error("Invalid device capabilities.");
+        throw new LocalUiError('devicesInvalidCapabilities');
     if (generation === current.current) {
       setDevices(result.devices);
       setAvds(result.avds);
@@ -216,7 +219,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       }),
     );
     if (result.id !== selected || result.platform !== platform)
-      throw new Error("Device frame identity changed.");
+      throw new LocalUiError('devicesFrameIdentity');
     if (generation === current.current) {
       setFrame(result);
       setNeedsScreenshot(false);
@@ -256,30 +259,26 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
     { x: number; y: number; time: number; id: string } | undefined
   >(undefined);
   return (
-    <section className="tool-panel" aria-label="Host devices">
-      <h3>Simulators and devices</h3>
-      <p>
-        Uses the SDK installed on this SSH host. Screenshot refresh captures one
-        frame per second. Optional iOS idb video uses a private local companion
-        socket.
-      </p>
+    <section className="tool-panel" aria-label={t('devicesTitle')}>
+      <h3>{t('devicesHeading')}</h3>
+      <p>{t('devicesHint')}</p>
       <div className="tool-bar">
         <label>
-          Platform
+          {t('devicesPlatform')}
           <select
             disabled={busy}
             value={platform}
             onChange={(event) => setPlatform(event.target.value)}
           >
             <option value="android">Android</option>
-            <option value="ios">iOS Simulator</option>
+            <option value="ios">{t('devicesSimulator')}</option>
           </select>
         </label>
         <button disabled={busy} onClick={() => void run(list)}>
-          Find devices
+          {t('devicesFind')}
         </button>
         <label>
-          Device
+          {t('devicesDevice')}
           <select
             disabled={busy}
             value={selected}
@@ -295,7 +294,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               setInput(false);
             }}
           >
-            <option value="">Select a device</option>
+            <option value="">{t('devicesSelect')}</option>
             {devices.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name} · {item.state}
@@ -327,14 +326,12 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
                   value.viewOnly !== true ||
                   value.maximumSeconds !== 180
                 )
-                  throw new Error(
-                    "Host Android video tools are unavailable or incompatible.",
-                  );
+                  throw new LocalUiError('devicesAndroidUnavailable');
                 if (generation === current.current) setAndroidVideoReady(true);
               })
             }
           >
-            Verify Android video tools
+            {t('devicesVerifyAndroid')}
           </button>
           <button
             disabled={!androidVideoReady || busy}
@@ -345,18 +342,17 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               setContinuous(!continuous);
             }}
           >
-            {continuous ? "Stop video preview" : "Start video preview"}
+            {continuous ? t('devicesStopVideo') : t('devicesStartVideo')}
           </button>
           <span>
-            View-only, up to three minutes. Requires installed host FFmpeg.
-            Capture a fresh screenshot after stopping to enable input.
+            {t('devicesAndroidHint')}
           </span>
         </div>
       )}
       {platform === "ios" && selected && (
         <div className="tool-bar">
           <label>
-            idb companion socket
+            {t('devicesSocket')}
             <input
               value={socket}
               disabled={continuous || busy}
@@ -388,15 +384,13 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
                     (n) => Number.isInteger(n) && n > 0 && n <= 8192,
                   )
                 )
-                  throw new Error(
-                    "Companion did not report verified simulator point dimensions.",
-                  );
+                  throw new LocalUiError('devicesIosDimensions');
                 if (generation === current.current)
                   setCompanion({ width: value.width, height: value.height });
               })
             }
           >
-            Verify iOS companion
+            {t('devicesVerifyIos')}
           </button>
           <button
             disabled={!companion || busy}
@@ -406,11 +400,10 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               setContinuous(!continuous);
             }}
           >
-            {continuous ? "Stop video preview" : "Start video preview"}
+            {continuous ? t('devicesStopVideo') : t('devicesStartVideo')}
           </button>
           <span>
-            Requires installed idb and an existing socket accessible only to
-            your host account.
+            {t('devicesIosHint')}
           </span>
         </div>
       )}
@@ -421,7 +414,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       ))}
       {error && (
         <p role="alert" className="inline-error">
-          {error}
+          {uiErrorText(error)}
         </p>
       )}
       {device && (
@@ -430,7 +423,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
             disabled={busy || continuous || !device.capabilities.screenshot}
             onClick={() => void run(capture)}
           >
-            Capture screen
+            {t('devicesCapture')}
           </button>
           <button
             disabled={continuous || !device.capabilities.screenshot}
@@ -439,7 +432,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               if (!live) void run(capture);
             }}
           >
-            {live ? "Stop live view" : "Start live view"}
+            {live ? t('devicesStopLive') : t('devicesStartLive')}
           </button>
           <label>
             <input
@@ -451,19 +444,19 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
               checked={input}
               onChange={(event) => setInput(event.target.checked)}
             />
-            Enable device input
+            {t('devicesEnableInput')}
           </label>
           {(device.capabilities.key || companion) &&
             (platform === "ios"
-              ? ["home", "power", "volume-up", "volume-down"]
-              : ["back", "home", "enter"]
+              ? ["home", "power", "volume-up", "volume-down"] as const
+              : ["back", "home", "enter"] as const
             ).map((key) => (
               <button
                 key={key}
                 disabled={busy || !input}
                 onClick={() => void run(() => action({ type: "key", key }))}
               >
-                {key}
+                {t(keyLabels[key])}
               </button>
             ))}
           {(["boot", "reboot", "shutdown"] as const).map(
@@ -473,11 +466,11 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
                   key={type}
                   disabled={busy}
                   onClick={() => {
-                    if (type === "boot" || confirm(`${type} ${device.name}?`))
+                    if (type === "boot" || confirm(t(type==='reboot'?'devicesConfirmReboot':'devicesConfirmShutdown',{name:device.name})))
                       void run(() => action({ type }));
                   }}
                 >
-                  {type}
+                  {t(({boot:'devicesBoot',reboot:'devicesReboot',shutdown:'devicesShutdown'} as const)[type])}
                 </button>
               ),
           )}
@@ -486,7 +479,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       {frame && (
         <img
           className="device-frame"
-          alt={`Screen of ${device?.name || frame.id}`}
+          alt={t('devicesScreen',{name:device?.name || frame.id})}
           src={`data:image/jpeg;base64,${frame.base64}`}
           draggable={false}
           style={{
@@ -557,14 +550,14 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
       )}
       {avds.length > 0 && (
         <div>
-          <h4>Available virtual devices</h4>
+          <h4>{t('devicesAvds')}</h4>
           {avds.map((avd) => (
             <button
               key={avd.id}
               disabled={busy}
               onClick={() => void run(() => action({ type: "boot" }, avd.id))}
             >
-              Boot {avd.name}
+              {t('devicesBootAvd',{name:avd.name})}
             </button>
           ))}
         </div>
