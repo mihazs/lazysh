@@ -2867,6 +2867,9 @@ async fn attach_tmux_inner(
 mod tests {
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
+    #[cfg(unix)]
+    #[path = "transcript_image_fixture.rs"]
+    mod transcript_image_fixture;
     use super::test_support::*;
     fn fixture_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();
@@ -4973,21 +4976,21 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local OpenSSH sshd; run explicitly for interoperability"]
     async fn openssh_sftp_and_command_interoperability() {
-        openssh_interoperability(false, false, false).await;
+        openssh_interoperability(OpenSshCheck::Files).await;
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     #[ignore = "requires local OpenSSH sshd and official mosh-server; run explicitly for interoperability"]
     async fn openssh_mosh_bootstrap_and_control_interoperability() {
-        openssh_interoperability(true, false, false).await;
+        openssh_interoperability(OpenSshCheck::Mosh).await;
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "requires OpenSSH and official ET_SERVER_BIN/ET_TERMINAL_BIN; run explicitly"]
     async fn openssh_et_bootstrap_and_control_interoperability() {
-        openssh_interoperability(false, true, false).await;
+        openssh_interoperability(OpenSshCheck::Et).await;
     }
 
     #[cfg(target_os = "macos")]
@@ -4999,11 +5002,42 @@ mod tests {
             Ok("1"),
             "Requires an explicitly owned disposable Mac clipboard, never a user's clipboard"
         );
-        openssh_interoperability(false, false, true).await;
+        openssh_interoperability(OpenSshCheck::Clipboard).await;
     }
 
     #[cfg(unix)]
-    async fn openssh_interoperability(mosh: bool, et: bool, mac_clipboard: bool) {
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH and current-source LAZYSH_TEST_AGENT_BIN; run explicitly"]
+    async fn openssh_recorded_images_preserve_bytes_and_default_off() {
+        openssh_interoperability(OpenSshCheck::TranscriptImages).await;
+    }
+
+    #[cfg(unix)]
+    enum OpenSshCheck {
+        Files,
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        Mosh,
+        #[cfg(target_os = "linux")]
+        Et,
+        #[cfg(target_os = "macos")]
+        Clipboard,
+        TranscriptImages,
+    }
+
+    #[cfg(unix)]
+    async fn openssh_interoperability(check: OpenSshCheck) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let mosh = matches!(check, OpenSshCheck::Mosh);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let mosh = false;
+        #[cfg(target_os = "linux")]
+        let et = matches!(check, OpenSshCheck::Et);
+        #[cfg(not(target_os = "linux"))]
+        let et = false;
+        #[cfg(target_os = "macos")]
+        let mac_clipboard = matches!(check, OpenSshCheck::Clipboard);
+        #[cfg(not(target_os = "macos"))]
+        let mac_clipboard = false;
         use std::os::unix::fs::PermissionsExt;
         use tauri::Manager;
         struct Process(std::process::Child);
@@ -5014,6 +5048,11 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
+        let environment = if matches!(check, OpenSshCheck::TranscriptImages) {
+            transcript_image_fixture::companion_path(dir.path())
+        } else {
+            String::new()
+        };
         let key = ed25519_key();
         let user_key = ed25519_key();
         let key_path = dir.path().join("host_key");
@@ -5029,7 +5068,7 @@ mod tests {
         let port = socket.local_addr().unwrap().port();
         drop(socket);
         let config = dir.path().join("sshd_config");
-        fs::write(&config,format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\nSubsystem sftp internal-sftp -d {}\n",key_path.display(),authorized.display(),dir.path().join("sshd.pid").display(),dir.path().display())).unwrap();
+        fs::write(&config,format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPermitRootLogin yes\nSubsystem sftp internal-sftp -d {}\n{environment}",key_path.display(),authorized.display(),dir.path().join("sshd.pid").display(),dir.path().display())).unwrap();
         let sshd = std::process::Command::new("sh")
             .args(["-c", "command -v sshd"])
             .output()
@@ -5089,6 +5128,10 @@ mod tests {
         .await
         .unwrap();
         let id = connected.session_id;
+        if matches!(check, OpenSshCheck::TranscriptImages) {
+            transcript_image_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
         #[cfg(target_os = "linux")]
         if et {
             let forwarding_host = Host {
