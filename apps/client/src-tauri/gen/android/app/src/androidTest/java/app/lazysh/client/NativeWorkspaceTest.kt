@@ -161,6 +161,11 @@ class NativeWorkspaceTest {
         assertEquals("Packaged APK must resolve implicit theme links to MainActivity", MainActivity::class.java.name,
             context.packageManager.resolveActivity(cold, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.name)
         assertTrue("The acceptance intent must not bypass manifest resolution", cold.component == null)
+        for (scheme in listOf("lazysh-invalid", "https")) {
+            val unsupported = Intent(cold).setData(Uri.parse("$scheme://theme?data=invalid"))
+            assertEquals("Unrelated schemes must not resolve to this APK", null,
+                context.packageManager.resolveActivity(unsupported, PackageManager.MATCH_DEFAULT_ONLY))
+        }
         val scenario = NativeActivityFixture.launch(cold)
         val original = AtomicReference<MainActivity>()
         scenario.onActivity { original.set(it) }
