@@ -13,7 +13,7 @@
     "build:native": "tauri build --no-bundle",
     "build:android": "CMAKE_ANDROID_NDK=$NDK_HOME WHISPER_DONT_GENERATE_BINDINGS=1 tauri android build --target aarch64 --debug --apk --ci",
     "build:android:emulator": "CMAKE_ANDROID_NDK=$NDK_HOME WHISPER_DONT_GENERATE_BINDINGS=1 tauri android build --target x86_64 --debug --apk --ci",
-    "test:android": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview",
+    "test:android": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi",
     "build:ios": "cd src-tauri && tauri ios build --target aarch64-sim --debug --ci",
     "check": "tsc -b",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
@@ -35,7 +35,8 @@
     "init:ios": "cd src-tauri && tauri ios init --ci",
     "test:install-browser": "playwright install chromium",
     "test:ios-workspace": "xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWorkspaceUITests -configuration debug -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/workspace-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO",
-    "test:android-theme-links": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshThemeLinkAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview"
+    "test:android-theme-links": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshThemeLinkAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview",
+    "test:android-ssh": "LAZYSH_ANDROID_UI_SSH=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts"
   },
   "dependencies": {
     "@lazysh/display-idle": "workspace:*",
