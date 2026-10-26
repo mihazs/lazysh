@@ -3,18 +3,19 @@ declare global { interface Window {
   nativeFixtureInvoke: (command: string, args: Record<string, unknown>) => Promise<unknown>;
 } }
 /** Shared synthetic native admission; each spec retains its own command behavior. */
-export async function installNativeBridge(page: Page, access = {reason:'Browser fixture', generation:'0'}) {
-  await page.addInitScript(access => {
+export async function installNativeBridge(page: Page, access = {reason:'Browser fixture', generation:'0'}, options={nativeLocale:false}) {
+  await page.addInitScript(({access,options}) => {
     Object.defineProperty(window, 'isTauri', {value:true});
     Object.defineProperty(window, '__TAURI_INTERNALS__', {value: {
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (command: string, args: Record<string, unknown> = {}) => {
         if (command === 'app_lock_status') return {initialized:true,supported:false,enabled:false,locked:false,...access};
+        if (command === 'ui_locale_status' && !options.nativeLocale) return {nativeAuthority:false};
         if (command === 'app_lock_ready' || command === 'adopt_session') return;
         return window.nativeFixtureInvoke(command, args);
       },
     }});
-  }, access);
+  }, {access,options});
 }
 /** Synthetic final audio only: never asks the host browser for a microphone. */
 export async function installSyntheticAudio(page: Page) {

@@ -12,6 +12,8 @@ fn main() {
         "board_keep_awake_acquire",
         "board_keep_awake_release",
         "app_lock_status",
+        "ui_locale_status",
+        "ui_locale_set",
         "app_lock_configure",
         "app_lock_ready",
         "theme_link_status",
