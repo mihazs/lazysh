@@ -34,6 +34,19 @@ This plugin has no remote payload handler or verified delivery pipeline. Configu
 
 ## Verification
 
+The renderer controls, contact/privacy explanations and retained app-owned failures
+support English, Brazilian Portuguese and Spanish. Changing interface language
+preserves consent and pending native operation/recovery ownership; it never
+registers, revokes or requests OS permission by itself. Native `reason` text,
+including empty strings, and provider names remain verbatim. Provider errors stay
+behind the existing generic failure messages. This does not translate OS permission
+sheets or establish provider availability, token validity or delivery.
+
+The native Vitest cases in `i18n/pushLocales.test.tsx` and synthetic desktop/phone
+Playwright cases in `e2e/push-locales.spec.ts` exercise these locale transitions,
+including a paused registration's late completion and failed revocation recovery.
+They do not invoke APNs/FCM or a real OS permission dialog.
+
 `RegistrationControllerTest` uses standard Gradle JUnit tests and a controllable messaging driver to exercise consent, asynchronous cancellation, late rotation, revocation failure/retry and one-at-a-time operations. The plugin itself compiles against the real FCM Android SDK. These tests do not contact Google or certify device registration. `PushSettingsPanel.test.tsx` uses the client's native Vitest structure to test consent, unavailable configuration, sanitized failures and revocation retry.
 
 After the Tauri Android build has generated plugin metadata, run the package's Android tests through the generated Gradle workspace:

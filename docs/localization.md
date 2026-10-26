@@ -47,8 +47,16 @@ reported SDK states/warnings, socket paths and native errors remain verbatim.
 Changing language does not restart a stream, replace its pending pull or frame,
 reset input opt-in, refetch inventory or submit a lifecycle action. Reboot and
 shutdown retain their explicit confirmation; protocol key names stay unchanged.
-This is a partial milestone under issue #79. Other feature panels still require their own
-localization and acceptance. Native lock-cover/biometric-reason resources on
+Remote push registration controls and their
+client-owned contact/privacy/error messages now use all three catalogs too.
+Changing language preserves checked consent and pending native operation/recovery
+identity; it never requests notification permission or registers/revokes a token
+by itself. Native status reasons, including empty text, and Apple APNs/Google
+Firebase names remain verbatim. Existing generic operation errors continue to
+hide provider diagnostics; native permission sheets remain outside this renderer.
+This is a partial milestone under issue #79. Other feature panels still require
+their own localization and acceptance.
+Native lock-cover/biometric-reason resources on
 Android, iOS and macOS use the [native language authority](native-ui-locale.md).
 Apple permission purposes have separate bundled resources below;
 selecting an interface language does not change native OS controls.
@@ -184,6 +192,12 @@ Run the existing project tasks from `apps/client`:
   desktop/phone widths, focused credential/file drafts, real sanitized thumbnail
   identity, cancellation followed by acceptance and explicit link copy/revocation.
 - `bun run check` checks catalog keys and required interpolation arguments.
+- `bun run test src/i18n/pushLocales.test.tsx src/PushSettingsPanel.test.tsx`
+  checks consent, held register/revoke, original access headers, one recovery read,
+  stale-result rejection and retained failure messages across all three catalogs.
+- `bun run test:e2e e2e/push-locales.spec.ts` checks actual registration controls
+  at desktop/phone widths with synthetic FCM/APNs metadata, preserved focused
+  consent and explicit revocation/retry, without native permission/provider calls.
 - `bun run test src/i18n/deviceLocales.test.tsx src/DevicePanel.test.tsx src/useDeviceStream.test.tsx`
   checks held stream startup/pulls, idle/sequence/identity validation, original
   request headers, screenshot timers, Android pixels and verified iOS point coordinates.

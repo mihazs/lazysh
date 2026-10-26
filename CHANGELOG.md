@@ -40,6 +40,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Remote push registration controls, contact/privacy disclosures and retained
+  operation errors now support English, Brazilian Portuguese and Spanish.
+  Language changes preserve consent and pending registration/revocation;
+  native reasons and provider names remain verbatim. Defaults are unchanged.
+
 - Desktop `-dir PATH` / `--dir PATH` cold launches open one local terminal after
   normal unlock, using the literal requested directory. Warm directory requests
   show a localized unsupported notice; host/multiplexer CLI targets remain
