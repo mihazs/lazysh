@@ -4,7 +4,8 @@ import { captureAccess, useAccessSnapshot, useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 
 import Markdown from "react-markdown";
-import { errorMessage } from "./SessionTools";
+import {errorMessage, captureUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
+import {validateRecordedPage} from './recordedFollow';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -139,19 +140,22 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     path: string;
     view?: string;
     transcriptSessionId?: string;
+    checkpointed?: boolean;
   }>();
   const [messages, setMessages] = useState<Message[]>([]);
   const [offset, setOffset] = useState(0);
   const [checkpoint, setCheckpoint] = useState<string>();
   const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiErrorCause>("");
   const [draft, setDraft] = useState("");
   const [draftStatus, setDraftStatus] = useState<"" | "chatDraftTooLong" | "chatDraftStaged">("");
   const composing = useRef(false);
   const request = useRef(0);
   const conversation = opened?.agent === 'claude' && opened.view === 'conversation';
-  const canFollow = conversation && agent === 'claude' && view === 'conversation' && path.trim() === opened.path;
+  const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
+  const followable = conversation || recorded;
+  const canFollow = followable && agent === opened.agent && view === (opened.view ?? 'records') && path.trim() === opened.path;
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
     setDraft(''); setDraftStatus(''); composing.current = false;
@@ -219,13 +223,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
       if (mounted.current && access.current()) {setBusy(false); setCompleted(value => value + 1);}
     }
   }
-  async function read(reset: boolean, automatic = false) {
+  async function read(reset: boolean, automatic = false, prepare = false) {
     if (flight.current || !access.current()) return;
     if (automatic && (!followRef.current || !canFollow || pageHidden.current || document.visibilityState === 'hidden')) return;
     const source = reset
       ? {
           agent,
           path: path.trim(),
+          ...(prepare ? {checkpointed:true} : {}),
           ...(["hermes", "opencode"].includes(agent)
             ? { transcriptSessionId }
             : {}),
@@ -233,6 +238,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         }
       : opened;
     if (!source) return;
+    if (reset && source.agent === 'grok-acp') {setFollowing(false); followRef.current = false;}
     flight.current = true;
     automaticRequest.current = automatic;
     const current = ++request.current;
@@ -246,9 +252,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           sessionId,
           ...source,
           offset: cursor,
-          ...(!replace && source.agent === "antigravity-jsonl" ? { checkpoint } : {}),
+          ...(!replace && (source.agent === "antigravity-jsonl" || source.checkpointed) ? { checkpoint } : {}),
         }),
       );
+      if (source.checkpointed) validateRecordedPage(page,cursor,replace ? undefined : checkpoint);
       if (source.view === "conversation" && page.view !== "active_branch")
         throw new Error(
           t("chatUpdateCompanion"),
@@ -261,6 +268,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         throw new Error(t("chatChanged"));
       if (!currentRequest(current)) return;
       setOpened(source);
+      if (prepare) {setFollowing(true); followRef.current = true;}
       if (reset) {atLatestRef.current = true; setAtLatest(true);}
       setOffset(page.nextOffset);
       setCheckpoint(page.checkpoint);
@@ -276,7 +284,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     } catch (e) {
       if (currentRequest(current)) {
         setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
-          ? t("chatChanged") : errorMessage(e));
+          ? t("chatChanged") : captureUiError(e));
         setFollowing(false); followRef.current = false;
       }
     } finally {
@@ -398,7 +406,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
       {agent === "grok-acp" && view === "conversation" && <p className="muted">{t("chatGrokConversation")}</p>}
       {error && (
         <p className="inline-error" role="alert">
-          {error}
+          {uiErrorText(error)}
         </p>
       )}
       {opened && (
@@ -409,17 +417,21 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             : opened.agent === "antigravity-jsonl" ? t("chatStepLimit") : t("chatMessageLimit")}
         </p>
       )}
-      {conversation && <div className="chat-follow-controls">
-        <label><input type="checkbox" disabled={!canFollow || !access.current()} checked={following} onChange={event => {
+      {agent === 'grok-acp' && view === 'records' && <button type="button" disabled={busy || !path.trim() || !access.current()} onClick={() => void read(true,false,true)}>
+        {t('chatRecordedStart')}
+      </button>}
+      {followable && <div className="chat-follow-controls">
+        <label><input type="checkbox" disabled={!canFollow || !access.current() || (recorded && busy && !automaticRequest.current)} checked={following} onChange={event => {
           followRef.current = event.target.checked; setFollowing(event.target.checked);
           if (!event.target.checked && automaticRequest.current) request.current++;
           if (event.target.checked) setError('');
-        }} />{t("chatFollow")}</label>
-        <p>{t("chatFollowExplanation")}</p>
-        {following && <p role="status">{visible ? t("chatFollowing") : t("chatFollowPaused")}</p>}
+        }} />{t(recorded ? "chatRecordedFollow" : "chatFollow")}</label>
+        <p>{t(recorded ? "chatRecordedExplanation" : "chatFollowExplanation")}</p>
+        {following && <p role="status">{visible ? t(recorded ? "chatRecordedFollowing" : "chatFollowing") : t("chatFollowPaused")}</p>}
+        {recorded && !following && <p role="status">{t('chatRecordedPaused')}</p>}
         {!atLatest && <button onClick={jumpToLatest}>{t("chatJumpLatest")}</button>}
       </div>}
-      <div ref={messageList} className={`chat-messages${conversation ? ' chat-conversation-messages' : ''}`} role={conversation ? 'region' : undefined} aria-label={conversation ? t("chatConversation") : undefined} tabIndex={conversation ? 0 : undefined} onScroll={() => {
+      <div ref={messageList} className={`chat-messages${followable ? ' chat-conversation-messages' : ''}`} role={followable ? 'region' : undefined} aria-label={followable ? t(recorded ? 'chatRecordedRegion' : 'chatConversation') : undefined} tabIndex={followable ? 0 : undefined} onScroll={() => {
         const element = messageList.current;
         if (element) {const latest = element.scrollHeight - element.clientHeight - element.scrollTop <= 24; atLatestRef.current = latest; setAtLatest(latest);}
       }}>
