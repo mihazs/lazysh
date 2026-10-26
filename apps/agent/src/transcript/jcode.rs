@@ -186,8 +186,7 @@ mod tests {
         let before = super::super::SourceSnapshot::capture(&file).unwrap();
         let replacement = dir.path().join("replacement.json");
         std::fs::write(&replacement, b"new").unwrap();
-        #[cfg(windows)]
-        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&path, dir.path().join("detached.json")).unwrap();
         std::fs::rename(replacement, &path).unwrap();
         assert!(crate::transcript::unchanged_snapshot(&path, &before).is_err());
     }
