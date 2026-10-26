@@ -23,12 +23,18 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    let file = open_transcript(path)?;
-    let size = file.metadata()?.len();
+    let mut file = open_transcript(path)?;
+    let before = file.metadata()?;
+    let size = before.len();
     if size > MAX_RECONSTRUCTION as u64 {
         return Err(Error::InvalidArgument);
     }
-    let mut reader = BufReader::new(file.take(size));
+    super::unchanged_snapshot(path, &before)?;
+    #[cfg(test)]
+    let source = mutation_tests::ObservedRead(&mut file);
+    #[cfg(not(test))]
+    let source = &mut file;
+    let mut reader = BufReader::new(source.take(size));
     let mut actions = Vec::new();
     let mut boundaries = Vec::new();
     let mut session = None;
@@ -178,6 +184,8 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
         }
         actions.push(action);
     }
+    // Parsed actions own their data; reject a changed source before publishing a view.
+    super::unchanged_snapshot(path, &before)?;
     let messages = reduce(actions)?;
     let total_messages = messages.len();
     let mut output_bytes = 0;
@@ -358,4 +366,164 @@ fn validate_normalized(message: &Value) -> Result<()> {
 fn normalized_size(message: &Value) -> Result<usize> {
     validate_normalized(message)?;
     super::message_size(message)
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use std::{
+        cell::RefCell,
+        fs::{self, File},
+        io::{self, Write},
+    };
+
+    thread_local! {
+        static MUTATE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+    pub(super) struct ObservedRead<'a>(pub &'a mut File);
+    impl Read for ObservedRead<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            let count = self.0.read(bytes)?;
+            if count > 0 {
+                MUTATE.with(|slot| {
+                    if let Some(mutate) = slot.borrow_mut().take() {
+                        mutate();
+                    }
+                });
+            }
+            Ok(count)
+        }
+    }
+
+    fn record(fill: char) -> Vec<u8> {
+        let row = json!({"timestamp":1,"method":"session/update","params":{"sessionId":"owned-capture-fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":fill.to_string().repeat(18000)}}}});
+        format!("{row}\n").into_bytes()
+    }
+
+    fn changed_capture(case: &'static str) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("updates.jsonl");
+        fs::write(&path, record('Q')).unwrap();
+        let selected = path.clone();
+        let detached = directory.path().join("detached.jsonl");
+        let original_at = fs::metadata(&path).unwrap().modified().unwrap();
+        let changed_at = original_at + std::time::Duration::from_secs(2);
+        MUTATE.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                match case {
+                    "truncate" => fs::write(&selected, b"").unwrap(),
+                    "rename" => {
+                        fs::rename(&selected, detached).unwrap();
+                        fs::write(&selected, record('Z')).unwrap();
+                    }
+                    "append" => fs::OpenOptions::new()
+                        .append(true)
+                        .open(&selected)
+                        .unwrap()
+                        .write_all(&record('Z'))
+                        .unwrap(),
+                    _ => fs::write(&selected, record('Z')).unwrap(),
+                }
+                // Portable cases have an observably changed timestamp even on
+                // coarse clocks; the Unix rename case isolates inode replacement.
+                File::options()
+                    .write(true)
+                    .open(&selected)
+                    .unwrap()
+                    .set_modified(if cfg!(unix) && case == "rename" {
+                        original_at
+                    } else {
+                        changed_at
+                    })
+                    .unwrap();
+            }))
+        });
+        let result = conversation(&path, 50);
+        MUTATE.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        let (rows, mixed) = result
+            .as_ref()
+            .map(|page| {
+                let text = page
+                    .messages
+                    .first()
+                    .and_then(|row| row["blocks"][0]["text"].as_str())
+                    .unwrap_or_default();
+                (
+                    page.messages.len(),
+                    text.contains('Q') && text.contains('Z'),
+                )
+            })
+            .unwrap_or_default();
+        eprintln!(
+            "Grok capture mutation={case} accepted={} rows={rows} mixed_old_new={mixed}",
+            result.is_ok()
+        );
+        assert!(
+            result.is_err(),
+            "mutated recorded conversation was accepted: {case}"
+        );
+        assert!(matches!(result.unwrap_err(), Error::InvalidEvent));
+    }
+
+    #[test]
+    fn truncated_capture_does_not_publish_a_shorter_history() {
+        changed_capture("truncate");
+    }
+    #[test]
+    fn renamed_capture_does_not_publish_the_detached_source() {
+        changed_capture("rename");
+    }
+    #[test]
+    fn rewritten_capture_does_not_publish_mixed_old_and_new_text() {
+        changed_capture("rewrite");
+    }
+
+    #[test]
+    fn append_during_capture_fails_without_retrying_or_publishing_a_prefix() {
+        changed_capture("append");
+    }
+
+    #[test]
+    fn stable_split_utf8_tail_waits_and_append_before_an_explicit_read_completes_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stable.jsonl");
+        let first = record('Q');
+        let second = record('é');
+        let split = second.iter().position(|byte| *byte == 0xc3).unwrap() + 1;
+        let mut bytes = first.clone();
+        bytes.extend_from_slice(&second[..split]);
+        fs::write(&path, &bytes).unwrap();
+        let partial = conversation(&path, 50).unwrap();
+        assert_eq!(partial.next_offset, first.len() as u64);
+        assert_eq!(partial.messages.len(), 1);
+        assert!(!partial.has_more);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&second[split..])
+            .unwrap();
+        let completed = conversation(&path, 50).unwrap();
+        assert_eq!(completed.next_offset, (first.len() + second.len()) as u64);
+        assert!(completed.messages[0]["blocks"][0]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(&"é".repeat(18000)));
+    }
+
+    #[test]
+    fn stable_valid_json_without_newline_is_not_consumed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("unterminated.jsonl");
+        let mut bytes = record('Q');
+        bytes.pop();
+        fs::write(&path, bytes).unwrap();
+        let pending = conversation(&path, 50).unwrap();
+        assert!(pending.messages.is_empty());
+        assert_eq!(pending.next_offset, 0);
+        assert!(!pending.has_more);
+    }
 }

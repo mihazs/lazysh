@@ -4,6 +4,8 @@
 
 - Localize terminal controls, clipboard consent, link confirmation, search/composer status and terminal-owned local errors in English, Brazilian Portuguese and Spanish. Language changes preserve live terminal handlers, raw content, drafts, explicit consent and input bytes; locale defaults and permissions are unchanged.
 
+- Reject observed file changes during Grok recorded-conversation reads, including concurrent appends, instead of publishing a partial, detached or mixed history. Stable incomplete tails, portable manual reads and existing limits/defaults remain unchanged.
+
 - Add owned OpenSSH/tmux acceptance for restoring an exact named-server workload through fresh verified SSH after original transport and native handle retirement. GUI cold start, app-process death and physical roaming remain separate acceptance.
 
 - Add explicit Grok recorded-file Follow with verified preparation, append-only paging, hidden-page pause and original source/access ownership. Manual Records remains the default; reconstructed conversation and live prompt targeting are not enabled.
