@@ -1,3 +1,4 @@
+import {attachmentReceipt} from '../src/test/attachmentData';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {expect,test} from '@playwright/test';
 import type {mountFileReview} from './fixtures/FileReviewHarness';
@@ -42,7 +43,7 @@ for(const labels of [
   await expect(englishRepo.getByRole('button',{name:'Show plain text',exact:true})).toBeVisible();
   await expect(englishRepo.locator('.repository-code')).toHaveText(fileReviewSource);
   await root.getByRole('button',{name:'Upload file',exact:true}).click();
-  await expect.poll(async()=>page.evaluate(()=>window.fileReview.calls.filter(call=>call.command==='upload_file'))).toEqual([{command:'upload_file',args:{sessionId:fileReviewSession,path:'/literal/new destination.txt',data:[97,98,99]}}]);
+  await expect.poll(async()=>page.evaluate(()=>window.fileReview.calls.filter(call=>call.command==='upload_file'))).toEqual([{command:'upload_file',args:{sessionId:fileReviewSession,path:'/literal/new destination.txt',data:[97,98,99],uploadId:attachmentReceipt}}]);
   await englishRepo.getByRole('combobox',{name:'Repository revision',exact:true}).selectOption('');
   await englishRepo.getByRole('button',{name:'Staged diff',exact:true}).click();
   await expect(englishRepo.getByRole('table',{name:'Side by side diff',exact:true})).toContainText('before literal');

@@ -1,5 +1,7 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  uploadCancelling: "Stopping upload…",
+  uploadCancelledWarning: "Upload cancelled locally. If sending started, a partial or completed new remote file may remain. Cancellation does not remove remote files.",
   desktopLaunchHostMissing: "This saved host no longer exists. Copy an existing host ID and run the command again.",
   desktopLaunchHostAmbiguous: "More than one saved host has this ID. Resolve the duplicate before trying again.",
   desktopLaunchHostChanged: "The saved host identity or protection changed. Cancel this request and run the command again.",

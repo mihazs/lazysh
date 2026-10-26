@@ -2,6 +2,8 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  uploadCancelling: ["Interrompendo envio…", "Deteniendo subida…"],
+  uploadCancelledWarning: ["Envio cancelado localmente. Se a transferência começou, um arquivo remoto novo pode permanecer parcial ou completo. O cancelamento não remove arquivos remotos.", "Subida cancelada localmente. Si la transferencia comenzó, puede quedar un archivo remoto nuevo parcial o completo. La cancelación no elimina archivos remotos."],
   desktopLaunchHostMissing: ["Este host salvo não existe mais. Copie o ID de um host existente e execute o comando novamente.", "Este host guardado ya no existe. Copia el ID de un host existente y ejecuta de nuevo el comando."],
   desktopLaunchHostAmbiguous: ["Mais de um host salvo tem este ID. Corrija a duplicidade antes de tentar novamente.", "Más de un host guardado tiene este ID. Corrige el duplicado antes de intentarlo de nuevo."],
   desktopLaunchHostChanged: ["A identidade ou a proteção do host salvo mudou. Cancele esta solicitação e execute o comando novamente.", "La identidad o la protección del host guardado cambió. Cancela esta solicitud y ejecuta de nuevo el comando."],

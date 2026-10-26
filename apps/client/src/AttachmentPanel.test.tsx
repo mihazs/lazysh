@@ -1,11 +1,12 @@
-import {attachmentPngHeader} from './test/attachmentData';
+import {attachmentPngHeader,attachmentReceipt} from './test/attachmentData';
 // @vitest-environment jsdom
-import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import AttachmentPanel from './AttachmentPanel';
 import { api } from './bridge';
 
-vi.mock('./bridge', () => ({ api: { uploadFile: vi.fn() } }));
+vi.mock('./bridge', () => ({ api: { uploadFile: vi.fn(), reserveUpload:vi.fn(),cancelUpload:vi.fn() } }));
+beforeEach(()=>{vi.mocked(api.reserveUpload).mockResolvedValue({uploadId:attachmentReceipt});vi.mocked(api.cancelUpload).mockResolvedValue({outcome:'unknown_or_settled'});});
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
 function file(name = 'report.txt', content = 'hello') {
   const value = new File([content], name, { type: 'text/plain' });
@@ -21,7 +22,7 @@ it('stages a private file, uploads only on explicit action, and exposes a quoted
   fireEvent.change(screen.getByLabelText('Destination path'), { target: { value: "/work/a'b.txt" } });
   fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
   await screen.findByLabelText('Host path');
-  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', "/work/a'b.txt", [104, 101, 108, 108, 111]);
+  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', "/work/a'b.txt", [104, 101, 108, 108, 111],attachmentReceipt);
   expect(screen.getByLabelText('Host path')).toHaveProperty('value', "'/work/a'\\''b.txt'");
   expect(screen.getByLabelText('Editable prompt')).toHaveProperty('value', "Please review the attached file '/work/a'\\''b.txt'.");
   fireEvent.change(screen.getByLabelText('Editable prompt'), { target: { value: 'My own prompt' } });
@@ -58,13 +59,12 @@ it('handles clipboard permission denial without automatic uploads', async () => 
   expect(api.uploadFile).not.toHaveBeenCalled();
 });
 
-it('flattens an explicit crop to PNG before the bounded upload', async () => {
+async function openEditableImage() {
   const bytes = attachmentPngHeader();
   const image = new File([bytes], 'shot.png', { type: 'image/png' });
   Object.defineProperty(image, 'arrayBuffer', { value: async () => bytes.buffer });
   const context = { clearRect: vi.fn(), drawImage: vi.fn(), translate: vi.fn(), strokeRect: vi.fn() };
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
-  vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback({ size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer } as Blob));
   vi.stubGlobal('Image', class {
     naturalWidth = 100; naturalHeight = 80; onload: (() => void) | null = null; onerror: (() => void) | null = null;
     set src(value: string) { if (value) queueMicrotask(() => this.onload?.()); }
@@ -76,11 +76,42 @@ it('flattens an explicit crop to PNG before the bounded upload', async () => {
   fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [image] } });
   fireEvent.click(await screen.findByLabelText('Crop or annotate PNG/JPEG'));
   await waitFor(() => expect(context.drawImage).toHaveBeenCalled());
+  return context;
+}
+it('flattens an explicit crop to PNG before the bounded upload', async () => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback({ size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer } as Blob));
+  const context=await openEditableImage();
   fireEvent.change(screen.getByLabelText('Crop x'), { target: { value: '10' } });
   fireEvent.change(screen.getByLabelText('Crop width'), { target: { value: '50' } });
   fireEvent.click(screen.getByRole('button', { name: 'Upload attachment' }));
   await screen.findByLabelText('Host path');
   expect(context.translate).toHaveBeenCalledWith(-10, -0);
   expect(HTMLCanvasElement.prototype.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png');
-  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', './shot-edited.png', [1, 2, 3]);
+  expect(api.uploadFile).toHaveBeenCalledWith('ssh-one', './shot-edited.png', [1, 2, 3],attachmentReceipt);
+});
+
+it('cancelling held PNG encoding never reserves or uploads its late final bytes',async()=>{
+  let encode!:BlobCallback;
+  vi.spyOn(HTMLCanvasElement.prototype,'toBlob').mockImplementation(callback=>{encode=callback;});
+  await openEditableImage();
+  fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  await waitFor(()=>expect(encode).toBeTypeOf('function'));
+  fireEvent.click(screen.getByRole('button',{name:'Cancel attachment'}));
+  await act(async()=>{encode({size:3,arrayBuffer:async()=>new Uint8Array([1,2,3]).buffer} as Blob);});
+  expect(api.reserveUpload).not.toHaveBeenCalled();expect(api.uploadFile).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('Host path')).toBeNull();
+});
+it('a clipboard read started earlier cannot replace the selection during an owned upload',async()=>{
+  let paste!:(items:unknown[])=>void;let finish!:()=>void;
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{read:()=>new Promise(resolve=>{paste=resolve;})}});
+  const decode=vi.fn(async()=>attachmentPngHeader().buffer);vi.stubGlobal('File',class extends File {arrayBuffer=decode;});
+  vi.mocked(api.uploadFile).mockImplementation(()=>new Promise<void>(resolve=>{finish=resolve;}));
+  render(<AttachmentPanel sessionId="ssh-one"/>);
+  fireEvent.click(screen.getByRole('button',{name:'Paste clipboard image'}));
+  fireEvent.change(screen.getByLabelText('Choose attachment'),{target:{files:[file()]}});
+  await screen.findByText(/report.txt · 5 bytes/);fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  await act(async()=>{paste([{types:['image/png'],getType:async()=>new Blob([attachmentPngHeader()],{type:'image/png'})}]);});
+  expect(screen.getByText(/report.txt · 5 bytes/)).toBeTruthy();expect(decode).not.toHaveBeenCalled();
+  await act(async()=>{finish();});expect(screen.getByLabelText('Host path')).toHaveProperty('value',"'./report.txt'");
 });
