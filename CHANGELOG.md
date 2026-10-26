@@ -6,6 +6,10 @@
   separate child PTYs, durable detach and original-lease revocation. GUI startup
   and biometric launch acceptance remain separate; runtime defaults do not change.
 
+- Add an explicit opt-in Grok ACP recorded-conversation view with bounded chunk grouping, tool replacement and proven prompt-index rewinds. Unsupported controls or ambiguous histories fail visibly with Records available. Records remain the default; Claude Follow, media no-fetch and live-session binding restrictions are unchanged.
+
+- Return the canonical SFTP destination after host-local uploads instead of echoing a relative input path. Attachments now copy/stage that returned path; Files refreshes its resolved parent. The internal `upload_file` result changes from void to `{path}`. Existing files remain protected by exclusive creation; cancellation never deletes remote paths.
+
 - Add cold saved-host CLI composition with `--mux tmux`, `tmux:SERVER` or
   `herdr`. After explicit normal authentication, lazysh opens that fixed picker
   on the new SSH control session; choosing an exact row attaches through the
@@ -67,6 +71,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   locks still fail closed. Separate SQLite contention failures remain under review.
 
 ### Added
+
+- Localize SSH identity generation/import controls, in-memory credential
+  explanations and public-key clipboard failures in English, Brazilian Portuguese
+  and Spanish. Key material, cryptographic parameters and explicit actions are
+  unchanged; no defaults or credential storage behavior change.
 
 - Localize tmux Jump To layouts, current-window markers, navigation guidance and
   the unavailable prefix in English, Brazilian Portuguese and Spanish. Language

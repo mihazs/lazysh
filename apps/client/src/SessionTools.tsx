@@ -1,6 +1,7 @@
 import {captureUiError, errorMessage, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi } from './access';
+import {uploadDirectory} from './attachment';
 import {useHostUpload} from './useHostUpload';
 import { useEffect, useRef, useState } from "react";
 import {
@@ -93,9 +94,9 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   async function sendFile() {
     if (!upload || !destination.trim() || busy) return;
     setError("");
-    await uploadJob.start(async()=>({path:destination,bytes:new Uint8Array(await upload.arrayBuffer())}),()=>{
+    await uploadJob.start(async()=>({path:destination,bytes:new Uint8Array(await upload.arrayBuffer())}),uploadedPath=>{
       setUpload(null);
-      void load(path);
+      void load(uploadDirectory(uploadedPath));
     });
   }
 

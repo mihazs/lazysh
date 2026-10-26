@@ -64,6 +64,47 @@ class NativeWorkspaceTest {
         }
     }
 
+    private enum class TypingPhase { CONSTRAINTS, FOCUS_CHECK, NATIVE_INJECTION, SETTLING }
+
+    // Failure metadata only: no selector, input value or renderer content is retained.
+    private class TypingTiming(val started: Long, val deadline: Long) {
+        var phase = TypingPhase.CONSTRAINTS
+        var constraintChecks = 0
+        var constraintsReady: Long? = null
+        var focusStarted: Long? = null
+        var focusReturned: Long? = null
+        var injectionStarted: Long? = null
+        var injectionReturned: Long? = null
+        var settlePolls = 0
+        var lastPollStarted: Long? = null
+        var lastPollReturned: Long? = null
+        var lastPollMatched: Boolean? = null
+        var deadlineObserved: Long? = null
+        var snapshotStarted: Long? = null
+        var snapshotReturned: Long? = null
+        var snapshotAvailable = false
+
+        fun report(now: Long): JSONObject {
+            fun elapsed(at: Long?): Any = at?.let { TimeUnit.NANOSECONDS.toMillis(it - started) } ?: JSONObject.NULL
+            val boundary = when {
+                injectionReturned?.let { it >= deadline } == true -> "injection_returned_after_deadline"
+                focusReturned?.let { it >= deadline } == true -> "focus_returned_after_deadline"
+                lastPollReturned?.let { it >= deadline } == true -> "poll_returned_after_deadline"
+                deadlineObserved != null -> "deadline_observed"
+                else -> "operation_failed"
+            }
+            return JSONObject().put("phase", phase.name).put("boundary", boundary)
+                .put("elapsedMs", elapsed(now)).put("budgetMs", elapsed(deadline))
+                .put("constraintChecks", constraintChecks).put("constraintsReadyMs", elapsed(constraintsReady))
+                .put("focusStartedMs", elapsed(focusStarted)).put("focusReturnedMs", elapsed(focusReturned))
+                .put("injectionStartedMs", elapsed(injectionStarted)).put("injectionReturnedMs", elapsed(injectionReturned))
+                .put("settlePolls", settlePolls).put("lastPollStartedMs", elapsed(lastPollStarted))
+                .put("lastPollReturnedMs", elapsed(lastPollReturned)).put("lastPollMatched", lastPollMatched ?: JSONObject.NULL)
+                .put("deadlineObservedMs", elapsed(deadlineObserved)).put("afterDeadlineSnapshotStartedMs", elapsed(snapshotStarted))
+                .put("afterDeadlineSnapshotReturnedMs", elapsed(snapshotReturned)).put("afterDeadlineSnapshotAvailable", snapshotAvailable)
+        }
+    }
+
     private fun typeInto(scenario: ActivityScenario<MainActivity>, selector: String, text: String) {
         // Grant native View focus before selecting the DOM input: requesting
         // native focus afterward can restore or blur a different DOM focus target.
@@ -89,46 +130,113 @@ class NativeWorkspaceTest {
         // Wait for the exact native type action's constraints, without refocusing
         // or attempting input, within the existing five-second typing budget.
         val typing = typeTextIntoFocusedView(text)
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (true) {
-            if (System.nanoTime() >= deadline) {
-                throw AssertionError("Native typing constraints did not become ready for $selector; native=${NativeActivityFixture.readiness(scenario)}; windows=${NativeActivityFixture.windowDiagnostics()}")
+        val started = System.nanoTime()
+        val deadline = started + TimeUnit.SECONDS.toNanos(5)
+        val timing = TypingTiming(started, deadline)
+        try {
+            while (true) {
+                if (System.nanoTime() >= deadline) {
+                    timing.deadlineObserved = System.nanoTime()
+                    throw AssertionError("Native typing constraints did not become ready for $selector; native=${NativeActivityFixture.readiness(scenario)}; windows=${NativeActivityFixture.windowDiagnostics()}")
+                }
+                var ready = false
+                timing.constraintChecks++
+                scenario.onActivity { activity ->
+                    ready = typing.constraints.matches(requireNotNull(webView(activity.window.decorView)))
+                }
+                if (ready) { timing.constraintsReady = System.nanoTime(); break }
+                Thread.sleep(25)
             }
-            var ready = false
-            scenario.onActivity { activity ->
-                ready = typing.constraints.matches(requireNotNull(webView(activity.window.decorView)))
+            timing.phase = TypingPhase.FOCUS_CHECK
+            timing.focusStarted = System.nanoTime()
+            val focusRemainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+            val stillFocused = evaluate(scenario,
+                "document.activeElement === document.querySelector(${JSONObject.quote(selector)})", focusRemainingMillis)
+            timing.focusReturned = System.nanoTime()
+            assertEquals("DOM input focus changed while awaiting native typing for $selector", "true", stillFocused)
+            assertTrue("Native typing readiness exhausted the shared budget for $selector", System.nanoTime() < deadline)
+            // Espresso webKeys uses JS value assignment. React tracks that setter,
+            // so its later synthetic change can be ignored. Inject native keys once
+            // into the focused WebView, preserving normal browser input events.
+            timing.phase = TypingPhase.NATIVE_INJECTION
+            timing.injectionStarted = System.nanoTime()
+            onView(isAssignableFrom(WebView::class.java)).perform(typing)
+            timing.injectionReturned = System.nanoTime()
+            timing.phase = TypingPhase.SETTLING
+            // Espresso acknowledges key injection, not the separate WebView renderer.
+            // Wait only for the exact result; never retype or assign the input value.
+            val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
+            while (true) {
+                if (System.nanoTime() >= deadline) {
+                    timing.deadlineObserved = System.nanoTime()
+                    timing.snapshotStarted = System.nanoTime()
+                    val diagnostics = try { evaluate(scenario, """JSON.stringify((() => {
+                      const target=document.querySelector(${JSONObject.quote(selector)});
+                      const actual=target?.value ?? '', expected=${JSONObject.quote(text)};
+                      let mismatch=0;
+                      while(mismatch<Math.min(actual.length,expected.length) && actual[mismatch]===expected[mismatch]) mismatch++;
+                      return {actualLength:actual.length,expectedLength:expected.length,firstMismatchIndex:mismatch,
+                        activeTag:document.activeElement?.tagName,
+                        activeField:document.activeElement?.getAttribute('placeholder'),
+                        targetFocused:document.activeElement===target,documentFocused:document.hasFocus()};
+                    })())""").also { timing.snapshotAvailable = true } } catch (_: Throwable) { "unavailable" }
+                    timing.snapshotReturned = System.nanoTime()
+                    throw AssertionError("Native typed input did not settle for $selector; after-deadline snapshot: $diagnostics")
+                }
+                val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+                timing.settlePolls++
+                timing.lastPollStarted = System.nanoTime()
+                timing.lastPollReturned = null
+                timing.lastPollMatched = null
+                val matched = evaluate(scenario, typed, remainingMillis) == "true"
+                timing.lastPollReturned = System.nanoTime()
+                timing.lastPollMatched = matched
+                if (matched) break
+                Thread.sleep(50)
             }
-            if (ready) break
-            Thread.sleep(25)
+        } catch (failure: Throwable) {
+            // Metadata must never replace the original assertion/type/cause.
+            runCatching { failure.addSuppressed(AssertionError("Native typing timing: ${timing.report(System.nanoTime())}")) }
+            throw failure
         }
-        val focusRemainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
-        assertEquals("DOM input focus changed while awaiting native typing for $selector", "true", evaluate(scenario,
-            "document.activeElement === document.querySelector(${JSONObject.quote(selector)})", focusRemainingMillis))
-        assertTrue("Native typing readiness exhausted the shared budget for $selector", System.nanoTime() < deadline)
-        // Espresso webKeys uses JS value assignment. React tracks that setter,
-        // so its later synthetic change can be ignored. Inject native keys once
-        // into the focused WebView, preserving normal browser input events.
-        onView(isAssignableFrom(WebView::class.java)).perform(typing)
-        // Espresso acknowledges key injection, not the separate WebView renderer.
-        // Wait only for the exact result; never retype or assign the input value.
-        val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
-        while (true) {
-            if (System.nanoTime() >= deadline) {
-                val diagnostics = evaluate(scenario, """JSON.stringify((() => {
-                  const target=document.querySelector(${JSONObject.quote(selector)});
-                  const actual=target?.value ?? '', expected=${JSONObject.quote(text)};
-                  let mismatch=0;
-                  while(mismatch<Math.min(actual.length,expected.length) && actual[mismatch]===expected[mismatch]) mismatch++;
-                  return {actualLength:actual.length,expectedLength:expected.length,firstMismatchIndex:mismatch,
-                    activeTag:document.activeElement?.tagName,
-                    activeField:document.activeElement?.getAttribute('placeholder'),
-                    targetFocused:document.activeElement===target,documentFocused:document.hasFocus()};
-                })())""")
-                throw AssertionError("Native typed input did not settle for $selector: $diagnostics")
-            }
-            val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
-            if (evaluate(scenario, typed, remainingMillis) == "true") break
-            Thread.sleep(50)
+    }
+
+    @Test fun nativeTypingTimingDistinguishesLateInjectionFromLatePollingWithoutInputData() {
+        val origin = 123_000_000L
+        val deadline = origin + TimeUnit.SECONDS.toNanos(5)
+        val injection = TypingTiming(origin, deadline).apply {
+            phase = TypingPhase.SETTLING
+            injectionStarted = origin + 10_000_000L
+            injectionReturned = deadline + 100_000_000L
+            deadlineObserved = injectionReturned
+            snapshotStarted = deadline + 110_000_000L
+            snapshotReturned = deadline + 120_000_000L
+            snapshotAvailable = true
+        }.report(deadline + 120_000_000L)
+        assertEquals("injection_returned_after_deadline", injection.getString("boundary"))
+        assertEquals(0, injection.getInt("settlePolls"))
+        assertTrue(injection.isNull("lastPollMatched"))
+        assertTrue(injection.getLong("afterDeadlineSnapshotStartedMs") > injection.getLong("budgetMs"))
+        val polling = TypingTiming(origin, deadline).apply {
+            phase = TypingPhase.SETTLING
+            injectionReturned = origin + 100_000_000L
+            settlePolls = 1
+            lastPollStarted = deadline - 10_000_000L
+            lastPollReturned = deadline + 10_000_000L
+            lastPollMatched = false
+        }.report(deadline + 10_000_000L)
+        assertEquals("poll_returned_after_deadline", polling.getString("boundary"))
+        assertTrue(polling.isNull("afterDeadlineSnapshotStartedMs"))
+        assertEquals(false, polling.getBoolean("afterDeadlineSnapshotAvailable"))
+        assertEquals("operation_failed", TypingTiming(origin, deadline).report(origin).getString("boundary"))
+        val allowed = setOf("phase", "boundary", "elapsedMs", "budgetMs", "constraintChecks", "constraintsReadyMs",
+            "focusStartedMs", "focusReturnedMs", "injectionStartedMs", "injectionReturnedMs", "settlePolls",
+            "lastPollStartedMs", "lastPollReturnedMs", "lastPollMatched", "deadlineObservedMs",
+            "afterDeadlineSnapshotStartedMs", "afterDeadlineSnapshotReturnedMs", "afterDeadlineSnapshotAvailable")
+        assertEquals(allowed, injection.keys().asSequence().toSet())
+        for (key in allowed - setOf("phase", "boundary")) {
+            val value = injection.get(key)
+            assertTrue("Timing metadata is finite and cannot hold input content", value == JSONObject.NULL || value is Number || value is Boolean)
         }
     }
 

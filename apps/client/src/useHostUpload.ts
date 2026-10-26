@@ -46,9 +46,9 @@ export function useHostUpload(api:Api,sessionId:string,onError:(error:unknown)=>
       const reserved=await api.reserveUpload(sessionId,prepared.bytes.length);
       job.receipt=reserved.uploadId;
       if(!current()){await sendCancel(job);return;}
-      await api.uploadFile(sessionId,prepared.path,Array.from(prepared.bytes),job.receipt);
+      const uploaded=await api.uploadFile(sessionId,prepared.path,Array.from(prepared.bytes),job.receipt);
       job.settled=true;
-      if(current())complete(prepared.path);
+      if(current())complete(uploaded.path);
     }catch(error){if(current())onError(error);}
     finally{
       // Keep the original operation responsible for its pending cancellation,

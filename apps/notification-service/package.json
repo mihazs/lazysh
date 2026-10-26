@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "license": "GPL-3.0-or-later",
-  "dependencies": { "@lazysh/common": "workspace:*" },
+  "dependencies": {
+    "@lazysh/common": "workspace:*",
+    "@lazysh/notification-client": "workspace:*"
+  },
   "scripts": {
     "build": "cargo build --release --locked --package lazysh-notifications",
     "check": "cargo check --locked --package lazysh-notifications",

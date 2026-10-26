@@ -41,7 +41,8 @@ export function parseTranscript(value: unknown): Page {
   if (
     page.schemaVersion !== 1 ||
     !Object.hasOwn(agents, page.agent) ||
-    (["grok-acp", "antigravity-jsonl"].includes(page.agent) && page.view !== "record_stream") ||
+    (page.agent === "grok-acp" && !["record_stream", "active_branch"].includes(page.view ?? "")) ||
+    (page.agent === "antigravity-jsonl" && page.view !== "record_stream") ||
     (page.agent === "antigravity-jsonl" && (typeof page.checkpoint !== "string" || !/^v1:[0-9]{1,8}:[0-9a-f]{64}$/.test(page.checkpoint))) ||
     !Array.isArray(page.messages) ||
     page.messages.length > 100 ||
@@ -228,7 +229,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           ...(["hermes", "opencode"].includes(agent)
             ? { transcriptSessionId }
             : {}),
-          ...(view === "conversation" && agent === "claude" ? { view } : {}),
+          ...(view === "conversation" && ["claude", "grok-acp"].includes(agent) ? { view } : {}),
         }
       : opened;
     if (!source) return;
@@ -310,6 +311,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             value={agent}
             onChange={(event) => {
               setAgent(event.target.value);
+              if (event.target.value === "grok-acp") setView("records");
               setDiscovered([]);
               setTranscriptSessionId("");
             }}
@@ -321,7 +323,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
             ))}
           </select>
         </label>
-        {agent === "claude" && (
+        {["claude", "grok-acp"].includes(agent) && (
           <label>
             {t("chatView")}
             <select
@@ -336,7 +338,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         <button type="button" disabled={busy || agent === "antigravity-jsonl"} onClick={() => void discover()}>
           {t("chatFind")}
         </button>
-        {agent === "grok-acp" && (
+        {agent === "grok-acp" && view !== "conversation" && (
           <p>
             {t("chatGrokExplanation")}
           </p>
@@ -393,6 +395,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
           </select>
         </label>
       )}
+      {agent === "grok-acp" && view === "conversation" && <p className="muted">{t("chatGrokConversation")}</p>}
       {error && (
         <p className="inline-error" role="alert">
           {error}

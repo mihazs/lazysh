@@ -62,3 +62,12 @@ export function imagePoint(clientX: number, clientY: number, rect: Pick<DOMRect,
   if (!rect.width || !rect.height) throw new LocalUiError('attachmentPreviewSize');
   return { x: Math.max(0, Math.min(size.width, (clientX - rect.left) * size.width / rect.width)), y: Math.max(0, Math.min(size.height, (clientY - rect.top) * size.height / rect.height)) };
 }
+
+/** SFTP separators are `/` even when this client or the remote host uses Windows. */
+export function uploadDirectory(path: string): string {
+  const slash = path.lastIndexOf('/');
+  const parent = path.slice(0,slash);
+  // Preserve the complete slash prefix and both server drive-root forms.
+  return /^\/*$/.test(parent) || /^\/?[A-Za-z]:$/.test(parent)
+    ? path.slice(0, slash + 1) : parent;
+}

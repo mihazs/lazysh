@@ -3,7 +3,7 @@ pub mod fs;
 pub mod private_state;
 #[cfg(feature = "service")]
 pub mod server;
-#[cfg(feature = "service")]
+#[cfg(feature = "secrets")]
 pub mod service_secrets;
 pub mod storage_filesystem;
 pub mod storage_namespace;

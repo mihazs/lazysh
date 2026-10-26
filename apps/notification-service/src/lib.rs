@@ -1,4 +1,7 @@
-pub mod client;
+pub use lazysh_notification_client::{
+    client, client_with_root, digest, http_client, https, secret, valid_token, Event, Kind,
+    Receipt, Source, Status,
+};
 mod store;
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
@@ -7,8 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{
@@ -22,53 +24,6 @@ use tokio::sync::{watch, Notify};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-pub fn secret() -> Zeroizing<String> {
-    Zeroizing::new(
-        rand::random::<[u8; 32]>()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-    )
-}
-pub fn digest(value: &str) -> [u8; 32] {
-    Sha256::digest(value.as_bytes()).into()
-}
-pub fn valid_token(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
-}
-pub fn https(value: &str) -> Result<reqwest::Url, String> {
-    if !value.starts_with("https://")
-        || value.contains('\\')
-        || value.chars().any(char::is_control)
-        || value
-            .split('/')
-            .nth(2)
-            .is_some_and(|authority| authority.contains('@'))
-    {
-        return Err("Require HTTPS without userinfo, query or fragment".into());
-    }
-    let url = reqwest::Url::parse(value).map_err(|_| "Invalid HTTPS endpoint")?;
-    if value.len() > 2048 || !lazysh_common::urls::credential_free_https(&url) {
-        return Err("Require HTTPS without userinfo, query or fragment".into());
-    }
-    Ok(url)
-}
-pub fn http_client() -> Result<reqwest::Client, String> {
-    client_with_root(None)
-}
-pub fn client_with_root(root: Option<reqwest::Certificate>) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(10));
-    if let Some(root) = root {
-        builder = builder.add_root_certificate(root);
-    }
-    builder
-        .build()
-        .map_err(|_| "Cannot construct HTTPS client".into())
-}
 pub struct Config {
     directory: PathBuf,
     admin_hash: [u8; 32],
@@ -140,68 +95,6 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.0, Json(ErrorBody { error: self.1 })).into_response()
     }
-}
-#[derive(Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Working,
-    NeedsAttention,
-    Done,
-}
-impl Kind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Working => "working",
-            Self::NeedsAttention => "needs_attention",
-            Self::Done => "done",
-        }
-    }
-}
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Event {
-    pub event_id: Uuid,
-    pub kind: Kind,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Source {
-    pub account_id: String,
-    pub id: Uuid,
-    pub alias: String,
-    pub token_hash: Vec<u8>,
-}
-impl Source {
-    fn validate(&self) -> Result<(), ApiError> {
-        if self.token_hash.len() != 32
-            || self.alias.is_empty()
-            || self.alias.len() > 64
-            || !self
-                .alias
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b" _-.".contains(&b))
-        {
-            return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_source"));
-        }
-        Ok(())
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Status {
-    pub account_id: String,
-    pub enabled: bool,
-    pub generation: i64,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Receipt {
-    pub receipt_id: String,
-    pub event_id: String,
-    pub kind: String,
-    pub alias: String,
-    pub state: String,
-    pub may_have_reached_destination: bool,
 }
 #[derive(Clone)]
 pub struct Service(Arc<Inner>);
@@ -323,7 +216,9 @@ async fn provision(
     Json(source): Json<Source>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     s.admin(&h)?;
-    source.validate()?;
+    source
+        .validate()
+        .map_err(|code| ApiError(StatusCode::BAD_REQUEST, code))?;
     if source.token_hash == s.0.config.admin_hash || source.token_hash == digest(&s.0.config.bearer)
     {
         return Err(ApiError::conflict());
