@@ -115,6 +115,8 @@
     "allow-disconnect",
     "allow-list-directory",
     "allow-read-file",
+    "allow-upload-reserve",
+    "allow-upload-cancel",
     "allow-upload-file",
     "allow-get-diff",
     "allow-list-multiplexer-sessions",

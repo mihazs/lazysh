@@ -1,6 +1,7 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedApi } from './access';
+import {useHostUpload} from './useHostUpload';
 import { useEffect, useRef, useState } from 'react';
 import { api as nativeApi } from './bridge';
 import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageSize, shellPath, validateCrop, type Crop, type ImageSize, type Point } from './attachment';
@@ -18,7 +19,7 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [color, setColor] = useState('#ef4444');
   const [error, setError] = useState<UiErrorCause>('');
-  const [busy, setBusy] = useState(false);
+
   const [uploaded, setUploaded] = useState('');
   const [prompt, setPrompt] = useState('');
   const [notice, setNotice] = useState<UiErrorCause | {key:'attachmentUploaded'|'attachmentCopied'|'attachmentStaged'}>('');
@@ -26,11 +27,12 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
   const source = useRef<HTMLImageElement | null>(null);
   const generation = useRef(0);
   const stroke = useRef<Stroke | null>(null);
-  const uploading = useRef(false);
+  const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
+  const busy=uploadJob.busy;
   useEffect(() => () => { generation.current++; source.current = null; }, [sessionId]);
 
   async function choose(file: File) {
-    if (uploading.current) return;
+    if (uploadJob.active()) return;
     const current = ++generation.current;
     setError(''); setNotice(''); setSelected(null); setUploaded(''); setStrokes([]); setEditing(false); source.current = null;
     try {
@@ -102,30 +104,28 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
     } catch (e) { setError(e instanceof Error ? captureUiError(e) : String(e)); }
   }
   async function upload() {
-    if (!selected || uploading.current) return;
-    uploading.current = true; setBusy(true); setError(''); setNotice('');
-    const current = generation.current;
-    try {
+    if (!selected || busy) return;
+    setError(''); setNotice('');
+    await uploadJob.start(async()=>{
       checkDestination(destination);
       let bytes = selected.bytes;
       if (editing && selected.size) {
         const rect = validateCrop(crop, selected.size);
         if (!source.current) throw new LocalUiError('attachmentWaitPreview');
         const output = document.createElement('canvas'); output.width = rect.width; output.height = rect.height;
-        const context = output.getContext('2d');
-        if (!context) throw new LocalUiError('attachmentEditingDevice');
-        context.translate(-rect.x, -rect.y); context.drawImage(source.current, 0, 0); draw(context, strokes);
-        const blob = await new Promise<Blob>((resolve, reject) => output.toBlob(blob => blob ? resolve(blob) : reject(new LocalUiError('attachmentEncodeFailed')), 'image/png'));
-        output.width = 0; output.height = 0;
-        if (blob.size > ATTACHMENT_LIMIT) throw new LocalUiError('attachmentEditedLimit');
-        bytes = new Uint8Array(await blob.arrayBuffer());
+        try {
+          const context = output.getContext('2d');
+          if (!context) throw new LocalUiError('attachmentEditingDevice');
+          context.translate(-rect.x, -rect.y); context.drawImage(source.current, 0, 0); draw(context, strokes);
+          const blob = await new Promise<Blob>((resolve, reject) => output.toBlob(blob => blob ? resolve(blob) : reject(new LocalUiError('attachmentEncodeFailed')), 'image/png'));
+          if (blob.size > ATTACHMENT_LIMIT) throw new LocalUiError('attachmentEditedLimit');
+          bytes = new Uint8Array(await blob.arrayBuffer());
+        } finally {output.width = 0; output.height = 0;}
       }
-      if (current !== generation.current) return;
-      await api.uploadFile(sessionId, destination, Array.from(bytes));
-      if (current !== generation.current) return;
-      setUploaded(destination); setPrompt(t('attachmentPromptTemplate',{path:shellPath(destination)})); setNotice({key:'attachmentUploaded'});
-    } catch (e) { if (current === generation.current) setError(captureUiError(e)); }
-    finally { uploading.current = false; if (current === generation.current) setBusy(false); }
+      return {path:destination,bytes};
+    },path=>{
+      setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
+    });
   }
 
   async function copy(text: string) {
@@ -139,6 +139,7 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
       <label>{t('attachmentPhoto')}<input aria-label={t('attachmentPhotoLabel')} type="file" accept="image/*" capture="environment" disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choose(file); }} /></label>
       <button type="button" disabled={busy} onClick={() => void pasteImage()}>{t('attachmentPaste')}</button>
     </div>
+    {uploadJob.cancelled && <p role="status">{t('uploadCancelledWarning')}</p>}
     {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}{notice && <p role="status">{typeof notice==='object'&&!(notice instanceof LocalUiError)?t(notice.key):uiErrorText(notice)}</p>}
     {selected && <div className="form-stack"><p>{t('attachmentMetadata',{name:selected.file.name,bytes:formatNumber(selected.file.size)})}</p>
       <label>{t('attachmentDestination')}<input value={destination} disabled={busy} onChange={event => setDestination(event.target.value)} /></label>
@@ -150,7 +151,7 @@ export default function AttachmentPanel({ sessionId }: { sessionId: string }) {
           onPointerMove={event => { if (!stroke.current || !selected.size || stroke.current.points.length >= 1000) return; stroke.current.points.push(imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), selected.size)); redraw(stroke.current); }}
           onPointerUp={() => { if (stroke.current) { const completed = stroke.current; stroke.current = null; setStrokes(values => [...values, completed]); } }} onPointerCancel={() => { stroke.current = null; redraw(); }} />
       </div>}
-      <div className="button-row"><button type="button" className="primary-button" disabled={busy || !destination.trim()} onClick={() => void upload()}>{busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={busy} onClick={() => { generation.current++; setSelected(null); setUploaded(''); setNotice(''); }}>{t('attachmentCancel')}</button></div>
+      <div className="button-row"><button type="button" className="primary-button" disabled={busy || !destination.trim()} onClick={() => void upload()}>{busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={uploadJob.cancelling} onClick={() => { generation.current++; if(busy){uploadJob.cancel();setUploaded('');setPrompt('');}else{setSelected(null);setUploaded('');setNotice('');} }}>{uploadJob.cancelling?t('uploadCancelling'):t('attachmentCancel')}</button></div>
     </div>}
     {uploaded && <div className="form-stack"><label>{t('attachmentHostPath')}<input readOnly value={shellPath(uploaded)} /></label><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button><label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></div>}
   </section>;
