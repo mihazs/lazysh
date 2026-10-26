@@ -5,6 +5,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     process::{Child, Command, Stdio},
 };
+use tauri::Manager;
 
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
@@ -26,9 +27,13 @@ struct Fixture {
     handle: Arc<SshHandle>,
     host: Host,
     tmux: String,
+    environment: Vec<(&'static str, String)>,
 }
 impl Fixture {
     async fn new() -> Self {
+        Self::with_herdr(None).await
+    }
+    async fn with_herdr(herdr: Option<&std::path::Path>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let tmux = std::env::var("LAZYSH_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
         let tmux_path = std::path::Path::new(&tmux)
@@ -36,6 +41,45 @@ impl Fixture {
             .filter(|path| !path.as_os_str().is_empty())
             .map(|path| format!("{}:/usr/bin:/bin", path.display()))
             .unwrap_or_else(|| "/usr/bin:/bin".into());
+        let mut environment = vec![
+            ("HOME", dir.path().display().to_string()),
+            ("ZDOTDIR", dir.path().display().to_string()),
+            ("TMUX_TMPDIR", dir.path().display().to_string()),
+            ("PATH", tmux_path),
+        ];
+        if let Some(binary) = herdr {
+            assert!(
+                binary.is_absolute(),
+                "Herdr fixture binary must be absolute"
+            );
+            environment
+                .last_mut()
+                .unwrap()
+                .1
+                .insert_str(0, &format!("{}:", binary.parent().unwrap().display()));
+            for (key, child) in [
+                ("XDG_CONFIG_HOME", "config-home"),
+                ("XDG_CACHE_HOME", "cache-home"),
+                ("XDG_STATE_HOME", "state-home"),
+                ("XDG_RUNTIME_DIR", "runtime"),
+            ] {
+                let path = dir.path().join(child);
+                fs::create_dir(&path).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+                environment.push((key, path.display().to_string()));
+            }
+        }
+        assert!(
+            environment.iter().all(|(_, value)| !value
+                .chars()
+                .any(|c| c.is_whitespace() || c == '"' || c == '\\')),
+            "owned sshd fixture paths must be plain configuration tokens"
+        );
+        let settings = environment
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host_key = fixture_key();
         let user_key = fixture_key();
@@ -54,7 +98,7 @@ impl Fixture {
         let config = dir.path().join("sshd_config");
         // Use isolated HOME/ZDOTDIR; identity comes from the owned exec frame,
         // never a user prompt, process-list timing or guessed newest client.
-        fs::write(&config, format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nLogLevel ERROR\nSetEnv HOME={} ZDOTDIR={} TMUX_TMPDIR={} PATH={}\n", host_file.display(), authorized.display(), dir.path().join("sshd.pid").display(),dir.path().display(),dir.path().display(),dir.path().display(),tmux_path)).unwrap();
+        fs::write(&config, format!("ListenAddress 127.0.0.1\nPort {port}\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nLogLevel ERROR\nSetEnv {settings}\n", host_file.display(), authorized.display(), dir.path().join("sshd.pid").display())).unwrap();
         let sshd = Command::new("sh")
             .args(["-c", "command -v sshd"])
             .output()
@@ -133,7 +177,28 @@ impl Fixture {
             handle,
             host,
             tmux,
+            environment,
         }
+    }
+    fn prepare_launch(
+        &self,
+        state: &AppState,
+        lease: &AccessLease,
+        mux: &str,
+    ) -> (
+        crate::desktop_launch::LaunchState,
+        String,
+        crate::desktop_launch::PreparedHost,
+    ) {
+        let intent = crate::desktop_launch::parse(
+            ["lazysh", "--host", &self.host.id, "--mux", mux].map(std::ffi::OsString::from),
+            || panic!("remote fixture must not inspect cwd"),
+        )
+        .unwrap();
+        let launch = crate::desktop_launch::LaunchState::new(intent);
+        let receipt = launch.read(lease).unwrap().host_receipt.unwrap();
+        let prepared = launch.prepare_host(state, &receipt, lease).unwrap();
+        (launch, receipt, prepared)
     }
     fn socket(&self) -> PathBuf {
         self.dir.path().join("tmux.sock")
@@ -999,21 +1064,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     let authority = AccessState::disabled();
     let lease = authority.lease(None).unwrap();
     state.config().unwrap().hosts.push(f.host.clone());
-    let intent = crate::desktop_launch::parse(
-        [
-            "lazysh",
-            "--host",
-            &f.host.id,
-            "--mux",
-            &format!("tmux:{hostile}"),
-        ]
-        .map(std::ffi::OsString::from),
-        || panic!("mux request must not resolve cwd"),
-    )
-    .unwrap();
-    let launch = crate::desktop_launch::LaunchState::new(intent);
-    let receipt = launch.read(&lease).unwrap().host_receipt.unwrap();
-    let prepared = launch.prepare_host(&state, &receipt, &lease).unwrap();
+    let (launch, receipt, prepared) = f.prepare_launch(&state, &lease, &format!("tmux:{hostile}"));
     let attempt = launch.begin_host(&receipt, &lease, &f.host.id).unwrap();
     attempt.check_host(&f.host).unwrap();
     let Some(crate::desktop_launch::MuxTarget::Tmux { server }) = prepared.mux else {
@@ -1300,4 +1351,634 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         ),
         "same"
     );
+}
+
+struct HerdrServers<'a> {
+    fixture: &'a Fixture,
+    binary: &'a std::path::Path,
+    processes: Vec<(&'static str, Process)>,
+}
+impl HerdrServers<'_> {
+    fn command(&self, name: &str) -> Command {
+        let mut command = Command::new(self.binary);
+        command
+            .env_clear()
+            .envs(
+                self.fixture
+                    .environment
+                    .iter()
+                    .map(|(key, value)| (*key, value)),
+            )
+            .env("SHELL", "/bin/sh")
+            .env("TERM", "xterm-256color")
+            .env("LANG", "C.UTF-8")
+            .args(["--session", name]);
+        command
+    }
+    async fn read_output(file: fs::File) -> Vec<u8> {
+        let mut file = tokio::fs::File::from_std(file);
+        tokio::io::AsyncSeekExt::rewind(&mut file).await.unwrap();
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .unwrap();
+        assert!(
+            bytes.len() <= 1024 * 1024,
+            "owned Herdr output exceeded fixture read bound"
+        );
+        bytes
+    }
+    async fn output(&self, name: &str, args: &[&str]) -> std::process::Output {
+        let stdout = tempfile::tempfile().unwrap();
+        let stderr = tempfile::tempfile().unwrap();
+        let mut command = self.command(name);
+        let mut child = Process(
+            command
+                .args(args)
+                .stdout(stdout.try_clone().unwrap())
+                .stderr(stderr.try_clone().unwrap())
+                .spawn()
+                .unwrap(),
+        );
+        let status = timeout(BOUND, async {
+            loop {
+                if let Some(status) = child.0.try_wait().unwrap() {
+                    break status;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        std::process::Output {
+            status,
+            stdout: Self::read_output(stdout).await,
+            stderr: Self::read_output(stderr).await,
+        }
+    }
+    async fn json(&self, name: &str, args: &[&str]) -> serde_json::Value {
+        let output = self.output(name, args).await;
+        assert!(
+            output.status.success(),
+            "owned Herdr command failed: {}",
+            String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(512)])
+        );
+        assert!(
+            output.stdout.len() <= 1024 * 1024,
+            "owned Herdr response exceeded fixture bound"
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+    async fn start(&mut self, name: &'static str) {
+        let mut command = self.command(name);
+        self.processes.push((
+            name,
+            Process(
+                command
+                    .arg("server")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            ),
+        ));
+        timeout(BOUND, async {
+            loop {
+                assert!(
+                    self.processes
+                        .last_mut()
+                        .unwrap()
+                        .1
+                         .0
+                        .try_wait()
+                        .unwrap()
+                        .is_none(),
+                    "owned Herdr server exited before readiness"
+                );
+                if self
+                    .output(name, &["api", "snapshot"])
+                    .await
+                    .status
+                    .success()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+impl HerdrServers<'_> {
+    fn assert_running(&mut self) {
+        assert!(
+            self.processes
+                .iter_mut()
+                .all(|(_, process)| process.0.try_wait().unwrap().is_none()),
+            "an original owned Herdr server exited"
+        );
+    }
+    async fn stop(&mut self) {
+        for name in self
+            .processes
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+        {
+            assert!(self
+                .output(name, &["server", "stop"])
+                .await
+                .status
+                .success());
+        }
+        for (_, process) in &mut self.processes {
+            let status = timeout(BOUND, async {
+                loop {
+                    if let Some(status) = process.0.try_wait().unwrap() {
+                        break status;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(status.success(), "owned Herdr server did not stop cleanly");
+        }
+    }
+}
+impl Drop for HerdrServers<'_> {
+    fn drop(&mut self) {
+        let live = self
+            .processes
+            .iter_mut()
+            .filter_map(|(name, process)| {
+                process
+                    .0
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .is_none()
+                    .then_some(*name)
+            })
+            .collect::<Vec<_>>();
+        for name in live {
+            let mut command = self.command(name);
+            if let Ok(child) = command
+                .args(["server", "stop"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                let mut stop = Process(child);
+                let until = std::time::Instant::now() + BOUND;
+                while stop.0.try_wait().ok().flatten().is_none()
+                    && std::time::Instant::now() < until
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+}
+async fn herdr_terminal_output(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    id: &str,
+    events: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    marker: &[u8],
+) -> Vec<u8> {
+    timeout(BOUND, async {
+        let mut bytes = Vec::new();
+        loop {
+            let event = events
+                .recv()
+                .await
+                .expect("owned terminal event channel closed");
+            assert_ne!(
+                event["type"], "closed",
+                "owned terminal closed before marker"
+            );
+            if let Some(data) = event["data"].as_array() {
+                bytes.extend(data.iter().map(|value| value.as_u64().unwrap() as u8));
+                let session = app.state::<AppState>().session(id).await.unwrap();
+                acknowledge(&session, data.len() as u32).unwrap();
+            }
+            assert!(
+                bytes.len() <= 128 * 1024,
+                "owned terminal marker exceeded fixture bound"
+            );
+            if bytes.windows(marker.len()).any(|value| value == marker) {
+                break bytes;
+            }
+        }
+    })
+    .await
+    .expect("owned terminal did not expose expected marker")
+}
+async fn herdr_source_probe(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+    events: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    marker: &str,
+) {
+    write_stdin(
+        lease.clone(),
+        app.state(),
+        source.session_id.clone(),
+        format!("{marker}\n"),
+        None,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let bytes = herdr_terminal_output(app, &source.session_id, events, marker.as_bytes()).await;
+    assert!(
+        !bytes
+            .windows(b"herdr --session".len())
+            .any(|value| value == b"herdr --session"),
+        "attachment command reached source foreground"
+    );
+}
+async fn herdr_child(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+    selected: &str,
+    kind: crate::multiplexer::MultiplexerKind,
+) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
+    let (events, receiver) = super::test_support::json_events();
+    let child = attach_multiplexer(
+        lease.clone(),
+        app.state(),
+        source.session_id.clone(),
+        None,
+        kind,
+        selected.into(),
+        80,
+        24,
+        events,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert_ne!(source.session_id, child.session_id);
+    let state = app.state::<AppState>();
+    let parent = state.session(&source.session_id).await.unwrap();
+    let native = state.session(&child.session_id).await.unwrap();
+    assert!(Arc::ptr_eq(&parent.handle, &native.handle));
+    assert_eq!(native.creation.generation(), lease.generation());
+    (child, receiver)
+}
+async fn herdr_retired(state: &AppState, id: &str, session: &Session, including_notice: bool) {
+    timeout(BOUND, async {
+        loop {
+            let active = state.sessions.lock().await.contains_key(id);
+            let retiring = including_notice && state.retiring.lock().await.contains_key(id);
+            if !active && !retiring && *session.finished.borrow() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("owned native terminal did not retire");
+}
+async fn herdr_counter(path: &std::path::Path) -> Option<u64> {
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let mut data = [0u8; 32];
+    let length = file.read(&mut data).await.ok()?;
+    std::str::from_utf8(&data[..length])
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+async fn herdr_advanced(path: &std::path::Path, prior: u64) -> u64 {
+    timeout(BOUND, async {
+        loop {
+            if let Some(value) = herdr_counter(path).await.filter(|value| *value > prior) {
+                break value;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("owned durable pane workload did not advance")
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and absolute LAZYSH_TEST_HERDR pointing to Herdr 0.9.3"]
+async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
+    use super::test_support::{ready_lease, unlocked_access};
+    use crate::herdr::{herdr_action, herdr_tree, HerdrAction};
+    use crate::multiplexer::{multiplexer_sessions, MultiplexerKind};
+    let binary = PathBuf::from(
+        std::env::var("LAZYSH_TEST_HERDR").expect("set an absolute pinned Herdr 0.9.3 binary path"),
+    );
+    let mut f = Fixture::with_herdr(Some(&binary)).await;
+    let mut servers = HerdrServers {
+        fixture: &f,
+        binary: &binary,
+        processes: Vec::new(),
+    };
+    let version = servers.output("aaa-first", &["--version"]).await;
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        "herdr 0.9.3"
+    );
+    for (name, label) in [("aaa-first", "OTHER_A"), ("zzz-selected", "OTHER_Z")] {
+        servers.start(name).await;
+        servers
+            .json(
+                name,
+                &[
+                    "workspace",
+                    "create",
+                    "--no-focus",
+                    "--label",
+                    label,
+                    "--cwd",
+                    f.dir.path().to_str().unwrap(),
+                ],
+            )
+            .await;
+    }
+    let state = AppState::new(f.dir.path().join("herdr-hosts")).unwrap();
+    state.config().unwrap().hosts.push(f.host.clone());
+    let app = tauri::test::mock_app();
+    app.manage(state.clone());
+    app.manage(crate::local::LocalState::default());
+    let authority = unlocked_access();
+    let lease = ready_lease(&authority);
+    let (launch, receipt, prepared) = f.prepare_launch(&state, &lease, "herdr");
+    let kind = match prepared.mux {
+        Some(crate::desktop_launch::MuxTarget::Herdr) => MultiplexerKind::Herdr,
+        _ => panic!("request lost Herdr kind"),
+    };
+    let attempt = launch.begin_host(&receipt, &lease, &f.host.id).unwrap();
+    let (bound, guard) = locked_connect_host(&state, &f.host.id, Some(&attempt), 80, 24)
+        .await
+        .unwrap();
+    assert_eq!(bound.credential_binding(), f.host.credential_binding());
+    let (events, mut source_events) = super::test_support::json_events();
+    let (channel, initial) = open_terminal_for(&f.handle, &lease, 80, 24, Some("exec cat".into()))
+        .await
+        .unwrap();
+    let source = spawn_terminal(
+        &state,
+        lease.clone(),
+        f.handle.clone(),
+        channel,
+        initial,
+        events,
+    )
+    .await
+    .unwrap();
+    attempt.finish();
+    drop(guard);
+    adopt_session(
+        lease.clone(),
+        app.state(),
+        app.state(),
+        source.session_id.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    herdr_source_probe(&app, &lease, &source, &mut source_events, "SOURCE_BEFORE").await;
+    let rows = serde_json::to_value(
+        multiplexer_sessions(app.state(), source.session_id.clone(), kind, lease.clone())
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap(),
+    )
+    .unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows
+        .iter()
+        .all(|row| matches!(row["name"].as_str(), Some("aaa-first" | "zzz-selected"))));
+    let selected = rows[1]["name"].as_str().unwrap().to_owned();
+    assert_ne!(selected, rows[0]["name"].as_str().unwrap());
+    let tree = herdr_tree(
+        app.state(),
+        source.session_id.clone(),
+        selected.clone(),
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert_eq!(tree.workspaces.len(), 1);
+    assert_eq!(tree.panes.len(), 1);
+    let workspace = tree.workspaces[0].workspace_id.clone();
+    let pane = tree.panes[0].pane_id.clone();
+    for action in [
+        HerdrAction::RenameWorkspace {
+            target: workspace.clone(),
+            label: "PICKED".into(),
+        },
+        HerdrAction::FocusWorkspace {
+            target: workspace.clone(),
+        },
+    ] {
+        herdr_action(
+            app.state(),
+            source.session_id.clone(),
+            selected.clone(),
+            action,
+            lease.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    }
+    let heartbeat = f.dir.path().join("durable-counter");
+    let pidfile = f.dir.path().join("durable-pid");
+    let script = format!(
+        "echo $$ > {}; n=0; while :; do n=$((n+1)); echo $n > {}; sleep 0.05; done",
+        quote(pidfile.to_str().unwrap()),
+        quote(heartbeat.to_str().unwrap())
+    );
+    let workload = format!("sh -c {}", quote(&script));
+    let parent = state.session(&source.session_id).await.unwrap();
+    exec_for_access(
+        &parent,
+        format!(
+            "herdr --session {} pane run {} {}",
+            quote(&selected),
+            quote(&pane),
+            quote(&workload)
+        ),
+        &lease,
+    )
+    .await
+    .unwrap();
+    herdr_advanced(&heartbeat, 0).await;
+    let workload_pid = herdr_counter(&pidfile).await.unwrap();
+    let process_pid = i32::try_from(workload_pid).unwrap();
+    assert!(process_pid > 1);
+    eprintln!("owned Herdr stages: requested_host_kind=true explicit_nonfirst_selection=true workload_started=true");
+    let (child, mut child_events) = herdr_child(&app, &lease, &source, &selected, kind).await;
+    herdr_terminal_output(&app, &child.session_id, &mut child_events, b"PICKED").await;
+    adopt_session(
+        lease.clone(),
+        app.state(),
+        app.state(),
+        child.session_id.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    herdr_source_probe(
+        &app,
+        &lease,
+        &source,
+        &mut source_events,
+        "SOURCE_DURING_CHILD",
+    )
+    .await;
+    let native = state.session(&child.session_id).await.unwrap();
+    disconnect_inner(&state, child.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &child.session_id, &native, true).await;
+    let detached = herdr_counter(&heartbeat).await.unwrap();
+    herdr_advanced(&heartbeat, detached).await;
+    assert_eq!(herdr_counter(&pidfile).await, Some(workload_pid));
+    servers.assert_running();
+    let after = herdr_tree(
+        app.state(),
+        source.session_id.clone(),
+        selected.clone(),
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert_eq!(after.panes[0].pane_id, pane);
+    assert_eq!(after.workspaces[0].workspace_id, workspace);
+    herdr_source_probe(
+        &app,
+        &lease,
+        &source,
+        &mut source_events,
+        "SOURCE_AFTER_DETACH",
+    )
+    .await;
+    eprintln!("owned Herdr stages: separate_child_display=true source_independent=true durable_after_detach=true");
+    let (pending, mut pending_events) = herdr_child(&app, &lease, &source, &selected, kind).await;
+    herdr_terminal_output(&app, &pending.session_id, &mut pending_events, b"PICKED").await;
+    let pending_native = state.session(&pending.session_id).await.unwrap();
+    assert!(!*pending_native.finished.borrow());
+    assert!(!*pending_native.cancel.borrow());
+    authority.lock().unwrap();
+    herdr_retired(&state, &pending.session_id, &pending_native, false).await;
+    assert!(*pending_native.cancel.borrow());
+    assert!(!pending_native
+        .adopted
+        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        state
+            .retiring
+            .lock()
+            .await
+            .contains_key(&pending.session_id),
+        "known cancelled tab notification waits for normal unlock"
+    );
+    // Data already queued before lock is valid; Closed must wait for unlock.
+    while let Ok(event) = pending_events.try_recv() {
+        assert_ne!(event["type"], "closed", "locked child published Closed");
+    }
+    assert!(
+        state.session(&source.session_id).await.is_ok(),
+        "adopted source must retain its existing lock policy"
+    );
+    let revoked = herdr_counter(&heartbeat).await.unwrap();
+    herdr_advanced(&heartbeat, revoked).await;
+    assert_eq!(herdr_counter(&pidfile).await, Some(workload_pid));
+    servers.assert_running();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    assert!(attach_multiplexer(
+        lease.clone(),
+        app.state(),
+        source.session_id.clone(),
+        None,
+        kind,
+        selected.clone(),
+        80,
+        24,
+        super::test_support::counting_events(&calls)
+    )
+    .await
+    .is_err());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    authority
+        .authorize(authority.generation().unwrap())
+        .unwrap();
+    let fresh = ready_lease(&authority);
+    let closed = timeout(BOUND, async {
+        loop {
+            let event = pending_events.recv().await.unwrap();
+            if event["type"] == "closed" {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(closed["message"], "Session cancelled before adoption");
+    herdr_retired(&state, &pending.session_id, &pending_native, true).await;
+    assert!(launch.begin_host(&receipt, &fresh, &f.host.id).is_err());
+    herdr_source_probe(
+        &app,
+        &fresh,
+        &source,
+        &mut source_events,
+        "SOURCE_AFTER_UNLOCK",
+    )
+    .await;
+    disconnect_inner(&state, source.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &source.session_id, &parent, true).await;
+    assert!(state.sessions.lock().await.is_empty());
+    assert!(state.retiring.lock().await.is_empty());
+    eprintln!("owned Herdr stages: original_lease_revoked=true pending_child_retired=true durable_after_revoke=true no_launch_replay=true");
+    servers.stop().await;
+    timeout(BOUND, async {
+        while unsafe { libc::kill(process_pid, 0) } == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("owned Herdr workload survived fixture teardown");
+    drop(servers);
+    f.handle
+        .disconnect(
+            russh::Disconnect::ByApplication,
+            "owned fixture complete",
+            "en",
+        )
+        .await
+        .unwrap();
+    f.daemon.0.kill().unwrap();
+    f.daemon.0.wait().unwrap();
+    assert!(tokio::net::TcpStream::connect(("127.0.0.1", f.host.port))
+        .await
+        .is_err());
+    eprintln!("owned Herdr stages: servers_reaped=true workload_stopped=true listener_closed=true");
 }
