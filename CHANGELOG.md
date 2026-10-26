@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Localize encrypted Sync interface and client-created validation/status messages in English, Brazilian Portuguese and Spanish, with locale-aware import counts. Recovery data, native diagnostics, scopes, explicit action gates and language-import intent remain unchanged; sync and locale defaults do not change.
+
 - Localize About interface labels and explanatory text in English, Brazilian Portuguese and Spanish. Imported legal notices, component names, source links and build metadata remain unchanged; locale defaults are unchanged.
 
 - Localize tmux workspace, Herdr and Zellij controls and accessible names in English, Brazilian Portuguese and Spanish; preserve literal remote identities, errors and launch-picker ownership when changing language.

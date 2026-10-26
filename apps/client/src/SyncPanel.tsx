@@ -1,3 +1,5 @@
+import {t,useUi,formatNumber} from './i18n/core';
+import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import {applyPreferenceIntent} from './i18n/nativeLocale';
 import { useEffect, useRef, useState } from "react";
@@ -6,9 +8,9 @@ import {
   getPreferences,
   parsePreferences,
 } from "./preferences";
-import { errorMessage } from "./SessionTools";
 
 type Scope = "settings" | "credentials";
+type SyncMessage = 'syncConfigured' | 'syncSettingsUploaded' | 'syncCredentialsUploaded' | 'syncDisconnected' | {hostsAdded:number;credentialsAdded:number};
 type Preview = {
   token: string;
   scope: Scope;
@@ -30,7 +32,7 @@ type Preview = {
 };
 export function parseSyncPreview(value: unknown): Preview {
   if (!value || typeof value !== "object")
-    throw new Error("Invalid sync preview.");
+    throw new LocalUiError('syncInvalidPreview');
   const preview = value as Preview;
   if (
     typeof preview.token !== "string" ||
@@ -41,7 +43,7 @@ export function parseSyncPreview(value: unknown): Preview {
     !Array.isArray(preview.conflicts) ||
     preview.conflicts.length > 1000
   )
-    throw new Error("Invalid sync preview.");
+    throw new LocalUiError('syncInvalidPreview');
   for (const host of preview.hosts) {
     if (
       !host ||
@@ -51,15 +53,15 @@ export function parseSyncPreview(value: unknown): Preview {
       host.port < 1 ||
       host.port > 65535
     )
-      throw new Error("Invalid synced host.");
+      throw new LocalUiError('syncInvalidHost');
     for (const key of ["id", "name", "hostname", "username"] as const)
       if (typeof host[key] !== "string" || host[key].length > 4096)
-        throw new Error("Invalid synced host.");
+        throw new LocalUiError('syncInvalidHost');
     if (
       host.fingerprint !== undefined &&
       (typeof host.fingerprint !== "string" || host.fingerprint.length > 256)
     )
-      throw new Error("Invalid synced identity.");
+      throw new LocalUiError('syncInvalidIdentity');
     if (
       (host.jumpHostId !== undefined &&
         (typeof host.jumpHostId !== "string" ||
@@ -69,7 +71,7 @@ export function parseSyncPreview(value: unknown): Preview {
       (host.trustFingerprint !== undefined &&
         typeof host.trustFingerprint !== "boolean")
     )
-      throw new Error("Invalid synced routing.");
+      throw new LocalUiError('syncInvalidRouting');
   }
   for (const conflict of preview.conflicts)
     if (
@@ -78,7 +80,7 @@ export function parseSyncPreview(value: unknown): Preview {
       typeof conflict.reason !== "string" ||
       conflict.reason.length > 4096
     )
-      throw new Error("Invalid sync conflict.");
+      throw new LocalUiError('syncInvalidConflict');
   return preview;
 }
 
@@ -87,6 +89,7 @@ export default function SyncPanel({
 }: {
   onHostsChanged: () => void;
 }) {
+  useUi();
   const invoke = useProtectedInvoke();
   const [endpoint, setEndpoint] = useState("");
   const [username, setUsername] = useState("");
@@ -100,8 +103,8 @@ export default function SyncPanel({
   const running = useRef(true);
   const operation = useRef(0);
   const [preview, setPreview] = useState<Preview>();
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [message, setMessage] = useState<SyncMessage | null>(null);
+  const [error, setError] = useState<UiErrorCause>('');
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -123,7 +126,7 @@ export default function SyncPanel({
       })
       .catch((e) => {
         if (alive.current && generation === operation.current)
-          setError(errorMessage(e));
+          setError(captureUiError(e));
       })
       .finally(() => {
         if (alive.current && generation === operation.current) {
@@ -141,11 +144,11 @@ export default function SyncPanel({
     operation.current++;
     setBusy(true);
     setError("");
-    setMessage("");
+    setMessage(null);
     try {
       await action();
     } catch (e) {
-      if (alive.current) setError(errorMessage(e));
+      if (alive.current) setError(captureUiError(e));
     } finally {
       running.current = false;
       if (alive.current) setBusy(false);
@@ -166,11 +169,11 @@ export default function SyncPanel({
     setRecoveryKey("");
     setPreview(undefined);
     setGenerated(result.recoveryKey || "");
-    setMessage("Encrypted sync configured. Nothing has been uploaded.");
+    setMessage('syncConfigured');
   }
   async function fetchPreview(scope: Scope) {
     const value = parseSyncPreview(await invoke("sync_preview", { scope }));
-    if (value.scope !== scope) throw new Error("Sync scope did not match.");
+    if (value.scope !== scope) throw new LocalUiError('syncScopeMismatch');
     if (alive.current) setPreview(value);
   }
   async function apply() {
@@ -192,16 +195,12 @@ export default function SyncPanel({
     }
     if (!alive.current) return;
     setPreview(undefined);
-    setMessage(
-      `Imported ${result.hostsAdded} hosts and ${result.credentialsAdded} credential entries.`,
-    );
+    setMessage({hostsAdded:result.hostsAdded,credentialsAdded:result.credentialsAdded});
   }
   return (
-    <section className="preferences-panel" aria-label="Encrypted sync">
+    <section className="preferences-panel" aria-label={t('appEncryptedSync')}>
       <p>
-        Use your own HTTPS WebDAV directory. Settings and credentials are
-        encrypted separately before upload. Sync runs only when you choose an
-        action.
+        {t('syncDescription')}
       </p>
       <form
         onSubmit={(event) => {
@@ -211,7 +210,7 @@ export default function SyncPanel({
       >
         <fieldset disabled={busy} style={{ border: 0, padding: 0 }}>
           <label>
-            WebDAV directory
+            {t('syncDirectory')}
             <input
               type="url"
               required
@@ -221,7 +220,7 @@ export default function SyncPanel({
             />
           </label>
           <label>
-            WebDAV username
+            {t('syncUsername')}
             <input
               autoComplete="off"
               value={username}
@@ -229,7 +228,7 @@ export default function SyncPanel({
             />
           </label>
           <label>
-            WebDAV password
+            {t('syncPassword')}
             <input
               type="password"
               autoComplete="off"
@@ -238,7 +237,7 @@ export default function SyncPanel({
             />
           </label>
           <label>
-            Recovery key from another device
+            {t('syncRecoveryImport')}
             <input
               type="password"
               autoComplete="off"
@@ -246,8 +245,8 @@ export default function SyncPanel({
               onChange={(event) => setRecoveryKey(event.target.value)}
               placeholder={
                 configured
-                  ? "Leave empty to keep this device’s key"
-                  : "Leave empty to create a new identity"
+                  ? t('syncKeepKey')
+                  : t('syncNewIdentity')
               }
             />
           </label>
@@ -257,7 +256,7 @@ export default function SyncPanel({
               checked={settingsEnabled}
               onChange={(event) => setSettingsEnabled(event.target.checked)}
             />
-            Enable settings sync
+            {t('syncEnableSettings')}
           </label>
           <label>
             <input
@@ -265,9 +264,9 @@ export default function SyncPanel({
               checked={credentialsEnabled}
               onChange={(event) => setCredentialsEnabled(event.target.checked)}
             />
-            Enable credentials sync
+            {t('syncEnableCredentials')}
           </label>
-          <button disabled={busy}>Configure sync</button>
+          <button disabled={busy}>{t('syncConfigure')}</button>
         </fieldset>
       </form>
       {configured && (
@@ -282,22 +281,21 @@ export default function SyncPanel({
                 typeof result.recoveryKey !== "string" ||
                 result.recoveryKey.length > 256
               )
-                throw new Error("Invalid recovery key response.");
+                throw new LocalUiError('syncInvalidRecovery');
               if (alive.current) setGenerated(result.recoveryKey);
             })
           }
         >
-          Show recovery key
+          {t('syncShowRecovery')}
         </button>
       )}
       {generated && (
         <div>
           <p>
-            Keep this recovery key to enroll another device. It decrypts your
-            synced data.
+            {t('syncRecoveryHint')}
           </p>
-          <textarea readOnly aria-label="Recovery key" value={generated} />
-          <button onClick={() => setGenerated("")}>Hide recovery key</button>
+          <textarea readOnly aria-label={t('syncRecoveryKey')} value={generated} />
+          <button onClick={() => setGenerated("")}>{t('syncHideRecovery')}</button>
         </div>
       )}
       {configured && (
@@ -311,10 +309,10 @@ export default function SyncPanel({
               }
             >
               <legend>
-                {scope === "settings" ? "Settings" : "Credentials"}
+                {t(scope === 'settings' ? 'syncSettings' : 'syncCredentials')}
               </legend>
               <button onClick={() => void run(() => fetchPreview(scope))}>
-                Preview remote {scope}
+                {t(scope === 'settings' ? 'syncPreviewSettings' : 'syncPreviewCredentials')}
               </button>
               <button
                 onClick={() =>
@@ -326,11 +324,11 @@ export default function SyncPanel({
                         : {}),
                     });
                     if (alive.current)
-                      setMessage(`Encrypted ${scope} uploaded.`);
+                      setMessage(scope === 'settings' ? 'syncSettingsUploaded' : 'syncCredentialsUploaded');
                   })
                 }
               >
-                Upload {scope}
+                {t(scope === 'settings' ? 'syncUploadSettings' : 'syncUploadCredentials')}
               </button>
             </fieldset>
           ))}
@@ -343,23 +341,20 @@ export default function SyncPanel({
                   setConfigured(false);
                   setGenerated("");
                   setPreview(undefined);
-                  setMessage(
-                    "This device is disconnected from sync. Remote data was not deleted.",
-                  );
+                  setMessage('syncDisconnected');
                 }
               })
             }
           >
-            Disconnect sync on this device
+            {t('syncDisconnect')}
           </button>
         </div>
       )}
       {preview && (
-        <section aria-label="Review sync changes">
-          <h3>Review {preview.scope}</h3>
+        <section aria-label={t('syncReviewRegion')}>
+          <h3>{t(preview.scope === 'settings' ? 'syncReviewSettings' : 'syncReviewCredentials')}</h3>
           <p>
-            Existing hosts and pins stay unchanged. Review imported identities
-            before applying.
+            {t('syncReviewHint')}
           </p>
           {preview.hosts.map((host) => (
             <article key={host.id}>
@@ -367,16 +362,16 @@ export default function SyncPanel({
               <p>
                 {host.username}@{host.hostname}:{host.port}
               </p>
-              <code>{host.fingerprint || "No saved fingerprint"}</code>
-              {host.jumpHostId && <p>Bastion: {host.jumpHostId}</p>}
+              <code>{host.fingerprint || t('syncNoFingerprint')}</code>
+              {host.jumpHostId && <p>{t('syncBastion')} {host.jumpHostId}</p>}
               {host.forwardAgent && (
-                <p>Selected-key forwarding is enabled for this host.</p>
+                <p>{t('syncForwardAgent')}</p>
               )}
               <p>
-                {host.addHost ? "Add host. " : ""}
-                {host.importCredentials ? "Import saved credentials." : ""}
+                {host.addHost ? `${t('syncAddHost')} ` : ''}
+                {host.importCredentials ? t('syncImportCredentials') : ''}
                 {host.trustFingerprint
-                  ? " Enroll this imported fingerprint."
+                  ? ` ${t('syncTrustFingerprint')}`
                   : ""}
               </p>
             </article>
@@ -387,17 +382,20 @@ export default function SyncPanel({
             </p>
           ))}
           <button disabled={busy} onClick={() => void run(apply)}>
-            Apply reviewed changes
+            {t('syncApply')}
           </button>
           <button disabled={busy} onClick={() => setPreview(undefined)}>
-            Cancel import
+            {t('syncCancel')}
           </button>
         </section>
       )}
-      {message && <p role="status">{message}</p>}
+      {message && <p role="status">{typeof message === 'string' ? t(message) : t('syncImported', {
+        hosts:t('syncHostCount',{count:message.hostsAdded,value:formatNumber(message.hostsAdded)}),
+        credentials:t('syncCredentialCount',{count:message.credentialsAdded,value:formatNumber(message.credentialsAdded)}),
+      })}</p>}
       {error && (
         <p role="alert" className="inline-error">
-          {error}
+          {uiErrorText(error)}
         </p>
       )}
     </section>
