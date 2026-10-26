@@ -29,6 +29,18 @@ Results, screenshots, and failure diagnostics are in
 generated result bundle before rerunning. CI uploads it even when the test fails
 and always deletes its isolated simulator. No existing user simulator is used.
 
+On workspace failure, CI also retains `lazysh-ios-workspace-metadata` within the
+app acceptance artifact. This filesystem-only probe records a SHA-256 of the
+generated PBX project, whitelisted project/workspace target configurations, and
+the selected simulator's persisted UDID, runtime, device type and state. Persisted
+state does **not** establish live simulator availability. Unknown schemas or
+conversion failures are marked unavailable. Inputs are capped at 2 MiB for PBX
+and 64 KiB for the device plist; filtered files are capped at 32 KiB, configuration
+lists at 32, arrays at eight values and strings at 128 characters with explicit
+truncation markers. Private conversion files are removed without upload. The
+probe runs no SDK or simulator commands and does not change XCTest's destination,
+deadline or original result. It is diagnostic evidence, not a destination fix.
+
 The source-controlled target lives in `src-tauri/apple/project.yml.hbs` and the
 fixture in `src-tauri/apple/UITests/WorkspaceUITests.swift`. Tauri generates the
 Xcode project during `build:ios`. The UI runner deliberately has no app-build
