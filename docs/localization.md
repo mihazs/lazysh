@@ -16,20 +16,31 @@ visible when the language changes. Raw native diagnostics remain verbatim.
 Cloud dictation enrollment and quota settings, and dictation history controls and
 local errors, are also covered. These changes preserve transcription content,
 engine/model identifiers, native diagnostics, capture revisions and storage
-epochs. The main Voice engine/model/recording/delivery controls remain a follow-up.
-This is a partial milestone under issue #79. Other feature panels and native
-lock-cover/biometric-reason text still require their own localization and
-acceptance. Apple permission purposes have separate bundled resources below;
+epochs. Main Voice engine/model/recording/delivery controls, local validation and
+retained download/import/asset/transcription/delivery progress are also covered.
+Engine/model names, recognition-language codes and endonyms, and received native
+capability reasons remain verbatim. Local initial fallback explanations are
+distinguished from received native reasons, including an empty native reason.
+Changing interface language does not change recognition language, microphone
+ownership, request IDs, cancellation, input claims or direct/Enter opt-in state.
+This is a partial milestone under issue #79. Other feature panels still require their own
+localization and acceptance. Native lock-cover/biometric-reason resources on
+Android, iOS and macOS use the [native language authority](native-ui-locale.md).
+Apple permission purposes have separate bundled resources below;
 selecting an interface language does not change native OS controls.
 
 App language offers **System** (the unchanged default), **English**,
 **Português (Brasil)** and **Español**. System uses the first supported language
-in the first 16 `navigator.languages` entries. Portuguese tags use the Brazilian
+in the first 16 `navigator.languages` entries on frontend-authority platforms
+(browser, Windows and Linux). Android, iOS and macOS use the native choice and OS
+resolution described in the native-language document. Portuguese tags use the Brazilian
 catalog and `pt-BR` formatting; no Portuguese-from-Portugal catalog is included.
 English and Spanish regional tags preserve regional `Intl` number/date
 formatting. Other or malformed languages fall back to English. Explicit choices
 use `en`, `pt-BR` or `es`. The validated `uiLanguage` preference persists and syncs;
-older backups default to System. Reset preferences restores System. No language
+older frontend backups default to System. Native-authority reset/import and
+first-upgrade behavior follow the native-language document. Reset preferences
+restores System. No language
 resources are fetched remotely.
 
 ## Adding interface text
@@ -124,6 +135,12 @@ Run the existing project tasks from `apps/client`:
   checks translated actions in the real Voice view, in-flight transcription and
   draft continuity, saved-history consent/retry and no IndexedDB transactions
   caused by language changes.
+- `bun run test src/i18n/voiceLocales.test.tsx` checks original recording and
+  channel ownership, request headers, recognition language, native reason text,
+  retained progress/local errors and one-shot Enter claims across locales.
+- `bun run test:e2e e2e/voice-locales.spec.ts e2e/direct-dictation.spec.ts` checks
+  actual App/Voice/bridge recording and direct-delivery state at desktop/phone
+  widths, unchanged drafts and one queued final payload across language changes.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
