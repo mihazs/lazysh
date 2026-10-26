@@ -266,3 +266,10 @@ preserving interpolation. The coverage test audits static text in the covered
 workflow; it does not claim all application strings are localized. Synthetic
 browser tests do not establish physical-device permission or system-language
 behavior.
+
+`bun run test src/i18n/accessLocales.test.tsx src/AccessShell.test.tsx` checks
+that a retained App Lock authentication failure follows English, Brazilian
+Portuguese and Spanish without another configuration request. Held configuration
+retains its original access header, checkbox identity and opt-in; later access
+authority still wins. Native unsupported-platform reasons stay literal. These
+are component fixtures, not proof of OS authentication or device prompts.
