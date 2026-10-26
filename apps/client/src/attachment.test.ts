@@ -1,13 +1,7 @@
+import {attachmentPngHeader as png} from './test/attachmentData';
 import { expect, it } from 'vitest';
 import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageSize, shellPath, validateCrop } from './attachment';
 
-function png(width: number, height: number) {
-  const bytes = new Uint8Array(24);
-  bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(8, 13); view.setUint32(12, 0x49484452); view.setUint32(16, width); view.setUint32(20, height);
-  return bytes;
-}
 it('bounds files and rejects filenames/paths that change path structure or shell lines', () => {
   expect(() => checkAttachment({ name: 'a.txt', size: ATTACHMENT_LIMIT })).not.toThrow();
   for (const value of [{ name: '../a', size: 1 }, { name: 'a\nb', size: 1 }, { name: 'a', size: ATTACHMENT_LIMIT + 1 }]) expect(() => checkAttachment(value)).toThrow();

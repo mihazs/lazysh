@@ -38,6 +38,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Localize host attachment selection, crop/annotation controls, upload/copy/staging
+  notices and local validation in English, Brazilian Portuguese and Spanish.
+  Language changes preserve file bytes, edits, paths and editable prompts; defaults
+  are unchanged. Public sharing controls remain separate work.
+
 - Localize agent-board activity, one-request approval controls and companion
   settings in English, Brazilian Portuguese and Spanish. Language changes retain
   reported agent content, pending decisions and unsaved settings; Keep Awake
