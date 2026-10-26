@@ -65,7 +65,7 @@ it("requires explicit preview and apply, and never automatically uploads", async
     screen.getByRole("button", { name: "Apply reviewed changes" }),
   );
   expect(
-    await screen.findByText("Imported 1 hosts and 0 credential entries."),
+    await screen.findByText("Imported 1 host and 0 credential entries."),
   ).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("sync_apply", { token: "review-one" }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(changed).toHaveBeenCalledOnce();
