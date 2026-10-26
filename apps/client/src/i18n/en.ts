@@ -557,6 +557,7 @@ export const english = {
   chatOpen: "Open transcript",
   chatRecent: "Recent transcripts",
   chatSelect: "Select a transcript",
+  chatGrokConversation: "Recorded display only; no live-session binding or compacted model context. Unsupported controls or ambiguous rewinds cannot be reconstructed; select Recorded messages to inspect the original records.",
   chatBranchLimit: "latest 50 messages from the selected branch",
   chatStepLimit: "showing up to 500 step records",
   chatMessageLimit: "showing up to 500 recorded messages",
