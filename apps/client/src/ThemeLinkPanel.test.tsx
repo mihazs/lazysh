@@ -9,7 +9,7 @@ import {acknowledgeAccessReady,accessSnapshot,applyAccessStatus} from './access'
 import {defaults,getPreferences,savePreferences} from './preferences';
 import * as preferences from './preferences';
 import {exportTheme} from './themeImport';
-vi.mock('@tauri-apps/api/core',()=>({invoke:vi.fn()}));
+vi.mock('@tauri-apps/api/core',()=>({invoke:vi.fn(),isTauri:()=>true}));
 vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn()}));
 let generation=0,pending: {receipt:string;code:string}|null,changed:()=>void;
 const receipt='11111111-1111-4111-8111-111111111111';

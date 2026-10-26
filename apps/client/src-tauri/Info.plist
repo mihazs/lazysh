@@ -8,6 +8,8 @@
     <string>Unlock saved SSH credentials with Face ID when you enable biometric protection.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Record speech for dictation using the engine you select.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Use the camera when you scan a theme QR or choose to capture an attachment photo. Theme QR scans stay on this device.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSExceptionDomains</key>

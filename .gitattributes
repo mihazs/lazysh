@@ -1,0 +1,2 @@
+# Preserve upstream notice bytes, including its trailing blank line.
+apps/client/src-tauri/licenses/quircs-LICENSE -text whitespace=-blank-at-eof

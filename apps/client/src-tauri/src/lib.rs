@@ -28,6 +28,7 @@ mod ssh;
 mod sync;
 mod terminal_input;
 mod theme_links;
+mod theme_qr;
 mod tmux_jump;
 mod tmux_server;
 mod ui_locale;
@@ -68,6 +69,7 @@ pub fn run() {
         .manage(app_lock::Runtime::default())
         .manage(keep_awake::Runtime::default())
         .manage(theme_links::ThemeLinks::default())
+        .manage(theme_qr::QrState::default())
         .manage(previews::PreviewState::default())
         .manage(devices::DeviceStreams::default())
         .manage(share::ShareState::default())
@@ -107,6 +109,7 @@ pub fn run() {
                 theme_links::theme_link_status,
                 theme_links::theme_link_read,
                 theme_links::theme_link_ack,
+                theme_qr::theme_qr_decode,
                 local::local_capability,
                 desktop_launch::desktop_launch_read,
                 desktop_launch::desktop_launch_ack,

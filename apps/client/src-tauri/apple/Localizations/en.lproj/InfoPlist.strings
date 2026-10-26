@@ -1,2 +1,3 @@
 "NSFaceIDUsageDescription" = "Unlock saved SSH credentials with Face ID when you enable biometric protection.";
 "NSMicrophoneUsageDescription" = "Record speech for dictation using the engine you select.";
+"NSCameraUsageDescription" = "Use the camera when you scan a theme QR or choose to capture an attachment photo. Theme QR scans stay on this device.";

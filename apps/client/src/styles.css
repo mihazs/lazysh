@@ -1677,3 +1677,7 @@ button svg {
 .dictation-history > label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 
 .keep-awake-control input[type="checkbox"] { width: 20px; height: 20px; vertical-align: middle; accent-color: var(--accent); }
+
+.theme-qr-panel { margin-block: 12px; padding: 10px; border: 1px solid var(--theme-border, #343d31); border-radius: 7px; }
+.theme-qr-panel video { display: block; width: 100%; max-width: 500px; max-height: 320px; object-fit: contain; background: #000; }
+.theme-qr-panel video[hidden] { display: none; }

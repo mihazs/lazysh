@@ -8,6 +8,7 @@ export const aboutLegalFiles = [
   'packages/mosh-transport/OPENSSL-LICENSE.txt',
   'packages/et-transport/LICENSE-MIT',
   'packages/portable-pty-vendor/LICENSE.md',
+  'apps/client/src-tauri/licenses/quircs-LICENSE',
 ] as const;
 export const aboutLocales = [
   {locale:'en',openHosts:'Open hosts',region:'About lazysh',source:'View corresponding source and build history',license:'License: Protocol Buffers'},
