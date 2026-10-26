@@ -30,7 +30,7 @@ test('Grok tool cards expose recorded status and linkage without live actions or
   await expect(page.getByText('Recorded tool status: failed',{exact:true})).toBeVisible();
   await summaries.filter({hasText:'Recorded status: completed'}).click();
   await expect(page.getByText('Original output <script>not executed</script>',{exact:true})).toBeVisible();
-  await expect(page.getByRole('button',{name:'Find transcripts',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'Find transcripts',exact:true})).toBeEnabled();
   await expect(page.getByLabel('Follow selected Claude branch')).toHaveCount(0);
   await expect(page.getByRole('button',{name:/^(Approve|Deny|Stop|Send)$/i})).toHaveCount(0);
   await expect(page.locator('.chat-message img,.chat-message script,.chat-message iframe')).toHaveCount(0);
