@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Localize Keep Awake controls and multiplexer prefix shortcuts in English, Brazilian Portuguese and Spanish while preserving native ownership, opt-in state, retained errors and exact input bytes. Keep the board checkbox within narrow layouts; defaults and permissions are unchanged.
+
 - Localize terminal controls, clipboard consent, link confirmation, search/composer status and terminal-owned local errors in English, Brazilian Portuguese and Spanish. Language changes preserve live terminal handlers, raw content, drafts, explicit consent and input bytes; locale defaults and permissions are unchanged.
 
 - Reject observed file changes during Grok recorded-conversation reads, including concurrent appends, instead of publishing a partial, detached or mixed history. Stable incomplete tails, portable manual reads and existing limits/defaults remain unchanged.
