@@ -350,3 +350,70 @@ fn concurrent_same_state_ingest_admits_one_transition_in_the_local_transaction()
         2
     );
 }
+
+fn maintain_due(store: &mut Store, now: i64) {
+    assert!(
+        store::schedule(&store.connection, 1, now)
+            .unwrap()
+            .maintenance
+    );
+    store::maintain(&mut store.connection, 1, now).unwrap();
+}
+
+#[test]
+fn read_only_schedule_and_maintenance_recover_and_expire_without_loading_credentials() {
+    let (_directory, mut store, now) = working();
+    let job = store::claim(&mut store.connection, 1, now)
+        .unwrap()
+        .unwrap();
+    maintain_due(&mut store, now);
+    let schedule = store::schedule(&store.connection, 1, now).unwrap();
+    assert!(!schedule.maintenance);
+    assert_eq!(schedule.next_attempt, Some(0));
+    let (id, attempts): (String, i64) = store
+        .connection
+        .query_row("SELECT id,attempts FROM relay_outbox", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(id, job.id);
+    assert_eq!(attempts, 1);
+    store
+        .connection
+        .execute("UPDATE relay_outbox SET expires=?1", [now - 1])
+        .unwrap();
+    store::maintain(&mut store.connection, 1, now).unwrap();
+    assert_eq!(store.relay_status().unwrap().retained_unknown, 1);
+    let changed = store.connection.total_changes();
+    for _ in 0..100 {
+        let idle = store::schedule(&store.connection, 1, now).unwrap();
+        assert!(!idle.maintenance);
+        assert!(idle.next_attempt.is_none());
+        assert!(store.connection.is_autocommit());
+    }
+    assert_eq!(store.connection.total_changes(), changed);
+}
+
+#[test]
+fn schedule_maintenance_terminalizes_exhausted_recovery_without_claiming_again() {
+    let (_directory, mut store, now) = working();
+    store
+        .connection
+        .execute(
+            "UPDATE relay_outbox SET state='sending',attempts=3,may_sent=1",
+            [],
+        )
+        .unwrap();
+    maintain_due(&mut store, now);
+    let idle = store::schedule(&store.connection, 1, now).unwrap();
+    assert!(!idle.maintenance);
+    assert!(idle.next_attempt.is_none());
+    let (state, attempts): (String, i64) = store
+        .connection
+        .query_row("SELECT state,attempts FROM relay_outbox", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(state, "failed_unknown");
+    assert_eq!(attempts, 3);
+}
