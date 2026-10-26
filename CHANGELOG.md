@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an explicit opt-in Grok ACP recorded-conversation view with bounded chunk grouping, tool replacement and proven prompt-index rewinds. Unsupported controls or ambiguous histories fail visibly with Records available. Records remain the default; Claude Follow, media no-fetch and live-session binding restrictions are unchanged.
+
 - Add cold saved-host CLI composition with `--mux tmux`, `tmux:SERVER` or
   `herdr`. After explicit normal authentication, lazysh opens that fixed picker
   on the new SSH control session; choosing an exact row attaches through the

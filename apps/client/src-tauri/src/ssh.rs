@@ -2493,7 +2493,9 @@ pub async fn agent_transcript(
             let mut command = transcript_command(&agent, &path, offset, checkpoint.as_deref())?;
             match view.as_deref() {
                 None | Some("records") => {}
-                Some("conversation") if agent == "claude" && offset == 0 => {
+                Some("conversation")
+                    if matches!(agent.as_str(), "claude" | "grok-acp") && offset == 0 =>
+                {
                     command.push_str(" --view conversation")
                 }
                 _ => {
