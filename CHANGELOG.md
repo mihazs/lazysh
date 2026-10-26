@@ -9,6 +9,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Companion initialization checks temporary SQLite journal/WAL/SHM paths while
+  holding its existing bootstrap lock, avoiding inspections racing another
+  initializer's journal removal. Ownership, permissions, no-follow checks and
+  the shared three-second bootstrap budget are unchanged.
+
 - The dictation-history opt-in checkbox uses bounded sizing and a wrapping label
   instead of inheriting full-width text-input sizing, keeping history controls
   within the panel at desktop and phone widths.
@@ -40,6 +45,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   HOME; manual local terminals and restoration retain their HOME default. Windows
   directory launches use a verified compatible drive-path spelling and refuse
   UNC, device and verbatim-only paths instead of letting the shell change cwd.
+- Localize host attachment selection, crop/annotation controls, upload/copy/staging
+  notices and local validation in English, Brazilian Portuguese and Spanish.
+  Language changes preserve file bytes, edits, paths and editable prompts; defaults
+  are unchanged. Public sharing controls remain separate work.
+
 - Localize agent-board activity, one-request approval controls and companion
   settings in English, Brazilian Portuguese and Spanish. Language changes retain
   reported agent content, pending decisions and unsaved settings; Keep Awake
