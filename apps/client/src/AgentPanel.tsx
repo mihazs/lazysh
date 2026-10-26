@@ -1,3 +1,5 @@
+import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
+import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
 
@@ -18,29 +20,30 @@ type AgentSession = {
   eventCount: number;
 };
 const states: AgentState[] = ['needs_attention', 'working', 'done'];
-const names: Record<AgentState, string> = { needs_attention: 'Needs you', working: 'Working', done: 'Done' };
+const names = {needs_attention:'agentsNeedsYou',working:'agentsWorking',done:'agentsDone'} as const;
 
 export function parseSnapshot(value: unknown): AgentSession[] {
   if (!value || typeof value !== 'object' || !('schemaVersion' in value) || value.schemaVersion !== 1 || !('sessions' in value) || !Array.isArray(value.sessions) || value.sessions.length > 100) {
-    throw new Error('Unsupported agent snapshot. Update the host companion.');
+    throw new LocalUiError('agentsUnsupportedSnapshot');
   }
   return value.sessions.map((item: unknown) => {
-    if (!item || typeof item !== 'object') throw new Error('Invalid agent session.');
+    if (!item || typeof item !== 'object') throw new LocalUiError('agentsInvalidSession');
     const row = item as Record<string, unknown>;
     for (const key of ['sessionId', 'agent', 'project', 'updatedAt', 'summary']) {
-      if (typeof row[key] !== 'string' || row[key].length > 4096) throw new Error('Invalid agent session.');
+      if (typeof row[key] !== 'string' || row[key].length > 4096) throw new LocalUiError('agentsInvalidSession');
     }
     if (!states.includes(row.state as AgentState) || !Number.isFinite(Date.parse(row.updatedAt as string)) || !Number.isSafeInteger(row.eventCount) || Number(row.eventCount) < 1 || (row.paneId !== null && typeof row.paneId !== 'string')) {
-      throw new Error('Invalid agent session.');
+      throw new LocalUiError('agentsInvalidSession');
     }
     return row as AgentSession;
   });
 }
 
 export function AgentPanel({ sessionId }: { sessionId: string }) {
+  useUi();
   const invoke = useProtectedInvoke();
   const [sessions, setSessions] = useState<AgentSession[]>([]);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadedSessionId, setLoadedSessionId] = useState<string>();
@@ -54,21 +57,21 @@ export function AgentPanel({ sessionId }: { sessionId: string }) {
       const rows = parseSnapshot(value);
       if (current === request.current) { setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); }
     } catch (e) {
-      if (current === request.current) setError(e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e));
+      if (current === request.current) setError(captureUiError(e));
     } finally { if (current === request.current) setBusy(false); }
   }
   useEffect(() => { setSessions([]); setLoaded(false); void refresh(); return () => { request.current++; }; }, [sessionId]);
 
-  return <section className="tool-panel" aria-label="Agent activity">
+  return <section className="tool-panel" aria-label={t('agentsTitle')}>
     <KeepAwakeControl sessionId={sessionId} />
     <ApprovalPanel sessionId={sessionId} />
     {loaded && loadedSessionId === sessionId && !error && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} />}
-    <div className="tool-bar"><h3>Agent activity</h3><button className="subtle-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />{busy ? 'Refreshing…' : 'Refresh'}</button></div>
-    <p className="agent-note">Last reported events from this host. Respond to agent prompts in the terminal.</p>
-    {error && <div className="agent-setup"><p className="inline-error" role="alert">{error}</p><h3>Connect your agents.</h3><p>Install the optional <code>lazysh-agent</code> companion on this host and enable its lifecycle hooks. Your terminal works independently.</p><p>See <code>docs/companion.md</code> in the lazysh repository for setup.</p></div>}
-    {busy && <p className="loading" role="status">Reading events over SSH…</p>}
-    {!busy && !error && loaded && sessions.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>No agent events yet.</h3><p>The companion is connected. Start an agent<br />with lifecycle hooks to see its activity here.</p></div>}
-    {sessions.length > 0 && <div className="agent-board">{states.map(state => <section key={state} aria-label={names[state]} className="agent-column"><h4>{names[state]} <span>{sessions.filter(s => s.state === state).length}</span></h4>{sessions.filter(s => s.state === state).map(s => <article className="agent-card" key={`${s.agent}:${s.sessionId}`}><strong><Bot size={16} /> {s.agent}</strong><p>{s.summary}</p><code title={s.project}>{s.project}</code><small>Reported <time dateTime={s.updatedAt}>{new Date(s.updatedAt).toLocaleString()}</time></small>{s.paneId && <small>Pane {s.paneId} · {s.eventCount} events</small>}</article>)}</section>)}</div>}
+    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />{busy ? t('agentsRefreshing') : t('agentsRefresh')}</button></div>
+    <p className="agent-note">{t('agentsReportedHint')}</p>
+    {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
+    {busy && <p className="loading" role="status">{t('agentsReading')}</p>}
+    {!busy && !error && loaded && sessions.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p></div>}
+    {sessions.length > 0 && <div className="agent-board">{states.map(state => <section key={state} aria-label={t(names[state])} className="agent-column"><h4>{t(names[state])} <span>{formatNumber(sessions.filter(s => s.state === state).length)}</span></h4>{sessions.filter(s => s.state === state).map(s => <article className="agent-card" key={`${s.agent}:${s.sessionId}`}><strong><Bot size={16} /> {s.agent}</strong><p>{s.summary}</p><code title={s.project}>{s.project}</code><small><time dateTime={s.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}</time></small>{s.paneId && <small>{t('agentsPaneEvents',{pane:s.paneId,events:formatNumber(s.eventCount)})}</small>}</article>)}</section>)}</div>}
   </section>;
 }
 

@@ -149,3 +149,21 @@ The app rechecks the exact active, connected session UUID, visible WebView, Voic
 Direct input requires a nonempty single line without terminal control characters, line separators or malformed Unicode, within 64 KiB of UTF-8 including the optional Enter. Multiline or rejected results remain in the draft for editing or explicit staging. Failed input reports the error and retains the draft; it is never resubmitted automatically. **Use in draft** in history continues to restore text only, even while direct mode is enabled.
 
 Vitest checks Unicode/control/byte boundaries, captured choices, one-shot claims, stale-session and foreground checks, no retries, and draft-only history reuse. Playwright exercises the actual App/Voice/bridge path at desktop and phone widths using synthetic audio and native-IO fixtures. Those browser checks do not verify a real microphone, speech model, operating-system background behavior, terminal process, or physical-device input delivery.
+
+## Interface language
+
+Voice controls, progress and app-owned errors use the selected English, Brazilian
+Portuguese or Spanish interface catalog. Recognition language stays independent:
+its protocol codes and displayed endonyms do not change when the interface does.
+Model filenames/catalog labels, engine names, transcripts and received native
+reasons/errors remain verbatim. Initial client fallback explanations use the
+catalog until a native capability response arrives, including a response with an
+empty reason.
+
+Language changes update the existing view. They do not restart a microphone,
+model download, asset operation or inference, replace its request/channel IDs,
+change the captured direct/Enter choice, resubmit a result or erase the editable
+draft. Persistent local progress/error keys are translated while rendering;
+Cloud cleanup warnings retain any preceding raw diagnostic. Synthetic Vitest and
+Playwright checks verify these state transitions and exact final input payloads,
+not real-device microphone/model or OS lifecycle behavior.

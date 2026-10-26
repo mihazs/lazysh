@@ -1,7 +1,8 @@
+import {t, useUi, formatDateTime} from './i18n/core';
+import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 
-import { errorMessage } from "./SessionTools";
 
 type Approval = {
   id: string;
@@ -25,9 +26,9 @@ export function parseApprovals(value: unknown): Approval[] {
     !Array.isArray(value.requests) ||
     value.requests.length > 20
   )
-    throw new Error("Unsupported approval response.");
+    throw new LocalUiError('approvalsUnsupported');
   return value.requests.map((item) => {
-    if (!item || typeof item !== "object") throw new Error("Invalid approval.");
+    if (!item || typeof item !== "object") throw new LocalUiError('approvalsInvalid');
     for (const key of [
       "id",
       "agent",
@@ -38,7 +39,7 @@ export function parseApprovals(value: unknown): Approval[] {
       "expiresAt",
     ])
       if (typeof item[key] !== "string" || item[key].length > 4096)
-        throw new Error("Invalid approval context.");
+        throw new LocalUiError('approvalsInvalidContext');
     if (
       !/^[\da-f-]{36}$/i.test(item.id) ||
       !/^[\da-f]{64}$/i.test(item.expectedHash) ||
@@ -46,14 +47,15 @@ export function parseApprovals(value: unknown): Approval[] {
       !Number.isFinite(Date.parse(item.expiresAt)) ||
       JSON.stringify(item.toolInput ?? null).length > 32768
     )
-      throw new Error("Invalid approval identity.");
+      throw new LocalUiError('approvalsInvalidIdentity');
     return item as Approval;
   });
 }
 export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
+  useUi();
   const invoke = useProtectedInvoke();
   const [requests, setRequests] = useState<Approval[]>([]);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const running = useRef(false);
@@ -69,7 +71,7 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
       );
       if (current === generation.current) setRequests(rows);
     } catch (e) {
-      if (current === generation.current) setError(errorMessage(e));
+      if (current === generation.current) setError(captureUiError(e));
     } finally {
       if (current === generation.current) {
         setBusy(false);
@@ -109,15 +111,13 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
         },
       );
       if (result?.schemaVersion !== 1 || result.accepted !== true)
-        throw new Error(
-          "The host did not accept this decision. Refresh its current request.",
-        );
+        throw new LocalUiError('approvalsNotAccepted');
       if (current === generation.current)
         setRequests((previous) =>
           previous.filter((item) => item.id !== request.id),
         );
     } catch (e) {
-      if (current === generation.current) setError(errorMessage(e));
+      if (current === generation.current) setError(captureUiError(e));
     } finally {
       if (current === generation.current) {
         running.current = false;
@@ -126,20 +126,19 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
     }
   }
   return (
-    <section aria-label="Pending approvals" className="approval-panel">
+    <section aria-label={t('approvalsTitle')} className="approval-panel">
       <div className="tool-bar">
-        <h3>Pending approvals</h3>
+        <h3>{t('approvalsTitle')}</h3>
         <button disabled={busy} onClick={() => void refresh()}>
-          Refresh approvals
+          {t('approvalsRefresh')}
         </button>
       </div>
       <p>
-        Only requests from a waiting lazysh approval hook can be answered here.
-        Other agent prompts stay in the terminal.
+        {t('approvalsHint')}
       </p>
       {error && (
         <p role="alert" className="inline-error">
-          {error}
+          {uiErrorText(error)}
         </p>
       )}
       {requests.map((request) => (
@@ -148,27 +147,21 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
             {request.agent} · {request.toolName}
           </h4>
           <p>
-            {request.project} · session <code>{request.sessionId}</code>
-            {request.paneId && (
-              <>
-                {" "}
-                · pane <code>{request.paneId}</code>
-              </>
-            )}
+            {request.paneId?t('approvalsPaneContext',{project:request.project,session:request.sessionId,pane:request.paneId}):t('approvalsContext',{project:request.project,session:request.sessionId})}
           </p>
           <pre>{JSON.stringify(request.toolInput, null, 2)}</pre>
-          <p>Expires {new Date(request.expiresAt).toLocaleString()}</p>
+          <p><time dateTime={request.expiresAt}>{t('approvalsExpires',{time:formatDateTime(new Date(request.expiresAt))})}</time></p>
           <button
             disabled={busy || Date.parse(request.expiresAt) <= Date.now()}
             onClick={() => void decide(request, "deny")}
           >
-            Deny request
+            {t('approvalsDeny')}
           </button>
           <button
             disabled={busy || Date.parse(request.expiresAt) <= Date.now()}
             onClick={() => void decide(request, "allow")}
           >
-            Allow this request
+            {t('approvalsAllow')}
           </button>
         </article>
       ))}

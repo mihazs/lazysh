@@ -35,19 +35,7 @@ it('stages an edited draft only on explicit request and never sends terminal inp
   window.removeEventListener('lazysh-prompt-draft',listener);
 });
 
-const catalogEntry={id:'tiny.en',file:'ggml-tiny.en.bin',label:'Tiny · English',bytes:77704715,sha256:'921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f',revision:'5359861c739e955e79d9a303bcbc70fb988958b1'};
-type DownloadCall={id:string;requestId:string;events:{onmessage:(event:unknown)=>void}};
-function downloadFixture(installed:{id:string;bytes:number}[]=[]) {
-  let complete!:()=>void;let fail!:(error:Error)=>void;
-  vi.mocked(invoke).mockImplementation(command=>{
-    if(command==='voice_models')return Promise.resolve(installed) as never;
-    if(command==='voice_model_catalog')return Promise.resolve([catalogEntry]) as never;
-    if(command==='voice_download_model')return new Promise<void>((resolve,reject)=>{complete=resolve;fail=reject;}) as never;
-    if(command==='voice_download_cancel')return Promise.resolve(true) as never;
-    return Promise.resolve() as never;
-  });
-  return {installed,complete:()=>complete(),fail:(message:string)=>fail(new Error(message))};
-}
+import {catalogEntry,type DownloadCall,downloadFixture} from './test/voiceDownloadFixture';
 it('downloads only on explicit click, shows bounded progress and selects the installed model',async()=>{
   const fixture=downloadFixture();render(<VoicePanel sessionId="ssh1"/>);
   const button=await screen.findByRole('button',{name:'Download selected model'});
@@ -236,36 +224,7 @@ it('resets direct input and Enter when Voice is closed and reopened for another 
   expect(screen.getByLabelText('Auto-send: press Enter')).toHaveProperty('checked',false);
 });
 
-const parakeetBytes = 487170055;
-function parakeetFixture(overrides: Record<string, unknown> = {}) {
-  const status = {available:true, reason:'Local CPU engine', installed:false, ready:false, busy:false,
-    stage:'idle', requestId:null as string|null, received:0, total:parakeetBytes, ...overrides};
-  let finishInstall!:()=>void, failInstall!:(error:Error)=>void;
-  let finishTranscription!:(result:{requestId:string;text:string})=>void;
-  vi.mocked(invoke).mockImplementation((command, args) => {
-    if (command === 'voice_models' || command === 'voice_model_catalog') return Promise.resolve([]) as never;
-    if (command === 'voice_parakeet_status') return Promise.resolve({...status}) as never;
-    if (command === 'voice_parakeet_install') {
-      Object.assign(status, {busy:true, stage:'downloading', requestId:(args as {requestId:string}).requestId});
-      return new Promise<void>((resolve,reject) => { finishInstall=resolve; failInstall=reject; }) as never;
-    }
-    if (command === 'voice_parakeet_remove') {
-      Object.assign(status, {installed:false, ready:false, busy:false, stage:'idle', requestId:null});
-      return Promise.resolve() as never;
-    }
-    if (command === 'voice_parakeet_cancel') {
-      Object.assign(status, {busy:true, stage:'finishing'});
-      return Promise.resolve({cancelled:true,finishing:true}) as never;
-    }
-    if (command === 'voice_parakeet_transcribe') {
-      Object.assign(status, {busy:true,stage:'loading',requestId:(args as {requestId:string}).requestId});
-      return new Promise<{requestId:string;text:string}>(resolve => { finishTranscription=resolve; }) as never;
-    }
-    return Promise.resolve() as never;
-  });
-  return {status, install:()=>finishInstall(), failInstall:()=>failInstall(new Error('Cancelled native installation')),
-    complete:(requestId:string,text:string)=>finishTranscription({requestId,text})};
-}
+import {parakeetFixture} from './test/parakeetFixture';
 function parakeetMicrophone() {
   return installSpeechCapture().microphone;
 }
