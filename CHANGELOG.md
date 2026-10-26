@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep dialog keyboard focus on visible, enabled controls, including expanded/collapsed notice summaries and ordinary links; preserve initial field focus, Escape and opener restoration.
+
 - Add an explicitly started foreground companion relay sender, pinned to a required local revision, with one dispatcher, a two-second startup quiet period and global failure cooldown. Default-off admission and synchronous hooks remain unchanged; no OS service/schedule or native mobile provider is installed.
 
 - Add explicit checkpointed Grok Records reads on Unix companions, binding continuation to selected file identity and its observed prefix. Manual paging/output stays unchanged; frontend Follow and live-agent targeting are not enabled.
