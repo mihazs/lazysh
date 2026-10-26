@@ -4,12 +4,17 @@
 
 - Add explicit named tmux server selection throughout discovery, attachment, controls, Jump To and saved workspace restoration. Commands now explicitly select `-L default` when no named server is chosen; an inherited `TMUX` environment variable no longer redirects legacy/default operations to another server. Client invocations now force UTF-8 (`-u`) so discovery framing and Unicode metadata are independent of the remote locale.
 
-- Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux explicitly remains unavailable pending bounded asynchronous desktop-portal ownership; physical idle-timeout and battery validation remain pending.
+- Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux now uses bounded asynchronous XDG portal acknowledgements, with exact cancellation, private-connection cleanup and visible owner-loss reporting. Acknowledgement does not establish physical idle-timeout or battery behavior; hardware validation remains pending.
 
 This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
+
+- Companion initialization checks temporary SQLite journal/WAL/SHM paths while
+  holding its existing bootstrap lock, avoiding inspections racing another
+  initializer's journal removal. Ownership, permissions, no-follow checks and
+  the shared three-second bootstrap budget are unchanged.
 
 - The dictation-history opt-in checkbox uses bounded sizing and a wrapping label
   instead of inheriting full-width text-input sizing, keeping history controls
@@ -34,6 +39,16 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   locks still fail closed. Separate SQLite contention failures remain under review.
 
 ### Added
+
+- Device discovery, screenshot/video controls and client-owned validation now
+  support English, Brazilian Portuguese and Spanish. Interface changes preserve
+  stream ownership, frame data, socket drafts and explicit device-input choices;
+  native SDK warnings and device identities remain verbatim. Defaults are unchanged.
+
+- Localize optional public-sharing configuration, expiring uploads/history,
+  thumbnails, copying and revocation in English, Brazilian Portuguese and Spanish.
+  Language changes preserve credential/file drafts and in-flight requests; defaults
+  and explicit upload/revoke consent are unchanged.
 
 - Localize host attachment selection, crop/annotation controls, upload/copy/staging
   notices and local validation in English, Brazilian Portuguese and Spanish.

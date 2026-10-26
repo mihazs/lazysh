@@ -1,4 +1,4 @@
-import {LocalUiError} from './i18n/localError';
+import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
@@ -1011,7 +1011,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
   const [deleting, setDeleting] = useState<Host | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiErrorCause>("");
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
   const [switcher, setSwitcher] = useState(false);
@@ -1290,8 +1290,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }, []);
   useEffect(() => {
     const rerender = () => setSessions((previous) => [...previous]);
-    const displayError = (event: Event) =>
-      setError(String((event as CustomEvent).detail));
+    const displayError = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      setError(detail instanceof LocalUiError ? detail : String(detail));
+    };
     window.addEventListener("lazysh-session-change", rerender);
     window.addEventListener("lazysh-error", displayError);
     return () => {
@@ -1659,7 +1661,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )}
         {error && (
           <div className="global-error" role="alert">
-            <span>{error}</span>
+            <span>{uiErrorText(error)}</span>
             <button
               className="icon-button"
               aria-label={t("appDismissError")}

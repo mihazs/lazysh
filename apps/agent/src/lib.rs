@@ -372,6 +372,13 @@ impl Store {
     }
     // Private native-test seam: rejection must precede every state mutation.
     fn open_with_admission(directory: &Path, admit: fn(&Path) -> io::Result<()>) -> Result<Self> {
+        Self::open_with_storage_checks(directory, admit, validate_sidecar)
+    }
+    fn open_with_storage_checks(
+        directory: &Path,
+        admit: fn(&Path) -> io::Result<()>,
+        mut check_sidecar: impl FnMut(&Path) -> Result<()>,
+    ) -> Result<Self> {
         fn path_error(error: io::Error) -> Error {
             if error.kind() == io::ErrorKind::Unsupported {
                 Error::UnsupportedStateFilesystem
@@ -390,15 +397,17 @@ impl Store {
         // The private directory protects newly created files until chmod, and
         // SQLite itself refuses leaf symlinks with SQLITE_OPEN_NOFOLLOW.
         validate_state_file(&path)?;
-        // SQLite owns sidecar creation, recovery and removal. Never open/close
-        // their descriptors here: POSIX locks belong to the process/inode.
-        for suffix in ["-journal", "-wal", "-shm"] {
-            validate_sidecar(&directory.join(format!("events.sqlite3{suffix}")))?;
-        }
-        // One deadline covers native bootstrap coordination and SQLite's
-        // subsequent schema/mode waits, rather than adding another wait budget.
+        // One deadline covers native bootstrap coordination, sidecar admission
+        // and SQLite's schema/mode waits rather than adding another wait budget.
         let bootstrap_deadline = Instant::now() + Duration::from_secs(3);
         let _bootstrap = lock_store_bootstrap(&directory, bootstrap_deadline)?;
+        // Inspect ephemeral paths inside the same lock as initialization: another
+        // initializer must not unlink its rollback journal during these checks.
+        // SQLite owns sidecar descriptors; never open/close them here because
+        // POSIX locks belong to the process/inode.
+        for suffix in ["-journal", "-wal", "-shm"] {
+            check_sidecar(&directory.join(format!("events.sqlite3{suffix}")))?;
+        }
         let mut connection = Connection::open_with_flags(
             &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -557,6 +566,108 @@ mod tests {
             .unwrap();
             assert_eq!(observations, 2);
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn ephemeral_sidecar_admission_holds_the_native_bootstrap_lock() {
+        let (directory, _path, removed) = unlinked_sidecar(0o600);
+        // Create only the real private bootstrap lock, not a SQLite sidecar FD.
+        drop(
+            lock_store_bootstrap(directory.path(), Instant::now() + Duration::from_secs(3))
+                .unwrap(),
+        );
+        let lock_path = directory.path().join("events.sqlite3-init-lock");
+        let mut protected_checks = 0;
+        let mut unprotected_observations = 0;
+        let store = Store::open_with_storage_checks(
+            directory.path(),
+            storage_filesystem::require_local,
+            |sidecar| {
+                let independent = fs::File::open(&lock_path)?;
+                match independent.try_lock() {
+                    Ok(()) => {
+                        // Model an initializer unlinking its journal during each
+                        // unprotected stat, using actual owned 0600 zero-link metadata.
+                        validate_sidecar_with(sidecar, || {
+                            unprotected_observations += 1;
+                            Ok(Some(removed.clone()))
+                        })
+                    }
+                    Err(fs::TryLockError::WouldBlock) => {
+                        protected_checks += 1;
+                        validate_sidecar(sidecar)
+                    }
+                    Err(fs::TryLockError::Error(error)) => Err(error.into()),
+                }
+            },
+        )
+        .unwrap_or_else(|error| panic!("ephemeral admission raced bootstrap: {error:?}"));
+        assert_eq!(protected_checks, 3);
+        assert_eq!(unprotected_observations, 0);
+        // Admission and successful open must release the native lock again.
+        fs::File::open(lock_path).unwrap().try_lock().unwrap();
+        drop(store);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn established_store_cleanup_during_protected_admission_preserves_committed_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let event = normalize(
+            &json!({
+                "schemaVersion": 1, "sessionId": "close-during-admission", "agent": "Fixture",
+                "project": "/synthetic", "state": "working", "summary": "Committed before cleanup"
+            }),
+            Agent::Generic,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let mut existing = Store::open(directory.path()).unwrap();
+        existing.ingest(&event, now).unwrap();
+        let sidecars =
+            ["-wal", "-shm"].map(|suffix| directory.path().join(format!("events.sqlite3{suffix}")));
+        for path in &sidecars {
+            assert!(fs::symlink_metadata(path).unwrap().is_file());
+        }
+        let mut established = Some(existing);
+        let mut checked = 0;
+        let mut reopened = Store::open_with_storage_checks(
+            directory.path(),
+            storage_filesystem::require_local,
+            |path| {
+                let probe = fs::File::open(directory.path().join("events.sqlite3-init-lock"))?;
+                assert!(matches!(
+                    probe.try_lock(),
+                    Err(fs::TryLockError::WouldBlock)
+                ));
+                if let Some(last_connection) = established.take() {
+                    // The new opener holds its native lock but has not opened
+                    // SQLite. Real last-close cleanup must still be able to run.
+                    drop(last_connection);
+                    for removed in &sidecars {
+                        assert_eq!(
+                            fs::symlink_metadata(removed).unwrap_err().kind(),
+                            io::ErrorKind::NotFound
+                        );
+                    }
+                }
+                // Check real path state, not injected metadata or an opened sidecar FD.
+                validate_sidecar(path)?;
+                checked += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(checked, 3);
+        assert!(established.is_none());
+        let snapshot = reopened.snapshot(50, now).unwrap();
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].event_count, 1);
+        assert_eq!(
+            serde_json::to_value(&snapshot.sessions[0].event).unwrap(),
+            serde_json::to_value(event).unwrap()
+        );
     }
     #[cfg(unix)]
     #[test]

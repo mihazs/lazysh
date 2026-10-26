@@ -76,7 +76,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux dbus-daemon
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
@@ -250,7 +250,8 @@ jobs:
             > "$diagnostic_dir/system-anr.txt" 2> "$diagnostic_dir/collector-errors.txt" &
             collector_pid=$!;
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
-            bun run test:android-mosh && bun run test:android;
+            bun run test:android-mosh && bun run test:android &&
+            LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture;
             exit $?;
             '
       - uses: actions/upload-artifact@v4

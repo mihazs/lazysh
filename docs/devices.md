@@ -1,5 +1,42 @@
 # Host devices and simulator video
 
+## Android SDK acceptance
+
+The Android runtime CI job additionally runs the native Cargo case
+`devices::tests::android_owned_emulator_inventory_and_screenshot` against its
+explicitly selected `emulator-5580`, after the app instrumentation checks. The
+case uses the production SDK runner to discover that emulator and capture its
+screen, then decodes the returned JPEG and checks identity, source dimensions,
+preview dimensions and payload bounds. It prints dimensions only and retains no
+screen capture. It is ignored in ordinary test runs because it requires the SDK
+and an owned emulator; `LAZYSH_TEST_ANDROID_SERIAL` must explicitly match
+`ANDROID_SERIAL` before any SDK command executes.
+
+This gate does not exercise touch calibration, lifecycle commands, video,
+SSH/frontend delivery, latency, battery use or physical devices. Those remain
+under issue #19. A passing synthetic inventory/image fixture alone does not
+establish the real SDK gate's result.
+
+The initial [API 36 emulator run](https://github.com/mihazs/lazysh/actions/runs/40268377280/job/121395629728)
+passed the exact case at source `cb9be42`: a 1080×1920 screen became a valid
+720×1280 JPEG. This is screenshot/discovery evidence for that owned emulator,
+separate from the synthetic interface checks below.
+
+## Interface language
+
+Device controls and client validation use English, Brazilian Portuguese or Spanish
+without changing the selected device/platform, SDK request IDs, frame bytes,
+source dimensions or coordinate mapping. A language change does not start/stop a
+stream, capture a screenshot or grant input permission. The iOS companion socket
+draft remains editable data; reported names, SDK states, native warnings/errors
+and socket paths are not translated. Reboot/shutdown keep their explicit confirmation.
+
+Synthetic Vitest/Playwright fixtures cover held startup and pulls, late cleanup,
+retained errors, the screenshot timer, exact Android pixels/iOS points and key
+values, plus real browser JPEG decoding and stable frame/draft identity while
+changing language. These renderer checks do not execute SDK commands or establish
+real-device input, video, latency, battery use or physical mobile WebView acceptance.
+
 The optional Rust companion can inspect Android devices/emulators and iOS Simulators on the connected host. It invokes the host's installed SDK tools through the existing authenticated SSH connection. It does not install SDKs, pair devices, change debugging authorization, or expose a control server.
 
 Android requires `adb` from platform-tools and, for virtual-device discovery/boot, the Android Emulator package with an existing AVD. `ANDROID_HOME` or `ANDROID_SDK_ROOT` selects the SDK; otherwise tools must be on the host's noninteractive `PATH`. A device must already authorize that host's debugging key. iOS requires macOS and an installed Xcode toolchain providing `xcrun simctl`.
@@ -51,6 +88,6 @@ Lifecycle actions are explicit `boot`, `shutdown`, or `reboot` subcommands. Andr
 
 SDK arguments are passed separately without a host shell. Device IDs, simulator UUIDs, AVD names, coordinates and swipe duration are validated before commands run. SDK text output is capped at 256 KiB; commands time out after ten seconds each. Android discovery can invoke two SDK commands, so the SSH caller should allow at least 25 seconds. Ctrl-C, SIGHUP and SIGTERM cancellation kill and reap owned SDK children; Unix also kills their process group. Windows cancellation covers the owned child, not arbitrary independently launched descendant processes. The SDK's ordinary adb server may remain running. SDK stderr is not echoed into JSON or logs.
 
-Verified with native Cargo tests: synthetic Android/iOS inventories, exact argument targeting, unsupported/hostile input rejection, image bounds/dimensions, private-file cleanup, AVD selection, private socket policy, companion identity/point binding, truncated/oversized video framing, cancellation during output backpressure, and bounded latest-frame storage. Vitest checks late startup cleanup and one outstanding pull. No installed SDK enumerated or controlled a developer's real devices during verification. Actual macOS idb/Xcode video, touch calibration, hardware encoding availability, device lifecycle, latency, frame rate, battery use, and broader iOS controls remain [issue #19](https://github.com/mihazs/lazysh/issues/19) acceptance work.
+Verified with native Cargo tests: synthetic Android/iOS inventories, exact argument targeting, unsupported/hostile input rejection, image bounds/dimensions, private-file cleanup, AVD selection, private socket policy, companion identity/point binding, truncated/oversized video framing, cancellation during output backpressure, and bounded latest-frame storage. Vitest checks late startup cleanup and one outstanding pull. The separate Android SDK gate above requires an actual owned emulator; synthetic passes do not certify it. Actual macOS idb/Xcode video, touch calibration, hardware encoding availability, device lifecycle, latency, frame rate, battery use, and broader iOS controls remain [issue #19](https://github.com/mihazs/lazysh/issues/19) acceptance work.
 
 Primary command references: [Android adb](https://developer.android.com/tools/adb), [Android Emulator command line](https://developer.android.com/studio/run/emulator-commandline), [AOSP input command implementation](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/services/core/java/com/android/server/input/InputShellCommand.java), and [Apple Simulator screenshots](https://developer.apple.com/library/archive/documentation/IDEs/Conceptual/iOS_Simulator_Guide/InteractingwiththeiOSSimulator/InteractingwiththeiOSSimulator.html), inspected 2026-10-24. SDK behavior is version-sensitive; fixture tests do not certify an installed host toolchain.

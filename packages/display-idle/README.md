@@ -22,28 +22,61 @@ Platform APIs:
 - macOS: an owned IOPM `PreventUserIdleDisplaySleep` assertion.
 - Windows: an owned `PowerRequestDisplayRequired` handle, without system/away-mode
   requests. Native close follows successful decrement; failures remain explicit.
-- Linux: explicitly unavailable. The shipping adapter makes no GTK/D-Bus idle
-  calls. The initial GTK prototype was removed: even a confirmable GNOME/Xfce
-  service could block GTK's UI-thread synchronous calls for an effectively
-  unbounded timeout. A cookie/query guard cannot make that path cancellable.
+- Linux: asynchronous Gio XDG `Inhibit(flags=8)`, with a private bus connection,
+  pinned unique portal owner and matching method handle plus `Response(0)`.
+  The existing locked Gio/GLib crates are direct Linux dependencies; no new crate
+  versions or portal plugin are introduced. A missing bus/service, denial, invalid
+  response or acquisition deadline reports an error. No GTK inhibition fallback.
 
 This foundation does not establish desktop-wide compositor or physical-device
 parity. Native flags/handles and synthetic browser fixtures are different evidence
 from physical display timeout, user sleep overrides, battery use and hardware.
 
-Remaining issue #81 acceptance includes a native Gio/D-Bus XDG portal backend that
-waits for successful `Response`, closes/cancels exact request handles on every
-lifecycle transition, handles late responses, and verifies compositor behavior.
-Implement that phase from fresh merged main. The acquire path must not hold the native serialization mutex while awaiting
-portal responses: cancellation/Close needs a prompt independent path. Do not treat
-an unconfirmed GTK cookie or the retained failed positive prototype probe as
-successful display inhibition.
+Linux retains serialized admission ordering, but exact pending cancellation and
+document invalidation run through short native ticket-policy locks BEFORE waiting
+for that serialization mutex. Async work runs on the existing GLib main context;
+UI closures never wait for remote replies. Original authority is checked again
+after async discovery immediately before `Inhibit`, and the existing atomic
+original-lease admission callback runs after acknowledgement. Acquisition expires
+after five seconds (the caller has a one-second delivery fallback); individual
+method calls use one-second timeouts. `Close` has a half-second call timeout and a
+one-second forced connection-close timer. Cleanup waits at most two seconds and
+retains unconfirmed resource metadata instead of claiming release. State permits
+one current operation and one retiring connection; failed retirement prevents
+further connections from accumulating.
+
+Owner/connection loss and observable negative responses produce a bounded event
+for the ORIGINAL document/epoch/ticket, never the document current at callback
+time. The UI subscribes before acquisition, fences loss-before-reply and does not
+replay requests after loss. The standard Request API has no universal Closed or
+permission-revoked signal; silent backend/compositor policy changes are not
+observable. `Response(0)` means portal acknowledgement, not physical timer proof.
+Setup and cleanup use detached `MainContext::spawn` tasks, which remain queued
+even while the context has no owner; `invoke` is not used for these operations.
+An observed loss or fresh issued acquisition failure requires explicit off/on
+before another acquisition; focus changes do not replay it. Metadata-only failures
+do not latch this gate, and normal acknowledged foreground resumption is preserved.
+Remaining #81 acceptance includes actual desktop/compositor and hardware tests.
+
+Protocol evidence: [Inhibit](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Inhibit.html),
+[Request](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html),
+and [pinned portal implementation](https://github.com/flatpak/xdg-desktop-portal/blob/49075617ff70ba2dc793dddb796a0a515fbebd7a/desktop-portal/inhibit.c).
+The implementation emits success after the backend method completes; a policy
+that filters all requested flags can produce no response, requiring the deadline.
+The portal's own tests also distinguish backend method completion from effective
+compositor policy. No physical-effect inference is made from this acknowledgement.
 
 ## Native checks
 
 Use existing Cargo/Gradle/XCTest tasks:
 
-- `cargo test -p tauri-plugin-lazysh-display-idle --lib` — bounded ownership policy.
+- `cargo test -p tauri-plugin-lazysh-display-idle --lib` — policy plus, on Linux,
+  actual Gio calls against an owned `dbus-daemon`/native fake portal. It does not use
+  or mutate the user's session bus. Fixtures cover early/late signals, denial,
+  missing replies, original guards, malformed handles, owner/connection loss,
+  cancellation, forced private-connection cleanup and repeated peer retirement.
+  Native Linux CI installs `dbus-daemon` and runs the uncached package task through
+  the client dependency graph.
 - Development GTK prototype evidence is superseded, not current API acceptance:
   the actual positive probe failed; a later actual portal-only rejection probe
   passed. Both logs were retained under `/tmp/lazysh-awake-gtk-{actual,negative}.log`

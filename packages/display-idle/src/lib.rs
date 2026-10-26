@@ -8,10 +8,26 @@ use tauri::{
     plugin::{Builder, TauriPlugin},
     Manager, Runtime,
 };
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios", target_os = "linux")))]
 mod desktop;
 #[cfg(any(not(any(target_os = "android", target_os = "ios")), test))]
 mod policy;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn visible_board<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<tauri::WebviewWindow<R>, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("The display owner no longer exists.")?;
+    if !window.is_visible().map_err(|e| e.to_string())?
+        || !window.is_focused().map_err(|e| e.to_string())?
+        || window.is_minimized().map_err(|e| e.to_string())?
+    {
+        return Err("Keep awake requires a visible, focused board.".into());
+    }
+    Ok(window)
+}
+#[cfg(target_os = "linux")]
+mod portal;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,6 +65,8 @@ pub struct DisplayIdle<R: Runtime> {
     app: tauri::AppHandle<R>,
     document: Arc<AtomicU64>,
     applied: Arc<Mutex<u64>>,
+    #[cfg(target_os = "linux")]
+    portal: portal::Portal,
     #[cfg(any(target_os = "android", target_os = "ios"))]
     handle: tauri::plugin::PluginHandle<R>,
 }
@@ -58,6 +76,8 @@ impl<R: Runtime> Clone for DisplayIdle<R> {
             app: self.app.clone(),
             document: self.document.clone(),
             applied: self.applied.clone(),
+            #[cfg(target_os = "linux")]
+            portal: self.portal.clone(),
             #[cfg(any(target_os = "android", target_os = "ios"))]
             handle: self.handle.clone(),
         }
@@ -71,7 +91,21 @@ impl<R: Runtime> DisplayIdle<R> {
                 .run_mobile_plugin(command, request)
                 .map_err(|error| error.to_string())
         }
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        #[cfg(target_os = "linux")]
+        {
+            match command {
+                "status" => self.portal.status(),
+                "release" => self
+                    .portal
+                    .release(request.ok_or("Missing portal ownership.")?),
+                "invalidate" => {
+                    self.portal.invalidate();
+                    self.portal.status()
+                }
+                _ => Err("Unknown portal operation.".into()),
+            }
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "linux")))]
         {
             desktop::command(&self.app, command, request.cloned())
         }
@@ -88,7 +122,7 @@ impl<R: Runtime> DisplayIdle<R> {
                 .run_mobile_plugin::<()>("invalidate", ())
                 .map_err(|error| error.to_string())?;
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            desktop::command(&self.app, "invalidate", None)?;
+            self.native("invalidate", None)?;
             *applied = document;
         }
         Ok(applied)
@@ -122,15 +156,32 @@ impl<R: Runtime> DisplayIdle<R> {
     pub fn acquire(
         &self,
         request: &Request,
-        before: impl FnOnce() -> Result<(), String>,
+        before: impl Fn() -> Result<(), String> + Send + Sync + 'static,
         admitted: impl FnOnce() -> Result<(), String>,
     ) -> Result<Status, String> {
         let _serial = self.synchronized()?;
         let document = self.document.load(Ordering::SeqCst);
         let native = self.native_request(request, true)?;
+        let before = Arc::new(before);
         let mut status = admitted_acquire(
-            before,
-            || self.native("acquire", Some(&native)),
+            || before(),
+            || {
+                #[cfg(target_os = "linux")]
+                {
+                    let app = self.app.clone();
+                    let before = before.clone();
+                    self.portal.acquire(
+                        native.clone(),
+                        request.clone(),
+                        Arc::new(move || {
+                            before()?;
+                            visible_board(&app).map(|_| ())
+                        }),
+                    )
+                }
+                #[cfg(not(target_os = "linux"))]
+                self.native("acquire", Some(&native))
+            },
             || {
                 if self.document.load(Ordering::SeqCst) != document {
                     return Err("Display ownership expired during acquisition.".into());
@@ -143,6 +194,8 @@ impl<R: Runtime> DisplayIdle<R> {
         Ok(status)
     }
     pub fn release(&self, request: &Request) -> Result<Status, String> {
+        #[cfg(target_os = "linux")]
+        self.portal.cancel(&self.native_request(request, false)?)?;
         let _serial = self.synchronized()?;
         let native = self.native_request(request, false)?;
         let mut status = self.native("release", Some(&native))?;
@@ -152,6 +205,8 @@ impl<R: Runtime> DisplayIdle<R> {
     /// Rotate synchronously before queuing platform cleanup, including renderer reload.
     pub fn invalidate(&self) {
         self.document.fetch_add(1, Ordering::SeqCst);
+        #[cfg(target_os = "linux")]
+        self.portal.invalidate();
         let handle = self.clone();
         tauri::async_runtime::spawn_blocking(move || {
             if let Err(error) = handle.synchronized() {
@@ -180,10 +235,34 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let handle = api.register_ios_plugin(init_plugin_display_idle)?;
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             let _ = api;
+            #[cfg(target_os = "linux")]
+            let portal = {
+                use tauri::Emitter;
+                let app = app.clone();
+                portal::Portal::new(
+                    glib::MainContext::default(),
+                    std::env::var("DBUS_SESSION_BUS_ADDRESS").ok(),
+                    Arc::new(move |owner, reason| {
+                        let _ = app.emit_to(
+                            "main",
+                            "lazysh-board-keep-awake-lost",
+                            Status {
+                                available: true,
+                                active: false,
+                                epoch: owner.epoch,
+                                ticket: owner.ticket,
+                                reason,
+                            },
+                        );
+                    }),
+                )
+            };
             app.manage(DisplayIdle {
                 app: app.clone(),
                 document: Arc::new(AtomicU64::new(0)),
                 applied: Arc::new(Mutex::new(0)),
+                #[cfg(target_os = "linux")]
+                portal,
                 #[cfg(any(target_os = "android", target_os = "ios"))]
                 handle,
             });
