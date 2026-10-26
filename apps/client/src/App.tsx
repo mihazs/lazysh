@@ -260,9 +260,21 @@ function Dialog({
     const focusable = () =>
       Array.from(
         ref.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
+          'button, input, textarea, select, summary, a[href], [tabindex]',
         ) ?? [],
-      );
+      ).filter(control => {
+        if (control.tabIndex < 0 || control.matches(':disabled')
+          || control.closest('[hidden], [inert]')
+          || control.getClientRects().length === 0
+          || getComputedStyle(control).visibility !== 'visible') return false;
+        // Collapsed details may retain cached layout rects after being opened.
+        for (let parent=control.parentElement; parent && parent!==ref.current; parent=parent.parentElement) {
+          if (parent.matches('details:not([open])')
+            && !parent.querySelector(':scope > summary')?.contains(control)) return false;
+        }
+        return true;
+      })
+        .sort((a,b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
     const controls = focusable();
     (
       controls.find((control) => control.matches("input, textarea")) ??
