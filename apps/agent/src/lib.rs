@@ -249,7 +249,9 @@ pub fn state_directory() -> Result<PathBuf> {
         })
 }
 
+mod storage_failure_diagnostic;
 mod storage_schema;
+use storage_failure_diagnostic::{failure as storage_failure, Phase as StoragePhase};
 
 pub struct Store {
     connection: Connection,
@@ -335,25 +337,33 @@ impl Store {
                 Error::Io(error)
             }
         }
-        let directory = storage_namespace::resolve(directory).map_err(path_error)?;
-        admit(&directory).map_err(path_error)?;
-        storage_namespace::create(&directory)?;
+        let directory = storage_namespace::resolve(directory)
+            .map_err(path_error)
+            .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
+        admit(&directory)
+            .map_err(path_error)
+            .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
+        storage_namespace::create(&directory)
+            .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e.into()))?;
         let path = directory.join("events.sqlite3");
         // Never open/close the database outside SQLite: on POSIX, closing any
         // descriptor for this inode releases this process's SQLite locks.
         // The private directory protects newly created files until chmod, and
         // SQLite itself refuses leaf symlinks with SQLITE_OPEN_NOFOLLOW.
-        validate_state_file(&path)?;
+        validate_state_file(&path)
+            .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
         // One deadline covers native bootstrap coordination, sidecar admission
         // and SQLite's schema/mode waits rather than adding another wait budget.
         let bootstrap_deadline = Instant::now() + Duration::from_secs(3);
-        let _bootstrap = lock_store_bootstrap(&directory, bootstrap_deadline)?;
+        let _bootstrap = lock_store_bootstrap(&directory, bootstrap_deadline)
+            .map_err(|e| storage_failure(StoragePhase::BootstrapLock, e))?;
         // Inspect ephemeral paths inside the same lock as initialization: another
         // initializer must not unlink its rollback journal during these checks.
         // SQLite owns sidecar descriptors; never open/close them here because
         // POSIX locks belong to the process/inode.
         for suffix in ["-journal", "-wal", "-shm"] {
-            check_sidecar(&directory.join(format!("events.sqlite3{suffix}")))?;
+            check_sidecar(&directory.join(format!("events.sqlite3{suffix}")))
+                .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
         }
         let mut connection = Connection::open_with_flags(
             &path,
@@ -361,46 +371,74 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )?;
+        )
+        .map_err(|e| storage_failure(StoragePhase::SqliteOpen, e.into()))?;
         // Short-lived hooks must not checkpoint/unlink shared WAL state when
         // another Store is admitting its sidecars. FULL commit synchronization
         // and SQLite's normal automatic checkpoints remain unchanged.
-        if !connection.set_db_config(
-            rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
-            true,
-        )? {
-            return Err(io::Error::other("Cannot retain companion WAL on close").into());
+        if !connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?
+        {
+            return Err(storage_failure(
+                StoragePhase::SqliteConfiguration,
+                io::Error::other("Cannot retain companion WAL on close").into(),
+            ));
         }
-        validate_state_file(&path)?;
-        connection.busy_handler(Some(move |_| wait_for_storage_until(bootstrap_deadline)))?;
-        connection.pragma_update(None, "synchronous", "FULL")?;
-        let mode: String = connection.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        validate_state_file(&path)
+            .map_err(|e| storage_failure(StoragePhase::BootstrapPreparation, e))?;
+        connection
+            .busy_handler(Some(move |_| wait_for_storage_until(bootstrap_deadline)))
+            .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?;
+        connection
+            .pragma_update(None, "synchronous", "FULL")
+            .map_err(|e| storage_failure(StoragePhase::Synchronous, e.into()))?;
+        let mode: String = connection
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+            .map_err(|e| storage_failure(StoragePhase::JournalMode, e.into()))?;
         if mode != "wal" {
-            return Err(io::Error::other("WAL unavailable for companion state").into());
+            return Err(storage_failure(
+                StoragePhase::JournalMode,
+                io::Error::other("WAL unavailable for companion state").into(),
+            ));
         }
-        connection.execute_batch("PRAGMA journal_size_limit=1048576;")?;
-        connection.execute_batch(storage_schema::V1_SESSIONS)?;
-        relay::initialize(&connection)?;
-        connection.busy_handler(Some(wait_for_storage))?;
+        connection
+            .execute_batch("PRAGMA journal_size_limit=1048576;")
+            .map_err(|e| storage_failure(StoragePhase::JournalSize, e.into()))?;
+        connection
+            .execute_batch(storage_schema::V1_SESSIONS)
+            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+        relay::initialize(&connection)
+            .map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;
+        connection
+            .busy_handler(Some(wait_for_storage))
+            .map_err(|e| storage_failure(StoragePhase::SqliteConfiguration, e.into()))?;
         Ok(Self { connection })
     }
     pub fn ingest(&mut self, event: &Event, now: DateTime<Utc>) -> Result<()> {
-        event.validate()?;
+        event
+            .validate()
+            .map_err(|e| storage_failure(StoragePhase::IngestValidation, e))?;
         let now = now.timestamp_micros() as f64 / 1_000_000.0;
         let transaction = self
             .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| storage_failure(StoragePhase::IngestBegin, e.into()))?;
         let prior: Option<String> = transaction
             .query_row(
                 "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
                 params![event.agent, event.session_id],
                 |row| row.get(0),
             )
-            .optional()?;
+            .optional()
+            .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?;
         transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
             ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
             summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
-            params![event.agent,event.session_id,event.project,event.state.as_str(),event.summary,event.pane_id,now])?;
+            params![event.agent,event.session_id,event.project,event.state.as_str(),event.summary,event.pane_id,now]).map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
         let kind = match event.state {
             SessionState::Working => lazysh_notification_client::Kind::Working,
             SessionState::NeedsAttention => lazysh_notification_client::Kind::NeedsAttention,
@@ -411,13 +449,18 @@ impl Store {
             kind,
             prior.as_deref() != Some(event.state.as_str()),
             now as i64,
-        )?;
-        transaction.execute(
-            "DELETE FROM sessions WHERE updated_at < ?1",
-            [now - RETENTION_SECONDS],
-        )?;
-        transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[])?;
-        transaction.commit()?;
+        )
+        .map_err(|e| storage_failure(StoragePhase::RelayAdmission, e))?;
+        transaction
+            .execute(
+                "DELETE FROM sessions WHERE updated_at < ?1",
+                [now - RETENTION_SECONDS],
+            )
+            .map_err(|e| storage_failure(StoragePhase::RetentionAge, e.into()))?;
+        transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
+        transaction
+            .commit()
+            .map_err(|e| storage_failure(StoragePhase::Commit, e.into()))?;
         Ok(())
     }
     pub fn snapshot(&mut self, limit: u8, now: DateTime<Utc>) -> Result<Snapshot> {

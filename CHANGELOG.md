@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit opt-in companion storage failure phase diagnostics and same-worker trace summaries. Default output, SQLite errors, durability and wait budgets remain unchanged; this adds evidence rather than repairing contention.
+
 - Keep dialog keyboard focus on visible, enabled controls, including expanded/collapsed notice summaries and ordinary links; preserve initial field focus, Escape and opener restoration.
 
 - Add an explicitly started foreground companion relay sender, pinned to a required local revision, with one dispatcher, a two-second startup quiet period and global failure cooldown. Default-off admission and synchronous hooks remain unchanged; no OS service/schedule or native mobile provider is installed.

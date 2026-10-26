@@ -6,6 +6,10 @@ use std::{
     process::{Command, Output},
 };
 
+#[path = "../../src/storage_failure_record.rs"]
+#[allow(dead_code)]
+mod failure_record;
+
 const FILE_LIMIT: usize = 64;
 const EXCERPT_LIMIT: usize = 128 * 1024;
 
@@ -61,7 +65,8 @@ impl StorageTrace {
             ])
             .arg(self.spool.path().join(format!("writer-{worker}")))
             .arg("--")
-            .arg(program);
+            .arg(program)
+            .env("LAZYSH_STORAGE_DIAGNOSTICS", "1");
         command
     }
 
@@ -81,6 +86,11 @@ impl StorageTrace {
                 output.stdout.len(),
                 output.stderr.len()
             ));
+            // Only a bounded, typed finite record may enter the same-worker manifest.
+            // Never export the surrounding raw stderr, even if it resembles a diagnostic.
+            if let Some(record) = failure_projection(&output.stderr) {
+                manifest.push_str(&format!("worker={worker} {}", record.line()));
+            }
         }
         for entry in entries.iter().take(FILE_LIMIT) {
             let name = entry.file_name();
@@ -105,6 +115,39 @@ impl StorageTrace {
         }
         Ok(())
     }
+}
+
+fn failure_projection(stderr: &[u8]) -> Option<failure_record::Failure> {
+    // CLI errors are small. Refuse unexpected bulk output rather than scanning it.
+    if stderr.len() > 4096 {
+        return None;
+    }
+    let mut records = std::str::from_utf8(stderr)
+        .ok()?
+        .lines()
+        .filter_map(failure_record::Failure::parse);
+    let first = records.next()?;
+    if records.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+#[test]
+fn diagnostic_projection_is_finite_single_and_never_exports_raw_stderr() {
+    let record = failure_record::Failure {
+        phase: failure_record::Phase::JournalMode,
+        result: failure_record::ResultClass::StorageError,
+        sqlite_code: Some(5),
+    };
+    let line = record.line();
+    let stderr = format!("private-path-and-payload\n{line}private-diagnostic-tail\n");
+    assert_eq!(failure_projection(stderr.as_bytes()), Some(record));
+    assert!(failure_projection(format!("{line}{line}").as_bytes()).is_none());
+    assert!(failure_projection(&vec![b'x'; 4097]).is_none());
+    assert!(
+        failure_projection(b"lazysh-storage-diagnostic {\"phase\":\"private_secret\"}").is_none()
+    );
 }
 
 fn valid_filename(name: &str) -> bool {
