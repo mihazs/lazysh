@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Localize tmux workspace, Herdr and Zellij controls and accessible names in English, Brazilian Portuguese and Spanish; preserve literal remote identities, errors and launch-picker ownership when changing language.
+
 - Return the canonical SFTP destination after host-local uploads instead of echoing a relative input path. Attachments now copy/stage that returned path; Files refreshes its resolved parent. The internal `upload_file` result changes from void to `{path}`. Existing files remain protected by exclusive creation; cancellation never deletes remote paths.
 
 - Add cold saved-host CLI composition with `--mux tmux`, `tmux:SERVER` or
