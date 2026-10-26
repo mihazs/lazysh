@@ -26,11 +26,16 @@ const page = {
   nextOffset: 80,
   hasMore: false,
 };
-it('admits returned image bytes only in Grok record image blocks and rejects malformed previews',()=>{
+it('admits returned image bytes only in supported recorded image contexts and rejects malformed previews',()=>{
   const imagePreview={mimeType:'image/png',data:readFileSync('e2e/fixtures/recorded-images/regions.png').toString('base64'),width:32,height:16};
   const block={type:'image',text:'Image attachment',imagePreview};
   const response={...page,agent:'grok-acp',view:'record_stream',messages:[{...message,blocks:[block]}]};
   expect(parseTranscript(response)).toEqual(response);
+  for(const view of ['record_stream','active_branch']) {
+    const claude={...response,agent:'claude',view,messages:[{...message,role:'user',blocks:[block]}]};
+    expect(parseTranscript(claude)).toEqual(claude);
+    for(const role of ['assistant','tool'])expect(()=>parseTranscript({...claude,messages:[{...message,role,blocks:[block]}]})).toThrow('Invalid recorded-image preview response.');
+  }
   for(const invalid of [
     {...response,agent:'claude'}, {...response,view:'active_branch'},
     {...response,messages:[{...message,role:'tool',blocks:[block]}]},
