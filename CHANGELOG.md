@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Visible file-size and repository validation errors now follow interface language
+  changes, including history errors with local causes. Host diagnostics remain
+  verbatim, and changing language does not refetch files or change selections.
+
 - Cancelled exec, SFTP, preview/probe, bastion, Mosh/ET bootstrap and device-stream
   channel openings retain ownership until peer confirmation and close late results
   without tearing down the parent SSH connection. They now share the existing
