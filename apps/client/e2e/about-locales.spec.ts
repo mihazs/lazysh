@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs';
+import clientPackage from '../package.json' with {type:'json'};
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {aboutLegalFiles,aboutLocales} from '../src/test/aboutData';
@@ -8,7 +9,7 @@ for(const labels of aboutLocales)test(`${labels.locale} About preserves legal by
   const external=await openLocalizedApp(page,labels.locale);
   await page.evaluate(()=>{window.aboutOpened=[];window.open=(url,target,features)=>{window.aboutOpened.push([String(url),target??'',features??'']);return null;};});
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:labels.openHosts,exact:true}).click();
-  await page.getByRole('button',{name:labels.region+' · 0.1.0',exact:true}).click();
+  await page.getByRole('button',{name:`${labels.region} · ${clientPackage.version}`,exact:true}).click();
   const about=page.getByRole('region',{name:labels.region,exact:true});
   await expect(about.getByText(labels.license,{exact:true})).toBeVisible();
   const code=about.locator('code');const revision=await code.textContent();expect(revision).toMatch(/^[0-9a-f]{40}$/);

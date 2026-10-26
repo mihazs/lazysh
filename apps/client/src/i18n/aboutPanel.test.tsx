@@ -7,6 +7,7 @@ import AboutPanel from '../AboutPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../access';
 import {aboutLegalFiles,aboutLocales} from '../test/aboutData';
 import {t,uiI18n} from './core';
+vi.mock('../../package.json',()=>({default:{version:'2.3.4'}}));
 vi.mock('@tauri-apps/api/core',async original=>({...await (await import('../test/nativeCoreMock')).mockNativeCore(original),isTauri:()=>true}));
 const revision='0123456789abcdef'.repeat(2)+'01234567';
 const bodies=aboutLegalFiles.map(path=>readFileSync(new URL('../../../../'+path,import.meta.url),'utf8'));
@@ -21,7 +22,7 @@ it.each(aboutLocales)('$locale translates interface text while legal bytes, iden
   expect(screen.getByRole('region',{name:labels.region})).toBeTruthy();
   expect(screen.getByText(labels.license)).toBeTruthy();
   expect(screen.getByText(t('aboutLicense',{component:'Eternal Terminal adapter'}))).toBeTruthy();
-  expect(screen.getByText(t('aboutDescription',{version:'0.1.0'}))).toBeTruthy();
+  expect(screen.getByText(t('aboutDescription',{version:'2.3.4'}))).toBeTruthy();
   expect(view.container.querySelector('code')?.textContent).toBe(revision);
   expect(screen.getByText(new RegExp(t('aboutDirty')))).toBeTruthy();
   expect([...view.container.querySelectorAll('pre')].map(node=>node.textContent)).toEqual(bodies);

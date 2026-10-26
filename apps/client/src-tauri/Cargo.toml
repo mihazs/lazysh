@@ -1,7 +1,7 @@
 [package]
 name = "lazysh"
 license.workspace = true
-version = "0.1.0"
+version.workspace = true
 description = "Direct SSH and agent workspace"
 edition = "2021"
 

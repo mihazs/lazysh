@@ -6,6 +6,8 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Host, TransportMode } from "./bridge";
 import type {DesktopMux} from './useDesktopLaunch';
+import {aboutLocales} from './test/aboutData';
+vi.mock('../package.json',()=>({default:{version:'2.3.4'}}));
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -112,6 +114,17 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it('keeps the current build version on the same About action through locale changes', async () => {
+  render(<App/>);
+  const button = await screen.findByRole('button', { name: 'About lazysh · 2.3.4' });
+  try {
+    for (const labels of aboutLocales) {
+      await act(async () => { await uiI18n.changeLanguage(labels.locale); });
+      expect(screen.getByRole('button', { name: `${labels.region} · 2.3.4` })).toBe(button);
+    }
+  } finally { await act(async () => { await uiI18n.changeLanguage('en'); }); }
 });
 
 async function openConnection() {

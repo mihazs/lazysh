@@ -1,0 +1,60 @@
+name: version
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-release
+      - run: bun install --frozen-lockfile
+      - run: bun run test:release
+
+  version-pr:
+    needs: release-tools
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-release
+      - run: bun install --frozen-lockfile
+      - name: Inspect the pending release plan
+        id: pending
+        run: |
+          bun run changeset status --output "$RUNNER_TEMP/release-plan.json"
+          echo "count=$(bun -p '(await Bun.file(process.env.RUNNER_TEMP + "/release-plan.json").json()).releases.length')" >> "$GITHUB_OUTPUT"
+      - name: Open or update the version-only PR
+        id: version
+        if: steps.pending.outputs.count != '0'
+        uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          github-token: ${{ github.token }}
+          script: bun run release:prepare
+          pr-base-branch: main
+          pr-title: 'chore(release): version lazysh packages'
+          commit-message: 'chore(release): version lazysh packages'
+      - name: Apply the repository release review template
+        if: steps.version.outputs.pr-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PR: ${{ steps.version.outputs.pr-number }}
+        run: gh pr edit "$RELEASE_PR" --body-file .github/release_pull_request_template.md
