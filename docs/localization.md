@@ -23,6 +23,11 @@ capability reasons remain verbatim. Local initial fallback explanations are
 distinguished from received native reasons, including an empty native reason.
 Changing interface language does not change recognition language, microphone
 ownership, request IDs, cancellation, input claims or direct/Enter opt-in state.
+Agent activity columns, explicit one-request approval controls and server companion
+settings also use all three catalogs. Agent names, summaries, tool JSON, paths,
+session/pane identities and native diagnostics remain verbatim. Language changes
+preserve pending decisions, their original hashes and polling interval, and
+unsaved companion switches. Keep Awake controls remain a separate task.
 This is a partial milestone under issue #79. Other feature panels still require their own
 localization and acceptance. Native lock-cover/biometric-reason resources on
 Android, iOS and macOS use the [native language authority](native-ui-locale.md).
@@ -141,6 +146,12 @@ Run the existing project tasks from `apps/client`:
 - `bun run test:e2e e2e/voice-locales.spec.ts e2e/direct-dictation.spec.ts` checks
   actual App/Voice/bridge recording and direct-delivery state at desktop/phone
   widths, unchanged drafts and one queued final payload across language changes.
+- `bun run test src/i18n/agentBoardLocales.test.tsx` checks held allow/deny
+  decisions, original access headers and target hashes, polling continuity,
+  expired and stale-session actions, settings revisions and visible errors.
+- `bun run test:e2e e2e/agent-board-locales.spec.ts` checks the actual board at
+  desktop/phone widths, unchanged raw records, focused unsaved switches and
+  one held approval across all three locales.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
