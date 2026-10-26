@@ -4,6 +4,7 @@ import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {invoke, isTauri} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
 import {cleanupNativeMocks} from './test/nativeCoreMock';
+import {uiI18n,t} from './i18n/core';
 import {accessSnapshot, applyAccessStatus} from './access';
 import KeepAwakeControl, {boardAwakeKey, parseKeepAwakeStatus} from './KeepAwakeControl';
 vi.mock('@tauri-apps/api/core', async original=>({...await (await import('./test/nativeCoreMock')).mockNativeCore(original),isTauri:vi.fn()}));
@@ -19,7 +20,7 @@ beforeEach(()=>{
   vi.spyOn(document,'hasFocus').mockReturnValue(true);
   vi.spyOn(document,'visibilityState','get').mockReturnValue('visible');
 });
-afterEach(()=>{cleanupNativeMocks();vi.restoreAllMocks();vi.resetAllMocks();localStorage.clear();});
+afterEach(async()=>{cleanupNativeMocks();await uiI18n.changeLanguage('en');vi.restoreAllMocks();vi.resetAllMocks();localStorage.clear();});
 type Owner={epoch:string;ticket:number};
 function backend(available=true) {
   let issued=0,closed=0,active:Owner|undefined;
@@ -251,4 +252,70 @@ it('read-only metadata failure does not block a later foreground metadata refres
   await act(async()=>{fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));});
   expect(await screen.findByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
   expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_status')).toHaveLength(2);
+});
+
+it('renders locale changes during a held acquire without releasing, reacquiring or replacing the checkbox',async()=>{
+  const native=backend(),original=vi.mocked(invoke).getMockImplementation()!;
+  let finish!:()=>void;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='board_keep_awake_acquire'?
+    new Promise(resolve=>{finish=()=>resolve(native.acquire((args as {request:Owner}).request));}) as never:original(command,args,options));
+  render(<KeepAwakeControl sessionId="locale-owner"/>);await optIn();
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  const checkbox=toggle(),calls=vi.mocked(invoke).mock.calls.length,listeners=vi.mocked(listen).mock.calls.length;
+  for(const locale of ['pt-BR','es','en']){
+    await act(async()=>{await uiI18n.changeLanguage(locale);});
+    expect(screen.getByRole('checkbox',{name:t('keepAwakeLabel')})).toBe(checkbox);
+    expect(screen.getByRole('status').textContent).toBe(t('keepAwakeChecking'));
+    expect(invoke).toHaveBeenCalledTimes(calls);expect(listen).toHaveBeenCalledTimes(listeners);
+  }
+  await act(async()=>finish());
+  expect(screen.getByRole('status').textContent).toBe(t('keepAwakeActive'));
+  const owner=native.active()!;
+  await act(async()=>{nativeLoss({...native.status(owner.ticket),active:false,reason:'Native display status is unavailable.'});});
+  const afterLoss=vi.mocked(invoke).mock.calls.length;
+  await act(async()=>{await uiI18n.changeLanguage('es');});
+  expect(screen.getByRole('alert').textContent).toBe('Native display status is unavailable.');
+  expect(screen.getByText(t('keepAwakeOptIn'))).toBeTruthy();
+  expect(invoke).toHaveBeenCalledTimes(afterLoss);
+});
+it('keeps the same retained cleanup cause through language changes and clears it only on acknowledged release',async()=>{
+  const native=backend(),original=vi.mocked(invoke).getMockImplementation()!;
+  let releases=0;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    if(command==='board_keep_awake_acquire')return Promise.resolve({...native.status((args as {request:Owner}).request.ticket),active:false}) as never;
+    if(command==='board_keep_awake_release' && ++releases===1)return Promise.resolve({...native.status(1),active:true}) as never;
+    return original(command,args,options);
+  });
+  render(<KeepAwakeControl sessionId="cleanup-locale"/>);await optIn();
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Native display release is still pending.');
+  const calls=vi.mocked(invoke).mock.calls.length;
+  for(const locale of ['pt-BR','es']){
+    await act(async()=>{await uiI18n.changeLanguage(locale);});
+    expect(screen.getByRole('alert').textContent).toBe(t('keepAwakeReleasePending'));
+    expect(invoke).toHaveBeenCalledTimes(calls);
+  }
+  fireEvent.click(screen.getByRole('checkbox',{name:t('keepAwakeLabel')}));
+  await waitFor(()=>expect(screen.queryByRole('alert')).toBeNull());
+  expect(releases).toBe(2);
+});
+it.each(['', 'Native display status is unavailable.', 'RAW native <reason> {{name}}'])('leaves native capability reason %j literal in every locale',async(reason)=>{
+  const native=backend(false);vi.mocked(invoke).mockResolvedValue({...native.status(1),reason} as never);
+  render(<KeepAwakeControl sessionId="raw-reason"/>);
+  await waitFor(()=>expect(invoke).toHaveBeenCalled());
+  for(const locale of ['pt-BR','es']){
+    await act(async()=>{await uiI18n.changeLanguage(locale);});
+    expect(screen.getByRole('status').textContent).toBe(reason);
+  }
+});
+it('keeps a preference failure live across locale changes after releasing the original owner',async()=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="save-locale"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');
+  vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new Error('storage');});
+  fireEvent.click(toggle());await waitFor(()=>expect(native.active()).toBeUndefined());
+  const calls=vi.mocked(invoke).mock.calls.length;
+  for(const locale of ['pt-BR','es']){
+    await act(async()=>{await uiI18n.changeLanguage(locale);});
+    expect(screen.getByRole('alert').textContent).toBe(t('keepAwakeSaveFailed'));
+    expect(invoke).toHaveBeenCalledTimes(calls);
+  }
 });

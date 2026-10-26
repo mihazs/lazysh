@@ -27,7 +27,11 @@ Agent activity columns, explicit one-request approval controls and server compan
 settings also use all three catalogs. Agent names, summaries, tool JSON, paths,
 session/pane identities and native diagnostics remain verbatim. Language changes
 preserve pending decisions, their original hashes and polling interval, and
-unsaved companion switches. Keep Awake controls remain a separate task.
+unsaved companion switches. Keep Awake controls and multiplexer prefix shortcuts
+also use the catalogs. Language changes preserve acknowledged display ownership,
+release/error identity, explicit opt-in, prefix drafts and exact ASCII input steps.
+Native display reasons and terminal diagnostics remain verbatim, including empty
+values; localized labels do not establish physical display-timer acceptance.
 Host attachment selection, crop/drawing controls, explicit upload/copy/staging
 actions and retained local errors/notices also use the catalogs. Language changes
 preserve selected file bytes, original crop coordinates, canvas resources,

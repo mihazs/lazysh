@@ -3,24 +3,28 @@ import {listen} from '@tauri-apps/api/event';
 import {useEffect, useRef, useState} from 'react';
 import {useAccessSnapshot, useMountedAccess, useProtectedInvoke} from './access';
 
+import {t, useUi} from './i18n/core';
+import {LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
+
 export const boardAwakeKey = 'lazysh.agent-board.keep-awake.v1';
 type Ticket = {epoch:string;ticket:number};
 type NativeStatus = Ticket & {available:boolean;active:boolean;reason:string};
 function readEnabled() { try { return localStorage.getItem(boardAwakeKey)==='true'; } catch { return false; } }
 function visible() { return document.visibilityState==='visible' && document.hasFocus(); }
 export function parseKeepAwakeStatus(value: unknown): NativeStatus {
-  if (!value || typeof value!=='object') throw new Error('Native display status is unavailable.');
+  if (!value || typeof value!=='object') throw new LocalUiError('keepAwakeInvalidStatus');
   const row=value as Record<string,unknown>;
   if (typeof row.available!=='boolean' || typeof row.active!=='boolean' || typeof row.reason!=='string' || row.reason.length>512
     || typeof row.epoch!=='string' || row.epoch.length>96 || !/^\d+\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(row.epoch)
     || !Number.isSafeInteger(row.ticket) || Number(row.ticket)<1)
-    throw new Error('Native display status is unavailable.');
+    throw new LocalUiError('keepAwakeInvalidStatus');
   return row as NativeStatus;
 }
 function message(error:unknown) {
-  return error instanceof Error ? error.message : typeof error==='string' ? error : 'The native display request failed.';
+  return error instanceof LocalUiError ? error : error instanceof Error ? error.message : typeof error==='string' ? error : new LocalUiError('keepAwakeRequestFailed');
 }
 export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
+  useUi();
   const invoke=useProtectedInvoke();
   const {access,mounted}=useMountedAccess();
   const {epoch}=useAccessSnapshot();
@@ -29,11 +33,11 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
   const [foreground,setForeground]=useState(()=>({visible:visible(),revision:0}));
   const [status,setStatus]=useState<NativeStatus>();
   const [phase,setPhase]=useState<'off'|'checking'|'active'|'paused'|'held'|'error'>('off');
-  const [error,setError]=useState('');
-  const [preferenceError,setPreferenceError]=useState('');
+  const [error,setError]=useState<UiErrorCause>('');
+  const [preferenceError,setPreferenceError]=useState<UiErrorCause>('');
   const desired=useRef(enabled);desired.current=enabled;
   const current=useRef<Ticket|undefined>(undefined);
-  const cleanupFailure=useRef('');
+  const cleanupFailure=useRef<UiErrorCause>('');
   const requireOptIn=useRef(false);
   useEffect(()=>{
     const changed=()=>setForeground(previous=>({visible:visible(),revision:previous.revision+1}));
@@ -54,7 +58,7 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
       void cleanupInvoke('board_keep_awake_release',{request:owner}).then(value=>{
         if(mounted.current && access.current() && (!current.current || current.current===owner)) {
           const released=parseKeepAwakeStatus(value);
-          if(released.active)throw new Error('Native display release is still pending.');
+          if(released.active)throw new LocalUiError('keepAwakeReleasePending');
           const previous=cleanupFailure.current;cleanupFailure.current='';
           setError(error=>error===previous?'':error);if(!desired.current)setPhase('off');
         }
@@ -94,7 +98,7 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
         if(lost){release(request);return;}
         if(!fresh())return;
         if(acquired.epoch!==request.epoch || acquired.ticket!==request.ticket || !acquired.active)
-          throw new Error('The native display request was not confirmed.');
+          throw new LocalUiError('keepAwakeUnconfirmed');
         cleanupFailure.current='';setError('');setStatus(acquired);setPhase('active');
       } catch(failure) {
         if(fresh() && !lost){if(request)requireOptIn.current=true;setError(message(failure));setPhase('error');}
@@ -112,19 +116,19 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
     requireOptIn.current=false;
     desired.current=checked;setEnabled(checked);setError(cleanupFailure.current);
     try {localStorage.setItem(boardAwakeKey,String(checked));setPreferenceError('');}
-    catch {setPreferenceError('Keep-awake preference could not be saved on this device.');}
+    catch {setPreferenceError(new LocalUiError('keepAwakeSaveFailed'));}
   }
-  return <section aria-label="Board display keep awake">
+  return <section className="keep-awake-control" aria-label={t('keepAwakeRegion')}>
     <label><input type="checkbox" checked={enabled} disabled={!native || !access.current() || (!enabled && !status?.available)}
-      onChange={event=>toggle(event.target.checked)}/>Keep display awake while this board is open</label>
-    <p role="status">{!native?'Keep awake requires the native app.':phase==='active'?'This board owns an acknowledged idle-inhibition request.':
-      phase==='held'?(enabled?'Native display inhibition is still reported active, but this board has no confirmed ownership.':'Native display inhibition is still reported active although the preference is off.'):
-      phase==='error'?'Native display ownership could not be confirmed.':phase==='checking'?'Checking native display ownership…':phase==='paused'?'Keep awake is paused until this board is visible and focused.':
-      status && !status.available?status.reason:enabled?'Native keep-awake is not active.':'Keep awake is off.'}</p>
+      onChange={event=>toggle(event.target.checked)}/>{t('keepAwakeLabel')}</label>
+    <p role="status">{!native?t('keepAwakeNative'):phase==='active'?t('keepAwakeActive'):
+      phase==='held'?(enabled?t('keepAwakeHeldOn'):t('keepAwakeHeldOff')):
+      phase==='error'?t('keepAwakeOwnership'):phase==='checking'?t('keepAwakeChecking'):phase==='paused'?t('keepAwakePaused'):
+      status && !status.available?status.reason:enabled?t('keepAwakeInactive'):t('keepAwakeOff')}</p>
     {status && !status.available && phase!=='off' && <p>{status.reason}</p>}
-    {(error || preferenceError) && <p role="alert">{[error,preferenceError].filter(Boolean).join(' ')}</p>}
-    {(phase==='held' || cleanupFailure.current) && <p>Native cleanup was not confirmed. Switch away from the app to retry release, or restart lazysh if it remains active.</p>}
-    {requireOptIn.current && <p>Turn this off and on to request ownership again.</p>}
-    <small>Opt-in native idle-inhibition requests only; acknowledgement does not verify the physical display timer. Agent processes and network connections are unchanged. Keeping a display on uses more battery.</small>
+    {(error || preferenceError) && <p role="alert">{[error,preferenceError].filter(Boolean).map(uiErrorText).join(' ')}</p>}
+    {(phase==='held' || cleanupFailure.current) && <p>{t('keepAwakeCleanup')}</p>}
+    {requireOptIn.current && <p>{t('keepAwakeOptIn')}</p>}
+    <small>{t('keepAwakeLimits')}</small>
   </section>;
 }
