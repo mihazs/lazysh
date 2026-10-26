@@ -115,7 +115,7 @@ Herdr navigation remain separate acceptance work under issue #7.
 
 List running named servers, then attach or browse one. The Herdr tree preserves server/workspace/tab/pane identity and displays reported agent states. Create and rename workspaces/tabs, focus workspaces/tabs, split and zoom exact panes, and focus reported agents. Plain panes can be selected through the terminal; Herdr's `agent focus` command only accepts agent panes.
 
-The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/), verified against Herdr **0.9.5**, protocol 22. Older or incompatible responses fail explicitly. lazysh does not install Herdr, alter its configuration, or stop existing servers.
+The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/) and validates its response shape and exact IDs. The native acceptance below was executed against pinned Herdr **0.9.3**; it does not establish other versions. Incompatible response shapes fail explicitly. lazysh does not install Herdr, alter its configuration, or stop existing servers.
 
 Attached tmux and Herdr terminals also offer prefix shortcuts and numbered window/tab controls. Configure one prefix key, such as `Ctrl+b` or `F12`; it is validated with the existing terminal chord parser. The panel uses the host's default action bindings. It only appears on a terminal known to be attached to that multiplexer, so a plain shell never receives prefix input from these controls. Custom host action remappings remain available through the terminal or configurable keyboard chords.
 
@@ -148,3 +148,41 @@ framing and a notification stream that cannot refresh the absolute deadline.
 These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 
 The client workspace handles saved tmux/Herdr attachment intents separately from these controls. Zellij restoration remains manual, matching the documented initial-attach boundary. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
+
+
+### Owned SSH Herdr acceptance
+
+On a Unix host with local OpenSSH `sshd` and an absolute path to Herdr 0.9.3:
+
+```sh
+LAZYSH_TEST_HERDR=/absolute/path/to/herdr-0.9.3 cargo test \
+  --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib \
+  ssh::tmux_jump_fixture::real_herdr_ssh_child_pty_preserves_source_and_durable_session \
+  -- --ignored --exact --nocapture
+```
+
+The fixture checks the actual binary version with a bounded owned subprocess.
+The retained Linux run used Herdr 0.9.3, SHA256
+`18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7`.
+It creates private home/config/state/runtime directories, two owned named Herdr
+servers and an owned loopback OpenSSH listener/key. No existing session is used.
+Named headless servers initially have no panes; the fixture creates its own
+workspace/workload explicitly before testing selection. The stopped default
+registry row is excluded by the normal running-session discovery path.
+
+The Rust host/Herdr intent selects the non-first observed running row explicitly.
+Its exact workspace marker appears in the native SSH child TUI, while independent
+source foreground markers continue to round-trip. Closing the adopted child
+preserves that pane's advancing workload. A second, unadopted child finishes when
+its original lease is revoked; the adopted source retains its existing lock
+policy. Already-buffered pre-lock output is allowed, the generic Closed notice
+waits for normal unlock, and the pending retirement record then drains. A stale
+attach produces no callback, and the spent launch receipt cannot replay. Teardown
+checks both server exits, the stopped workload and the closed owned SSH listener.
+
+The fixture manually constructs the native source session over its freshly
+verified owned SSH transport. It establishes the native Herdr child/durability
+path, not OS CLI delivery, actual GUI startup or physical biometric prompts.
+Those and mobile/device lifecycle acceptance remain separate. This ignored
+external-tool fixture executes when explicitly requested; ordinary native test
+runs compile it without executing it.

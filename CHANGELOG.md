@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Add owned OpenSSH/Herdr 0.9.3 acceptance coverage for explicit session selection,
+  separate child PTYs, durable detach and original-lease revocation. GUI startup
+  and biometric launch acceptance remain separate; runtime defaults do not change.
+
 - Add cold saved-host CLI composition with `--mux tmux`, `tmux:SERVER` or
   `herdr`. After explicit normal authentication, lazysh opens that fixed picker
   on the new SSH control session; choosing an exact row attaches through the
