@@ -74,20 +74,35 @@ it.each([
   {name:'note limits',command:'unused',key:'previewNoteLimits'},
   {name:'raw diagnostics with key-like properties',command:'list_previews',raw:'previewInvalidList <raw/user/path>'},
 ] as const)('retranslates already-visible $name without new IPC',async scenario=>{
-  vi.mocked(invoke).mockImplementation(async command=>{
-    if(command===scenario.command){if('raw' in scenario)throw {name:'LocalUiError',key:'previewInvalidList',message:scenario.raw};return scenario.reply;}
-    return [previewFixture];
-  });
-  render(<PreviewPanel sessionId="preview-error-session"/>);
-  if(scenario.command!=='list_previews'){
-    await waitFor(()=>expect(screen.getByRole('button',{name:t('previewDiscover')})).toHaveProperty('disabled',false));
-    if('input' in scenario){fireEvent.change(screen.getByRole('textbox',{name:t('previewDiscoverPorts')}),{target:{value:scenario.input}});fireEvent.click(screen.getByRole('button',{name:t('previewDiscover')}));}
-    else if(scenario.key==='previewPortRange'){fireEvent.change(screen.getByRole('textbox',{name:t('previewRemotePort')}),{target:{value:'0'}});fireEvent.click(screen.getByRole('button',{name:t('previewOpen')}));}
-    else if(scenario.key==='previewNoteLimits'){fireEvent.change(screen.getByRole('textbox',{name:t('previewPagePath')}),{target:{value:'invalid page'}});fireEvent.change(screen.getByRole('textbox',{name:t('previewComment')}),{target:{value:'Keep this draft'}});fireEvent.click(screen.getByRole('button',{name:t('previewStage')}));}
-    else fireEvent.click(screen.getByRole('button',{name:t('previewDiscover')}));
-  }
-  const alert=await screen.findByRole('alert');
-  await languagesPreserve(()=>{expect(screen.getByRole('alert')).toBe(alert);expect(alert.textContent).toBe('raw' in scenario?scenario.raw:t(scenario.key));});
+  const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged);
+  try {
+    vi.mocked(invoke).mockImplementation(async command=>{
+      if(command===scenario.command){if('raw' in scenario)throw {name:'LocalUiError',key:'previewInvalidList',message:scenario.raw};return scenario.reply;}
+      return [previewFixture];
+    });
+    render(<PreviewPanel sessionId="preview-error-session"/>);
+    if(scenario.command!=='list_previews'){
+      await waitFor(()=>expect(screen.getByRole('button',{name:t('previewDiscover')})).toHaveProperty('disabled',false));
+      if('input' in scenario){fireEvent.change(screen.getByRole('textbox',{name:t('previewDiscoverPorts')}),{target:{value:scenario.input}});fireEvent.click(screen.getByRole('button',{name:t('previewDiscover')}));}
+      else if(scenario.key==='previewPortRange'){fireEvent.change(screen.getByRole('textbox',{name:t('previewRemotePort')}),{target:{value:'0'}});fireEvent.click(screen.getByRole('button',{name:t('previewOpen')}));}
+      else if(scenario.key==='previewNoteLimits'){
+        const path=screen.getByRole('textbox',{name:t('previewPagePath')});
+        const comment=screen.getByRole('textbox',{name:t('previewComment')});
+        const invalidComment='x'.repeat(4001);
+        fireEvent.change(path,{target:{value:'invalid page'}});
+        fireEvent.change(comment,{target:{value:invalidComment}});
+        // Frame navigation intentionally resets the path; the invalid comment survives it.
+        fireEvent.load(screen.getByTitle(t('previewFrameTitle',{port:5173})));
+        expect(path).toHaveProperty('value','/');
+        expect(comment).toHaveProperty('value',invalidComment);
+        fireEvent.click(screen.getByRole('button',{name:t('previewStage')}));
+      }
+      else fireEvent.click(screen.getByRole('button',{name:t('previewDiscover')}));
+    }
+    const alert=await screen.findByRole('alert');
+    expect(staged).not.toHaveBeenCalled();
+    await languagesPreserve(()=>{expect(screen.getByRole('alert')).toBe(alert);expect(alert.textContent).toBe('raw' in scenario?scenario.raw:t(scenario.key));expect(staged).not.toHaveBeenCalled();});
+  } finally {window.removeEventListener('lazysh-prompt-draft',staged);}
 });
 
 it.each([
