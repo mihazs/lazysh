@@ -252,88 +252,32 @@ pub struct Store {
     connection: Connection,
 }
 
-fn regular_state_metadata(path: &Path, message: &'static str) -> io::Result<Option<fs::Metadata>> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if storage_namespace::is_link(&metadata) || !metadata.is_file() => {
-            Err(io::Error::new(io::ErrorKind::InvalidInput, message))
-        }
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
 fn validate_state_file(path: &Path) -> Result<()> {
-    let Some(metadata) = regular_state_metadata(path, "State must be a regular file")? else {
-        return Ok(());
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.nlink() != 1 || metadata.uid() != unsafe { libc::geteuid() } {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "State must not have hard links",
-            )));
-        }
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    lazysh_common::private_state::validate_database(path).map_err(Error::from)
+}
+fn sidecar_kind(path: &Path) -> lazysh_common::private_state::SidecarKind {
+    use lazysh_common::private_state::SidecarKind;
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("events.sqlite3-journal") => SidecarKind::Journal,
+        Some("events.sqlite3-wal") => SidecarKind::Wal,
+        Some("events.sqlite3-shm") => SidecarKind::Shm,
+        Some("events.sqlite3-init-lock") => SidecarKind::BootstrapLock,
+        _ => SidecarKind::Other,
     }
-    Ok(())
 }
-
 fn validate_sidecar(path: &Path) -> Result<()> {
-    validate_sidecar_with(path, || {
-        regular_state_metadata(path, "Invalid state sidecar")
-    })
+    lazysh_common::private_state::validate_sidecar(path, sidecar_kind(path)).map_err(Error::from)
 }
+#[cfg(test)]
+fn regular_state_metadata(path: &Path, message: &'static str) -> io::Result<Option<fs::Metadata>> {
+    lazysh_common::test_support::regular_state_metadata(path, message)
+}
+#[cfg(test)]
 fn validate_sidecar_with(
     path: &Path,
-    mut observe: impl FnMut() -> io::Result<Option<fs::Metadata>>,
+    observe: impl FnMut() -> io::Result<Option<fs::Metadata>>,
 ) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let kind = match path.file_name().and_then(|name| name.to_str()) {
-            Some("events.sqlite3-journal") => "journal",
-            Some("events.sqlite3-wal") => "wal",
-            Some("events.sqlite3-shm") => "shm",
-            Some("events.sqlite3-init-lock") => "bootstrap-lock",
-            _ => "other",
-        };
-        let mut retries = 0;
-        loop {
-            let Some(metadata) = observe()? else {
-                return Ok(());
-            };
-            {
-                use std::os::unix::fs::{MetadataExt, PermissionsExt};
-                let links = metadata.nlink();
-                let owned = metadata.uid() == unsafe { libc::geteuid() };
-                let mode = metadata.permissions().mode() & 0o777;
-                // SQLite may unlink its ephemeral sidecar during stat. Never accept
-                // that removed inode: re-stat the path, validating any replacement.
-                if links == 0
-                    && owned
-                    && mode == 0o600
-                    && matches!(kind, "journal" | "wal" | "shm")
-                    && retries < 2
-                {
-                    retries += 1;
-                    continue;
-                }
-                if links != 1 || !owned || mode != 0o600 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        format!("Unsafe state sidecar (kind={kind}, links={links}, owned={owned}, mode={mode:03o})"),
-                    ).into());
-                }
-            }
-            return Ok(());
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        observe().map(|_| ()).map_err(Error::from)
-    }
+    lazysh_common::test_support::observe_sidecar(sidecar_kind(path), observe).map_err(Error::from)
 }
 
 fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File> {

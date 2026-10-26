@@ -24,4 +24,5 @@ tempfile = "3"
 libc = "0.2"
 
 [dev-dependencies]
+lazysh-common = { path = "../../packages/common", features = ["test-support"] }
 rusqlite = { version = "0.41", features = ["trace"] }

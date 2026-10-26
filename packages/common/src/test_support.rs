@@ -67,6 +67,20 @@ pub fn successful_output(command: &mut std::process::Command) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// Dev-feature adapter for the private validator observer seam; absent from normal builds.
+pub fn observe_sidecar(
+    kind: crate::private_state::SidecarKind,
+    observe: impl FnMut() -> std::io::Result<Option<std::fs::Metadata>>,
+) -> std::io::Result<()> {
+    crate::private_state::observe_sidecar(kind, observe)
+}
+pub fn regular_state_metadata(
+    path: &std::path::Path,
+    message: &'static str,
+) -> std::io::Result<Option<std::fs::Metadata>> {
+    crate::private_state::regular_state_metadata(path, message)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
