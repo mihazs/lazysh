@@ -9,6 +9,9 @@ use std::{
 };
 
 pub fn conversation(path: &Path, agent: TranscriptAgent, limit: u8) -> Result<TranscriptPage> {
+    if matches!(agent, TranscriptAgent::GrokAcp) {
+        return super::grok_conversation::conversation(path, limit);
+    }
     if !(1..=100).contains(&limit) || !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }

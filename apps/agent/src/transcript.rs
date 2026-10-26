@@ -17,6 +17,7 @@ mod discovery;
 mod droid;
 mod event_adapters;
 mod grok_acp;
+mod grok_conversation;
 mod jcode;
 mod snapshot;
 pub use conversation::conversation;
