@@ -415,6 +415,15 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
+        // Short-lived hooks must not checkpoint/unlink shared WAL state when
+        // another Store is admitting its sidecars. FULL commit synchronization
+        // and SQLite's normal automatic checkpoints remain unchanged.
+        if !connection.set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+            true,
+        )? {
+            return Err(io::Error::other("Cannot retain companion WAL on close").into());
+        }
         validate_state_file(&path)?;
         connection.busy_handler(Some(move |_| wait_for_storage_until(bootstrap_deadline)))?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -610,7 +619,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn established_store_cleanup_during_protected_admission_preserves_committed_event() {
+    fn legacy_connection_cleanup_during_protected_admission_preserves_committed_event() {
         let directory = tempfile::tempdir().unwrap();
         let now = Utc::now();
         let event = normalize(
@@ -624,6 +633,15 @@ mod tests {
         .unwrap()
         .unwrap();
         let mut existing = Store::open(directory.path()).unwrap();
+        // Keep exercising the actual cleanup boundary for legacy/external peers
+        // that have not adopted Store's retained-WAL close policy.
+        assert!(!existing
+            .connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .unwrap());
         existing.ingest(&event, now).unwrap();
         let sidecars =
             ["-wal", "-shm"].map(|suffix| directory.path().join(format!("events.sqlite3{suffix}")));
@@ -810,22 +828,35 @@ mod tests {
         let first = Store::open(dir.path()).unwrap();
         let second = Store::open(dir.path()).unwrap();
         for store in [first, second] {
-            assert_eq!(
+            assert!(store
+                .connection
+                .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE)
+                .unwrap());
+            let number = |name: &str| {
                 store
                     .connection
-                    .query_row("PRAGMA synchronous", [], |r| r.get::<_, i32>(0))
-                    .unwrap(),
-                2
+                    .pragma_query_value(None, name, |row| row.get::<_, i64>(0))
+                    .unwrap()
+            };
+            assert_eq!(number("wal_autocheckpoint"), 1000);
+            assert_eq!(number("journal_size_limit"), 1024 * 1024);
+            assert_eq!(number("synchronous"), 2);
+            eprintln!(
+                "Store WAL settings: page_size={}, auto_pages={}, journal_bytes={}",
+                number("page_size"),
+                number("wal_autocheckpoint"),
+                number("journal_size_limit")
             );
             assert_eq!(
                 store
                     .connection
-                    .query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
+                    .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
                     .unwrap(),
                 "wal"
             );
         }
     }
+
     #[test]
     fn retention_runs_on_ingest_and_snapshot() {
         let dir = tempfile::tempdir().unwrap();

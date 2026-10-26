@@ -13,6 +13,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Changed companion SQLite close behavior: successful Store connections retain
+  private WAL/SHM files after clean exit instead of checkpointing/deleting them
+  for each short-lived hook. FULL commit synchronization and normal automatic
+  checkpoints remain enabled. A database-only copy can now miss acknowledged
+  events even after CLI exit; use a consistent SQLite backup or verified checkpoint.
+
 - Companion initialization checks temporary SQLite journal/WAL/SHM paths while
   holding its existing bootstrap lock, avoiding inspections racing another
   initializer's journal removal. Ownership, permissions, no-follow checks and
