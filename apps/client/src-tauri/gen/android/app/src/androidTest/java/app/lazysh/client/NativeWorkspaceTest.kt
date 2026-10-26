@@ -477,6 +477,8 @@ class NativeWorkspaceTest {
             typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
             closeSoftKeyboard()
             clickButton("Paste draft")
+            assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario,
+                "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"))
             // Paste draft focuses xterm; normal native Enter submits the real shell input.
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",

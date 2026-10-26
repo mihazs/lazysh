@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep keyboard focus in the terminal after Paste draft, so the next keyboard Enter reaches the shell. Opening Compose and staging new drafts still focus the editor; paste and command bytes are unchanged.
+
 - Add an owned Android app SSH acceptance route through explicit fingerprint review, ephemeral identity paste and interactive shell output. Existing workspace/vault/theme tests and runtime defaults remain unchanged; real hosted UI execution is reported separately.
 
 - Keep an already-visible App Lock authentication failure in the current interface language without repeating native configuration or changing opt-in, access authority or defaults.

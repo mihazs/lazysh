@@ -89,7 +89,7 @@ export default function TerminalPane({ session, active, reportError }: {
   }, [session.id, reportError]);
 
   useEffect(() => {
-    if (composing && active) composerInput.current?.focus();
+    if (composing && active && draft) composerInput.current?.focus();
   }, [composing, active, draft]);
 
   useEffect(() => {

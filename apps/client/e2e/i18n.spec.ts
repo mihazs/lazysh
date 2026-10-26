@@ -40,6 +40,26 @@ async function connectedTerminal(page: Page) {
   await expect(screen).toContainText('RAW C-b, {{text}} 世界');
   return {screen,canvas:await page.locator('.terminal-canvas').elementHandle()};
 }
+test('Paste draft returns keyboard Enter to the existing terminal without losing composer staging focus',async({page})=>{
+  await fixture(page);const {canvas}=await connectedTerminal(page);
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  const composer=page.getByRole('textbox',{name:'Compose text',exact:true});
+  await expect(composer).toBeFocused();
+  await composer.fill("printf 'SSH_%s_END\\n' 'owned-challenge'");
+  await page.keyboard.press('Enter');
+  const draft=await composer.inputValue();
+  expect(draft).toContain('\n');
+  expect(await page.evaluate(()=>window.localeFixture.sent)).toEqual([]);
+  await page.getByRole('button',{name:'Paste draft',exact:true}).click();
+  await expect(composer).toHaveValue('');
+  await expect(page.locator('.terminal-canvas .xterm-helper-textarea')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>window.localeFixture.sent)).toEqual([draft.replaceAll('\n','\r'),'\r']);
+  expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId:'local:locale-fixture',text:'new staged draft'}})));
+  await expect(composer).toHaveValue('new staged draft');
+  await expect(composer).toBeFocused();
+});
 test('system and English persist, reset safely, and locale changes preserve the existing live terminal',async({page})=>{
   await fixture(page);await expect(page.locator('html')).toHaveAttribute('lang','en-GB');
   const {screen,canvas}=await connectedTerminal(page);
