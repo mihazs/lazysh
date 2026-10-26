@@ -129,10 +129,11 @@ pub(super) fn read_page(
         return Err(Error::InvalidArgument);
     }
     let mut file = open_transcript(path)?;
-    let before = file.metadata()?;
+    let before = super::SourceSnapshot::capture(&file)?;
     let bytes = super::snapshot::read_bytes(&mut file, before.len())?;
-    let after = open_transcript(path)?.metadata()?;
-    crate::transcript::same_file(&before, &after)?;
+    let selected = open_transcript(path)?;
+    before.same_file(&selected)?;
+    let after = selected.metadata()?;
     if before.len() != bytes.len() as u64
         || before.len() != after.len()
         || before.modified()? != after.modified()?

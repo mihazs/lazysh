@@ -25,9 +25,11 @@ mod jcode;
 #[cfg(test)]
 mod mutation_observer;
 mod snapshot;
+mod source_snapshot;
 pub use conversation::conversation;
 pub use database::read_database_page;
 pub use discovery::discover;
+pub(crate) use source_snapshot::SourceSnapshot;
 
 const MAX_LINE: u64 = 256 * 1024;
 const MAX_SCAN: u64 = 4 * 1024 * 1024;
@@ -274,19 +276,10 @@ fn message_size(message: &Value) -> Result<usize> {
         .map(|bytes| bytes.len())
         .map_err(|_| Error::InvalidEvent)
 }
-pub(crate) fn same_file(before: &std::fs::Metadata, after: &std::fs::Metadata) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != after.dev() || before.ino() != after.ino() {
-            return Err(Error::InvalidEvent);
-        }
-    }
-    Ok(())
-}
-fn unchanged_snapshot(path: &Path, before: &std::fs::Metadata) -> Result<()> {
-    let after = open_transcript(path)?.metadata()?;
-    same_file(before, &after)?;
+fn unchanged_snapshot(path: &Path, before: &SourceSnapshot) -> Result<()> {
+    let selected = open_transcript(path)?;
+    before.same_file(&selected)?;
+    let after = selected.metadata()?;
     if before.len() != after.len() || before.modified()? != after.modified()? {
         return Err(Error::InvalidEvent);
     }
