@@ -24,6 +24,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Browser preview controls, forwarding/discovery validation and element-picker
+  captions/statuses now support English, Brazilian Portuguese and Spanish.
+  Language changes preserve the live iframe, selection and editable note; page
+  data and staged annotation payloads remain verbatim. Defaults are unchanged.
+
 - Remote file browsing, uploads, repository history, side-by-side diffs and line
   comments now have English, Brazilian Portuguese and Spanish controls. Language
   changes preserve selected files, revisions and editable drafts; file contents

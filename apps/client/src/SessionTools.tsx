@@ -1,3 +1,4 @@
+import {captureUiError, errorMessage, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi } from './access';
 import { useEffect, useRef, useState } from "react";
@@ -12,27 +13,10 @@ import {
 import { api as nativeApi, type FileEntry } from "./bridge";
 export { MuxPanel } from "./MultiplexerPanel";
 
-export function errorMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error)
-    return String(error.message);
-  return String(error);
-}
-
-/** Only client-created failures carry local keys; host strings are never interpreted. */
-export class LocalFileError extends Error {
-  constructor(readonly key: 'filesTooLarge' | 'repoInvalid' | 'repoSubmodule' | 'repoInvalidFile') {
-    super(t(key));
-  }
-}
-type FileErrorCause = string | LocalFileError;
-export type FileErrorState = FileErrorCause | {history: FileErrorCause};
-export function captureFileError(error: unknown): FileErrorCause {
-  return error instanceof LocalFileError ? error : errorMessage(error);
-}
+export {errorMessage} from './i18n/localError';
+export type FileErrorState = UiErrorCause | {history: UiErrorCause};
 export function fileErrorText(error: FileErrorState): string {
-  if (typeof error === 'string') return error;
-  if (error instanceof LocalFileError) return t(error.key);
-  return t('repoHistoryUnavailable', {error: fileErrorText(error.history)});
+  return typeof error === 'object' && 'history' in error ? t('repoHistoryUnavailable', {error:uiErrorText(error.history)}) : uiErrorText(error);
 }
 
 const join = (parent: string, child: string) =>
@@ -71,7 +55,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       setDraft(next);
       setContent(null);
     } catch (e) {
-      if (current === request.current) setError(captureFileError(e));
+      if (current === request.current) setError(captureUiError(e));
     } finally {
       if (current === request.current) setBusy(false);
     }
@@ -97,7 +81,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       const text = await api.readFile(sessionId, next);
       if (current === request.current) setContent({ path: next, text });
     } catch (e) {
-      if (current === request.current) setError(captureFileError(e));
+      if (current === request.current) setError(captureUiError(e));
     } finally {
       if (current === request.current) setBusy(false);
     }
@@ -116,7 +100,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       setUpload(null);
       await load(path);
     } catch (e) {
-      setError(captureFileError(e));
+      setError(captureUiError(e));
     } finally {
       setBusy(false);
     }
@@ -179,7 +163,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             e.target.value = "";
             if (!file) return;
             if (file.size > 10 * 1024 * 1024) {
-              setError(new LocalFileError('filesTooLarge'));
+              setError(new LocalUiError('filesTooLarge'));
               return;
             }
             setUpload(file);
