@@ -1,5 +1,8 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  desktopLaunchWarmUnsupported: "Directory launch requires a new app instance. Close lazysh, then run the directory command again. No new terminal was opened.",
+  desktopLaunchWindowsUnsupported: "This directory is not supported by the Windows local shell. Choose an ordinary local drive directory with a compatible name and length.",
+  desktopLaunchUnavailable: "This directory launch is no longer available. Run the directory command again.",
   appUnsupportedTmuxRestoreName: "This tmux destination cannot be restored automatically because its exact name is unsupported. The live terminal and Jump To remain available.",
   appJumpTo: "Jump To",
   appReadingTmuxDestinations: "Reading tmux destinations…",
@@ -1044,4 +1047,10 @@ export const english = {
   devicesIosDimensions: "Companion did not report verified simulator point dimensions.",
   devicesInvalidIdle: "Invalid idle device packet.",
   devicesInvalidSequence: "Invalid device stream sequence.",
+  jumpLayout: "Jump To layout",
+  jumpAccordion: "Accordion",
+  jumpGrid: "Grid",
+  jumpCurrent: "Current",
+  jumpUnavailable: "Jump To unavailable:",
+  jumpHint: "Jumping changes this client's session and the destination session's current window.",
 } as const;

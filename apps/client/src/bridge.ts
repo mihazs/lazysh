@@ -71,7 +71,7 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   return createSession(command,args,onEvent);
 }
 export const api = {
-  connectLocal: (onEvent:(event:SshEvent)=>void) => createSession('local_connect',{cols:100,rows:30},onEvent),
+  connectLocal: (onEvent:(event:SshEvent)=>void, launchReceipt?:string) => createSession('local_connect',{cols:100,rows:30,...(launchReceipt ? {launchReceipt} : {})},onEvent),
   connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession("connect_et", {sessionId, options, cols:100, rows:30},onEvent);
   },

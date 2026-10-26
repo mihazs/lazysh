@@ -119,6 +119,8 @@ jobs:
       - name: Build pinned Parakeet runtime and exercise native macOS ACL storage
         if: runner.os == 'macOS'
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
+      - name: Exercise native desktop launch parsing and original-lease admission
+        run: "cargo test --locked -p lazysh --lib desktop_launch::"
       - name: Exercise native local PTY and ConPTY lifecycle
         run: bunx turbo run test:local --filter=@lazysh/client
       - name: Exercise native display-idle ownership and platform API release

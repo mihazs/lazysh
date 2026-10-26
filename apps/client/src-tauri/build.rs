@@ -20,6 +20,8 @@ fn main() {
         "theme_link_read",
         "theme_link_ack",
         "local_capability",
+        "desktop_launch_read",
+        "desktop_launch_ack",
         "local_connect",
         "local_write",
         "local_resize",
