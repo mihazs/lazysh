@@ -1,3 +1,4 @@
+import {attachmentPngHeader} from './test/attachmentData';
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -58,8 +59,7 @@ it('handles clipboard permission denial without automatic uploads', async () => 
 });
 
 it('flattens an explicit crop to PNG before the bounded upload', async () => {
-  const bytes = new Uint8Array(24); bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
-  const view = new DataView(bytes.buffer); view.setUint32(8, 13); view.setUint32(12, 0x49484452); view.setUint32(16, 100); view.setUint32(20, 80);
+  const bytes = attachmentPngHeader();
   const image = new File([bytes], 'shot.png', { type: 'image/png' });
   Object.defineProperty(image, 'arrayBuffer', { value: async () => bytes.buffer });
   const context = { clearRect: vi.fn(), drawImage: vi.fn(), translate: vi.fn(), strokeRect: vi.fn() };
