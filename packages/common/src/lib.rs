@@ -35,3 +35,6 @@ macro_rules! impl_from_error {
 pub type IosHandle<T> = T;
 #[cfg(not(target_os = "ios"))]
 pub type IosHandle<T> = std::marker::PhantomData<fn() -> T>;
+
+#[cfg(feature = "url")]
+pub mod urls;
