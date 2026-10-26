@@ -410,9 +410,50 @@ jobs:
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
         run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Run native workspace Save, relaunch, and Delete acceptance
+        id: ios-workspace
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' && steps.ios-mosh-app.outcome == 'success' }}
         run: bun run test:ios-workspace
+      - name: Capture failed workspace filesystem metadata
+        if: ${{ !cancelled() && steps.ios-workspace.outcome == 'failure' }}
+        timeout-minutes: 1
+        env:
+          WORKSPACE_OUTCOME: ${{ steps.ios-workspace.outcome }}
+        run: |
+          # This never changes the test outcome and never starts SDK/simulator tools.
+          test "$WORKSPACE_OUTCOME" = failure || exit 0
+          set +e
+          umask 077
+          diagnostic_dir="$RUNNER_TEMP/lazysh-ios-workspace-metadata"
+          mkdir -p "$diagnostic_dir" || exit 0
+          raw_dir="$(mktemp -d "$RUNNER_TEMP/lazysh-ios-workspace-private.XXXXXX")" || exit 0
+          trap 'rm -rf "$raw_dir"' EXIT
+          printf 'workspace outcome=failure\n' > "$diagnostic_dir/status.txt"
+          capture_metadata() {
+            kind="$1"; source_file="$2"; limit="$3"
+            result=unavailable
+            if test -f "$source_file" && test ! -L "$source_file"; then
+              size="$(wc -c < "$source_file")"
+              if test "$size" -le "$limit"; then
+                if test "$kind" = project; then
+                  shasum -a 256 "$source_file" | awk '{print $1}' > "$diagnostic_dir/project.sha256"
+                fi
+                if (ulimit -f 8192; plutil -convert json -o "$raw_dir/$kind.json" "$source_file") 2>/dev/null &&
+                  (ulimit -f 64; jq --arg kind "$kind" --arg device "$APPLE_STATUS_SIMULATOR_ID" -f .github/ios-workspace-metadata.jq "$raw_dir/$kind.json" > "$raw_dir/$kind.filtered.json") 2>/dev/null &&
+                  test "$(wc -c < "$raw_dir/$kind.filtered.json")" -le 32768; then
+                  cp "$raw_dir/$kind.filtered.json" "$diagnostic_dir/$kind.json" && result=retained
+                fi
+              fi
+            fi
+            printf '%s=%s\n' "$kind" "$result" >> "$diagnostic_dir/status.txt"
+          }
+          capture_metadata project apps/client/src-tauri/gen/apple/lazysh.xcodeproj/project.pbxproj 2097152
+          if [[ "$APPLE_STATUS_SIMULATOR_ID" =~ ^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$ ]]; then
+            capture_metadata device "$HOME/Library/Developer/CoreSimulator/Devices/$APPLE_STATUS_SIMULATOR_ID/device.plist" 65536
+          else
+            printf 'device=unavailable\n' >> "$diagnostic_dir/status.txt"
+          fi
+          exit 0
       - name: Verify tests preserve the prebuilt iOS host binary
         timeout-minutes: 1
         if: ${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}
@@ -426,6 +467,7 @@ jobs:
             apps/client/src-tauri/gen/apple/workspace-ui.xcresult
             apps/client/src-tauri/gen/apple/mosh-app.xcresult
             ${{ runner.temp }}/lazysh-ios-signing
+            ${{ runner.temp }}/lazysh-ios-workspace-metadata
           if-no-files-found: warn
       - name: Remove status test simulator
         timeout-minutes: 2
