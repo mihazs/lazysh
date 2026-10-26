@@ -57,6 +57,16 @@ const translations = {
   terminalClipboardPrompt_zero: ["O programa remoto quer substituir sua área de transferência ({{characters}} caracteres).", "El programa remoto quiere sustituir tu portapapeles ({{characters}} caracteres)."],
   terminalClipboardPrompt_many: ["O programa remoto quer substituir sua área de transferência ({{characters}} caracteres).", "El programa remoto quiere sustituir tu portapapeles ({{characters}} caracteres)."],
   terminalClipboardPrompt_other: ["O programa remoto quer substituir sua área de transferência ({{characters}} caracteres).", "El programa remoto quiere sustituir tu portapapeles ({{characters}} caracteres)."],
+
+  chatRecordedStart: ["Começar a acompanhar o arquivo registrado", "Empezar a seguir el archivo registrado"],
+  chatRecordedFollow: ["Acompanhar arquivo registrado", "Seguir archivo registrado"],
+  chatRecordedExplanation: ["Lê os registros acrescentados dois segundos após cada leitura. Isso não reconstrói uma conversa nem identifica o terminal ativo. Páginas ocultas pausam; erros interrompem as leituras sem reiniciar o arquivo.", "Lee los registros añadidos dos segundos después de cada lectura. Esto no reconstruye una conversación ni identifica el terminal activo. Las páginas ocultas pausan; los errores detienen las lecturas sin reiniciar el archivo."],
+  chatRecordedFollowing: ["Acompanhando o arquivo registrado.", "Siguiendo el archivo registrado."],
+  chatRecordedPaused: ["As leituras do arquivo registrado estão pausadas. Retome com o mesmo arquivo ou comece explicitamente a acompanhar uma nova visualização.", "Las lecturas del archivo registrado están en pausa. Reanuda con el mismo archivo o empieza explícitamente a seguir una vista nueva."],
+  chatRecordedRegion: ["Mensagens do arquivo registrado", "Mensajes del archivo registrado"],
+  chatRecordedUnsupported: ["O companion não retornou uma resposta compatível para o arquivo registrado. Atualize-o ou use os registros manualmente.", "El companion no devolvió una respuesta compatible para el archivo registrado. Actualízalo o usa los registros manualmente."],
+  chatRecordedChanged: ["Não foi possível verificar a continuidade do arquivo registrado. As leituras estão pausadas; iniciar uma nova visualização exige uma ação explícita.", "No se pudo verificar la continuidad del archivo registrado. Las lecturas están en pausa; iniciar una vista nueva requiere una acción explícita."],
+
   syncReviewRegion: ["Revisar alterações da sincronização", "Revisar cambios de sincronización"],
   syncDescription: ["Use seu próprio diretório WebDAV via HTTPS. Configurações e credenciais são criptografadas separadamente antes do envio. A sincronização só é executada quando você escolhe uma ação.", "Usa tu propio directorio WebDAV mediante HTTPS. La configuración y las credenciales se cifran por separado antes de subirlas. La sincronización solo se ejecuta cuando eliges una acción."],
   syncDirectory: ["Diretório WebDAV", "Directorio WebDAV"],
