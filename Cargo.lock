@@ -3464,6 +3464,7 @@ dependencies = [
  "libc",
  "tempfile",
  "tokio",
+ "url",
  "zeroize",
 ]
 
@@ -3490,6 +3491,31 @@ dependencies = [
  "pkg-config",
  "serde_json",
  "sha2 0.10.9",
+ "zeroize",
+]
+
+[[package]]
+name = "lazysh-notifications"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "hyper-util",
+ "lazysh-common",
+ "rand 0.10.3",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "uuid",
  "zeroize",
 ]
 

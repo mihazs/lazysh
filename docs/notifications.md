@@ -21,3 +21,5 @@ Full remote push requires a separate, opt-in delivery service and native registr
 - Host events need authenticated ingestion, bounded notification summaries, delivery deduplication, account/device binding, revocation and separately disclosed external data handling. A generic job webhook must authenticate its inputs independently of SSH.
 
 Those remote services, cross-device delivery, cold-start deep links, native push credentials and physical-device lifecycle tests remain tracked in issue #14. No relay endpoint or account is silently configured by enabling this local inbox.
+
+The optional [single-destination webhook relay](notification-relay.md) provides a separately operated authenticated background event path. It does not bind this native app or enable APNs/FCM delivery; mobile delivery remains unavailable in this phase.

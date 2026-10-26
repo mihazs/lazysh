@@ -241,13 +241,7 @@ fn endpoint(value: &str) -> Result<Url> {
         return Err("Sync URL must not contain userinfo".into());
     }
     let mut url = Url::parse(value).map_err(|_| "Invalid sync endpoint")?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
+    if !lazysh_common::urls::credential_free_https(&url) {
         return Err("Sync URL must not contain credentials, a query or a fragment".into());
     }
     if !url.path().ends_with('/') {

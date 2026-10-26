@@ -8,6 +8,8 @@
   existing native child PTY. Mux launches explicitly use SSH without changing
   saved host transport preferences. Warm CLI delivery remains unsupported.
 
+- Add an optional self-hosted authenticated webhook relay with private source capabilities, a durable bounded outbox and one fixed HTTPS destination. Delivery is disabled by default; native APNs/FCM delivery remains unavailable.
+
 - Add cold desktop `--host SAVED_ID` / `-host SAVED_ID` launch into the normal
   saved-host connection dialog, with original unlock ownership across explicit
   credential and key-trust retries. The host editor now offers **Copy host ID**.

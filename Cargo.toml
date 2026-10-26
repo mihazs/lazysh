@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/client/src-tauri", "apps/agent", "apps/share-service", "apps/transcription-service", "packages/credential-vault", "packages/mosh-transport", "packages/et-transport", "packages/apple-speech", "packages/apple-status", "packages/push-registration", "packages/parakeet-runtime", "packages/common", "packages/display-idle"]
+members = ["apps/client/src-tauri", "apps/agent", "apps/share-service", "apps/transcription-service", "apps/notification-service", "packages/credential-vault", "packages/mosh-transport", "packages/et-transport", "packages/apple-speech", "packages/apple-status", "packages/push-registration", "packages/parakeet-runtime", "packages/common", "packages/display-idle"]
 resolver = "2"
 exclude = ["packages/portable-pty-vendor", "packages/deep-link-vendor"]
 
