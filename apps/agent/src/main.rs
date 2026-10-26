@@ -5,7 +5,7 @@ use std::io::{self, Write};
 #[derive(Parser)]
 #[command(
     version,
-    about = "Bounded local agent status snapshots. No server or approval injection."
+    about = "Local lifecycle state and explicit bound relay publishing. No resident server or approval injection."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -13,6 +13,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Explicit opt-in relay setup and bounded drain; never installs hooks or schedules.
+    Relay {
+        #[command(subcommand)]
+        command: lazysh_agent::relay::RelayCommand,
+    },
     /// Show host companion settings without creating state when absent.
     Settings {
         #[command(subcommand)]
@@ -125,6 +130,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
     }
     let output = match cli.command {
+        Command::Relay { command } => Some(lazysh_agent::relay::run(
+            command,
+            &lazysh_agent::state_directory()?,
+        )?),
         Command::Settings { command } => {
             let directory = lazysh_agent::state_directory()?;
             let settings = match command {

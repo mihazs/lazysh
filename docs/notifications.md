@@ -22,4 +22,4 @@ Full remote push requires a separate, opt-in delivery service and native registr
 
 Those remote services, cross-device delivery, cold-start deep links, native push credentials and physical-device lifecycle tests remain tracked in issue #14. No relay endpoint or account is silently configured by enabling this local inbox.
 
-The optional [single-destination webhook relay](notification-relay.md) provides a separately operated authenticated background event path. It does not bind this native app or enable APNs/FCM delivery; mobile delivery remains unavailable in this phase.
+The optional [single-destination webhook relay](notification-relay.md) provides a separately operated authenticated event path with explicit opt-in companion admission and bounded manual flush. No automatic sender schedule is installed. It does not bind this native app or enable APNs/FCM delivery; mobile delivery remains unavailable in this phase.

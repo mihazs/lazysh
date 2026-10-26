@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add default-off companion publishing of new normalized lifecycle transitions to an explicitly bound self-hosted webhook relay. Admission is atomic with local ingest; bounded flush is explicitly invoked, with stable retry identities and persistent disable. No sender schedule, APNs/FCM delivery or deployment is installed.
+
 - Add cold saved-host CLI composition with `--mux tmux`, `tmux:SERVER` or
   `herdr`. After explicit normal authentication, lazysh opens that fixed picker
   on the new SSH control session; choosing an exact row attaches through the

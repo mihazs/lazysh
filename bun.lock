@@ -15,6 +15,10 @@
       "version": "0.1.0",
       "dependencies": {
         "@lazysh/common": "workspace:*",
+        "@lazysh/notification-client": "workspace:*",
+      },
+      "devDependencies": {
+        "@lazysh/notification-service": "workspace:*",
       },
     },
     "apps/client": {

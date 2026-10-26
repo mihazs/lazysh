@@ -5,6 +5,10 @@ edition = "2021"
 license.workspace = true
 description = "Opt-in authenticated single-destination webhook relay"
 
+[features]
+default = []
+test-support = []
+
 [dependencies]
 lazysh-notification-client = { path = "../../packages/notification-client" }
 lazysh-common = { path = "../../packages/common", features = ["service", "url"] }

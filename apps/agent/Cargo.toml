@@ -3,9 +3,11 @@ name = "lazysh-agent"
 license.workspace = true
 version = "0.1.0"
 edition = "2021"
-description = "Local-only lifecycle event companion for lazysh"
+description = "Lifecycle event companion with explicit opt-in bound relay publishing"
 
 [dependencies]
+lazysh-notification-client = { path = "../../packages/notification-client" }
+tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time"] }
 lazysh-common = { path = "../../packages/common" }
 clap = { version = "4.6", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -26,3 +28,13 @@ libc = "0.2"
 [dev-dependencies]
 lazysh-common = { path = "../../packages/common", features = ["test-support"] }
 rusqlite = { version = "0.41", features = ["trace"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
+lazysh-notifications = { path = "../notification-service", features = ["test-support"] }
+axum = "0.8.9"
+hyper-util = { version = "0.1", features = ["http1", "server-auto", "service", "tokio"] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util"] }

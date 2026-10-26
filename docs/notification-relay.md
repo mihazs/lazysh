@@ -52,6 +52,33 @@ Reuse that event ID when retrying an unknown publish outcome. Valid states are `
 
 `receipt --capability-file FILE --receipt-id UUID` reports only that source's result. `status --origin ORIGIN --admin-file FILE` reports account, enabled state and target generation. Omit `--enable` on `destination` to persistently disable. Use `source-revoke --origin ORIGIN --admin-file FILE --source-id UUID` to revoke one source. Revocation also prevents later source provisioning retries from reviving it.
 
+## Opt in the host companion
+
+The companion can durably admit its **new normalized state transitions** to this relay. This is a separate, default-off preference; enabling inbox monitoring or installing lifecycle hooks does not enable publishing. Provision a dedicated private source envelope first, then explicitly configure the companion on its host:
+
+```sh
+lazysh-agent relay status
+lazysh-agent relay configure --expected-revision 0 --enable \
+  --capability-file /private/relay-config/build-source
+lazysh-agent relay flush --limit 8 --deadline-seconds 30
+```
+
+Use the current local `revision` from `relay status` for every configure or disable. A private-CA relay also requires explicit `--relay-ca-file FILE` on configure. Omit `--enable` to save a verified binding without enabling admission. Enable rejects a remotely disabled destination. Configure probes and atomically pins the relay account, source, target generation, origin and exact private capability/CA bytes; it does not send old events. The credential files remain owner-only and must remain at their checked paths. Even a whitespace-only file change invalidates the captured binding; explicitly configure again after any intended identity or trust-file change.
+
+Ordinary `ingest` performs no networking and starts no asynchronous runtime. In the same SQLite transaction as the local state update, an enabled companion queues a random stable event UUID only when the normalized state changes to `working`, `needs_attention` or `done`. Repeated state observations do not enqueue another event. It never uploads the session ID, agent label, pane ID, prompt, transcript, command, project directory or host address. The relay supplies the independently provisioned public alias. A known full local outbox preserves the local update and increments the durable `capacityFailures` counter; unexpected SQL/disk errors roll back the whole ingest rather than claiming a capacity rejection.
+
+**Flush is explicit.** Nothing installs a schedule, modifies hook configuration, starts a daemon, or automatically sends pending work. Invoke flush yourself or configure an operator-owned schedule separately. This manual drain is not complete background mobile push. It owns one persistent private `relay-publisher.lock`, takes at most eight jobs, and stops admitting requests at the selected 1–30 second dispatch deadline. Existing SQLite admission retains its separate three-second shared budget; filesystem/OS work is not a hard real-time promise. A concurrent flush fails busy. The drain guard spans each admitted POST and its synchronous local finalization, including interruption; no detached local writer can complete after releasing that ownership.
+
+The dedicated `/v1/bound-events` protocol requires the original account/source/target generation both for new admission and matching-receipt reconciliation. An older relay that lacks this route fails closed; the companion never falls back to the manual `/v1/events` endpoint. A lost response may retry only the same UUID and original binding. `relayRecorded` means the relay recorded a matching receipt, **not** that the destination accepted it. The companion retains receipt IDs in its private local database; its CLI exposes aggregate local status rather than a receipt list or a remote delivery-status probe. JSON flush reports include retry/blocked counts, a finite `lastFailure` class and a stop reason; successful process completion alone does not mean delivery. Status counts are local and make no remote probe.
+
+Local queued work expires after 24 hours, permits at most three persisted admitted attempts with a two-second retry delay, and retains at most 1,000 pending plus 100 terminal records. The local capacity-failure counter survives reconfiguration. Terminal counts cover only those retained records, not lifetime delivery totals. A crash, killed drain or expired request after admission has an unknown remote outcome, even if the local record is later cancelled or blocked. Deleting local terminal metadata does not revoke the relay's original receipt.
+
+```sh
+lazysh-agent relay disable --expected-revision 1
+```
+
+Disable persists and advances the local revision, cancelling all old pending rows without rewriting their original configuration. Re-enable requires another explicit configure with the new revision; old rows never become fresh work. Configuration/remote-generation changes also require explicit reconfiguration. Disable cannot recall a POST already admitted locally, a receipt already recorded by the relay or an effect already accepted by the destination. Revoke the source at the relay as well when its remote authority must end. Protect the companion's private plaintext database and its retained WAL/SHM metadata; use a consistent SQLite backup rather than copying only the main file.
+
 ## Delivery and revocation boundary
 
 The destination receives only `schemaVersion:1`, `receiptId`, `eventId`, finite `kind` and its admin-provisioned public `alias`. The receipt ID is the stable HTTP `Idempotency-Key` across attempts and restarts. Only HTTP 2xx marks `accepted`: this means the destination accepted the request, **not** that a device displayed it or a human saw it. Exactly-once effects depend on the destination honoring idempotency.
@@ -66,4 +93,4 @@ There are at most 128 retained source identities, 1,000 pending events and 10,00
 
 ## Verification and limits
 
-Standard Cargo fixtures own their temporary storage, loopback listeners and TLS receiver certificate. They exercise real HTTP ingest-to-TLS-delivery-to-receipt, auth, source isolation, dedup conflicts, private no-overwrite files/CLI output, actual child-process source creation with a committed lost TLS response and same-envelope resume, explicit-CA/wrong-host/no-CA handling, restart/idempotency, target binding, held POST/revoke, redirect rejection, timeout, shutdown, one-worker and capacity bounds. No external notification provider, user credentials, model, device or deployment is contacted. Native push/account binding and physical background delivery remain future #14 acceptance, not a capability advertised by this service.
+Standard Cargo fixtures own their temporary storage, loopback listeners and TLS receiver certificate. They exercise real HTTP ingest-to-TLS-delivery-to-receipt, auth, source isolation, dedup conflicts, private no-overwrite files/CLI output, actual child-process source creation with a committed lost TLS response and same-envelope resume, explicit-CA/wrong-host/no-CA handling, restart/idempotency, target binding, held POST/revoke, redirect rejection, timeout, shutdown, one-worker and capacity bounds. No external notification provider, user credentials, model, device or deployment is contacted. Companion fixtures additionally execute the real CLI through owned TLS relay and destination servers, lost-ACK process recovery, exclusive drain/disable races, original-generation rejection, exact capability binding, downgrade rejection and dispatch deadlines. Native app push/account binding and physical background delivery remain future #14 acceptance, not a capability advertised by this service.

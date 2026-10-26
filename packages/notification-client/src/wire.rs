@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Working,
@@ -63,6 +63,10 @@ pub struct Receipt {
     pub state: String,
     pub may_have_reached_destination: bool,
 }
+
+mod bound;
+pub(crate) use bound::schema_one;
+pub use bound::{BoundEvent, BoundReceipt, BoundStatus};
 
 #[cfg(test)]
 mod tests {

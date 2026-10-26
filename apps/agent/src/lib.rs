@@ -1,13 +1,14 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 pub mod approvals;
 pub mod devices;
+pub mod relay;
 pub mod settings;
 mod storage_filesystem;
 mod storage_namespace;
 pub mod transcript;
 pub mod usage;
 use clap::ValueEnum;
-use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -67,6 +68,7 @@ pub enum Error {
     UnsupportedStateFilesystem,
     Device(&'static str),
     Settings(&'static str),
+    Relay(&'static str),
     Io(io::Error),
     Storage(rusqlite::Error),
 }
@@ -78,6 +80,7 @@ impl Error {
             Self::UnsupportedStateFilesystem => "UnsupportedStateFilesystem",
             Self::Device(kind) => kind,
             Self::Settings(kind) => kind,
+            Self::Relay(kind) => kind,
             Self::Io(_) => "IoError",
             Self::Storage(_) => "StorageError",
         }
@@ -377,6 +380,7 @@ impl Store {
         }
         connection.execute_batch("PRAGMA journal_size_limit=1048576;")?;
         connection.execute_batch(storage_schema::V1_SESSIONS)?;
+        relay::initialize(&connection)?;
         connection.busy_handler(Some(wait_for_storage))?;
         Ok(Self { connection })
     }
@@ -386,10 +390,28 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let prior: Option<String> = transaction
+            .query_row(
+                "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
+                params![event.agent, event.session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
         transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
             ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
             summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
             params![event.agent,event.session_id,event.project,event.state.as_str(),event.summary,event.pane_id,now])?;
+        let kind = match event.state {
+            SessionState::Working => lazysh_notification_client::Kind::Working,
+            SessionState::NeedsAttention => lazysh_notification_client::Kind::NeedsAttention,
+            SessionState::Done => lazysh_notification_client::Kind::Done,
+        };
+        relay::admit_transition(
+            &transaction,
+            kind,
+            prior.as_deref() != Some(event.state.as_str()),
+            now as i64,
+        )?;
         transaction.execute(
             "DELETE FROM sessions WHERE updated_at < ?1",
             [now - RETENTION_SECONDS],

@@ -1,6 +1,6 @@
 pub use lazysh_notification_client::{
-    client, client_with_root, digest, http_client, https, secret, valid_token, Event, Kind,
-    Receipt, Source, Status,
+    client, client_with_root, digest, http_client, https, secret, valid_token, BoundEvent,
+    BoundReceipt, BoundStatus, Event, Kind, Receipt, Source, Status,
 };
 mod store;
 use axum::{
@@ -69,6 +69,9 @@ impl ApiError {
     fn unauthorized() -> Self {
         Self(StatusCode::UNAUTHORIZED, "unauthorized")
     }
+    fn target_changed() -> Self {
+        Self(StatusCode::PRECONDITION_FAILED, "bound_target_changed")
+    }
     fn conflict() -> Self {
         Self(StatusCode::CONFLICT, "identity_conflict")
     }
@@ -109,6 +112,11 @@ struct Inner {
 impl Service {
     pub fn open(config: Config) -> Result<Self, String> {
         Self::open_with(config, http_client()?, false)
+    }
+    /// Owned HTTPS fixtures can add their test certificate without changing CLI trust.
+    #[cfg(feature = "test-support")]
+    pub fn open_with_test_client(config: Config, client: reqwest::Client) -> Result<Self, String> {
+        Self::open_with(config, client, false)
     }
     pub fn reconfigure(config: Config) -> Result<(), String> {
         store::Store::open(&config, true).map(|_| ())
@@ -159,6 +167,7 @@ impl Service {
             .route("/v1/admin/destination/{action}", post(policy))
             .route("/v1/source/status", get(source_status))
             .route("/v1/events", post(ingest))
+            .route("/v1/bound-events", get(bound_status).post(bound_ingest))
             .route("/v1/receipts/{id}", get(receipt))
             .layer(DefaultBodyLimit::max(4096))
             .with_state(self.clone())
@@ -258,6 +267,23 @@ async fn ingest(
 ) -> Result<Json<Receipt>, ApiError> {
     let source = s.source(&h).await?;
     let receipt = s.db(move |s| s.ingest(source, event)).await?;
+    s.0.wake.notify_one();
+    Ok(Json(receipt))
+}
+async fn bound_status(
+    State(s): State<Service>,
+    h: HeaderMap,
+) -> Result<Json<BoundStatus>, ApiError> {
+    let token = Zeroizing::new(token(&h)?.to_owned());
+    s.db(move |s| s.bound_status(&token)).await.map(Json)
+}
+async fn bound_ingest(
+    State(s): State<Service>,
+    h: HeaderMap,
+    Json(event): Json<BoundEvent>,
+) -> Result<Json<BoundReceipt>, ApiError> {
+    let token = Zeroizing::new(token(&h)?.to_owned());
+    let receipt = s.db(move |s| s.ingest_bound(&token, event)).await?;
     s.0.wake.notify_one();
     Ok(Json(receipt))
 }

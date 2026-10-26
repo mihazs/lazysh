@@ -3,7 +3,7 @@ mod private_files;
 mod wire;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
-pub use wire::{Event, Kind, Receipt, Source, Status};
+pub use wire::{BoundEvent, BoundReceipt, BoundStatus, Event, Kind, Receipt, Source, Status};
 use zeroize::Zeroizing;
 
 pub fn secret() -> Zeroizing<String> {
