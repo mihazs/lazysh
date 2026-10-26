@@ -1,5 +1,9 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  desktopLaunchMuxSsh: "Mux launches use SSH for their control connection. The saved host transport is unchanged.",
+  desktopLaunchMuxPicker: "Choose a running session to attach in a new terminal. This request keeps its original kind and server.",
+  desktopLaunchMuxUnavailable: "{{kind}} is not installed on this host. The SSH terminal remains available.",
+
   uploadCancelling: "Stopping upload…",
   uploadCancelledWarning: "Upload cancelled locally. If sending started, a partial or completed new remote file may remain. Cancellation does not remove remote files.",
   desktopLaunchHostMissing: "This saved host no longer exists. Copy an existing host ID and run the command again.",

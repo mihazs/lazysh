@@ -17,8 +17,8 @@ With lazysh fully closed, run `lazysh --host SAVED_ID` (or `-host`, including
 in the unlocked app. Display names, SSH configuration aliases and raw hostnames
 are not alternate identifiers. IDs contain 1–100 UTF-8 bytes without control
 characters. Missing or duplicate IDs fail visibly; the command does not create
-or guess a host. Duplicate options, mixing `--dir` and `--host`, and `--mux`
-combinations fail before startup. No credentials belong in the command line.
+or guess a host. Duplicate selectors and mixing `--dir` with a remote selector fail before startup.
+A saved-host request may include the explicit multiplexer picker described below. No credentials belong in the command line.
 
 After normal unlock, one native receipt opens the existing connection dialog.
 Connect explicitly and verify any unknown host key independently. Password,
@@ -41,7 +41,7 @@ localized unsupported-warm-launch notice after normal unlock; singleton handoff
 success is not connection success. Close the app before retrying. Desktop URLs
 retain their existing ingress behavior. This independent saved-ID contract does
 not establish Moshi's undocumented runtime host grammar; only its help flags were
-observed. Warm delivery and host/multiplexer composition remain open in
+observed. Warm delivery remains open in
 [issue #86](https://github.com/mihazs/lazysh/issues/86).
 
 Native controlled SSH tests cover changed target metadata before authentication,
@@ -50,6 +50,60 @@ Frontend tests cover the actual dialog and original-lease transport cleanup,
 including held Mosh/ET results across lock/reunlock. GUI CLI invocation on each
 OS and platform-specific credential/biometric prompts remain separate acceptance
 gates; a Linux test pass alone does not establish them.
+
+### Multiplexer picker launches
+
+With the app closed, use one of:
+
+```sh
+lazysh --host SAVED_ID --mux tmux
+lazysh --host SAVED_ID --mux tmux:agents
+lazysh --host SAVED_ID --mux herdr
+```
+
+Single-dash and `--option=value` forms also work, in either selector order.
+`--mux` requires a saved host, cannot accompany `--dir`, and accepts exactly the
+three forms above. `tmux` and `tmux:default` select the explicit default server.
+Named servers use the existing [literal native validation](multiplexers.md#tmux):
+1–64 UTF-8 bytes, no slash/control characters, and neither `.` nor `..`.
+Shell quoting belongs to your shell; lazysh does not reinterpret the resulting
+literal name as a command or a socket path.
+
+Mux composition explicitly uses an SSH control connection, including when the
+saved host normally prefers Mosh, ET or Auto. The dialog explains this choice
+and does not change the saved profile. Unlock, credential/biometric policy,
+first-key review and explicit Connect remain mandatory. Host-only CLI requests
+continue to honor the existing transport selection.
+
+Successful authentication opens the existing requested picker on that exact new
+SSH session with the original access owner. Kind and tmux server stay fixed for
+that request. tmux lists the requested server's real workspaces; Herdr lists its
+real sessions. No first row is selected automatically, and missing tools, empty
+lists and host failures remain visible. Choose an exact row to attach through
+an independently owned native child PTY. No attach text is sent to the source
+terminal's foreground process. The picker exposes existing rows without create
+or rename controls; the selected attachment retains its existing native semantics.
+
+Switching back to **Terminal** leaves the authenticated SSH control terminal open.
+Returning to its **Sessions** view retains the same fixed picker while this
+request context exists. Closing the control terminal uses the normal session
+cleanup path. An attached child's ordinary ownership/close behavior is unchanged.
+The successful initial SSH creation already spent the CLI receipt; closing the
+picker, failed attachment or lock/reunlock does not refill it. The picker context
+is ephemeral, is not written into host settings or workspace restoration, and
+never rebinds to another active session or a fresh unlock lease. Explicit chosen
+attachments retain their existing restoration metadata and fresh-authentication
+rules.
+
+Native tests pass for selector bounds, both argument orders, preserved literal
+mux metadata across explicit retry, and no host-file mutation. The controlled
+OpenSSH/named-tmux fixture feeds the parsed/prepared server into the existing
+native child attachment and retains colliding-ID/server-isolation assertions.
+Isolated tmux and Herdr lifecycle fixtures also pass. Actual App/picker tests
+cover saved transport overrides, exact new-source ownership, explicit trust,
+closing/reopening and stale results after lock. Desktop GUI CLI invocation, platform credential/biometric prompts, and SSH
+Herdr child-PTY acceptance remain unexecuted local gates. The isolated Herdr
+lifecycle fixture does not establish its SSH attachment behavior.
 
 ## Transport selection
 

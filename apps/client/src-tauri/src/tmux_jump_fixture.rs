@@ -24,6 +24,7 @@ struct Fixture {
     dir: tempfile::TempDir,
     daemon: Process,
     handle: Arc<SshHandle>,
+    host: Host,
     tmux: String,
 }
 impl Fixture {
@@ -130,6 +131,7 @@ impl Fixture {
             dir,
             daemon,
             handle,
+            host,
             tmux,
         }
     }
@@ -996,6 +998,28 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     app.manage(state.clone());
     let authority = AccessState::disabled();
     let lease = authority.lease(None).unwrap();
+    state.config().unwrap().hosts.push(f.host.clone());
+    let intent = crate::desktop_launch::parse(
+        [
+            "lazysh",
+            "--host",
+            &f.host.id,
+            "--mux",
+            &format!("tmux:{hostile}"),
+        ]
+        .map(std::ffi::OsString::from),
+        || panic!("mux request must not resolve cwd"),
+    )
+    .unwrap();
+    let launch = crate::desktop_launch::LaunchState::new(intent);
+    let receipt = launch.read(&lease).unwrap().host_receipt.unwrap();
+    let prepared = launch.prepare_host(&state, &receipt, &lease).unwrap();
+    let attempt = launch.begin_host(&receipt, &lease, &f.host.id).unwrap();
+    attempt.check_host(&f.host).unwrap();
+    let Some(crate::desktop_launch::MuxTarget::Tmux { server }) = prepared.mux else {
+        panic!("expected requested named tmux picker");
+    };
+    assert_eq!(server, hostile);
     let (channel, initial) =
         open_terminal_for(&f.handle, &lease, 80, 24, Some("exec sleep 120".into()))
             .await
@@ -1010,6 +1034,8 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     )
     .await
     .unwrap();
+    attempt.finish();
+    assert!(launch.begin_host(&receipt, &lease, &f.host.id).is_err());
     let neutral = state.session(&parent.session_id).await.unwrap();
     let inherited = format!("{}/tmux-{}/other,1,0", f.dir.path().display(), unsafe {
         libc::geteuid()
@@ -1033,7 +1059,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         lease.clone(),
         app.state(),
         parent.session_id.clone(),
-        Some(hostile.into()),
+        Some(server),
         "same".into(),
         80,
         24,
