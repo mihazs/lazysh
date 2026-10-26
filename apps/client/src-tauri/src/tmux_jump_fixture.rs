@@ -24,7 +24,8 @@ impl Drop for Process {
 struct Fixture {
     dir: tempfile::TempDir,
     daemon: Process,
-    handle: Arc<SshHandle>,
+    handle: Option<Arc<SshHandle>>,
+    user_key: zeroize::Zeroizing<String>,
     host: Host,
     tmux: String,
     environment: Vec<(&'static str, String)>,
@@ -174,11 +175,41 @@ impl Fixture {
         Self {
             dir,
             daemon,
-            handle,
+            handle: Some(handle),
+            user_key: zeroize::Zeroizing::new(
+                user_key.to_openssh(Default::default()).unwrap().to_string(),
+            ),
             host,
             tmux,
             environment,
         }
+    }
+    fn handle(&self) -> &Arc<SshHandle> {
+        self.handle
+            .as_ref()
+            .expect("fixture connection has been taken")
+    }
+    async fn fresh_handle(&self, state: &AppState) -> Arc<SshHandle> {
+        Arc::new(
+            authenticate(
+                state,
+                &self.host,
+                None,
+                Some(self.user_key.to_string()),
+                None,
+            )
+            .await
+            .unwrap(),
+        )
+    }
+    async fn stop_listener(&mut self) {
+        self.daemon.0.kill().unwrap();
+        self.daemon.0.wait().unwrap();
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", self.host.port))
+                .await
+                .is_err()
+        );
     }
     fn prepare_launch(
         &self,
@@ -241,7 +272,7 @@ impl Fixture {
             self.prefix(),
             quote(session)
         );
-        let (mut channel, mut bytes) = open_terminal(&self.handle, 80, 24, Some(command))
+        let (mut channel, mut bytes) = open_terminal(self.handle(), 80, 24, Some(command))
             .await
             .unwrap();
         let identity = timeout(BOUND, async {
@@ -281,7 +312,7 @@ impl Fixture {
         Display { channel, identity }
     }
     async fn control(&self, session: &str) -> Control {
-        let mut channel = self.handle.channel_open_session().await.unwrap();
+        let mut channel = self.handle().channel_open_session().await.unwrap();
         channel
             .exec(
                 true,
@@ -769,7 +800,7 @@ async fn product_actor_probe() {
     let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
     let command = crate::tmux_jump::attach_with_prefix("alpha", &marker, &f.prefix());
     let command = format!("printf 'owned startup banner\\r\\n'; {command}");
-    let (mut channel, mut initial) = open_terminal(&f.handle, 80, 24, Some(command))
+    let (mut channel, mut initial) = open_terminal(f.handle(), 80, 24, Some(command))
         .await
         .unwrap();
     let identity = crate::tmux_jump::handshake(&mut channel, &mut initial, &marker)
@@ -782,7 +813,7 @@ async fn product_actor_probe() {
     access.authorize(access.generation().unwrap()).unwrap();
     let lease = crate::ssh::test_support::ready_lease(&access);
     let control = crate::tmux_jump::prepare_command(
-        &f.handle,
+        f.handle(),
         identity.clone(),
         format!(
             "{} -C attach-session -f no-output,ignore-size -t {}",
@@ -864,7 +895,7 @@ async fn product_actor_probe() {
     timeout(BOUND, binding.retired()).await.unwrap();
 
     let retained = crate::tmux_jump::prepare_command(
-        &f.handle,
+        f.handle(),
         identity.clone(),
         format!(
             "{} -C attach-session -f no-output,ignore-size -t {}",
@@ -918,7 +949,7 @@ async fn product_actor_probe() {
     // there is no arbitrary sleep or mutation retry to arrange the race.
     let phase = f.dir.path().join("partial-control-ready");
     let command=format!("IFS= read -r request; printf '%s\\n' '%begin 1 2 3'; printf partial; printf ready > {}; IFS= read -r next",quote(phase.to_str().unwrap()));
-    let mut stub = f.handle.channel_open_session().await.unwrap();
+    let mut stub = f.handle().channel_open_session().await.unwrap();
     stub.exec(true, command).await.unwrap();
     request_ok(&mut stub).await.unwrap();
     let (_stub_cancel, mut stub_cancellation) = watch::channel(false);
@@ -967,7 +998,7 @@ async fn malformed_stream_probe() {
         "IFS= read -r request; i=0; while [ \"$i\" -lt 50 ]; do printf '%s\\n' '%sessions-changed'; sleep 0.1; i=$((i+1)); done",
     ];
     for command in cases {
-        let mut channel = f.handle.channel_open_session().await.unwrap();
+        let mut channel = f.handle().channel_open_session().await.unwrap();
         channel.exec(true, command).await.unwrap();
         request_ok(&mut channel).await.unwrap();
         let (_cancel, mut cancellation) = watch::channel(false);
@@ -1072,13 +1103,13 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     };
     assert_eq!(server, hostile);
     let (channel, initial) =
-        open_terminal_for(&f.handle, &lease, 80, 24, Some("exec sleep 120".into()))
+        open_terminal_for(f.handle(), &lease, 80, 24, Some("exec sleep 120".into()))
             .await
             .unwrap();
     let parent = spawn_terminal(
         &state,
         lease.clone(),
-        f.handle.clone(),
+        f.handle().clone(),
         channel,
         initial,
         Channel::new(|_| Ok(())),
@@ -1353,6 +1384,266 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     );
 }
 
+// Exercise the same native attach boundary as saved-workspace restoration, without
+// borrowing the fixture's original connection or its AppState.
+async fn reconnect_display(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    handle: Arc<SshHandle>,
+    server: &str,
+    name: &str,
+) -> (String, mpsc::UnboundedReceiver<serde_json::Value>) {
+    let state = app.state::<AppState>();
+    let (channel, initial) = open_terminal_for(&handle, lease, 80, 24, Some("exec cat".into()))
+        .await
+        .unwrap();
+    let parent = spawn_terminal(
+        &state,
+        lease.clone(),
+        handle,
+        channel,
+        initial,
+        Channel::new(|_| Ok(())),
+    )
+    .await
+    .unwrap();
+    let (events, receiver) = super::test_support::json_events();
+    let child = attach_tmux(
+        lease.clone(),
+        state,
+        parent.session_id,
+        Some(server.into()),
+        name.into(),
+        80,
+        24,
+        events,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap()
+    .session_id;
+    (child, receiver)
+}
+
+async fn assert_reconnected_output(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    id: &str,
+    events: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    selected: &str,
+    other: &str,
+) {
+    let bytes = owned_terminal_output(app, id, events, b":FRAME-END").await;
+    let output = String::from_utf8_lossy(&bytes);
+    assert!(
+        output.contains(selected),
+        "restored display must contain the selected server token and actual pane PID"
+    );
+    assert!(
+        !output.contains(other),
+        "restored display must not contain the other colliding server token/PID"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux; fresh authenticated restoration acceptance"]
+async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
+    let mut f = Fixture::new().await;
+    let original = f.handle.take().unwrap();
+    let old_handle = Arc::downgrade(&original);
+    let saved_server = "世界 '$(printf NO);";
+    let servers = NamedServers {
+        fixture: &f,
+        names: vec![saved_server.into(), "other".into()],
+    };
+    let tokens = [
+        uuid::Uuid::new_v4().simple().to_string(),
+        uuid::Uuid::new_v4().simple().to_string(),
+    ];
+    for (name, token) in servers.names.iter().zip(&tokens) {
+        let workload = format!("i=0; while :; do i=$((i+1)); printf 'DISPLAY:{token}:%s:%s:FRAME-END\\n' \"$$\" \"$i\"; sleep 0.05; done");
+        assert_eq!(
+            servers.direct(
+                name,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "same",
+                    "-P",
+                    "-F",
+                    "#{session_id}:#{window_id}:#{pane_id}",
+                    &workload
+                ]
+            ),
+            "$0:@0:%0"
+        );
+    }
+    let identity = |server: &str| {
+        servers.direct(
+            server,
+            &[
+                "display-message",
+                "-p",
+                "-t",
+                "%0",
+                "#{pid}:#{session_id}:#{window_id}:#{pane_id}:#{pane_pid}",
+            ],
+        )
+    };
+    let selected_identity = identity(saved_server);
+    let other_identity = identity("other");
+    let selected_output = format!(
+        "DISPLAY:{}:{}:",
+        tokens[0],
+        selected_identity.rsplit(':').next().unwrap()
+    );
+    let other_output = format!(
+        "DISPLAY:{}:{}:",
+        tokens[1],
+        other_identity.rsplit(':').next().unwrap()
+    );
+    let owned_pids = [&selected_identity, &other_identity]
+        .into_iter()
+        .flat_map(|identity| {
+            let fields = identity.split(':').collect::<Vec<_>>();
+            [
+                fields[0].parse::<i32>().unwrap(),
+                fields[4].parse::<i32>().unwrap(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let authority = AccessState::disabled();
+    let lease = authority.lease(None).unwrap();
+    let first = tauri::test::mock_app();
+    first.manage(AppState::new(f.dir.path().join("first-lifetime")).unwrap());
+    let (child, mut first_events) =
+        reconnect_display(&first, &lease, original, saved_server, "same").await;
+    assert_reconnected_output(
+        &first,
+        &child,
+        &mut first_events,
+        &selected_output,
+        &other_output,
+    )
+    .await;
+    let first_state = first.state::<AppState>();
+    let snapshot =
+        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), first.state(), child.clone())
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+    let snapshot = serde_json::to_value(snapshot).unwrap();
+    let saved_name = snapshot["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["name"] == "same")
+        .unwrap()["restoreName"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(saved_name, "same");
+    let original_transport = first_state
+        .session(&child)
+        .await
+        .unwrap()
+        .handle
+        .handle
+        .clone();
+    first_state.cancel_for_renderer_rebind().await;
+    timeout(BOUND, async {
+        while !original_transport.is_closed() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("original SSH transport must actually close");
+    drop(original_transport);
+    assert!(first_state.sessions.lock().await.is_empty());
+    assert!(first_state.retiring.lock().await.is_empty());
+    timeout(BOUND, async {
+        while old_handle.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all original native SSH handles must retire before reauthentication");
+    drop(first);
+    drop(lease);
+    drop(authority);
+    assert_eq!(identity(saved_server), selected_identity);
+    assert_eq!(identity("other"), other_identity);
+    let before = servers.direct(saved_server, &["capture-pane", "-p", "-t", "%0"]);
+    timeout(BOUND, async {
+        while servers.direct(saved_server, &["capture-pane", "-p", "-t", "%0"]) == before {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("durable workload must advance without any original SSH connection");
+    let authority = AccessState::disabled();
+    let lease = authority.lease(None).unwrap();
+    let second = tauri::test::mock_app();
+    second.manage(AppState::new(f.dir.path().join("second-lifetime")).unwrap());
+    // authenticate() checks the saved exact host fingerprint and authenticates the
+    // fixture's ephemeral private key against the real owned OpenSSH server.
+    let fresh = f.fresh_handle(&second.state()).await;
+    assert!(!fresh.is_closed());
+    let fresh_weak = Arc::downgrade(&fresh);
+    let (restored, mut restored_events) =
+        reconnect_display(&second, &lease, fresh, saved_server, &saved_name).await;
+    assert_reconnected_output(
+        &second,
+        &restored,
+        &mut restored_events,
+        &selected_output,
+        &other_output,
+    )
+    .await;
+    assert_ne!(restored, child);
+    let native = second.state::<AppState>().session(&restored).await.unwrap();
+    assert_eq!(
+        crate::tmux_server::TmuxServer::for_session(&native, None).unwrap(),
+        crate::tmux_server::TmuxServer::parse(Some(saved_server)).unwrap()
+    );
+    drop(native);
+    crate::tmux_jump::tmux_jump_snapshot(lease, second.state(), restored)
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    assert_eq!(identity(saved_server), selected_identity);
+    assert_eq!(identity("other"), other_identity);
+    second
+        .state::<AppState>()
+        .cancel_for_renderer_rebind()
+        .await;
+    timeout(BOUND, async {
+        while fresh_weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("fresh owned transport must retire during teardown");
+    drop(servers);
+    for pid in owned_pids {
+        timeout(BOUND, async {
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        })
+        .await
+        .expect("owned tmux server/workload must exit during teardown");
+    }
+    f.stop_listener().await;
+}
+
 struct HerdrServers<'a> {
     fixture: &'a Fixture,
     binary: &'a std::path::Path,
@@ -1544,7 +1835,7 @@ impl Drop for HerdrServers<'_> {
         }
     }
 }
-async fn herdr_terminal_output(
+async fn owned_terminal_output(
     app: &tauri::App<tauri::test::MockRuntime>,
     id: &str,
     events: &mut mpsc::UnboundedReceiver<serde_json::Value>,
@@ -1596,7 +1887,7 @@ async fn herdr_source_probe(
     .unwrap()
     .into_inner()
     .unwrap();
-    let bytes = herdr_terminal_output(app, &source.session_id, events, marker.as_bytes()).await;
+    let bytes = owned_terminal_output(app, &source.session_id, events, marker.as_bytes()).await;
     assert!(
         !bytes
             .windows(b"herdr --session".len())
@@ -1728,13 +2019,13 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         .unwrap();
     assert_eq!(bound.credential_binding(), f.host.credential_binding());
     let (events, mut source_events) = super::test_support::json_events();
-    let (channel, initial) = open_terminal_for(&f.handle, &lease, 80, 24, Some("exec cat".into()))
+    let (channel, initial) = open_terminal_for(f.handle(), &lease, 80, 24, Some("exec cat".into()))
         .await
         .unwrap();
     let source = spawn_terminal(
         &state,
         lease.clone(),
-        f.handle.clone(),
+        f.handle().clone(),
         channel,
         initial,
         events,
@@ -1831,7 +2122,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     assert!(process_pid > 1);
     eprintln!("owned Herdr stages: requested_host_kind=true explicit_nonfirst_selection=true workload_started=true");
     let (child, mut child_events) = herdr_child(&app, &lease, &source, &selected, kind).await;
-    herdr_terminal_output(&app, &child.session_id, &mut child_events, b"PICKED").await;
+    owned_terminal_output(&app, &child.session_id, &mut child_events, b"PICKED").await;
     adopt_session(
         lease.clone(),
         app.state(),
@@ -1881,7 +2172,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     .await;
     eprintln!("owned Herdr stages: separate_child_display=true source_independent=true durable_after_detach=true");
     let (pending, mut pending_events) = herdr_child(&app, &lease, &source, &selected, kind).await;
-    herdr_terminal_output(&app, &pending.session_id, &mut pending_events, b"PICKED").await;
+    owned_terminal_output(&app, &pending.session_id, &mut pending_events, b"PICKED").await;
     let pending_native = state.session(&pending.session_id).await.unwrap();
     assert!(!*pending_native.finished.borrow());
     assert!(!*pending_native.cancel.borrow());
@@ -1967,7 +2258,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     .await
     .expect("owned Herdr workload survived fixture teardown");
     drop(servers);
-    f.handle
+    f.handle()
         .disconnect(
             russh::Disconnect::ByApplication,
             "owned fixture complete",
@@ -1975,10 +2266,6 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         )
         .await
         .unwrap();
-    f.daemon.0.kill().unwrap();
-    f.daemon.0.wait().unwrap();
-    assert!(tokio::net::TcpStream::connect(("127.0.0.1", f.host.port))
-        .await
-        .is_err());
+    f.stop_listener().await;
     eprintln!("owned Herdr stages: servers_reaped=true workload_stopped=true listener_closed=true");
 }

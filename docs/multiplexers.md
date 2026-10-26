@@ -186,3 +186,23 @@ path, not OS CLI delivery, actual GUI startup or physical biometric prompts.
 Those and mobile/device lifecycle acceptance remain separate. This ignored
 external-tool fixture executes when explicitly requested; ordinary native test
 runs compile it without executing it.
+
+### Fresh verified SSH restoration acceptance
+
+The owned Cargo fixture
+`ssh::tmux_jump_fixture::real_tmux_jump_fresh_ssh_restores_same_durable_named_pane`
+is included in `bun run --cwd apps/client test:tmux`. It uses an isolated OpenSSH
+listener, ephemeral keys, private `TMUX_TMPDIR`, and two named servers with
+colliding session/window/pane IDs. It closes the original SSH transport, waits
+for native sessions and retained connection handles to retire, then uses a fresh
+`AppState` and host-key-verified authentication to reattach the saved literal
+server/session name. Native display output must contain the selected server's random token and actual
+pane-process PID, and exclude the other server's distinct token/PID. Unchanged
+server/pane/process identity establishes that the same workload survives and
+resumes; the second
+server's identity remains unchanged. Both native lifetimes and owned servers are
+cleaned up.
+
+This is transport retirement and fresh authentication within one Rust test
+process. It does not establish application-process death, GUI startup, OS-vault
+prompts, physical mobile lifecycle, or network roaming behavior.
