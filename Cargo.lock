@@ -3464,6 +3464,7 @@ dependencies = [
  "libc",
  "tempfile",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

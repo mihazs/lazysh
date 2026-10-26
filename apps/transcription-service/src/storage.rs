@@ -1,9 +1,9 @@
 use crate::{digest, secret, ApiError, Config, Device, Quota};
 use axum::http::StatusCode;
+use lazysh_common::service_secrets::{file, private};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
     fs::{self, File},
-    io::Read,
     path::Path,
 };
 use zeroize::Zeroizing;
@@ -19,46 +19,9 @@ fn supported_host() -> Result<(), String> {
     }
 }
 
-fn private(metadata: &fs::Metadata, directory: bool) -> Result<(), String> {
-    if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
-        return Err("Require a private regular file or directory".into());
-    }
-    if !lazysh_common::fs::owner_only(metadata, directory) {
-        return Err("Require private owner-only storage without hard links".into());
-    }
-    Ok(())
-}
-fn file(path: &Path, create: bool) -> Result<File, String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err("Symlinks are not supported".into());
-            }
-            private(&metadata, false)?;
-        }
-        Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err("Cannot open private file".into()),
-    }
-    let mut options = lazysh_common::fs::read_options(create);
-    options.create(create);
-    let file = options.open(path).map_err(|_| "Cannot open private file")?;
-    private(
-        &file.metadata().map_err(|_| "Cannot inspect private file")?,
-        false,
-    )?;
-    Ok(file)
-}
 pub fn read_secret(path: &Path) -> Result<Zeroizing<String>, String> {
     supported_host()?;
-    let mut value = Zeroizing::new(String::new());
-    file(path, false)?
-        .take(1025)
-        .read_to_string(&mut value)
-        .map_err(|_| "Cannot read secret file")?;
-    if value.len() > 1024 {
-        return Err("Secret file is too large".into());
-    }
-    Ok(value)
+    lazysh_common::service_secrets::read_secret(path)
 }
 pub(crate) struct Store {
     connection: Connection,
