@@ -94,6 +94,11 @@ palettes and exported JSON/share-code/link bytes remain unchanged. Language chan
 preserve editable fallback names, previews, original linked receipts/access leases
 and held clipboard/read/acknowledgement operations; they do not apply, save, copy
 or acknowledge a theme by themselves.
+Retained app-icon validation, read and local fallback errors also follow the
+interface language. Language changes preserve the original icon request, selected
+icon, read-after-failure behavior and request generation without rereading or
+reapplying it. Native reasons and errors, including empty strings, remain literal;
+renderer fixtures do not establish actual iOS Home Screen behavior.
 This is a partial milestone under issue #79. Other feature panels still require
 their own localization and acceptance.
 Native lock-cover/biometric-reason resources on
