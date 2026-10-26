@@ -98,6 +98,9 @@ enum Command {
         /// Require a source-bound consistency receipt (Grok Records only).
         #[arg(long)]
         checkpointed: bool,
+        /// Admit bounded static inline PNG/JPEG previews (Grok Records only).
+        #[arg(long)]
+        inline_images: bool,
         #[arg(long)]
         session_id: Option<String>,
         #[arg(long, default_value_t = 0)]
@@ -233,12 +236,13 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             path,
             checkpoint,
             checkpointed,
+            inline_images,
             session_id,
             offset,
             limit,
             view,
         } => {
-            if checkpointed
+            if (checkpointed || inline_images)
                 && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
                     || !matches!(view, lazysh_agent::transcript::TranscriptView::Records)
                     || session_id.is_some())
@@ -256,6 +260,15 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
             Some(
                 serde_json::to_value(match view {
+                    lazysh_agent::transcript::TranscriptView::Records if inline_images => {
+                        lazysh_agent::transcript::read_grok_images(
+                            &path,
+                            offset,
+                            limit,
+                            checkpointed,
+                            checkpoint.as_deref(),
+                        )?
+                    }
                     lazysh_agent::transcript::TranscriptView::Records if checkpointed => {
                         lazysh_agent::transcript::read_checkpointed_grok(
                             &path,

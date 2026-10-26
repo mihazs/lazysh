@@ -24,7 +24,7 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
         return Err(Error::InvalidArgument);
     }
     let mut file = open_transcript(path)?;
-    let before = file.metadata()?;
+    let before = super::SourceSnapshot::capture(&file)?;
     let size = before.len();
     if size > MAX_RECONSTRUCTION as u64 {
         return Err(Error::InvalidArgument);

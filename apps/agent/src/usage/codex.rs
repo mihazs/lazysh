@@ -49,7 +49,7 @@ fn label(value: &Value) -> Result<Option<String>> {
 
 pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<Window> {
     let mut file = open_transcript(path)?;
-    let before = file.metadata()?;
+    let before = crate::transcript::SourceSnapshot::capture(&file)?;
     crate::transcript::seek_record(&mut file, offset, before.len())?;
     let mut reader = BufReader::new(file.take(before.len() - offset));
     let mut cursor = offset;
@@ -186,8 +186,9 @@ pub(super) fn read(path: &Path, offset: u64, observed: DateTime<Utc>) -> Result<
         }
         cursor += size;
     }
-    let after = open_transcript(path)?.metadata()?;
-    crate::transcript::same_file(&before, &after)?;
+    let selected = open_transcript(path)?;
+    before.same_file(&selected)?;
+    let after = selected.metadata()?;
     if after.len() < before.len()
         || (after.len() == before.len() && after.modified()? != before.modified()?)
     {

@@ -9,7 +9,8 @@ const status = (current = 'default', available = true) => ({available, current, 
 let generation = 0;
 const unlocked = () => ({initialized: true, supported: true, enabled: false, locked: false, reason: '', generation: String(generation), nonce: 'a'.repeat(64)});
 beforeEach(() => { generation += 10; applyAccessStatus(unlocked()); vi.mocked(invoke).mockReset(); });
-afterEach(cleanup);
+import {t,uiI18n} from './i18n/core';
+afterEach(async()=>{cleanup();await uiI18n.changeLanguage('en');});
 it('does not offer changes on unsupported platforms', async () => {
   vi.mocked(invoke).mockResolvedValue(status('default', false)); render(<AppIconPanel />);
   await screen.findByText('Actual UIKit readback');
@@ -69,4 +70,46 @@ it.each(['success', 'failure'])('drops a stale native %s on the same mounted vie
   fireEvent.click(screen.getByRole('button', {name:'Apply app icon'}));
   await screen.findByText('Current icon: Default');
   expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('retranslates a retained owned read failure without starting another native read',async()=>{
+  vi.mocked(invoke).mockRejectedValue(new Error('RAW native status failed'));render(<AppIconPanel/>);
+  await screen.findByRole('alert');
+  await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
+  expect(screen.getByRole('alert').textContent).toBe(t('iconsCannotReadTheCurrentAppIconTryRefreshing'));
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
+
+async function iconLanguages(check:()=>void){
+  const{enablePseudoLocale}=await import('./test/pseudoLocale');const calls=[...vi.mocked(invoke).mock.calls];
+  for(const locale of ['en','pt-BR','es','en-XA']){
+    await act(async()=>{if(locale==='en-XA')await enablePseudoLocale(uiI18n);else await uiI18n.changeLanguage(locale);});check();expect(vi.mocked(invoke).mock.calls).toEqual(calls);
+  }
+}
+it('keeps a held initial read and its native reason without repeating work on language changes',async()=>{
+  let finish!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));render(<AppIconPanel/>);
+  const select=screen.getByLabelText('Home Screen icon');
+  await iconLanguages(()=>{expect(screen.getByLabelText(t('iconsHomeScreenIcon'))).toBe(select);expect(select).toHaveProperty('disabled',true);expect(screen.queryByRole('alert')).toBeNull();});
+  await act(async()=>finish({...status('amber'),reason:'Cannot read the current app icon. Try refreshing.'}));
+  await iconLanguages(()=>{expect(select).toHaveProperty('value','amber');expect(screen.getByText('Cannot read the current app icon. Try refreshing.')).toBeTruthy();});
+});
+it.each(['malformed','unknown'] as const)('retains the local %s apply cause and original payload through locale changes',async(outcome)=>{
+  let finish!:()=>void;
+  vi.mocked(invoke).mockResolvedValueOnce(status()).mockImplementationOnce(()=>new Promise((resolve,reject)=>{finish=()=>outcome==='malformed'?resolve(null):reject(false);})).mockResolvedValueOnce(status());
+  render(<AppIconPanel/>);await screen.findByText('Current icon: Default');
+  const select=screen.getByLabelText('Home Screen icon');fireEvent.change(select,{target:{value:'amber'}});
+  fireEvent.click(screen.getByRole('button',{name:'Apply app icon'}));
+  await iconLanguages(()=>{expect(screen.getByLabelText(t('iconsHomeScreenIcon'))).toBe(select);expect(select).toHaveProperty('value','amber');expect(select).toHaveProperty('disabled',true);});
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='set_app_icon')).toEqual([['set_app_icon',{icon:'amber'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}]]);
+  await act(async()=>finish());
+  await iconLanguages(()=>{expect(screen.getByRole('alert').textContent).toBe(t(outcome==='malformed'?'iconsCannotReadTheCurrentAppIcon':'appIOSCouldNotChangeTheAppIcon'));expect(select).toHaveProperty('value','default');});
+  expect(invoke).toHaveBeenCalledTimes(3);
+});
+it.each(['',new Error(''),'Cannot read the current app icon. Try refreshing.',new Error('RAW native <{{reason}}>')])('keeps native apply error %j literal with the original Error.message formatting',async(raw)=>{
+  vi.mocked(invoke).mockResolvedValueOnce(status()).mockRejectedValueOnce(raw).mockResolvedValueOnce({...status(),reason:''});
+  render(<AppIconPanel/>);await screen.findByText('Current icon: Default');
+  fireEvent.change(screen.getByLabelText('Home Screen icon'),{target:{value:'amber'}});fireEvent.click(screen.getByRole('button',{name:'Apply app icon'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(3));
+  await iconLanguages(()=>{expect(screen.queryByRole('alert')?.textContent??'').toBe(raw instanceof Error?raw.message:raw);expect(document.querySelector('fieldset > p')?.textContent).toBe('');});
 });
