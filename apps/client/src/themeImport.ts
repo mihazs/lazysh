@@ -1,4 +1,4 @@
-import {t} from './i18n/core';
+import {LocalUiError} from './i18n/localError';
 import type { ITheme } from '@xterm/xterm';
 
 export type ThemeInfo = {name: string; mode: 'dark' | 'light'};
@@ -7,33 +7,33 @@ export type ImportedTheme = ThemeInfo & {v: 1; colors: ThemeColors};
 const colorKeys = ['background','foreground','cursor','cursorAccent','selectionBackground','selectionForeground','selectionInactiveBackground','black','red','green','yellow','blue','magenta','cyan','white','brightBlack','brightRed','brightGreen','brightYellow','brightBlue','brightMagenta','brightCyan','brightWhite'];
 const bytes = (value: string) => new TextEncoder().encode(value);
 export function themeInfo(value: unknown): ThemeInfo {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t("validationThemeNeedsANameAndExplicitLightOrDark"));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new LocalUiError('validationThemeNeedsANameAndExplicitLightOrDark');
   const p = value as Record<string, unknown>;
-  if (Object.keys(p).some(key => !['name','mode'].includes(key)) || typeof p.name !== 'string' || !p.name.trim() || /[\uD800-\uDFFF]/u.test(p.name) || [...p.name].length > 40 || /[\x00-\x1f\x7f-\x9f]/.test(p.name) || (p.mode !== 'light' && p.mode !== 'dark')) throw new Error(t("validationThemeNeedsANameOfUpTo40Characters"));
+  if (Object.keys(p).some(key => !['name','mode'].includes(key)) || typeof p.name !== 'string' || !p.name.trim() || /[\uD800-\uDFFF]/u.test(p.name) || [...p.name].length > 40 || /[\x00-\x1f\x7f-\x9f]/.test(p.name) || (p.mode !== 'light' && p.mode !== 'dark')) throw new LocalUiError('validationThemeNeedsANameOfUpTo40Characters');
   return {name: p.name.trim(), mode: p.mode};
 }
 export function themeColors(value: unknown): ThemeColors {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t("validationAThemeMustBeAJSONObjectOfHexadecimal"));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new LocalUiError('validationAThemeMustBeAJSONObjectOfHexadecimal');
   const result: Record<string, string> = {};
   for (const [key, color] of Object.entries(value)) {
     if (key === 'bold') {
       if (color === 'bright') {result.bold = color; continue;}
-      if (typeof color !== 'string' || !/^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(color)) throw new Error(t("validationInvalidThemeColorBold"));
+      if (typeof color !== 'string' || !/^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(color)) throw new LocalUiError('validationInvalidThemeColorBold');
     } else
-    if (!colorKeys.includes(key) || typeof color !== 'string' || !/^#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i.test(color)) throw new Error(t("validationInvalidThemeColorValue1", {value1: key}));
+    if (!colorKeys.includes(key) || typeof color !== 'string' || !/^#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i.test(color)) throw new LocalUiError('validationInvalidThemeColorValue1', key);
     result[key] = (color.length === 4 ? '#' + [...color.slice(1)].map(c => c + c).join('') : color).toLowerCase();
   }
-  if (!result.background || !result.foreground) throw new Error(t("validationThemeNeedsBackgroundAndForegroundColors"));
+  if (!result.background || !result.foreground) throw new LocalUiError('validationThemeNeedsBackgroundAndForegroundColors');
   return result as ThemeColors;
 }
 export function importedTheme(value: unknown): ImportedTheme {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t("validationInvalidThemeDocument"));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new LocalUiError('validationInvalidThemeDocument');
   const p = value as Record<string, unknown>;
-  if (p.v !== 1 || Object.keys(p).some(key => !['v','name','mode','colors'].includes(key))) throw new Error(t("validationUnsupportedThemeDocument"));
+  if (p.v !== 1 || Object.keys(p).some(key => !['v','name','mode','colors'].includes(key))) throw new LocalUiError('validationUnsupportedThemeDocument');
   const info = themeInfo({name:p.name,mode:p.mode});
   const colors = themeColors(p.colors);
   for (const color of [colors.background!, colors.foreground!]) {
-    if (color.length === 9 && !color.endsWith('ff')) throw new Error(t("validationWholeAppThemesNeedOpaqueBackgroundAndForegroundColors"));
+    if (color.length === 9 && !color.endsWith('ff')) throw new LocalUiError('validationWholeAppThemesNeedOpaqueBackgroundAndForegroundColors');
   }
   const normalized = {...colors} as Record<string,string>;
   for (const base of ['black','red','green','yellow','blue','magenta','cyan','white']) {
@@ -46,22 +46,22 @@ export function importedTheme(value: unknown): ImportedTheme {
   return {v:1,...info,colors:normalized};
 }
 export function parseThemeImport(source: string, legacyInfo: ThemeInfo): ImportedTheme {
-  if (source.length > 16384 || bytes(source).length > 16384) throw new Error(t("validationThemeInputExceeds16KiB"));
+  if (source.length > 16384 || bytes(source).length > 16384) throw new LocalUiError('validationThemeInputExceeds16KiB');
   let json = source.trim();
   const shared = json.startsWith('lazysh-theme:') || json.startsWith('moshi-theme:');
-  if (!shared && bytes(source).length > 8192) throw new Error(t("validationThemeJSONExceeds8KiB"));
+  if (!shared && bytes(source).length > 8192) throw new LocalUiError('validationThemeJSONExceeds8KiB');
   if (shared) {
     const encoded = json.slice(json.indexOf(':') + 1);
-    if (!/^[\w+/-]+={0,2}$/.test(encoded) || encoded.length % 4 === 1) throw new Error(t("validationInvalidThemeShareCode"));
+    if (!/^[\w+/-]+={0,2}$/.test(encoded) || encoded.length % 4 === 1) throw new LocalUiError('validationInvalidThemeShareCode');
     try {
       const decoded = atob(encoded.replace(/-/g,'+').replace(/_/g,'/'));
       if (decoded.length > 8192) throw new Error();
       json = new TextDecoder('utf-8', {fatal:true}).decode(Uint8Array.from(decoded, c => c.charCodeAt(0)));
-    } catch {throw new Error(t("validationInvalidOrOversizedThemeShareCode"));}
+    } catch {throw new LocalUiError('validationInvalidOrOversizedThemeShareCode');}
   }
-  if (bytes(json).length > 8192) throw new Error(t("validationThemeJSONExceeds8KiB"));
+  if (bytes(json).length > 8192) throw new LocalUiError('validationThemeJSONExceeds8KiB');
   let value: unknown;
-  try {value = JSON.parse(json);} catch {throw new Error(t("validationEnterValidThemeJSONOrAThemeShareCode"));}
+  try {value = JSON.parse(json);} catch {throw new LocalUiError('validationEnterValidThemeJSONOrAThemeShareCode');}
   if (value && typeof value === 'object' && 'v' in value) return importedTheme(value);
   return importedTheme({v:1,...themeInfo(legacyInfo),colors:value});
 }

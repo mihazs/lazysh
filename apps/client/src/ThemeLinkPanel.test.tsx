@@ -30,7 +30,8 @@ beforeEach(()=>{
     throw new Error('unexpected command');
   });
 });
-afterEach(cleanup);
+import {t,uiI18n} from './i18n/core';
+afterEach(async()=>{cleanup();await uiI18n.changeLanguage('en');});
 it('requires explicit review and apply while preserving the manual import draft',async()=>{
   render(<><ThemeLinkPanel/><ThemeImportPanel preferences={defaults} apply={()=>true}/></>);
   const input=screen.getByLabelText('Theme JSON or share code');
@@ -164,4 +165,45 @@ it('ignores an older post-ack status reply after a newer replacement event refre
   expect(screen.getByRole('button',{name:'Review linked theme'})).toBeTruthy();
   fireEvent.click(screen.getByRole('button',{name:'Review linked theme'}));
   await screen.findByRole('heading',{name:'New pending'});
+});
+
+async function linkedLanguages(check:()=>void){
+  const{enablePseudoLocale}=await import('./test/pseudoLocale');
+  const calls=[...vi.mocked(invoke).mock.calls],listeners=vi.mocked(listen).mock.calls.length;
+  for(const locale of ['pt-BR','es','en-XA']){
+    await act(async()=>{if(locale==='en-XA')await enablePseudoLocale(uiI18n);else await uiI18n.changeLanguage(locale);});
+    check();expect(vi.mocked(invoke).mock.calls).toEqual(calls);expect(listen).toHaveBeenCalledTimes(listeners);
+  }
+}
+it('preserves the original held read and raw preview name through language changes',async()=>{
+  const name='RAW <name> {{literal}} 中文';offer(name);
+  let finish!:(value:unknown)=>void;
+  const original=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='theme_link_read'?new Promise(resolve=>{finish=resolve;}) as never:original(command,args,options));
+  render(<ThemeLinkPanel/>);const review=await screen.findByRole('button',{name:'Review linked theme'});fireEvent.click(review);
+  await linkedLanguages(()=>{expect(screen.getByRole('button',{name:t('themeLinkReviewLinkedTheme')})).toBe(review);expect(review).toHaveProperty('disabled',true);expect(getPreferences().theme).toBe('forest');});
+  const originalCandidate=pending;await act(async()=>finish(originalCandidate));
+  const preview=screen.getByRole('region',{name:t('themeLinkLinkedThemePreview')});
+  await linkedLanguages(()=>{expect(screen.getByRole('region',{name:t('themeLinkLinkedThemePreview')})).toBe(preview);expect(screen.getByRole('heading',{name})).toBeTruthy();expect(pending).toBe(originalCandidate);expect(getPreferences().theme).toBe('forest');});
+});
+it.each(['success','failure'] as const)('retains the applied notice and original receipt through a held %s acknowledgement',async(outcome)=>{
+  let finish!:()=>void;
+  const original=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='theme_link_ack'?new Promise((resolve,reject)=>{finish=()=>outcome==='failure'?reject(new Error('RAW ack refused')):original(command,args,options).then(resolve,reject);}) as never:original(command,args,options));
+  render(<ThemeLinkPanel/>);fireEvent.click(await screen.findByRole('button',{name:'Review linked theme'}));
+  await screen.findByRole('heading',{name:'Linked 日光'});fireEvent.click(screen.getByRole('button',{name:'Apply linked theme'}));
+  const notice=await screen.findByRole('status');const persisted=JSON.stringify(getPreferences());
+  await linkedLanguages(()=>{expect(screen.getByRole('status')).toBe(notice);expect(notice.textContent).toBe(t('themeLinkLinkedThemeAppliedToAppAndTerminal'));expect(JSON.stringify(getPreferences())).toBe(persisted);});
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='theme_link_ack')).toEqual([['theme_link_ack',{receipt},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}]]);
+  await act(async()=>finish());
+  await linkedLanguages(()=>{
+    expect(screen.getByRole('status').textContent).toBe(t('themeLinkLinkedThemeAppliedToAppAndTerminal'));
+    expect(screen.queryByRole('alert')?.textContent??'').toBe(outcome==='failure'?t('appTheLinkedThemeIsAlreadyAppliedButItsPending'):'');
+    expect(JSON.stringify(getPreferences())).toBe(persisted);
+  });
+});
+it('translates the retained unsupported-link error without reading or acknowledging it again',async()=>{
+  pending={receipt,code:'lazysh-theme:'+btoa('{}').replace(/=+$/,'')};render(<ThemeLinkPanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Review linked theme'}));await screen.findByRole('alert');
+  await linkedLanguages(()=>{expect(screen.getByRole('alert').textContent).toBe(t('themeLinkThisLinkDoesNotContainASupportedThemeDiscard'));expect(pending?.receipt).toBe(receipt);expect(getPreferences().theme).toBe('forest');});
 });
