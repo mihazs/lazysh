@@ -134,6 +134,7 @@ async fn cancellation_of_a_real_stalled_sftp_write_closes_the_owned_stream_witho
         russh_sftp::client::SftpSession::new(crate::sftp_stream::SftpStream::with_cancellation(
             client,
             work.cancellation(),
+            work.cancellation(),
             work.retention(),
         ))
         .await
@@ -252,6 +253,7 @@ async fn cancellation_retires_blocked_init_or_write_without_peer_drain() {
         let stream = crate::sftp_stream::SftpStream::with_cancellation(
             stream,
             work.cancellation(),
+            work.cancellation(),
             work.retention(),
         );
         let sending = tokio::spawn(async move {
@@ -309,6 +311,7 @@ async fn split_transport_retains_capacity_until_both_io_halves_drop() {
     let (client, _peer) = tokio::io::duplex(1);
     let stream = crate::sftp_stream::SftpStream::with_cancellation(
         client,
+        work.cancellation(),
         work.cancellation(),
         work.retention(),
     );

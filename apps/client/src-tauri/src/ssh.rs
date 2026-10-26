@@ -2116,6 +2116,7 @@ pub(crate) async fn transfer_file(
         let stream = crate::sftp_stream::SftpStream::with_cancellation(
             sftp_channel(session, lease).await?,
             ownership.cancellation(),
+            ownership.cancellation(),
             ownership.retention(),
         );
         transfer_sftp(SftpSession::new(stream).await?, path, data).await

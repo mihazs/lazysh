@@ -15,7 +15,8 @@ pub struct SftpStream<S> {
     emitted: usize,
     remaining: u32,
     rejected: bool,
-    stop: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    read_stop: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    write_stop: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     reader: Option<Waker>,
     writer: Option<Waker>,
     // Release upload capacity only after both upstream IO halves have retired.
@@ -30,7 +31,8 @@ impl<S> SftpStream<S> {
             emitted: 0,
             remaining: 0,
             rejected: false,
-            stop: None,
+            read_stop: None,
+            write_stop: None,
             reader: None,
             writer: None,
             _retained: None,
@@ -38,17 +40,19 @@ impl<S> SftpStream<S> {
     }
     pub(crate) fn with_cancellation(
         inner: S,
-        stop: Pin<Box<dyn Future<Output = ()> + Send>>,
+        read_stop: Pin<Box<dyn Future<Output = ()> + Send>>,
+        write_stop: Pin<Box<dyn Future<Output = ()> + Send>>,
         retained: Arc<dyn Send + Sync>,
     ) -> Self {
         Self {
-            stop: Some(stop),
+            read_stop: Some(read_stop),
+            write_stop: Some(write_stop),
             _retained: Some(retained),
             ..Self::new(inner)
         }
     }
     fn stopped(&mut self, cx: &mut Context<'_>, reading: bool) -> bool {
-        if self.stop.is_none() {
+        if self.read_stop.is_none() && self.write_stop.is_none() {
             return self.inner.is_none();
         }
         if reading {
@@ -56,15 +60,22 @@ impl<S> SftpStream<S> {
         } else {
             self.writer = Some(cx.waker().clone());
         }
-        if self
-            .stop
+        // Each half owns an independent subscription. The other task may
+        // already have exited after registering its waker.
+        let stop = if reading {
+            &mut self.read_stop
+        } else {
+            &mut self.write_stop
+        };
+        if stop
             .as_mut()
             .is_some_and(|stop| stop.as_mut().poll(cx).is_ready())
         {
             // Upstream may be stuck inside write_all and unable to consume its
             // queued close sentinel. Drop this transport independently of it.
             self.inner.take();
-            self.stop.take();
+            self.read_stop.take();
+            self.write_stop.take();
             for waker in [self.reader.take(), self.writer.take()]
                 .into_iter()
                 .flatten()
@@ -214,48 +225,67 @@ mod tests {
                 self.0.fetch_add(1, Ordering::SeqCst);
             }
         }
-        let (cancel, mut cancellation) = tokio::sync::watch::channel(false);
-        let (client, _peer) = tokio::io::duplex(1);
-        let stream = SftpStream::with_cancellation(
-            client,
-            Box::pin(async move {
-                let _ = cancellation.changed().await;
-            }),
-            Arc::new(()),
-        );
-        let (mut reader, mut writer) = tokio::io::split(stream);
-        let reading = Arc::new(Counter(AtomicUsize::new(0)));
-        let writing = Arc::new(Counter(AtomicUsize::new(0)));
-        let read_waker = Waker::from(reading.clone());
-        let write_waker = Waker::from(writing.clone());
-        let mut read_context = Context::from_waker(&read_waker);
-        let mut write_context = Context::from_waker(&write_waker);
-        let mut bytes = [0; 4];
-        let mut buffer = ReadBuf::new(&mut bytes);
-        assert!(Pin::new(&mut reader)
-            .poll_read(&mut read_context, &mut buffer)
-            .is_pending());
-        assert!(Pin::new(&mut writer)
-            .poll_write(&mut write_context, &[1])
-            .is_ready());
-        assert!(Pin::new(&mut writer)
-            .poll_write(&mut write_context, &[2])
-            .is_pending());
-        cancel.send_replace(true);
-        assert!(writing.0.load(Ordering::SeqCst) > 0);
-        assert!(matches!(
-            Pin::new(&mut writer).poll_write(&mut write_context, &[2]),
-            Poll::Ready(Err(_))
-        ));
-        assert!(
+        for read_exits in [false, true] {
+            let (cancel, cancellation) = tokio::sync::watch::channel(false);
+            let (client, _peer) = tokio::io::duplex(1);
+            let stop = |mut cancellation: tokio::sync::watch::Receiver<bool>| {
+                Box::pin(async move {
+                    let _ = cancellation.changed().await;
+                })
+            };
+            let stream = SftpStream::with_cancellation(
+                client,
+                stop(cancellation.clone()),
+                stop(cancellation),
+                Arc::new(()),
+            );
+            let (reader, mut writer) = tokio::io::split(stream);
+            let mut reader = Some(reader);
+            let reading = Arc::new(Counter(AtomicUsize::new(0)));
+            let writing = Arc::new(Counter(AtomicUsize::new(0)));
+            let read_waker = Waker::from(reading.clone());
+            let write_waker = Waker::from(writing.clone());
+            let mut read_context = Context::from_waker(&read_waker);
+            let mut write_context = Context::from_waker(&write_waker);
+            let mut bytes = [0; 4];
+            let mut buffer = ReadBuf::new(&mut bytes);
+            assert!(Pin::new(reader.as_mut().unwrap())
+                .poll_read(&mut read_context, &mut buffer)
+                .is_pending());
+            assert!(Pin::new(&mut writer)
+                .poll_write(&mut write_context, &[1])
+                .is_ready());
+            assert!(Pin::new(&mut writer)
+                .poll_write(&mut write_context, &[2])
+                .is_pending());
+            if read_exits {
+                assert!(Pin::new(reader.as_mut().unwrap())
+                    .poll_read(&mut read_context, &mut buffer)
+                    .is_pending());
+                drop(reader.take());
+            }
+            cancel.send_replace(true);
+            assert!(writing.0.load(Ordering::SeqCst) > 0);
+            assert!(
+                reading.0.load(Ordering::SeqCst) > 0,
+                "cancellation must wake the reader independently before either IO task polls again"
+            );
+            assert!(matches!(
+                Pin::new(&mut writer).poll_write(&mut write_context, &[2]),
+                Poll::Ready(Err(_))
+            ));
+            assert!(
             reading.0.load(Ordering::SeqCst) > 0,
             "the read task must also wake when the cancellation future last registered the writer"
         );
-        assert!(matches!(
-            Pin::new(&mut reader).poll_read(&mut read_context, &mut buffer),
-            Poll::Ready(Ok(()))
-        ));
-        assert!(buffer.filled().is_empty());
+            if let Some(mut reader) = reader.take() {
+                assert!(matches!(
+                    Pin::new(&mut reader).poll_read(&mut read_context, &mut buffer),
+                    Poll::Ready(Ok(()))
+                ));
+            }
+            assert!(buffer.filled().is_empty());
+        }
     }
     #[tokio::test]
     async fn oversized_header_is_rejected_before_exposing_length() {

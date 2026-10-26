@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Allow active host-local uploads to be cancelled from Attachments and the remote Files browser. New reservation defaults allow two pending/sending files, each up to 10 MiB (20 MiB total); unused reservations expire after 30 seconds, separately from the existing 30-second transfer deadline. Cancellation never deletes a remote pathname: a partial or completed new file may remain. Existing files remain protected against replacement.
+- Allow active host-local uploads to be cancelled from Attachments and the remote Files browser. New reservation defaults allow two occupied jobs (pending, sending or retiring), each up to 10 MiB (20 MiB total); unused reservations expire after 30 seconds, separately from the existing 30-second transfer deadline. Cancellation never deletes a remote pathname: a partial or completed new file may remain. Existing files remain protected against replacement.
 
 - Add metadata-only discovery of existing Grok ACP `updates.jsonl` candidates in the pinned source store layout, honoring literal nonempty `GROK_HOME` overrides. Selecting and opening a file remains explicit; record-stream, conversation-replay and live-binding restrictions are unchanged.
 

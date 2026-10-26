@@ -40,7 +40,8 @@ directory explicitly when deciding whether a remaining file should be kept.
 
 The transport observes cancellation independently of the SFTP library's outgoing
 queue, including a blocked initial handshake or write. Reader and writer tasks
-are both woken, and the capacity permit remains held until both IO halves retire.
+have independent cancellation subscriptions, and the capacity permit remains held
+until both IO halves retire. An exited reader cannot strand a blocked writer.
 An immediate new upload may therefore need to wait briefly for prior cleanup.
 
 Cargo fixtures cover bounded receipts, zero-byte files, exact-size/session checks,
