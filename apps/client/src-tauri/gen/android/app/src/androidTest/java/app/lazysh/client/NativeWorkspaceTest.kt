@@ -6,6 +6,10 @@ import android.content.Context
 import android.view.KeyEvent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.net.Uri
 import android.util.Base64
 import androidx.test.platform.app.InstrumentationRegistry
@@ -39,6 +43,10 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.regex.Pattern
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -342,6 +350,152 @@ class NativeWorkspaceTest {
         // through the actual UI before the ordinary native workspace suite.
         click("Reset preferences")
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
+    }
+
+    private class QrCameraObservation(private val rear: Set<String>) : CameraManager.AvailabilityCallback() {
+        private val available = mutableSetOf<String>()
+        private val opened = mutableSetOf<String>()
+        private var armed = false
+        val idle = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        @Synchronized override fun onCameraUnavailable(id: String) {
+            available.remove(id)
+            if (armed && id in rear) opened.add(id)
+        }
+        @Synchronized override fun onCameraAvailable(id: String) {
+            if (id in rear) available.add(id)
+            if (available.containsAll(rear)) idle.countDown()
+            if (armed && id in opened) released.countDown()
+        }
+        @Synchronized fun arm() {
+            assertTrue("Previous capture must release every rear camera before a new Scan", available.containsAll(rear))
+            armed = true
+        }
+        @Synchronized fun openedAny() = opened.isNotEmpty()
+    }
+
+    @Test fun qrCameraReleaseRequiresTheSuccessfulAttemptsOwnOpenAndClose() {
+        val first = QrCameraObservation(setOf("owned-rear"))
+        first.onCameraAvailable("owned-rear"); first.arm()
+        first.onCameraUnavailable("owned-rear"); first.onCameraAvailable("owned-rear")
+        assertEquals(0L, first.released.count)
+        val fresh = QrCameraObservation(setOf("owned-rear"))
+        fresh.onCameraAvailable("owned-rear"); fresh.arm()
+        first.onCameraAvailable("owned-rear") // A queued old callback cannot release fresh work.
+        assertTrue(!fresh.openedAny()); assertEquals(1L, fresh.released.count)
+        fresh.onCameraUnavailable("owned-rear"); first.onCameraAvailable("owned-rear")
+        assertTrue(fresh.openedAny()); assertEquals(1L, fresh.released.count)
+        fresh.onCameraAvailable("other-camera"); assertEquals(1L, fresh.released.count)
+        fresh.onCameraAvailable("owned-rear"); assertEquals(0L, fresh.released.count)
+    }
+
+    // Dedicated invocation with an owned emulator imagefile camera; no mocked frames or IPC.
+    @Test fun ownedQrCameraRequiresPermissionAndExplicitPreview() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        assertEquals("Camera permission must start ungranted", PackageManager.PERMISSION_DENIED,
+            context.checkSelfPermission(android.Manifest.permission.CAMERA))
+        val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val rear = camera.cameraIdList.filter { camera.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK }.toSet()
+        assertTrue("Owned rear imagefile camera must exist", rear.isNotEmpty())
+        val scenario = NativeActivityFixture.scenario
+        val observer = HandlerThread("owned-qr-camera-observer").apply { start() }
+        var observation: QrCameraObservation? = null
+        fun observe(): QrCameraObservation {
+            observation?.let { camera.unregisterAvailabilityCallback(it) }
+            val next = QrCameraObservation(rear); observation = next
+            camera.registerAvailabilityCallback(next, Handler(observer.looper))
+            assertTrue("Rear camera must be idle before explicit Scan", next.idle.await(5, TimeUnit.SECONDS))
+            next.arm()
+            return next
+        }
+        fun button(label: String) {
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$label']")).perform(webClick())
+        }
+        val preview = "Boolean(document.querySelector('.theme-preview'))"
+        val stopped = "document.querySelector('.theme-qr-panel video')?.srcObject===null"
+        val available = "Boolean(document.querySelector('.theme-qr-panel button') && !document.querySelector('.theme-qr-panel button').disabled)"
+        val draftSelector = "[aria-label='Theme JSON or share code']"
+        val draft = "manual owned QR draft stays literal"
+        var permissionController: String? = null
+        fun permission(id: String) {
+            val selector = permissionController?.let { By.res(it, id) }
+                ?: By.res(Pattern.compile("[a-zA-Z0-9_.]+:id/" + Pattern.quote(id)))
+            val device = UiDevice.getInstance(instrumentation)
+            assertTrue("Expected real owned camera permission choice: $id", device.wait(Until.hasObject(selector), 5_000))
+            val choices = device.findObjects(selector)
+            assertEquals("Permission choice must be unambiguous", 1, choices.size)
+            val target = choices.single()
+            val owner = requireNotNull(target.applicationPackage) { "Permission owner unavailable" }
+            val info = context.packageManager.getApplicationInfo(owner, 0)
+            assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
+            if (permissionController == null) permissionController = owner
+            assertEquals("Permission choices must retain the same system owner", permissionController, owner)
+            target.click()
+        }
+        var primary: Throwable? = null
+        var propagating = false
+        try {
+            var capture = observe()
+            awaitDocument(scenario, "QR workspace ready", "Boolean(document.querySelector('button[aria-label=Preferences]'))")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label=Preferences]")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
+            awaitDocument(scenario, "explicit QR controls", available)
+            typeInto(scenario, draftSelector, draft)
+            closeSoftKeyboard()
+            val saved = evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')")
+            button("Scan QR with camera")
+            permission("permission_deny_button")
+            awaitDocument(scenario, "QR denied camera settles", "$available && $stopped")
+            assertEquals("Denied choice must leave camera permission ungranted", PackageManager.PERMISSION_DENIED,
+                context.checkSelfPermission(android.Manifest.permission.CAMERA))
+            assertEquals("Denied camera must not preview", "false", evaluate(scenario, preview))
+            assertEquals("Denial keeps explicit image fallback available", "true", evaluate(scenario,
+                "Boolean(document.querySelector('.theme-qr-panel input[type=file]:not(:disabled)'))"))
+            assertTrue("Denied request must not open the camera", !capture.openedAny())
+            println("lazysh QR UI: real permission denied; fallback available")
+            // This is a new explicit user action, not revival of the denied attempt.
+            capture = observe()
+            button("Scan QR with camera")
+            permission("permission_allow_foreground_only_button")
+            assertEquals("Explicit Allow must grant camera permission", PackageManager.PERMISSION_GRANTED,
+                context.checkSelfPermission(android.Manifest.permission.CAMERA))
+            awaitDocument(scenario, "QR granted permission settles", "$preview || ($available && $stopped)")
+            if (evaluate(scenario, preview) != "true") {
+                // A real permission dialog can hide/stop the Activity. The original
+                // cancelled pipeline must stay cancelled; require fresh user intent.
+                assertEquals("Only a lifecycle-cancelled attempt may need fresh Scan", "true", evaluate(scenario,
+                    "Array.from(document.querySelectorAll('.theme-qr-panel [role=status]')).some(x=>x.textContent==='QR scan stopped.')"))
+                assertEquals("Interrupted permission must not publish a stale preview", "false", evaluate(scenario, preview))
+                println("lazysh QR UI: permission lifecycle cancelled; explicit fresh scan")
+                capture = observe()
+                button("Scan QR with camera")
+            }
+            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'")
+            assertEquals("QR preview must preserve the manual draft", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(draftSelector)})?.value===${JSONObject.quote(draft)}"))
+            assertTrue("QR preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
+            assertTrue("The actual rear camera must have opened", capture.openedAny())
+            awaitDocument(scenario, "QR video detached after decode", stopped)
+            assertTrue("Native rear camera must be released after decode", capture.released.await(5, TimeUnit.SECONDS))
+            button("Cancel preview")
+            awaitDocument(scenario, "QR explicit preview discarded", "!($preview) && $stopped && $available")
+            assertTrue("Discarded preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
+            println("lazysh QR UI: decoded preview discarded; camera released; draft unchanged")
+        } catch (failure: Throwable) { primary = failure; propagating = true; throw failure }
+        finally {
+            fun cleanup(action: () -> Unit) { try { action() } catch (failure: Throwable) {
+                if (primary == null) primary = failure else primary!!.addSuppressed(AssertionError("Owned QR cleanup also failed"))
+            } }
+            cleanup {
+                val device = UiDevice.getInstance(instrumentation)
+                permissionController?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close preferences']")).perform(webClick())
+            }
+            cleanup { observation?.let { camera.unregisterAvailabilityCallback(it) } }
+            cleanup { observer.quitSafely(); observer.join(5_000); assertTrue("Camera observer must retire", !observer.isAlive) }
+            if (!propagating && primary != null) throw primary!!
+        }
     }
 
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
