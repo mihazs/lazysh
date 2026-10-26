@@ -7,6 +7,10 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- The dictation-history opt-in checkbox uses bounded sizing and a wrapping label
+  instead of inheriting full-width text-input sizing, keeping history controls
+  within the panel at desktop and phone widths.
+
 - Visible file-size and repository validation errors now follow interface language
   changes, including history errors with local causes. Host diagnostics remain
   verbatim, and changing language does not refetch files or change selections.
@@ -26,6 +30,12 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   locks still fail closed. Separate SQLite contention failures remain under review.
 
 ### Added
+
+- Cloud dictation enrollment/quota settings and dictation history controls now
+  support English, Brazilian Portuguese and Spanish, including visible local
+  errors. Language changes preserve pending transcription, drafts and history
+  consent/entries. The main Voice engine/recording controls remain a follow-up;
+  defaults and native diagnostics are unchanged.
 
 - App language choices now also cover native lock screens and newly created
   biometric prompts on Android, iOS and macOS, including cold launch. Native

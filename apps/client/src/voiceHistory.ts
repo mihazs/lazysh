@@ -1,3 +1,4 @@
+import {t, useUi} from './i18n/core';
 import { useEffect, useRef, useState } from 'react';
 
 export const VOICE_HISTORY_DATABASE = 'lazysh-voice-history-v1';
@@ -95,11 +96,12 @@ export async function changeDictationHistory(action:Action): Promise<{history:Di
 }
 
 export function useDictationHistory() {
+  useUi();
   const [entries,setEntries]=useState<DictationEntry[]>([]);
   const [remember,setRememberState]=useState(false);
   const [ready,setReady]=useState(false);
   const [pending,setPending]=useState(false);
-  const [error,setError]=useState('');
+  const [error,setError]=useState<'' | 'historyLoadFailed' | 'historyChanged' | 'historyEnableFailed' | 'historyDisableFailed' | 'historyInvalidText' | 'historyTooLarge' | 'historySaveFailed' | 'historyDeleteFailed'>('');
   const current=useRef<DictationEntry[]>([]);
   const saved=useRef(empty());
   const revision=useRef(0);
@@ -121,7 +123,7 @@ export function useDictationHistory() {
       if(!mounted.current || version!==revision.current || running.current)return;
       if(saved.current.epoch!==history.epoch){revision.current++;if(!history.remember && saved.current.remember)update([]);}
       adopt(history);
-    }catch{if(mounted.current && version===revision.current)setError('Saved dictation history could not be loaded. Clear history to remove its stored copy.');}
+    }catch{if(mounted.current && version===revision.current)setError('historyLoadFailed');}
     finally{if(mounted.current)setReady(true);}
   }
   async function setRemember(value:boolean){
@@ -132,25 +134,25 @@ export function useDictationHistory() {
     try{
       const {history,accepted}=await changeDictationHistory({type:'remember',value,epoch:saved.current.epoch,entries:current.current});
       if(!mounted.current)return;
-      if(!accepted){adopt(history);setError('Saved history changed in another view. Review the current setting before enabling Remember.');return;}
+      if(!accepted){adopt(history);setError('historyChanged');return;}
       erasePending.current=false;adopt(history);setError('');notify();
-    }catch{if(mounted.current)setError(value?'Could not enable saved history. Current-view history is unchanged.':'Remember is off for this view, but saved history could not be deleted. Retry Delete or Clear history before closing.');}
+    }catch{if(mounted.current)setError(value?'historyEnableFailed':'historyDisableFailed');}
     finally{running.current=false;if(mounted.current)setPending(false);}
   }
   function capture():HistoryCapture{return {revision:revision.current,epoch:saved.current.epoch,remember:saved.current.remember && !erasePending.current,createdAt:Date.now()};}
   async function add(text:string,captured:HistoryCapture){
     if(!mounted.current || captured.revision!==revision.current || !text.trim())return;
-    if(!validText(text)){setError('This text cannot be kept in dictation history. Your draft is unchanged.');return;}
+    if(!validText(text)){setError('historyInvalidText');return;}
     const entry={id:crypto.randomUUID(),text,createdAt:captured.createdAt};
     const next=boundDictationHistory([entry,...current.current],captured.remember);
-    if(!next.some(item=>item.id===entry.id)){setError('This dictation exceeds the history storage limit. Your draft is unchanged.');return;}
+    if(!next.some(item=>item.id===entry.id)){setError('historyTooLarge');return;}
     if(!captured.remember){update(next);return;}
     try{
       const {history,accepted}=await changeDictationHistory({type:'add',epoch:captured.epoch,entry,isCurrent:()=>mounted.current && captured.revision===revision.current});
       if(!mounted.current || captured.revision!==revision.current)return;
       if(!accepted){revision.current++;saved.current=history;setRememberState(history.remember);update(history.entries);return;}
       adopt(history);setError('');notify();
-    }catch{if(mounted.current && captured.revision===revision.current){update(next);setError('This dictation could not be saved on the device. It is available only in this view.');}}
+    }catch{if(mounted.current && captured.revision===revision.current){update(next);setError('historySaveFailed');}}
   }
   async function destroy(id?:string){
     if(running.current)return;
@@ -161,7 +163,7 @@ export function useDictationHistory() {
       const {history}=await changeDictationHistory({type:id?'remove':'clear',id,disable:erasePending.current});
       if(!mounted.current)return;
       erasePending.current=false;adopt(history);if(!history.remember)update(next);setError('');notify();
-    }catch{if(mounted.current){if(!saved.current.remember && !erasePending.current)update(next);setError('Saved history could not be deleted. Retry Delete or Clear history to remove its stored copy.');}}
+    }catch{if(mounted.current){if(!saved.current.remember && !erasePending.current)update(next);setError('historyDeleteFailed');}}
     finally{running.current=false;if(mounted.current)setPending(false);}
   }
   useEffect(()=>{
@@ -179,5 +181,5 @@ export function useDictationHistory() {
     document.addEventListener('visibilitychange',visible);
     return()=>{mounted.current=false;revision.current++;clearInterval(timer);channel.current?.close();channel.current=undefined;document.removeEventListener('visibilitychange',visible);};
   },[]);
-  return {entries,remember,ready,pending,error,capture,add,setRemember,invalidate:()=>{revision.current++;},remove:(id:string)=>destroy(id),clear:()=>destroy()};
+  return {entries,remember,ready,pending,error:error?t(error):'',capture,add,setRemember,invalidate:()=>{revision.current++;},remove:(id:string)=>destroy(id),clear:()=>destroy()};
 }
