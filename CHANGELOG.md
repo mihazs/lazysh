@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep retained recorded-usage validation, transcript discovery and continuity errors in the current interface language without repeating requests. Raw host diagnostics, parser rules, metrics and defaults are unchanged.
+
 - Prepare automatic version and package-changelog pull requests with Changesets, keeping private Bun, Cargo and Tauri product versions together. About labels read the client build version. Existing root changelog history is retained. Publishing, tags and application-store release defaults remain disabled; GitHub PR creation and default-token CI approval require explicit repository setup.
 
 - Extend explicit recorded PNG/JPEG previews to Codex user data-URL images in Records. Selecting Codex from a conversation view establishes Records and requires fresh image opt-in; file references and other media stay inert. Defaults, legacy output, paging and transcript bytes are unchanged.
