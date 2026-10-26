@@ -1,3 +1,4 @@
+import {LocalUiError} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect } from "react";
 
@@ -44,7 +45,7 @@ export function useDeviceStream(
           if (packet.error) throw packet.error;
           if (packet.idle === true) {
             if (packet.sequence !== sequence || packet.frame)
-              throw new Error("Invalid idle device packet.");
+              throw new LocalUiError('devicesInvalidIdle');
             continue;
           }
           if (
@@ -52,7 +53,7 @@ export function useDeviceStream(
             packet.sequence <= sequence ||
             !packet.frame
           )
-            throw new Error("Invalid device stream sequence.");
+            throw new LocalUiError('devicesInvalidSequence');
           sequence = packet.sequence;
           onFrame(packet.frame);
         }

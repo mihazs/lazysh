@@ -7,17 +7,7 @@ import DevicePanel, { framePoint, parseFrame } from "./DevicePanel";
 vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
 afterEach(cleanupNativeMocks);
 
-const frame = {
-  schemaVersion: 1,
-  platform: "android",
-  id: "emulator-5554",
-  mime: "image/jpeg",
-  base64: "/9j/2Q==",
-  width: 1080,
-  height: 1920,
-  imageWidth: 540,
-  imageHeight: 960,
-};
+import {deviceFrame as frame} from './test/deviceData';
 it("bounds frame content and maps displayed coordinates to original device pixels", () => {
   expect(parseFrame(frame)).toEqual(frame);
   for (const value of [
