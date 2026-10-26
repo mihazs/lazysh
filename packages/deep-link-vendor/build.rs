@@ -4,73 +4,12 @@
 
 #[path = "src/config.rs"]
 mod config;
-use config::{AssociatedDomain, Config};
+#[path = "src/manifest.rs"]
+mod manifest;
+use config::Config;
+use manifest::intent_filter;
 
 const COMMANDS: &[&str] = &["get_current", "register", "unregister", "is_registered"];
-
-// TODO: Consider using activity-alias in case users may have multiple activities in their app.
-fn intent_filter(domain: &AssociatedDomain) -> String {
-    let host = domain
-        .host
-        .as_ref()
-        .map(|h| format!(r#"<data android:host="{h}" />"#))
-        .unwrap_or_default();
-
-    let auto_verify = if domain.is_app_link() {
-        r#"android:autoVerify="true" "#.to_string()
-    } else {
-        String::new()
-    };
-
-    format!(
-        r#"<intent-filter {auto_verify}>
-    <action android:name="android.intent.action.VIEW" />
-    <!-- ChromeOS ARC++ uses a different action for deep links -->
-    <action android:name="org.chromium.arc.intent.action.VIEW" />
-    <category android:name="android.intent.category.DEFAULT" />
-    <category android:name="android.intent.category.BROWSABLE" />
-    {schemes}
-    {host}
-    {domains}
-    {path_patterns}
-    {path_prefixes}
-    {path_suffixes}
-</intent-filter>"#,
-        schemes = domain
-            .scheme
-            .iter()
-            .map(|scheme| format!(r#"<data android:scheme="{scheme}" />"#))
-            .collect::<Vec<_>>()
-            .join("\n    "),
-        host = host,
-        domains = domain
-            .path
-            .iter()
-            .map(|path| format!(r#"<data android:path="{path}" />"#))
-            .collect::<Vec<_>>()
-            .join("\n    "),
-        path_patterns = domain
-            .path_pattern
-            .iter()
-            .map(|pattern| format!(r#"<data android:pathPattern="{pattern}" />"#))
-            .collect::<Vec<_>>()
-            .join("\n    "),
-        path_prefixes = domain
-            .path_prefix
-            .iter()
-            .map(|prefix| format!(r#"<data android:pathPrefix="{prefix}" />"#))
-            .collect::<Vec<_>>()
-            .join("\n    "),
-        path_suffixes = domain
-            .path_suffix
-            .iter()
-            .map(|suffix| format!(r#"<data android:pathSuffix="{suffix}" />"#))
-            .collect::<Vec<_>>()
-            .join("\n    "),
-    )
-    .trim()
-    .to_string()
-}
 
 fn main() {
     let result = tauri_plugin::Builder::new(COMMANDS)
