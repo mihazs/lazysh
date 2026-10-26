@@ -1046,6 +1046,12 @@ const translations = {
   devicesIosDimensions: ["O companion não informou dimensões verificadas em pontos do simulador.", "El companion no indicó dimensiones verificadas en puntos del simulador."],
   devicesInvalidIdle: ["Pacote ocioso do dispositivo inválido.", "Paquete inactivo del dispositivo no válido."],
   devicesInvalidSequence: ["Sequência do stream do dispositivo inválida.", "Secuencia del stream del dispositivo no válida."],
+  jumpLayout: ["Visualização do Ir para", "Vista de Ir a"],
+  jumpAccordion: ["Acordeão", "Acordeón"],
+  jumpGrid: ["Grade", "Cuadrícula"],
+  jumpCurrent: ["Atual", "Actual"],
+  jumpUnavailable: ["Ir para indisponível:", "Ir a no está disponible:"],
+  jumpHint: ["Ir para outro destino altera a sessão deste cliente e a janela atual da sessão de destino.", "Elegir un destino cambia la sesión de este cliente y la ventana actual de la sesión de destino."],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;

@@ -40,6 +40,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Localize tmux Jump To layouts, current-window markers, navigation guidance and
+  the unavailable prefix in English, Brazilian Portuguese and Spanish. Language
+  changes format displayed window indexes for the selected language and retain
+  native target IDs, pending requests and raw host diagnostics; defaults are unchanged.
+
 - Device discovery, screenshot/video controls and client-owned validation now
   support English, Brazilian Portuguese and Spanish. Interface changes preserve
   stream ownership, frame data, socket drafts and explicit device-input choices;
