@@ -21,6 +21,9 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .and_then(|_| file.sync_all())
         .map_err(|_| "Cannot persist private capability output")?;
+    sync_parent(path)
+}
+fn sync_parent(path: &Path) -> Result<(), String> {
     std::fs::File::open(
         path.parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -29,6 +32,14 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     .and_then(|f| f.sync_all())
     .map_err(|_| "Cannot persist capability directory".into())
 }
+fn sync_existing_envelope(path: &Path) -> Result<(), String> {
+    validate_output_parent(path)?;
+    lazysh_common::service_secrets::file(path, false)?
+        .sync_all()
+        .map_err(|_| "Cannot persist private capability output")?;
+    sync_parent(path)
+}
+
 pub fn keygen(path: &Path) -> Result<(), String> {
     write_private(path, secret().as_bytes())
 }
@@ -129,6 +140,7 @@ pub async fn resume_source(
     if cap.origin != base(origin)? {
         return Err("Capability origin mismatch".into());
     }
+    sync_existing_envelope(path)?;
     let status = admin_status(client, origin, admin).await?;
     if status.account_id != cap.account_id {
         return Err("Capability account mismatch".into());

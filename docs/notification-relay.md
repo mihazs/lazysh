@@ -37,7 +37,7 @@ lazysh-notifications source-create --origin https://relay.example \
   --output /private/relay-config/build-source
 ```
 
-The command first reads the account ID, creates and fsyncs a private recovery envelope, then provisions its UUID, public alias and capability hash. Only the public source ID is printed. A lost POST response does not require a second source: run `source-resume` with the **same** origin, admin file and `--capability-file` path. The server accepts only the same source UUID/hash/alias/account; conflicts and revoked IDs cannot be silently overwritten or revived. Copy the private source envelope to the intended publisher through your own secure channel. Never place capability contents in arguments, shell history or logs.
+The command first reads the account ID, creates and fsyncs a private recovery envelope, then provisions its UUID, public alias and capability hash. Only the public source ID is printed. A lost POST response does not require a second source: run `source-resume` with the **same** origin, admin file and `--capability-file` path. Resume revalidates the private output namespace and syncs the existing envelope and its directory before provisioning, without rewriting its bytes. The server accepts only the same source UUID/hash/alias/account; conflicts and revoked IDs cannot be silently overwritten or revived. Copy the private source envelope to the intended publisher through your own secure channel. Never place capability contents in arguments, shell history or logs.
 
 Explicitly enable the configured destination:
 

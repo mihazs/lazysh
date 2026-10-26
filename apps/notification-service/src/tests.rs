@@ -703,7 +703,20 @@ async fn recovery_envelope_survives_lost_tls_provision_ack_without_second_identi
     let destination = TlsReceiver::new(200, false).await;
     let directory = tempfile::tempdir().unwrap();
     let service = destination.service(directory.path());
-    let (router, committed) = support::hold_first_provision(service.router());
+    let provisions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = provisions.clone();
+    let router = service.router().layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let counter = counter.clone();
+            async move {
+                if request.uri().path() == "/v1/admin/sources" {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
+                next.run(request).await
+            }
+        },
+    ));
+    let (router, committed) = support::hold_first_provision(router);
     let tls = support::Server::new(router).await;
     let origin = tls.origin.clone();
     let ca = directory.path().join("relay-ca.pem");
@@ -743,6 +756,23 @@ async fn recovery_envelope_survives_lost_tls_provision_ack_without_second_identi
             .unwrap(),
         1
     );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let unsafe_ancestor = directory.path().join("unsafe");
+        let leaf = unsafe_ancestor.join("private-leaf");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let unsafe_cap = leaf.join("capability");
+        std::fs::copy(&envelope, &unsafe_cap).unwrap();
+        std::fs::set_permissions(&unsafe_ancestor, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let before = provisions.load(Ordering::SeqCst);
+        let error = client::resume_source(&client, &origin, ADMIN, &unsafe_cap)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Unsafe capability output namespace");
+        assert_eq!(provisions.load(Ordering::SeqCst), before);
+        assert_eq!(std::fs::read(&unsafe_cap).unwrap(), saved);
+    }
     assert!(
         client::resume_source(&client, "https://different.invalid", ADMIN, &envelope)
             .await
