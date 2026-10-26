@@ -10,6 +10,17 @@ Routing uses an SSH `direct-tcpip` channel to the destination address and port, 
 
 This implementation supports SSH routing. Bastion routes and selected-identity forwarding are SSH-terminal features. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
 
+## SSH identity interface language
+
+The identity generator/import inspector uses English, Brazilian Portuguese and
+Spanish for its controls, encrypted-key/passphrase explanation and local public-key
+clipboard failure. Changing interface language preserves focused private-key and
+passphrase drafts, pending generation/inspection and returned public metadata.
+It never generates, inspects, copies, selects or saves an identity automatically.
+Cryptographic identifiers, key bytes, fingerprints and native errors remain verbatim.
+The 12-byte UTF-8 generation requirement and explicit connection/OS-store actions
+are unchanged. The panel keeps keys in memory; localization does not add storage.
+
 ## Cold saved-host desktop launch
 
 With lazysh fully closed, run `lazysh --host SAVED_ID` (or `-host`, including

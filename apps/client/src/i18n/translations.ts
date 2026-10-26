@@ -1086,6 +1086,22 @@ const translations = {
   pushApnsHint: ["Desativar remove a associação APNs local deste aplicativo e seu token em memória. Isso não invalida um token globalmente nem revoga uma conta futura no servidor de entrega.", "Desactivar elimina la asociación APNs local de esta aplicación y su token en memoria. No invalida un token globalmente ni revoca una futura cuenta en un servidor de entrega."],
   pushPauseFailed: ["Não foi possível concluir a pausa do registro. Atualize o status e tente novamente quando estiver online.", "No se pudo completar la pausa del registro. Actualiza el estado y vuelve a intentarlo cuando tengas conexión."],
   pushOperationFailed: ["O registro nativo de push está indisponível ou a operação falhou. Atualize o status e tente novamente.", "El registro nativo de push no está disponible o la operación falló. Actualiza el estado y vuelve a intentarlo."],
+  credentialsRegion: ["Gerenciamento de chaves SSH", "Gestión de claves SSH"],
+  credentialsHeading: ["Identidades SSH", "Identidades SSH"],
+  credentialsHint: ["Gere uma identidade Ed25519 criptografada ou inspecione uma chave privada existente. Copie a chave pública para as chaves autorizadas do servidor.", "Genera una identidad Ed25519 cifrada o inspecciona una clave privada existente. Copia la clave pública a las claves autorizadas de tu servidor."],
+  credentialsSource: ["Origem da identidade", "Origen de la identidad"],
+  credentialsGenerateOption: ["Gerar Ed25519", "Generar Ed25519"],
+  credentialsImportOption: ["Importar chave privada", "Importar clave privada"],
+  credentialsPassphrase: ["Frase secreta da chave", "Frase de contraseña de la clave"],
+  credentialsPassphraseHint: ["Novas identidades exigem uma frase secreta de pelo menos 12 bytes.", "Las identidades nuevas requieren una frase de contraseña de al menos 12 bytes."],
+  credentialsPreparing: ["Preparando identidade…", "Preparando identidad…"],
+  credentialsGenerate: ["Gerar identidade criptografada", "Generar identidad cifrada"],
+  credentialsInspect: ["Inspecionar identidade", "Inspeccionar identidad"],
+  credentialsPublicKey: ["Chave pública", "Clave pública"],
+  credentialsCopyPublic: ["Copiar chave pública", "Copiar clave pública"],
+  credentialsUse: ["Usar na conexão", "Usar para la conexión"],
+  credentialsMemory: ["As chaves permanecem na memória aqui. Para usar o armazenamento de credenciais do sistema operacional, salve as credenciais do servidor no diálogo de conexão.", "Aquí las claves permanecen en la memoria. Para usar el almacén de credenciales del sistema operativo, guarda las credenciales del servidor en su diálogo de conexión."],
+  credentialsCopyFailed: ["Não foi possível copiar a chave pública. Selecione e copie manualmente.", "No se pudo copiar la clave pública. Selecciónala y cópiala manualmente."],
 } as const satisfies Record<keyof typeof english, readonly [string, string]>;
 
 type Catalog = Record<keyof typeof english, string>;

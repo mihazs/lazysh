@@ -59,6 +59,11 @@ identity; it never requests notification permission or registers/revokes a token
 by itself. Native status reasons, including empty text, and Apple APNs/Google
 Firebase names remain verbatim. Existing generic operation errors continue to
 hide provider diagnostics; native permission sheets remain outside this renderer.
+SSH identity generation/import controls, in-memory credential explanations and
+the local public-key clipboard error also use the catalogs. Language changes
+preserve focused key/passphrase drafts, pending request identity and raw public
+metadata/native diagnostics; they never generate, inspect, copy, select or save
+credentials. Private-key headers and cryptographic identifiers remain literal.
 This is a partial milestone under issue #79. Other feature panels still require
 their own localization and acceptance.
 Native lock-cover/biometric-reason resources on
@@ -196,6 +201,13 @@ Run the existing project tasks from `apps/client`:
 - `bun run test:e2e e2e/share-locales.spec.ts` checks Share in all three locales at
   desktop/phone widths, focused credential/file drafts, real sanitized thumbnail
   identity, cancellation followed by acceptance and explicit link copy/revocation.
+- `bun run test src/i18n/credentialsLocales.test.tsx src/CredentialsPanel.test.tsx`
+  checks the UTF-8 passphrase boundary, original protected arguments, held and stale
+  results, private-result visibility, raw errors and explicit clipboard/use actions.
+- `bun run test:e2e e2e/credentials-locales.spec.ts` checks all three locales at
+  desktop/phone widths, focused secret drafts, unchanged synthetic key material,
+  public-key copying, explicit use and retained clipboard errors. No real key
+  generation, native vault access or OS clipboard permission is exercised.
 - `bun run check` checks catalog keys and required interpolation arguments.
 - `bun run test src/i18n/pushLocales.test.tsx src/PushSettingsPanel.test.tsx`
   checks consent, held register/revoke, original access headers, one recovery read,

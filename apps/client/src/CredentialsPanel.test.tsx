@@ -6,7 +6,7 @@ import CredentialsPanel from './CredentialsPanel';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
-const info = { publicKey: 'ssh-ed25519 PUBLIC', fingerprint: 'SHA256:public', algorithm: 'ssh-ed25519' };
+import {identityInfo as info} from './test/identityData';
 
 it('requires a generation passphrase and exposes only the public identity before explicit use', async () => {
   const onUse = vi.fn();
