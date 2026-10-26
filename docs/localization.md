@@ -88,6 +88,12 @@ these causes when rendered, preserving drafts, modifiers, focus, existing raw-er
 formatting and exact dispatch bytes. Grammar, aliases, limits and stored bindings
 are unchanged; language changes do not save or replay input. This does not claim
 a complete audit of all retained messages elsewhere in the application.
+Theme import/share validation and retained manual/linked-theme notices also render
+in the current language, including literal invalid color-key data. Theme names,
+palettes and exported JSON/share-code/link bytes remain unchanged. Language changes
+preserve editable fallback names, previews, original linked receipts/access leases
+and held clipboard/read/acknowledgement operations; they do not apply, save, copy
+or acknowledge a theme by themselves.
 This is a partial milestone under issue #79. Other feature panels still require
 their own localization and acceptance.
 Native lock-cover/biometric-reason resources on

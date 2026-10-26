@@ -1,3 +1,4 @@
+import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -8,10 +9,10 @@ import { getPreferences, savePreferences } from './preferences';
 
 type Candidate = {receipt: string; code: string};
 export function themeCandidate(value: unknown): Candidate {
-  if (!value || typeof value !== 'object') throw new Error(t("themeLinkThemeLinkIsUnavailable"));
+  if (!value || typeof value !== 'object') throw new LocalUiError('themeLinkThemeLinkIsUnavailable');
   const p=value as Record<string,unknown>;
   if (typeof p.receipt!=='string' || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/.test(p.receipt)
-    || typeof p.code!=='string' || p.code.length>16384 || !/^lazysh-theme:[\w-]+$/.test(p.code)) throw new Error(t("themeLinkThemeLinkIsUnavailable"));
+    || typeof p.code!=='string' || p.code.length>16384 || !/^lazysh-theme:[\w-]+$/.test(p.code)) throw new LocalUiError('themeLinkThemeLinkIsUnavailable');
   return {receipt:p.receipt,code:p.code};
 }
 /** This separate surface never changes the manual import form or its unsaved draft. */
@@ -20,7 +21,7 @@ export default function ThemeLinkPanel({target}: {target?: HTMLElement|null}) {
   const lease=useRef(captureAccess()).current;
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const [pending,setPending]=useState(false),[candidate,setCandidate]=useState<Candidate>(),[preview,setPreview]=useState<ImportedTheme>();
-  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
+  const [error,setError]=useState<UiErrorCause>(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState<'applied'>();
   const mounted=useRef(true),running=useRef(false),statusRevision=useRef(0);
   // Every status path shares this sequence: a late acknowledgement refresh must
   // never overwrite a newer OS-event refresh for a replacement candidate.
@@ -41,7 +42,7 @@ export default function ThemeLinkPanel({target}: {target?: HTMLElement|null}) {
   },[refresh]);
   async function action(kind:'review'|'apply'|'cancel') {
     if(!mounted.current || !lease.current() || running.current)return;
-    running.current=true;setBusy(true);setError('');setNotice('');
+    running.current=true;setBusy(true);setError('');setNotice(undefined);
     let applied=false;
     try {
       if(kind==='review') {
@@ -50,21 +51,21 @@ export default function ThemeLinkPanel({target}: {target?: HTMLElement|null}) {
         if(value===null){setPending(false);return;}
         const next=themeCandidate(value);setCandidate(next);
         try {setPreview(parseThemeImport(next.code,{name:t("appLinkedTheme"),mode:'dark'}));}
-        catch {setError(t("themeLinkThisLinkDoesNotContainASupportedThemeDiscard"));}
+        catch {setError(new LocalUiError('themeLinkThisLinkDoesNotContainASupportedThemeDiscard'));}
       } else if(candidate) {
         if(kind==='apply' && preview) {
           // Persistence is synchronous under this mount's original current lease.
           // A committed acknowledgement may outlive its revoked IPC response.
           lease.assert();
           savePreferences({...getPreferences(),customTheme:preview.colors,customThemeInfo:{name:preview.name,mode:preview.mode},theme:'custom',appTheme:'custom'});
-          applied=true;setNotice(t("themeLinkLinkedThemeAppliedToAppAndTerminal"));
+          applied=true;setNotice('applied');
         }
         await invoke('theme_link_ack',{receipt:candidate.receipt});
         lease.assert();if(!mounted.current)return;
         setCandidate(undefined);setPreview(undefined);
         await refresh();
       }
-    } catch {if(mounted.current && lease.current())setError(applied?t("appTheLinkedThemeIsAlreadyAppliedButItsPending"):t("appThemeLinkCouldNotBeUpdatedYourCurrentTheme"));}
+    } catch {if(mounted.current && lease.current())setError(new LocalUiError(applied?'appTheLinkedThemeIsAlreadyAppliedButItsPending':'appThemeLinkCouldNotBeUpdatedYourCurrentTheme'));}
     finally {if(mounted.current && lease.current()){running.current=false;setBusy(false);}}
   }
   if(!pending && !candidate && !notice)return null;
@@ -75,7 +76,7 @@ export default function ThemeLinkPanel({target}: {target?: HTMLElement|null}) {
       {preview && <><p>{preview.mode==='light'?t("themeLight"):t("themeDark")}{" "}{t("themeThemeLazysh")}</p><pre style={{background:preview.colors.background,color:preview.colors.foreground}}>agent $ ready for review</pre><button type="button" disabled={busy} onClick={()=>void action('apply')}>{t("themeLinkApplyLinkedTheme")}</button></>}
       <button type="button" disabled={busy} onClick={()=>void action('cancel')}>{t("themeLinkDiscardThemeLink")}</button>
     </section>}
-    {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {error && <p role="alert">{uiErrorText(error)}</p>}{notice && <p role="status">{t('themeLinkLinkedThemeAppliedToAppAndTerminal')}</p>}
   </aside>;
   return target?createPortal(content,target):content;
 }
