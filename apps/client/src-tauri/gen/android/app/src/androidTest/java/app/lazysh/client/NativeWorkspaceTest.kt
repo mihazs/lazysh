@@ -21,17 +21,25 @@ import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView
 import androidx.test.espresso.action.ViewActions.pressKey
 import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.action.GeneralClickAction
+import androidx.test.espresso.action.Press
+import androidx.test.espresso.action.Tap
 import androidx.test.espresso.action.EspressoKey
 import androidx.test.espresso.matcher.ViewMatchers.withText
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.espresso.web.sugar.Web.onWebView
 import androidx.test.espresso.web.webdriver.DriverAtoms.findElement
 import androidx.test.espresso.web.webdriver.DriverAtoms.webClick
+import androidx.test.espresso.web.webdriver.DriverAtoms.webScrollIntoView
 import androidx.test.espresso.web.webdriver.Locator
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -373,10 +381,35 @@ class NativeWorkspaceTest {
         fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun selectSsh() {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role=dialog] select")).perform(webClick())
-            onView(withText("SSH")).perform(click())
+            val selector = "[role=dialog] select"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
+            // A DOM click atom does not activate Chromium's native select popup.
+            // Read only this control's viewport geometry, then inject one native tap.
+            val geometry = JSONArray(evaluate(scenario, """(() => {
+              const target=document.querySelector(${JSONObject.quote(selector)});
+              const r=target.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
+              return [x,y,innerWidth,innerHeight,r.width,r.height,document.elementFromPoint(x,y)===target];
+            })()"""))
+            val values = (0..5).map { geometry.getDouble(it) }
+            assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
+                values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
+                values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val origin = IntArray(2)
+                view.getLocationOnScreen(origin)
+                val scale = view.width.toDouble() / values[2]
+                val x = values[0] * scale
+                val y = values[1] * scale
+                assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
+                floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+            }, Press.FINGER))
+            val option = onView(withText("SSH")).inRoot(isDialog())
+            option.check(matches(isDisplayed()))
+            println("lazysh SSH UI: native transport chooser ready")
+            option.perform(click())
             assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
                 "document.querySelector('[role=dialog] select')?.value==='ssh'"))
+            println("lazysh SSH UI: native transport selected")
         }
         var primaryFailure: Throwable? = null
         try {
