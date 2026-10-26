@@ -67,6 +67,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/theme-links"
         }
     }
+    if (providers.gradleProperty("lazyshSshAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/ssh-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ui"
+        }
+    }
     buildFeatures {
         buildConfig = true
     }

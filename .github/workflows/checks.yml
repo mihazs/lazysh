@@ -194,7 +194,7 @@ jobs:
         with:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
+        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment
@@ -255,7 +255,7 @@ jobs:
             > "$diagnostic_dir/system-anr.txt" 2> "$diagnostic_dir/collector-errors.txt" &
             collector_pid=$!;
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
-            bun run test:android-mosh && bun run test:android &&
+            bun run test:android-mosh && bun run test:android-ssh &&
             LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture;
             exit $?;
             '
