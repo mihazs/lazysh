@@ -1,5 +1,5 @@
 import {t, useUi, formatNumber} from './i18n/core';
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AppIconPanel from "./AppIconPanel";
 import {useMountedAccess} from './access';
 import {applyPreferenceIntent, nativeLocale, useNativeLocale} from './i18n/nativeLocale';
@@ -18,6 +18,8 @@ export default function PreferencesPanel() {
   const fonts = useDeviceFonts();
   const [fontBusy, setFontBusy] = useState(false);
   const [error, setError] = useState("");
+  const [languageError, setLanguageError] = useState(false);
+  useEffect(()=>{if(locale.phase==='ready')setLanguageError(false);},[locale.phase]);
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
   const [chordLabel, setChordLabel] = useState("");
@@ -31,8 +33,8 @@ export default function PreferencesPanel() {
     catch { setError(t("preferencesSettingsCouldNotBeSavedOnThisDevice")); return false; }
   }
   async function languageAction(action:()=>Promise<void>) {
-    try {await action();if(current())setError('');}
-    catch {if(current())setError(t('nativeLocaleSaveFailed'));}
+    try {await action();if(current())setLanguageError(false);}
+    catch {if(current())setLanguageError(true);}
   }
   function move(item: ToolbarKey, delta: number) {
     const toolbar = [...preferences.toolbar];
@@ -51,6 +53,7 @@ export default function PreferencesPanel() {
     <h2>{t("preferencesTerminalPreferences")}</h2>
     <p>{t("preferencesChangesApplyToEveryOpenTerminal")}</p>
     {error && <p role="alert">{error}</p>}
+    {languageError && <p role="alert">{t('nativeLocaleSaveFailed')}</p>}
     <label>{t('language')}<select disabled={languageBusy} value={preferences.uiLanguage} onChange={event => void languageAction(()=>nativeLocale.change(event.target.value as Preferences['uiLanguage'],current))}>
       <option value="system">{t('languageSystem')}</option><option value="en">{t('languageEnglish')}</option>
       <option value="pt-BR">{t('languagePortugueseBrazil')}</option><option value="es">{t('languageSpanish')}</option>
