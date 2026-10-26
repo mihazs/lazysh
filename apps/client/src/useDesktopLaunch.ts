@@ -1,30 +1,55 @@
 import {useEffect, useMemo, useRef} from 'react';
 import {listen} from '@tauri-apps/api/event';
-import {bindProtectedInvoke, captureAccess, isAccessReady, subscribeAccess} from './access';
+import {bindProtectedInvoke, captureAccess, isAccessReady, subscribeAccess, type AccessLease} from './access';
+import type {Host} from './bridge';
 import {captureUiError, LocalUiError, type UiErrorCause} from './i18n/localError';
 
-type Snapshot = {directoryReceipt:string|null; notice:{receipt:string}|null};
-/** Interpret native codes only at the directory-launch operation boundary. */
+type Snapshot = {directoryReceipt:string|null; hostReceipt?:string|null; notice:{receipt:string}|null};
+export type DesktopHostLaunch = Readonly<{receipt:string;lease:AccessLease;hosts:readonly Host[]}>;
+/** Only a native launch await may brand these finite failures. */
+export function ownedLaunchError(error:unknown):LocalUiError|undefined {
+  const code=typeof error==='string' ? error : error && typeof error==='object' && 'kind' in error ? error.kind : undefined;
+  const key=code === 'LOCAL_LAUNCH_UNAVAILABLE' ? 'desktopLaunchUnavailable'
+    : code === 'LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED' ? 'desktopLaunchWindowsUnsupported'
+    : code === 'HOST_LAUNCH_MISSING' ? 'desktopLaunchHostMissing'
+    : code === 'HOST_LAUNCH_AMBIGUOUS' ? 'desktopLaunchHostAmbiguous'
+    : code === 'HOST_LAUNCH_CHANGED' ? 'desktopLaunchHostChanged'
+    : code === 'HOST_LAUNCH_BUSY' ? 'desktopLaunchHostBusy'
+    : code === 'HOST_LAUNCH_INVALID' ? 'desktopLaunchHostInvalid' : undefined;
+  return key ? new LocalUiError(key) : undefined;
+}
 export function captureLaunchError(error:unknown):UiErrorCause {
-  return error === 'LOCAL_LAUNCH_UNAVAILABLE' ? new LocalUiError('desktopLaunchUnavailable')
-    : error === 'LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED' ? new LocalUiError('desktopLaunchWindowsUnsupported') : captureUiError(error);
+  return ownedLaunchError(error) ?? captureUiError(error);
 }
 function snapshot(value:unknown):Snapshot {
   const uuid=(value:unknown)=>typeof value==='string' && /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/.test(value);
   if(!value || typeof value!=='object')throw new LocalUiError('desktopLaunchUnavailable');
   const state=value as Snapshot;
   if(!(state.directoryReceipt===null || uuid(state.directoryReceipt))
+    || !(state.hostReceipt==null || uuid(state.hostReceipt))
+    || !!(state.directoryReceipt && state.hostReceipt)
     || !(state.notice===null || (typeof state.notice==='object' && uuid(state.notice.receipt))))throw new LocalUiError('desktopLaunchUnavailable');
   return state;
 }
 
+function preparedHosts(value:unknown):readonly Host[] {
+  if(!value || typeof value!=='object' || !('hosts' in value) || !Array.isArray(value.hosts)
+    || value.hosts.length<1 || value.hosts.length>2)throw new LocalUiError('desktopLaunchHostInvalid');
+  const hosts=value.hosts as Host[];
+  if(hosts.some(host=>!host || typeof host!=='object' || ['id','name','hostname','username'].some(key=>typeof host[key as keyof Host]!=='string')
+    || !host.id || new TextEncoder().encode(host.id).length>100 || /[\x00-\x1f\x7f-\x9f]/.test(host.id)
+    || !Number.isInteger(host.port) || host.port<1 || host.port>65535)
+    || (hosts[0].jumpHostId ? hosts.length!==2 || hosts[1].id!==hosts[0].jumpHostId : hosts.length!==1))throw new LocalUiError('desktopLaunchHostInvalid');
+  return Object.freeze(hosts.map(host=>Object.freeze({...host})));
+}
+
 /** A locked or replaced mount cannot start an initial intent or show old errors. */
 export function useDesktopLaunch(native:boolean, available:boolean, busy:boolean,
-  open:(receipt:string)=>Promise<void>, notice:(message:UiErrorCause)=>void) {
+  open:(receipt:string)=>Promise<void>, notice:(message:UiErrorCause)=>void, openHost?:(launch:DesktopHostLaunch)=>Promise<void>) {
   const lease=useRef(captureAccess()).current;
   const attempted=useRef(false);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
-  const callbacks=useRef({open,notice}); callbacks.current={open,notice};
+  const callbacks=useRef({open,notice,openHost}); callbacks.current={open,notice,openHost};
   useEffect(()=>{
     if(!native || !available || busy)return;
     let alive=true, running=false, dirty=false, stopEvent:(()=>void)|undefined;
@@ -41,6 +66,13 @@ export function useDesktopLaunch(native:boolean, available:boolean, busy:boolean
           if(value.directoryReceipt && !attempted.current) {
             attempted.current=true;
             await callbacks.current.open(value.directoryReceipt);
+          }
+          if(value.hostReceipt && !attempted.current) {
+            attempted.current=true;
+            const hosts=preparedHosts(await invoke<unknown>('desktop_launch_prepare_host',{receipt:value.hostReceipt}).catch(error=>{throw captureLaunchError(error);}));
+            if(!current())return;
+            if(!callbacks.current.openHost)throw new LocalUiError('desktopLaunchHostInvalid');
+            await callbacks.current.openHost(Object.freeze({receipt:value.hostReceipt,lease,hosts}));
           }
           if(value.notice && current()) {
             callbacks.current.notice(new LocalUiError('desktopLaunchWarmUnsupported'));

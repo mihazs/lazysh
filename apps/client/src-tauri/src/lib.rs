@@ -108,6 +108,8 @@ pub fn run() {
                 local::local_capability,
                 desktop_launch::desktop_launch_read,
                 desktop_launch::desktop_launch_ack,
+                desktop_launch::desktop_launch_prepare_host,
+                desktop_launch::desktop_launch_cancel,
                 local::local_connect,
                 local::local_write,
                 local::local_resize,

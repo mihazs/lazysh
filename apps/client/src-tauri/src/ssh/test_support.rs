@@ -60,3 +60,29 @@ pub(crate) fn replacement_lease(access: &AccessState) -> AccessLease {
         .lease(access.status().unwrap().nonce.as_deref())
         .unwrap()
 }
+
+pub(crate) fn host_offer(
+    id: &str,
+    access: &AccessLease,
+) -> (crate::desktop_launch::LaunchState, String) {
+    use crate::desktop_launch::{LaunchState, LaunchTarget};
+    let launch = LaunchState::new(Some(LaunchTarget::Host(id.into())));
+    let receipt = launch.read(access).unwrap().host_receipt.unwrap();
+    (launch, receipt)
+}
+
+pub(crate) fn prepared_host_offer(
+    state: &AppState,
+    host_id: &str,
+) -> (
+    AccessState,
+    AccessLease,
+    crate::desktop_launch::LaunchState,
+    String,
+) {
+    let access = unlocked_access();
+    let lease = ready_lease(&access);
+    let (launch, receipt) = host_offer(host_id, &lease);
+    launch.prepare_host(state, &receipt, &lease).unwrap();
+    (access, lease, launch, receipt)
+}

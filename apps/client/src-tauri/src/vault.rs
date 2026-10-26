@@ -103,15 +103,16 @@ fn encode(host: &Host, credentials: &Credentials) -> Result<Zeroizing<String>, S
 
 fn decode(host: &Host, value: &str) -> Result<Credentials, String> {
     let stored: Stored = serde_json::from_str(value).map_err(|_| "Invalid saved credentials")?;
-    if stored.version != 1
-        || stored.hostname != host.hostname
-        || stored.port != host.port
-        || stored.username != host.username
-        || host.fingerprint.as_deref() != Some(&stored.fingerprint)
-        || host.jump_host_id != stored.jump_host_id
-        || host.forward_agent != stored.forward_agent
-        || host.biometric_unlock != stored.biometric_unlock
-    {
+    let binding: crate::ssh::CredentialBinding<'_> = (
+        &stored.hostname,
+        stored.port,
+        &stored.username,
+        Some(&stored.fingerprint),
+        stored.jump_host_id.as_deref(),
+        stored.forward_agent,
+        stored.biometric_unlock,
+    );
+    if stored.version != 1 || host.credential_binding() != binding {
         return Err(
             "Host identity changed. Forget the old credentials and enter them again.".into(),
         );
