@@ -95,6 +95,9 @@ enum Command {
         path: std::path::PathBuf,
         #[arg(long)]
         checkpoint: Option<String>,
+        /// Require a source-bound consistency receipt (Grok Records only).
+        #[arg(long)]
+        checkpointed: bool,
         #[arg(long)]
         session_id: Option<String>,
         #[arg(long, default_value_t = 0)]
@@ -229,12 +232,21 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             agent,
             path,
             checkpoint,
+            checkpointed,
             session_id,
             offset,
             limit,
             view,
         } => {
-            if checkpoint.is_some()
+            if checkpointed
+                && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
+                    || !matches!(view, lazysh_agent::transcript::TranscriptView::Records)
+                    || session_id.is_some())
+            {
+                return Err(Error::InvalidArgument);
+            }
+            if !checkpointed
+                && checkpoint.is_some()
                 && !matches!(
                     agent,
                     lazysh_agent::transcript::TranscriptAgent::AntigravityJsonl
@@ -244,6 +256,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
             Some(
                 serde_json::to_value(match view {
+                    lazysh_agent::transcript::TranscriptView::Records if checkpointed => {
+                        lazysh_agent::transcript::read_checkpointed_grok(
+                            &path,
+                            offset,
+                            limit,
+                            checkpoint.as_deref(),
+                        )?
+                    }
                     lazysh_agent::transcript::TranscriptView::Records => match agent {
                         lazysh_agent::transcript::TranscriptAgent::Hermes
                         | lazysh_agent::transcript::TranscriptAgent::Opencode => {
