@@ -20,6 +20,8 @@
     "Cargo.lock",
     "packages/parakeet-runtime/licenses/**",
     "packages/deep-link-vendor/tests/xdg_commands.rs",
-    "packages/deep-link-vendor/tests/xdg_unregister.rs"
+    "packages/deep-link-vendor/tests/xdg_unregister.rs",
+    "packages/display-idle/android/build/**",
+    "packages/display-idle/android/.tauri/**"
   ]
 }
