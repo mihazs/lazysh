@@ -31,13 +31,14 @@ it('admits returned image bytes only in supported recorded image contexts and re
   const block={type:'image',text:'Image attachment',imagePreview};
   const response={...page,agent:'grok-acp',view:'record_stream',messages:[{...message,blocks:[block]}]};
   expect(parseTranscript(response)).toEqual(response);
-  for(const view of ['record_stream','active_branch']) {
-    const claude={...response,agent:'claude',view,messages:[{...message,role:'user',blocks:[block]}]};
-    expect(parseTranscript(claude)).toEqual(claude);
-    for(const role of ['assistant','tool'])expect(()=>parseTranscript({...claude,messages:[{...message,role,blocks:[block]}]})).toThrow('Invalid recorded-image preview response.');
+  for(const [agent,view] of [['claude','record_stream'],['claude','active_branch'],['codex','record_stream']]) {
+    const recorded={...response,agent,view,messages:[{...message,role:'user',blocks:[block]}]};
+    expect(parseTranscript(recorded)).toEqual(recorded);
+    for(const role of ['assistant','tool'])expect(()=>parseTranscript({...recorded,messages:[{...message,role,blocks:[block]}]})).toThrow('Invalid recorded-image preview response.');
   }
   for(const invalid of [
     {...response,agent:'claude'}, {...response,view:'active_branch'},
+    {...response,agent:'codex',view:'active_branch',messages:[{...message,role:'user',blocks:[block]}]},
     {...response,messages:[{...message,role:'tool',blocks:[block]}]},
     ...[{...block,type:'text'},{...block,id:'tool-call'},{...block,status:'completed'},
       {...block,imagePreview:{...imagePreview,width:16,height:32}}].map(value=>({...response,messages:[{...message,blocks:[value]}]})),

@@ -14,6 +14,18 @@ pub(super) fn admit(content: &Value) -> Option<Value> {
     admit_base64(content["mimeType"].as_str()?, content["data"].as_str()?)
 }
 
+pub(super) fn admit_data_url(url: &str) -> Option<Value> {
+    [
+        ("data:image/png;base64,", "image/png"),
+        ("data:image/jpeg;base64,", "image/jpeg"),
+    ]
+    .into_iter()
+    .find_map(|(prefix, mime)| {
+        url.strip_prefix(prefix)
+            .and_then(|data| admit_base64(mime, data))
+    })
+}
+
 pub(super) fn admit_base64(mime: &str, data: &str) -> Option<Value> {
     if data.is_empty() || data.len() > MAX_ENCODED {
         return None;

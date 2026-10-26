@@ -1,17 +1,4 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use lazysh_agent::transcript::{
-    claude_conversation_images, conversation, read_inline_images, read_page, TranscriptAgent,
-};
-use serde_json::{json, Value};
-use std::{fs, process::Command};
-
-#[path = "support/jsonl.rs"]
-mod jsonl;
-#[path = "support/recorded_image.rs"]
-mod recorded_image;
-const PNG: &[u8] = include_bytes!("../../client/e2e/fixtures/recorded-images/regions.png");
-const JPEG: &[u8] =
-    include_bytes!("../../client/e2e/fixtures/recorded-images/regions-orientation6.jpg");
+use super::*;
 
 fn image(bytes: &[u8], mime: &str) -> Value {
     json!({"type":"image","source":{"type":"base64","media_type":mime,"data":STANDARD.encode(bytes)}})
@@ -186,14 +173,7 @@ fn cli_opts_in_for_claude_without_allowing_checkpoint_or_selector_combinations()
         &path,
         &[message("user", None, "user", vec![image(PNG, "image/png")])],
     );
-    let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
-            .args(["transcript", "--agent", "claude", "--path"])
-            .arg(&path)
-            .args(args)
-            .output()
-            .unwrap()
-    };
+    let run = |args: &[&str]| recorded_image::transcript("claude", &path, args);
     for view in ["records", "conversation"] {
         let result = run(&["--view", view, "--inline-images"]);
         assert!(
@@ -216,11 +196,7 @@ fn cli_opts_in_for_claude_without_allowing_checkpoint_or_selector_combinations()
         vec!["--session-id", "other"],
         vec!["--view", "conversation", "--offset", "1"],
     ] {
-        let mut args = vec!["--inline-images"];
-        args.extend(extra);
-        let result = run(&args);
-        assert!(!result.status.success());
-        assert!(result.stdout.is_empty());
+        recorded_image::assert_rejected("claude", &path, &extra);
     }
 }
 
@@ -243,23 +219,7 @@ fn both_views_charge_image_bytes_to_the_existing_output_budget() {
         })
         .collect();
     jsonl::write(&path, &records);
-    let mut offset = 0;
-    let mut returned = Vec::new();
-    loop {
-        let page =
-            read_inline_images(&path, TranscriptAgent::Claude, offset, 100, false, None).unwrap();
-        assert!(page.next_offset > offset);
-        recorded_image::assert_image_page(&page.messages);
-        returned.extend(
-            page.messages
-                .iter()
-                .map(|row| row["id"].as_str().unwrap().to_owned()),
-        );
-        offset = page.next_offset;
-        if !page.has_more {
-            break;
-        }
-    }
+    let (returned, offset) = recorded_image::collect_image_ids(&path, TranscriptAgent::Claude);
     assert_eq!(returned, ids);
     assert_eq!(offset, fs::metadata(&path).unwrap().len());
     let branch = claude_conversation_images(&path, 100).unwrap();
