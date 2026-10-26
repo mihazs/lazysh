@@ -36,9 +36,7 @@ pub(super) fn normalize(record: &Value, offset: u64) -> Option<Value> {
     if params["sessionId"].as_str()?.is_empty() {
         return None;
     }
-    let seconds = i64::try_from(record["timestamp"].as_u64()?).ok()?;
-    let timestamp = chrono::DateTime::from_timestamp(seconds, 0)?
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let timestamp = recorded_timestamp(record)?;
     let update = params.get("update")?;
     let tag = update["sessionUpdate"].as_str()?;
     let (role, blocks) = if method == "session/update" {
@@ -120,13 +118,13 @@ fn content(value: &Value, kind: &str) -> Option<Value> {
 }
 
 // Preserve explicit recorded values only; missing/unknown is not a live state.
-fn recorded_status(update: &Value) -> Option<&str> {
+pub(super) fn recorded_status(update: &Value) -> Option<&str> {
     update["status"]
         .as_str()
         .filter(|status| matches!(*status, "pending" | "in_progress" | "completed" | "failed"))
 }
 
-fn tool_output(update: &Value, id: &str, status_only_card: bool) -> Vec<Value> {
+pub(super) fn tool_output(update: &Value, id: &str, status_only_card: bool) -> Vec<Value> {
     let mut parts: Vec<Value> = update["content"]
         .as_array()
         .into_iter()
@@ -209,4 +207,12 @@ fn plan(update: &Value) -> Option<String> {
         ));
     }
     Some(lines.join("\n"))
+}
+
+pub(super) fn recorded_timestamp(record: &Value) -> Option<String> {
+    let seconds = i64::try_from(record["timestamp"].as_u64()?).ok()?;
+    Some(
+        chrono::DateTime::from_timestamp(seconds, 0)?
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
 }
