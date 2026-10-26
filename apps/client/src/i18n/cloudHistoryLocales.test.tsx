@@ -7,7 +7,7 @@ import CloudVoiceSettingsPanel from '../CloudVoiceSettingsPanel';
 import VoiceHistoryPanel from '../VoiceHistoryPanel';
 import VoicePanel from '../VoicePanel';
 import {useDictationHistory} from '../voiceHistory';
-import {cloudSnapshot} from '../test/cloudVoiceData';
+import {cloudSnapshot,configuredCloudReply} from '../test/cloudVoiceData';
 import {installSpeechCapture} from '../test/speechCapture';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../access';
 import {t,uiI18n} from './core';
@@ -85,21 +85,18 @@ it('retranslates history errors while retaining capture revision, exact text, en
 it('locale subscriptions do not cancel or replace an active Cloud transcription, draft or original session lease',async()=>{
   const value=cloudSnapshot(),id='12345678-1234-4234-8234-123456789abc';let complete!:(value:unknown)=>void;
   vi.mocked(invoke).mockImplementation(async command=>{
-    if(command==='voice_models'||command==='voice_model_catalog')return [];
-    if(command==='voice_cloud_status')return {configured:true,origin:value.origin};
-    if(command==='voice_cloud_refresh')return value;
     if(command==='voice_cloud_begin')return id;
     if(command==='voice_cloud_transcribe')return new Promise(resolve=>{complete=resolve;});
-    return undefined;
+    return configuredCloudReply(command,value);
   });
   const microphone=installSpeechCapture();render(<VoicePanel sessionId="literal-session"/>);
-  fireEvent.change(screen.getByLabelText('Speech engine'),{target:{value:'cloud'}});
+  fireEvent.change(screen.getByLabelText(t('voiceSpeechEngine')),{target:{value:'cloud'}});
   await waitFor(()=>expect(screen.getByRole('button',{name:t('cloudSettingsRefresh')})).toHaveProperty('disabled',false));
-  const draft=screen.getByLabelText('Dictation draft');fireEvent.change(draft,{target:{value:'keep existing draft'}});
+  const draft=screen.getByLabelText(t('voiceDraft'));fireEvent.change(draft,{target:{value:'keep existing draft'}});
   fireEvent.click(screen.getByRole('button',{name:'Record speech'}));
   fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
   await waitFor(()=>expect(complete).toBeTypeOf('function'));
-  await localized(()=>{expect(screen.getByLabelText('Dictation draft')).toBe(draft);expect(draft).toHaveProperty('value','keep existing draft');expect(screen.getByLabelText('Speech engine')).toHaveProperty('value','cloud');expect(microphone.microphone).toHaveBeenCalledOnce();});
+  await localized(()=>{expect(screen.getByLabelText(t('voiceDraft'))).toBe(draft);expect(draft).toHaveProperty('value','keep existing draft');expect(screen.getByLabelText(t('voiceSpeechEngine'))).toHaveProperty('value','cloud');expect(microphone.microphone).toHaveBeenCalledOnce();});
   await act(async()=>{complete({requestId:id,text:'verbatim {{text}} <b>not HTML</b>',quota:value.quota,checkedAt:value.checkedAt+1000});});
   expect(draft).toHaveProperty('value','verbatim {{text}} <b>not HTML</b>');
   expect(invoke).toHaveBeenCalledWith('voice_cloud_transcribe',{requestId:id,sessionId:'literal-session',samples:Array(1600).fill(0),language:'auto'},{headers:{'X-Lazysh-Access':'e'.repeat(64)}});
