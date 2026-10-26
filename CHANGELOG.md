@@ -29,6 +29,18 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   serialized native update. Existing OS permission-language selection and access
   policy are unchanged; Windows, Linux and browser storage keep their defaults.
 
+- Remote file browsing, uploads, repository history, side-by-side diffs and line
+  comments now have English, Brazilian Portuguese and Spanish controls. Language
+  changes preserve selected files, revisions and editable drafts; file contents
+  and staged annotation payloads stay verbatim. Defaults are unchanged.
+
+- English, Brazilian Portuguese and Spanish interface text for Transcript, Usage
+  and the notification inbox, including accessibility labels and validation.
+  Usage and inbox dates/numbers follow the selected interface locale. Recorded
+  messages, tool arguments, provider/agent names, IDs and remote diagnostics stay
+  verbatim. Language changes retain drafts and polling/listener lifecycles;
+  language preference defaults and native permission behavior are unchanged.
+
 - Brazilian Portuguese and Spanish Apple permission explanations, with English
   fallback. Apple selects permission-sheet localization through the app's OS
   language; the in-app language override does not override system prompts. The

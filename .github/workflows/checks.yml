@@ -27,6 +27,7 @@ jobs:
           restore-keys: turbo-client-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: bun run test:hooks
+      - run: bun run test:ci
       - run: bunx turbo run build check test --filter=@lazysh/client
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
@@ -210,9 +211,44 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on
           pre-emulator-launch-script: $ANDROID_HOME/emulator/emulator -accel-check
-          script: |
-            bun run test:android-mosh
-            bun run test:android
+          # The action runs each newline in a separate shell; fold this into one
+          # invocation so cleanup runs before the action terminates the emulator.
+          script: >-
+            bash -c '
+            diagnostic_dir="apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics";
+            mkdir -p "$diagnostic_dir";
+            capture() {
+            local name="$1"; shift;
+            (ulimit -c 0; ulimit -f 1024; exec timeout --kill-after=2s 10s "$@") > "$diagnostic_dir/$name.txt" 2>&1;
+            local code=$?;
+            printf "%s exit=%s\n" "$name" "$code" >> "$diagnostic_dir/status.txt";
+            };
+            cleanup() {
+            local result=$?;
+            trap - EXIT INT TERM;
+            if (( result != 0 )); then
+            capture kernel-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
+            capture cpu-load adb shell dumpsys cpuinfo;
+            capture lastanr adb shell dumpsys activity lastanr;
+            capture lastanr-traces adb shell dumpsys activity lastanr-traces;
+            fi;
+            kill %1 2>/dev/null || true;
+            wait "$collector_pid"; local collector_result=$?;
+            printf "collector exit=%s; test exit=%s\n" "$collector_result" "$result" >> "$diagnostic_dir/status.txt";
+            exit "$result";
+            };
+            trap cleanup EXIT;
+            trap "exit 130" INT;
+            trap "exit 143" TERM;
+            (ulimit -c 0; ulimit -f 1024; exec timeout --kill-after=2s 1800s adb logcat
+            -b main -b system -b events -v threadtime
+            "ActivityManager:E" "InputDispatcher:W" "WindowManager:W" "am_anr:I" "*:S")
+            > "$diagnostic_dir/system-anr.txt" 2> "$diagnostic_dir/collector-errors.txt" &
+            collector_pid=$!;
+            capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
+            bun run test:android-mosh && bun run test:android;
+            exit $?;
+            '
       - uses: actions/upload-artifact@v4
         if: always()
         with:

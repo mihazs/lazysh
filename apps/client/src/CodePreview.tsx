@@ -1,3 +1,4 @@
+import {t, useUi} from './i18n/core';
 import { useEffect, useState, type ReactNode } from 'react';
 
 type SyntaxNode = { type: string; value?: string; tagName?: string; properties?: { className?: unknown }; children?: SyntaxNode[] };
@@ -7,6 +8,7 @@ function renderNodes(nodes: SyntaxNode[]): ReactNode {
 const languages: Record<string, string> = { js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', rs: 'rust', py: 'python', go: 'go', sh: 'bash', bash: 'bash', json: 'json', css: 'css', html: 'xml', xml: 'xml', yml: 'yaml', yaml: 'yaml', sql: 'sql', md: 'markdown', c: 'c', h: 'c', cpp: 'cpp', java: 'java', kt: 'kotlin', swift: 'swift' };
 
 export default function CodePreview({ path, text }: { path: string; text: string }) {
+  useUi();
   const [highlight, setHighlight] = useState(false);
   const [nodes, setNodes] = useState<SyntaxNode[]>();
   const language = languages[path.split('.').at(-1)?.toLowerCase() || ''];
@@ -20,7 +22,7 @@ export default function CodePreview({ path, text }: { path: string; text: string
     return () => { active = false; };
   }, [highlight, language, text]);
   return <>
-    {language && text.length <= 100000 && <button onClick={() => setHighlight(!highlight)}>{highlight ? 'Show plain text' : 'Highlight syntax'}</button>}
+    {language && text.length <= 100000 && <button onClick={() => setHighlight(!highlight)}>{highlight ? t('codePlain') : t('codeHighlight')}</button>}
     <pre className="file-content repository-code"><code>{nodes ? renderNodes(nodes) : text}</code></pre>
   </>;
 }

@@ -1,3 +1,4 @@
+import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi } from './access';
 import { useEffect, useRef, useState } from "react";
 import {
@@ -21,6 +22,7 @@ const join = (parent: string, child: string) =>
   `${parent.replace(/\/$/, "")}/${child}`;
 
 export function FilesPanel({ sessionId }: { sessionId: string }) {
+  useUi();
   const api = useProtectedApi(nativeApi);
   const [path, setPath] = useState(".");
   const [draft, setDraft] = useState(".");
@@ -104,7 +106,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <section className="tool-panel" aria-label="Remote files">
+    <section className="tool-panel" aria-label={t('filesRemote')}>
       <form
         className="tool-bar"
         onSubmit={(e) => {
@@ -115,14 +117,14 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
         <button
           type="button"
           className="icon-button"
-          aria-label="Parent directory"
+          aria-label={t('filesParent')}
           disabled={busy}
           onClick={() => void load(join(path, ".."))}
         >
           <ArrowLeft size={16} />
         </button>
         <label className="sr-only" htmlFor="remote-path">
-          Remote directory
+          {t('filesDirectory')}
         </label>
         <input
           id="remote-path"
@@ -131,12 +133,12 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           required
         />
         <button className="subtle-button" disabled={busy}>
-          Open
+          {t('filesOpen')}
         </button>
         <button
           type="button"
           className="icon-button"
-          aria-label="Refresh files"
+          aria-label={t('filesRefresh')}
           disabled={busy}
           onClick={() => void load(path)}
         >
@@ -148,10 +150,11 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           disabled={busy}
           onClick={() => picker.current?.click()}
         >
-          <Upload size={15} /> Upload
+          <Upload size={15} /> {t('filesUpload')}
         </button>
         <input
           type="file"
+          aria-label={t('filesChooseUpload')}
           className="sr-only"
           ref={picker}
           onChange={(e) => {
@@ -159,7 +162,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             e.target.value = "";
             if (!file) return;
             if (file.size > 10 * 1024 * 1024) {
-              setError("Choose a file smaller than 10 MiB.");
+              setError(t('filesTooLarge'));
               return;
             }
             setUpload(file);
@@ -175,11 +178,10 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
       {upload && (
         <div className="upload-confirm">
           <p>
-            Upload <strong>{upload.name}</strong> (
-            {upload.size.toLocaleString()} bytes) to this host?
+            {t('filesConfirm',{name:upload.name,bytes:formatNumber(upload.size)})}
           </p>
           <label>
-            Destination path
+            {t('filesDestination')}
             <input
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
@@ -191,27 +193,27 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
               disabled={busy || !destination.trim()}
               onClick={() => void sendFile()}
             >
-              Upload file
+              {t('filesUploadFile')}
             </button>
             <button
               className="subtle-button"
               disabled={busy}
               onClick={() => setUpload(null)}
             >
-              Cancel
+              {t('filesCancel')}
             </button>
           </div>
         </div>
       )}
       {busy && (
         <p className="loading" role="status">
-          Loading from host…
+          {t('filesLoading')}
         </p>
       )}
       <div className="file-layout">
-        <div className="file-list" aria-label="Directory entries">
+        <div className="file-list" aria-label={t('filesEntries')}>
           {entries.length === 0 && !busy && (
-            <p className="muted">This directory is empty.</p>
+            <p className="muted">{t('filesEmpty')}</p>
           )}
           {entries.map((entry) => (
             <button
@@ -223,7 +225,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
               {entry.isDir ? <Folder size={16} /> : <File size={16} />}
               <span>{entry.name}</span>
               <small>
-                {entry.isDir ? "" : `${entry.size.toLocaleString()} B`}
+                {entry.isDir ? "" : `${formatNumber(entry.size)} B`}
               </small>
             </button>
           ))}
@@ -237,11 +239,9 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           ) : (
             <div className="panel-empty">
               <File size={28} />
-              <h3>Read from the source.</h3>
+              <h3>{t('filesReadSource')}</h3>
               <p>
-                Select a file to view its contents.
-                <br />
-                Files stay on your host until you open them.
+                {t('filesReadHint')}
               </p>
             </div>
           )}
@@ -252,6 +252,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
 }
 
 export function DiffPanel({ sessionId }: { sessionId: string }) {
+  useUi();
   const api = useProtectedApi(nativeApi);
   const [path, setPath] = useState(".");
   const [staged, setStaged] = useState(false);
@@ -270,7 +271,7 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
     }
   }
   return (
-    <section className="tool-panel" aria-label="Git diff">
+    <section className="tool-panel" aria-label={t('diffTitle')}>
       <form
         className="tool-bar"
         onSubmit={(e) => {
@@ -279,13 +280,13 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
         }}
       >
         <label className="sr-only" htmlFor="repository-path">
-          Repository path
+          {t('diffPath')}
         </label>
         <input
           id="repository-path"
           value={path}
           onChange={(e) => setPath(e.target.value)}
-          placeholder="Repository path on host"
+          placeholder={t('diffPathHint')}
           required
         />
         <label className="checkbox-label">
@@ -294,10 +295,10 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
             checked={staged}
             onChange={(e) => setStaged(e.target.checked)}
           />{" "}
-          Staged
+          {t('diffStaged')}
         </label>
         <button className="subtle-button" disabled={busy}>
-          {busy ? "Loading…" : "Read diff"}
+          {busy ? t('diffLoading') : t('diffRead')}
         </button>
       </form>
       {error && (
@@ -308,11 +309,9 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
       {diff === null ? (
         <div className="panel-empty">
           <GitCompareArrows size={28} />
-          <h3>Review before you return.</h3>
+          <h3>{t('diffReview')}</h3>
           <p>
-            Enter the repository path on your host to read
-            <br />
-            its working tree or staged changes.
+            {t('diffHint')}
           </p>
         </div>
       ) : diff ? (
@@ -338,11 +337,11 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
       ) : (
         <div className="panel-empty">
           <GitCompareArrows size={28} />
-          <h3>No changes in this diff.</h3>
+          <h3>{t('diffEmpty')}</h3>
           <p>
             {staged
-              ? "Nothing is staged."
-              : "The tracked working tree is clean. Untracked files are not included."}
+              ? t('diffNothingStaged')
+              : t('diffClean')}
           </p>
         </div>
       )}

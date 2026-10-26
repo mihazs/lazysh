@@ -13,8 +13,8 @@ it.each(Object.entries(catalogs))('%s supplies every English key with exactly th
     expect(placeholders(catalog[key]),`${locale}.${key}`).toEqual(placeholders(english[key]));
     expect(catalog[key].replace(/\{\{[^{}]+\}\}/g,''),`${locale}.${key}`).not.toMatch(/[{}]|\$t\(/);
   }
-  for(const category of new Intl.PluralRules(locale).resolvedOptions().pluralCategories) {
-    expect(catalog).toHaveProperty(`sessionCount_${category}`);
+  for(const base of ["sessionCount","usageMinutes"]) for(const category of new Intl.PluralRules(locale).resolvedOptions().pluralCategories) {
+    expect(catalog).toHaveProperty(`${base}_${category}`);
   }
 });
 it.each([

@@ -1,3 +1,4 @@
+import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi } from './access';
 import { useProtectedInvoke } from './access';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -20,7 +21,7 @@ type Line = { before?: number; after?: number; left?: string; right?: string; ki
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object';
 const validText = (value: unknown, limit = 4096): value is string => typeof value === 'string' && value.length <= limit && !value.includes('\0');
 const validOid = (value: unknown): value is string => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
-function invalidResponse(): never { throw new Error('Invalid repository response. Update the client and reconnect.'); }
+function invalidResponse(): never { throw new Error(t('repoInvalid')); }
 export function parseRepositoryStatus(value: unknown): { path: string; changes: Change[] } {
   if (!isObject(value) || !validText(value.path) || !Array.isArray(value.changes) || value.changes.length > 10000) return invalidResponse();
   for (const row of value.changes) if (!isObject(row) || !validText(row.path) || !(row.originalPath === null || validText(row.originalPath)) || typeof row.index !== 'string' || !/^[ MADRCU?!T]$/.test(row.index) || typeof row.worktree !== 'string' || !/^[ MADRCU?!T]$/.test(row.worktree)) return invalidResponse();
@@ -79,6 +80,7 @@ export function diffLines(patch: string): Line[] {
 }
 
 export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
+  useUi();
   const api = useProtectedApi(nativeApi);
   const invoke = useProtectedInvoke();
   const [path, setPath] = useState('.');
@@ -96,7 +98,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
   const [diff, setDiff] = useState<Diff | null>(null);
   const [preview, setPreview] = useState('');
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [draftStatus, setDraftStatus] = useState('');
+  const [draftStatus, setDraftStatus] = useState<'' | 'repoCommentsStaged' | 'repoCommentsCopied'>('');
   const [commentLine, setCommentLine] = useState(1);
   const [markdown, setMarkdown] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -122,7 +124,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
           if (saved.revision) await browse(saved.revision, result.path, saved);
           else await open(saved.file, saved.staged, undefined, result.path, '');
         }
-      } catch (e) { if (current === request.current) { setHistory([]); setError(`Working tree loaded. History unavailable: ${errorMessage(e)}`); } }
+      } catch (e) { if (current === request.current) { setHistory([]); setError(t('repoHistoryUnavailable',{error:errorMessage(e)})); } }
     } catch (e) { if (current === request.current) setError(errorMessage(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
@@ -151,12 +153,12 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
         const value = imageUrl(await invoke('repository_image', { sessionId, path: repositoryPath, filePath, objectId: entry?.oid || null }));
         if (current === request.current) setPreview(value);
       } else if (entry) {
-        if (entry.kind !== 'blob' && entry.kind !== 'symlink') throw new Error('Submodule content belongs to its own repository.');
+        if (entry.kind !== 'blob' && entry.kind !== 'symlink') throw new Error(t('repoSubmodule'));
         const value = parseBlob(await invoke('repository_blob', { sessionId, path: repositoryPath, objectId: entry.oid }));
         if (current === request.current) setContent(value);
       } else if (staged === undefined) {
         const text = await api.readFile(sessionId, `${repositoryPath.replace(/\/$/, '')}/${filePath}`);
-        if (typeof text !== 'string' || text.length > 1048576) throw new Error('Invalid file response.');
+        if (typeof text !== 'string' || text.length > 1048576) throw new Error(t('repoInvalidFile'));
         if (current === request.current) setContent({ text: text.includes('\0') ? null : text, binary: text.includes('\0'), bytes: new TextEncoder().encode(text).length });
       } else {
         const value = parseDiff(await invoke('repository_diff', { sessionId, path: repositoryPath, filePath, staged }));
@@ -185,38 +187,38 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
     } catch (e) { if (current === request.current) setError(errorMessage(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
-  return <section className="tool-panel repository-panel" aria-label="Repository review">
-    <h3>Repository review</h3>
+  return <section className="tool-panel repository-panel" aria-label={t('repoTitle')}>
+    <h3>{t('repoTitle')}</h3>
     <form className="tool-bar" onSubmit={event => { event.preventDefault(); void load(draft); }}>
-      <label>Repository directory<input required value={draft} onChange={event => setDraft(event.target.value)} /></label>
-      <button disabled={busy}>Open repository</button>
-      <label>Revision<select aria-label="Repository revision" disabled={busy} value={revision} onChange={event => void browse(event.target.value)}><option value="">Working tree</option>{revision && !history.some(commit => commit.oid === revision) && <option value={revision}>Selected commit {revision.slice(0, 8)}</option>}{history.map(commit => <option key={commit.oid} value={commit.oid}>{commit.oid.slice(0, 8)} {commit.subject}</option>)}</select></label>
-      {olderHistory && <button type="button" disabled={busy || historyOffset >= 100000} onClick={() => void older()}>Load older commits</button>}
+      <label>{t('repoDirectory')}<input required value={draft} onChange={event => setDraft(event.target.value)} /></label>
+      <button disabled={busy}>{t('repoOpen')}</button>
+      <label>{t('repoRevision')}<select aria-label={t('repoRevisionLabel')} disabled={busy} value={revision} onChange={event => void browse(event.target.value)}><option value="">{t('repoWorkingTree')}</option>{revision && !history.some(commit => commit.oid === revision) && <option value={revision}>{t('repoSelectedCommit',{commit:revision.slice(0,8)})}</option>}{history.map(commit => <option key={commit.oid} value={commit.oid}>{commit.oid.slice(0, 8)} {commit.subject}</option>)}</select></label>
+      {olderHistory && <button type="button" disabled={busy || historyOffset >= 100000} onClick={() => void older()}>{t('repoOlder')}</button>}
     </form>
     {error && <p className="inline-error" role="alert">{error}</p>}
-    {busy && <p role="status">Reading repository…</p>}
+    {busy && <p role="status">{t('repoReading')}</p>}
     <div className="repository-layout"><div className="repository-list">
-      <label>Find file<input value={filter} onChange={event => setFilter(event.target.value)} /></label>
-      {(revision ? visibleEntries : visibleChanges).length > 500 && <p>Showing the first 500 matches. Narrow the file search to see more.</p>}
-      {revision ? <><p>{entries.length.toLocaleString()} entries in <code>{directory || '/'}</code></p>{directory && <button disabled={busy} onClick={() => void browse(revision, path, undefined, directory.includes('/') ? directory.slice(0, directory.lastIndexOf('/')) : '')}>Parent directory</button>}{visibleEntries.slice(0, 500).map(entry => <button className="repository-file" disabled={busy} key={entry.path} aria-pressed={selected === entry.path} onClick={() => void open(entry.path, undefined, entry)}><code>{entry.path}</code><small>{entry.kind} {entry.size === null ? '' : `${entry.size.toLocaleString()} bytes`}</small></button>)}</> : <>
-        {changes.length === 0 && history.length > 0 && <p>No working-tree changes.</p>}
-        {visibleChanges.slice(0, 500).map(change => <article key={change.path} className="repository-change"><code>{change.index}{change.worktree} {change.path}</code>{change.originalPath && <small>From {change.originalPath}</small>}<div>
-          <button disabled={busy} onClick={() => void open(change.path)}>Read file</button>
-          {change.index !== ' ' && change.index !== '?' && <button disabled={busy} onClick={() => void open(change.path, true)}>Staged diff</button>}
-          {change.worktree !== ' ' && change.worktree !== '?' && <button disabled={busy} onClick={() => void open(change.path, false)}>Unstaged diff</button>}
-          {change.index === '?' && <small>Untracked file · read to review its full content</small>}
+      <label>{t('repoFind')}<input value={filter} onChange={event => setFilter(event.target.value)} /></label>
+      {(revision ? visibleEntries : visibleChanges).length > 500 && <p>{t('repoLimit')}</p>}
+      {revision ? <><p>{t('repoEntries',{entries:formatNumber(entries.length),directory:directory || '/'})}</p>{directory && <button disabled={busy} onClick={() => void browse(revision, path, undefined, directory.includes('/') ? directory.slice(0, directory.lastIndexOf('/')) : '')}>{t('filesParent')}</button>}{visibleEntries.slice(0, 500).map(entry => <button className="repository-file" disabled={busy} key={entry.path} aria-pressed={selected === entry.path} onClick={() => void open(entry.path, undefined, entry)}><code>{entry.path}</code><small>{entry.kind} {entry.size === null ? '' : t('repoBytes',{bytes:formatNumber(entry.size)})}</small></button>)}</> : <>
+        {changes.length === 0 && history.length > 0 && <p>{t('repoClean')}</p>}
+        {visibleChanges.slice(0, 500).map(change => <article key={change.path} className="repository-change"><code>{change.index}{change.worktree} {change.path}</code>{change.originalPath && <small>{t('repoFrom',{path:change.originalPath})}</small>}<div>
+          <button disabled={busy} onClick={() => void open(change.path)}>{t('repoRead')}</button>
+          {change.index !== ' ' && change.index !== '?' && <button disabled={busy} onClick={() => void open(change.path, true)}>{t('repoStaged')}</button>}
+          {change.worktree !== ' ' && change.worktree !== '?' && <button disabled={busy} onClick={() => void open(change.path, false)}>{t('repoUnstaged')}</button>}
+          {change.index === '?' && <small>{t('repoUntracked')}</small>}
         </div></article>)}
       </>}
     </div><div className="repository-content">
       {selected && <h4>{selected}</h4>}
-      {preview && <img className="repository-image" src={preview} alt={`Preview of ${selected}`} />}
-      {content && (content.binary ? <p>Binary file · {content.bytes.toLocaleString()} bytes. Preview unavailable.</p> : <>
-        {selected.toLowerCase().endsWith('.md') && <button onClick={() => setMarkdown(!markdown)}>{markdown ? 'Show source' : 'Render Markdown'}</button>}
-        <div className="tool-bar"><label>Comment line<input type="number" min={1} max={lineCount} value={commentLine} onChange={event => setCommentLine(Number(event.target.value))} /></label><button disabled={!Number.isSafeInteger(commentLine) || commentLine < 1 || commentLine > lineCount || annotations.length >= 20} onClick={() => annotate(commentLine)}>Add line comment</button></div>
-        {markdown ? <Markdown components={{ img: () => <span>[Remote image omitted]</span>, a: ({ children }) => <span>{children}</span> }}>{content.text || ''}</Markdown> : <CodePreview path={selected} text={content.text || ''} />}
+      {preview && <img className="repository-image" src={preview} alt={t('repoPreview',{file:selected})} />}
+      {content && (content.binary ? <p>{t('repoBinary',{bytes:formatNumber(content.bytes)})}</p> : <>
+        {selected.toLowerCase().endsWith('.md') && <button onClick={() => setMarkdown(!markdown)}>{markdown ? t('repoSource') : t('repoMarkdown')}</button>}
+        <div className="tool-bar"><label>{t('repoCommentLine')}<input type="number" min={1} max={lineCount} value={commentLine} onChange={event => setCommentLine(Number(event.target.value))} /></label><button disabled={!Number.isSafeInteger(commentLine) || commentLine < 1 || commentLine > lineCount || annotations.length >= 20} onClick={() => annotate(commentLine)}>{t('repoAddComment')}</button></div>
+        {markdown ? <Markdown components={{ img: () => <span>{t('repoRemoteImage')}</span>, a: ({ children }) => <span>{children}</span> }}>{content.text || ''}</Markdown> : <CodePreview path={selected} text={content.text || ''} />}
       </>)}
-      {diff && (diff.binary ? <p>Binary file changed. Text diff unavailable.</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" aria-label="Side by side diff"><thead><tr><th colSpan={2}>Before</th><th colSpan={2}>After</th></tr></thead><tbody>{diffLines(diff.patch).map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{line.before}</td><td><pre>{line.left}</pre></td><td>{line.after}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>No changes in this selection.</p>)}
+      {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffLines(diff.patch).map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{line.before}</td><td><pre>{line.left}</pre></td><td>{line.after}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
     </div></div>
-    {annotations.length > 0 && <section className="repository-comments" aria-label="Review comments"><h4>Comments for your next prompt</h4>{annotations.map((note, index) => <label key={`${note.repository}:${note.file}:${note.revision}:${note.line}`}>{note.repository}/{note.file}:{note.line}<textarea maxLength={2000} value={note.text} onChange={event => setAnnotations(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => setAnnotations(current => current.filter((_, i) => i !== index))}>Remove comment</button></label>)}{annotationText.length > 65536 && <p>Shorten the comments or copy them in smaller groups; the next prompt is limited to 65,536 characters.</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: annotationText } })); setDraftStatus('Comments staged for your next prompt. Review before sending.'); }}>Use in next prompt</button><button disabled={!annotationText} onClick={() => void navigator.clipboard.writeText(annotationText).then(() => setDraftStatus('Comments copied.')).catch(e => setError(errorMessage(e)))}>Copy comments</button>{draftStatus && <p role="status">{draftStatus}</p>}</section>}
+    {annotations.length > 0 && <section className="repository-comments" aria-label={t('repoComments')}><h4>{t('repoNextPrompt')}</h4>{annotations.map((note, index) => <label key={`${note.repository}:${note.file}:${note.revision}:${note.line}`}>{note.repository}/{note.file}:{note.line}<textarea maxLength={2000} value={note.text} onChange={event => setAnnotations(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => setAnnotations(current => current.filter((_, i) => i !== index))}>{t('repoRemoveComment')}</button></label>)}{annotationText.length > 65536 && <p>{t('repoShorten')}</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: annotationText } })); setDraftStatus('repoCommentsStaged'); }}>{t('repoUsePrompt')}</button><button disabled={!annotationText} onClick={() => void navigator.clipboard.writeText(annotationText).then(() => setDraftStatus('repoCommentsCopied')).catch(e => setError(errorMessage(e)))}>{t('repoCopyComments')}</button>{draftStatus && <p role="status">{t(draftStatus)}</p>}</section>}
   </section>;
 }

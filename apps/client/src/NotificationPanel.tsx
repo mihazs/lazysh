@@ -1,3 +1,4 @@
+import {t, useUi, formatDateTime} from './i18n/core';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
@@ -56,7 +57,7 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
     if (!state.notifications || !isTauri()) return;
     let active = true;
     let remove: (() => void) | undefined;
-    void registerActionTypes([{ id: 'lazysh-agent', actions: [{ id: 'open-session', title: 'Open session', foreground: true }] }]).then(() => onAction(event => {
+    void registerActionTypes([{ id: 'lazysh-agent', actions: [{ id: 'open-session', title: t("inboxOpenSessionAction"), foreground: true }] }]).then(() => onAction(event => {
       const id = event.notification?.extra?.lazyshEventId;
       const sessionId = event.notification?.extra?.lazyshSessionId;
       if (active && typeof id === 'string' && typeof sessionId === 'string' && ['tap', 'open-session'].includes(event.actionId)) openInboxEvent(id, currentSessions.current, sessionId);
@@ -68,42 +69,43 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
 
 export default function NotificationPanel({ sessions }: { sessions: InboxSession[] }) {
   const invoke = useProtectedInvoke();
+  useUi();
   const state = useInbox();
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState<'' | 'inboxEnabled' | 'inboxPermissionDenied' | 'inboxTestSubmitted' | 'inboxConnectionEnded'>('');
   async function enable() {
     setBusy(true); setStatus('');
     try {
       const granted = await isPermissionGranted() || await requestPermission() === 'granted';
       updateInbox({ notifications: granted });
-      setStatus(granted ? 'System notifications enabled for new attention events while connected.' : 'Notification permission was not granted. The inbox remains available.');
+      setStatus(granted ? "inboxEnabled" : "inboxPermissionDenied");
     } catch (e) { updateInbox({ error: errorMessage(e) }); }
     finally { setBusy(false); }
   }
   async function test() {
     setBusy(true); setStatus('');
-    try { await invoke('notification_test'); setStatus('Test notification submitted. Delivery depends on your system notification settings.'); }
+    try { await invoke('notification_test'); setStatus("inboxTestSubmitted"); }
     catch (e) { updateInbox({ error: errorMessage(e) }); }
     finally { setBusy(false); }
   }
-  const names = { needs_attention: 'Needs you', working: 'Working', done: 'Done' };
-  return <section className="tool-panel notification-panel" aria-label="Agent inbox">
-    <h3>Agent inbox</h3>
-    <p>Collect agent status over live SSH connections. The first snapshot creates an inbox baseline; only new attention events trigger notifications. Monitoring pauses when this app is suspended or disconnected.</p>
-    <div className="tool-bar"><label><input type="checkbox" checked={state.monitoring} disabled={!isTauri()} onChange={event => updateInbox({ monitoring: event.target.checked })} />Monitor connected hosts</label>
-      {state.notifications ? <button onClick={() => updateInbox({ notifications: false })}>Pause system notifications</button> : <button disabled={busy || !isTauri()} onClick={() => void enable()}>Enable system notifications</button>}
-      <button disabled={busy || !state.notifications || !isTauri()} onClick={() => void test()}>Test notification</button>
-      <button disabled={!state.monitoring || !isTauri()} onClick={() => window.dispatchEvent(new Event('lazysh-inbox-refresh'))}>Refresh inbox</button>
-      <button disabled={!state.rows.length} onClick={() => updateInbox({ rows: [] })}>Clear inbox</button>
+  const names = { needs_attention: "inboxNeedsYou", working: "inboxWorking", done: "inboxDone" } as const;
+  return <section className="tool-panel notification-panel" aria-label={t("inboxTitle")}>
+    <h3>{t("inboxTitle")}</h3>
+    <p>{t("inboxExplanation")}</p>
+    <div className="tool-bar"><label><input type="checkbox" checked={state.monitoring} disabled={!isTauri()} onChange={event => updateInbox({ monitoring: event.target.checked })} />{t("inboxMonitor")}</label>
+      {state.notifications ? <button onClick={() => updateInbox({ notifications: false })}>{t("inboxPause")}</button> : <button disabled={busy || !isTauri()} onClick={() => void enable()}>{t("inboxEnable")}</button>}
+      <button disabled={busy || !state.notifications || !isTauri()} onClick={() => void test()}>{t("inboxTest")}</button>
+      <button disabled={!state.monitoring || !isTauri()} onClick={() => window.dispatchEvent(new Event('lazysh-inbox-refresh'))}>{t("inboxRefresh")}</button>
+      <button disabled={!state.rows.length} onClick={() => updateInbox({ rows: [] })}>{t("inboxClear")}</button>
     </div>
-    <p>Notifications contain the agent name and project directory. This device keeps up to 100 status rows and deduplication identifiers locally. No transcript text is included. At most 32 connected hosts are monitored.</p>
-    {!isTauri() && <p>Monitoring and system notifications require the native lazysh app.</p>}
+    <p>{t("inboxPrivacy")}</p>
+    {!isTauri() && <p>{t("inboxNativeRequired")}</p>}
     {state.error && <p className="inline-error" role="alert">{state.error}</p>}
-    {status && <p role="status">{status}</p>}
-    {state.rows.length === 0 && <p>No collected events. Enable monitoring with a connected host companion.</p>}
-    <div className="notification-list">{state.rows.map(row => <article className="agent-card" key={row.id}><strong>{names[row.state]} · {row.agent}</strong><p>{row.hostName} · <code>{row.project}</code></p><time dateTime={row.updatedAt}>{new Date(row.updatedAt).toLocaleString()}</time><div>
-      <button disabled={!sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected)} onClick={() => { if (!openInboxEvent(row.eventId, sessions)) setStatus('This exact connection has ended. Reconnect from Hosts to inspect the agent.'); }}>Open connected session</button>
-      <button onClick={() => updateInbox({ rows: state.rows.filter(event => event.id !== row.id) })}>Archive</button>
+    {status && <p role="status">{t(status)}</p>}
+    {state.rows.length === 0 && <p>{t("inboxEmpty")}</p>}
+    <div className="notification-list">{state.rows.map(row => <article className="agent-card" key={row.id}><strong>{t(names[row.state])} · {row.agent}</strong><p>{row.hostName} · <code>{row.project}</code></p><time dateTime={row.updatedAt}>{formatDateTime(new Date(row.updatedAt))}</time><div>
+      <button disabled={!sessions.some(session => session.id === row.sessionId && session.hostId === row.hostId && session.connected)} onClick={() => { if (!openInboxEvent(row.eventId, sessions)) setStatus("inboxConnectionEnded"); }}>{t("inboxOpenConnected")}</button>
+      <button onClick={() => updateInbox({ rows: state.rows.filter(event => event.id !== row.id) })}>{t("inboxArchive")}</button>
     </div></article>)}</div>
   </section>;
 }
