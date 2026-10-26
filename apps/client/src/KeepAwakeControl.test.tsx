@@ -154,3 +154,38 @@ it('keeps a visible cleanup failure when a concurrent old status reply arrives a
   expect(screen.queryByText('Keep awake is off.')).toBeNull();
   expect(screen.queryByText('Keep awake is paused until this board is visible and focused.')).toBeNull();
 });
+for(const outcome of ['rejected','still-active','malformed'] as const)it(`reports ${outcome} release on blur while the preference remains enabled`,async()=>{
+  const native=backend();const original=vi.mocked(invoke).getMockImplementation()!;
+  const failure=outcome==='rejected'?'Blur release failed':outcome==='still-active'?'Native display release is still pending.':'Native display status is unavailable.';
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='board_keep_awake_release'?
+    outcome==='rejected'?Promise.reject(new Error(failure)):Promise.resolve(outcome==='still-active'?{...native.status(2),active:true}:null) as never:original(command,args,options));
+  localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
+  await screen.findByText('Native display keep-awake is active.');fireEvent(window,new Event('blur'));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent',failure);
+  expect(toggle()).toHaveProperty('checked',true);
+  expect(screen.getByRole('status').textContent).toContain('could not be confirmed');
+  expect(screen.getByText(/Switch away from the app to retry release, or restart lazysh/)).toBeTruthy();
+});
+it('disables and releases even when saving the off preference fails',async()=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
+  await screen.findByText('Native display keep-awake is active.');const owner=native.active();
+  vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new Error('Storage unavailable');});
+  fireEvent.click(toggle());
+  await waitFor(()=>expect(native.active()).toBeUndefined());
+  expect(toggle()).toHaveProperty('checked',false);
+  expect(invoke).toHaveBeenCalledWith('board_keep_awake_release',{request:owner});
+  expect(screen.getByRole('alert').textContent).toContain('could not be saved');
+});
+it('does not attribute an old release acknowledgement to a newer active owner',async()=>{
+  const native=backend();const original=vi.mocked(invoke).getMockImplementation()!;let finish!:()=>void;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    if(command==='board_keep_awake_release')return original(command,args,options).then(()=>new Promise(resolve=>{finish=()=>resolve({...native.status((args as {request:Owner}).request.ticket),active:true});})) as never;
+    return original(command,args,options);
+  });
+  localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="a"/>);
+  await screen.findByText('Native display keep-awake is active.');const first=native.active();view.rerender(<KeepAwakeControl sessionId="b"/>);
+  await waitFor(()=>expect(native.active()?.ticket).toBeGreaterThan(first!.ticket));
+  await act(async()=>finish());
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText('Native display keep-awake is active.')).toBeTruthy();
+});

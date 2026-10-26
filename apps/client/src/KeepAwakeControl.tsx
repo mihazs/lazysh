@@ -29,6 +29,7 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
   const [status,setStatus]=useState<NativeStatus>();
   const [phase,setPhase]=useState<'off'|'checking'|'active'|'paused'|'held'|'error'>('off');
   const [error,setError]=useState('');
+  const [preferenceError,setPreferenceError]=useState('');
   const desired=useRef(enabled);desired.current=enabled;
   const current=useRef<Ticket|undefined>(undefined);
   const cleanupFailure=useRef('');
@@ -47,22 +48,22 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
     const fresh=()=>alive && mounted.current && access.current();
     const release=(owner:Ticket)=>{
       void cleanupInvoke('board_keep_awake_release',{request:owner}).then(value=>{
-        if(mounted.current && access.current() && !desired.current && (!current.current || current.current===owner)) {
+        if(mounted.current && access.current() && (!current.current || current.current===owner)) {
           const released=parseKeepAwakeStatus(value);
           if(released.active)throw new Error('Native display release is still pending.');
           const previous=cleanupFailure.current;cleanupFailure.current='';
-          setError(error=>error===previous?'':error);setPhase('off');
+          setError(error=>error===previous?'':error);if(!desired.current)setPhase('off');
         }
       }).catch(failure=>{
         if(mounted.current && access.current() && (!current.current || current.current===owner)){
           cleanupFailure.current=message(failure);
-          if(!desired.current){setError(cleanupFailure.current);setPhase('error');}
+          setError(cleanupFailure.current);setPhase('error');
         }
       });
     };
     if (!native) return;
     if (!access.current()) {cleanupFailure.current='';setPhase('paused');setStatus(undefined);setError('');return;}
-    if (!foreground.visible) {setPhase('paused');return;}
+    if (!foreground.visible) {setPhase(cleanupFailure.current?'error':'paused');return;}
     setError(cleanupFailure.current);setPhase(cleanupFailure.current?'error':'checking');
     void (async()=>{
       try {
@@ -92,8 +93,9 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
     };
   },[sessionId,enabled,foreground,epoch,native,invoke,access,mounted]);
   function toggle(checked:boolean) {
-    try {localStorage.setItem(boardAwakeKey,String(checked));setEnabled(checked);setError(cleanupFailure.current);}
-    catch {setError('Keep-awake preference could not be saved on this device.');}
+    desired.current=checked;setEnabled(checked);setError(cleanupFailure.current);
+    try {localStorage.setItem(boardAwakeKey,String(checked));setPreferenceError('');}
+    catch {setPreferenceError('Keep-awake preference could not be saved on this device.');}
   }
   return <section aria-label="Board display keep awake">
     <label><input type="checkbox" checked={enabled} disabled={!native || !access.current() || (!enabled && !status?.available)}
@@ -103,7 +105,7 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
       phase==='error'?'Native display ownership could not be confirmed.':phase==='checking'?'Checking native display ownership…':phase==='paused'?'Keep awake is paused until this board is visible and focused.':
       status && !status.available?status.reason:enabled?'Native keep-awake is not active.':'Keep awake is off.'}</p>
     {status && !status.available && phase!=='off' && <p>{status.reason}</p>}
-    {error && <p role="alert">{error}</p>}
+    {(error || preferenceError) && <p role="alert">{[error,preferenceError].filter(Boolean).join(' ')}</p>}
     {(phase==='held' || cleanupFailure.current) && <p>Native cleanup was not confirmed. Switch away from the app to retry release, or restart lazysh if it remains active.</p>}
     <small>Opt-in display idle prevention only. Agent processes and network connections are unchanged. Keeping a display on uses more battery.</small>
   </section>;

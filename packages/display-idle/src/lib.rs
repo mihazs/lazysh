@@ -28,6 +28,20 @@ pub struct Status {
     pub epoch: String,
     pub ticket: u64,
 }
+fn admitted_acquire<T>(
+    before: impl FnOnce() -> Result<(), String>,
+    acquire: impl FnOnce() -> Result<T, String>,
+    admitted: impl FnOnce() -> Result<(), String>,
+    release: impl FnOnce() -> Result<(), String>,
+) -> Result<T, String> {
+    before()?;
+    let status = acquire()?;
+    if let Err(error) = admitted() {
+        release()?;
+        return Err(error);
+    }
+    Ok(status)
+}
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_display_idle);
 
@@ -103,15 +117,28 @@ impl<R: Runtime> DisplayIdle<R> {
             ticket: request.ticket,
         })
     }
-    pub fn acquire(&self, request: &Request) -> Result<Status, String> {
+    /// Check authority before native admission and commit ownership in serialized order.
+    /// Callbacks must not wait for UI/native work or reenter this service.
+    pub fn acquire(
+        &self,
+        request: &Request,
+        before: impl FnOnce() -> Result<(), String>,
+        admitted: impl FnOnce() -> Result<(), String>,
+    ) -> Result<Status, String> {
         let _serial = self.synchronized()?;
         let document = self.document.load(Ordering::SeqCst);
         let native = self.native_request(request, true)?;
-        let mut status = self.native("acquire", Some(&native))?;
-        if self.document.load(Ordering::SeqCst) != document {
-            self.native("release", Some(&native))?;
-            return Err("Display ownership expired during acquisition.".into());
-        }
+        let mut status = admitted_acquire(
+            before,
+            || self.native("acquire", Some(&native)),
+            || {
+                if self.document.load(Ordering::SeqCst) != document {
+                    return Err("Display ownership expired during acquisition.".into());
+                }
+                admitted()
+            },
+            || self.native("release", Some(&native)).map(|_| ()),
+        )?;
         status.epoch = request.epoch.clone();
         Ok(status)
     }
@@ -133,6 +160,8 @@ impl<R: Runtime> DisplayIdle<R> {
         });
     }
 }
+#[cfg(test)]
+mod admission_tests;
 pub trait DisplayIdleExt<R: Runtime> {
     fn display_idle(&self) -> &DisplayIdle<R>;
 }
