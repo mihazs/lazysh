@@ -236,10 +236,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         result.sessions.length > 50 ||
         result.sessions.some(item => !isDiscoveredTranscript(item, 4096))
       )
-        throw new Error(t("panelInvalidTranscriptList"));
+        throw new LocalUiError('panelInvalidTranscriptList');
       if (currentRequest(current)) setDiscovered(result.sessions);
     } catch (e) {
-      if (currentRequest(current)) setError(errorMessage(e));
+      if (currentRequest(current)) setError(captureUiError(e));
     } finally {
       flight.current = false;
       automaticRequest.current = false;
