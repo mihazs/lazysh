@@ -3,9 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import PreviewFrame from './PreviewFrame';
 import { elementSelection } from './previewAnnotations';
-const token = '11111111-1111-4111-8111-111111111111';
-const url = 'http://127.0.0.1:41234/';
-const selected = { path: '/login', selector: 'button:nth-of-type(1)', text: '<img src=x onerror=alert(1)>', rect: { x: 1, y: 2, width: 90, height: 30 } };
+import {previewFixture,previewSelection as selected} from './test/previewData';
+const {pickerToken:token,url}=previewFixture;
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 function setup() {
   const capture = vi.fn(); const view = render(<PreviewFrame url={url} port={5173} token={token} onSelection={capture} />);
