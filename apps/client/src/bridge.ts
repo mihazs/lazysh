@@ -122,8 +122,8 @@ export const api = {
     remoteInvoke<void>("upload_file", { sessionId, path, data }),
   diff: (sessionId: string, path: string, staged = false) =>
     remoteInvoke<string>("get_diff", { sessionId, path, staged }),
-  muxSessions: (sessionId: string) =>
-    remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId }),
+  muxSessions: (sessionId: string, tmuxServer?: string) =>
+    remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
   tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string) =>
     remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId }),
@@ -131,8 +131,10 @@ export const api = {
     sessionId: string,
     name: string,
     onEvent: (event: SshEvent) => void,
+    tmuxServer?: string,
   ) => {
     return createRemoteSession("attach_tmux", {
+      ...(tmuxServer === undefined ? {} : {tmuxServer}),
       sessionId,
       name,
       cols: 100,

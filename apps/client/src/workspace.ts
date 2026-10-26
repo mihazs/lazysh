@@ -1,12 +1,12 @@
 import type {AutoOptions, EtOptions, MoshOptions, MultiplexerKind} from "./bridge";
-export type SessionAttachment = {kind: MultiplexerKind; name: string; restoreName?: string | null};
+export type SessionAttachment = {kind: MultiplexerKind; name: string; restoreName?: string | null; tmuxServer?: string};
 export type SessionIntent = {
   hostId?: string;
   local?: true;
   auto?: AutoOptions;
   et?: { serverPath: string; port: number };
   mosh?: { serverPath: string; portMin: number; portMax: number };
-  attached?: Pick<SessionAttachment, 'kind' | 'name'>;
+  attached?: Pick<SessionAttachment, 'kind' | 'name' | 'tmuxServer'>;
 };
 function validMosh(value: MoshOptions) {
   return !!value && typeof value.serverPath === 'string' && value.serverPath.length > 0 && value.serverPath.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value.serverPath)
@@ -19,6 +19,10 @@ function validEt(value: EtOptions) {
 function publicMosh(value:MoshOptions):MoshOptions { return {serverPath:value.serverPath,portMin:value.portMin,portMax:value.portMax}; }
 function publicEt(value:EtOptions):EtOptions { return {serverPath:value.serverPath,port:value.port}; }
 const key = "lazysh.workspace.v1";
+export function validTmuxServer(name: unknown): name is string {
+  return typeof name === 'string' && name.length > 0 && new TextEncoder().encode(name).length <= 64
+    && !['.', '..'].includes(name) && !/[\/\x00-\x1f\x7f-\x9f]/.test(name);
+}
 function validTmuxName(name: string) {
   return name.length > 0 && new TextEncoder().encode(name).length <= 200 && !/[\x00-\x1f\x7f-\x9f]/.test(name);
 }
@@ -46,7 +50,8 @@ export function readWorkspace(): SessionIntent[] {
             typeof item.attached.name === "string" &&
             item.attached.name.length > 0 &&
             item.attached.name.length <= 200 &&
-            (item.attached.kind !== 'tmux' || validTmuxName(item.attached.name))))),
+            (item.attached.kind !== 'tmux' || validTmuxName(item.attached.name)) &&
+            (item.attached.tmuxServer === undefined || (item.attached.kind === 'tmux' && validTmuxServer(item.attached.tmuxServer)))))),
     );
   } catch {
     return [];
@@ -58,7 +63,8 @@ export function saveWorkspace(sessions: (SessionIntent & {attached?: SessionAtta
     key,
     JSON.stringify(
       sessions.filter(({attached}) => !attached || (attached.restoreName !== null &&
-        (attached.kind !== 'tmux' || validTmuxName(attached.restoreName ?? attached.name))))
+        (attached.kind !== 'tmux' || validTmuxName(attached.restoreName ?? attached.name)) &&
+        (attached.tmuxServer === undefined || (attached.kind === 'tmux' && validTmuxServer(attached.tmuxServer)))))
         .slice(0, 20).map(({ hostId, attached, mosh, et, auto, local }) => local ? {local:true} : ({
         hostId,
         ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
@@ -73,7 +79,7 @@ export function saveWorkspace(sessions: (SessionIntent & {attached?: SessionAtta
             }
           : {}),
         ...(!auto && attached
-          ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name } }
+          ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
           : {}),
       })),
     ),

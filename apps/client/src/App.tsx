@@ -1061,7 +1061,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if (!session?.attached || !destination) return;
     const suffix = ` / ${session.attached.name}`;
     if (session.name.endsWith(suffix)) session.name = `${session.name.slice(0, -suffix.length)} / ${destination.name}`;
-    session.attached = {kind:'tmux', name:destination.name, restoreName:destination.restoreName};
+    session.attached = {...session.attached, kind:'tmux', name:destination.name, restoreName:destination.restoreName};
     persistWorkspace(sessionsRef.current);
     setSessions([...sessionsRef.current]);
   }
@@ -1173,6 +1173,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   shell.session.id,
                   intent.attached.name,
                   child.onEvent,
+                  intent.attached.tmuxServer,
                 )
               : await api.attachMultiplexer(
                   shell.session.id,
@@ -1405,6 +1406,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     source: LiveSession,
     name: string,
     kind: "tmux" | "herdr" | "zellij" = "tmux",
+    tmuxServer?: string,
   ) {
     const pending = await prepareSession(
       source.hostId,
@@ -1415,11 +1417,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     try {
       const result =
         kind === "tmux"
-          ? await api.attachTmux(source.id, name, pending.onEvent)
+          ? await api.attachTmux(source.id, name, pending.onEvent, tmuxServer)
           : await api.attachMultiplexer(source.id, kind, name, pending.onEvent);
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
-      pending.session.attached = { kind, name };
+      pending.session.attached = { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) };
       sessionConnected(pending.session);
       ownership.delete(result.sessionId);
     } catch (error) {
@@ -1786,7 +1788,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     key={active.id}
                     sessionId={active.id}
                     attached={active.attached}
-                    onAttach={(name, kind) => attachTmux(active, name, kind)}
+                    onAttach={(name, kind, server) => attachTmux(active, name, kind, server)}
                   />
                 )}
                 {!active.connected && view !== "terminal" && (

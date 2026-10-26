@@ -59,3 +59,27 @@ it('discloses unsupported controls and host command failures', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Select %9' }));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Pane no longer exists');
 });
+it('carries a literal selected server through discovery, pane actions and attachment',async()=>{
+  vi.mocked(invoke).mockResolvedValue(tree);const attach=vi.fn().mockResolvedValue(undefined);
+  render(<MuxPanel sessionId="ssh1" onAttach={attach}/>);
+  await screen.findByRole('button',{name:'Attach work'});
+  const server="世界 '$(touch NO);";
+  fireEvent.change(screen.getByLabelText('tmux server'),{target:{value:server}});
+  fireEvent.click(screen.getByRole('button',{name:'Browse server'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'ssh1',tmuxServer:server},expect.anything()));
+  fireEvent.click(await screen.findByRole('button',{name:'Select %9'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('tmux_action',{sessionId:'ssh1',tmuxServer:server,action:{type:'selectPane',target:'%9'}},expect.anything()));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Attach work'})).toHaveProperty('disabled',false));
+  fireEvent.click(screen.getByRole('button',{name:'Attach work'}));
+  await waitFor(()=>expect(attach).toHaveBeenCalledWith('work','tmux',server));
+});
+it('keeps an attached terminal on its immutable server and rejects socket paths in the picker',async()=>{
+  vi.mocked(invoke).mockResolvedValue(tree);
+  const view=render(<MuxPanel sessionId="ssh1" attached={{kind:'tmux',name:'work',tmuxServer:'agents'}} onAttach={vi.fn()}/>);
+  expect(screen.getByLabelText('tmux server')).toHaveProperty('disabled',true);
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('multiplexer_tree',{sessionId:'ssh1',tmuxServer:'agents'},expect.anything()));
+  view.unmount();render(<MuxPanel sessionId="ssh2" onAttach={vi.fn()}/>);
+  await screen.findByRole('button',{name:'Attach work'});
+  fireEvent.change(screen.getByLabelText('tmux server'),{target:{value:'/tmp/socket'}});
+  expect(screen.getByRole('button',{name:'Browse server'})).toHaveProperty('disabled',true);
+});

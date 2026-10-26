@@ -396,6 +396,7 @@ describe("connection flow", () => {
       "one",
       "work",
       expect.any(Function),
+      undefined,
     );
     expect(mocks.api.write).not.toHaveBeenCalled();
     expect(mocks.api.disconnect).not.toHaveBeenCalled();
@@ -403,7 +404,7 @@ describe("connection flow", () => {
     expect(screen.getByText("Live SSH terminal")).toBeTruthy();
   });
 
-  it.each(['exact\u00a0native name', null])('jumps inside the display and honors native restoration identity %s', async restoreName => {
+  it.each([['exact\u00a0native name', undefined], ['exact\u00a0native name', "世界 '$(touch NO);"], [null, undefined]])('jumps inside the display and preserves restoration identity %s on server %s', async (restoreName, tmuxServer) => {
     mocks.api.connect.mockResolvedValue({sessionId:'source'});
     mocks.invoke.mockResolvedValue({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]});
     mocks.api.attachTmux.mockResolvedValue({sessionId:'display'});
@@ -416,13 +417,15 @@ describe("connection flow", () => {
     const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
     await screen.findByText('Live SSH terminal');expect(screen.queryByRole('button',{name:'Jump To'})).toBeNull();
     await user.click(screen.getByRole('button',{name:'Sessions'}));
+    if(tmuxServer){await user.clear(screen.getByLabelText('tmux server'));await user.type(screen.getByLabelText('tmux server'),tmuxServer);await user.click(screen.getByRole('button',{name:'Browse server'}));}
     await user.click(await screen.findByRole('button',{name:'Attach work'}));
+    expect(mocks.api.attachTmux).toHaveBeenCalledWith('source','work',expect.any(Function),tmuxServer);
     await user.click(await screen.findByRole('button',{name:'Jump To'}));
     await user.click(await screen.findByRole('button',{name:'1: build'}));
     await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Jump To'})).toBeNull());
     expect(mocks.api.tmuxJump).toHaveBeenCalledWith('display','native-only-generation','$2','@2');
     expect(screen.getByRole('tab',{name:'Home / destination'})).toBeTruthy();
-    expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home'},...(restoreName === null ? [] : [{hostId:'home',attached:{kind:'tmux',name:restoreName}}])]));
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home'},...(restoreName === null ? [] : [{hostId:'home',attached:{kind:'tmux',name:restoreName,...(tmuxServer===undefined?{}:{tmuxServer})}}])]));
     if (restoreName === null) expect(screen.getByText(/This tmux destination cannot be restored/)).toBeTruthy();
     else expect(screen.queryByText(/This tmux destination cannot be restored/)).toBeNull();
     mocks.api.tmuxJumpSnapshot.mockResolvedValue({...snapshot,current:{sessionId:'$2',windowId:'@2'}});
@@ -504,10 +507,10 @@ it("focuses host search when opened with the command palette shortcut", async ()
   ).toBeTruthy();
 });
 
-it("restores an exact tmux workspace through saved credentials without sending shell text", async () => {
+it.each([undefined, "agents"])("restores the exact tmux workspace on server %s without sending shell text", async tmuxServer => {
   vi.mocked(localStorage.getItem).mockReturnValue(
     JSON.stringify([
-      { hostId: "home", attached: { kind: "tmux", name: "durable-agent" } },
+      { hostId: "home", attached: { kind: "tmux", name: "durable-agent", ...(tmuxServer===undefined?{}:{tmuxServer}) } },
     ]),
   );
   mocks.api.connect.mockResolvedValue({ sessionId: "temporary-shell" });
@@ -529,13 +532,14 @@ it("restores an exact tmux workspace through saved credentials without sending s
     "temporary-shell",
     "durable-agent",
     expect.any(Function),
+    tmuxServer,
   );
   expect(mocks.invoke).toHaveBeenCalledWith("disconnect", {sessionId:"temporary-shell"});
   expect(mocks.api.write).not.toHaveBeenCalled();
   expect(localStorage.setItem).toHaveBeenLastCalledWith(
     "lazysh.workspace.v1",
     JSON.stringify([
-      { hostId: "home", attached: { kind: "tmux", name: "durable-agent" } },
+      { hostId: "home", attached: { kind: "tmux", name: "durable-agent", ...(tmuxServer===undefined?{}:{tmuxServer}) } },
     ]),
   );
 });

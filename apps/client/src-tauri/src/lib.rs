@@ -26,6 +26,7 @@ mod sync;
 mod terminal_input;
 mod theme_links;
 mod tmux_jump;
+mod tmux_server;
 mod ui_locale;
 mod vault;
 mod voice;

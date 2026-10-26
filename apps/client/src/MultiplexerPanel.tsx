@@ -1,3 +1,4 @@
+import {validTmuxServer, type SessionAttachment} from './workspace';
 import { observeCurrent } from "./asyncState";
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -22,8 +23,12 @@ type Action =
   | { type: 'splitPane'; target: string; horizontal: boolean; directory: string };
 type Edit = { type: 'createSession' } | { type: 'createWindow' | 'renameSession' | 'renameWindow'; target: string };
 
-export function MuxPanel({ sessionId, onAttach, attached }: { sessionId: string; onAttach: (name: string, kind?: MultiplexerKind) => Promise<void>; attached?: { kind: MultiplexerKind; name: string } }) {
+export function MuxPanel({ sessionId, onAttach, attached }: { sessionId: string; onAttach: (name: string, kind?: MultiplexerKind, tmuxServer?: string) => Promise<void>; attached?: SessionAttachment }) {
   const invoke = useProtectedInvoke();
+  const [selectedServer, setSelectedServer] = useState(attached?.kind === 'tmux' ? attached.tmuxServer ?? 'default' : 'default');
+  const [serverDraft, setServerDraft] = useState(selectedServer);
+  const tmuxServer = attached?.kind === 'tmux' ? attached.tmuxServer ?? 'default' : selectedServer;
+  const serverArgs = tmuxServer === 'default' ? {} : {tmuxServer};
   const [tree, setTree] = useState<Tree | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -42,10 +47,10 @@ export function MuxPanel({ sessionId, onAttach, attached }: { sessionId: string;
   useEffect(() => {
     const current = ++generation.current;
     setTree(null); setEdit(null); setPersistent({}); setHerdr(''); setZellij(''); setProjects([]); setProjectsLoaded(false); setError(''); setBusy(true);
-    observeCurrent(invoke<Tree>('multiplexer_tree', { sessionId }), () => generation.current === current,
+    observeCurrent(invoke<Tree>('multiplexer_tree', { sessionId, ...serverArgs }), () => generation.current === current,
       setTree, error => setError(errorMessage(error)), () => setBusy(false));
     return () => { generation.current++; };
-  }, [sessionId]);
+  }, [sessionId, tmuxServer]);
   useEffect(() => { try { localStorage.setItem('lazysh.multiplexer.layout', layout); } catch { /* Layout remains usable without persistence. */ } }, [layout]);
   async function run(action?: Action, attach?: string, kind?: MultiplexerKind) {
     if (locked.current) return;
@@ -55,11 +60,12 @@ export function MuxPanel({ sessionId, onAttach, attached }: { sessionId: string;
     try {
       if (attach !== undefined) {
         if (kind) await onAttach(attach, kind);
-        else await onAttach(attach);
+        else if (tmuxServer === 'default') await onAttach(attach);
+        else await onAttach(attach, 'tmux', tmuxServer);
       }
       else {
-        if (action) await invoke('tmux_action', { sessionId, action });
-        const value = await invoke<Tree>('multiplexer_tree', { sessionId });
+        if (action) await invoke('tmux_action', { sessionId, action, ...serverArgs });
+        const value = await invoke<Tree>('multiplexer_tree', { sessionId, ...serverArgs });
         if (generation.current === current) { setTree(value); setEdit(null); }
       }
     } catch (e) { if (generation.current === current) setError(errorMessage(e)); }
@@ -97,6 +103,8 @@ export function MuxPanel({ sessionId, onAttach, attached }: { sessionId: string;
     else void run({ type: edit.type, target: edit.target, name });
   }
   return <section className="tool-panel multiplexer-panel" aria-label="Multiplexer workspaces">
+    <div className="tool-bar"><label>tmux server<input value={attached?.kind === 'tmux' ? tmuxServer : serverDraft} disabled={busy || attached?.kind === 'tmux'} onChange={event=>setServerDraft(event.target.value)} placeholder="default" /></label>
+      {attached?.kind !== 'tmux' && <button className="subtle-button" disabled={busy || !validTmuxServer(serverDraft)} onClick={()=>{setError('');setSelectedServer(serverDraft);}}>Browse server</button>}<span>Server: {tmuxServer}</span></div>
     <div className="tool-bar"><h3>Workspaces</h3><button className="subtle-button" disabled={busy} onClick={() => void run()}><RefreshCw size={15} /> Refresh</button>
       {tree?.tmuxAvailable && <button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'createSession' })}>New session</button>}</div>
     <div className="tool-bar"><label>Workspace layout<select value={layout} onChange={e => setLayout(e.target.value)}><option value="list">List</option><option value="accordion">Accordion</option><option value="grid">Grid</option></select></label><button className="subtle-button" disabled={busy} onClick={() => void loadProjects()}>Load recent projects</button></div>

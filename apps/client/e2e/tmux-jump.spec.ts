@@ -1,14 +1,14 @@
 import { expect, test } from '@playwright/test';
 
 declare global { interface Window {
-  tmuxJumpFixture: { jumps: Record<string, unknown>[]; defer: boolean; finish?: () => void };
+  tmuxJumpFixture: { jumps: Record<string, unknown>[]; attachments: Record<string,unknown>[]; defer: boolean; finish?: () => void };
 } }
 
-test('attached display Jump To is reachable, remembers layouts and drops a late result after switching terminals', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('lazysh.workspace.v1', JSON.stringify([{hostId:'fixture'},{hostId:'fixture',attached:{kind:'tmux',name:'work'}}]));
+for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display Jump To preserves server ${server ?? 'default'} and drops a late result after switching terminals`, async ({ page }) => {
+  await page.addInitScript(({server}) => {
+    localStorage.setItem('lazysh.workspace.v1', JSON.stringify([{hostId:'fixture'},{hostId:'fixture',attached:{kind:'tmux',name:'work',...(server===undefined?{}:{tmuxServer:server})}}]));
     localStorage.setItem('lazysh.multiplexer.layout', 'grid');
-    window.tmuxJumpFixture = {jumps:[],defer:false};
+    window.tmuxJumpFixture = {jumps:[],attachments:[],defer:false};
     const snapshot = {generation:'retained-actor',current:{sessionId:'$1',windowId:'@1'},sessions:[
       {id:'$1',name:'work',restoreName:'work',windows:[{id:'@1',index:0,name:'agent'}]},
       {id:'$2',name:'builds',restoreName:'builds',windows:[{id:'@2',index:1,name:'compiler'}]},
@@ -19,10 +19,11 @@ test('attached display Jump To is reachable, remembers layouts and drops a late 
       transformCallback:()=>1,unregisterCallback:()=>{},
       invoke:async(command:string,args:Record<string,unknown>={})=>{
         if(command==='app_lock_status')return {initialized:true,supported:false,reason:'Synthetic tmux UI fixture; no remote process runs.',enabled:false,locked:false,generation:'0'};
+        if(command==='ui_locale_status')return {nativeAuthority:false};
         if(command==='list_hosts')return [{id:'fixture',name:'Fixture',hostname:'localhost',port:22,username:'test'}];
         if(command==='local_capability')return {available:false,reason:'SSH fixture only.'};
         if(command==='connect')return {sessionId:`ssh-${++connections}`};
-        if(command==='attach_tmux')return {sessionId:'display'};
+        if(command==='attach_tmux'){window.tmuxJumpFixture.attachments.push(args);return {sessionId:'display'};}
         if(command==='tmux_jump_snapshot')return snapshot;
         if(command==='tmux_jump'){
           window.tmuxJumpFixture.jumps.push(args);
@@ -37,10 +38,11 @@ test('attached display Jump To is reachable, remembers layouts and drops a late 
         throw new Error(`Unexpected tmux UI fixture command: ${command}`);
       },
     }});
-  });
+  },{server});
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   await expect(page.getByRole('tab')).toHaveCount(2);
+  expect(await page.evaluate(()=>window.tmuxJumpFixture.attachments.map(({sessionId,name,tmuxServer})=>({sessionId,name,...(tmuxServer===undefined?{}:{tmuxServer})})))).toEqual([{sessionId:'ssh-2',name:'work',...(server===undefined?{}:{tmuxServer:server})}]);
   await expect(page.getByRole('button',{name:'Jump To',exact:true})).toHaveCount(0);
   await page.getByRole('tab',{name:'Fixture / work',exact:true}).click();
   const trigger=page.getByRole('button',{name:'Jump To',exact:true});
@@ -75,5 +77,5 @@ test('attached display Jump To is reachable, remembers layouts and drops a late 
   await expect(page.getByRole('tab',{name:'Fixture / work',exact:true})).toBeVisible();
   expect(await page.evaluate(()=>window.tmuxJumpFixture.jumps)).toEqual([{sessionId:'display',generation:'retained-actor',targetSessionId:'$2',windowId:'@2'}]);
   const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.workspace.v1')!));
-  expect(saved).toEqual([{hostId:'fixture'},{hostId:'fixture',attached:{kind:'tmux',name:'work'}}]);
+  expect(saved).toEqual([{hostId:'fixture'},{hostId:'fixture',attached:{kind:'tmux',name:'work',...(server===undefined?{}:{tmuxServer:server})}}]);
 });
