@@ -3,10 +3,10 @@ import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import ChatPanel from './ChatPanel';
-import {accessSnapshot,applyAccessStatus} from './access';
+import {chatFollowAccess as access} from './test/chatFollowAccess';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 const page=(text='Initial branch')=>({schemaVersion:1,agent:'claude',view:'active_branch',messages:[{id:text,role:'assistant',blocks:[{type:'text',text}]}],nextOffset:100,hasMore:false});
-function access(locked=false){applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),...(locked?{}:{nonce:'a'.repeat(64)})});}
+
 beforeEach(()=>{vi.useFakeTimers();vi.mocked(invoke).mockReset();access();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 async function open(){

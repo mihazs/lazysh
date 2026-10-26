@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- Add explicit checkpointed Grok Records reads on Unix companions, binding continuation to selected file identity and its observed prefix. Manual paging/output stays unchanged; frontend Follow and live-agent targeting are not enabled.
+- Add explicit Grok recorded-file Follow with verified preparation, append-only paging, hidden-page pause and original source/access ownership. Manual Records remains the default; reconstructed conversation and live prompt targeting are not enabled.
+
+- Add explicit checkpointed Grok Records reads on Unix companions, binding continuation to selected file identity and its observed prefix. Manual paging/output stays unchanged; live-agent targeting is not enabled.
 
 - Disable Turbo caching for client production builds so About/source metadata always embeds the current Git revision and dirty state. Other packages keep their existing cache behavior; source URL and metadata rules are unchanged.
 
