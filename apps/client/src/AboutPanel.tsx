@@ -1,3 +1,4 @@
+import {t, useUi} from './i18n/core';
 import { useProtectedApi } from './access';
 import { useState } from "react";
 import license from "../../../LICENSE?raw";
@@ -12,6 +13,7 @@ import { api as nativeApi, native } from "./bridge";
 import { errorMessage } from "./SessionTools";
 
 export default function AboutPanel() {
+  useUi();
   const api = useProtectedApi(nativeApi);
   const [error, setError] = useState("");
   const source = `https://github.com/mihazs/lazysh${__LAZYSH_SOURCE_REVISION__ ? `/tree/${__LAZYSH_SOURCE_REVISION__}` : ""}`;
@@ -21,46 +23,40 @@ export default function AboutPanel() {
     else window.open(url, "_blank", "noopener,noreferrer");
   }
   return (
-    <section className="preferences-panel" aria-label="About lazysh">
+    <section className="preferences-panel" aria-label={t('appAboutLazysh')}>
       <h2>lazysh</h2>
       <p>
-        Independent SSH and AI-agent workspace. Version 0.1.0, in development.
+        {t('aboutDescription', {version: '0.1.0'})}
       </p>
       <p>
-        Copyright lazysh contributors. Licensed under GNU GPL version 3 or, at
-        your option, any later version. Provided without warranty.
+        {t('aboutCopyright')}
       </p>
       {error && <p role="alert">{error}</p>}
       <button onClick={() => open(source)}>
-        View corresponding source and build history
+        {t('aboutSource')}
       </button>
       {__LAZYSH_SOURCE_REVISION__ && (
         <p>
-          Source revision: <code>{__LAZYSH_SOURCE_REVISION__}</code>
+          {t('aboutRevision')} <code>{__LAZYSH_SOURCE_REVISION__}</code>
           {__LAZYSH_SOURCE_DIRTY__
-            ? " with uncommitted development changes"
+            ? ` ${t('aboutDirty')}`
             : ""}
           .
         </p>
       )}
       <p>
-        For a distributed build, use its release or CI commit to identify the
-        matching source. Third-party components retain their own copyright and
-        license notices.
+        {t('aboutDistributedSource')}
       </p>
       <details>
-        <summary>GNU General Public License</summary>
+        <summary>{t('aboutLicense', {component: 'GNU General Public License'})}</summary>
         <pre style={{ whiteSpace: "pre-wrap" }}>{license}</pre>
       </details>
       <details>
-        <summary>Mosh notices</summary>
+        <summary>{t('aboutMoshNotices')}</summary>
         <p>
-          Mosh is copyright its contributors and licensed under
-          GPL-3.0-or-later, with the applicable OpenSSL linking exception in its
-          source headers. lazysh modifications, upstream version and checksums
-          are recorded with the transport source.
+          {t('aboutMoshExplanation')}
         </p>
-        <button onClick={() => open(source)}>Mosh source and notices</button>
+        <button onClick={() => open(source)}>{t('aboutMoshSource')}</button>
         <pre style={{ whiteSpace: "pre-wrap" }}>{moshIos}</pre>
       </details>
       {[
@@ -72,7 +68,7 @@ export default function AboutPanel() {
         ["Portable PTY", ptyLicense],
       ].map(([name, text]) => (
         <details key={name}>
-          <summary>{name} license</summary>
+          <summary>{t('aboutLicense', {component: name})}</summary>
           <pre style={{ whiteSpace: "pre-wrap" }}>{text}</pre>
         </details>
       ))}

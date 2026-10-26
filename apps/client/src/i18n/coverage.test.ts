@@ -3,7 +3,7 @@ import ts from 'typescript';
 import {expect,it} from 'vitest';
 
 it('keeps interface text and accessible attributes catalogued throughout the covered workflow',()=>{
-  const files=['App','PreferencesPanel','ChordBuilder','ThemeImportPanel','ThemeLinkPanel','AppIconPanel','AccessPanel','AccessShell','ChatPanel','UsagePanel','NotificationPanel','SessionTools','RepositoryPanel','CodePreview','PreviewPanel','PreviewFrame','CloudVoiceSettingsPanel','VoiceHistoryPanel','VoicePanel','AgentPanel','ApprovalPanel','CompanionSettingsPanel','AttachmentPanel','SharePanel','DevicePanel','TmuxJumpPanel','PushSettingsPanel','MultiplexerPanel','HerdrPanel','ZellijPanel','CredentialsPanel'];
+  const files=['AboutPanel','App','PreferencesPanel','ChordBuilder','ThemeImportPanel','ThemeLinkPanel','AppIconPanel','AccessPanel','AccessShell','ChatPanel','UsagePanel','NotificationPanel','SessionTools','RepositoryPanel','CodePreview','PreviewPanel','PreviewFrame','CloudVoiceSettingsPanel','VoiceHistoryPanel','VoicePanel','AgentPanel','ApprovalPanel','CompanionSettingsPanel','AttachmentPanel','SharePanel','DevicePanel','TmuxJumpPanel','PushSettingsPanel','MultiplexerPanel','HerdrPanel','ZellijPanel','CredentialsPanel'];
   const literalExamples=new Set(['default','/home/user/project','tmux','Herdr','Zellij','Herdr:','Zellij:','· Herdr','· Zellij','Android','/private/tmp/lazysh-idb/idb.sock','Whisper','Cloud · gpt-transcribe','MiB','https://voice.example.com','https://files.example.com','-----BEGIN OPENSSH PRIVATE KEY-----','IPv4','IPv6','/host/session.jsonl','l','lazysh','SSH','ET','Mosh','Eternal Terminal','Ctrl','C-b, T','workstation.local','agent $ ready for review','lazysh 0123456789 · 中文 日本語 한국어']);
   const uncatalogued:string[]=[];
   for(const file of files) {
