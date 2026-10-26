@@ -325,6 +325,17 @@ fn screenshots_bound_bridge_payload_and_preserve_source_coordinate_dimensions() 
     assert_eq!(frame["height"], 1000);
     assert_eq!(frame["imageWidth"], 1280);
     assert!(frame["imageHeight"].as_u64().unwrap() < 1000);
+    assert_jpeg_preview(&frame);
+    assert_eq!(
+        runner.calls[0],
+        (
+            Tool::Adb,
+            args(&["-s", "emulator-5554", "exec-out", "screencap", "-p"])
+        )
+    );
+}
+
+fn assert_jpeg_preview(frame: &Value) {
     assert_eq!(frame["mime"], "image/jpeg");
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(frame["base64"].as_str().unwrap())
@@ -338,13 +349,60 @@ fn screenshots_bound_bridge_payload_and_preserve_source_coordinate_dimensions() 
         decoded.height(),
         frame["imageHeight"].as_u64().unwrap() as u32
     );
+    assert!((1..=1280).contains(&decoded.width()));
+    assert!((1..=1280).contains(&decoded.height()));
+    assert!(bytes.len() <= MAX_FRAME);
     assert!(serde_json::to_vec(&frame).unwrap().len() < 768 * 1024);
-    assert_eq!(
-        runner.calls[0],
-        (
-            Tool::Adb,
-            args(&["-s", "emulator-5554", "exec-out", "screencap", "-p"])
-        )
+}
+
+#[test]
+#[ignore = "requires an explicitly selected owned Android emulator and installed SDK"]
+fn android_owned_emulator_inventory_and_screenshot() {
+    let id = std::env::var("LAZYSH_TEST_ANDROID_SERIAL")
+        .expect("explicitly select an owned emulator with LAZYSH_TEST_ANDROID_SERIAL");
+    assert!(
+        emulator_id(&id),
+        "this acceptance test requires an emulator"
+    );
+    assert_eq!(std::env::var("ANDROID_SERIAL").as_deref(), Ok(id.as_str()));
+    let mut runner = SdkRunner {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    let inventory = execute(
+        &mut runner,
+        DeviceCommand::List {
+            platform: Platform::Android,
+        },
+    )
+    .expect("real SDK discovery");
+    let selected = inventory["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|device| device["id"].as_str() == Some(&id))
+        .expect("the selected emulator must be present in actual SDK discovery");
+    assert_eq!(selected["state"], "running");
+    assert_eq!(selected["kind"], "emulator");
+    assert_eq!(selected["capabilities"]["screenshot"], true);
+    let frame = execute(
+        &mut runner,
+        DeviceCommand::Screenshot {
+            platform: Platform::Android,
+            id: id.clone(),
+        },
+    )
+    .expect("real emulator capture through the production SDK runner");
+    assert_eq!(frame["schemaVersion"], 1);
+    assert_eq!(frame["platform"], "android");
+    assert_eq!(frame["id"], id);
+    for axis in ["width", "height"] {
+        assert!((1..=8192).contains(&frame[axis].as_u64().unwrap()));
+    }
+    assert_jpeg_preview(&frame);
+    // Report dimensions only: never persist or print captured screen contents.
+    println!(
+        "owned Android SDK preview: {}x{} source, {}x{} JPEG",
+        frame["width"], frame["height"], frame["imageWidth"], frame["imageHeight"]
     );
 }
 
