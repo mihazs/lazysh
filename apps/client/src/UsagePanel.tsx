@@ -3,7 +3,7 @@ import { usageAgents as agents, isDiscoveredTranscript } from "./transcriptSourc
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 
-import { errorMessage } from "./SessionTools";
+import {LocalUiError,captureUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import type { RecordedProviderWindow, RecordedUsageContext } from "./bridge";
 import "./UsagePanel.css";
 
@@ -39,30 +39,30 @@ export function parseUsage(value: unknown): Snapshot {
     || !Number.isSafeInteger(data.samplesAvailable) || data.samplesAvailable < 0 || data.samplesAvailable > 100
     || !Array.isArray(data.samples) || data.samples.length > 20 || data.samples.length > data.samplesAvailable
     || !data.context || Object.values(data.context).some(value => value !== null) || !["usedTokens", "limitTokens", "remainingTokens"].every(key => Object.hasOwn(data.context, key))
-    || !data.quota || data.quota.remaining !== null || data.quota.resetsAt !== null) throw new Error(t("usageUnsupportedResponse"));
+    || !data.quota || data.quota.remaining !== null || data.quota.resetsAt !== null) throw new LocalUiError('usageUnsupportedResponse');
   const seen = new Set<string>();
   for (const sample of data.samples) {
     if (!sample || typeof sample.id !== "string" || !sample.id || sample.id.length > 4096 || seen.has(sample.id)
       || !["fresh", "stale", "unknown"].includes(sample.freshness)
       || (sample.recordedAt !== null && !validTime(sample.recordedAt))
       || (sample.recordedAt === null && sample.freshness !== "unknown")
-      || counters.some(key => sample[key] !== null && (!Number.isSafeInteger(sample[key]) || Number(sample[key]) < 0))) throw new Error(t("usageInvalidRecord"));
+      || counters.some(key => sample[key] !== null && (!Number.isSafeInteger(sample[key]) || Number(sample[key]) < 0))) throw new LocalUiError('usageInvalidRecord');
     seen.add(sample.id);
   }
   if (data.recordedContext !== undefined && data.recordedContext !== null) {
     const context = data.recordedContext;
-    if (data.agent !== "codex" || context.source !== "codex_token_count" || !validCounter(context.usedTokens) || !validCounter(context.limitTokens) || !validRecorded(context)) throw new Error(t("usageInvalidContext"));
+    if (data.agent !== "codex" || context.source !== "codex_token_count" || !validCounter(context.usedTokens) || !validCounter(context.limitTokens) || !validRecorded(context)) throw new LocalUiError('usageInvalidContext');
   }
   if (data.providerWindows !== undefined) {
-    if (!Array.isArray(data.providerWindows) || data.providerWindows.length > 16) throw new Error(t("usageInvalidWindows"));
+    if (!Array.isArray(data.providerWindows) || data.providerWindows.length > 16) throw new LocalUiError('usageInvalidWindows');
     const windows = new Set<string>();
     for (const window of data.providerWindows) {
       if (!window || data.agent !== "codex" || window.provider !== "codex" || window.accountId !== null || !["primary", "secondary"].includes(window.kind)
         || (window.limitId !== null && (typeof window.limitId !== "string" || !window.limitId || window.limitId.length > 128 || /[\u0000-\u001f\u007f]/.test(window.limitId)))
         || !Number.isFinite(window.usedPercent) || window.usedPercent < 0 || window.usedPercent > 100
-        || !validCounter(window.windowMinutes) || window.windowMinutes === 0 || (window.resetsAt !== null && !validTime(window.resetsAt)) || !validRecorded(window)) throw new Error(t("usageInvalidWindow"));
+        || !validCounter(window.windowMinutes) || window.windowMinutes === 0 || (window.resetsAt !== null && !validTime(window.resetsAt)) || !validRecorded(window)) throw new LocalUiError('usageInvalidWindow');
       const key = JSON.stringify([window.limitId, window.kind]);
-      if (windows.has(key)) throw new Error(t("usageDuplicateWindow"));
+      if (windows.has(key)) throw new LocalUiError('usageDuplicateWindow');
       windows.add(key);
     }
   }
@@ -94,7 +94,7 @@ export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId
   const [receivedAt, setReceivedAt] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiErrorCause>("");
   const request = useRef(0);
   useEffect(() => {
     request.current++; setPath(""); setTranscriptSessionId(""); setDiscovered([]); setOpened(undefined); setData(undefined); setError(""); setBusy(false);
@@ -107,9 +107,9 @@ export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId
     try {
       const result = await invoke<{ schemaVersion: number; sessions: Discovered[] }>("agent_transcripts", { sessionId, agent });
       if (current !== request.current) return;
-      if (result?.schemaVersion !== 1 || !Array.isArray(result.sessions) || result.sessions.length > 50 || result.sessions.some(item => !isDiscoveredTranscript(item, 256))) throw new Error(t("panelInvalidTranscriptList"));
+      if (result?.schemaVersion !== 1 || !Array.isArray(result.sessions) || result.sessions.length > 50 || result.sessions.some(item => !isDiscoveredTranscript(item, 256))) throw new LocalUiError('panelInvalidTranscriptList');
       setDiscovered(result.sessions);
-    } catch (e) { if (current === request.current) setError(errorMessage(e)); }
+    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
   async function read(source: Source) {
@@ -118,9 +118,9 @@ export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId
       const result = await invoke("agent_usage", { sessionId, ...source });
       if (current !== request.current) return;
       const snapshot = parseUsage(result);
-      if (snapshot.agent !== source.agent || snapshot.nextOffset < source.offset || (snapshot.hasMore && snapshot.nextOffset === source.offset)) throw new Error(t("usageChanged"));
+      if (snapshot.agent !== source.agent || snapshot.nextOffset < source.offset || (snapshot.hasMore && snapshot.nextOffset === source.offset)) throw new LocalUiError('usageChanged');
       const received = Date.now(); setReceivedAt(received); setNow(received); setData(snapshot); setOpened(source);
-    } catch (e) { if (current === request.current) setError(errorMessage(e)); }
+    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
     finally { if (current === request.current) setBusy(false); }
   }
   const latest = data?.samples.at(-1);
@@ -136,7 +136,7 @@ export default function UsagePanel({ sessionId, onShareAppleUsage }: { sessionId
       <button disabled={busy || !path.trim()} type="submit">{t("usageInspect")}</button>
     </form>
     {busy && <p role="status">{t("usageReading")}</p>}
-    {error && <p className="inline-error" role="alert">{error}</p>}
+    {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}
     {data && <>
       <p><time dateTime={data.observedAt}>{t("usageObservedAt", {time:formatDateTime(new Date(data.observedAt))})}</time>{" "}{t("usageSummary", {shown:formatNumber(data.samples.length),available:formatNumber(data.samplesAvailable)})}</p>
       <section aria-label={t("usageLatest")}><h4>{t("usageLatest")}</h4>

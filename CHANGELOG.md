@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep retained recorded-usage validation, transcript discovery and continuity errors in the current interface language without repeating requests. Raw host diagnostics, parser rules, metrics and defaults are unchanged.
+
 - Prepare automatic version and package-changelog pull requests with Changesets, keeping private Bun, Cargo and Tauri product versions together. About labels read the client build version. Existing root changelog history is retained. Publishing, tags and application-store release defaults remain disabled; GitHub PR creation and default-token CI approval require explicit repository setup.
 
 - Add an explicit Mac-host clipboard action for the latest successful attachment. It writes the raw canonical path through the original verified SSH session and fixed `/usr/bin/pbcopy`; uploads still never copy automatically. Cancellation cannot undo a clipboard change already delivered. Linux and Windows host clipboard tools remain unsupported.
