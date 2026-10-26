@@ -11,7 +11,7 @@ it('retains distinct transcript and usage identity limits in shared discovery va
   }
   expect(isDiscoveredTranscript({path:'/',name:'session'},256)).toBe(true);
 });
-it('keeps explicit record-only agents out of recorded usage selection', () => {
+it('keeps record-only agents out of recorded usage selection even when discovery is available', () => {
   for (const agent of ['grok-acp','antigravity-jsonl']) {
     expect(Object.hasOwn(transcriptAgents,agent)).toBe(true);
     expect(Object.hasOwn(usageAgents,agent)).toBe(false);

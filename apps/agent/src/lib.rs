@@ -252,88 +252,32 @@ pub struct Store {
     connection: Connection,
 }
 
-fn regular_state_metadata(path: &Path, message: &'static str) -> io::Result<Option<fs::Metadata>> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if storage_namespace::is_link(&metadata) || !metadata.is_file() => {
-            Err(io::Error::new(io::ErrorKind::InvalidInput, message))
-        }
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
 fn validate_state_file(path: &Path) -> Result<()> {
-    let Some(metadata) = regular_state_metadata(path, "State must be a regular file")? else {
-        return Ok(());
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.nlink() != 1 || metadata.uid() != unsafe { libc::geteuid() } {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "State must not have hard links",
-            )));
-        }
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    lazysh_common::private_state::validate_database(path).map_err(Error::from)
+}
+fn sidecar_kind(path: &Path) -> lazysh_common::private_state::SidecarKind {
+    use lazysh_common::private_state::SidecarKind;
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("events.sqlite3-journal") => SidecarKind::Journal,
+        Some("events.sqlite3-wal") => SidecarKind::Wal,
+        Some("events.sqlite3-shm") => SidecarKind::Shm,
+        Some("events.sqlite3-init-lock") => SidecarKind::BootstrapLock,
+        _ => SidecarKind::Other,
     }
-    Ok(())
 }
-
 fn validate_sidecar(path: &Path) -> Result<()> {
-    validate_sidecar_with(path, || {
-        regular_state_metadata(path, "Invalid state sidecar")
-    })
+    lazysh_common::private_state::validate_sidecar(path, sidecar_kind(path)).map_err(Error::from)
 }
+#[cfg(test)]
+fn regular_state_metadata(path: &Path, message: &'static str) -> io::Result<Option<fs::Metadata>> {
+    lazysh_common::test_support::regular_state_metadata(path, message)
+}
+#[cfg(test)]
 fn validate_sidecar_with(
     path: &Path,
-    mut observe: impl FnMut() -> io::Result<Option<fs::Metadata>>,
+    observe: impl FnMut() -> io::Result<Option<fs::Metadata>>,
 ) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let kind = match path.file_name().and_then(|name| name.to_str()) {
-            Some("events.sqlite3-journal") => "journal",
-            Some("events.sqlite3-wal") => "wal",
-            Some("events.sqlite3-shm") => "shm",
-            Some("events.sqlite3-init-lock") => "bootstrap-lock",
-            _ => "other",
-        };
-        let mut retries = 0;
-        loop {
-            let Some(metadata) = observe()? else {
-                return Ok(());
-            };
-            {
-                use std::os::unix::fs::{MetadataExt, PermissionsExt};
-                let links = metadata.nlink();
-                let owned = metadata.uid() == unsafe { libc::geteuid() };
-                let mode = metadata.permissions().mode() & 0o777;
-                // SQLite may unlink its ephemeral sidecar during stat. Never accept
-                // that removed inode: re-stat the path, validating any replacement.
-                if links == 0
-                    && owned
-                    && mode == 0o600
-                    && matches!(kind, "journal" | "wal" | "shm")
-                    && retries < 2
-                {
-                    retries += 1;
-                    continue;
-                }
-                if links != 1 || !owned || mode != 0o600 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        format!("Unsafe state sidecar (kind={kind}, links={links}, owned={owned}, mode={mode:03o})"),
-                    ).into());
-                }
-            }
-            return Ok(());
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        observe().map(|_| ()).map_err(Error::from)
-    }
+    lazysh_common::test_support::observe_sidecar(sidecar_kind(path), observe).map_err(Error::from)
 }
 
 fn lock_store_bootstrap(directory: &Path, deadline: Instant) -> Result<fs::File> {
@@ -415,6 +359,15 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
+        // Short-lived hooks must not checkpoint/unlink shared WAL state when
+        // another Store is admitting its sidecars. FULL commit synchronization
+        // and SQLite's normal automatic checkpoints remain unchanged.
+        if !connection.set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+            true,
+        )? {
+            return Err(io::Error::other("Cannot retain companion WAL on close").into());
+        }
         validate_state_file(&path)?;
         connection.busy_handler(Some(move |_| wait_for_storage_until(bootstrap_deadline)))?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -610,7 +563,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn established_store_cleanup_during_protected_admission_preserves_committed_event() {
+    fn legacy_connection_cleanup_during_protected_admission_preserves_committed_event() {
         let directory = tempfile::tempdir().unwrap();
         let now = Utc::now();
         let event = normalize(
@@ -624,6 +577,15 @@ mod tests {
         .unwrap()
         .unwrap();
         let mut existing = Store::open(directory.path()).unwrap();
+        // Keep exercising the actual cleanup boundary for legacy/external peers
+        // that have not adopted Store's retained-WAL close policy.
+        assert!(!existing
+            .connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .unwrap());
         existing.ingest(&event, now).unwrap();
         let sidecars =
             ["-wal", "-shm"].map(|suffix| directory.path().join(format!("events.sqlite3{suffix}")));
@@ -810,22 +772,35 @@ mod tests {
         let first = Store::open(dir.path()).unwrap();
         let second = Store::open(dir.path()).unwrap();
         for store in [first, second] {
-            assert_eq!(
+            assert!(store
+                .connection
+                .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE)
+                .unwrap());
+            let number = |name: &str| {
                 store
                     .connection
-                    .query_row("PRAGMA synchronous", [], |r| r.get::<_, i32>(0))
-                    .unwrap(),
-                2
+                    .pragma_query_value(None, name, |row| row.get::<_, i64>(0))
+                    .unwrap()
+            };
+            assert_eq!(number("wal_autocheckpoint"), 1000);
+            assert_eq!(number("journal_size_limit"), 1024 * 1024);
+            assert_eq!(number("synchronous"), 2);
+            eprintln!(
+                "Store WAL settings: page_size={}, auto_pages={}, journal_bytes={}",
+                number("page_size"),
+                number("wal_autocheckpoint"),
+                number("journal_size_limit")
             );
             assert_eq!(
                 store
                     .connection
-                    .query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
+                    .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
                     .unwrap(),
                 "wal"
             );
         }
     }
+
     #[test]
     fn retention_runs_on_ingest_and_snapshot() {
         let dir = tempfile::tempdir().unwrap();

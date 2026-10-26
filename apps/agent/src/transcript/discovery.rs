@@ -31,10 +31,7 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
     if !(1..=100).contains(&limit) {
         return Err(Error::InvalidArgument);
     }
-    if matches!(
-        agent,
-        TranscriptAgent::GrokAcp | TranscriptAgent::AntigravityJsonl
-    ) {
+    if matches!(agent, TranscriptAgent::AntigravityJsonl) {
         return Err(Error::InvalidArgument);
     }
     if matches!(agent, TranscriptAgent::Hermes | TranscriptAgent::Opencode) {
@@ -42,6 +39,7 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
     }
     let root = match root {
         Some(path) => path.to_path_buf(),
+        None if matches!(agent, TranscriptAgent::GrokAcp) => grok_sessions_root()?,
         None if matches!(agent, TranscriptAgent::DevinAtif) => std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
@@ -106,7 +104,7 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
         TranscriptAgent::Codex => 3,
         TranscriptAgent::Pi | TranscriptAgent::Omp | TranscriptAgent::Omo => 1,
         TranscriptAgent::Copilot | TranscriptAgent::Droid => 1,
-        TranscriptAgent::QoderIde | TranscriptAgent::Kimi => 2,
+        TranscriptAgent::QoderIde | TranscriptAgent::Kimi | TranscriptAgent::GrokAcp => 2,
         TranscriptAgent::Cursor => 3,
         TranscriptAgent::Jcode | TranscriptAgent::DevinAtif | TranscriptAgent::AmpJson => 0,
         _ => return Err(Error::InvalidArgument),
@@ -147,6 +145,9 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
             }
             let path = entry.path();
             let expected = match agent {
+                TranscriptAgent::GrokAcp => {
+                    depth == 2 && path.file_name().is_some_and(|name| name == "updates.jsonl")
+                }
                 TranscriptAgent::Copilot => {
                     path.file_name().is_some_and(|name| name == "events.jsonl")
                 }
@@ -182,7 +183,10 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
             let modified_at = chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339();
             discovery.sessions.push(DiscoveredSession {
                 path: path.into(),
-                name: if matches!(agent, TranscriptAgent::Copilot | TranscriptAgent::Kimi) {
+                name: if matches!(
+                    agent,
+                    TranscriptAgent::Copilot | TranscriptAgent::Kimi | TranscriptAgent::GrokAcp
+                ) {
                     entry
                         .path()
                         .parent()
@@ -215,4 +219,16 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
         }
     }
     Ok(discovery)
+}
+
+/// The pinned provider uses a nonempty override verbatim, including relative paths.
+/// Resolve only: never call the provider's directory-creating/cached getter.
+#[allow(deprecated)] // Matches the provider's USERPROFILE-first Windows home contract.
+fn grok_sessions_root() -> Result<PathBuf> {
+    std::env::var_os("GROK_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|path| path.join(".grok")))
+        .map(|path| path.join("sessions"))
+        .ok_or(Error::InvalidArgument)
 }

@@ -4,6 +4,8 @@
 
 - Allow active host-local uploads to be cancelled from Attachments and the remote Files browser. New reservation defaults allow two pending/sending files, each up to 10 MiB (20 MiB total); unused reservations expire after 30 seconds, separately from the existing 30-second transfer deadline. Cancellation never deletes a remote pathname: a partial or completed new file may remain. Existing files remain protected against replacement.
 
+- Add metadata-only discovery of existing Grok ACP `updates.jsonl` candidates in the pinned source store layout, honoring literal nonempty `GROK_HOME` overrides. Selecting and opening a file remains explicit; record-stream, conversation-replay and live-binding restrictions are unchanged.
+
 - Add explicit named tmux server selection throughout discovery, attachment, controls, Jump To and saved workspace restoration. Commands now explicitly select `-L default` when no named server is chosen; an inherited `TMUX` environment variable no longer redirects legacy/default operations to another server. Client invocations now force UTF-8 (`-u`) so discovery framing and Unicode metadata are independent of the remote locale.
 
 - Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux now uses bounded asynchronous XDG portal acknowledgements, with exact cancellation, private-connection cleanup and visible owner-loss reporting. Acknowledgement does not establish physical idle-timeout or battery behavior; hardware validation remains pending.
@@ -12,6 +14,12 @@ This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
+
+- Changed companion SQLite close behavior: successful Store connections retain
+  private WAL/SHM files after clean exit instead of checkpointing/deleting them
+  for each short-lived hook. FULL commit synchronization and normal automatic
+  checkpoints remain enabled. A database-only copy can now miss acknowledged
+  events even after CLI exit; use a consistent SQLite backup or verified checkpoint.
 
 - Companion initialization checks temporary SQLite journal/WAL/SHM paths while
   holding its existing bootstrap lock, avoiding inspections racing another

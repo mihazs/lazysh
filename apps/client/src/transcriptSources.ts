@@ -17,7 +17,7 @@ export const usageAgents: Record<string, string> = {
 };
 export const transcriptAgents: Record<string, string> = {
   ...usageAgents,
-  "grok-acp": "Grok ACP records (explicit file)",
+  "grok-acp": "Grok ACP records",
   "antigravity-jsonl": "Antigravity step records (explicit file)",
 };
 export type DiscoveredTranscript = { path: string; name: string; sessionId?: string };

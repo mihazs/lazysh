@@ -1,4 +1,4 @@
-use lazysh_agent::transcript::{conversation, discover, read_page, TranscriptAgent};
+use lazysh_agent::transcript::{conversation, read_page, TranscriptAgent};
 use serde_json::{json, Value};
 use std::{fs, io::Write, process::Command};
 
@@ -294,12 +294,10 @@ fn oversized_rows_fail_and_unknown_rows_advance_within_scan_budget() {
     assert!(page.next_offset > 0 && page.next_offset <= 4 * 1024 * 1024);
 }
 #[test]
-fn explicit_records_reject_discovery_and_conversation_cli_views() {
+fn records_still_reject_conversation_cli_views() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("updates.jsonl");
     fs::write(&path, FIXTURE).unwrap();
-    assert!(discover(TranscriptAgent::GrokAcp, None, 50).is_err());
-    assert!(discover(TranscriptAgent::GrokAcp, Some(directory.path()), 50).is_err());
     assert!(conversation(&path, TranscriptAgent::GrokAcp, 50).is_err());
     let run = |extra: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))

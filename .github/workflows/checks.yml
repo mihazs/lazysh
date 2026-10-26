@@ -114,6 +114,9 @@ jobs:
         run: |
           bun run --cwd apps/client tauri build --bundles app
           plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
+      - name: Reject unverified Windows private-file permissions
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p lazysh-common --features service --lib service_secrets::tests::public_storage_helpers_reject_unverified_host_permissions -- --exact
       - name: Exercise native companion WAL admission and recovery
         run: bun run test:storage
       - name: Build pinned Parakeet runtime and exercise native macOS ACL storage

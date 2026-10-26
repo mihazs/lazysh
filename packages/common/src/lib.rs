@@ -1,7 +1,10 @@
 pub mod audio;
 pub mod fs;
+pub mod private_state;
 #[cfg(feature = "service")]
 pub mod server;
+#[cfg(feature = "service")]
+pub mod service_secrets;
 pub mod storage_filesystem;
 pub mod storage_namespace;
 #[cfg(feature = "test-support")]
