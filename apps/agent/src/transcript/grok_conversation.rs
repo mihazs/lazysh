@@ -24,14 +24,14 @@ pub(super) fn conversation(path: &Path, limit: u8) -> Result<TranscriptPage> {
         return Err(Error::InvalidArgument);
     }
     let mut file = open_transcript(path)?;
-    let before = file.metadata()?;
+    let before = super::SourceSnapshot::capture(&file)?;
     let size = before.len();
     if size > MAX_RECONSTRUCTION as u64 {
         return Err(Error::InvalidArgument);
     }
     super::unchanged_snapshot(path, &before)?;
     #[cfg(test)]
-    let source = mutation_tests::ObservedRead(&mut file);
+    let source = super::mutation_observer::ObservedRead(&mut file);
     #[cfg(not(test))]
     let source = &mut file;
     let mut reader = BufReader::new(source.take(size));
@@ -372,28 +372,9 @@ fn normalized_size(message: &Value) -> Result<usize> {
 mod mutation_tests {
     use super::*;
     use std::{
-        cell::RefCell,
         fs::{self, File},
-        io::{self, Write},
+        io::Write,
     };
-
-    thread_local! {
-        static MUTATE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
-    }
-    pub(super) struct ObservedRead<'a>(pub &'a mut File);
-    impl Read for ObservedRead<'_> {
-        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-            let count = self.0.read(bytes)?;
-            if count > 0 {
-                MUTATE.with(|slot| {
-                    if let Some(mutate) = slot.borrow_mut().take() {
-                        mutate();
-                    }
-                });
-            }
-            Ok(count)
-        }
-    }
 
     fn record(fill: char) -> Vec<u8> {
         let row = json!({"timestamp":1,"method":"session/update","params":{"sessionId":"owned-capture-fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":fill.to_string().repeat(18000)}}}});
@@ -408,40 +389,36 @@ mod mutation_tests {
         let detached = directory.path().join("detached.jsonl");
         let original_at = fs::metadata(&path).unwrap().modified().unwrap();
         let changed_at = original_at + std::time::Duration::from_secs(2);
-        MUTATE.with(|slot| {
-            *slot.borrow_mut() = Some(Box::new(move || {
-                match case {
-                    "truncate" => fs::write(&selected, b"").unwrap(),
-                    "rename" => {
-                        fs::rename(&selected, detached).unwrap();
-                        fs::write(&selected, record('Z')).unwrap();
-                    }
-                    "append" => fs::OpenOptions::new()
-                        .append(true)
-                        .open(&selected)
-                        .unwrap()
-                        .write_all(&record('Z'))
-                        .unwrap(),
-                    _ => fs::write(&selected, record('Z')).unwrap(),
+        super::super::mutation_observer::set(move || {
+            match case {
+                "truncate" => fs::write(&selected, b"").unwrap(),
+                "rename" => {
+                    fs::rename(&selected, detached).unwrap();
+                    fs::write(&selected, record('Z')).unwrap();
                 }
-                // Portable cases have an observably changed timestamp even on
-                // coarse clocks; the Unix rename case isolates inode replacement.
-                File::options()
-                    .write(true)
+                "append" => fs::OpenOptions::new()
+                    .append(true)
                     .open(&selected)
                     .unwrap()
-                    .set_modified(if cfg!(unix) && case == "rename" {
-                        original_at
-                    } else {
-                        changed_at
-                    })
-                    .unwrap();
-            }))
+                    .write_all(&record('Z'))
+                    .unwrap(),
+                _ => fs::write(&selected, record('Z')).unwrap(),
+            }
+            // Portable cases have an observably changed timestamp even on
+            // coarse clocks; the Unix rename case isolates inode replacement.
+            File::options()
+                .write(true)
+                .open(&selected)
+                .unwrap()
+                .set_modified(if cfg!(unix) && case == "rename" {
+                    original_at
+                } else {
+                    changed_at
+                })
+                .unwrap();
         });
         let result = conversation(&path, 50);
-        MUTATE.with(|slot| {
-            slot.borrow_mut().take();
-        });
+        super::super::mutation_observer::clear();
         let (rows, mixed) = result
             .as_ref()
             .map(|page| {

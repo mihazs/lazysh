@@ -8,7 +8,7 @@ import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import type { LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
-import { fontFamilyFor, useDeviceFonts } from "./fonts";
+import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
 import "@xterm/xterm/css/xterm.css";
 
@@ -89,7 +89,7 @@ export default function TerminalPane({ session, active, reportError }: {
   }, [session.id, reportError]);
 
   useEffect(() => {
-    if (composing && active) composerInput.current?.focus();
+    if (composing && active && draft) composerInput.current?.focus();
   }, [composing, active, draft]);
 
   useEffect(() => {
@@ -185,7 +185,7 @@ export default function TerminalPane({ session, active, reportError }: {
     if (ctrl || meta) {
       const named: Record<string, string> = {"\x1b": "Escape", "\t": "Tab", "\r": "Enter", "\x7f": "Backspace", "\x1b[D": "Left", "\x1b[A": "Up", "\x1b[B": "Down", "\x1b[C": "Right"};
       try {data = parseChord(`${ctrl ? "Ctrl+" : ""}${meta ? "Alt+" : ""}${named[key] ?? key}`);}
-      catch (error) {reportError(String(error)); return;}
+      catch (error) {reportError(error instanceof LocalUiError?error:String(error)); return;}
     }
     void api.write(session.id, data).catch(error => reportError(String(error)));
     if (!ctrlLocked) setCtrl(false);
@@ -240,7 +240,7 @@ export default function TerminalPane({ session, active, reportError }: {
     try {
       void api.writeSequence(session.id, parseChordSteps(keys)).catch(error => {if (current()) reportError(errorMessage(error));});
       return true;
-    } catch (error) {if (current()) reportError(errorMessage(error)); return false;}
+    } catch (error) {if (current()) reportError(error instanceof LocalUiError?error:errorMessage(error)); return false;}
   }
   function runGesture(action: GestureAction, slot?: GestureSlot) {
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
@@ -348,7 +348,7 @@ export default function TerminalPane({ session, active, reportError }: {
     gesture.current = null;
   }
   return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
-    {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={warning}>{warning}</div>)}
+    {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>}
     {clipboard !== null && <div className="terminal-consent" role="region" aria-label={t('terminalClipboardRegion')}>
       <p>{t("terminalClipboardPrompt",{count:clipboard.length,characters:formatNumber(clipboard.length)})}</p>

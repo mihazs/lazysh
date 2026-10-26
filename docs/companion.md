@@ -119,11 +119,54 @@ defines `true` as an execution error. Native and browser fixtures are synthetic;
 no Claude CLI, private transcript, provider account or physical mobile WebView
 was used to verify this slice.
 
+### Snapshot file identity
+
+Claude and Grok conversation captures, bounded JSON exports, jcode snapshots and
+journals, Antigravity step reads, and Codex usage windows retain a handle to the
+initially opened file until their pathname checks finish. Unix compares device
+and inode. Windows compares the volume serial number and 128-bit file ID from
+[`GetFileInformationByHandleEx(FileIdInfo)`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex),
+as specified by Microsoft's
+[`FILE_ID_INFO` contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info).
+These identity checks reject replacement even when content, size and modification
+time match. A Windows identity API/filesystem error fails the read without a
+metadata-only fallback; platforms other than Unix and Windows return
+`TranscriptIdentityUnsupported` for these readers. Existing owner/no-follow
+admission and each reader's length, time and output bounds still apply.
+
+This is a per-read check, not a lock, an atomic content snapshot, a persistent
+source receipt or a live-terminal binding. Same-file rewrites that restore all
+observed bytes/metadata, and changes after the last observation, remain outside
+its guarantee. Legacy append Records and the separate Unix-only Grok `g1`
+checkpoint contract are unchanged.
+
 ### Claude current branch
 
 Use `lazysh-agent transcript --agent claude --view conversation --path /absolute/path/session.jsonl --limit 100` to reconstruct the current main conversation branch. This reads a bounded complete snapshot, picks the latest main user/assistant leaf, follows `parentUuid`, and recovers sibling tool calls and results belonging to responses on that branch. Compaction follows the new summary chain without reconnecting `logicalParentUuid` to obsolete context. Duplicate UUIDs use their latest record; cycles fail closed.
 
 The response uses `view: "active_branch"`, optional `branchId`, `hasMore: false`, and `truncated: true` when older selected messages exceed the requested limit or output budget. Refresh replaces the whole conversation snapshot, including when the selected branch changes. `--offset` must be zero in this mode. It accepts at most 16 MiB and 10,000 linked records; larger files return an error and remain available through record paging/the terminal. Conversation mode is supported only for Claude.
+
+Claude captures exactly the initially observed prefix into an owned buffer of at
+most 16 MiB before parsing. Short reads, observed truncation and file identity
+replacement on Unix or Windows fail without publishing a shorter or detached branch. If observed
+size or modification time changes, one bounded, chunked comparison checks that
+the selected file still contains the exact captured prefix. Matching append-only
+growth remains useful during Follow: this read returns the original prefix and
+the next read can include the appended messages. An incomplete final line,
+including split UTF-8 or JSON awaiting its newline, stays unconsumed.
+
+There is no capture retry or new deadline. The changed-metadata path reads at most
+one additional original-length prefix, using an 8 KiB comparison buffer rather
+than another full snapshot allocation. The captured buffer is released after
+parsing, before branch reconstruction. This is observational consistency, not a
+file lock. The single comparison observes chunks sequentially: a later change
+to an already-compared chunk during verification can escape detection, so it
+cannot certify that all captured bytes coexist at one instant. Unseen changes
+restored before checks, metadata-preserving rewrites, and mutations after the
+final observation also remain outside the guarantee. The shared
+[snapshot identity checks](#snapshot-file-identity) apply, including fail-closed
+identity errors. Raw record readers, Grok capture policy, Follow polling and error
+handling are unchanged.
 
 After opening a Claude transcript in **Latest conversation branch**, optionally
 enable **Follow selected Claude branch**. Following is off by default, is not
@@ -212,7 +255,7 @@ Primary format evidence: [Copilot persisted path and event loop](https://github.
 
 Use `--agent jcode` to read a jcode `0.99.1` snapshot together with its append journal. Discovery lists `*.json` snapshots under `$JCODE_HOME/sessions` (otherwise `~/.jcode/sessions`); reading `session.json` also reads its sibling `session.journal.jsonl` if present. Messages already contained in the snapshot are deduplicated by their IDs, preserving the first authoritative copy, matching jcode's idempotent replay behavior. Text, history thinking traces, signed Anthropic thinking text, tool calls/results and recorded token usage are supported. Signatures, hidden replay reasoning, opaque provider state, system prompts and display-only system/background messages are omitted. Other unsupported content remains a terminal workflow.
 
-The opaque numeric `nextOffset` is a message index for this format. Each request reconstructs the bounded snapshot/journal before paging. Snapshots and journals are each limited to 16 MiB, journal lines to 256 KiB, and reconstructed messages and journal entries to 10,000 each. Partial trailing journal entries are retried on refresh; malformed complete entries fail instead of attempting jcode's recovery/migration writes. File sizes and modification times are checked again after reading, plus file identity on Unix; a detected concurrent checkpoint or append fails for a fresh retry. This is not a lock on the running agent or protection against all same-size metadata-preserving rewrites. Reopen from offset zero after an agent rewind or snapshot rewrite.
+The opaque numeric `nextOffset` is a message index for this format. Each request reconstructs the bounded snapshot/journal before paging. Snapshots and journals are each limited to 16 MiB, journal lines to 256 KiB, and reconstructed messages and journal entries to 10,000 each. Partial trailing journal entries are retried on refresh; malformed complete entries fail instead of attempting jcode's recovery/migration writes. File sizes and modification times are checked again after reading, plus the shared Unix/Windows file identity check; a detected concurrent checkpoint or append fails for a fresh retry. This is not a lock on the running agent or protection against all same-size metadata-preserving rewrites. Reopen from offset zero after an agent rewind or snapshot rewrite.
 
 Primary evidence: [jcode snapshot model](https://github.com/1jehuang/jcode/blob/022e13f88c1b55319f3f4aa9cfb63039246a51da/crates/jcode-base/src/session.rs), [message types](https://github.com/1jehuang/jcode/blob/022e13f88c1b55319f3f4aa9cfb63039246a51da/crates/jcode-message-types/src/lib.rs), [journal entry shape](https://github.com/1jehuang/jcode/blob/022e13f88c1b55319f3f4aa9cfb63039246a51da/crates/jcode-base/src/session/journal.rs), and [snapshot/journal replay](https://github.com/1jehuang/jcode/blob/022e13f88c1b55319f3f4aa9cfb63039246a51da/crates/jcode-base/src/session/persistence.rs), inspected 2026-10-24.
 
@@ -244,7 +287,7 @@ Primary evidence at commit `784d7f9197eac084340331c1612f939728c6ad57`: [native p
 
 Discovery evidence: the [official Moshi companion v0.4.37 Linux archive](https://cdn.getmoshi.app/hook/v0.4.37/moshi-hook_Linux_x86_64.tar.gz), SHA-256 `c401ba0adeaa46d38558ff862a584c824d32e64dc8d79d44daa53e81a6aab4af` matching the publisher checksums and Homebrew formula. Its shipped `docs/api.md` transcript section and `docs/hooks.md` Devin section describe the XDG directory, `<id>.json` mapping, and ATIF step conversion. This documents the target app's export integration; the Devin CLI/export-format evidence below independently pins the supported ATIF version. Relative/empty XDG handling follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/).
 
-Each request reads at most 16 MiB and 10,000 sequential steps, then returns up to 100 normalized messages under the existing 512 KiB message-output budget. `nextOffset` is an opaque **step index**, including skipped system steps. Unsupported versions, malformed snapshots, duplicate/nonsequential step IDs, unknown sources/content kinds, more than 1,000 parts/calls/results per step, or a text block above 256 KiB fail explicitly. The reader uses the existing regular-file, no-follow, Unix-owner checks and detects size/mtime changes plus Unix file identity changes during reading. This detects common concurrent rewrites rather than locking the source. Reopen at zero after replacement or truncation.
+Each request reads at most 16 MiB and 10,000 sequential steps, then returns up to 100 normalized messages under the existing 512 KiB message-output budget. `nextOffset` is an opaque **step index**, including skipped system steps. Unsupported versions, malformed snapshots, duplicate/nonsequential step IDs, unknown sources/content kinds, more than 1,000 parts/calls/results per step, or a text block above 256 KiB fail explicitly. The reader uses the existing regular-file, no-follow, Unix-owner checks and detects size/mtime changes plus the shared snapshot identity changes during reading on Unix and Windows. This detects common concurrent rewrites rather than locking the source. Reopen at zero after replacement or truncation.
 
 User/agent text, image placeholders, explicit plaintext reasoning, tool names/arguments and observation content are supported. System prompts, root/final rollups, provider-specific `extra`, costs and referenced subagent trajectories are omitted. Images and subagent references are never opened or fetched. Per-step `prompt_tokens` maps to recorded input tokens (including cached input), `completion_tokens` to output, and `cached_tokens` to cache reads; no cache-write count or context/quota value is inferred. Copied-context steps are retained as exported, so this is an ordered export record stream and should not be summed as fresh billing.
 
@@ -307,6 +350,85 @@ The modern disk envelope is `{timestamp, method, params: {sessionId, update}}`. 
 The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Unix-owner guards and modification-time ordering apply. Discovery does not read transcript contents, `.cwd`, session metadata or sidecars; it reports file path/size/time and the parent folder as an opaque display label. It never interprets a folder ID as a live agent session ID. Results are candidates, not parsed transcripts or proven live-terminal bindings. Select a result and explicitly open it to use the existing guarded record reader; malformed or replaced files are still validated on open. No new whole-file size ceiling is implied by metadata listing.
 
 `--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged.
+
+#### Optional inline recorded images
+
+In Claude Records/current branch or Grok **Recorded messages**, enable
+**Include recorded images** before opening or starting supported Follow. This
+option defaults off. The Grok companion CLI equivalent is
+`lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --inline-images`;
+it also composes with `--checkpointed` and its existing continuation receipt.
+Claude accepts the same flag with `--agent claude --view records` or
+`--agent claude --view conversation`. Checkpointed mode remains Grok Records
+only. The native `inlineImages` argument defaults false. Other agents, Grok
+conversation and transcript session selectors reject image opt-in before SSH
+execution; Claude conversation also retains its zero-offset/no-checkpoint rule.
+Existing manual output without the option remains unchanged.
+
+Only top-level recorded Grok user/assistant image chunks and Claude user
+`content[]` images with a `source.type=base64` PNG/JPEG payload
+can gain a **View recorded image** action. Tool media, audio, resource/terminal
+references and external URIs stay inert; no referenced file or URL is fetched.
+The original base64 and on-disk transcript bytes are preserved. Invalid,
+animated PNG, unsupported or oversized images retain their attachment metadata
+without admitted preview bytes, so valid neighboring text remains readable.
+Existing raw record limits still apply to the whole JSONL line.
+
+Admission requires canonical standard base64 of at most 64 KiB (48 KiB decoded),
+at most 2048 pixels on either axis and at most 1,048,576 total pixels. Native
+static raster validation requests an advisory 8 MiB decoder allocation budget
+and rejects APNG before raster decoding. This is not an enforced peak-memory
+cap: JPEG progressive coefficient buffers and other decoder allocations may
+exceed that setting. Encoded byte, decoded byte, axis and pixel limits above
+are enforced. Existing line, scan, page, checkpoint and IPC budgets still
+apply; page charging includes admitted base64. Returned preview fields are
+validated again by the client before display. These checks are resource limits,
+not a promise that every decoder accepts every PNG/JPEG variant.
+
+**View recorded image** explicitly decodes one image with the browser bitmap
+decoder into a canvas. JPEG EXIF orientation is respected while independently
+checking raw encoded dimensions and actual oriented bitmap dimensions. No
+object URL, image cache, auto decode or persistent media store is created.
+Closing the preview, changing its source, losing access, evicting its row or
+unmounting clears its canvas; a late bitmap is closed without painting. Only
+one decode may be in flight across Chat panel remounts and source/session
+changes, with no queue or automatic retry. Devices without the
+required bitmap/canvas support report that preview is unavailable.
+
+Owned native fixtures cover static PNG, ordinary/progressive JPEG admission,
+placeholders, legacy output, paging and checkpoint composition. The small
+progressive fixture is acceptance evidence, not a peak-memory measurement.
+Chromium desktop/phone tests decode original PNG and
+rectangular EXIF-rotated JPEG pixels and exercise cleanup and stale completions.
+These are recorded-file tests, not provider/account execution, native Android/iOS
+WebView acceptance or proof of live terminal binding. Other recorded formats,
+including assistant/nested-tool Claude media, remain separate work under issue #5.
+
+Claude's source contract here is the **shipped npm Claude Code 2.1.81 artifact**,
+not an inference from generic Anthropic API types. Its input processing creates
+base64 user image blocks (possibly resized/re-encoded); its retained-record
+writer serializes message content to session JSONL without an image-redaction
+step on the inspected path. This does not promise images exist in every session
+or survive every retention setting. Tool-result media is a separate nested
+shape and remains inert. Conversation image admission occurs only during final
+normalization of the existing selected chain, without changing capture, branch
+selection or parallel-tool recovery. When that exact row/image disappears, its
+preview selection is retired; a later branch returning it needs a new View.
+
+The [official package](https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.81.tgz)
+matches its registry SHA-512 integrity. SHA-256: tarball
+`875acc67241a94a6220b559712aff0b2c226458507648c308c73c9788bc45b2f`;
+`cli.js` `66d05774a73a5abea90ee27cc42f1f9c0f28302bd59c90b5bbb352cd7dff0a4e`.
+Bounded REA analysis parsed 14,560 bytes of exact selected functions/classes;
+parent evidence `ev_4e2e06dfb4d7e0a48d9fb9e74cbb3c9164a965490217c02319bf876df694dd42`
+retains partial graph coverage and 881 explicit unknowns. Original `cli.js`
+UTF-8 byte ranges supporting input/constructor/record filtering/writer/serializer
+are respectively `[11674187,11676420)`, `[10998218,10998820)`,
+`[10934292,10934571)`, `[10900382,10909787)` and `[54034,54176)`.
+These are static observations, not provider execution, full-path runtime or
+current-version compatibility proof. Current 2.1.310 persistence is uninspected.
+Owned fixtures model this schema without copying vendor implementation or
+accessing private transcripts.
 
 #### Opt-in checkpointed Grok Records
 
@@ -406,11 +528,11 @@ final line is still ignored without consuming it, including valid JSON without a
 newline and split UTF-8. Appending before a later explicit read can complete it.
 The client keeps the previous displayed view when a requested refresh fails.
 
-Manual conversation remains portable: existing Unix device/inode checks detect
-selected-path replacement; other hosts retain length/modification-time checks.
-These per-read metadata guards do not establish cross-request file identity or
-live-agent binding. Changes restoring all observed metadata (or indistinguishable
-replacement where native identity is unavailable) remain unobservable. Claude,
+Manual conversation uses the shared [snapshot identity checks](#snapshot-file-identity)
+on Unix and Windows alongside its length/modification-time checks. Unavailable
+identity fails closed. These per-read guards do not establish cross-request file
+identity or live-agent binding. Same-file rewrites restoring all observed bytes
+and metadata remain unobservable. Claude,
 raw Records, recorded-file Follow, CLI combinations and existing limits do not
 change; no whole-file buffer or platform-only receipt is added.
 
@@ -497,7 +619,8 @@ The reader bounds the observed file/hash to **16 MiB**, each physical line to
 **256 KiB**, page scanning to **4 MiB**, output to **512 KiB** and page records to
 **100**. Arrays/block amplification and label lengths are bounded. It reuses
 regular-file, owner and no-follow admission checks, then compares size/mtime and
-Unix device/inode after reading to detect ordinary concurrent writer changes.
+the shared Unix/Windows source identity after reading to detect ordinary
+concurrent writer changes. Identity errors fail the read.
 This is not a lock or atomic snapshot of a hostile metadata-preserving concurrent
 rewrite. On such read errors, retry by reopening rather than mixing generations.
 Producer compact truncation flags do not mean lazysh fetched a full transcript.

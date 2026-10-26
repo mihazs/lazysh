@@ -98,6 +98,9 @@ enum Command {
         /// Require a source-bound consistency receipt (Grok Records only).
         #[arg(long)]
         checkpointed: bool,
+        /// Admit bounded static PNG/JPEG previews (Grok Records or Claude user images).
+        #[arg(long)]
+        inline_images: bool,
         #[arg(long)]
         session_id: Option<String>,
         #[arg(long, default_value_t = 0)]
@@ -233,6 +236,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             path,
             checkpoint,
             checkpointed,
+            inline_images,
             session_id,
             offset,
             limit,
@@ -242,6 +246,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
                     || !matches!(view, lazysh_agent::transcript::TranscriptView::Records)
                     || session_id.is_some())
+            {
+                return Err(Error::InvalidArgument);
+            }
+            if inline_images
+                && (session_id.is_some()
+                    || !(matches!(agent, lazysh_agent::transcript::TranscriptAgent::Claude)
+                        || (matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
+                            && matches!(view, lazysh_agent::transcript::TranscriptView::Records))))
             {
                 return Err(Error::InvalidArgument);
             }
@@ -256,6 +268,16 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             }
             Some(
                 serde_json::to_value(match view {
+                    lazysh_agent::transcript::TranscriptView::Records if inline_images => {
+                        lazysh_agent::transcript::read_inline_images(
+                            &path,
+                            agent,
+                            offset,
+                            limit,
+                            checkpointed,
+                            checkpoint.as_deref(),
+                        )?
+                    }
                     lazysh_agent::transcript::TranscriptView::Records if checkpointed => {
                         lazysh_agent::transcript::read_checkpointed_grok(
                             &path,
@@ -287,7 +309,11 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                         if offset != 0 || checkpoint.is_some() {
                             return Err(Error::InvalidArgument);
                         }
-                        lazysh_agent::transcript::conversation(&path, agent, limit)?
+                        if inline_images {
+                            lazysh_agent::transcript::claude_conversation_images(&path, limit)?
+                        } else {
+                            lazysh_agent::transcript::conversation(&path, agent, limit)?
+                        }
                     }
                 })
                 .map_err(|_| Error::InvalidEvent)?,

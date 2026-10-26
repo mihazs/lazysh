@@ -2,6 +2,17 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  chatImageInclude: ["Incluir imagens registradas", "Incluir imágenes registradas"],
+  chatImageView: ["Ver imagem registrada", "Ver imagen registrada"],
+  chatImagePreview: ["Prévia da imagem registrada", "Vista previa de imagen registrada"],
+  chatImageClose: ["Fechar prévia da imagem", "Cerrar vista previa de imagen"],
+  chatImageLoading: ["Decodificando imagem registrada…", "Decodificando imagen registrada…"],
+  chatImageInvalid: ["Resposta de prévia de imagem registrada inválida.", "Respuesta de vista previa de imagen registrada no válida."],
+  chatImageUnavailable: ["A prévia da imagem registrada não está disponível neste dispositivo.", "La vista previa de imagen registrada no está disponible en este dispositivo."],
+  chatImageBusy: ["Outra prévia de imagem está sendo concluída. Escolha Ver novamente quando terminar.", "Otra vista previa de imagen está terminando. Elige Ver de nuevo cuando termine."],
+  chatImageDimensions: ["As dimensões da imagem decodificada não correspondem à imagem registrada.", "Las dimensiones de la imagen decodificada no coinciden con la imagen registrada."],
+  chatImageDecodeFailed: ["Não foi possível decodificar a imagem registrada neste dispositivo.", "No se pudo decodificar la imagen registrada en este dispositivo."],
+
   keepAwakeRegion: ["Manter a tela do painel ligada", "Mantener encendida la pantalla del panel"],
   keepAwakeLabel: ["Manter a tela ligada enquanto este painel estiver aberto", "Mantener la pantalla encendida mientras este panel esté abierto"],
   keepAwakeNative: ["Manter a tela ligada requer o aplicativo nativo.", "Mantener la pantalla encendida requiere la aplicación nativa."],

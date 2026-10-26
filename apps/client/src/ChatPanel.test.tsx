@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import ChatPanel, { parseTranscript } from "./ChatPanel";
+import {readFileSync} from 'node:fs';
 
 vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
 afterEach(cleanupNativeMocks);
@@ -25,6 +26,23 @@ const page = {
   nextOffset: 80,
   hasMore: false,
 };
+it('admits returned image bytes only in supported recorded image contexts and rejects malformed previews',()=>{
+  const imagePreview={mimeType:'image/png',data:readFileSync('e2e/fixtures/recorded-images/regions.png').toString('base64'),width:32,height:16};
+  const block={type:'image',text:'Image attachment',imagePreview};
+  const response={...page,agent:'grok-acp',view:'record_stream',messages:[{...message,blocks:[block]}]};
+  expect(parseTranscript(response)).toEqual(response);
+  for(const view of ['record_stream','active_branch']) {
+    const claude={...response,agent:'claude',view,messages:[{...message,role:'user',blocks:[block]}]};
+    expect(parseTranscript(claude)).toEqual(claude);
+    for(const role of ['assistant','tool'])expect(()=>parseTranscript({...claude,messages:[{...message,role,blocks:[block]}]})).toThrow('Invalid recorded-image preview response.');
+  }
+  for(const invalid of [
+    {...response,agent:'claude'}, {...response,view:'active_branch'},
+    {...response,messages:[{...message,role:'tool',blocks:[block]}]},
+    ...[{...block,type:'text'},{...block,id:'tool-call'},{...block,status:'completed'},
+      {...block,imagePreview:{...imagePreview,width:16,height:32}}].map(value=>({...response,messages:[{...message,blocks:[value]}]})),
+  ])expect(()=>parseTranscript(invalid)).toThrow('Invalid recorded-image preview response.');
+});
 it('validates Claude-only boolean tool errors and renders recorded failures without changing output',async()=>{
   const blocks=[{type:'tool_result',id:'failed-call',text:'Permission denied',isError:true},
     {type:'tool_result',id:'ok-call',text:'Original success',isError:false},

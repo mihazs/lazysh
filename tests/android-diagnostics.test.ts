@@ -78,7 +78,7 @@ exit "$SDK_EXIT"
   const sdkExpected = mosh === 0 && instrumentation === 0;
   expect((await readFile(invocations, 'utf8')).trim().split('\n')).toEqual([
     'run test:android-mosh',
-    ...(mosh === 0 ? ['run test:android'] : []),
+    ...(mosh === 0 ? ['run test:android-ssh'] : []),
     ...(sdkExpected ? ['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture'] : []),
   ]);
   expect(await Bun.file(sdkSerial).exists()).toBe(sdkExpected);

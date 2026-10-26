@@ -1,5 +1,9 @@
 package app.lazysh.client
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.view.KeyEvent
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -15,15 +19,27 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView
+import androidx.test.espresso.action.ViewActions.pressKey
+import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.action.GeneralClickAction
+import androidx.test.espresso.action.Press
+import androidx.test.espresso.action.Tap
+import androidx.test.espresso.action.EspressoKey
+import androidx.test.espresso.matcher.ViewMatchers.withText
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.espresso.web.sugar.Web.onWebView
 import androidx.test.espresso.web.webdriver.DriverAtoms.findElement
 import androidx.test.espresso.web.webdriver.DriverAtoms.webClick
+import androidx.test.espresso.web.webdriver.DriverAtoms.webScrollIntoView
 import androidx.test.espresso.web.webdriver.Locator
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -326,6 +342,197 @@ class NativeWorkspaceTest {
         // through the actual UI before the ordinary native workspace suite.
         click("Reset preferences")
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
+    }
+
+    // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
+    @Test fun ownedOpenSshConnectsThroughRealUi() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
+        require(path != null && Regex("/data/local/tmp/lazysh-ui-ssh-[a-f0-9]{32}/fixture[.]json").matches(path)) {
+            "An owned SSH fixture path is required"
+        }
+        val bytes = instrumentation.uiAutomation.executeShellCommand("cat $path").use { descriptor ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
+                val buffer = ByteArray(16 * 1024 + 1)
+                var count = 0
+                while (count < buffer.size) {
+                    val read = stream.read(buffer, count, buffer.size - count)
+                    if (read < 0) break
+                    count += read
+                }
+                require(count <= 16 * 1024) { "Owned SSH fixture exceeds bound" }
+                buffer.copyOf(count)
+            }
+        }
+        val fixture = try { JSONObject(String(bytes, Charsets.UTF_8)) }
+        catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
+        val nonce = fixture.getString("nonce")
+        require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
+        val name = "Android SSH $nonce"
+        require(fixture.getString("name") == name && fixture.getInt("port") in 1..65535)
+        val privateKey = fixture.getString("privateKey")
+        require(privateKey.length in 1..8192) { "Invalid owned identity size" }
+        val scenario = NativeActivityFixture.scenario
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val label = "lazysh-ui-ssh-$nonce"
+        fun clickButton(text: String) {
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$text']")).perform(webClick())
+        }
+        fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
+        fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
+        fun selectSsh() {
+            val selector = "[role=dialog] select"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
+            // A DOM click atom does not activate Chromium's native select popup.
+            // Read only this control's viewport geometry, then inject one native tap.
+            val geometry = JSONArray(evaluate(scenario, """(() => {
+              const target=document.querySelector(${JSONObject.quote(selector)});
+              const r=target.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
+              return [x,y,innerWidth,innerHeight,r.width,r.height,document.elementFromPoint(x,y)===target];
+            })()"""))
+            val values = (0..5).map { geometry.getDouble(it) }
+            assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
+                values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
+                values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val origin = IntArray(2)
+                view.getLocationOnScreen(origin)
+                val scale = view.width.toDouble() / values[2]
+                val x = values[0] * scale
+                val y = values[1] * scale
+                assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
+                floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+            }, Press.FINGER))
+            val option = onView(withText("SSH")).inRoot(isDialog())
+            option.check(matches(isDisplayed()))
+            println("lazysh SSH UI: native transport chooser ready")
+            option.perform(click())
+            assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
+                "document.querySelector('[role=dialog] select')?.value==='ssh'"))
+            println("lazysh SSH UI: native transport selected")
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            awaitDocument(scenario, "SSH workspace ready", present("button[aria-label='Add host']"))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Add host']")).perform(webClick())
+            typeInto(scenario, "input[placeholder='Home workstation']", name)
+            typeInto(scenario, "input[placeholder='workstation.local']", "127.0.0.1")
+            typeInto(scenario, "input[placeholder='Your SSH username']", fixture.getString("username"))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".port-field input")).perform(webClick())
+            onView(isAssignableFrom(WebView::class.java)).perform(
+                pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
+                pressKey(KeyEvent.KEYCODE_DEL))
+            typeInto(scenario, ".port-field input", fixture.getInt("port").toString())
+            closeSoftKeyboard()
+            selectSsh()
+            clickButton("Save host")
+            val connect = "button[aria-label='Connect to $name']"
+            awaitDocument(scenario, "SSH fixture host saved", present(connect))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, connect)).perform(webClick())
+            awaitDocument(scenario, "SSH authentication dialog", present("[role=dialog] input[type=password]"))
+            selectSsh()
+            clickButton("Private key")
+            val keySelector = "[role=dialog] textarea[placeholder='-----BEGIN OPENSSH PRIVATE KEY-----']"
+            scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).requestFocus() }
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, keySelector)).perform(webClick())
+            val pasteDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            val inputConstraints = typeTextIntoFocusedView("readiness-only").constraints
+            while (true) {
+                var ready = false
+                scenario.onActivity { activity -> ready = inputConstraints.matches(requireNotNull(webView(activity.window.decorView))) }
+                if (ready) break
+                assertTrue("Native key field input connection did not become ready", System.nanoTime() < pasteDeadline)
+                Thread.sleep(25)
+            }
+            assertEquals("Key field must own DOM focus before paste", "true", evaluate(scenario,
+                "document.activeElement===document.querySelector(${JSONObject.quote(keySelector)})",
+                TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)))
+            instrumentation.runOnMainSync {
+                val clip = ClipData.newPlainText(label, privateKey)
+                clip.description.extras = android.os.PersistableBundle().apply {
+                    putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+                }
+                clipboard.setPrimaryClip(clip)
+            }
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_PASTE))
+            // Boolean only: never retain a key value, DOM dump or screenshot in diagnostics.
+            while (true) {
+                assertTrue("Native paste did not reach the controlled key field", System.nanoTime() < pasteDeadline)
+                val remaining = TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)
+                if (evaluate(scenario, "document.querySelector(${JSONObject.quote(keySelector)})?.value===${JSONObject.quote(privateKey)}", remaining) == "true") break
+                Thread.sleep(50)
+            }
+            assertEquals("Remember credentials must remain off", "true", evaluate(scenario,
+                "Array.from(document.querySelectorAll('[role=dialog] input[type=checkbox]')).every(x=>!x.checked)"))
+            closeSoftKeyboard()
+            clickButton("Connect")
+            awaitDocument(scenario, "explicit SSH fingerprint review", present(".fingerprint code"))
+            assertEquals("Exact ephemeral server fingerprint must be reviewed", "true", evaluate(scenario,
+                "document.querySelector('.fingerprint code')?.textContent===${JSONObject.quote(fixture.getString("fingerprint"))}"))
+            assertEquals("No terminal before explicit trust", "false", evaluate(scenario, present(".terminal-canvas .xterm-screen")))
+            clickButton("Trust key and connect")
+            awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
+            clickButton("Compose")
+            typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
+            closeSoftKeyboard()
+            clickButton("Paste draft")
+            assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario,
+                "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"))
+            // Paste draft focuses xterm; normal native Enter submits the real shell input.
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+            awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
+                screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Disconnect $name']")).perform(webClick())
+            awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Delete $name']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
+            awaitDocument(scenario, "owned SSH host deleted", "!" + present(connect))
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            var cleanupFailure: Throwable? = null
+            fun retainCleanup(failure: Throwable, message: String) {
+                val first = primaryFailure ?: cleanupFailure
+                if (first != null) first.addSuppressed(AssertionError(message))
+                else cleanupFailure = failure
+            }
+            try {
+                val disconnect = "button[aria-label='Disconnect $name']"
+                val authentication = "[role=dialog] textarea, [role=dialog] .fingerprint code, [role=dialog] .destination"
+                if (evaluate(scenario, present(authentication)) == "true") {
+                    clickButton("Cancel")
+                    // An already-visible original error must not abort this cleanup wait.
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (true) {
+                        assertTrue("Owned SSH authentication dialog did not dismiss", System.nanoTime() < deadline)
+                        val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+                        if (evaluate(scenario, "!" + present(authentication), remaining) == "true") break
+                        Thread.sleep(50)
+                    }
+                }
+                if (evaluate(scenario, present(disconnect)) == "true") {
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                }
+                val delete = "button[aria-label='Delete $name']"
+                if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, delete)).perform(webClick())
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
+                }
+            } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH UI cleanup failed") }
+            try {
+                instrumentation.runOnMainSync {
+                    if (clipboard.primaryClipDescription?.label?.toString() == label) {
+                        if (android.os.Build.VERSION.SDK_INT >= 28) clipboard.clearPrimaryClip()
+                        else clipboard.setPrimaryClip(ClipData.newPlainText(label, ""))
+                    }
+                }
+            } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH clipboard cleanup failed") }
+            cleanupFailure?.let { throw it }
+        }
     }
 
     @Test fun bundledWorkspaceSavesHostsThroughNativeIpcAndSurvivesActivityRecreation() {
