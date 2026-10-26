@@ -7,6 +7,8 @@ import {grokFollowPage,grokReceipt} from './test/recordedFollowData';
 import {t,uiI18n} from './i18n/core';
 import ChatPanel from './ChatPanel';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCore(original));
+// These lifecycle fixtures use literal text; real Markdown/media rendering is covered in ChatPanel.test.tsx.
+vi.mock('react-markdown',()=>({default:({children}:{children:string})=><p>{children}</p>}));
 beforeEach(async()=>{
   await uiI18n.changeLanguage('en');
   vi.useFakeTimers();vi.mocked(invoke).mockReset();chatFollowAccess();
@@ -125,8 +127,13 @@ it('keeps at most 500 rows and never follows reconstructed Grok conversation',as
     cursor+=100;return {...grokFollowPage(cursor),messages:Array.from({length:100},(_,i)=>({id:`grok-record-${cursor-100+i}`,role:'assistant',blocks:[{type:'text',text:`Record row ${cursor-100+i}`}]}))};
   });
   mount();await start();for(let i=0;i<5;i++)await advance();
-  expect(screen.getAllByRole('article')).toHaveLength(500);expect(screen.queryByText('Record row 0')).toBeNull();
-  expect(screen.getByText('Record row 599')).toBeTruthy();
+  const retained=screen.getAllByRole('article');
+  expect(retained).toHaveLength(500);
+  expect(retained.map(row=>row.textContent)).toEqual(Array.from({length:500},(_,i)=>`${t('chatRoleAssistant')}Record row ${100+i}`));
+  expect(screen.queryByText('Record row 0')).toBeNull();expect(screen.getByText('Record row 599')).toBeTruthy();
+  expect(args()).toEqual(Array.from({length:6},(_,i)=>({sessionId:'original-ssh',agent:'grok-acp',path:'/raw/updates.jsonl',
+    checkpointed:true,offset:i*100,...(i?{checkpoint:grokReceipt(i*100)}:{})})));
+
   fireEvent.change(screen.getByLabelText('View'),{target:{value:'conversation'}});
   expect(screen.queryByRole('button',{name:'Start following recorded file'})).toBeNull();
   expect(follow()).toHaveProperty('disabled',true);await advance(10000);expect(invoke).toHaveBeenCalledTimes(6);
