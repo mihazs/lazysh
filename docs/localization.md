@@ -28,6 +28,14 @@ settings also use all three catalogs. Agent names, summaries, tool JSON, paths,
 session/pane identities and native diagnostics remain verbatim. Language changes
 preserve pending decisions, their original hashes and polling interval, and
 unsaved companion switches. Keep Awake controls remain a separate task.
+Host attachment selection, crop/drawing controls, explicit upload/copy/staging
+actions and retained local errors/notices also use the catalogs. Language changes
+preserve selected file bytes, original crop coordinates, canvas resources,
+upload destinations and editable prompts. The initial prompt uses the language
+active when the explicit upload completes; later language changes never rewrite
+that prompt or user edits. Public sharing controls remain separate work. Its
+existing image-header caller still renders a creation-time Error.message until
+that surface is localized; native diagnostics remain verbatim.
 This is a partial milestone under issue #79. Other feature panels still require their own
 localization and acceptance. Native lock-cover/biometric-reason resources on
 Android, iOS and macOS use the [native language authority](native-ui-locale.md).
@@ -152,6 +160,12 @@ Run the existing project tasks from `apps/client`:
 - `bun run test:e2e e2e/agent-board-locales.spec.ts` checks the actual board at
   desktop/phone widths, unchanged raw records, focused unsaved switches and
   one held approval across all three locales.
+- `bun run test src/i18n/attachmentLocales.test.tsx` checks held uploads, exact
+  bytes/path/session/access headers, stale results, clipboard consent/failures,
+  retained local/raw errors, editable prompts and canvas resource continuity.
+- `bun run test:e2e e2e/attachment-locales.spec.ts` checks real browser image
+  decode/crop/drawing at desktop/phone widths in all three locales, held upload
+  targets and explicit clipboard/staging actions without rewriting draft content.
 - `bun run check` checks catalog keys and required interpolation arguments.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
