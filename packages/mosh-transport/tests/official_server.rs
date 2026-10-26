@@ -196,7 +196,13 @@ fn simulator_diagnostics_with_inventory(
     // The leader remains our unreaped child even if ps fails or times out.
     // Inventory failure must not prevent sampling that already-known process.
     if !processes.iter().any(|(pid, _)| *pid == leader) {
-        processes.insert(0, (leader, format!("pid={leader} executable=owned-simctl")));
+        processes.insert(
+            0,
+            (
+                leader,
+                format!("pid={leader} executable=unknown (tracked leader)"),
+            ),
+        );
     }
     for (pid, description) in processes.into_iter().take(2) {
         // Recheck group membership immediately before sampling. The leader is
@@ -644,16 +650,21 @@ fn simulator_diagnostics_never_sample_an_unowned_process_group() {
     assert!(!observed.contains("sample deadline_exceeded="));
 }
 
+fn diagnostic_sleep() -> Command {
+    let mut child = Command::new("sleep");
+    child.arg("10");
+    child
+}
+
 #[test]
 fn simulator_diagnostics_observe_the_live_fixture_and_keep_its_deadline() {
     let started = std::time::Instant::now();
-    let mut child = Command::new("sleep");
-    child.arg("10");
-    let (_, timed_out, diagnostics) =
-        bounded_output(child, std::time::Duration::from_millis(50), |pid| {
-            simulator_timeout_diagnostics(pid, std::path::Path::new("ios_peer-no-child"), &[])
-        })
-        .unwrap();
+    let (_, timed_out, diagnostics) = bounded_output(
+        diagnostic_sleep(),
+        std::time::Duration::from_millis(50),
+        |pid| simulator_timeout_diagnostics(pid, std::path::Path::new("ios_peer-no-child"), &[]),
+    )
+    .unwrap();
     assert!(timed_out);
     assert!(diagnostics.contains("executable="), "{diagnostics}");
     assert_eq!(diagnostics.matches("executable=").count(), 1);
@@ -662,27 +673,32 @@ fn simulator_diagnostics_observe_the_live_fixture_and_keep_its_deadline() {
 
 #[test]
 fn inventory_failure_still_observes_the_owned_leader_and_tears_down() {
-    let mut child = Command::new("sleep");
-    child.arg("10");
-    let (_, timed_out, diagnostics) =
-        bounded_output(child, std::time::Duration::from_millis(50), |pid| {
+    let mut leader = None;
+    let (_, timed_out, diagnostics) = bounded_output(
+        diagnostic_sleep(),
+        std::time::Duration::from_millis(50),
+        |pid| {
+            leader = Some(pid);
             simulator_diagnostics_with_inventory(
                 pid,
                 std::path::Path::new("ios_peer-no-child"),
                 Command::new("/nonexistent/lazysh-fixture-inventory"),
                 &[],
             )
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!(timed_out);
     assert!(
         diagnostics.contains("inventory unavailable:"),
         "{diagnostics}"
     );
+    let leader = leader.expect("the timeout observer must receive our actual child PID");
     assert!(
-        diagnostics.contains("executable=owned-simctl"),
+        diagnostics.contains(&format!("pid={leader} executable=unknown (tracked leader)")),
         "{diagnostics}"
     );
+    assert!(!diagnostics.contains("owned-simctl"), "{diagnostics}");
     assert_eq!(diagnostics.matches("executable=").count(), 1);
 }
 
