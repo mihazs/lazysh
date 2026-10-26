@@ -3495,6 +3495,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazysh-notification-client"
+version = "0.1.0"
+dependencies = [
+ "lazysh-common",
+ "rand 0.10.3",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "lazysh-notifications"
 version = "0.1.0"
 dependencies = [
@@ -3502,14 +3516,13 @@ dependencies = [
  "clap",
  "hyper-util",
  "lazysh-common",
- "rand 0.10.3",
+ "lazysh-notification-client",
  "rcgen",
  "reqwest 0.12.28",
  "rusqlite",
  "rustls",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "subtle",
  "tempfile",
  "tokio",

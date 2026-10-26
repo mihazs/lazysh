@@ -815,3 +815,25 @@ async fn interrupted_third_admission_cannot_restart_into_a_fourth_post() {
             .may_have_reached_destination
     );
 }
+
+#[tokio::test]
+async fn shared_source_validator_preserves_the_server_error_response() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = Service::open(config(directory.path(), OFFLINE_ENDPOINT)).unwrap();
+    let input = Source {
+        account_id: service.db(|s| s.status()).await.unwrap().account_id,
+        id: Uuid::new_v4(),
+        alias: "invalid\ncontrol".into(),
+        token_hash: vec![0; 32],
+    };
+    let (status, body) = call(
+        &service,
+        "POST",
+        "/v1/admin/sources",
+        ADMIN,
+        serde_json::to_value(input).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body, serde_json::json!({"error":"invalid_source"}));
+}
