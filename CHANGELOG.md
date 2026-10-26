@@ -40,6 +40,13 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Desktop `-dir PATH` / `--dir PATH` cold launches open one local terminal after
+  normal unlock, using the literal requested directory. Warm directory requests
+  show a localized unsupported notice; host/multiplexer CLI targets remain
+  unavailable. Explicit missing directories now fail instead of falling back to
+  HOME; manual local terminals and restoration retain their HOME default. Windows
+  directory launches use a verified compatible drive-path spelling and refuse
+  UNC, device and verbatim-only paths instead of letting the shell change cwd.
 - Device discovery, screenshot/video controls and client-owned validation now
   support English, Brazilian Portuguese and Spanish. Interface changes preserve
   stream ownership, frame data, socket drafts and explicit device-input choices;
