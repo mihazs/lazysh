@@ -397,6 +397,24 @@ lazysh-agent transcript --agent grok-acp --view conversation --path /absolute/pa
 
 Records remain the default. Selecting Grok in the client resets its view to Records; choosing Latest conversation branch is explicit. Refresh replaces the displayed branch. Claude Follow is unchanged. Grok Follow is available only for Records, never this reconstructed conversation view. Rejected reconstruction leaves the Records selector available and displays the original diagnostic alongside an explanation; it does not silently fall back and pretend the records form a conversation.
 
+Grok conversation reads retain bounded streaming parsing. The selected path is
+checked against the opened file's original metadata before reading and again
+after the read loop, before reducing/publishing the owned parsed actions.
+Observed rename, truncate, rewrite or append during capture fails with
+`InvalidEvent`; no partial view, retry or reset is returned. A stable incomplete
+final line is still ignored without consuming it, including valid JSON without a
+newline and split UTF-8. Appending before a later explicit read can complete it.
+The client keeps the previous displayed view when a requested refresh fails.
+
+Manual conversation remains portable: existing Unix device/inode checks detect
+selected-path replacement; other hosts retain length/modification-time checks.
+These per-read metadata guards do not establish cross-request file identity or
+live-agent binding. Changes restoring all observed metadata (or indistinguishable
+replacement where native identity is unavailable) remain unobservable. Claude,
+raw Records, recorded-file Follow, CLI combinations and existing limits do not
+change; no whole-file buffer or platform-only receipt is added.
+
+
 This view scans the selected file from byte zero: at most 16 MiB, 10,000 complete nonempty records and 256 KiB per line. It retains only normalized message actions and selected normalized tool patches, with a cumulative 16 MiB reconstruction budget (also charged for subsequently abandoned actions). All tool IDs retain the existing 256-byte limit; final cards allow at most 1,000 blocks and assembled text at most 256 KiB. Output is the latest 1–100 messages within 512 KiB, using schema v1 `active_branch`, `hasMore:false` and truthful `truncated`. An incomplete final line is left unconsumed for a later refresh. Bounds fail explicitly rather than returning an incorrectly reconstructed suffix.
 
 Adjacent chunks with the same explicit UUID `messageId` combine without losing text/thinking/media ordering; repeated nonadjacent keyed messages reject reconstruction. User blocks with the same explicit `promptIndex` combine. Identifier-free adjacent chunks combine only within an uninterrupted same-role run; this is a bounded display grouping, not proof of provider message identity. Tool/response/turn/control boundaries stop that grouping. Explicit `hideFromScrollback:true` user chunks still establish prompt boundaries but are not displayed.

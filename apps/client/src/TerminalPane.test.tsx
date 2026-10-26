@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
+import {uiI18n,useUi} from "./i18n/core";
+import {uiErrorText,type UiErrorCause} from "./i18n/localError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
@@ -35,7 +37,7 @@ beforeEach(() => {
   savePreferences({...defaults});
   terminal = createMockTerminal();
 });
-afterEach(() => {cleanup(); vi.useRealTimers(); vi.unstubAllGlobals();});
+afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealTimers(); vi.unstubAllGlobals();});
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
@@ -411,3 +413,94 @@ function swipeTwoLeft(canvas: HTMLElement, releaseSecond = true) {
   fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: "touch", clientX: 0, clientY: 100});
   if (releaseSecond) fireEvent.pointerUp(canvas, {pointerId: 2, pointerType: "touch", clientX: 100, clientY: 100});
 }
+
+function LocaleTerminal() {
+  useUi();
+  const [session]=useState(()=>({id:"ssh",name:"Host <raw> {{name}} 中文",connected:true,terminal} as unknown as LiveSession));
+  const [error,setError]=useState<UiErrorCause>("");
+  return <><TerminalPane session={session} active reportError={setError}/>{error && <p role="alert">{uiErrorText(error)}</p>}</>;
+}
+it.each([
+  ["pt-BR","Compor","Compor texto","Colar rascunho"],
+  ["es","Redactar","Redactar texto","Pegar borrador"],
+] as const)("renders actual %s terminal controls while retaining draft and terminal identity",async(locale,compose,label,paste)=>{
+  render(<LocaleTerminal/>);
+  const canvas=document.querySelector(".terminal-canvas");
+  const registrations=terminal.parser.registerOscHandler.mock.calls.length;
+  await act(async()=>{await uiI18n.changeLanguage(locale);});
+  fireEvent.click(screen.getByRole("button",{name:compose}));
+  const draft=screen.getByRole("textbox",{name:label});
+  fireEvent.change(draft,{target:{value:"raw Ctrl+b <draft> {{name}} 中文"}});draft.focus();
+  await act(async()=>{await uiI18n.changeLanguage("en");});
+  expect(screen.getByRole("textbox",{name:"Compose text"})).toBe(draft);
+  expect((draft as HTMLTextAreaElement).value).toBe("raw Ctrl+b <draft> {{name}} 中文");expect(document.activeElement).toBe(draft);
+  expect(document.querySelector(".terminal-canvas")).toBe(canvas);
+  expect(terminal.parser.registerOscHandler).toHaveBeenCalledTimes(registrations);
+  expect(terminal.paste).not.toHaveBeenCalled();expect(mocks.write).not.toHaveBeenCalled();
+  await act(async()=>{await uiI18n.changeLanguage(locale);});
+  fireEvent.click(screen.getByRole("button",{name:paste}));
+  expect(terminal.paste).toHaveBeenCalledWith("raw Ctrl+b <draft> {{name}} 中文");
+});
+
+it('retains search result, modifier state and exact input bytes across language changes',async()=>{
+  render(<LocaleTerminal/>);
+  const ctrl=screen.getByRole('button',{name:'ctrl'});fireEvent.doubleClick(ctrl);
+  fireEvent.click(screen.getByRole('button',{name:'Find'}));
+  const input=screen.getByRole('textbox',{name:'Search terminal history'});
+  fireEvent.change(input,{target:{value:'world'}});input.focus();fireEvent.submit(input.closest('form')!);
+  expect(screen.getByText('Match on line 2')).toBeTruthy();
+  await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
+  expect(screen.getByText('Resultado na linha 2')).toBeTruthy();
+  expect(screen.getByRole('textbox',{name:'Buscar no histórico do terminal'})).toBe(input);
+  expect((input as HTMLInputElement).value).toBe('world');expect(document.activeElement).toBe(input);
+  expect(terminal.select).toHaveBeenCalledTimes(1);expect(mocks.write).not.toHaveBeenCalled();
+  await act(async()=>{await uiI18n.changeLanguage('es');});
+  expect(screen.getByText('Coincidencia en la línea 2')).toBeTruthy();
+  expect(ctrl.textContent).toBe('ctrl · bloqueado');
+  fireEvent.click(screen.getByRole('button',{name:'c'}));expect(mocks.write).toHaveBeenCalledWith('ssh','\x03');
+  fireEvent.change(input,{target:{value:'raw-no-match'}});fireEvent.submit(input.closest('form')!);
+  await act(async()=>{await uiI18n.changeLanguage('en');});
+  expect(screen.getByText('No match in retained history.')).toBeTruthy();
+});
+it('keeps one explicit OSC copy through a held write and retranslates only its local failure',async()=>{
+  let reject!:(error:Error)=>void;
+  vi.mocked(navigator.clipboard.writeText).mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+  render(<LocaleTerminal/>);
+  const raw='raw Ctrl+b {{clipboard}} 中文';
+  act(()=>{osc(`c;${btoa(String.fromCharCode(...new TextEncoder().encode(raw)))}`);});
+  const region=screen.getByRole('region',{name:'Remote clipboard request'});
+  await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
+  expect(screen.getByRole('region',{name:'Solicitação remota da área de transferência'})).toBe(region);
+  expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Permitir esta cópia'}));
+  await act(async()=>{await uiI18n.changeLanguage('es');});
+  expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);expect(navigator.clipboard.writeText).toHaveBeenCalledWith(raw);
+  await act(async()=>{reject(new Error('owned clipboard rejection'));});
+  expect(screen.getByRole('alert').textContent).toContain('El acceso al portapapeles no estaba disponible.');
+  await act(async()=>{await uiI18n.changeLanguage('en');});
+  expect(screen.getByRole('alert').textContent).toBe('Clipboard access was unavailable. Use your system copy menu.');
+  expect(terminal.parser.registerOscHandler).toHaveBeenCalledTimes(1);
+  expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+});
+it('retains a held paste and the same link operation without translating raw diagnostics',async()=>{
+  let resolve!:(text:string)=>void;
+  vi.mocked(navigator.clipboard.readText).mockImplementationOnce(()=>new Promise<string>(done=>{resolve=done;}));
+  render(<LocaleTerminal/>);
+  fireEvent.click(screen.getByRole('button',{name:'paste'}));
+  await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
+  expect(navigator.clipboard.readText).toHaveBeenCalledTimes(1);expect(terminal.paste).not.toHaveBeenCalled();
+  await act(async()=>{resolve('raw <paste> {{text}} 中文');});
+  expect(terminal.paste).toHaveBeenCalledWith('raw <paste> {{text}} 中文');
+  let reject!:(error:string)=>void;
+  mocks.openWebUrl.mockImplementationOnce(()=>new Promise<void>((_resolve,fail)=>{reject=fail;}));
+  act(()=>{mocks.link!(new MouseEvent('click'),'https://example.com/raw');});
+  fireEvent.click(screen.getByRole('button',{name:'Abrir no navegador'}));
+  const opening=screen.getByRole('button',{name:'Abrindo…'});
+  await act(async()=>{await uiI18n.changeLanguage('es');});
+  expect(screen.getByRole('button',{name:'Abriendo…'})).toBe(opening);
+  expect(mocks.openWebUrl).toHaveBeenCalledTimes(1);expect(mocks.openWebUrl).toHaveBeenCalledWith('https://example.com/raw');
+  const raw='RAW denied <native> {{token}} 中文';await act(async()=>{reject(raw);});
+  expect(screen.getByRole('alert').textContent).toBe(raw);
+  await act(async()=>{await uiI18n.changeLanguage('en');});
+  expect(screen.getByRole('alert').textContent).toBe(raw);expect(mocks.openWebUrl).toHaveBeenCalledTimes(1);
+});

@@ -27,7 +27,11 @@ Agent activity columns, explicit one-request approval controls and server compan
 settings also use all three catalogs. Agent names, summaries, tool JSON, paths,
 session/pane identities and native diagnostics remain verbatim. Language changes
 preserve pending decisions, their original hashes and polling interval, and
-unsaved companion switches. Keep Awake controls remain a separate task.
+unsaved companion switches. Keep Awake controls and multiplexer prefix shortcuts
+also use the catalogs. Language changes preserve acknowledged display ownership,
+release/error identity, explicit opt-in, prefix drafts and exact ASCII input steps.
+Native display reasons and terminal diagnostics remain verbatim, including empty
+values; localized labels do not establish physical display-timer acceptance.
 Host attachment selection, crop/drawing controls, explicit upload/copy/staging
 actions and retained local errors/notices also use the catalogs. Language changes
 preserve selected file bytes, original crop coordinates, canvas resources,
@@ -64,6 +68,18 @@ the local public-key clipboard error also use the catalogs. Language changes
 preserve focused key/passphrase drafts, pending request identity and raw public
 metadata/native diagnostics; they never generate, inspect, copy, select or save
 credentials. Private-key headers and cryptographic identifiers remain literal.
+Terminal-owned controls, session-ended guidance, remote clipboard consent, link
+confirmation, retained search results, composer actions and D-pad accessibility
+labels also use the three catalogs. Search stores its line/empty result rather
+than a pretranslated sentence; terminal-created local errors retain finite causes
+through the existing App error route. Language changes preserve the xterm/session,
+addons and callback registration, query and draft bytes, Control state, explicit
+clipboard consent and in-flight clipboard/browser operations. They never copy,
+paste, open a URL, reconnect or dispatch input by themselves. Technical keycaps,
+user snippet/chord labels and bindings, raw terminal output, URLs, session names
+and native error strings remain verbatim. Shared font/parser messages retain
+their existing owning-module behavior; this does not claim a complete audit of
+all retained messages elsewhere in the application.
 This is a partial milestone under issue #79. Other feature panels still require
 their own localization and acceptance.
 Native lock-cover/biometric-reason resources on
@@ -208,6 +224,14 @@ Run the existing project tasks from `apps/client`:
   desktop/phone widths, focused secret drafts, unchanged synthetic key material,
   public-key copying, explicit use and retained clipboard errors. No real key
   generation, native vault access or OS clipboard permission is exercised.
+- `bun run test src/TerminalPane.test.tsx src/i18n/catalogs.test.ts src/i18n/coverage.test.ts`
+  checks actual Portuguese/Spanish controls, stable editor/terminal/handler identity,
+  retained search/modifier state, held clipboard/link ownership and live local
+  error causes while preserving native text and exact key/paste bytes.
+- `bun run test:e2e e2e/i18n.spec.ts --grep terminal-owned` checks the real xterm
+  renderer at desktop/phone widths in English, Brazilian Portuguese and Spanish,
+  explicit OSC clipboard consent, raw content, draft/focus continuity and Control
+  bytes through a synthetic native bridge/clipboard. No OS permission is requested.
 - `bun run check` checks catalog keys and required interpolation arguments.
 - `bun run test src/i18n/pushLocales.test.tsx src/PushSettingsPanel.test.tsx`
   checks consent, held register/revoke, original access headers, one recovery read,

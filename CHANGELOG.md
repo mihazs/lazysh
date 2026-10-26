@@ -4,6 +4,14 @@
 
 - Add an explicit Mac-host clipboard action for the latest successful attachment. It writes the raw canonical path through the original verified SSH session and fixed `/usr/bin/pbcopy`; uploads still never copy automatically. Cancellation cannot undo a clipboard change already delivered. Linux and Windows host clipboard tools remain unsupported.
 
+- Localize Keep Awake controls and multiplexer prefix shortcuts in English, Brazilian Portuguese and Spanish while preserving native ownership, opt-in state, retained errors and exact input bytes. Keep the board checkbox within narrow layouts; defaults and permissions are unchanged.
+
+- Localize terminal controls, clipboard consent, link confirmation, search/composer status and terminal-owned local errors in English, Brazilian Portuguese and Spanish. Language changes preserve live terminal handlers, raw content, drafts, explicit consent and input bytes; locale defaults and permissions are unchanged.
+
+- Reject observed file changes during Grok recorded-conversation reads, including concurrent appends, instead of publishing a partial, detached or mixed history. Stable incomplete tails, portable manual reads and existing limits/defaults remain unchanged.
+
+- Add owned OpenSSH/tmux acceptance for restoring an exact named-server workload through fresh verified SSH after original transport and native handle retirement. GUI cold start, app-process death and physical roaming remain separate acceptance.
+
 - Add explicit Grok recorded-file Follow with verified preparation, append-only paging, hidden-page pause and original source/access ownership. Manual Records remains the default; reconstructed conversation and live prompt targeting are not enabled.
 
 - Keep About source revisions and expanded legal notices within mobile dialog bounds, including clean builds. Long tokens wrap and preserved notice indentation scrolls within keyboard-focusable legal blocks; legal bytes and source links remain unchanged.

@@ -2,22 +2,24 @@ import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {pseudoEnglish} from '../src/test/pseudoLocale';
 
-declare global {interface Window {localeFixture:{calls:string[];output:()=>void};}}
+declare global {interface Window {localeFixture:{calls:string[];sent:string[];copied:string[];output:(text?:string)=>void};}}
 const nativeReason='RAW native reason <verbatim> 中文';
 async function fixture(page: Page, languages = ['en-GB']) {
   await installNativeBridge(page);
   await page.addInitScript(({reason,languages})=>{
     Object.defineProperty(navigator,'languages',{configurable:true,get:()=>languages});
-    window.localeFixture={calls:[],output:()=>{}};
+    window.localeFixture={calls:[],sent:[],copied:[],output:()=>{}};
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{window.localeFixture.copied.push(text);},readText:async()=>"RAW clipboard"}});
     window.nativeFixtureInvoke=async(command,args)=>{
       window.localeFixture.calls.push(command);
       if(command==='list_hosts')return [{id:'locale-host',name:'Host <raw> {{x}} 中文',hostname:'fixture.invalid',username:'agent',port:22}];
       if(command==='local_capability')return {available:true,reason:'Synthetic local terminal; no shell starts.'};
       if(command==='local_connect') {
         const channel=args.events as {onmessage:(event:unknown)=>void};
-        window.localeFixture.output=()=>channel.onmessage({type:'data',data:[...new TextEncoder().encode('RAW C-b, {{text}} 世界\r\n')]});
+        window.localeFixture.output=(text='RAW C-b, {{text}} 世界\r\n')=>channel.onmessage({type:'data',data:[...new TextEncoder().encode(text)]});
         return {sessionId:'local:locale-fixture'};
       }
+      if(command==='local_write'){window.localeFixture.sent.push(String(args.data));return;}
       if(['local_resize','local_ack','local_disconnect'].includes(command))return;
       if(command==='app_icon_status')return {available:false,current:'unknown',reason};
       if(command==='credential_protection')return {available:false,reason};
@@ -161,4 +163,37 @@ for(const system of [
   await expect(page.getByRole('combobox',{name:system.language,exact:true})).toHaveValue('system');
   await expect(page.getByRole('option',{name:system.system,exact:true})).toHaveAttribute('value','system');
   expect(await page.evaluate(()=>localStorage.getItem('lazysh.preferences.v1'))).toBeNull();
+});
+
+for(const locale of [
+  {code:'en',compose:'Compose text',paste:'Paste draft',find:'Find',search:'Search terminal history',next:'Next',match:'Match on line 1',consent:'Remote clipboard request',allow:'Allow this copy'},
+  {code:'pt-BR',compose:'Compor texto',paste:'Colar rascunho',find:'Buscar',search:'Buscar no histórico do terminal',next:'Próxima',match:'Resultado na linha 1',consent:'Solicitação remota da área de transferência',allow:'Permitir esta cópia'},
+  {code:'es',compose:'Redactar texto',paste:'Pegar borrador',find:'Buscar',search:'Buscar en el historial del terminal',next:'Siguiente',match:'Coincidencia en la línea 1',consent:'Solicitud remota del portapapeles',allow:'Permitir esta copia'},
+] as const) test(`terminal-owned ${locale.code} controls retain live content, explicit consent and input bytes`,async({page})=>{
+  await fixture(page);const {screen,canvas}=await connectedTerminal(page);
+  await page.getByRole('button',{name:'ctrl',exact:true}).dblclick();
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  const draft='RAW Ctrl+b <draft> {{text}} 中文';
+  const textarea=page.getByRole('textbox',{name:'Compose text',exact:true});await textarea.fill(draft);
+  const editor=await textarea.elementHandle();
+  await page.evaluate(()=>window.localeFixture.output('\x1b]52;c;'+btoa('RAW clipboard {{text}}')+'\x07'));
+  await expect(page.getByRole('region',{name:'Remote clipboard request',exact:true})).toBeVisible();
+  await textarea.focus();
+  await page.evaluate(async code=>{const {savePreferences,getPreferences}=await import('/src/preferences.ts');savePreferences({...getPreferences(),uiLanguage:code});},locale.code);
+  const localized=page.getByRole('textbox',{name:locale.compose,exact:true});
+  await expect(localized).toHaveValue(draft);await expect(localized).toBeFocused();
+  expect(await editor!.evaluate(node=>node.isConnected)).toBe(true);expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(page.getByRole('region',{name:locale.consent,exact:true})).toContainText('RAW clipboard {{text}}');
+  expect(await page.evaluate(()=>window.localeFixture.copied)).toEqual([]);expect(await page.evaluate(()=>window.localeFixture.sent)).toEqual([]);
+  await page.getByRole('button',{name:locale.allow,exact:true}).click();
+  expect(await page.evaluate(()=>window.localeFixture.copied)).toEqual(['RAW clipboard {{text}}']);
+  await page.getByRole('button',{name:locale.find,exact:true}).click();
+  await page.getByRole('textbox',{name:locale.search,exact:true}).fill('RAW');
+  await page.getByRole('button',{name:locale.next,exact:true}).click();await expect(page.getByText(locale.match,{exact:true})).toBeVisible();
+  await expect(screen).toContainText('RAW C-b, {{text}} 世界');
+  await page.getByRole('button',{name:'c',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.localeFixture.sent)).toEqual(['\x03']);
+  expect(await page.evaluate(()=>window.localeFixture.calls.filter(command=>command==='local_connect').length)).toBe(1);
+  expect(await page.evaluate(()=>window.localeFixture.calls.includes('local_disconnect'))).toBe(false);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
 });
