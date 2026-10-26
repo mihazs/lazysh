@@ -1,3 +1,5 @@
+import {LocalUiError} from './i18n/localError';
+import {t,uiI18n} from './i18n/core';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -1076,4 +1078,16 @@ it('invalidates direct delivery synchronously on disconnect intent and never rev
   await expect(fresh(request)).rejects.toThrow('no longer active');
   await mocks.voiceProps.mock.calls.at(-1)![0].onDirectDictation({...request,text:'recording after repeated failure',autoSend:false});
   expect(mocks.api.write).toHaveBeenLastCalledWith('dictation-current','recording after repeated failure');
+});
+
+it('retains only class-branded global failures across locales and preserves every other payload conversion',async()=>{
+  render(<App/>);await screen.findByRole('button',{name:'Connect to Home'});
+  try{
+    act(()=>{window.dispatchEvent(new CustomEvent('lazysh-error',{detail:new LocalUiError('shareCompletedWhileClosing')}));});
+    for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});expect(screen.getByRole('alert').textContent).toContain(t('shareCompletedWhileClosing'));}
+    for(const detail of ['shareCompletedWhileClosing <raw> {{name}}',{key:'shareCompletedWhileClosing',message:'Never trust this key'}]){
+      act(()=>{window.dispatchEvent(new CustomEvent('lazysh-error',{detail}));});
+      for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});expect(screen.getByRole('alert').textContent).toContain(String(detail));expect(screen.getByRole('alert').textContent).not.toContain('Never trust this key');}
+    }
+  }finally{await act(async()=>{await uiI18n.changeLanguage('en');});}
 });

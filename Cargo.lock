@@ -6692,6 +6692,8 @@ name = "tauri-plugin-lazysh-display-idle"
 version = "0.1.0"
 dependencies = [
  "core-foundation-sys",
+ "gio",
+ "glib",
  "serde",
  "tauri",
  "tauri-plugin",

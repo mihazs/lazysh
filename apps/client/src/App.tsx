@@ -1292,8 +1292,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }, []);
   useEffect(() => {
     const rerender = () => setSessions((previous) => [...previous]);
-    const displayError = (event: Event) =>
-      setError(String((event as CustomEvent).detail));
+    const displayError = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      setError(detail instanceof LocalUiError ? detail : String(detail));
+    };
     window.addEventListener("lazysh-session-change", rerender);
     window.addEventListener("lazysh-error", displayError);
     return () => {

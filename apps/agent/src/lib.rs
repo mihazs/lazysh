@@ -610,6 +610,67 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn established_store_cleanup_during_protected_admission_preserves_committed_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let event = normalize(
+            &json!({
+                "schemaVersion": 1, "sessionId": "close-during-admission", "agent": "Fixture",
+                "project": "/synthetic", "state": "working", "summary": "Committed before cleanup"
+            }),
+            Agent::Generic,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let mut existing = Store::open(directory.path()).unwrap();
+        existing.ingest(&event, now).unwrap();
+        let sidecars =
+            ["-wal", "-shm"].map(|suffix| directory.path().join(format!("events.sqlite3{suffix}")));
+        for path in &sidecars {
+            assert!(fs::symlink_metadata(path).unwrap().is_file());
+        }
+        let mut established = Some(existing);
+        let mut checked = 0;
+        let mut reopened = Store::open_with_storage_checks(
+            directory.path(),
+            storage_filesystem::require_local,
+            |path| {
+                let probe = fs::File::open(directory.path().join("events.sqlite3-init-lock"))?;
+                assert!(matches!(
+                    probe.try_lock(),
+                    Err(fs::TryLockError::WouldBlock)
+                ));
+                if let Some(last_connection) = established.take() {
+                    // The new opener holds its native lock but has not opened
+                    // SQLite. Real last-close cleanup must still be able to run.
+                    drop(last_connection);
+                    for removed in &sidecars {
+                        assert_eq!(
+                            fs::symlink_metadata(removed).unwrap_err().kind(),
+                            io::ErrorKind::NotFound
+                        );
+                    }
+                }
+                // Check real path state, not injected metadata or an opened sidecar FD.
+                validate_sidecar(path)?;
+                checked += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(checked, 3);
+        assert!(established.is_none());
+        let snapshot = reopened.snapshot(50, now).unwrap();
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].event_count, 1);
+        assert_eq!(
+            serde_json::to_value(&snapshot.sessions[0].event).unwrap(),
+            serde_json::to_value(event).unwrap()
+        );
+    }
+    #[cfg(unix)]
+    #[test]
     fn sidecar_revalidation_rejects_unsafe_replacements_and_stops_after_three_observations() {
         use std::os::unix::fs::{symlink, PermissionsExt};
         for replacement in ["hardlink", "symlink", "mode", "directory"] {

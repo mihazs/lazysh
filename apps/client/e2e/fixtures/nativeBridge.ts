@@ -1,14 +1,25 @@
 import type { Page } from '@playwright/test';
 declare global { interface Window {
   nativeFixtureInvoke: (command: string, args: Record<string, unknown>) => Promise<unknown>;
+  nativeFixtureEmit: (event:string,payload:unknown)=>void;
 } }
 /** Shared synthetic native admission; each spec retains its own command behavior. */
-export async function installNativeBridge(page: Page, access = {reason:'Browser fixture', generation:'0'}, options={nativeLocale:false}) {
+export async function installNativeBridge(page: Page, access = {reason:'Browser fixture', generation:'0'}, options:{nativeLocale?:boolean;nativeEvents?:boolean}={}) {
   await page.addInitScript(({access,options}) => {
+    let next=0;
+    const callbacks=new Map<number,(value:unknown)=>void>();
+    const listeners=new Map<number,{event:string;handler:number}>();
+    if(options.nativeEvents) {
+      Object.defineProperty(window,'__TAURI_EVENT_PLUGIN_INTERNALS__',{value:{unregisterListener(_event:string,id:number){listeners.delete(id);}}});
+      window.nativeFixtureEmit=(event,payload)=>{for(const [id,listener] of listeners)if(listener.event===event)callbacks.get(listener.handler)?.({event,id,payload});};
+    }
     Object.defineProperty(window, 'isTauri', {value:true});
     Object.defineProperty(window, '__TAURI_INTERNALS__', {value: {
-      transformCallback: () => 1, unregisterCallback: () => {},
+      transformCallback: (callback:(value:unknown)=>void) => {if(!options.nativeEvents)return 1;const id=++next;callbacks.set(id,callback);return id;},
+      unregisterCallback: (id:number) => {callbacks.delete(id);},
       invoke: async (command: string, args: Record<string, unknown> = {}) => {
+        if(options.nativeEvents && command==='plugin:event|listen'){const id=++next;listeners.set(id,{event:String(args.event),handler:Number(args.handler)});return id;}
+        if(options.nativeEvents && command==='plugin:event|unlisten'){listeners.delete(Number(args.eventId));return;}
         if (command === 'app_lock_status') return {initialized:true,supported:false,enabled:false,locked:false,...access};
         if (command === 'ui_locale_status' && !options.nativeLocale) return {nativeAuthority:false};
         if (command === 'app_lock_ready' || command === 'adopt_session') return;

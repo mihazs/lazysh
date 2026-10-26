@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux explicitly remains unavailable pending bounded asynchronous desktop-portal ownership; physical idle-timeout and battery validation remain pending.
+- Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux now uses bounded asynchronous XDG portal acknowledgements, with exact cancellation, private-connection cleanup and visible owner-loss reporting. Acknowledgement does not establish physical idle-timeout or battery behavior; hardware validation remains pending.
 
 This is a development preview, not a stable release or a claim of complete Moshi
 parity. Remaining capability and platform gates are tracked in issue #1.
@@ -45,6 +45,16 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   HOME; manual local terminals and restoration retain their HOME default. Windows
   directory launches use a verified compatible drive-path spelling and refuse
   UNC, device and verbatim-only paths instead of letting the shell change cwd.
+- Device discovery, screenshot/video controls and client-owned validation now
+  support English, Brazilian Portuguese and Spanish. Interface changes preserve
+  stream ownership, frame data, socket drafts and explicit device-input choices;
+  native SDK warnings and device identities remain verbatim. Defaults are unchanged.
+
+- Localize optional public-sharing configuration, expiring uploads/history,
+  thumbnails, copying and revocation in English, Brazilian Portuguese and Spanish.
+  Language changes preserve credential/file drafts and in-flight requests; defaults
+  and explicit upload/revoke consent are unchanged.
+
 - Localize host attachment selection, crop/annotation controls, upload/copy/staging
   notices and local validation in English, Brazilian Portuguese and Spanish.
   Language changes preserve file bytes, edits, paths and editable prompts; defaults

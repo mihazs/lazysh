@@ -1,7 +1,8 @@
+import {t,useUi,formatNumber,formatDateTime} from './i18n/core';
+import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import { useProtectedInvoke } from './access';
 import { useEffect, useRef, useState } from "react";
 
-import { errorMessage } from "./SessionTools";
 import { imageSize } from "./attachment";
 
 type Status = { configured: boolean; origin: string | null };
@@ -20,16 +21,16 @@ const thumbnailInputLimit = 2 * 1024 * 1024;
 type Thumbnail = { url: string; id: string; name: string; width: number; height: number };
 const imageShare = (item: Share) => ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(item.mime.toLowerCase()) || /\.(png|jpe?g|gif|webp)$/i.test(item.name);
 export function thumbnailBlob(value: unknown): { blob: Blob; width: number; height: number } {
-  if (!value || typeof value !== 'object') throw new Error('Invalid image preview.');
+  if (!value || typeof value !== 'object') throw new LocalUiError('shareInvalidPreview');
   const result = value as Record<string, unknown>;
-  if (result.mime !== 'image/png' || !Number.isSafeInteger(result.width) || Number(result.width) < 1 || Number(result.width) > 256 || !Number.isSafeInteger(result.height) || Number(result.height) < 1 || Number(result.height) > 256 || !Array.isArray(result.data) || result.data.length > 512 * 1024 || result.data.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255)) throw new Error('Invalid image preview.');
+  if (result.mime !== 'image/png' || !Number.isSafeInteger(result.width) || Number(result.width) < 1 || Number(result.width) > 256 || !Number.isSafeInteger(result.height) || Number(result.height) < 1 || Number(result.height) > 256 || !Array.isArray(result.data) || result.data.length > 512 * 1024 || result.data.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255)) throw new LocalUiError('shareInvalidPreview');
   const bytes = Uint8Array.from(result.data);
   const dimensions = imageSize(bytes);
-  if (!dimensions || dimensions.mime !== 'image/png' || dimensions.width !== result.width || dimensions.height !== result.height) throw new Error('Image preview dimensions do not match its contents.');
+  if (!dimensions || dimensions.mime !== 'image/png' || dimensions.width !== result.width || dimensions.height !== result.height) throw new LocalUiError('sharePreviewMismatch');
   return { blob: new Blob([bytes], { type: 'image/png' }), width: dimensions.width, height: dimensions.height };
 }
 function originUrl(value: string): URL {
-  const url = new URL(value);
+  let url:URL;try{url=new URL(value);}catch{throw new LocalUiError('shareOriginInvalid');}
   if (
     url.protocol !== "https:" ||
     url.username ||
@@ -38,7 +39,7 @@ function originUrl(value: string): URL {
     url.search ||
     url.hash
   )
-    throw new Error("Use the HTTPS origin of your sharing service.");
+    throw new LocalUiError('shareOriginInvalid');
   return url;
 }
 export function parseShare(value: unknown, origin: string): Share {
@@ -61,8 +62,8 @@ export function parseShare(value: unknown, origin: string): Share {
     item.expiresAt > 8640000000000 ||
     typeof item.url !== "string"
   )
-    throw new Error("Invalid sharing service response.");
-  const url = new URL(item.url);
+    throw new LocalUiError('shareResponseInvalid');
+  let url:URL;try{url=new URL(item.url);}catch{throw new LocalUiError('shareAddressInvalid');}
   if (
     url.origin !== originUrl(origin).origin ||
     url.username ||
@@ -71,7 +72,7 @@ export function parseShare(value: unknown, origin: string): Share {
     url.search ||
     url.hash
   )
-    throw new Error("The service returned an unexpected download address.");
+    throw new LocalUiError('shareAddressInvalid');
   return item;
 }
 function parsePage(value: unknown, origin: string): Page {
@@ -84,7 +85,7 @@ function parsePage(value: unknown, origin: string): Page {
     (page.nextCursor !== null &&
       (typeof page.nextCursor !== "string" || page.nextCursor.length > 1024))
   )
-    throw new Error("Invalid sharing history response.");
+    throw new LocalUiError('shareHistoryInvalid');
   return {
     ...page,
     shares: page.shares.map((item) => parseShare(item, origin)),
@@ -92,6 +93,7 @@ function parsePage(value: unknown, origin: string): Page {
 }
 
 export default function SharePanel() {
+  useUi();
   const invoke = useProtectedInvoke();
   const [status, setStatus] = useState<Status>({
     configured: false,
@@ -106,8 +108,8 @@ export default function SharePanel() {
   const [busy, setBusy] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [error, setError] = useState<UiErrorCause>("");
+  const [message, setMessage] = useState<null|'shareSaved'|'shareForgotten'|'shareComplete'|'shareCompletedBeforeCancellation'|'shareCopied'>(null);
   const [now, setNow] = useState(Date.now());
   const alive = useRef(true);
   const cancelled = useRef(false);
@@ -138,7 +140,7 @@ export default function SharePanel() {
         }
       })
       .catch((e) => {
-        if (alive.current) setError(errorMessage(e));
+        if (alive.current) setError(captureUiError(e));
       })
       .finally(() => {
         if (alive.current) setBusy(false);
@@ -159,7 +161,7 @@ export default function SharePanel() {
     clearThumbnail();
     setBusy(true);
     setError("");
-    setMessage("");
+    setMessage(null);
     try {
       originUrl(origin);
       const value = await invoke<Status>("share_configure", { origin, token });
@@ -168,10 +170,10 @@ export default function SharePanel() {
         setToken("");
         setItems([]);
         setCursor(null);
-        setMessage("Sharing service saved on this device.");
+        setMessage('shareSaved');
       }
     } catch (e) {
-      if (alive.current) setError(errorMessage(e));
+      if (alive.current) setError(captureUiError(e));
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -191,7 +193,7 @@ export default function SharePanel() {
         setCursor(page.nextCursor);
       }
     } catch (e) {
-      if (alive.current) setError(errorMessage(e));
+      if (alive.current) setError(captureUiError(e));
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -199,14 +201,14 @@ export default function SharePanel() {
   async function upload() {
     if (!file || !status.origin) return;
     if (file.size > limit) {
-      setError("Files must be 10 MiB or smaller.");
+      setError(new LocalUiError('shareFileLimit'));
       return;
     }
     setBusy(true);
     setUploading(true);
     setProgress(0);
     setError("");
-    setMessage("");
+    setMessage(null);
     cancelled.current = false;
     let sent = false;
     try {
@@ -219,12 +221,12 @@ export default function SharePanel() {
       uploadId.current = result.id;
       for (let offset = 0; offset < file.size; offset += 256 * 1024) {
         if (cancelled.current || !alive.current)
-          throw new Error("Upload cancelled.");
+          throw new LocalUiError('shareUploadCancelled');
         const chunk = new Uint8Array(
           await file.slice(offset, offset + 256 * 1024).arrayBuffer(),
         );
         if (cancelled.current || !alive.current)
-          throw new Error("Upload cancelled.");
+          throw new LocalUiError('shareUploadCancelled');
         await invoke("share_upload_chunk", {
           id: result.id,
           offset,
@@ -234,14 +236,14 @@ export default function SharePanel() {
           setProgress(Math.min(file.size, offset + chunk.length));
       }
       if (cancelled.current || !alive.current)
-        throw new Error("Upload cancelled.");
+        throw new LocalUiError('shareUploadCancelled');
       sent = true;
       const response = await invoke<{ schemaVersion: number; share: unknown }>(
         "share_upload_finish",
         { id: result.id },
       );
       if (response.schemaVersion !== 1)
-        throw new Error("Unsupported sharing service response.");
+        throw new LocalUiError('shareResponseUnsupported');
       const item = parseShare(response.share, status.origin);
       uploadId.current = null;
       if (alive.current) {
@@ -251,16 +253,16 @@ export default function SharePanel() {
             ...current.filter((existing) => existing.id !== item.id),
           ].slice(0, 50),
         );
-        setMessage(cancelled.current ? "Upload completed before cancellation. Delete it below to revoke the link." : "Upload complete. Copy its expiring link below.");
-      } else window.dispatchEvent(new CustomEvent('lazysh-error',{detail:'A shared upload completed while the dialog was closing. Open Shareable uploads and refresh history to delete it.'}));
+        setMessage(cancelled.current ? 'shareCompletedBeforeCancellation' : 'shareComplete');
+      } else window.dispatchEvent(new CustomEvent('lazysh-error',{detail:new LocalUiError('shareCompletedWhileClosing')}));
     } catch (e) {
       if (alive.current)
         setError(
           cancelled.current
-            ? "Upload cancelled. Refresh history to check for a completed upload."
-            : errorMessage(e),
+            ? new LocalUiError('shareCancellationCheck')
+            : captureUiError(e),
         );
-      else if(sent)window.dispatchEvent(new CustomEvent('lazysh-error',{detail:'A shared upload stopped while the dialog was closing. Refresh sharing history to check whether the service completed it.'}));
+      else if(sent)window.dispatchEvent(new CustomEvent('lazysh-error',{detail:new LocalUiError('shareStoppedWhileClosing')}));
     } finally {
       if (uploadId.current) {
         await invoke("share_upload_cancel", { id: uploadId.current }).catch(
@@ -277,7 +279,7 @@ export default function SharePanel() {
   async function remove(item: Share) {
     if (
       !window.confirm(
-        `Delete the shared file “${item.name}” and revoke its link?`,
+        t('shareConfirmDelete',{name:item.name}),
       )
     )
       return;
@@ -291,7 +293,7 @@ export default function SharePanel() {
           current.filter((existing) => existing.id !== item.id),
         );
     } catch (e) {
-      if (alive.current) setError(errorMessage(e));
+      if (alive.current) setError(captureUiError(e));
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -310,7 +312,7 @@ export default function SharePanel() {
       const url = URL.createObjectURL(result.blob);
       thumbnailUrl.current = url;
       setThumbnail({ url, id: item.id, name: item.name, width: result.width, height: result.height });
-    } catch (e) { if (alive.current && generation === thumbnailGeneration.current) setError(errorMessage(e)); }
+    } catch (e) { if (alive.current && generation === thumbnailGeneration.current) setError(captureUiError(e)); }
     finally {
       if (thumbnailRequest.current === requestId) {
         thumbnailRequest.current = null;
@@ -322,18 +324,17 @@ export default function SharePanel() {
     if (thumbnail && !items.some(item => item.id === thumbnail.id && item.expiresAt * 1000 > now)) clearThumbnail();
   }, [now, items, thumbnail]);
   return (
-    <section className="preferences-panel" aria-label="Shareable uploads">
-      <h2>Shareable uploads</h2>
+    <section className="preferences-panel" aria-label={t('shareTitle')}>
+      <h2>{t('shareTitle')}</h2>
       <p>
-        Optional: send a selected file to your HTTPS sharing service and create
-        an expiring download link. Host attachments use SSH separately.
+        {t('shareScope')}
       </p>
-      {error && <p role="alert">{error}</p>}
-      {message && <p role="status">{message}</p>}
+      {error && <p role="alert">{uiErrorText(error)}</p>}
+      {message && <p role="status">{t(message)}</p>}
       <fieldset disabled={busy}>
-        <legend>Service on this device</legend>
+        <legend>{t('shareServiceLegend')}</legend>
         <label>
-          Sharing service origin
+          {t('shareOriginLabel')}
           <input
             type="url"
             placeholder="https://files.example.com"
@@ -342,7 +343,7 @@ export default function SharePanel() {
           />
         </label>
         <label>
-          Management token
+          {t('shareToken')}
           <input
             type="password"
             autoComplete="new-password"
@@ -352,22 +353,21 @@ export default function SharePanel() {
           />
         </label>
         <p>
-          The token stays in the native credential store. Leave it blank to keep
-          the existing token for the same service.
+          {t('shareTokenHint')}
         </p>
         <button onClick={() => void configure()} disabled={!origin.trim()}>
-          Save sharing service
+          {t('shareSave')}
         </button>
       {status.configured && <button onClick={()=>{
         clearThumbnail();
         setBusy(true);setError("");
-        void invoke("share_forget").then(()=>{if(alive.current){setStatus({configured:false,origin:null});setOrigin("");setToken("");setItems([]);setCursor(null);setMessage("Service credentials removed from this device.");}}).catch(e=>{if(alive.current)setError(errorMessage(e));}).finally(()=>{if(alive.current)setBusy(false);});
-      }}>Forget service on this device</button>}
+        void invoke("share_forget").then(()=>{if(alive.current){setStatus({configured:false,origin:null});setOrigin("");setToken("");setItems([]);setCursor(null);setMessage('shareForgotten');}}).catch(e=>{if(alive.current)setError(captureUiError(e));}).finally(()=>{if(alive.current)setBusy(false);});
+      }}>{t('shareForget')}</button>}
       </fieldset>
       <fieldset disabled={busy || !status.configured}>
-        <legend>New expiring link</legend>
+        <legend>{t('shareNew')}</legend>
         <label>
-          File to share
+          {t('shareFile')}
           <input
             type="file"
             onChange={(event) => {
@@ -378,34 +378,34 @@ export default function SharePanel() {
         </label>
         {file && (
           <p>
-            {file.name} · {file.size.toLocaleString()} bytes
+            {t('shareMetadata',{name:file.name,bytes:formatNumber(file.size)})}
           </p>
         )}
         <label>
-          Link lifetime
+          {t('shareLifetime')}
           <select
             value={ttl}
             onChange={(event) => setTtl(Number(event.target.value))}
           >
-            <option value={3600}>1 hour</option>
-            <option value={86400}>1 day</option>
-            <option value={604800}>7 days</option>
+            <option value={3600}>{t('shareHour')}</option>
+            <option value={86400}>{t('shareDay')}</option>
+            <option value={604800}>{t('shareWeek')}</option>
           </select>
         </label>
         <button
           disabled={!file || file.size > limit}
           onClick={() => void upload()}
         >
-          Upload and create link
+          {t('shareUpload')}
         </button>
       </fieldset>
       {uploading && (
         <div>
           <label>
-            Preparing upload
+            {t('sharePreparing')}
             <progress max={file?.size || 1} value={progress} />
           </label>
-          {progress === file?.size && <p>Sending to the sharing service…</p>}
+          {progress === file?.size && <p>{t('shareSending')}</p>}
           <button
             onClick={() => {
               cancelled.current = true;
@@ -415,7 +415,7 @@ export default function SharePanel() {
                 }).catch(() => {});
             }}
           >
-            Cancel upload
+            {t('shareCancel')}
           </button>
         </div>
       )}
@@ -423,43 +423,41 @@ export default function SharePanel() {
         disabled={busy || !status.configured}
         onClick={() => void history()}
       >
-        Refresh upload history
+        {t('shareHistory')}
       </button>
       <ul>
         {items.map((item) => (
           <li key={item.id}>
             <strong>{item.name}</strong>
             <p>
-              {item.size.toLocaleString()} bytes ·{" "}
-              {item.expiresAt * 1000 <= now ? "Expired" : "Expires"}{" "}
-              {new Date(item.expiresAt * 1000).toLocaleString()}
+              {t(item.expiresAt * 1000 <= now?'shareExpired':'shareExpires',{bytes:formatNumber(item.size),time:formatDateTime(new Date(item.expiresAt * 1000))})}
             </p>
-            {imageShare(item) && <><button disabled={busy || thumbnailLoading !== null || item.expiresAt * 1000 <= now || item.size > thumbnailInputLimit} onClick={() => void preview(item)}>Load thumbnail for {item.name}</button>{item.size > thumbnailInputLimit && <small>Image previews are limited to 2 MiB. Copy the link to download the original.</small>}</>}
-            {thumbnail?.id === item.id && <figure className="share-thumbnail"><img key={thumbnail.url} src={thumbnail.url} width={thumbnail.width} height={thumbnail.height} alt={`Thumbnail of ${thumbnail.name}`} onLoad={event => {
+            {imageShare(item) && <><button disabled={busy || thumbnailLoading !== null || item.expiresAt * 1000 <= now || item.size > thumbnailInputLimit} onClick={() => void preview(item)}>{t('shareLoadThumbnail',{name:item.name})}</button>{item.size > thumbnailInputLimit && <small>{t('sharePreviewLimit')}</small>}</>}
+            {thumbnail?.id === item.id && <figure className="share-thumbnail"><img key={thumbnail.url} src={thumbnail.url} width={thumbnail.width} height={thumbnail.height} alt={t('shareThumbnailAlt',{name:thumbnail.name})} onLoad={event => {
               if (thumbnailUrl.current !== thumbnail.url) return;
-              if (event.currentTarget.naturalWidth !== thumbnail.width || event.currentTarget.naturalHeight !== thumbnail.height) { clearThumbnail(); setError('Image preview decoded to unexpected dimensions.'); }
-            }} onError={() => { if (thumbnailUrl.current === thumbnail.url) { clearThumbnail(); setError('Image preview could not be displayed. Download the original file instead.'); } }} /><figcaption>Static PNG preview · {thumbnail.width} × {thumbnail.height}</figcaption><button onClick={clearThumbnail}>Hide thumbnail for {item.name}</button></figure>}
+              if (event.currentTarget.naturalWidth !== thumbnail.width || event.currentTarget.naturalHeight !== thumbnail.height) { clearThumbnail(); setError(new LocalUiError('shareDecodedMismatch')); }
+            }} onError={() => { if (thumbnailUrl.current === thumbnail.url) { clearThumbnail(); setError(new LocalUiError('shareDisplayFailed')); } }} /><figcaption>{t('sharePreviewCaption',{width:formatNumber(thumbnail.width),height:formatNumber(thumbnail.height)})}</figcaption><button onClick={clearThumbnail}>{t('shareHideThumbnail',{name:item.name})}</button></figure>}
             <button
               disabled={busy || item.expiresAt * 1000 <= now}
               onClick={() => {
                 void navigator.clipboard
                   .writeText(item.url)
-                  .then(() => setMessage("Expiring link copied."))
-                  .catch(() => setError("Clipboard unavailable."));
+                  .then(() => setMessage('shareCopied'))
+                  .catch(() => setError(new LocalUiError('shareClipboardUnavailable')));
               }}
             >
-              Copy link for {item.name}
+              {t('shareCopy',{name:item.name})}
             </button>
             <button disabled={busy} onClick={() => void remove(item)}>
-              Delete {item.name}
+              {t('shareDelete',{name:item.name})}
             </button>
           </li>
         ))}
       </ul>
-      {thumbnailLoading && <div className="share-thumbnail-loading"><p role="status">{thumbnailCancelling ? 'Stopping image preview…' : 'Loading image preview…'}</p><button disabled={thumbnailCancelling} onClick={clearThumbnail}>Cancel thumbnail loading</button></div>}
+      {thumbnailLoading && <div className="share-thumbnail-loading"><p role="status">{thumbnailCancelling ? t('shareStopping') : t('shareLoading')}</p><button disabled={thumbnailCancelling} onClick={clearThumbnail}>{t('shareCancelThumbnail')}</button></div>}
       {cursor && (
         <button disabled={busy} onClick={() => void history(cursor)}>
-          Older uploads
+          {t('shareOlder')}
         </button>
       )}
     </section>

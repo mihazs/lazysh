@@ -33,9 +33,20 @@ actions and retained local errors/notices also use the catalogs. Language change
 preserve selected file bytes, original crop coordinates, canvas resources,
 upload destinations and editable prompts. The initial prompt uses the language
 active when the explicit upload completes; later language changes never rewrite
-that prompt or user edits. Public sharing controls remain separate work. Its
-existing image-header caller still renders a creation-time Error.message until
-that surface is localized; native diagnostics remain verbatim.
+that prompt or user edits. Public sharing enrollment, expiring uploads/history, explicit link copying and
+revocation, sanitized thumbnail controls and retained client-owned errors/statuses
+also use all three catalogs. Interface changes preserve credentials/file drafts,
+TTL values, upload/chunk/cancellation IDs, thumbnail resources and raw share
+metadata/addresses. No service, clipboard or revoke action runs because the
+language changes. Native diagnostics remain verbatim. Closing-dialog upload warnings retain only
+a finite client-created error cause in the existing App event route; raw strings
+and ordinary objects preserve the original String conversion.
+Host device discovery, screenshots, video preview controls, input/lifecycle
+buttons and client-owned validation also use the catalogs. Device names, IDs,
+reported SDK states/warnings, socket paths and native errors remain verbatim.
+Changing language does not restart a stream, replace its pending pull or frame,
+reset input opt-in, refetch inventory or submit a lifecycle action. Reboot and
+shutdown retain their explicit confirmation; protocol key names stay unchanged.
 This is a partial milestone under issue #79. Other feature panels still require their own
 localization and acceptance. Native lock-cover/biometric-reason resources on
 Android, iOS and macOS use the [native language authority](native-ui-locale.md).
@@ -166,7 +177,19 @@ Run the existing project tasks from `apps/client`:
 - `bun run test:e2e e2e/attachment-locales.spec.ts` checks real browser image
   decode/crop/drawing at desktop/phone widths in all three locales, held upload
   targets and explicit clipboard/staging actions without rewriting draft content.
+- `bun run test src/i18n/shareLocales.test.tsx` checks original credentials/chunk
+  bytes/offsets/TTL/access headers, held cancellation/thumbnail state and explicit
+  copy/delete/forget actions, with live finite errors and raw diagnostics.
+- `bun run test:e2e e2e/share-locales.spec.ts` checks Share in all three locales at
+  desktop/phone widths, focused credential/file drafts, real sanitized thumbnail
+  identity, cancellation followed by acceptance and explicit link copy/revocation.
 - `bun run check` checks catalog keys and required interpolation arguments.
+- `bun run test src/i18n/deviceLocales.test.tsx src/DevicePanel.test.tsx src/useDeviceStream.test.tsx`
+  checks held stream startup/pulls, idle/sequence/identity validation, original
+  request headers, screenshot timers, Android pixels and verified iOS point coordinates.
+- `bun run test:e2e e2e/device-locales.spec.ts` checks real JPEG image decoding and
+  stable frame DOM/source, video ownership, input opt-in, explicit confirmation
+  and focused iOS socket drafts at desktop/phone widths in all three catalogs.
 
 `src/test/pseudoLocale.ts` is a test fixture, not a supported language or a
 persisted preference. Browser tests load it explicitly to expand labels while
