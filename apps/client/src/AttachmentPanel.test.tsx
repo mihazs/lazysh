@@ -14,7 +14,7 @@ function file(name = 'report.txt', content = 'hello') {
   return value;
 }
 it('stages a private file, uploads only on explicit action, and exposes a quoted editable prompt', async () => {
-  vi.mocked(api.uploadFile).mockResolvedValue(undefined);
+  vi.mocked(api.uploadFile).mockResolvedValue({path:"/work/a'b.txt"});
   render(<AttachmentPanel sessionId="ssh-one" />);
   fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [file()] } });
   await screen.findByText(/report.txt · 5 bytes/);
@@ -71,7 +71,7 @@ async function openEditableImage() {
   });
   Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:local-image') });
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
-  vi.mocked(api.uploadFile).mockResolvedValue(undefined);
+  vi.mocked(api.uploadFile).mockResolvedValue({path:"/work/a'b.txt"});
   render(<AttachmentPanel sessionId="ssh-one" />);
   fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [image] } });
   fireEvent.click(await screen.findByLabelText('Crop or annotate PNG/JPEG'));
@@ -102,10 +102,10 @@ it('cancelling held PNG encoding never reserves or uploads its late final bytes'
   expect(screen.queryByLabelText('Host path')).toBeNull();
 });
 it('a clipboard read started earlier cannot replace the selection during an owned upload',async()=>{
-  let paste!:(items:unknown[])=>void;let finish!:()=>void;
+  let paste!:(items:unknown[])=>void;let finish!:(value:{path:string})=>void;
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{read:()=>new Promise(resolve=>{paste=resolve;})}});
   const decode=vi.fn(async()=>attachmentPngHeader().buffer);vi.stubGlobal('File',class extends File {arrayBuffer=decode;});
-  vi.mocked(api.uploadFile).mockImplementation(()=>new Promise<void>(resolve=>{finish=resolve;}));
+  vi.mocked(api.uploadFile).mockImplementation(()=>new Promise<{path:string}>(resolve=>{finish=resolve;}));
   render(<AttachmentPanel sessionId="ssh-one"/>);
   fireEvent.click(screen.getByRole('button',{name:'Paste clipboard image'}));
   fireEvent.change(screen.getByLabelText('Choose attachment'),{target:{files:[file()]}});
@@ -113,5 +113,5 @@ it('a clipboard read started earlier cannot replace the selection during an owne
   await waitFor(()=>expect(finish).toBeTypeOf('function'));
   await act(async()=>{paste([{types:['image/png'],getType:async()=>new Blob([attachmentPngHeader()],{type:'image/png'})}]);});
   expect(screen.getByText(/report.txt · 5 bytes/)).toBeTruthy();expect(decode).not.toHaveBeenCalled();
-  await act(async()=>{finish();});expect(screen.getByLabelText('Host path')).toHaveProperty('value',"'./report.txt'");
+  await act(async()=>{finish({path:"/host/report.txt"});});expect(screen.getByLabelText('Host path')).toHaveProperty('value',"'/host/report.txt'");
 });

@@ -10,7 +10,7 @@ export function fileReviewReply(command: string): unknown {
   if (command === 'list_directory') return [{name:fileReviewName,isDir:false,size:12500}];
   if (command === 'read_file') return fileReviewSource;
   if (command === 'upload_reserve') return {uploadId:attachmentReceipt};
-  if (command === 'upload_file') return undefined;
+  if (command === 'upload_file') return {path:'/literal/new destination.txt'};
   if (command === 'get_diff') return fileReviewPatch;
   if (command === 'repository_status') return {path:fileReviewRoot,changes:[{path:fileReviewName,originalPath:null,index:'M',worktree:'M'}]};
   if (command === 'repository_history') return [{oid:fileReviewOid,subject:'Literal commit subject'}];
