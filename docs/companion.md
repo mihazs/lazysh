@@ -406,6 +406,25 @@ These are recorded-file tests, not provider/account execution, native Android/iO
 WebView acceptance or proof of live terminal binding. Other recorded formats,
 including assistant/tool/generated media, remain separate work under issue #5.
 
+The explicitly selected Linux owned-OpenSSH fixture executes the built companion
+through product `agent_transcript` for synthetic Grok, Claude and Codex Records.
+It checks exact original PNG/JPEG base64 and decoded bytes over multi-frame JSON
+responses, default-off page equivalence, pagination and unchanged source files.
+The temporary daemon and protected source session are cleaned up. A separate
+custom-peer fixture holds channel confirmation, revokes the original lease and
+verifies no command dispatch after reauthorization, late channel closure and
+recovered channel capacity. That deterministic cancellation check is not proof
+of cancelling an already-running remote image decoder.
+
+To reproduce the real transport case, build `cargo build -p lazysh-agent --locked`
+in the same checkout, set `LAZYSH_TEST_AGENT_BIN` to the absolute path of that
+checkout's private `target/debug/lazysh-agent`, then run
+`cargo test -p lazysh --lib ssh::tests::openssh_recorded_images_preserve_bytes_and_default_off --locked -- --ignored --exact`.
+Verify the binary's current build/dependency paths rather than using an unrelated
+installed companion. This requires local OpenSSH; it creates only synthetic
+files and does not start a provider or read private transcripts. Other host OSes,
+native WebViews, live provider recordings and physical devices remain unverified.
+
 Codex Records admits only `response_item` → `payload.type=message` → `role=user`
 → `content[].type=input_image` with `image_url` beginning exactly
 `data:image/png;base64,` or `data:image/jpeg;base64,`. The suffix remains subject
@@ -429,9 +448,9 @@ serializes it without an image scrub on that path. The inspected text-based
 compaction path omits images from replacement model context and appends a
 compaction checkpoint. Records can therefore contain historical images no
 longer in active context; this reader does not reconstruct compaction/rollback
-history or inspect nested checkpoints. Other versions/variants, actual SSH
-image transport, provider compatibility and native WebView acceptance remain
-unverified.
+history or inspect nested checkpoints. Other versions/variants, live provider
+recordings, provider compatibility and native WebView acceptance remain unverified;
+the Linux synthetic-file SSH transport check above is a separate bounded proof.
 
 Claude's source contract here is the **shipped npm Claude Code 2.1.81 artifact**,
 not an inference from generic Anthropic API types. Its input processing creates
