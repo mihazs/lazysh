@@ -48,6 +48,8 @@ pub async fn local_connect(
     lease: AccessLease,
 
     state: State<'_, LocalState>,
+    launch: State<'_, crate::desktop_launch::LaunchState>,
+    launch_receipt: Option<String>,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
@@ -56,11 +58,15 @@ pub async fn local_connect(
         .run(async {
             #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
             {
-                desktop::connect(&state, lease.clone(), cols, rows, events).await
+                let directory = match launch_receipt {
+                    Some(receipt) => Some(launch.claim(&receipt, &lease)?),
+                    None => None,
+                };
+                desktop::connect(&state, lease.clone(), directory, cols, rows, events).await
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             {
-                let _ = (state, cols, rows, events);
+                let _ = (state, launch, launch_receipt, cols, rows, events);
                 Err("Local terminals require the desktop app".into())
             }
         })
@@ -530,18 +536,49 @@ mod desktop {
     pub async fn connect(
         state: &LocalState,
         creation: AccessLease,
+        directory: Option<std::path::PathBuf>,
         cols: u32,
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
+        let command = shell_command(directory)?;
+        start_with_access(state, creation, command, cols, rows, events).await
+    }
+    pub(super) fn shell_command(
+        directory: Option<std::path::PathBuf>,
+    ) -> Result<CommandBuilder, String> {
         let mut command = CommandBuilder::new_default_prog();
         command.env("TERM", "xterm-256color");
-        if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-            .filter(|path| std::path::Path::new(path).is_dir())
+        if let Some(directory) = directory {
+            #[cfg(windows)]
+            let directory = {
+                // cmd.exe treats canonical verbatim drive paths as UNC and silently
+                // changes cwd. Simplify only names representable without DOS ambiguity.
+                let compatible = dunce::simplified(&directory);
+                const UNSUPPORTED: &str = "LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED";
+                if !compatible.is_absolute()
+                    || !matches!(compatible.components().next(),
+                    Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
+                {
+                    return Err(UNSUPPORTED.into());
+                }
+                if compatible
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?
+                    != directory
+                {
+                    return Err(UNSUPPORTED.into());
+                }
+                compatible.to_owned()
+            };
+            command.cwd(directory);
+        } else if let Some(home) =
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .filter(|path| std::path::Path::new(path).is_dir())
         {
             command.cwd(home);
         }
-        start_with_access(state, creation, command, cols, rows, events).await
+        Ok(command)
     }
     #[cfg(test)]
     pub(super) async fn start(
@@ -1132,6 +1169,215 @@ mod tests {
         command.env("TERM", "xterm-256color");
         command
     }
+    fn directory_fixture(
+        name: &str,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        portable_pty::CommandBuilder,
+    ) {
+        let base = tempfile::tempdir().unwrap();
+        let directory = base.path().join(name);
+        std::fs::create_dir(&directory).unwrap();
+        let selected = crate::desktop_launch::parse(
+            [
+                std::ffi::OsString::from("lazysh"),
+                "--dir".into(),
+                directory.to_owned().into_os_string(),
+            ],
+            || unreachable!(),
+        )
+        .unwrap()
+        .unwrap();
+        let command = desktop::shell_command(Some(selected.clone())).unwrap();
+        assert!(command.is_default_prog());
+        (base, selected, command)
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_command_preserves_canonical_identity_with_ordinary_drive_spelling() {
+        let (_base, selected, command) = directory_fixture("workspace 世界 �");
+        let cwd = std::path::Path::new(command.get_cwd().unwrap());
+        assert!(cwd.is_absolute());
+        assert!(
+            matches!(cwd.components().next(), Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(),std::path::Prefix::Disk(_)))
+        );
+        assert_eq!(cwd.canonicalize().unwrap(), selected);
+        assert!(command.is_default_prog());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_command_refuses_unrepresentable_paths_without_starting_a_shell() {
+        for path in [
+            r"\\server\share\project",
+            r"\\?\UNC\server\share\project",
+            r"\\.\C:\project",
+            r"\\?\C:\NUL",
+            r"\\?\C:\trailing.",
+            r"\\?\C:\trailing ",
+        ] {
+            assert_eq!(
+                desktop::shell_command(Some(path.into())).err().as_deref(),
+                Some("LOCAL_LAUNCH_DIRECTORY_UNSUPPORTED"),
+                "{path}"
+            );
+        }
+        let long = format!("{}{}\\{}", r"\\?\C:\", "x".repeat(150), "y".repeat(150));
+        assert!(desktop::shell_command(Some(long.into())).is_err());
+        let base = tempfile::tempdir().unwrap();
+        let literal = base.path().canonicalize().unwrap().join("trailing.");
+        std::fs::create_dir(&literal).unwrap();
+        let result = desktop::shell_command(Some(literal.canonicalize().unwrap()));
+        std::fs::remove_dir(&literal).unwrap();
+        assert!(
+            result.is_err(),
+            "a literal trailing dot must not silently select another directory"
+        );
+    }
+    #[cfg(unix)]
+    fn isolated_login(command: &mut portable_pty::CommandBuilder, home: &std::path::Path) {
+        command.env_clear();
+        command.env("SHELL", "/bin/sh");
+        command.env("HOME", home);
+        command.env("PATH", "/usr/bin:/bin");
+        command.env("TERM", "xterm-256color");
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_launch_uses_the_selected_login_shell_and_literal_initial_pwd() {
+        let (base, selected, mut command) =
+            directory_fixture("workspace 世界 � $(touch NOT_CREATED)");
+        isolated_login(&mut command, base.path());
+        let state = LocalState::default();
+        let (event, mut rx) = events();
+        let connected = desktop::start(&state, command, 80, 24, event)
+            .await
+            .unwrap();
+        desktop::write(
+            &state,
+            &connected.session_id,
+            "stty -echo; printf '__DIRECTORY_RESULT__'; pwd -P; printf '__DIRECTORY_END__\\n'\n"
+                .into(),
+            access_lease(),
+        )
+        .unwrap();
+        let output = until(&mut rx, "__DIRECTORY_END__\r\n").await;
+        desktop::disconnect(&state, &connected.session_id);
+        closed(&mut rx).await;
+        assert!(
+            output.contains(&format!(
+                "__DIRECTORY_RESULT__{}\r\n__DIRECTORY_END__",
+                selected.display()
+            )),
+            "{output}"
+        );
+        assert!(!base.path().join("NOT_CREATED").exists());
+    }
+    #[tokio::test]
+    async fn directory_removed_after_cli_validation_never_falls_back_to_home() {
+        let (base, selected, mut command) = directory_fixture("removed-before-spawn");
+        command.env(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            base.path(),
+        );
+        #[cfg(unix)]
+        isolated_login(&mut command, base.path());
+        std::fs::remove_dir(&selected).unwrap();
+        let state = LocalState::default();
+        let (event, mut rx) = events();
+        let result = desktop::start(&state, command, 80, 24, event).await;
+        // Clean a wrongly started fallback child before reporting a failed check.
+        if let Ok(connected) = &result {
+            desktop::disconnect(&state, &connected.session_id);
+            closed(&mut rx).await;
+        }
+        assert!(
+            result.is_err(),
+            "a removed explicit directory must not select HOME"
+        );
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn directory_launch_conpty_records_its_actual_default_shell_working_directory() {
+        let (base, selected, mut command) = directory_fixture("selected-workspace");
+        command.env("USERPROFILE", base.path());
+        let report = base.path().join("lazysh-working-directory.txt");
+        command.env("LAZYSH_CWD_REPORT", &report);
+        let shell: String = command.get_shell().chars().take(512).collect();
+        let state = LocalState::default();
+        let (event, mut rx) = events();
+        let connected = desktop::start(&state, command, 240, 24, event)
+            .await
+            .unwrap();
+        let write = desktop::write(
+            &state,
+            &connected.session_id,
+            "cd > \"%LAZYSH_CWD_REPORT%\"\r\n".into(),
+            access_lease(),
+        );
+        let mut output = Vec::new();
+        let mut file_state = String::from("not inspected");
+        let mut saw_closed = false;
+        let observed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                // Only this owned fixture's PTY, bounded independently of its deadline.
+                for _ in 0..32 {
+                    let Ok(event) = rx.try_recv() else {
+                        break;
+                    };
+                    saw_closed |= event["type"] == "closed";
+                    if let Some(data) = event["data"].as_array() {
+                        output.extend(
+                            data.iter()
+                                .take((16 * 1024usize).saturating_sub(output.len()))
+                                .filter_map(|value| value.as_u64().map(|value| value as u8)),
+                        );
+                    }
+                }
+                match tokio::fs::File::open(&report).await {
+                    Ok(file) => {
+                        use tokio::io::AsyncReadExt;
+                        let mut bytes = Vec::new();
+                        let result = file.take(8193).read_to_end(&mut bytes).await;
+                        file_state = format!("read={result:?}; bytes={}", bytes.len());
+                        if result.is_ok() && bytes.len() <= 8192 {
+                            if let Ok(text) = String::from_utf8(bytes) {
+                                if !text.trim().is_empty() {
+                                    break std::path::PathBuf::from(text.trim()).canonicalize();
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => file_state = format!("open={error}"),
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        desktop::disconnect(&state, &connected.session_id);
+        if !saw_closed {
+            closed(&mut rx).await;
+        }
+        // Cleanup must finish even when write, observation or cwd equality fails.
+        let diagnostic = format!(
+            "shell={shell:?}; configured_cwd={selected:?}; expected_file={file_state}; owned_pty={:?}",
+            String::from_utf8_lossy(&output)
+        );
+        assert!(
+            write.is_ok(),
+            "owned shell write failed: {write:?}; {diagnostic}"
+        );
+        assert_eq!(
+            observed
+                .expect(&format!(
+                    "the chosen shell did not report its cwd; {diagnostic}"
+                ))
+                .expect(&diagnostic),
+            selected,
+            "{diagnostic}"
+        );
+    }
     #[cfg(unix)]
     #[tokio::test]
     async fn real_local_sequences_keep_following_input_outside_the_chord() {
@@ -1315,7 +1561,7 @@ mod tests {
     async fn windows_conpty_executes_utf8_resizes_and_closes() {
         let state = LocalState::default();
         let (event, mut rx) = events();
-        let connected = desktop::connect(&state, access_lease(), 80, 24, event)
+        let connected = desktop::connect(&state, access_lease(), None, 80, 24, event)
             .await
             .expect("ConPTY startup failed on this Windows runner");
         let pid = desktop::process_id(&state, &connected.session_id);
@@ -1460,79 +1706,108 @@ mod tests {
     #[tokio::test]
     async fn rebind_waits_for_an_admitted_launch_after_its_caller_is_cancelled() {
         use std::sync::Arc;
-        let state = Arc::new(LocalState::default());
-        let access = AccessState::disabled();
-        let creation = access.lease(None).unwrap();
-        let (began, started) = tokio::sync::oneshot::channel();
-        let (release, held) = std::sync::mpsc::channel();
-        let caller_state = state.clone();
-        let caller_creation = creation.clone();
-        let caller = tokio::spawn(async move {
-            let (events, _rx) = events();
-            caller_creation
-                .run(desktop::start_with_held_launch(
-                    &caller_state,
-                    caller_creation.clone(),
-                    shell("exec sleep 120"),
-                    events,
-                    move |pid| {
-                        let _ = began.send(pid);
-                        let _ = held.recv();
-                    },
-                ))
+        for directory_launch in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let pending = crate::desktop_launch::LaunchState::new(
+                directory_launch.then(|| directory.path().to_owned()),
+            );
+            let state = Arc::new(LocalState::default());
+            let access = if directory_launch {
+                unlocked_access()
+            } else {
+                AccessState::disabled()
+            };
+            let creation = ready_lease(&access);
+            let receipt = pending.read(&creation).unwrap().directory_receipt;
+            let mut command = shell("exec sleep 120");
+            if let Some(receipt) = &receipt {
+                let path = pending.claim(receipt, &creation).unwrap();
+                command.cwd(path);
+            }
+            let (began, started) = tokio::sync::oneshot::channel();
+            let (release, held) = std::sync::mpsc::channel();
+            let caller_state = state.clone();
+            let caller_creation = creation.clone();
+            let caller = tokio::spawn(async move {
+                let (events, _rx) = events();
+                caller_creation
+                    .run(desktop::start_with_held_launch(
+                        &caller_state,
+                        caller_creation.clone(),
+                        command,
+                        events,
+                        move |pid| {
+                            let _ = began.send(pid);
+                            let _ = held.recv();
+                        },
+                    ))
+                    .await
+            });
+            let pid = started.await.unwrap() as i32;
+            assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+            if directory_launch {
+                access.lock().unwrap();
+            }
+            access.replace_renderer().unwrap();
+            assert!(caller.await.unwrap().is_err());
+            let available_while_held = state.available_slots();
+            let cleanup_state = state.clone();
+            let mut cleanup = tokio::spawn(async move {
+                cleanup_state.cancel_for_renderer_rebind().await;
+            });
+            // The held native worker cannot finish until this test explicitly releases it.
+            let ended_early = tokio::time::timeout(Duration::from_millis(50), &mut cleanup)
                 .await
-        });
-        let pid = started.await.unwrap() as i32;
-        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
-        access.replace_renderer().unwrap();
-        assert!(caller.await.unwrap().is_err());
-        let available_while_held = state.available_slots();
-        let cleanup_state = state.clone();
-        let mut cleanup = tokio::spawn(async move {
-            cleanup_state.cancel_for_renderer_rebind().await;
-        });
-        // The held native worker cannot finish until this test explicitly releases it.
-        let ended_early = tokio::time::timeout(Duration::from_millis(50), &mut cleanup)
-            .await
-            .is_ok();
-        let alive_when_cleanup_returned = ended_early && unsafe { libc::kill(pid, 0) } == 0;
-        let _ = release.send(());
-        if !ended_early {
-            tokio::time::timeout(Duration::from_secs(5), cleanup)
-                .await
-                .unwrap()
-                .unwrap();
-        }
-        // Always clean the real child before asserting the red/green boundary.
-        wait_reaped(pid).await;
-        assert!(!alive_when_cleanup_returned,
+                .is_ok();
+            let alive_when_cleanup_returned = ended_early && unsafe { libc::kill(pid, 0) } == 0;
+            let _ = release.send(());
+            if !ended_early {
+                tokio::time::timeout(Duration::from_secs(5), cleanup)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            // Always clean the real child before asserting the red/green boundary.
+            wait_reaped(pid).await;
+            assert!(!alive_when_cleanup_returned,
             "cleanup returned while its held old child was still alive; available slots={available_while_held}");
-        assert_eq!(
-            available_while_held, 19,
-            "launch permit must belong to the real native worker, not its cancelled caller"
-        );
-        assert!(
-            !ended_early,
-            "cleanup acknowledged while an admitted launch was held"
-        );
-        assert_eq!(state.available_slots(), 20);
-        assert!(access.finish_renderer_replacement().unwrap());
-        access.foreground().unwrap();
-        let fresh = ready_lease(&access);
-        let (events, mut rx) = events();
-        let connected = desktop::start_with_access(
-            &state,
-            fresh.clone(),
-            shell("printf 'AFTER_HELD_LAUNCH\\n'; exec sleep 120"),
-            80,
-            24,
-            events,
-        )
-        .await
-        .unwrap();
-        assert!(desktop::adopt(&state, &connected.session_id, &fresh).unwrap());
-        until(&mut rx, "AFTER_HELD_LAUNCH").await;
-        desktop::disconnect(&state, &connected.session_id);
-        closed(&mut rx).await;
+            assert_eq!(
+                available_while_held, 19,
+                "launch permit must belong to the real native worker, not its cancelled caller"
+            );
+            assert!(
+                !ended_early,
+                "cleanup acknowledged while an admitted launch was held"
+            );
+            assert_eq!(state.available_slots(), 20);
+            assert!(access.finish_renderer_replacement().unwrap());
+            access.foreground().unwrap();
+            if directory_launch {
+                access.authorize(access.generation().unwrap()).unwrap();
+            }
+            let fresh = ready_lease(&access);
+            assert!(pending.queued_receipt().is_none());
+            if let Some(receipt) = &receipt {
+                assert!(
+                    pending.claim(receipt, &fresh).is_err(),
+                    "a cancelled launch receipt must not replay after unlock"
+                );
+            }
+            let (events, mut rx) = events();
+            let connected = desktop::start_with_access(
+                &state,
+                fresh.clone(),
+                shell("printf 'AFTER_HELD_LAUNCH\\n'; exec sleep 120"),
+                80,
+                24,
+                events,
+            )
+            .await
+            .unwrap();
+            assert!(desktop::adopt(&state, &connected.session_id, &fresh).unwrap());
+            until(&mut rx, "AFTER_HELD_LAUNCH").await;
+            desktop::disconnect(&state, &connected.session_id);
+            closed(&mut rx).await;
+        }
     }
 }

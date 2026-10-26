@@ -164,6 +164,14 @@ mod tests {
             .manage(ThemeLinks::default())
             .build(tauri::generate_context!(test = true))
             .unwrap();
+        assert!(crate::desktop_launch::parse(
+            ["lazysh", "lazysh://theme?data=YWJj"]
+                .into_iter()
+                .map(std::ffi::OsString::from),
+            || panic!("desktop URLs must not become directory launches"),
+        )
+        .unwrap()
+        .is_none());
         app.listen_any("deep-link://new-url", |event| {
             assert_eq!(event.payload(), "null")
         });
