@@ -10,6 +10,47 @@ Routing uses an SSH `direct-tcpip` channel to the destination address and port, 
 
 This implementation supports SSH routing. Bastion routes and selected-identity forwarding are SSH-terminal features. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
 
+## Cold saved-host desktop launch
+
+With lazysh fully closed, run `lazysh --host SAVED_ID` (or `-host`, including
+`--host=SAVED_ID`). Obtain the exact opaque ID using **Edit host → Copy host ID**
+in the unlocked app. Display names, SSH configuration aliases and raw hostnames
+are not alternate identifiers. IDs contain 1–100 UTF-8 bytes without control
+characters. Missing or duplicate IDs fail visibly; the command does not create
+or guess a host. Duplicate options, mixing `--dir` and `--host`, and `--mux`
+combinations fail before startup. No credentials belong in the command line.
+
+After normal unlock, one native receipt opens the existing connection dialog.
+Connect explicitly and verify any unknown host key independently. Password,
+private-key, saved-credential, biometric and bastion handling use the existing
+connection paths. SSH, Mosh, ET and Auto preferences remain selectable. A
+successful initial SSH control connection spends the receipt, including when a
+subsequent Mosh/ET bootstrap fails. Cancelling the dialog also spends it.
+
+The receipt is bound to its original access lease and the native target/bastion
+credential identities. Only an explicitly verified key-trust action updates the
+corresponding frozen fingerprint; changed routing, endpoint, username, agent
+forwarding or biometric policy fails closed. Display-label and transport
+preference changes do not change credential identity. Lock/reunlock, renderer
+replacement and failed preparation never automatically reoffer an old request.
+Manual connections and workspace restoration do not consume the launch receipt.
+Prepared metadata contains no credentials and is not persisted as a launch queue.
+
+If lazysh is already running, no host connection is started. The app presents a
+localized unsupported-warm-launch notice after normal unlock; singleton handoff
+success is not connection success. Close the app before retrying. Desktop URLs
+retain their existing ingress behavior. This independent saved-ID contract does
+not establish Moshi's undocumented runtime host grammar; only its help flags were
+observed. Warm delivery and host/multiplexer composition remain open in
+[issue #86](https://github.com/mihazs/lazysh/issues/86).
+
+Native controlled SSH tests cover changed target metadata before authentication,
+unknown-key trust/retry and revocation while waiting for the credential guard.
+Frontend tests cover the actual dialog and original-lease transport cleanup,
+including held Mosh/ET results across lock/reunlock. GUI CLI invocation on each
+OS and platform-specific credential/biometric prompts remain separate acceptance
+gates; a Linux test pass alone does not establish them.
+
 ## Transport selection
 
 Choose a host's **Preferred transport** in its editor. New hosts default to **Auto**; existing hosts without a preference keep SSH. The connection dialog starts with that preference and its saved helper paths/ports. A per-connection override does not silently change the saved host.

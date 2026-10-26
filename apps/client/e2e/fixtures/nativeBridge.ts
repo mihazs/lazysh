@@ -23,7 +23,7 @@ export async function installNativeBridge(page: Page, access = {reason:'Browser 
         if (command === 'app_lock_status') return {initialized:true,supported:false,enabled:false,locked:false,...access};
         if (command === 'ui_locale_status' && !options.nativeLocale) return {nativeAuthority:false};
         if (command === 'app_lock_ready' || command === 'adopt_session') return;
-        if (command === 'desktop_launch_read') return {directoryReceipt:null,notice:null};
+        if (command === 'desktop_launch_read') return {directoryReceipt:null,hostReceipt:null,notice:null};
         return window.nativeFixtureInvoke(command, args);
       },
     }});
