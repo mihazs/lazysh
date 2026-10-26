@@ -9,6 +9,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
 
+- Companion initialization checks temporary SQLite journal/WAL/SHM paths while
+  holding its existing bootstrap lock, avoiding inspections racing another
+  initializer's journal removal. Ownership, permissions, no-follow checks and
+  the shared three-second bootstrap budget are unchanged.
+
 - The dictation-history opt-in checkbox uses bounded sizing and a wrapping label
   instead of inheriting full-width text-input sizing, keeping history controls
   within the panel at desktop and phone widths.
