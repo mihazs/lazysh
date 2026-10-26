@@ -15,12 +15,18 @@ new language check rather than an automatic retry. Ordinary font, theme and othe
 preference updates preserve the native-owned language, even when their captured
 preference object is older.
 
+Android preference inspection and persistence run on one bounded worker queue.
+Cover and prompt labels use the last inspected snapshot without waiting for a
+slow preference commit; completion refreshes labels on the UI thread. A dropped
+caller does not release an admitted write or cause automatic replay.
+
 Reset preferences explicitly selects System through the same native setter.
 Reviewed settings imports change language only when the imported object explicitly
 contains `uiLanguage`; older imports preserve the current choice. A view disposed
 before its queued action starts cannot submit that action. An already-admitted
 native cosmetic write may finish after the view closes; subsequent reads reconcile
-the actual choice.
+the actual choice. A later settings-storage failure is reported separately from
+a native language failure; a confirmed read clears the language retry error.
 
 System follows the first supported OS language among the first sixteen preferences.
 Portuguese variants use Brazilian Portuguese; English and Spanish retain their

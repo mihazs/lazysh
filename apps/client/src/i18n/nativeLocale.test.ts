@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,expect,it,vi} from 'vitest';
-import {createLocaleController} from './nativeLocale';
+import {createLocaleController,PreferenceStorageError} from './nativeLocale';
 import type {UiLanguage} from './core';
 
 function deferred<T>() {let resolve!:(value:T)=>void;let reject!:(error:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
@@ -95,4 +95,12 @@ it('retry fails promptly while an unknown native write owns the queue instead of
   expect(settledBeforeWrite).toBe(true);expect(before).toBe(2);
   expect(pending).toMatchObject({phase:'error',writerPending:true});
   expect(controller.snapshot()).not.toMatchObject({writerPending:true});
+});
+
+it('frontend-only persistence failures remain settings errors without a native retry state',async()=>{
+  const invoke=vi.fn();
+  const controller=createLocaleController({native:false,invoke,commit:()=>{throw new Error('Owned quota failure');}});
+  await expect(controller.change('es')).rejects.toBeInstanceOf(PreferenceStorageError);
+  expect(controller.snapshot()).toEqual({mode:'frontend',phase:'ready'});
+  expect(invoke).not.toHaveBeenCalled();
 });

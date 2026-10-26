@@ -31,10 +31,21 @@ internal object UiLocalePolicy {
 /** Cosmetic preferences are independent of credential epochs and native cover authority. */
 internal class NativeUiLocale(context: Context, preferencesName: String = "lazysh-ui-locale") {
     private val context = context.applicationContext ?: context
-    private val preferences = this.context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
-    private data class State(val choice: String, val revision: String)
+    private val store = synchronized(stores) {
+        stores.getOrPut(preferencesName) {
+            val preferences = this.context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+            UiLocaleStore(
+                read = { decode(preferences.getString("state", null)) },
+                write = { next ->
+                    val blob = JSONObject().put("choice", next.choice).put("revision", next.revision).toString()
+                    check(preferences.edit().putString("state", blob).commit()) { "Cannot save native interface language" }
+                },
+            )
+        }
+    }
     companion object {
-        private val mutations = Any()
+        private val stores = mutableMapOf<String, UiLocaleStore>()
+        val worker = UiLocaleWorkQueue()
         private fun localized(context: Context, language: String): Context {
             val configuration = Configuration(context.resources.configuration)
             configuration.setLocale(Locale.forLanguageTag(language))
@@ -43,41 +54,32 @@ internal class NativeUiLocale(context: Context, preferencesName: String = "lazys
         fun presentationContext(context: Context): Context = try {
             NativeUiLocale(context).presentationContext()
         } catch (_: Exception) { localized(context, "en") }
-    }
-
-    private fun read(): State {
-        val blob = preferences.getString("state", null) ?: return State("system", "0")
-        check(blob.length <= 256) { "Cannot read native interface language" }
-        val value = JSONObject(blob)
-        val choice = value.getString("choice")
-        val revision = value.getString("revision")
-        check(value.length() == 2 && UiLocalePolicy.validChoice(choice) && revision != "0" && UiLocalePolicy.validRevision(revision)) {
-            "Cannot read native interface language"
+        private fun decode(blob: String?): UiLocaleState {
+            if (blob == null) return UiLocaleState("system", "0")
+            check(blob.length <= 256) { "Cannot read native interface language" }
+            val value = JSONObject(blob)
+            val choice = value.getString("choice")
+            val revision = value.getString("revision")
+            check(value.length() == 2 && UiLocalePolicy.validChoice(choice) && revision != "0" && UiLocalePolicy.validRevision(revision)) {
+                "Cannot read native interface language"
+            }
+            return UiLocaleState(choice, revision)
         }
-        return State(choice, revision)
     }
-    private fun resolved(state: State): String {
+    private fun resolved(state: UiLocaleState): String {
         val locales = context.resources.configuration.locales
         return UiLocalePolicy.resolve(state.choice, (0 until minOf(locales.size(), 16)).map { locales[it].toLanguageTag() })
     }
-    private fun status(state: State) = JSObject().apply {
+    private fun status(state: UiLocaleState) = JSObject().apply {
         put("nativeAuthority", true); put("choice", state.choice)
         put("resolvedLocale", resolved(state)); put("revision", state.revision)
     }
-    fun status(): JSObject = synchronized(mutations) { status(read()) }
-    fun set(choice: String, expectedRevision: String): JSObject = synchronized(mutations) {
-        require(UiLocalePolicy.validChoice(choice) && UiLocalePolicy.validRevision(expectedRevision)) { "Invalid interface language" }
-        val previous = read()
-        check(previous.revision == expectedRevision) { "Interface language changed; refresh and retry" }
-        if (previous.choice == choice) return@synchronized status(previous)
-        val next = State(choice, UUID.randomUUID().toString())
-        val blob = JSONObject().put("choice", next.choice).put("revision", next.revision).toString()
-        check(preferences.edit().putString("state", blob).commit()) { "Cannot save native interface language" }
-        status(next)
-    }
+    // These storage methods run on the owned worker; presentation never acquires its lock.
+    fun status(): JSObject = status(store.refresh())
+    fun set(choice: String, expectedRevision: String): JSObject = status(store.set(choice, expectedRevision))
     fun presentationContext(): Context {
         // Status still reports corrupt storage; presentation must never block the native lock.
-        val language = synchronized(mutations) { runCatching { resolved(read()) }.getOrDefault("en") }
+        val language = runCatching { resolved(store.presentation()) }.getOrDefault("en")
         return localized(context, language)
     }
 }

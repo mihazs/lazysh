@@ -3,6 +3,8 @@ import {useSyncExternalStore} from 'react';
 import {getPreferences, mirrorNativeUiLanguage, parsePreferences, savePreferences} from '../preferences';
 import {isUiLanguage, type UiLanguage} from './core';
 
+export class PreferenceStorageError extends Error {}
+
 type NativeStatus = {nativeAuthority:boolean; choice:UiLanguage; resolvedLocale:string; revision:string};
 export type LocaleSnapshot = {mode:'unknown'|'frontend'|'native'; phase:'loading'|'ready'|'saving'|'error'; native?:NativeStatus; error?:'read'|'write'; writerPending?:boolean};
 type Port = {
@@ -63,7 +65,8 @@ export function createLocaleController(port:Port) {
       if (!isUiLanguage(choice)) return Promise.reject(new Error('Invalid interface language'));
       if (snapshot.mode==='frontend') {
         if (!current()) return Promise.reject(new Error('Language action cancelled'));
-        port.commit(choice,false);return Promise.resolve();
+        try {port.commit(choice,false);return Promise.resolve();}
+        catch {return Promise.reject(new PreferenceStorageError('Cannot save interface preferences'));}
       }
       if(snapshot.mode!=='native' || snapshot.phase==='error' || snapshot.phase==='loading')return Promise.reject(new Error('Retry the native language check'));
       if(pendingChanges>=16)return Promise.reject(new Error('Language changes are busy'));
@@ -95,7 +98,11 @@ export function useNativeLocale() {
 /** Reset/import may change locale explicitly; ordinary preference writes never do on native-authority platforms. */
 export function applyPreferenceIntent(value:unknown, explicitLanguage:boolean, current:()=>boolean=()=>true):Promise<void> {
   const preferences=parsePreferences(value);
-  const commit=()=>{if(current())savePreferences({...preferences,uiLanguage:getPreferences().uiLanguage});};
+  const commit=()=>{
+    if(!current())return;
+    try {savePreferences({...preferences,uiLanguage:getPreferences().uiLanguage});}
+    catch {throw new PreferenceStorageError('Cannot save interface preferences');}
+  };
   if (!explicitLanguage) {commit();return Promise.resolve();}
   const frontend=nativeLocale.snapshot().mode==='frontend';
   const task=nativeLocale.change(preferences.uiLanguage,current);

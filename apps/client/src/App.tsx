@@ -982,10 +982,10 @@ function ConnectDialog({
 export default function App() {
   useUi();
   const locale=useClientLocale();
-  return <>
+  return <div className="app-viewport">
     <NativeLocaleNotice state={locale} retry={()=>void nativeLocale.refresh().catch(()=>{})}/>
     <AccessShell native={native}>{registry => <WorkspaceApp registry={registry} />}</AccessShell>
-  </>;
+  </div>;
 }
 
 function WorkspaceApp({ registry }: { registry: SessionRegistry }) {

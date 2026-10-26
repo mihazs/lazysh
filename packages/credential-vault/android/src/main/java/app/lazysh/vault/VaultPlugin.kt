@@ -80,18 +80,26 @@ class VaultPlugin(initialActivity: Activity) : Plugin(initialActivity) {
     }
     override fun onPause(activity: AppCompatActivity) { if (activity === this.activity) resumeCover.pause() }
     @Command fun resumeFailure(invoke: Invoke) = activity.runOnUiThread { resumeCover.failure(); invoke.resolve() }
-    @Command fun uiLocaleStatus(invoke: Invoke) = activity.runOnUiThread {
-        resumeCover.relabel()
-        try { invoke.resolve(NativeUiLocale(activity).status()) }
-        catch (_: Exception) { invoke.reject("Cannot read native interface language") }
+    private fun localeWork(invoke: Invoke, failure: String, action: (NativeUiLocale) -> JSObject) {
+        val application = activity.applicationContext
+        if (!NativeUiLocale.worker.execute {
+            val result = runCatching { action(NativeUiLocale(application)) }
+            ContextCompat.getMainExecutor(application).execute {
+                // A replacement Activity owns the current cover; never relabel its old wrapper.
+                current.get()?.resumeCover?.relabel()
+                result.onSuccess { invoke.resolve(it) }.onFailure { invoke.reject(failure) }
+            }
+        }) invoke.reject("Native interface language is busy; refresh and retry")
     }
-    @Command fun uiLocaleSet(invoke: Invoke) = activity.runOnUiThread {
-        val result = runCatching {
-            val args = invoke.parseArgs(VaultUiLocale::class.java)
-            NativeUiLocale(activity).set(args.choice, args.expectedRevision)
+    @Command fun uiLocaleStatus(invoke: Invoke) =
+        localeWork(invoke, "Cannot read native interface language") { it.status() }
+    @Command fun uiLocaleSet(invoke: Invoke) {
+        val args = try { invoke.parseArgs(VaultUiLocale::class.java) } catch (_: Exception) {
+            invoke.reject("Invalid interface language"); return
         }
-        resumeCover.relabel()
-        result.onSuccess { invoke.resolve(it) }.onFailure { invoke.reject("Cannot save native interface language; refresh and retry") }
+        localeWork(invoke, "Cannot save native interface language; refresh and retry") {
+            it.set(args.choice, args.expectedRevision)
+        }
     }
     @Command fun resumeCapability(invoke: Invoke) = activity.runOnUiThread {
         val result = JSObject(); val supported = available() && resumeCover.ready

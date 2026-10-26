@@ -54,6 +54,11 @@ test('a failed cosmetic getter shows retry without inventing a native setter',as
   });
   await page.goto('/');
   await expect(page.getByText('The native interface language could not be read. Your saved browser choice has not been applied.')).toBeVisible();
+  const workspace=await page.locator('.app-shell').boundingBox();
+  const notice=await page.getByRole('alert').boundingBox();
+  expect(workspace).not.toBeNull();expect(notice).not.toBeNull();
+  expect(workspace!.y).toBeGreaterThanOrEqual(notice!.y+notice!.height);
+  expect(workspace!.y+workspace!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   readable=true;await page.getByRole('button',{name:'Retry language check',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('lang','pt-BR');expect(writes).toBe(0);
 });
