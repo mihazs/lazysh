@@ -27,7 +27,7 @@ for(const labels of aboutLocales)test(`${labels.locale} About preserves legal by
     return {tag:node.tagName,text:node.textContent?.slice(0,80),left:rect.left,right:rect.right,width:rect.width,client:node.clientWidth,scroll:node.scrollWidth,font:style.font,wrap:style.overflowWrap};
   }));
   const session=await page.context().newCDPSession(page);await session.send('DOM.enable');await session.send('CSS.enable');
-  const document=await session.send('DOM.getDocument');const codeNode=await session.send('DOM.querySelector',{nodeId:document.root.nodeId,selector:'[role="dialog"] code'});
+  const tree=await session.send('DOM.getDocument');const codeNode=await session.send('DOM.querySelector',{nodeId:tree.root.nodeId,selector:'[role="dialog"] code'});
   const fonts=await session.send('CSS.getPlatformFontsForNode',{nodeId:codeNode.nodeId});await session.detach();
   await testInfo.attach('about-layout.json',{body:JSON.stringify({geometry,fonts},null,2),contentType:'application/json'});
   expect(await english.locator('code').locator('..').evaluate(element=>element.scrollWidth<=element.clientWidth),'The full source revision must fit its paragraph, including in dirty development builds.').toBe(true);
@@ -39,6 +39,13 @@ for(const labels of aboutLocales)test(`${labels.locale} About preserves legal by
       await expect.poll(()=>notice.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
     }
   }
+  const lastNotice=english.locator('details').last();const summary=lastNotice.locator('summary');
+  const close=page.getByRole('dialog').getByRole('button',{name:'Close About lazysh',exact:true});
+  await summary.click();await close.focus();await page.keyboard.press('Shift+Tab');await expect(summary).toBeFocused();
+  await page.keyboard.press('Tab');await expect(close).toBeFocused();
+  await summary.focus();await page.keyboard.press('Enter');await expect(lastNotice).toHaveAttribute('open','');
+  const lastBody=lastNotice.locator('pre');await lastBody.focus();await page.keyboard.press('Tab');await expect(close).toBeFocused();
+  await page.keyboard.press('Shift+Tab');await expect(lastBody).toBeFocused();
   expect(await english.locator('pre').allTextContents()).toEqual(bodies);
   expect(external).toEqual([]);expect(await page.locator('[role=dialog] img,[role=dialog] iframe').count()).toBe(0);
 });

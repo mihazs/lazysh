@@ -308,6 +308,52 @@ The existing depth/10,000-entry/100-result/path/regular-file/observed-symlink/Un
 
 `--view conversation` is now an explicit opt-in recorded-display reducer (see below). The UI labels it **Grok ACP records**, enables explicit metadata discovery and retains manual path entry. Grok's append-only rewind records create timeline branches; this record view can contain abandoned history and does not merge chunks, replace tool cards in place, reconstruct turns or remove rewound messages. It does not launch a Grok CLI/exporter, access account APIs, install hooks or establish that the selected file belongs to the live terminal. Records remain the default view; live terminal controls are unchanged.
 
+#### Opt-in checkpointed Grok Records
+
+Legacy Grok Records paging/output stays unchanged. Unix companions also accept
+an explicit consistency mode (the client does not yet offer Grok Follow):
+
+```sh
+lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --checkpointed --offset 0
+lazysh-agent transcript --agent grok-acp --path /absolute/path/updates.jsonl --checkpointed --offset NEXT_OFFSET --checkpoint TOKEN
+```
+
+Start at zero without a token. Resume with the returned token and its exact
+`nextOffset`, including zero when a file is empty or has only an unfinished
+record. The canonical receipt is
+`g1:SOURCE_SHA256:NEXT_OFFSET:OBSERVED_LENGTH:PREFIX_SHA256`, at most 150 ASCII
+bytes with lowercase hashes and canonical decimal byte counts. It binds the
+exact selected pathname bytes, Unix device/inode and the entire observed file
+prefix, including unread records and any incomplete final line. It is a
+consistency receipt, not an authorization credential or a live-agent identity.
+
+A request reads at most a 16 MiB snapshot, with the existing 256 KiB line,
+4 MiB scan, 512 KiB output and 100-record bounds (native requests use 50).
+The selected pathname is checked against the opened file before and after
+capture. Observed replacement, truncation or changed observed prefix stops with
+`TranscriptChanged`; concurrent modification during capture stops with
+`TranscriptBusy`. Each request makes one attempt and returns no partial page or
+new receipt on failure. There is no automatic retry/reset. An explicit busy
+retry must keep the original receipt; reopening from zero is a separate choice.
+
+An unterminated final line is not parsed or consumed, even if it is valid JSON;
+split UTF-8 waits for its newline. It returns `hasMore: false` and a receipt so
+later appends can complete it. A malformed tail later terminated by the writer's
+recovery newline fails rather than being skipped. Rewind controls retain the
+existing raw-reader treatment: their bytes advance the cursor, while displayed
+older records are not removed or reconstructed into an active branch.
+
+Checkpointed mode rejects conversation view, recorded session IDs, other agents,
+missing/invalid receipts and mismatched/non-boundary offsets. The optional native
+`checkpointed` argument defaults false; native validation occurs before SSH
+execution and keeps the original SSH session/access lease. Hosts without supported
+Unix file identity return `TranscriptIdentityUnsupported`; manual Records remains
+available. Antigravity `v1` receipts and Claude conversation semantics do not change.
+
+No stateless receipt can detect an unseen truncate/regrow restoring identical
+bytes/identity, or eventual inode reuse. This does not establish journal continuity,
+Grok release compatibility, model replay, live prompt targeting or provider access.
+
 #### Optional Grok recorded conversation
 
 ```sh
