@@ -427,5 +427,12 @@ export const english = {
   "appHostKeyChanged": "The host key changed. Connection blocked. Verify the server independently before replacing this host.",
   "appLocalFailure": "Local terminal: {{details}}",
   "fontImported": "Imported font",
-  "fontSaveFailed": "The font could not be saved. Check available device storage."
+  "fontSaveFailed": "The font could not be saved. Check available device storage.",
+  nativeLocaleChecking: "Checking the native interface language…",
+  nativeLocaleUnavailable: "The native interface language could not be read. Your saved browser choice has not been applied.",
+  nativeLocaleRetry: "Retry language check",
+  nativeLocaleWritePending: "A native language write is still finishing. Wait for it to settle or restart lazysh before retrying.",
+  nativeLocaleSaving: "Saving interface language…",
+  nativeLocaleSaveFailed: "The interface language could not be saved. Retry the language check before changing it again.",
+  nativeLocaleChangedElsewhere: "The interface language changed elsewhere. Retry the language check.",
 } as const;

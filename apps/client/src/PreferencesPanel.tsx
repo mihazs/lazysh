@@ -1,6 +1,8 @@
 import {t, useUi, formatNumber} from './i18n/core';
 import { useState } from "react";
 import AppIconPanel from "./AppIconPanel";
+import {useMountedAccess} from './access';
+import {applyPreferenceIntent, nativeLocale, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
 import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabelKeys, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
@@ -9,6 +11,10 @@ import { deleteAllFonts, deleteFont, fontFamilyFor, importFont, resetFontSelecti
 export default function PreferencesPanel() {
   useUi();
   const preferences = usePreferences();
+  const locale=useNativeLocale();
+  const owner=useMountedAccess();
+  const current=()=>owner.mounted.current && owner.access.current();
+  const languageBusy=locale.phase!=='ready';
   const fonts = useDeviceFonts();
   const [fontBusy, setFontBusy] = useState(false);
   const [error, setError] = useState("");
@@ -23,6 +29,10 @@ export default function PreferencesPanel() {
   function update(patch: Partial<Preferences>) {
     try { savePreferences({ ...preferences, ...patch }); setError(""); return true; }
     catch { setError(t("preferencesSettingsCouldNotBeSavedOnThisDevice")); return false; }
+  }
+  async function languageAction(action:()=>Promise<void>) {
+    try {await action();if(current())setError('');}
+    catch {if(current())setError(t('nativeLocaleSaveFailed'));}
   }
   function move(item: ToolbarKey, delta: number) {
     const toolbar = [...preferences.toolbar];
@@ -41,7 +51,7 @@ export default function PreferencesPanel() {
     <h2>{t("preferencesTerminalPreferences")}</h2>
     <p>{t("preferencesChangesApplyToEveryOpenTerminal")}</p>
     {error && <p role="alert">{error}</p>}
-    <label>{t('language')}<select value={preferences.uiLanguage} onChange={event => update({uiLanguage:event.target.value as Preferences['uiLanguage']})}>
+    <label>{t('language')}<select disabled={languageBusy} value={preferences.uiLanguage} onChange={event => void languageAction(()=>nativeLocale.change(event.target.value as Preferences['uiLanguage'],current))}>
       <option value="system">{t('languageSystem')}</option><option value="en">{t('languageEnglish')}</option>
       <option value="pt-BR">{t('languagePortugueseBrazil')}</option><option value="es">{t('languageSpanish')}</option>
     </select></label>
@@ -106,6 +116,9 @@ export default function PreferencesPanel() {
         setChordLabel(''); return true;
       }} />
     </details>
-    <button onClick={() => {update({...defaults, toolbar: [...defaults.toolbar], snippets: [], customTheme: undefined, customThemeInfo: undefined}); void fontAction(resetFontSelection);}}>{t("preferencesResetPreferences")}</button>
+    <button disabled={languageBusy} onClick={() => {void languageAction(async()=>{
+      await applyPreferenceIntent({...defaults,toolbar:[...defaults.toolbar],snippets:[],customTheme:undefined,customThemeInfo:undefined},true,current);
+      if(current())await fontAction(resetFontSelection);
+    });}}>{t("preferencesResetPreferences")}</button>
   </section>;
 }

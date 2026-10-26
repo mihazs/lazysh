@@ -25,6 +25,7 @@ mod sync;
 mod terminal_input;
 mod theme_links;
 mod tmux_jump;
+mod ui_locale;
 mod vault;
 mod voice;
 mod zellij;
@@ -76,6 +77,8 @@ pub fn run() {
                 app_lock::app_lock_status,
                 app_lock::app_lock_configure,
                 app_lock::app_lock_ready,
+                ui_locale::ui_locale_status,
+                ui_locale::ui_locale_set,
                 app_icons::app_icon_status,
                 app_icons::set_app_icon,
                 theme_links::theme_link_status,

@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 pub mod access;
 #[cfg(target_os = "macos")]
 mod macos_resume;
+#[cfg(target_os = "macos")]
+mod macos_ui_locale;
 mod operation;
+pub mod ui_locale;
 pub use operation::{CredentialOperation, CredentialOperations};
 use zeroize::Zeroize;
 #[cfg(target_os = "macos")]
@@ -130,6 +133,80 @@ pub struct Vault<R: Runtime> {
     _runtime: std::marker::PhantomData<fn() -> R>,
     #[cfg(mobile)]
     handle: tauri::plugin::PluginHandle<R>,
+}
+
+impl<R: Runtime> Vault<R> {
+    pub async fn ui_locale_status(&self) -> Result<ui_locale::UiLocaleStatus, String> {
+        #[cfg(mobile)]
+        {
+            self.handle
+                .run_mobile_plugin_async::<ui_locale::UiLocaleStatus>("uiLocaleStatus", ())
+                .await
+                .map_err(mobile_error)?
+                .validate()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            objc2::rc::autoreleasepool(|_| macos_ui_locale::status())?.validate()
+        }
+        #[cfg(all(desktop, not(target_os = "macos")))]
+        {
+            Ok(ui_locale::UiLocaleStatus::frontend_authority())
+        }
+    }
+    pub async fn ui_locale_set(
+        &self,
+        choice: ui_locale::UiLocaleChoice,
+        expected_revision: String,
+    ) -> Result<ui_locale::UiLocaleStatus, String> {
+        if !ui_locale::valid_revision(&expected_revision) {
+            return Err("Invalid interface language revision".into());
+        }
+        #[cfg(mobile)]
+        {
+            #[derive(Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Change {
+                choice: ui_locale::UiLocaleChoice,
+                expected_revision: String,
+            }
+            self.handle
+                .run_mobile_plugin_async::<ui_locale::UiLocaleStatus>(
+                    "uiLocaleSet",
+                    Change {
+                        choice,
+                        expected_revision,
+                    },
+                )
+                .await
+                .map_err(mobile_error)?
+                .validate()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let status =
+                objc2::rc::autoreleasepool(|_| macos_ui_locale::set(choice, &expected_revision))?
+                    .validate()?;
+            let resume = self.resume.clone();
+            let (done, completed) = tokio::sync::oneshot::channel();
+            self.resume_app
+                .run_on_main_thread(move || {
+                    resume.refresh_locale();
+                    let _ = done.send(());
+                })
+                .map_err(|_| "Cannot refresh native interface language")?;
+            tokio::time::timeout(std::time::Duration::from_secs(5), completed)
+                .await
+                .map_err(|_| "Native interface language refresh timed out")?
+                .map_err(|_| "Cannot refresh native interface language")?;
+            Ok(status)
+        }
+        #[cfg(all(desktop, not(target_os = "macos")))]
+        {
+            let _ = choice;
+            Err("Native interface language authority is unavailable on this platform".into())
+        }
+    }
 }
 
 fn validate(key: &str, value: Option<&str>) -> Result<(), String> {

@@ -113,18 +113,27 @@ export function parsePreferences(value: unknown): Preferences {
   };
 }
 let cached: Preferences | undefined;
+let nativeUiLanguage: UiLanguage | undefined;
 export function getPreferences(): Preferences {
   if (!cached) {
     try { cached = parsePreferences(JSON.parse(localStorage.getItem(key) ?? "null")); }
     catch { cached = { ...defaults }; }
   }
+  if (nativeUiLanguage && cached.uiLanguage!==nativeUiLanguage) cached={...cached,uiLanguage:nativeUiLanguage};
   return cached;
 }
 export function savePreferences(value: Preferences) {
   const validated = parsePreferences(value);
+  if (nativeUiLanguage) validated.uiLanguage = nativeUiLanguage;
   localStorage.setItem(key, JSON.stringify(validated));
   cached = validated;
   window.dispatchEvent(new Event(event));
+}
+/** Only a successful native getter/setter may establish the cosmetic language mirror. */
+export function mirrorNativeUiLanguage(choice: UiLanguage) {
+  nativeUiLanguage = choice;
+  try {savePreferences({...getPreferences(), uiLanguage:choice});}
+  catch {cached={...getPreferences(),uiLanguage:choice};window.dispatchEvent(new Event(event));}
 }
 function subscribe(listener: () => void) {
   const stored = (e: StorageEvent) => { if (e.key === key || e.key === null) { cached = undefined; listener(); } };

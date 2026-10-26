@@ -1,5 +1,7 @@
 import {t, useUi} from './i18n/core';
 import {useClientLocale} from './i18n/useClientLocale';
+import {nativeLocale} from './i18n/nativeLocale';
+import {NativeLocaleNotice} from './i18n/NativeLocaleNotice';
 import {
   Suspense,
   lazy,
@@ -979,8 +981,11 @@ function ConnectDialog({
 
 export default function App() {
   useUi();
-  useClientLocale();
-  return <AccessShell native={native}>{registry => <WorkspaceApp registry={registry} />}</AccessShell>;
+  const locale=useClientLocale();
+  return <>
+    <NativeLocaleNotice state={locale} retry={()=>void nativeLocale.refresh().catch(()=>{})}/>
+    <AccessShell native={native}>{registry => <WorkspaceApp registry={registry} />}</AccessShell>
+  </>;
 }
 
 function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
