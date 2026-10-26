@@ -421,7 +421,24 @@ describe("connection flow", () => {
     await user.click(await screen.findByRole('button',{name:'Attach work'}));
     expect(mocks.api.attachTmux).toHaveBeenCalledWith('source','work',expect.any(Function),tmuxServer);
     await user.click(await screen.findByRole('button',{name:'Jump To'}));
-    await user.click(await screen.findByRole('button',{name:'1: build'}));
+    await user.click(await screen.findByRole('button',{name:'1: build'}).catch(error=>{
+      // Failure evidence for #109; preserve the original query deadline and error.
+      try {
+        const dialog=document.querySelector('[role="dialog"][aria-label="Jump To"]');
+        const panel=dialog?.querySelector('[aria-label="tmux Jump To"]');
+        console.error('Jump To target query diagnostics', {
+          dialogPresent:!!dialog,panelPresent:!!panel,
+          dialogText:dialog?.textContent?.slice(0,800),
+          layout:panel?.querySelector('select')?.value,
+          visibleTargets:screen.queryAllByRole('button',{name:'1: build'}).length,
+          includingHiddenTargets:screen.queryAllByRole('button',{name:'1: build',hidden:true}).length,
+          snapshotCalls:mocks.api.tmuxJumpSnapshot.mock.calls.length,
+          lastSnapshotSession:String(mocks.api.tmuxJumpSnapshot.mock.lastCall?.[0]??'').slice(0,120),
+          activeTab:document.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.slice(0,120),
+        });
+      } catch { /* Diagnostics must never replace the original test failure. */ }
+      throw error;
+    }));
     await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Jump To'})).toBeNull());
     expect(mocks.api.tmuxJump).toHaveBeenCalledWith('display','native-only-generation','$2','@2');
     expect(screen.getByRole('tab',{name:'Home / destination'})).toBeTruthy();
