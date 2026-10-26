@@ -54,3 +54,25 @@ byte boundaries in the shared pre-parse ingress guard. `DeepLinkInput.kt` and
 `DeepLinkInputTest.kt` are new lazysh-authored files under GPL-3.0-or-later;
 existing upstream files retain their original licenses and notices. The CLI-specific mock
 regression is gated to Linux and Windows, where that ingress API is active.
+
+The Android intent-filter renderer is moved from `build.rs` to `src/manifest.rs`
+with its upstream copyright and license notices intact. It omits empty optional
+lines before Tauri indents the generated block, preventing trailing-whitespace
+source changes when the canonical application manifest already contains the
+paired `DEEP LINK PLUGIN` block. Nonempty XML, including the ChromeOS action and
+all associated-domain attributes, is preserved. The updater and URL validation
+are unchanged.
+
+The application's standard Cargo `deep_link_manifest` integration target includes
+the actual renderer and configuration source, exercising custom-scheme and
+fully populated domain output without new dependencies. The inclusion wrapper
+`tests/manifest.rs` is lazysh-authored under GPL-3.0-or-later; upstream source
+retains its original notices. Android app JUnit separately parses canonical XML,
+whose file is registered as a native Gradle test input to invalidate cached
+results when routing declarations change.
+
+The existing optional-host deserializer uses equivalent nested `if let` blocks
+instead of a Rust 2024 let-chain so the same source compiles in the application's
+Rust 2021 integration target. No package edition changes. Positive, omitted/null
+and rejected scheme-prefixed host cases check the original behavior and error
+wording; no host or route validation is relaxed.
