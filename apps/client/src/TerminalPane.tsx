@@ -185,7 +185,7 @@ export default function TerminalPane({ session, active, reportError }: {
     if (ctrl || meta) {
       const named: Record<string, string> = {"\x1b": "Escape", "\t": "Tab", "\r": "Enter", "\x7f": "Backspace", "\x1b[D": "Left", "\x1b[A": "Up", "\x1b[B": "Down", "\x1b[C": "Right"};
       try {data = parseChord(`${ctrl ? "Ctrl+" : ""}${meta ? "Alt+" : ""}${named[key] ?? key}`);}
-      catch (error) {reportError(String(error)); return;}
+      catch (error) {reportError(error instanceof LocalUiError?error:String(error)); return;}
     }
     void api.write(session.id, data).catch(error => reportError(String(error)));
     if (!ctrlLocked) setCtrl(false);
@@ -240,7 +240,7 @@ export default function TerminalPane({ session, active, reportError }: {
     try {
       void api.writeSequence(session.id, parseChordSteps(keys)).catch(error => {if (current()) reportError(errorMessage(error));});
       return true;
-    } catch (error) {if (current()) reportError(errorMessage(error)); return false;}
+    } catch (error) {if (current()) reportError(error instanceof LocalUiError?error:errorMessage(error)); return false;}
   }
   function runGesture(action: GestureAction, slot?: GestureSlot) {
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;

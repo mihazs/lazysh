@@ -81,9 +81,13 @@ and native error strings remain verbatim. Retained device-font validation errors
 and fallback warnings also translate when rendered, including missing font roles
 and names in load warnings. Language changes do not repeat IndexedDB transactions,
 FontFace loading, import or deletion. Font bytes, IDs, families and persisted names
-stay unchanged, and raw browser/storage diagnostics stay literal. Shared chord-parser
-messages retain their existing owning-module behavior; this does not claim a
-complete audit of all retained messages elsewhere in the application.
+stay unchanged, and raw browser/storage diagnostics stay literal. Shared advanced
+and simple chord-parser validation errors also retain finite causes and literal
+key/step data. ChordBuilder and synchronous terminal parser-error paths translate
+these causes when rendered, preserving drafts, modifiers, focus, existing raw-error
+formatting and exact dispatch bytes. Grammar, aliases, limits and stored bindings
+are unchanged; language changes do not save or replay input. This does not claim
+a complete audit of all retained messages elsewhere in the application.
 This is a partial milestone under issue #79. Other feature panels still require
 their own localization and acceptance.
 Native lock-cover/biometric-reason resources on
