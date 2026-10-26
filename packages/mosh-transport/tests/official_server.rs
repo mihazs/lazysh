@@ -135,16 +135,43 @@ fn owned_processes(
             let parent = fields.next()?.parse::<u32>().ok()?;
             let group = fields.next()?.parse::<u32>().ok()?;
             let name = fields.collect::<Vec<_>>().join(" ");
-            let owned = group == leader
+            let image = std::path::Path::new(&name).file_name();
+            let owned = !name.is_empty() && group == leader
                 && (pid == leader
                     || (parent == leader
-                        && std::path::Path::new(&name).file_name() == executable.file_name()));
+                        && image == executable.file_name()));
+            // An observed image name is not evidence that main/test entry ran,
+            // or that the image caused the stall. Unmatched names stay unknown.
+            let role = if image == executable.file_name() {
+                "native"
+            } else {
+                match image.and_then(|name| name.to_str()) {
+                    Some("xcrun") => "xcrun",
+                    Some("simctl") => "simctl",
+                    _ => "unknown",
+                }
+            };
             owned.then_some((
                 pid,
-                format!("pid={pid} ppid={parent} pgid={group} executable={name}"),
+                format!("pid={pid} ppid={parent} pgid={group} executable={name} observed_image_role={role}"),
             ))
         })
         .collect()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn simulator_inventory(leader: u32) -> Command {
+    let mut inventory = Command::new("/bin/ps");
+    // Apple ps uses KERN_PROC_PGRP for one group selector. Combining selectors
+    // or requesting all processes would instead query the global process list.
+    inventory.args([
+        "-x",
+        "-g",
+        &leader.to_string(),
+        "-o",
+        "pid=,ppid=,pgid=,comm=",
+    ]);
+    inventory
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -153,9 +180,7 @@ fn simulator_timeout_diagnostics(
     executable: &std::path::Path,
     keys: &[String],
 ) -> String {
-    let mut inventory = Command::new("/bin/ps");
-    inventory.args(["-axo", "pid=,ppid=,pgid=,comm="]);
-    simulator_diagnostics_with_inventory(leader, executable, inventory, keys)
+    simulator_diagnostics_with_inventory(leader, executable, simulator_inventory(leader), keys)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -604,6 +629,41 @@ fn diagnostic_inventory_excludes_unowned_groups_and_unrelated_children() {
 }
 
 #[test]
+fn diagnostic_inventory_selects_only_the_owned_group_without_global_selectors() {
+    let command = simulator_inventory(12345);
+    assert_eq!(command.get_program(), "/bin/ps");
+    let arguments: Vec<_> = command.get_args().collect();
+    assert_eq!(
+        arguments,
+        ["-x", "-g", "12345", "-o", "pid=,ppid=,pgid=,comm="]
+    );
+}
+
+#[test]
+fn diagnostic_image_roles_require_observed_exact_names_and_owned_relationships() {
+    let executable = std::path::Path::new("/tmp/lazysh_mosh_transport-owned");
+    for (name, role) in [
+        ("/usr/bin/xcrun", "xcrun"),
+        ("/Xcode/usr/bin/simctl", "simctl"),
+        ("/tmp/lazysh_mosh_transport-owned", "native"),
+        ("/tmp/xcrun-lookalike", "unknown"),
+    ] {
+        let inventory = format!("100 1 100 {name}\n101 100 100 {}\n102 1 777 /usr/bin/simctl\n103 100 100 /usr/bin/xcrun\n", executable.display());
+        let processes = owned_processes(&inventory, 100, executable);
+        assert_eq!(processes.len(), 2);
+        assert!(
+            processes[0]
+                .1
+                .contains(&format!("observed_image_role={role}")),
+            "{processes:?}"
+        );
+        assert!(processes[1].1.contains("observed_image_role=native"));
+        assert!(!processes.iter().any(|(pid, _)| [102, 103].contains(pid)));
+    }
+    assert!(owned_processes("100 1 100\n", 100, executable).is_empty());
+}
+
+#[test]
 fn diagnostic_redaction_precedes_bounded_unicode_tail() {
     let secret = "private-fixture-key".to_owned();
     let message = format!("{secret}{}{}", "🌐".repeat(8192), secret);
@@ -654,6 +714,45 @@ fn diagnostic_sleep() -> Command {
     let mut child = Command::new("sleep");
     child.arg("10");
     child
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_group_inventory_observes_the_actual_owned_image() {
+    let mut observed = None;
+    let (_, timed_out, _) = bounded_output(
+        diagnostic_sleep(),
+        std::time::Duration::from_millis(50),
+        |pid| {
+            observed = Some((
+                pid,
+                bounded_output(
+                    simulator_inventory(pid),
+                    std::time::Duration::from_secs(1),
+                    |_| String::new(),
+                ),
+            ));
+            String::new()
+        },
+    )
+    .unwrap();
+    assert!(timed_out);
+    // Assert only after bounded_output has killed/reaped the owned child,
+    // including when the Apple inventory command fails or times out.
+    let (pid, inventory) = observed.expect("the owned child must reach its observer");
+    let (inventory, expired, _) = inventory.unwrap();
+    assert!(!expired && inventory.status.success());
+    let processes = owned_processes(
+        &String::from_utf8_lossy(&inventory.stdout),
+        pid,
+        std::path::Path::new("ios_peer-no-child"),
+    );
+    assert_eq!(processes.len(), 1, "{processes:?}");
+    assert_eq!(processes[0].0, pid);
+    assert!(
+        processes[0].1.contains("sleep observed_image_role=unknown"),
+        "{processes:?}"
+    );
 }
 
 #[test]

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Scope failure-only iOS Mosh process inventory to the owned process group and label positively observed launcher/native images. Startup deadlines, sampling limits, failure gates and defaults are unchanged; this does not establish the intermittent stall's cause.
+
 - Keep an already-visible App Lock authentication failure in the current interface language without repeating native configuration or changing opt-in, access authority or defaults.
 
 - Keep retained theme validation, import/share, clipboard and linked-theme result messages in the current interface language without reapplying themes or repeating clipboard/acknowledgement actions. Theme data, export bytes, validation limits and defaults are unchanged.

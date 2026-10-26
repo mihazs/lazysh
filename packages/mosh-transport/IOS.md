@@ -45,7 +45,7 @@ runner's first output; its exact CoreSimulator startup cause remains unproven.
 On a stalled simulator executable, the fixture keeps the original 45-second
 failure deadline and adds at most five seconds of diagnostic observation before
 terminating its owned process group. It records executable names/PIDs without
-argv or environment, and attempts one-second stack samples of its own `simctl`
+argv or environment, and attempts one-second stack samples of its tracked launcher
 and an identifiable direct native child in that same process group. Shared
 CoreSimulator daemons and unrelated processes are excluded. Missing diagnostic
 tools do not prevent teardown; known fixture keys are redacted before truncation.
@@ -58,6 +58,27 @@ CI run 40177092696 stalled before `--list` output and its inventory command
 was unavailable, so no stack was captured. The fixture now reports the inventory
 failure status and still samples its known owned leader independently of that
 inventory; child sampling continues to require positive ownership evidence.
+Failure-only inventory now uses `/bin/ps -x -g <owned-PGID> -o
+pid=,ppid=,pgid=,comm=` within the same one-second bound. There is exactly one
+selection criterion: the owned process group. Apple's [ps manual](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/ps.1)
+defines `-g` as process-group selection and `-x` as including processes without
+a controlling terminal. Its [implementation](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/ps.c)
+selects `KERN_PROC_PGRP` for one group selector; global or combined selectors
+would obtain the wider process list. This narrows observation without changing
+the launch, sampling, timeout or cleanup schedule.
+For positively observed owned names, `observed_image_role` distinguishes exact
+`xcrun`, `simctl`, and the expected native executable (`native`); all other
+names are `unknown`. The unreaped tracked leader remains explicitly unknown if
+inventory cannot identify it. An observed image does not prove entry into main,
+test execution, or a cause for the stall, and an image may change before sampling.
+Artifact 12663228981 from PR143 retained only an empty standalone discovery timeout
+and timed-out inventory/sample observers; no executable image or stack was
+established. Passing artifact 12661573984 from PR141 executed seven unit cases and
+the official-peer fixture, without explaining that recurrence. Linux Cargo checks
+cover formatting, ownership filtering and bounded failure behavior; the additional
+macOS-only native test exercises the actual Apple selector against an owned child.
+Neither Linux `ps` nor source inspection substitutes for executing that test and
+the iOS fixture on macOS. The intermittent cause remains open in issue #45.
 The peer communicates only with
 ephemeral official Mosh 1.4.0 host servers on shared loopback, exercising two
 parallel clients, UTF-8, remote PTY resize, and acknowledged shutdown. The host
