@@ -7,6 +7,7 @@ const bodies=aboutLegalFiles.map(path=>readFileSync(new URL('../../../'+path,imp
 for(const labels of aboutLocales)test(`${labels.locale} About preserves legal bytes and corresponding source through a live locale switch`,async({page})=>{
   const external=await openLocalizedApp(page,labels.locale);
   await page.evaluate(()=>{window.aboutOpened=[];window.open=(url,target,features)=>{window.aboutOpened.push([String(url),target??'',features??'']);return null;};});
+  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:labels.openHosts,exact:true}).click();
   await page.getByRole('button',{name:labels.region+' · 0.1.0',exact:true}).click();
   const about=page.getByRole('region',{name:labels.region,exact:true});
   await expect(about.getByText(labels.license,{exact:true})).toBeVisible();
