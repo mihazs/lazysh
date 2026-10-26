@@ -27,7 +27,11 @@ Agent activity columns, explicit one-request approval controls and server compan
 settings also use all three catalogs. Agent names, summaries, tool JSON, paths,
 session/pane identities and native diagnostics remain verbatim. Language changes
 preserve pending decisions, their original hashes and polling interval, and
-unsaved companion switches. Keep Awake controls remain a separate task.
+unsaved companion switches. Keep Awake controls and multiplexer prefix shortcuts
+also use the catalogs. Language changes preserve acknowledged display ownership,
+release/error identity, explicit opt-in, prefix drafts and exact ASCII input steps.
+Native display reasons and terminal diagnostics remain verbatim, including empty
+values; localized labels do not establish physical display-timer acceptance.
 Host attachment selection, crop/drawing controls, explicit upload/copy/staging
 actions and retained local errors/notices also use the catalogs. Language changes
 preserve selected file bytes, original crop coordinates, canvas resources,
@@ -73,9 +77,13 @@ addons and callback registration, query and draft bytes, Control state, explicit
 clipboard consent and in-flight clipboard/browser operations. They never copy,
 paste, open a URL, reconnect or dispatch input by themselves. Technical keycaps,
 user snippet/chord labels and bindings, raw terminal output, URLs, session names
-and native error strings remain verbatim. Shared font/parser messages retain
-their existing owning-module behavior; this does not claim a complete audit of
-all retained messages elsewhere in the application.
+and native error strings remain verbatim. Retained device-font validation errors
+and fallback warnings also translate when rendered, including missing font roles
+and names in load warnings. Language changes do not repeat IndexedDB transactions,
+FontFace loading, import or deletion. Font bytes, IDs, families and persisted names
+stay unchanged, and raw browser/storage diagnostics stay literal. Shared chord-parser
+messages retain their existing owning-module behavior; this does not claim a
+complete audit of all retained messages elsewhere in the application.
 This is a partial milestone under issue #79. Other feature panels still require
 their own localization and acceptance.
 Native lock-cover/biometric-reason resources on

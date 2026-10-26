@@ -1675,3 +1675,5 @@ button svg {
 .access-lock-toggle { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 
 .dictation-history > label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+
+.keep-awake-control input[type="checkbox"] { width: 20px; height: 20px; vertical-align: middle; accent-color: var(--accent); }
