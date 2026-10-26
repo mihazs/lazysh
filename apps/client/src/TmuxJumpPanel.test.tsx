@@ -5,12 +5,9 @@ import { invoke } from '@tauri-apps/api/core';
 import TmuxJumpPanel from './TmuxJumpPanel';
 import type { TmuxJumpSnapshot } from './bridge';
 import { accessSnapshot, applyAccessStatus } from './access';
+import {tmuxJumpSnapshot as snapshot} from './test/tmuxJumpData';
 
 vi.mock('@tauri-apps/api/core', () => ({invoke:vi.fn(),isTauri:()=>true}));
-const snapshot: TmuxJumpSnapshot = { generation:'actor-one', current:{sessionId:'$1',windowId:'@3'}, sessions:[
-  {id:'$1',name:'work',restoreName:'work',windows:[{id:'@3',index:0,name:'agent'}]},
-  {id:'$2',name:'other',restoreName:'other',windows:[{id:'@4',index:1,name:'build'}]},
-] };
 afterEach(() => { cleanup(); localStorage.clear(); vi.resetAllMocks(); });
 function access(locked: boolean) {
   const generation = String(BigInt(accessSnapshot().status?.generation ?? '0') + 1n);

@@ -1047,4 +1047,10 @@ export const english = {
   devicesIosDimensions: "Companion did not report verified simulator point dimensions.",
   devicesInvalidIdle: "Invalid idle device packet.",
   devicesInvalidSequence: "Invalid device stream sequence.",
+  jumpLayout: "Jump To layout",
+  jumpAccordion: "Accordion",
+  jumpGrid: "Grid",
+  jumpCurrent: "Current",
+  jumpUnavailable: "Jump To unavailable:",
+  jumpHint: "Jumping changes this client's session and the destination session's current window.",
 } as const;

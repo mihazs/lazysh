@@ -1,14 +1,14 @@
 import { expect, test } from '@playwright/test';
 
 declare global { interface Window {
-  tmuxJumpFixture: { jumps: Record<string, unknown>[]; attachments: Record<string,unknown>[]; defer: boolean; finish?: () => void };
+  tmuxJumpFixture: { jumps: Record<string, unknown>[]; attachments: Record<string,unknown>[]; reads: number; defer: boolean; finish?: () => void };
 } }
 
 for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display Jump To preserves server ${server ?? 'default'} and drops a late result after switching terminals`, async ({ page }) => {
   await page.addInitScript(({server}) => {
     localStorage.setItem('lazysh.workspace.v1', JSON.stringify([{hostId:'fixture'},{hostId:'fixture',attached:{kind:'tmux',name:'work',...(server===undefined?{}:{tmuxServer:server})}}]));
     localStorage.setItem('lazysh.multiplexer.layout', 'grid');
-    window.tmuxJumpFixture = {jumps:[],attachments:[],defer:false};
+    window.tmuxJumpFixture = {jumps:[],attachments:[],reads:0,defer:false};
     const snapshot = {generation:'retained-actor',current:{sessionId:'$1',windowId:'@1'},sessions:[
       {id:'$1',name:'work',restoreName:'work',windows:[{id:'@1',index:0,name:'agent'}]},
       {id:'$2',name:'builds',restoreName:'builds',windows:[{id:'@2',index:1,name:'compiler'}]},
@@ -24,7 +24,7 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
         if(command==='local_capability')return {available:false,reason:'SSH fixture only.'};
         if(command==='connect')return {sessionId:`ssh-${++connections}`};
         if(command==='attach_tmux'){window.tmuxJumpFixture.attachments.push(args);return {sessionId:'display'};}
-        if(command==='tmux_jump_snapshot')return snapshot;
+        if(command==='tmux_jump_snapshot'){window.tmuxJumpFixture.reads++;return snapshot;}
         if(command==='tmux_jump'){
           window.tmuxJumpFixture.jumps.push(args);
           const result={...snapshot,current:{sessionId:'$2',windowId:'@2'}};
@@ -57,6 +57,24 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
   await expect(layout).toHaveValue('grid');
   await expect(dialog.getByRole('button',{name:'0: agent · Current',exact:true})).toHaveAttribute('aria-current','location');
   expect(await dialog.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  const reads=await page.evaluate(()=>window.tmuxJumpFixture.reads);
+  await layout.focus();
+  const select=await layout.elementHandle();
+  for(const [language,caption,current] of [['pt-BR','Visualização do Ir para','Atual'],['es','Vista de Ir a','Actual'],['en','Jump To layout','Current']] as const){
+    await page.evaluate(async language=>{
+      const {nativeLocale}=await import('/src/i18n/nativeLocale.ts');
+      await nativeLocale.change(language);
+    },language);
+    const localized=page.getByRole('dialog');
+    const field=localized.getByRole('combobox',{name:caption,exact:true});
+    await expect(field).toHaveValue('grid');
+    expect(await field.evaluate((element,original)=>element===original,select)).toBe(true);
+    await expect(field).toBeFocused();
+    await expect(localized.getByRole('button',{name:`0: agent · ${current}`,exact:true})).toHaveAttribute('aria-current','location');
+    expect(await localized.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+    expect(await page.evaluate(()=>window.tmuxJumpFixture.reads)).toBe(reads);
+    expect(await page.evaluate(()=>window.tmuxJumpFixture.jumps)).toEqual([]);
+  }
   for(const value of ['list','accordion']){
     await layout.selectOption(value);
     await dialog.getByRole('button',{name:'0: agent · Current',exact:true}).click();
