@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Disable Turbo caching for client production builds so About/source metadata always embeds the current Git revision and dirty state. Other packages keep their existing cache behavior; source URL and metadata rules are unchanged.
+
 - Add default-off companion publishing of new normalized lifecycle transitions to an explicitly bound self-hosted webhook relay. Admission is atomic with local ingest; bounded flush is explicitly invoked, with stable retry identities and persistent disable. No sender schedule, APNs/FCM delivery or deployment is installed.
 
 - Localize encrypted Sync interface and client-created validation/status messages in English, Brazilian Portuguese and Spanish, with locale-aware import counts. Recovery data, native diagnostics, scopes, explicit action gates and language-import intent remain unchanged; sync and locale defaults do not change.
