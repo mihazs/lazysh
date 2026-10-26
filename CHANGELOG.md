@@ -66,6 +66,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- Localize SSH identity generation/import controls, in-memory credential
+  explanations and public-key clipboard failures in English, Brazilian Portuguese
+  and Spanish. Key material, cryptographic parameters and explicit actions are
+  unchanged; no defaults or credential storage behavior change.
+
 - Localize tmux Jump To layouts, current-window markers, navigation guidance and
   the unavailable prefix in English, Brazilian Portuguese and Spanish. Language
   changes format displayed window indexes for the selected language and retain
