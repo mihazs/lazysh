@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep retained theme validation, import/share, clipboard and linked-theme result messages in the current interface language without reapplying themes or repeating clipboard/acknowledgement actions. Theme data, export bytes, validation limits and defaults are unchanged.
+
 - Keep retained shortcut-parser validation errors in the current interface language while preserving literal key/step data, drafts and exact input bytes. Accepted grammar, stored bindings, defaults and native behavior are unchanged.
 
 - Keep retained local font errors and fallback warnings in the current interface language without reloading fonts or repeating storage operations. Font data, stored names, raw device diagnostics and defaults are unchanged.
