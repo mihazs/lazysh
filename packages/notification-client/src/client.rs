@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::{io::Write, path::Path};
 use uuid::Uuid;
 
+mod bound;
+pub use bound::{BoundError, CapturedPublisher, PublisherBinding};
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Capability {
@@ -71,6 +74,10 @@ async fn response<T: serde::de::DeserializeOwned>(
             response.status().as_u16()
         ));
     }
+    let bytes = bounded_body(response).await?;
+    serde_json::from_slice(&bytes).map_err(|_| "Invalid relay response".into())
+}
+async fn bounded_body(response: reqwest::Response) -> Result<Vec<u8>, String> {
     // No unbounded body collection, including authenticated but untrusted relay responses.
     let mut response = response;
     let mut bytes = Vec::new();
@@ -84,8 +91,9 @@ async fn response<T: serde::de::DeserializeOwned>(
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| "Invalid relay response".into())
+    Ok(bytes)
 }
+
 pub async fn admin_status(
     client: &reqwest::Client,
     origin: &str,
@@ -163,6 +171,9 @@ pub async fn resume_source(
     Ok(cap.source_id)
 }
 pub fn read_capability(path: &Path) -> Result<Capability, String> {
+    capture_capability(path).map(|(cap, _)| cap)
+}
+fn capture_capability(path: &Path) -> Result<(Capability, String), String> {
     let raw = lazysh_common::service_secrets::read_secret(path)?;
     let cap: Capability = serde_json::from_str(&raw).map_err(|_| "Invalid source envelope")?;
     if cap.schema_version != 1
@@ -172,7 +183,7 @@ pub fn read_capability(path: &Path) -> Result<Capability, String> {
     {
         return Err("Invalid source envelope".into());
     }
-    Ok(cap)
+    Ok((cap, hex_digest(raw.as_bytes())))
 }
 pub async fn publish(
     client: &reqwest::Client,
@@ -233,8 +244,11 @@ impl Drop for Capability {
 
 /// Additional explicit relay trust; this never disables chain or hostname verification.
 pub fn transport(ca_file: Option<&Path>) -> Result<reqwest::Client, String> {
+    captured_transport(ca_file).map(|(client, _)| client)
+}
+fn captured_transport(ca_file: Option<&Path>) -> Result<(reqwest::Client, Option<String>), String> {
     use std::io::Read;
-    let root = ca_file
+    let captured = ca_file
         .map(|path| {
             let mut bytes = Vec::new();
             lazysh_common::service_secrets::file(path, false)?
@@ -244,9 +258,22 @@ pub fn transport(ca_file: Option<&Path>) -> Result<reqwest::Client, String> {
             if bytes.len() > 16384 {
                 return Err("Relay CA file is too large".to_owned());
             }
-            reqwest::Certificate::from_pem(&bytes)
-                .map_err(|_| "Invalid relay CA certificate".into())
+            let root = reqwest::Certificate::from_pem(&bytes)
+                .map_err(|_| "Invalid relay CA certificate".to_owned())?;
+            Ok((root, hex_digest(&bytes)))
         })
         .transpose()?;
-    crate::client_with_root(root)
+    let (root, hash) = match captured {
+        Some((root, hash)) => (Some(root), Some(hash)),
+        None => (None, None),
+    };
+    Ok((crate::client_with_root(root)?, hash))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

@@ -12,6 +12,10 @@
   },
   "license": "GPL-3.0-or-later",
   "dependencies": {
-    "@lazysh/common": "workspace:*"
+    "@lazysh/common": "workspace:*",
+    "@lazysh/notification-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@lazysh/notification-service": "workspace:*"
   }
 }

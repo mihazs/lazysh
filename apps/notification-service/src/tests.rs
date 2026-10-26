@@ -837,3 +837,373 @@ async fn shared_source_validator_preserves_the_server_error_response() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body, serde_json::json!({"error":"invalid_source"}));
 }
+
+fn publisher_files(
+    directory: &std::path::Path,
+    tls: &support::Server,
+    account: String,
+    id: Uuid,
+) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let capability = client::Capability {
+        schema_version: 1,
+        origin: tls.origin.clone(),
+        account_id: account,
+        source_id: id,
+        alias: "public".into(),
+        secret: SOURCE.into(),
+    };
+    let capfile = directory.join("publisher.json");
+    let ca = directory.join("publisher.pem");
+    client::write_private(&capfile, &serde_json::to_vec(&capability).unwrap()).unwrap();
+    client::write_private(&ca, tls.pem.as_bytes()).unwrap();
+    (capfile, ca)
+}
+async fn bound_status_of(service: &Service) -> BoundStatus {
+    let (code, value) = call(
+        service,
+        "GET",
+        "/v1/bound-events",
+        SOURCE,
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    serde_json::from_value(value).unwrap()
+}
+fn bound_event(status: &BoundStatus, event: &Event) -> BoundEvent {
+    BoundEvent {
+        schema_version: 1,
+        account_id: status.account_id,
+        source_id: status.source_id,
+        generation: status.generation,
+        event_id: event.event_id,
+        kind: event.kind,
+    }
+}
+async fn bound_post(service: &Service, event: &BoundEvent) -> (StatusCode, serde_json::Value) {
+    call(
+        service,
+        "POST",
+        "/v1/bound-events",
+        SOURCE,
+        serde_json::to_value(event).unwrap(),
+    )
+    .await
+}
+async fn assert_no_events(service: &Service) {
+    assert_eq!(
+        service
+            .db(|s| Ok(s
+                .connection
+                .query_row("SELECT count(*) FROM events", [], |r| r.get::<_, i64>(0))?))
+            .await
+            .unwrap(),
+        0
+    );
+}
+fn wrong_bound_targets(expected: &BoundEvent) -> Vec<serde_json::Value> {
+    ["accountId", "sourceId", "generation"]
+        .into_iter()
+        .map(|field| {
+            let mut wrong = serde_json::to_value(expected).unwrap();
+            wrong[field] = if field == "generation" {
+                serde_json::json!(expected.generation + 1)
+            } else {
+                serde_json::json!(Uuid::new_v4())
+            };
+            wrong
+        })
+        .collect()
+}
+#[tokio::test]
+async fn bound_admission_checks_transaction_identity_and_preserves_original_receipt_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = Service::open(config(directory.path(), OFFLINE_ENDPOINT)).unwrap();
+    let id = source(&service, SOURCE, "public").await;
+    enable(&service).await;
+    let status = bound_status_of(&service).await;
+    assert_eq!(status.source_id, id);
+    let event = event();
+    let expected = bound_event(&status, &event);
+    for wrong in wrong_bound_targets(&expected) {
+        assert_eq!(
+            call(&service, "POST", "/v1/bound-events", SOURCE, wrong)
+                .await
+                .0,
+            StatusCode::PRECONDITION_FAILED
+        );
+    }
+    assert_no_events(&service).await;
+    let (code, value) = bound_post(&service, &expected).await;
+    assert_eq!(code, StatusCode::OK);
+    let original: BoundReceipt = serde_json::from_value(value).unwrap();
+    for enabled in [false, true] {
+        service.db(move |s| s.policy(enabled)).await.unwrap();
+        let (code, value) = bound_post(&service, &expected).await;
+        assert_eq!(code, StatusCode::OK);
+        let receipt: BoundReceipt = serde_json::from_value(value).unwrap();
+        assert_eq!(receipt.generation, original.generation);
+        assert_eq!(receipt.receipt.receipt_id, original.receipt.receipt_id);
+        assert_eq!(receipt.receipt.state, "cancelled");
+    }
+    let mut altered = expected.clone();
+    altered.kind = Kind::Done;
+    assert_eq!(bound_post(&service, &altered).await.0, StatusCode::CONFLICT);
+    altered = expected.clone();
+    altered.generation += 1;
+    assert_eq!(bound_post(&service, &altered).await.0, StatusCode::CONFLICT);
+    service
+        .db(|s| {
+            s.connection
+                .execute("UPDATE account SET id=?1", [Uuid::new_v4().to_string()])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        bound_post(&service, &expected).await.0,
+        StatusCode::PRECONDITION_FAILED
+    );
+    service.db(move |s| s.revoke(id)).await.unwrap();
+    assert_eq!(
+        bound_post(&service, &expected).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn captured_publisher_uses_one_private_capability_and_exact_ca_snapshot_before_any_post() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = Service::open(config(&directory.path().join("state"), OFFLINE_ENDPOINT)).unwrap();
+    let id = source(&service, SOURCE, "public").await;
+    enable(&service).await;
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = requests.clone();
+    let router = service.router().layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                next.run(request).await
+            }
+        },
+    ));
+    let tls = support::Server::new(router).await;
+    let account = service.db(|s| s.status()).await.unwrap().account_id;
+    let (capfile, ca) = publisher_files(directory.path(), &tls, account, id);
+    let captured = client::CapturedPublisher::load(&capfile, Some(&ca)).unwrap();
+    let binding = captured.binding().clone();
+    assert_eq!(binding.fingerprint().len(), 64);
+    let status = captured.bound_status().await.unwrap();
+    assert!(status.enabled);
+    let transport = client::transport(Some(&ca)).unwrap();
+    for wrong in wrong_bound_targets(&bound_event(&status, &event())) {
+        let response = transport
+            .post(format!("{}/v1/bound-events", tls.origin))
+            .bearer_auth(SOURCE)
+            .json(&wrong)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+    assert_no_events(&service).await;
+    let saved = event();
+    let saved_id = saved.event_id;
+    let original = captured
+        .publish_bound(saved, &binding, status.generation)
+        .await
+        .unwrap();
+    let mut bytes = std::fs::read(&capfile).unwrap();
+    bytes.push(b'\n');
+    std::fs::write(&capfile, &bytes).unwrap();
+    let changed = client::CapturedPublisher::load(&capfile, Some(&ca)).unwrap();
+    let before = requests.load(Ordering::SeqCst);
+    assert_eq!(
+        changed
+            .publish_bound(event(), &binding, status.generation)
+            .await
+            .unwrap_err(),
+        client::BoundError::Binding
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), before);
+    let current = changed.binding().clone();
+    let mut pem = std::fs::read(&ca).unwrap();
+    pem.push(b'\n');
+    std::fs::write(&ca, pem).unwrap();
+    let different_ca = client::CapturedPublisher::load(&capfile, Some(&ca)).unwrap();
+    assert_ne!(different_ca.binding().ca_hash, current.ca_hash);
+    assert_eq!(
+        different_ca
+            .publish_bound(event(), &current, status.generation)
+            .await
+            .unwrap_err(),
+        client::BoundError::Binding
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), before);
+    // Files disappear after capture: no secret/trust reread and no implicit freshening.
+    std::fs::remove_file(capfile).unwrap();
+    std::fs::remove_file(ca).unwrap();
+    service.db(|s| s.policy(false)).await.unwrap();
+    let receipt = captured
+        .publish_bound(
+            Event {
+                event_id: saved_id,
+                kind: Kind::NeedsAttention,
+            },
+            &binding,
+            status.generation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.receipt.receipt_id, original.receipt.receipt_id);
+    assert_eq!(receipt.generation, status.generation);
+    assert_eq!(
+        captured
+            .publish_bound(event(), &binding, status.generation)
+            .await
+            .unwrap_err(),
+        client::BoundError::TargetChanged
+    );
+}
+
+#[tokio::test]
+async fn old_or_downgraded_relay_never_falls_back_to_the_manual_event_route() {
+    for supports_get in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let account = Uuid::new_v4();
+        let id = Uuid::new_v4();
+        let manual = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = manual.clone();
+        let status = BoundStatus {
+            schema_version: 1,
+            account_id: account,
+            source_id: id,
+            generation: 1,
+            enabled: true,
+        };
+        let mut router = Router::new().route(
+            "/v1/events",
+            post(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::OK
+                }
+            }),
+        );
+        if supports_get {
+            router = router.route(
+                "/v1/bound-events",
+                get(move || {
+                    let status = status.clone();
+                    async move { Json(status) }
+                })
+                .post(|| async { StatusCode::NOT_FOUND }),
+            );
+        }
+        let tls = support::Server::new(router).await;
+        let (capfile, ca) = publisher_files(directory.path(), &tls, account.to_string(), id);
+        let captured = client::CapturedPublisher::load(&capfile, Some(&ca)).unwrap();
+        if supports_get {
+            assert!(captured.bound_status().await.is_ok());
+            assert_eq!(
+                captured
+                    .publish_bound(event(), captured.binding(), 1)
+                    .await
+                    .unwrap_err(),
+                client::BoundError::Unsupported
+            );
+        } else {
+            assert_eq!(
+                captured.bound_status().await.unwrap_err(),
+                client::BoundError::Unsupported
+            );
+        }
+        assert_eq!(manual.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn bound_https_responses_cannot_forge_receipt_identity_or_expand_the_closed_wire() {
+    let mode = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let selected = mode.clone();
+    let router = Router::new().route(
+        "/v1/bound-events",
+        post(move |h: HeaderMap, Json(event): Json<BoundEvent>| {
+            let selected = selected.clone();
+            async move {
+                assert_eq!(token(&h).unwrap(), SOURCE);
+                let mut value = serde_json::to_value(BoundReceipt {
+                    schema_version: 1,
+                    account_id: event.account_id,
+                    source_id: event.source_id,
+                    generation: event.generation,
+                    receipt: Receipt {
+                        receipt_id: Uuid::new_v4().to_string(),
+                        event_id: event.event_id.to_string(),
+                        kind: event.kind.as_str().into(),
+                        alias: "public".into(),
+                        state: "queued".into(),
+                        may_have_reached_destination: false,
+                    },
+                })
+                .unwrap();
+                let (pointer, replacement) = match selected.load(Ordering::SeqCst) {
+                    0 => ("/accountId", serde_json::json!(Uuid::new_v4())),
+                    1 => ("/sourceId", serde_json::json!(Uuid::new_v4())),
+                    2 => ("/generation", serde_json::json!(event.generation + 1)),
+                    3 => ("/receipt/eventId", serde_json::json!(Uuid::new_v4())),
+                    4 => ("/receipt/kind", serde_json::json!("working")),
+                    5 => ("/receipt/receiptId", serde_json::json!("invalid")),
+                    6 => ("/receipt/state", serde_json::json!("future_state")),
+                    7 => ("/schemaVersion", serde_json::json!(2)),
+                    8 => ("/generation", serde_json::json!(-1)),
+                    9 => (
+                        "/receipt/mayHaveReachedDestination",
+                        serde_json::json!("true"),
+                    ),
+                    _ => ("/receipt/alias", serde_json::json!("x".repeat(5000))),
+                };
+                *value.pointer_mut(pointer).unwrap() = replacement;
+                Json(value)
+            }
+        }),
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let tls = support::Server::new(router).await;
+    let (capfile, ca) = publisher_files(
+        directory.path(),
+        &tls,
+        Uuid::new_v4().to_string(),
+        Uuid::new_v4(),
+    );
+    let captured = client::CapturedPublisher::load(&capfile, Some(&ca)).unwrap();
+    for variant in 0..=10 {
+        mode.store(variant, Ordering::SeqCst);
+        assert_eq!(
+            captured
+                .publish_bound(event(), captured.binding(), 1)
+                .await
+                .unwrap_err(),
+            client::BoundError::InvalidResponse,
+            "variant={variant}"
+        );
+    }
+    for (error, retryable) in [
+        (client::BoundError::Binding, false),
+        (client::BoundError::Unsupported, false),
+        (client::BoundError::Unauthorized, false),
+        (client::BoundError::TargetChanged, false),
+        (client::BoundError::Conflict, false),
+        (client::BoundError::Disabled, false),
+        (client::BoundError::Capacity, true),
+        (client::BoundError::Unavailable, true),
+        (client::BoundError::InvalidResponse, true),
+    ] {
+        assert_eq!(error.retryable(), retryable);
+        assert!(!error.to_string().contains(SOURCE));
+    }
+}

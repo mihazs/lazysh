@@ -1,4 +1,6 @@
-use crate::{digest, ApiError, Config, Event, Receipt, Source, Status};
+use crate::{
+    digest, ApiError, BoundEvent, BoundReceipt, BoundStatus, Config, Event, Receipt, Source, Status,
+};
 use lazysh_common::{
     private_state::{self, SidecarKind},
     service_secrets, storage_filesystem, storage_namespace,
@@ -18,6 +20,10 @@ pub(crate) fn now() -> i64 {
         .unwrap_or_default()
         .as_secs()
         .min(i64::MAX as u64) as i64
+}
+enum SourceProof {
+    Id(Uuid),
+    Token([u8; 32]),
 }
 pub(crate) struct Store {
     pub connection: Connection,
@@ -197,34 +203,108 @@ impl Store {
         transaction.commit()?;
         Ok(())
     }
+    pub fn bound_status(&self, token: &str) -> Result<BoundStatus, ApiError> {
+        let source_id = self.authenticate(token)?;
+        let status = self.status()?;
+        Ok(BoundStatus {
+            schema_version: 1,
+            account_id: Uuid::parse_str(&status.account_id).map_err(|_| ApiError::storage())?,
+            source_id,
+            generation: status.generation,
+            enabled: status.enabled,
+        })
+    }
     pub fn ingest(&mut self, source: Uuid, event: Event) -> Result<Receipt, ApiError> {
+        self.ingest_checked(SourceProof::Id(source), event, None)
+            .map(|(receipt, _)| receipt)
+    }
+    pub fn ingest_bound(
+        &mut self,
+        token: &str,
+        bound: BoundEvent,
+    ) -> Result<BoundReceipt, ApiError> {
+        if !bound.valid() {
+            return Err(ApiError(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_bound_event",
+            ));
+        }
+        let event = Event {
+            event_id: bound.event_id,
+            kind: bound.kind,
+        };
+        let (receipt, generation) =
+            self.ingest_checked(SourceProof::Token(digest(token)), event, Some(&bound))?;
+        Ok(BoundReceipt {
+            schema_version: 1,
+            account_id: bound.account_id,
+            source_id: bound.source_id,
+            generation,
+            receipt,
+        })
+    }
+    fn ingest_checked(
+        &mut self,
+        proof: SourceProof,
+        event: Event,
+        expected: Option<&BoundEvent>,
+    ) -> Result<(Receipt, i64), ApiError> {
         let transaction = self.connection.transaction()?;
-        let active: Option<String> = transaction
+        let (predicate, identity) = match proof {
+            SourceProof::Id(id) => ("id", rusqlite::types::Value::Text(id.to_string())),
+            SourceProof::Token(hash) => ("token", rusqlite::types::Value::Blob(hash.to_vec())),
+        };
+        // Authentication is rechecked in the SAME transaction as bound admission.
+        let active: Option<(String, String)> = transaction
             .query_row(
-                "SELECT alias FROM sources WHERE id=?1 AND active=1",
-                [source.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let alias = active.ok_or_else(ApiError::unauthorized)?;
-        let existing: Option<(String, String)> = transaction
-            .query_row(
-                "SELECT receipt,kind FROM events WHERE source=?1 AND event=?2",
-                params![source.to_string(), event.event_id.to_string()],
+                &format!("SELECT id,alias FROM sources WHERE {predicate}=?1 AND active=1"),
+                [identity],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if let Some((id, kind)) = existing {
-            if kind != event.kind.as_str() {
+        let (source, alias) = active.ok_or_else(ApiError::unauthorized)?;
+        let source = Uuid::parse_str(&source).map_err(|_| ApiError::storage())?;
+        let bound_account = if let Some(expected) = expected {
+            let account: (String, bool, i64) =
+                transaction.query_row("SELECT id,enabled,generation FROM account", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
+            if source != expected.source_id
+                || Uuid::parse_str(&account.0).map_err(|_| ApiError::storage())?
+                    != expected.account_id
+            {
+                return Err(ApiError::target_changed());
+            }
+            Some((account.1, account.2))
+        } else {
+            None
+        };
+        let existing: Option<(String, String, i64)> = transaction
+            .query_row(
+                "SELECT receipt,kind,generation FROM events WHERE source=?1 AND event=?2",
+                params![source.to_string(), event.event_id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        if let Some((id, kind, generation)) = existing {
+            if kind != event.kind.as_str()
+                || expected.is_some_and(|bound| bound.generation != generation)
+            {
                 return Err(ApiError::conflict());
             }
-            drop(transaction);
-            return self.receipt(source, &id);
+            let receipt = Self::receipt_on(&transaction, source, &id)?;
+            transaction.commit()?;
+            return Ok((receipt, generation));
         }
-        let (enabled, generation): (bool, i64) =
-            transaction.query_row("SELECT enabled,generation FROM account", [], |r| {
+        let (enabled, generation) = match bound_account {
+            Some(account) => account,
+            None => transaction.query_row("SELECT enabled,generation FROM account", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
-            })?;
+            })?,
+        };
+        if expected.is_some_and(|bound| bound.generation != generation) {
+            return Err(ApiError::target_changed());
+        }
         if !enabled {
             return Err(ApiError::disabled());
         }
@@ -245,11 +325,15 @@ impl Store {
                 now() + 86400
             ],
         )?;
+        let receipt = Self::receipt_on(&transaction, source, &id)?;
         transaction.commit()?;
-        self.receipt(source, &id)
+        Ok((receipt, generation))
     }
     pub fn receipt(&self, source: Uuid, id: &str) -> Result<Receipt, ApiError> {
-        self.connection.query_row("SELECT receipt,event,kind,alias,state,may_sent FROM events WHERE source=?1 AND receipt=?2",params![source.to_string(),id],|r|Ok(Receipt{receipt_id:r.get(0)?,event_id:r.get(1)?,kind:r.get(2)?,alias:r.get(3)?,state:r.get(4)?,may_have_reached_destination:r.get(5)?})).optional()?.ok_or_else(ApiError::not_found)
+        Self::receipt_on(&self.connection, source, id)
+    }
+    fn receipt_on(connection: &Connection, source: Uuid, id: &str) -> Result<Receipt, ApiError> {
+        connection.query_row("SELECT receipt,event,kind,alias,state,may_sent FROM events WHERE source=?1 AND receipt=?2",params![source.to_string(),id],|r|Ok(Receipt{receipt_id:r.get(0)?,event_id:r.get(1)?,kind:r.get(2)?,alias:r.get(3)?,state:r.get(4)?,may_have_reached_destination:r.get(5)?})).optional()?.ok_or_else(ApiError::not_found)
     }
     pub fn claim(&mut self) -> Result<Option<Job>, ApiError> {
         let transaction = self.connection.transaction()?;
