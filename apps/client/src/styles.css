@@ -115,8 +115,18 @@ button svg {
 .muted {
   color: var(--muted);
 }
-.app-shell {
+.app-viewport {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.app-viewport > [role="alert"],
+.app-viewport > [role="status"] {
+  flex-shrink: 0;
+}
+.app-shell {
+  flex: 1;
+  min-height: 0;
   display: flex;
 }
 .sidebar {

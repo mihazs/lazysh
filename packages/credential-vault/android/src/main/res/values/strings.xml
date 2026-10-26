@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lazysh_resume_title">lazysh is locked</string>
+    <string name="lazysh_resume_detail">Unlock with this device\'s biometrics to continue.</string>
+    <string name="lazysh_resume_failure">Unlock failed or was cancelled. lazysh remains locked. Check device biometrics and retry.</string>
+    <string name="lazysh_resume_unlock">Unlock lazysh</string>
+    <string name="lazysh_resume_privacy">lazysh privacy lock</string>
+    <string name="lazysh_biometric_unlock">Unlock lazysh credentials</string>
+    <string name="lazysh_action_cancel">Cancel</string>
+</resources>

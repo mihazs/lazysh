@@ -113,7 +113,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           bun run --cwd apps/client tauri build --bundles app
-          plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/InfoPlist.strings
+          plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
       - name: Exercise native companion WAL admission and recovery
         run: bun run test:storage
       - name: Build pinned Parakeet runtime and exercise native macOS ACL storage

@@ -1,0 +1,7 @@
+"resume.title" = "lazysh está bloqueado";
+"resume.message" = "Usa la biometría de este dispositivo para continuar.";
+"resume.unlock" = "Desbloquear lazysh";
+"resume.failure" = "El desbloqueo falló o se canceló. lazysh sigue bloqueado. Comprueba la biometría del dispositivo e inténtalo de nuevo.";
+"auth.unlock" = "Desbloquear credenciales de lazysh";
+"auth.protect" = "Proteger credenciales de lazysh";
+"action.cancel" = "Cancelar";

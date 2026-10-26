@@ -8,8 +8,25 @@ struct VaultItem: Decodable { let key: String; let value: String?; let biometric
 struct VaultCancellation: Decodable { let authEpoch: UInt64; let backgroundGeneration: UInt64? }
 struct VaultLifecycle: Decodable { let background: Channel }
 struct ResumeRegistration: Decodable { let events: Channel }
+struct UiLocaleMutation: Decodable { let choice: String; let expectedRevision: String }
 
 class VaultPlugin: Plugin {
+  @objc public func uiLocaleStatus(_ invoke: Invoke) {
+    DispatchQueue.main.async {
+      do { invoke.resolve(try NativeUiLocale.shared.status()) }
+      catch { invoke.reject("Cannot read native UI language") }
+    }
+  }
+  @objc public func uiLocaleSet(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(UiLocaleMutation.self)
+    DispatchQueue.main.async {
+      do {
+        let status = try NativeUiLocale.shared.set(args.choice, expectedRevision: args.expectedRevision)
+        self.resumeCover.refreshLocale()
+        invoke.resolve(status)
+      } catch { invoke.reject("Native UI language changed or could not be saved; retry") }
+    }
+  }
   private let lock = NSLock()
   private let resumeCover = ResumeCover()
   override func load(webview: WKWebView) { resumeCover.load(webview: webview, host: manager.viewController?.view) }
@@ -36,11 +53,14 @@ class VaultPlugin: Plugin {
     }
   }
   private var contexts: [UUID: (context: LAContext, authEpoch: UInt64)] = [:]
-  private func registerContext(_ context: LAContext, id: UUID, expected: UInt64, started: UInt64) -> Bool {
+  private func registerContext(_ context: LAContext, id: UUID, expected: UInt64, started: UInt64, reason: String, lookup: inout [String: Any]) -> Bool {
+    context.touchIDAuthenticationAllowableReuseDuration = 0
+    context.localizedReason = NativeUiLocale.shared.text(reason)
     lock.lock()
     defer { lock.unlock() }
     guard contexts.isEmpty && expected >= epoch && started == lifecycle && foreground else { return false }
     contexts[id] = (context, expected)
+    lookup[kSecUseAuthenticationContext as String] = context
     return true
   }
   private var epoch: UInt64 = 0
@@ -120,12 +140,7 @@ class VaultPlugin: Plugin {
         var lookup = self.query(args.key, biometric)
         lookup[kSecReturnData as String] = true; lookup[kSecMatchLimit as String] = kSecMatchLimitOne
         let id = UUID(); let context = LAContext()
-        if biometric {
-          context.touchIDAuthenticationAllowableReuseDuration = 0
-          context.localizedReason = "Unlock lazysh credentials"
-          guard self.registerContext(context, id: id, expected: expected, started: started) else { invoke.reject("Credential authentication cancelled or another request is in progress"); return }
-          lookup[kSecUseAuthenticationContext as String] = context
-        }
+        if biometric && !self.registerContext(context, id: id, expected: expected, started: started, reason: "auth.unlock", lookup: &lookup) { invoke.reject("Credential authentication cancelled or another request is in progress"); return }
         defer { context.invalidate(); self.lock.lock(); self.contexts.removeValue(forKey: id); self.lock.unlock() }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(lookup as CFDictionary, &result)
@@ -163,12 +178,7 @@ class VaultPlugin: Plugin {
     DispatchQueue.global(qos: .userInitiated).async {
       let id = UUID(); let context = LAContext()
       var lookup = self.query(args.key, biometric)
-      if biometric {
-        context.touchIDAuthenticationAllowableReuseDuration = 0
-        context.localizedReason = "Protect lazysh credentials"
-        guard self.registerContext(context, id: id, expected: expected, started: started) else { invoke.reject("Credential authentication cancelled or another request is in progress"); return }
-        lookup[kSecUseAuthenticationContext as String] = context
-      }
+      if biometric && !self.registerContext(context, id: id, expected: expected, started: started, reason: "auth.protect", lookup: &lookup) { invoke.reject("Credential authentication cancelled or another request is in progress"); return }
       defer { context.invalidate(); self.lock.lock(); self.contexts.removeValue(forKey: id); self.lock.unlock() }
       if biometric && hasProtected {
         var unlock = lookup; unlock[kSecReturnData as String] = true

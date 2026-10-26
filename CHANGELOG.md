@@ -27,6 +27,15 @@ parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Added
 
+- App language choices now also cover native lock screens and newly created
+  biometric prompts on Android, iOS and macOS, including cold launch. Native
+  preferences own the choice on those platforms; startup never overwrites it
+  with a stale browser value. The first upgrade without a native choice uses
+  System rather than automatically migrating a browser-only choice. Reset and
+  explicit settings imports use the same
+  serialized native update. Existing OS permission-language selection and access
+  policy are unchanged; Windows, Linux and browser storage keep their defaults.
+
 - Browser preview controls, forwarding/discovery validation and element-picker
   captions/statuses now support English, Brazilian Portuguese and Spanish.
   Language changes preserve the live iframe, selection and editable note; page
