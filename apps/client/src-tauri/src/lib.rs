@@ -4,6 +4,7 @@ mod apple_speech;
 mod apple_status;
 mod approvals;
 mod companion_settings;
+mod desktop_launch;
 mod devices;
 mod et;
 mod forward_agent;
@@ -31,9 +32,21 @@ mod zellij;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(desktop)]
+    let directory = match desktop_launch::parse(std::env::args_os(), std::env::current_dir) {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("lazysh: {error}");
+            std::process::exit(2);
+        }
+    };
+    #[cfg(mobile)]
+    let directory = None;
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}));
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        desktop_launch::secondary(app, args)
+    }));
     builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_lazysh_apple_status::init())
@@ -54,6 +67,7 @@ pub fn run() {
         .manage(voice::cloud::CloudState::default())
         .manage(sync::SyncState::default())
         .manage(local::LocalState::default())
+        .manage(desktop_launch::LaunchState::new(directory))
         .setup(|app| {
             use tauri::Manager;
             let state = ssh::AppState::new(app.path().app_config_dir()?)?;
@@ -82,6 +96,8 @@ pub fn run() {
                 theme_links::theme_link_read,
                 theme_links::theme_link_ack,
                 local::local_capability,
+                desktop_launch::desktop_launch_read,
+                desktop_launch::desktop_launch_ack,
                 local::local_connect,
                 local::local_write,
                 local::local_resize,

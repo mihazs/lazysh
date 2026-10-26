@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "allow-theme-link-status", "allow-theme-link-read", "allow-theme-link-ack",
+    "allow-desktop-launch-read", "allow-desktop-launch-ack",
     "allow-app-lock-status", "allow-app-lock-configure", "allow-app-lock-ready",
     "allow-local-capability", "allow-local-connect", "allow-local-write", "allow-local-resize", "allow-local-ack", "allow-local-disconnect",
     "allow-share-thumbnail", "allow-share-thumbnail-cancel",

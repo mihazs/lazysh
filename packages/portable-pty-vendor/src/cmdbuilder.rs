@@ -503,7 +503,6 @@ impl CommandBuilder {
             .cwd
             .as_ref()
             .map(|dir| dir.as_os_str())
-            .filter(|dir| std::path::Path::new(dir).is_dir())
             .unwrap_or(home.as_ref());
         let shell = self.get_shell();
 
@@ -610,7 +609,8 @@ impl CommandBuilder {
         let home: Option<&OsStr> = self
             .get_env("USERPROFILE")
             .filter(|path| Path::new(path).is_dir());
-        let cwd: Option<&OsStr> = self.cwd.as_deref().filter(|path| Path::new(path).is_dir());
+        // An explicit missing cwd must fail at CreateProcess, never select HOME.
+        let cwd: Option<&OsStr> = self.cwd.as_deref();
         let dir: Option<&OsStr> = cwd.or(home);
 
         dir.map(|dir| {

@@ -11,6 +11,7 @@ export async function installNativeBridge(page: Page, access = {reason:'Browser 
       invoke: async (command: string, args: Record<string, unknown> = {}) => {
         if (command === 'app_lock_status') return {initialized:true,supported:false,enabled:false,locked:false,...access};
         if (command === 'app_lock_ready' || command === 'adopt_session') return;
+        if (command === 'desktop_launch_read') return {directoryReceipt:null,notice:null};
         return window.nativeFixtureInvoke(command, args);
       },
     }});

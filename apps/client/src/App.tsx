@@ -11,6 +11,7 @@ import {
 import { bindProtectedApi, captureAccess, useProtectedApi, useProtectedInvoke } from './access';
 import AccessShell, { type SessionRegistry } from './AccessShell';
 import ThemeLinkPanel from './ThemeLinkPanel';
+import {localLaunchError, useDesktopLaunch} from './useDesktopLaunch';
 import AccessPanel from './AccessPanel';
 import { forgetSession, PendingSessions, retainSession } from './pendingSessions';
 import {
@@ -1077,7 +1078,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return()=>{alive=false;};
   },[]);
   useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
-  async function openLocalTerminal() {
+  useDesktopLaunch(native,localCapability.available,openingLocal,
+    receipt=>openLocalTerminal(receipt),setError);
+  async function openLocalTerminal(launchReceipt?:string) {
     if(localOpening.current || !localCapability.available)return;
     localOpening.current=true;setOpeningLocal(true);setError('');
     let pending:Prepared|undefined;
@@ -1085,7 +1088,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     try {
       pending=await prepareSession('', t("appLocalTerminal"), t("appThisDeviceLocalShell"));
       pending.session.local=true;
-      const result=await api.connectLocal(pending.onEvent);
+      const result=await (launchReceipt ? api.connectLocal(pending.onEvent,launchReceipt) : api.connectLocal(pending.onEvent));
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
       if(!mounted.current){await ownership.close(result.sessionId);disposeTerminal(pending.session);return;}
@@ -1651,7 +1654,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )}
         {error && (
           <div className="global-error" role="alert">
-            <span>{error}</span>
+            <span>{localLaunchError(error)}</span>
             <button
               className="icon-button"
               aria-label={t("appDismissError")}

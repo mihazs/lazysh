@@ -1,5 +1,7 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  desktopLaunchWarmUnsupported: "Directory launch requires a new app instance. Close lazysh, then run the directory command again. No new terminal was opened.",
+  desktopLaunchUnavailable: "This directory launch is no longer available. Run the directory command again.",
   appUnsupportedTmuxRestoreName: "This tmux destination cannot be restored automatically because its exact name is unsupported. The live terminal and Jump To remain available.",
   appJumpTo: "Jump To",
   appReadingTmuxDestinations: "Reading tmux destinations…",

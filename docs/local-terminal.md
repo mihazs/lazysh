@@ -8,6 +8,21 @@ Local sessions use the existing terminal input, UTF-8 display, selection, search
 
 Workspace restoration saves only `{ "local": true }`. Restoring starts a fresh local shell after the explicit restore action; it cannot recover a terminated shell process, terminal output or working directory. Shell history follows the user's shell configuration, independently of workspace metadata.
 
+To start one local workspace from a terminal, close existing lazysh instances and run:
+
+```sh
+lazysh --dir '/absolute/project directory'
+lazysh -dir ./relative-project
+```
+
+`-dir=PATH` and `--dir=PATH` are also accepted. Paths are literal: lazysh performs no shell expansion, globbing or command interpolation. Relative paths resolve against the launching process's working directory and are canonicalized. The supplied and resolved paths must be valid Unicode and at most 4096 UTF-8 bytes. Invalid/missing directories, non-Unicode paths, Windows drive-relative paths such as `C:project`, duplicate directory options and combinations with other arguments fail before UI startup with exit 2. Host and multiplexer CLI options are not implemented. Without an owned CLI option, framework flags and existing desktop URL handling retain their prior behavior.
+
+This first directory slice supports cold launch only. The initial path stays native in one bounded, non-overwritable intent until an unlocked, ready renderer submits that exact receipt through the normal guarded local-connect command. Manual local opens and workspace restoration do not claim it. If an instance is already running, a directory invocation opens no new terminal; the running app retains a localized rejection notice for display after normal unlock. Its path is never interpreted from the singleton plugin's lossy argument transport. The secondary process retains the singleton handoff exit behavior; a successful handoff is not confirmation of a directory terminal. Close the app and retry for a cold launch. Existing desktop URL ingress and other single-instance behavior remain unchanged. Full desktop launch parity, including warm directory delivery and host/multiplexer destinations, remains tracked in issue #86.
+
+An explicitly requested directory never silently falls back to HOME. If it disappears before native process working-directory setup, startup fails. Filesystem changes after a child enters the directory follow OS semantics. Unix uses the selected login shell; user/system startup files can subsequently change directory, so this does not promise to override shell configuration. The launch mechanism does not serialize the directory into workspace metadata or launch-notification payloads. Restoration continues to use the normal HOME default.
+
+Native regression tests cover parser bounds, caller-relative paths, literal shell-looking names, Unicode refusal without replacement, one-shot receipts, stale leases, actual login-shell `pwd`, and removal after validation. Windows has native drive/Unicode and actual ConPTY working-directory fixtures; executing those on a Windows runner remains a separate platform gate. Frontend tests cover deferred/fresh access, stale success/error suppression, localized warm notices, and unchanged manual/restoration calls. Source or component checks alone do not establish actual desktop GUI launch acceptance on every OS.
+
 ## Process and flow control
 
 The native desktop implementation uses [portable-pty 0.9](https://docs.rs/portable-pty/0.9.0/portable_pty/): Unix PTYs on Linux/macOS and ConPTY on supported Windows systems. Each session has a 32-operation input queue, one queued 16 KiB output chunk and 256 KiB of unacknowledged terminal output. Input operations are limited to 64 KiB. Output acknowledgment cannot exceed the outstanding byte count. An unresponsive output consumer times out and closes the session. Terminal dimensions are validated before resize.

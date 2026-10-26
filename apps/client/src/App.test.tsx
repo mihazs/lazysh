@@ -36,6 +36,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...request:[string,unknown?,un
   const [command]=request;
   if(command==='app_lock_status')return Promise.resolve(unlockedStatus());
   if(command==='app_lock_ready')return Promise.resolve();
+  if(command==='desktop_launch_read')return Promise.resolve({directoryReceipt:null,notice:null});
   return mocks.invoke(...request);
 } }));
 vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(event:{payload:unknown})=>void)=>{
@@ -927,6 +928,7 @@ it('opens an explicit local terminal without SSH authentication and hides remote
   await user.click(await screen.findByRole('button',{name:'Open local terminal'}));
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
   expect(mocks.api.connectLocal).toHaveBeenCalledTimes(1);expect(mocks.api.connect).not.toHaveBeenCalled();
+  expect(mocks.api.connectLocal).toHaveBeenCalledWith(expect.any(Function));
   expect(screen.getByText(/Local PTY/)).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Files'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Agents'})).toBeNull();
@@ -950,6 +952,7 @@ it('restores local intention through a fresh local PTY without a host lookup or 
   await waitFor(()=>expect((screen.getByRole('button',{name:'Open local terminal'}) as HTMLButtonElement).disabled).toBe(false));
   await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));
   expect(await screen.findByText(/Local PTY/)).toBeTruthy();expect(mocks.api.connectLocal).toHaveBeenCalledTimes(1);
+  expect(mocks.api.connectLocal).toHaveBeenCalledWith(expect.any(Function));
   expect(mocks.api.connect).not.toHaveBeenCalled();
 });
 it('disconnects a late local startup when the app closes',async()=>{
