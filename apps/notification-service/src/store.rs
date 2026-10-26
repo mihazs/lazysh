@@ -6,7 +6,6 @@ use lazysh_common::{
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::{
     fs::File,
-    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
@@ -286,17 +285,4 @@ impl Store {
         self.connection.execute("UPDATE events SET state=?1,next=?2 WHERE receipt=?3 AND generation=?4 AND state='sending'",params![state,now()+2,job.receipt.receipt_id,job.generation])?;
         Ok(())
     }
-}
-
-pub fn validate_output_parent(path: &Path) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let resolved =
-        storage_namespace::resolve(parent).map_err(|_| "Unsafe capability output namespace")?;
-    service_secrets::private(
-        &std::fs::metadata(resolved).map_err(|_| "Cannot inspect capability output directory")?,
-        true,
-    )
 }

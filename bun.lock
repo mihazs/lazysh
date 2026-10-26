@@ -62,6 +62,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@lazysh/common": "workspace:*",
+        "@lazysh/notification-client": "workspace:*",
       },
     },
     "apps/share-service": {
@@ -114,6 +115,13 @@
     "packages/mosh-transport": {
       "name": "@lazysh/mosh-transport",
       "version": "0.1.0",
+    },
+    "packages/notification-client": {
+      "name": "@lazysh/notification-client",
+      "version": "0.1.0",
+      "dependencies": {
+        "@lazysh/common": "workspace:*",
+      },
     },
     "packages/parakeet-runtime": {
       "name": "@lazysh/parakeet-runtime",
@@ -269,6 +277,8 @@
     "@lazysh/et-transport": ["@lazysh/et-transport@workspace:packages/et-transport"],
 
     "@lazysh/mosh-transport": ["@lazysh/mosh-transport@workspace:packages/mosh-transport"],
+
+    "@lazysh/notification-client": ["@lazysh/notification-client@workspace:packages/notification-client"],
 
     "@lazysh/notification-service": ["@lazysh/notification-service@workspace:apps/notification-service"],
 

@@ -52,7 +52,7 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
-        run: bunx turbo run build check test lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service
+        run: bunx turbo run build check check:rust test test:rust lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service --filter=@lazysh/notification-client
       - name: Upload owned concurrent hook syscall excerpts
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
