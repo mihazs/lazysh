@@ -563,3 +563,21 @@ async fn termination_signal_finishes_the_original_claim_before_releasing_drain_o
         .success());
     // A later due retry is allowed; the next drain must never inherit the old owner.
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dispatch_limit_reports_bounded_stop_and_preserves_the_next_due_event() {
+    let fixture = Fixture::ready().await;
+    fixture.ingest("needs_attention").await;
+    assert_eq!(fixture.status().await["pending"], 2);
+    let report = fixture.run(&["relay", "flush", "--limit", "1"], None).await;
+    assert_eq!(report["relayRecorded"], 1);
+    assert_eq!(report["stopped"], "limit");
+    assert_eq!(fixture.status().await["pending"], 1);
+    let report = fixture.run(&["relay", "flush"], None).await;
+    assert_eq!(report["relayRecorded"], 1);
+    assert_eq!(report["stopped"], "drained");
+    assert_eq!(fixture.status().await["pending"], 0);
+    let posts = fixture.tap.posts.lock().await;
+    assert_eq!(posts.len(), 2);
+    assert_ne!(posts[0]["eventId"], posts[1]["eventId"]);
+}

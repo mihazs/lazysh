@@ -184,7 +184,7 @@ fn flush(directory: &Path, limit: u8, deadline_seconds: u8) -> Result<FlushRepor
         retry_pending: 0,
         blocked: 0,
         last_failure: None,
-        stopped: "drained",
+        stopped: "limit",
     };
     if !policy.enabled {
         report.stopped = "disabled";
@@ -213,7 +213,7 @@ fn flush(directory: &Path, limit: u8, deadline_seconds: u8) -> Result<FlushRepor
             if *cancelled.borrow(){report.stopped="cancelled";break;}
             if tokio::time::Instant::now()>=deadline{report.stopped="deadline";break;}
             let Some(job)=store::claim(&mut store.connection,policy.revision,chrono::Utc::now().timestamp())? else{
-                if store::policy(&store.connection)?.revision!=policy.revision{report.stopped="configuration_changed";}break;
+                report.stopped=if store::policy(&store.connection)?.revision!=policy.revision{"configuration_changed"}else{"drained"};break;
             };
             report.attempted+=1;
             let binding:PublisherBinding=serde_json::from_str(&job.config.binding).map_err(|_|invalid())?;
