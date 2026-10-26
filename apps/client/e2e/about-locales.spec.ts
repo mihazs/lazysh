@@ -4,7 +4,7 @@ import {openLocalizedApp} from './fixtures/localizedApp';
 import {aboutLegalFiles,aboutLocales} from '../src/test/aboutData';
 declare global {interface Window {aboutOpened:string[][];}}
 const bodies=aboutLegalFiles.map(path=>readFileSync(new URL('../../../'+path,import.meta.url),'utf8'));
-for(const labels of aboutLocales)test(`${labels.locale} About preserves legal bytes and corresponding source through a live locale switch`,async({page})=>{
+for(const labels of aboutLocales)test(`${labels.locale} About preserves legal bytes and corresponding source through a live locale switch`,async({page},testInfo)=>{
   const external=await openLocalizedApp(page,labels.locale);
   await page.evaluate(()=>{window.aboutOpened=[];window.open=(url,target,features)=>{window.aboutOpened.push([String(url),target??'',features??'']);return null;};});
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:labels.openHosts,exact:true}).click();
@@ -22,7 +22,30 @@ for(const labels of aboutLocales)test(`${labels.locale} About preserves legal by
   const english=page.getByRole('region',{name:'About lazysh',exact:true});
   await expect(english.getByRole('button',{name:aboutLocales[0].source,exact:true})).toBeVisible();
   expect(await english.locator('pre').allTextContents()).toEqual(bodies);
-  for(const panel of [english,page.getByRole('dialog')])expect(await panel.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  const geometry=await english.evaluate(root=>[root,...root.querySelectorAll('p,code,pre,button,summary')].map(node=>{
+    const rect=node.getBoundingClientRect(),style=getComputedStyle(node);
+    return {tag:node.tagName,text:node.textContent?.slice(0,80),left:rect.left,right:rect.right,width:rect.width,client:node.clientWidth,scroll:node.scrollWidth,font:style.font,wrap:style.overflowWrap};
+  }));
+  const session=await page.context().newCDPSession(page);await session.send('DOM.enable');await session.send('CSS.enable');
+  const tree=await session.send('DOM.getDocument');const codeNode=await session.send('DOM.querySelector',{nodeId:tree.root.nodeId,selector:'[role="dialog"] code'});
+  const fonts=await session.send('CSS.getPlatformFontsForNode',{nodeId:codeNode.nodeId});await session.detach();
+  await testInfo.attach('about-layout.json',{body:JSON.stringify({geometry,fonts},null,2),contentType:'application/json'});
+  expect(await english.locator('code').locator('..').evaluate(element=>element.scrollWidth<=element.clientWidth),'The full source revision must fit its paragraph, including in dirty development builds.').toBe(true);
+  for(const panel of [english,page.getByRole('dialog')])expect(await panel.evaluate(element=>element.scrollWidth<=element.clientWidth),JSON.stringify({geometry,fonts})).toBe(true);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  for(const notice of await english.locator('pre').all()) {
+    if(await notice.evaluate(element=>element.scrollWidth>element.clientWidth)) {
+      await notice.focus();await page.keyboard.press('ArrowRight');
+      await expect.poll(()=>notice.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
+    }
+  }
+  const lastNotice=english.locator('details').last();const summary=lastNotice.locator('summary');
+  const close=page.getByRole('dialog').getByRole('button',{name:'Close About lazysh',exact:true});
+  await summary.click();await close.focus();await page.keyboard.press('Shift+Tab');await expect(summary).toBeFocused();
+  await page.keyboard.press('Tab');await expect(close).toBeFocused();
+  await summary.focus();await page.keyboard.press('Enter');await expect(lastNotice).toHaveAttribute('open','');
+  const lastBody=lastNotice.locator('pre');await lastBody.focus();await page.keyboard.press('Tab');await expect(close).toBeFocused();
+  await page.keyboard.press('Shift+Tab');await expect(lastBody).toBeFocused();
+  expect(await english.locator('pre').allTextContents()).toEqual(bodies);
   expect(external).toEqual([]);expect(await page.locator('[role=dialog] img,[role=dialog] iframe').count()).toBe(0);
 });

@@ -1505,6 +1505,8 @@ button svg {
 }
 
 .preferences-panel { padding: 24px; max-width: 760px; overflow: auto; }
+.about-panel { overflow-wrap: anywhere; }
+.about-panel pre { overflow-x: auto; }
 .preferences-panel > label, .preferences-panel details label { display: flex; gap: 12px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
 .preferences-panel input:not([type="checkbox"]), .preferences-panel select, .preferences-panel textarea, .terminal-search input, .terminal-compose textarea { background: var(--theme-panel, #151c12); color: var(--theme-text, #e0e8da); border: 1px solid var(--theme-border, #46573c); padding: 9px; border-radius: 5px; max-width: 100%; }
 .preferences-panel textarea { width: 100%; min-height: 90px; }
