@@ -50,7 +50,10 @@ async function productFixture(data?: unknown, link = false, conversionFailure = 
   // Execute the workflow's exact capture body. Only the Apple plist converter
   // is replaced; filtering, snapshotting, hashing and bounds remain real.
   const converter = join(bin, 'plutil');
-  await writeFile(converter, '#!/bin/bash\ntest "$CONVERSION_FAILURE" != 1 || exit 9\njq -e --arg key "$2" \'.[$key]\' "$6" > "$5"\n');
+  await writeFile(converter, '#!/bin/bash\n' +
+    'test "$#" = 9 && test "$1" = -extract && test "$3" = raw && test "$4" = -expect && test "$5" = string && test "$6" = -n && test "$7" = -o || exit 8\n' +
+    'test "$CONVERSION_FAILURE" != 1 || exit 9\n' +
+    'jq -erj --arg key "$2" \'.[$key] | select(type == "string")\' "$9" > "$8"\n');
   await chmod(converter, 0o755);
   const child = Bun.spawn(['bash', '-e', '-c', productCapture.run!], { cwd: directory,
     env: { ...process.env, PATH: bin + ':' + process.env.PATH, RUNNER_TEMP: runnerTemp,
@@ -74,15 +77,23 @@ test('compiled app version capture only adds finite observations to the existing
 
 test('missing, unsafe or failed compiled metadata stays explicitly unavailable without changing verdicts', async () => {
   const fields = { CFBundleIdentifier: 'app.lazysh.client', CFBundleShortVersionString: '1.2.3', CFBundleVersion: '1002003' };
-  for (const [data, link, failure] of [
-    [undefined, false, false], [fields, true, false], [fields, false, true],
-    ['not a plist', false, false], ['x'.repeat(65537), false, false],
-    [{ ...fields, CFBundleVersion: 123 }, false, false],
-    [{ ...fields, CFBundleVersion: '' }, false, false],
-    [{ ...fields, CFBundleVersion: 'x'.repeat(129) }, false, false],
-    [{ ...fields, CFBundleVersion: '1\n2' }, false, false],
-    [{ CFBundleIdentifier: 'app.lazysh.client' }, false, false],
-  ] as const) expect((await productFixture(data, link, failure)).receipt).toEqual({ status: 'unavailable' });
+  for (const [data, link, failure, stage] of [
+    [undefined, false, false, 'input'], [fields, true, false, 'input'], [fields, false, true, 'identifier'],
+    ['not a plist', false, false, 'identifier'], ['x'.repeat(65537), false, false, 'input'],
+    [{ ...fields, CFBundleVersion: 123 }, false, false, 'build-version'],
+    [{ ...fields, CFBundleVersion: '' }, false, false, 'validation'],
+    [{ ...fields, CFBundleVersion: 'x'.repeat(129) }, false, false, 'validation'],
+    [{ ...fields, CFBundleVersion: '1\n2' }, false, false, 'validation'],
+    [{ ...fields, CFBundleVersion: '1\n' }, false, false, 'validation'],
+    [{ ...fields, CFBundleVersion: '1\u00002' }, false, false, 'validation'],
+    [{ CFBundleIdentifier: 'app.lazysh.client' }, false, false, 'short-version'],
+  ] as const) expect((await productFixture(data, link, failure)).receipt).toEqual({ status: 'unavailable', stage });
+});
+
+test('scalar capture preserves literal quotes and UTF8 without interpreting or trimming values', async () => {
+  const fields = { CFBundleIdentifier: 'app.lazysh."é"', CFBundleShortVersionString: '版本 1.2', CFBundleVersion: '1002003 ' };
+  const result = await productFixture({ ...fields, PRIVATE_TOKEN: 'not retained' });
+  expect(result.receipt).toEqual({ status: 'retained', ...fields, plistSha256: createHash('sha256').update(result.source!).digest('hex') });
 });
 
 async function fixture(data: unknown, outcome = 'failure', conversionFailure = false) {
