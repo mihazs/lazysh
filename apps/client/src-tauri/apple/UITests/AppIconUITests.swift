@@ -6,7 +6,7 @@ private enum IconConfirmationOwner: String, Hashable { case springboard, app }
 private func iconConfirmationRecord(owner: IconConfirmationOwner, frame: CGRect?) -> String {
   let prefix = "LAZYSH_ICON_CONFIRM owner=\(owner.rawValue) stage=before_hittability"
   guard let frame else { return prefix + " snapshot=unavailable" }
-  let finite = [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height].allSatisfy { $0.isFinite }
+  let finite = !frame.isInfinite && [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height].allSatisfy { $0.isFinite }
   let positive = finite && frame.size.width > 0 && frame.size.height > 0
   return prefix + " snapshot=available frame_finite=\(finite) frame_positive=\(positive)"
 }
