@@ -104,8 +104,13 @@ Use existing Cargo/Gradle/XCTest tasks:
   uses `G_MAXINT` for synchronous Inhibit/IsInhibited calls.
 - Android `:tauri-plugin-lazysh-display-idle:testDebugUnitTest` tests policy and
   compiles the adapter/debug-only real-Window fixture. App instrumentation calls
-  that fixture on the existing Activity; it does not assert physical timeout or
-  claim the entire plugin/renderer pipeline was exercised.
+  that fixture on the existing Activity. The separately selected owned-SSH
+  `NativeWorkspaceTest.ownedOpenSshConnectsThroughRealUi` also exercises the shipping
+  Agents board checkbox against the actual Activity flag, explicit opt-in/off,
+  background/foreground and board-unmount/remount lifecycle. It uses the existing
+  authenticated SSH fixture, not a fake IPC/native flag setter. Actual packaged
+  device/emulator execution is required before claiming this pipeline passed;
+  neither fixture asserts physical display timeout or battery behavior.
 - iOS policy/real-UIApplication fixtures are in the existing hosted
   `LazyshMoshAppTests` target. SDK execution is required before an iOS runtime claim.
 - macOS/Windows Cargo tests perform actual API acquire/release round trips in

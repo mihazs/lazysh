@@ -941,6 +941,88 @@ class NativeWorkspaceTest {
         }
     }
 
+    // Called only from the real, authenticated owned-SSH UI flow below. Native
+    // Window reads observe the shipping plugin; no test fixture changes its flag.
+    private fun verifyBoardKeepAwake(scenario: ActivityScenario<MainActivity>) {
+        val checkbox = ".keep-awake-control input[type=checkbox]"
+        val active = "This board owns an acknowledged idle-inhibition request."
+        val off = "Keep awake is off."
+        fun flag(): Boolean {
+            var enabled = false
+            scenario.onActivity { activity ->
+                enabled = activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+            }
+            return enabled
+        }
+        fun awaitFlag(expected: Boolean, stage: String) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (flag() != expected) {
+                assertTrue("Native display flag did not settle at $stage", System.nanoTime() < deadline)
+                Thread.sleep(25)
+            }
+        }
+        fun view(name: String) {
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='$name']]"))
+                .perform(webScrollIntoView()).perform(webClick())
+        }
+        fun toggle() {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
+                .perform(webScrollIntoView()).perform(webClick())
+        }
+        fun status(text: String) = "Array.from(document.querySelectorAll('.keep-awake-control [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
+        fun awaitActive(stage: String) {
+            awaitDocument(scenario, stage, "document.querySelector('$checkbox')?.checked===true && ${status(active)}")
+            awaitFlag(true, stage)
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            awaitFlag(false, "connected terminal before opt-in")
+            view("Agents")
+            awaitDocument(scenario, "board keep-awake available and off",
+                "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}")
+            assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
+                "localStorage.getItem('lazysh.agent-board.keep-awake.v1')!=='true'"))
+            awaitFlag(false, "board default off")
+            toggle()
+            awaitActive("explicit board opt-in")
+            toggle()
+            awaitDocument(scenario, "explicit board disable", status(off))
+            awaitFlag(false, "explicit board disable")
+            toggle()
+            awaitActive("second explicit board opt-in")
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            awaitFlag(false, "actual Activity background")
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            awaitActive("actual Activity foreground")
+            view("Terminal")
+            awaitDocument(scenario, "board unmounted", "!document.querySelector('.keep-awake-control')")
+            awaitFlag(false, "leaving board")
+            view("Agents")
+            awaitActive("persisted opt-in on new board mount")
+            toggle()
+            awaitDocument(scenario, "final explicit board off", status(off))
+            awaitFlag(false, "final explicit board off")
+            assertEquals("Owned board preference must finish off", "true", evaluate(scenario,
+                "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='false'"))
+            println("lazysh board keep-awake: packaged opt-in/off, background/foreground and board unmount/remount verified against actual Window flag")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+                if (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED)
+                    scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                if (evaluate(scenario, "document.querySelector('$checkbox')?.checked===true") == "true") toggle()
+                view("Terminal")
+                awaitFlag(false, "owned board cleanup")
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(AssertionError("Owned board keep-awake cleanup also failed"))
+                else throw cleanup
+            }
+        }
+    }
+
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -1080,6 +1162,7 @@ class NativeWorkspaceTest {
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                 screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
+            verifyBoardKeepAwake(scenario)
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Disconnect $name']")).perform(webClick())
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
