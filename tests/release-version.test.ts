@@ -57,7 +57,7 @@ async function fixture(fragment?: string, sourceVersion?: string) {
   const tooling = await json(source, 'package.json');
   if (sourceVersion !== undefined) tooling.version = sourceVersion;
   tooling.version = '0.1.0';
-  tooling.devDependencies = { '@changesets/cli': '3.0.3' };
+  tooling.devDependencies = { '@changesets/cli': '3.0.3', jscpd: '5.4.2' };
   const members = (Bun.TOML.parse(await Bun.file(join(source, 'Cargo.toml')).text()) as any).workspace.members as string[];
   await writeFile(join(directory, 'package.json'), JSON.stringify(tooling, null, 2));
   await writeFile(join(directory, 'Cargo.toml'), `[workspace]\nmembers = ${JSON.stringify(members)}\nexclude = ["packages/portable-pty-vendor", "packages/deep-link-vendor"]\nresolver = "2"\n[workspace.package]\nversion = "0.1.0"\n`);
@@ -98,6 +98,57 @@ async function fixture(fragment?: string, sourceVersion?: string) {
 }
 
 const fragment = (impact: string) => `---\n"@lazysh/client": ${impact}\n---\n\nOwned release fixture entry.\n`;
+
+test('real multi-package release preparation scopes generated history but rejects handwritten clones', async () => {
+  const directory = await fixture('---\n"@lazysh/agent": minor\n"@lazysh/client": minor\n---\n\nReport bounded session history through explicit companion queries without changing existing reads or defaults. Keep observations associated with their original timestamps and exact selected session. The feature exposes reported metadata only after a deliberate choice and leaves transcript reads behind their existing confirmation boundary. A missing report remains unavailable, and a recorded report does not establish that the process is still running. Native diagnostics remain literal throughout the selected interface language.\n');
+  await copyFile(join(source, '.jscpd.json'), join(directory, '.jscpd.json'));
+  const manifests = [...new Bun.Glob('{apps,packages}/*/package.json').scanSync({ cwd: directory })];
+  const generated = manifests.map(path => path.replace('package.json', 'CHANGELOG.md')).sort();
+  expect(generated).toHaveLength(15);
+  for (const path of generated) await copyFile(join(source, path), join(directory, path));
+  const result = await successful(directory, ['bun', 'run', 'release:prepare']);
+  expect(result.stdout + result.stderr).toContain('Found 0 clones.');
+  expect((await json(directory, 'package.json')).version).toBe('0.2.0');
+  for (const path of ['apps/agent/CHANGELOG.md', 'apps/client/CHANGELOG.md']) {
+    expect(await Bun.file(join(directory, path)).text()).toContain('Report bounded session history');
+  }
+  const config = await json(directory, '.jscpd.json');
+  expect(config.ignore.filter((path: string) => path.endsWith('/CHANGELOG.md')).sort()).toEqual(generated);
+  expect(config).toMatchObject({ minTokens: 50, minLines: 5, mode: 'mild', maxSize: '1mb' });
+  expect((await json(directory, 'package.json')).scripts['duplicates:check']).toBe('jscpd --config .jscpd.json --threshold 0 --fail-on-empty .');
+  const handwritten = `export function assessRecordedSample(values: number[]) {
+  let aggregate = 731;
+  const accepted = [];
+  for (const value of values) {
+    if (!Number.isSafeInteger(value)) throw new Error('Only owned integer samples are accepted');
+    const normalized = Math.max(-139, Math.min(283, value));
+    aggregate = (aggregate * 17 + normalized) % 104729;
+    if (normalized > 23) accepted.push(normalized + aggregate);
+  }
+  return { aggregate, accepted, count: values.length };
+}\n`;
+  for (const path of ['owned-first.ts', 'owned-second.ts']) await writeFile(join(directory, path), handwritten);
+  const code = await command(directory, ['bun', 'run', 'duplicates:check']);
+  expect(code.code).not.toBe(0);
+  expect(code.stdout + code.stderr).toContain('Clone found (typescript)');
+  for (const path of ['owned-first.ts', 'owned-second.ts']) await rm(join(directory, path));
+  const manual = `# An independently maintained operational note
+This handwritten document describes the procedure for inspecting a bounded local report.
+Read the recorded identifiers before selecting the matching session from the current list.
+Keep the original timestamps and distinguish unavailable values from measured observations.
+Ask for an explicit review before applying any proposed configuration to a connected host.
+Retain the original failure when cleanup also reports a separate unsuccessful operation.
+Document the actual checks performed and leave unavailable platform behavior unverified.
+\n`;
+  await writeFile(join(directory, 'CHANGELOG.md'), manual);
+  await mkdir(join(directory, 'docs'));
+  await writeFile(join(directory, 'docs/owned-note.md'), manual);
+  const markdown = await command(directory, ['bun', 'run', 'duplicates:check']);
+  expect(markdown.code).not.toBe(0);
+  expect(markdown.stdout + markdown.stderr).toContain('Clone found (markdown)');
+  expect(markdown.stdout).toContain('CHANGELOG.md');
+  expect(markdown.stdout).toContain('docs/owned-note.md');
+}, 60_000);
 
 test('actual locked Tauri CLI receipt identifies the native version under test', async () => {
   expect((await json(source, 'node_modules/@tauri-apps/cli/package.json')).version).toBe('2.12.4');
