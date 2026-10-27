@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep release generation compatible with strict source duplication checks by identifying only the 15 exact Changesets-generated package changelog paths as generated artifacts. Handwritten root history, documentation, source and tests retain the unchanged zero-clone gate.
+
 - Add an opt-in Claude reported-history shortcut that prefills Chat from an exact hook-reported session/path association on the selected SSH connection. Reading still requires Open transcript, with recorded images and Follow off. Existing manual paths and older companions remain usable; reported history never grants live agent input authority.
 
 - Keep retained transcript validation and read alerts in the current interface language without repeating reads. Raw host diagnostics, parser rules, transcript contents, Follow and image behavior remain unchanged.

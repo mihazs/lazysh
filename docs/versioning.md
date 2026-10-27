@@ -105,6 +105,16 @@ package script because the action tokenizes its command without a shell. Any
 detected clone fails the job; no scope exception or threshold change
 is made for authored fragments, source or tests.
 
+The scanner's generated-artifact scope lists exactly the 15 owned package
+`CHANGELOG.md` paths in `.jscpd.json`. Changesets 3.0.3 produces these files;
+their history begins with the automated release PRs #220 and #239 and contains
+no handwritten entries. Shared fixed-train release notes and accumulated
+dependency entries can legitimately repeat across that output. Keep manual
+release explanations in the root `CHANGELOG.md` or authored changeset fragments,
+which remain scanned along with documentation and source/tests. Do not broaden
+this list to a changelog glob or add handwritten content to a generated file.
+Changing workspace membership requires reviewing this exact generated-path list.
+
 Current GitHub documentation says PRs opened or synchronized by `GITHUB_TOKEN`
 create approval-required workflow runs. A writer must choose **Approve workflows
 to run** and review the exact generated head. Token-created pushes do not
