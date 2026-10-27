@@ -7,6 +7,7 @@ import { forgetSession } from './pendingSessions';
 
 /** Native owns sessions; retain xterm buffers while transient tools and drafts unmount. */
 export type SessionRegistry = { sessions: LiveSession[]; activeId: string | null };
+type AccessErrorKey = 'accessNativeAppLockStatusIsUnavailable' | 'accessNativeAppLockStatusIsUnavailableRestartLazyshTo' | 'accessNativeAppUnlockCouldNotFinish';
 export default function AccessShell({ native, children }: {
   native: boolean; children: (registry: SessionRegistry) => ReactNode;
 }) {
@@ -14,7 +15,7 @@ export default function AccessShell({ native, children }: {
   const registry = useRef<SessionRegistry>({ sessions: [], activeId: null }).current;
   const { status, epoch } = useAccessSnapshot();
   const [initialized, setInitialized] = useState(!native);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<AccessErrorKey>();
   useEffect(() => () => {
     // The shell lifetime is the renderer lifetime, unlike WorkspaceApp's lock-driven remounts.
     for (const session of registry.sessions) forgetSession(session.id);
@@ -26,7 +27,7 @@ export default function AccessShell({ native, children }: {
       try {
         const remove = await listen<unknown>('lazysh-app-lock', event => {
           if (!alive) return;
-          try { applyAccessStatus(event.payload); } catch { setError(t("accessNativeAppLockStatusIsUnavailable")); }
+          try { applyAccessStatus(event.payload); } catch { setError("accessNativeAppLockStatusIsUnavailable"); }
         });
         if (!alive) { remove(); return; }
         stop = remove;
@@ -35,7 +36,7 @@ export default function AccessShell({ native, children }: {
         if (!alive) return;
         if (accessSnapshot().epoch === initialEpoch) applyAccessStatus(value);
         setInitialized(true);
-      } catch { if (alive) setError(t("accessNativeAppLockStatusIsUnavailableRestartLazyshTo")); }
+      } catch { if (alive) setError("accessNativeAppLockStatusIsUnavailableRestartLazyshTo"); }
     })();
     return () => { alive = false; stop?.(); };
   }, [native]);
@@ -44,12 +45,12 @@ export default function AccessShell({ native, children }: {
     // Effects run after React commits the fresh tree; the native cover remains until this acknowledgement.
     const current = epoch;
     void accessControl.ready(status.generation).then(() => acknowledgeAccessReady(current)).catch(() => {
-      if (accessSnapshot().epoch === current) setError(t("accessNativeAppUnlockCouldNotFinish"));
+      if (accessSnapshot().epoch === current) setError("accessNativeAppUnlockCouldNotFinish");
     });
   }, [native, initialized, status?.initialized, status?.locked, status?.generation, epoch]);
   if (native && (error || !initialized || !status?.initialized || status.locked)) {
     return <main aria-label={t("accessAppAccess")}><h1>{status?.locked ? t("accessLazyshIsLocked") : t("accessCheckingDeviceAccess")}</h1>
-      <p>{error || (status?.locked ? t("accessUseTheNativeUnlockControlToAuthenticateOnThis") : t("accessWaitingForTheNativeAccessCheck"))}</p>
+      <p>{error ? t(error) : (status?.locked ? t("accessUseTheNativeUnlockControlToAuthenticateOnThis") : t("accessWaitingForTheNativeAccessCheck"))}</p>
     </main>;
   }
   return <Fragment key={native ? epoch : 'browser'}>{children(registry)}</Fragment>;
