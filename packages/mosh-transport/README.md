@@ -69,6 +69,16 @@ is collected. The [Apple ps manual](https://keith.github.io/xcode-man-pages/ps.1
 documents these fields. A retained state is an observation, not proof of native
 entry, a blocked function or the cause of #45's intermittent empty `--list` timeout.
 
+Before timeout diagnostics run, the existing pipe readers also expose a capped
+retained-byte count, observed EOF and first/last successful-read milliseconds
+relative to reader setup. A nonblocking per-stream snapshot retains coherent
+metadata or a fixed busy/unavailable marker, without waiting for a reader lock.
+Stdout and stderr snapshots are separate observations, not an atomic global
+timeline; their timestamps describe reads, not when the child wrote or exited.
+The formatted snapshot is frozen before sampling, so later output cannot rewrite
+it. The existing 16 MiB retained-output cap, launch/diagnostic deadlines and
+cleanup behavior remain unchanged. No new raw data or process is collected.
+
 Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS native/app acceptance, Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.
 
 Native application regression peers enable the development-only `test-fixtures`
