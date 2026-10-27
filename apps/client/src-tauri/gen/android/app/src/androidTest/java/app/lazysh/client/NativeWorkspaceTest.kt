@@ -131,17 +131,26 @@ class NativeWorkspaceTest {
             scenario.onActivity { activity ->
                 val web = requireNotNull(webView(activity.window.decorView))
                 web.evaluateJavascript("""(() => {
+                  console.warn('lazysh.qr.capture:enter');
                   const out=(stage,reason,length=0,data=null)=>({stage,reason,length,data});
                   const v=document.querySelector('.theme-qr-panel video');
                   if(!v||v.readyState<2||!v.videoWidth||!v.videoHeight)return out('VIDEO','UNAVAILABLE');
                   const scale=Math.min(1,500/v.videoWidth,500/v.videoHeight),c=document.createElement('canvas');
                   c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));
                   const ctx=c.getContext('2d');if(!ctx)return out('CONTEXT','UNAVAILABLE');
+                  console.warn('lazysh.qr.capture:before_draw');
                   try {ctx.drawImage(v,0,0,c.width,c.height);} catch {return out('DRAW','FAILED');}
+                  console.warn('lazysh.qr.capture:after_draw');
+                  console.warn('lazysh.qr.capture:before_encode');
                   let png;try {png=c.toDataURL('image/png');} catch {return out('ENCODE','FAILED');}
+                  console.warn('lazysh.qr.capture:after_encode');
                   const length=Math.min(png.length,1000000);
+                  console.warn('lazysh.qr.capture:return');
                   return png.length<=262166?out('COMPLETE','SAVED',length,png):out('ENCODED_LIMIT','LIMIT',length);
-                })()""") { value -> result.set(value); completed.countDown() }
+                })()""") { value ->
+                    android.util.Log.w("LazyshQrCapture", "lazysh.qr.capture:callback_entry")
+                    result.set(value); completed.countDown()
+                }
             }
             diagnostic.stage = QrCaptureStage.CALLBACK
             if (!completed.await(diagnostic.budgetMs, TimeUnit.MILLISECONDS)) {
