@@ -2,11 +2,12 @@ import {LocalUiError} from './i18n/localError';
 import {t,uiI18n} from './i18n/core';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Host, TransportMode } from "./bridge";
 import type {DesktopMux} from './useDesktopLaunch';
 import {aboutLocales} from './test/aboutData';
+import {tmuxChatReply,tmuxChatSource} from './test/tmuxChat';
 vi.mock('../package.json',()=>({default:{version:'2.3.4'}}));
 
 const mocks = vi.hoisted(() => ({
@@ -118,6 +119,32 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it.each(['plain','tmux'] as const)('offers explicit terminal input only on an actual %s Chat session and targets the exact display',async kind=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'plain-control'});mocks.api.attachTmux.mockResolvedValue({sessionId:'retained-display'});
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'work',windows:[]}]});
+    if(command==='agent_transcript')return Promise.resolve({schemaVersion:1,agent:'claude',messages:[],nextOffset:0,hasMore:false});
+    if(command==='tmux_chat')return tmuxChatReply(command,args);
+    return Promise.resolve(false);
+  });
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  if(kind==='tmux'){
+    await user.click(screen.getByRole('button',{name:'Sessions'}));await user.click(await screen.findByRole('button',{name:'Attach work'}));
+    await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
+  }
+  await user.click(screen.getByRole('button',{name:'Transcript'}));await user.type(await screen.findByLabelText('Transcript path'),tmuxChatSource.path);await user.click(screen.getByRole('button',{name:'Open transcript'}));
+  await screen.findByRole('button',{name:t('chatRefreshMessages')});
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);
+  if(kind==='plain'){expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();return;}
+  await user.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));const input=screen.getByRole('region',{name:t('chatTerminalTitle')});
+  await within(input).findByText('Agent work');expect(within(input).getByText('dev@home.local')).toBeTruthy();expect(within(input).getByText('Home / work')).toBeTruthy();
+  expect(mocks.invoke).toHaveBeenCalledWith('tmux_chat',{sessionId:'retained-display',action:{kind:'snapshot'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  await user.click(within(input).getByRole('button',{name:t('chatTerminalConfirm')}));await user.type(screen.getByLabelText('Draft for this terminal'),'explicit input');
+  await user.click(within(input).getByRole('button',{name:t('chatTerminalSend')}));await within(input).findByText(t('chatTerminalSent'));
+  expect(mocks.invoke).toHaveBeenCalledWith('tmux_chat',expect.objectContaining({sessionId:'retained-display',action:expect.objectContaining({kind:'input',source:tmuxChatSource,operation:1,input:{kind:'send',text:'explicit input'}})}),{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
 const reportedAgent={sessionId:'opaque-claude-row',agent:'Claude Code',project:'/project',state:'working',updatedAt:'2026-10-24T19:30:00Z',summary:'Reported work',paneId:'%7',eventCount:1};
