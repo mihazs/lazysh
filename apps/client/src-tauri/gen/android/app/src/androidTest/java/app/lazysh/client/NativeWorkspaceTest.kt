@@ -112,6 +112,9 @@ class NativeWorkspaceTest {
         var snapshotReturned: Long? = null
         var snapshotAvailable = false
 
+        fun settledBeforeDeadline(): Boolean =
+            lastPollMatched == true && lastPollReturned?.let { it < deadline } == true
+
         fun report(now: Long): JSONObject {
             fun elapsed(at: Long?): Any = at?.let { TimeUnit.NANOSECONDS.toMillis(it - started) } ?: JSONObject.NULL
             val boundary = when {
@@ -219,7 +222,8 @@ class NativeWorkspaceTest {
                 val matched = evaluate(scenario, typed, remainingMillis) == "true"
                 timing.lastPollReturned = System.nanoTime()
                 timing.lastPollMatched = matched
-                if (matched) break
+                // A late renderer callback cannot establish a match within the shared budget.
+                if (timing.settledBeforeDeadline()) break
                 Thread.sleep(50)
             }
         } catch (failure: Throwable) {
@@ -302,6 +306,22 @@ class NativeWorkspaceTest {
         for (key in allowed - setOf("phase", "boundary")) {
             val value = injection.get(key)
             assertTrue("Timing metadata is finite and cannot hold input content", value == JSONObject.NULL || value is Number || value is Boolean)
+        }
+    }
+
+    @Test fun nativeTypingRequiresAnExactMatchObservedStrictlyBeforeTheOriginalDeadline() {
+        val origin = 123_000_000L
+        val deadline = origin + TimeUnit.SECONDS.toNanos(5)
+        val timing = TypingTiming(origin, deadline)
+        assertTrue("An absent poll cannot settle input", !timing.settledBeforeDeadline())
+        timing.lastPollMatched = true
+        assertTrue("A missing observation time cannot settle input", !timing.settledBeforeDeadline())
+        for (offset in listOf(-1L, 0L, 1L)) {
+            timing.lastPollReturned = deadline + offset
+            timing.lastPollMatched = true
+            assertEquals("Exact-match deadline offset=$offset", offset < 0, timing.settledBeforeDeadline())
+            timing.lastPollMatched = false
+            assertTrue("An unmatched poll cannot settle input", !timing.settledBeforeDeadline())
         }
     }
 
