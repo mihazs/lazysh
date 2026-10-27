@@ -154,14 +154,14 @@ The default view is an append-record browser. Claude sidechain, team, and meta r
 
 The app's transcript view includes an editable **Draft for this terminal** composer. **Stage in terminal** (or Ctrl/Command-Enter after IME composition ends) moves the draft into the composer for that existing SSH terminal. Review the intended live agent pane there before using **Paste draft**. Staging does not send a prompt, launch an agent, or establish that the manually selected transcript belongs to the current pane. Permissions, plans, questions and stop requests remain live-terminal actions until their exact runtime mapping is verified. **Open terminal** returns to that terminal without staging text.
 
-Claude views on an existing native tmux attachment also offer explicit
+Supported Chat views on an existing native tmux attachment also offer explicit
 **Send to terminal** and **Request stop** after confirming the connected host,
-tmux session/window and pane. Send accepts one UTF-8 line up to 4 KiB plus Enter;
-Request stop sends Escape. The running agent remains unverified, and a tmux
+tmux session/window and pane. Send accepts UTF-8 text up to 4 KiB plus Enter;
+multiline text and tabs use the existing bounded tmux paste path. Request stop sends Escape. The running agent remains unverified, and a tmux
 acknowledgement does not prove provider receipt or that a process stopped. Stage
-remains the default and the fallback for other drafts/agents/multiplexers.
+remains the default and the fallback for other drafts, unsupported agents and multiplexers.
 Already admitted input cannot be recalled by closing the view, and uncertainty
-never causes an automatic resend. See the [destination and lifetime contract](chat-terminal-input.md).
+never causes an automatic resend. See the [destination and lifetime contract](chat-terminal-input.md). The closed 17-reader extension includes Hermes/OpenCode database-session selectors in confirmation authority; it does not establish a live agent or provider association.
 
 ### Claude recorded tool errors
 

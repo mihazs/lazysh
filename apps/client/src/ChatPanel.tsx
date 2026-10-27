@@ -1,4 +1,4 @@
-import ChatTerminalInput,{type ClaudeTerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
+import ChatTerminalInput,{validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
@@ -166,8 +166,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     checkpointed?: boolean;
     inlineImages?: boolean;
   }>();
-  const terminalSource=useMemo<ClaudeTerminalSource|undefined>(()=>opened?.agent==='claude'
-    ? Object.freeze({agent:'claude',path:opened.path,view:opened.view==='conversation'?'conversation':'records',inlineImages:!!opened.inlineImages}) : undefined,[opened]);
+  const terminalSource=useMemo<TerminalSource|undefined>(()=>{
+    if(!opened)return;
+    const source={agent:opened.agent,path:opened.path,view:opened.view??'records',inlineImages:!!opened.inlineImages,
+      ...(['hermes','opencode'].includes(opened.agent)?{transcriptSessionId:opened.transcriptSessionId}:{})};
+    return validTerminalSource(source)?Object.freeze(source):undefined;
+  },[opened]);
+  const terminalInputKey=JSON.stringify([previewSource,transcriptSessionId]);
   const [messages, setMessages] = useState<Message[]>([]);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
   useEffect(()=>{if(preview && !previewRetained)setPreview(undefined);},[preview,previewRetained]);
@@ -187,7 +192,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const followable = conversation || recorded;
   const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;
   const selectedPath=reportedMatches?path:path.trim();
-  const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && selectedPath===opened.path && (canIncludeImages&&inlineImages)===!!opened.inlineImages;
+  const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && selectedPath===opened.path && (!['hermes','opencode'].includes(agent) || transcriptSessionId===opened.transcriptSessionId) && (canIncludeImages&&inlineImages)===!!opened.inlineImages;
   const canFollow = followable && sourceMatches;
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
@@ -533,7 +538,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         <p>{t("chatDraftExplanation")}</p>
         <div className="button-row"><button type="submit" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>{onOpenTerminal && <button type="button" onClick={onOpenTerminal}>{t("chatOpenTerminal")}</button>}<button type="button" disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}>{t("chatClearDraft")}</button></div>
         {terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
-          key={`${previewSource}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput}
+          key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput}
           access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
           onSent={(text,revision)=>{
             if(draftRevision.current===revision){draftRevision.current++;setDraft(current=>current===text?'':current);setDraftStatus('');}

@@ -1,7 +1,7 @@
 # Confirmed terminal input
 
-The native `tmux_chat` command adds an explicit terminal destination to a Claude
-recorded view. It does not establish that the recorded file and a running Claude
+The native `tmux_chat` command adds an explicit terminal destination to a supported
+recorded Chat view. It does not establish that the recorded file and a running agent
 process are the same session. It never launches an agent or uses a provider API.
 Without a verified display-owned tmux binding, ordinary terminal input and Stage
 remain the fallback. Herdr, Zellij and plain shells are outside this first slice.
@@ -21,10 +21,27 @@ alongside navigation's bounded human-readable session/window labels and a pane
 index for confirmation. Labels and the connected host name help users choose;
 they never replace internal identity checks. PID, TTY and lease internals do not
 belong in the product confirmation.
-`bind` requires that destination plus a bounded Claude source context (literal
-path, Records/conversation view and image option). It replaces any prior receipt
+`bind` requires that destination plus a bounded reader source context (literal
+agent/path, Records/conversation view and image option). It replaces any prior receipt
 with an ephemeral receipt owned by the original access lease. Nothing is saved
 to configuration, restored, or automatically rebound.
+
+The closed reader IDs are `claude`, `codex`, `pi`, `omp`, `hermes`, `opencode`,
+`copilot`, `qoder-ide`, `kimi`, `jcode`, `droid`, `cursor`, `omo`, `devin-atif`,
+`amp-json`, `grok-acp` and `antigravity-jsonl`. This includes explicitly selected
+record/export formats; it does not make them verified live-process integrations.
+Gemini/Qwen's hook-only tier and unknown IDs retain the TUI fallback.
+
+Records are supported for every reader. Conversation is supported for Claude and
+Grok; recorded images retain the existing Claude Records/conversation and
+Grok/Codex Records limits. Other option combinations fail closed. Hermes and
+OpenCode additionally require their exact database `transcriptSessionId`, bounded
+to 256 UTF-8 bytes without control characters. Other readers must omit that field;
+explicit null is rejected. The original Claude four-field IPC remains readable.
+The literal selector is never trimmed, guessed or replaced on retry. Editing the
+selector, including A→B→A in the same database, retires the old confirmation and
+late result; choose and confirm again. Continuation reads retain matching
+authority, while explicitly opening a source always requires new confirmation.
 
 `input` supplies that same receipt/source and the exact next operation number.
 One native input may be pending per binding. Duplicate or regressing operations,
@@ -105,7 +122,10 @@ The existing owned fixture uses temporary loopback SSH credentials and isolated
 tmux namespaces. It exercises overlapping pane IDs, another displayed client,
 literal UTF-8/Enter/Escape bytes, retained workload identity, duplicate operations,
 source/lease/mode/synchronization/EOF retirement and controlled interleavings
-after preflight and before dequeue. Its workload is synthetic `cat`, not Claude.
+after preflight and before dequeue. Each of the 17 closed reader contexts sends
+literal text/Enter and Escape through that same retained client and workload;
+changed database selectors are rejected. Its workload is synthetic `cat`, not
+any of the 17 agent runtimes.
 These checks are not automatically run merely because the ignored case exists.
 Actual provider, native WebView, GUI and physical-device acceptance are separate.
 
