@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Resolve Tauri's native application version from the synchronized client manifest, fixing Android and Apple mobile generators falling back to unrelated version defaults. Application identifiers, stored data, protocols and permissions are unchanged.
+
 - Keep retained transcript-discovery validation alerts in the current interface language without repeating discovery. Raw host diagnostics, transcript validation and request ownership are unchanged.
 
 - Keep retained recorded-usage validation, transcript discovery and continuity errors in the current interface language without repeating requests. Raw host diagnostics, parser rules, metrics and defaults are unchanged.
