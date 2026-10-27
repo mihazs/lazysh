@@ -55,24 +55,36 @@ class NativeWorkspaceTest {
         return null
     }
 
-    private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String {
+    private fun dispatchEvaluationIfPresent(root: View, expression: String, receive: (String) -> Unit): Boolean {
+        val web = webView(root) ?: return false
+        web.evaluateJavascript(expression) { receive(it) }
+        return true
+    }
+
+    private fun evaluateIfPresent(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String? {
         val result = AtomicReference<String>()
         val completed = CountDownLatch(1)
+        var dispatched = false
         scenario.onActivity { activity ->
-            val web = requireNotNull(webView(activity.window.decorView))
-            web.evaluateJavascript(expression) { value -> result.set(value); completed.countDown() }
+            dispatched = dispatchEvaluationIfPresent(activity.window.decorView, expression) { value ->
+                result.set(value); completed.countDown()
+            }
         }
+        if (!dispatched) return null
         assertTrue("WebView evaluation timed out", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
         return result.get()
     }
+
+    private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String =
+        requireNotNull(evaluateIfPresent(scenario, expression, timeoutMillis))
 
     private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         while (true) {
             val native = NativeActivityFixture.readiness(scenario)
-            if (native.ready && evaluate(scenario, expression) == "true") return
-            val error = evaluate(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
-            assertTrue("Native workspace failed at $stage: $error", error == "\"\"")
+            if (native.ready && evaluateIfPresent(scenario, expression) == "true") return
+            val error = evaluateIfPresent(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
+            assertTrue("Native workspace failed at $stage: $error", error == null || error == "\"\"")
             if (System.nanoTime() >= deadline) {
                 throw AssertionError("Native workspace not ready at $stage: $native; windows=${NativeActivityFixture.windowDiagnostics()}")
             }
@@ -214,6 +226,43 @@ class NativeWorkspaceTest {
             // Metadata must never replace the original assertion/type/cause.
             runCatching { failure.addSuppressed(AssertionError("Native typing timing: ${timing.report(System.nanoTime())}")) }
             throw failure
+        }
+    }
+
+    @Test fun documentEvaluationCanWaitForAWebViewInsertedAfterTheNativeRoot() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val pageReady = CountDownLatch(1)
+        val evaluated = CountDownLatch(1)
+        val result = AtomicReference<String>()
+        lateinit var root: android.widget.FrameLayout
+        var web: WebView? = null
+        try {
+            instrumentation.runOnMainSync {
+                root = android.widget.FrameLayout(instrumentation.targetContext)
+                assertTrue("An existing native root is not a document", !dispatchEvaluationIfPresent(root, "true") {
+                    throw AssertionError("Missing WebView must not dispatch JavaScript")
+                })
+                val owned = WebView(instrumentation.targetContext)
+                web = owned
+                owned.settings.javaScriptEnabled = true
+                owned.webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) { pageReady.countDown() }
+                }
+                root.addView(owned)
+                owned.loadData("<!doctype html><title>owned evaluation fixture</title>", "text/html", "UTF-8")
+            }
+            assertTrue("Owned native WebView did not load", pageReady.await(5, TimeUnit.SECONDS))
+            instrumentation.runOnMainSync {
+                assertTrue("An inserted descendant must receive evaluation", dispatchEvaluationIfPresent(root, "1===1") {
+                    result.set(it); evaluated.countDown()
+                })
+            }
+            assertTrue("Owned native WebView did not evaluate", evaluated.await(5, TimeUnit.SECONDS))
+            assertEquals("true", result.get())
+        } finally {
+            instrumentation.runOnMainSync {
+                web?.let { root.removeView(it); it.destroy() }
+            }
         }
     }
 
