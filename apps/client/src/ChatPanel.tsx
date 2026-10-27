@@ -1,3 +1,5 @@
+import AttachmentPanel from './AttachmentPanel';
+import {shellPath} from './attachment';
 import ChatTerminalInput,{validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
@@ -182,8 +184,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<UiErrorCause>("");
   const [draft, setDraft] = useState("");
+  const [attachmentOpen,setAttachmentOpen]=useState(false);
+  const currentSession=useRef(sessionId);currentSession.current=sessionId;
   const draftRevision=useRef(0);
-  const [draftStatus, setDraftStatus] = useState<"" | "chatDraftTooLong" | "chatDraftStaged">("");
+  const [draftStatus, setDraftStatus] = useState<"" | "chatDraftTooLong" | "chatDraftStaged" | "chatAttachmentTooLong">("");
   const composing = useRef(false);
   const [compositionActive,setCompositionActive]=useState(false);
   const request = useRef(0);
@@ -197,14 +201,14 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
-    draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
+    setAttachmentOpen(false);draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
     setOpened(undefined); setMessages([]); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
   useEffect(() => {setFollowing(false); followRef.current = false; request.current++;}, [agent,path,view,transcriptSessionId,inlineImages]);
   useEffect(() => {
-    if (!access.current()) {setFollowing(false); followRef.current = false; request.current++;}
+    if (!access.current()) {setAttachmentOpen(false);setFollowing(false); followRef.current = false; request.current++;}
   }, [accessState.epoch,access]);
   useEffect(() => {
     const visibility = () => {
@@ -533,6 +537,16 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
               : t("chatRefreshMessages")}
         </button>
       )}
+      <button type="button" disabled={!access.current()} aria-expanded={attachmentOpen} onClick={()=>setAttachmentOpen(value=>!value)}>{t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')}</button>
+      {attachmentOpen && access.current() && <div>
+        <p>{t('chatAttachmentScope')}</p>
+        <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={path=>{
+          if(!mounted.current || !access.current() || currentSession.current!==sessionId || composing.current)return;
+          const next=draft?`${draft}\n${shellPath(path)}`:shellPath(path);
+          if(next.length>65536){setDraftStatus('chatAttachmentTooLong');return;}
+          draftRevision.current++;setDraft(next);setDraftStatus('');setAttachmentOpen(false);
+        }}/>
+      </div>}
       <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
         <label>{t("chatDraftLabel")}<textarea rows={4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} /></label>
         <p>{t("chatDraftExplanation")}</p>
