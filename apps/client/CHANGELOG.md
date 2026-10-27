@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 0.2.1
+
+### Patch Changes
+
+- 0e21551: Keep retained transcript validation and read alerts in the current interface language without repeating reads or altering raw host diagnostics.
+- @lazysh/common@0.2.1
+  - @lazysh/display-idle@0.2.1
+  - @lazysh/et-transport@0.2.1
+  - @lazysh/mosh-transport@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes
