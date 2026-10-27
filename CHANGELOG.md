@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep retained native access-status and unlock errors in the current interface language without repeating authentication checks, ready acknowledgements or protected workspace mounts. Access policy and defaults are unchanged.
+
 - Add explicit confirmed Chat input for original guarded Herdr terminals. Stage remains default; preparation candidates are retired on cancellation or context changes, uncertain input is never retried, and acknowledgements establish queue admission rather than agent execution.
 
 - Add the native guarded-Herdr SSH prerequisite: consume private startup credentials before display output and bind explicit terminal preparations to the original connection and access proof. Frontend Herdr Chat controls remain disabled; unsupported builds keep ordinary attachment, and uncertain guarded starts are not retried automatically.

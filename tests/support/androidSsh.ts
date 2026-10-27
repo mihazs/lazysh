@@ -217,19 +217,23 @@ export class SshFixture {
 // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
 export async function packageExitInfo(adb:string,serial:string) {
   const records:{timestamp:string;pid:number;reason:number;subreason:number;status:number}[]=[];
+  const shape={serviceHeader:false,recordHeaders:0,timestampRows:0,ownedProcessRows:0};
   const owned=new OwnedProcess(adb,['-s',serial,'shell','dumpsys','activity','exit-info','app.lazysh.client'],undefined,process.env,false);
   let bytes=0,pending='',discardLine=false,overflow=false;
   let stamp:{timestamp:string;pid:number}|undefined;
   let header=false;
   const line=(value:string)=>{
-    if(/^\s*ApplicationExitInfo #[0-9]+:\s*$/.test(value)){header=true;stamp=undefined;return;}
+    if(value.trim()==='ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)')shape.serviceHeader=true;
+    if(/^\s*ApplicationExitInfo #[0-9]+:\s*$/.test(value)){shape.recordHeaders=Math.min(256,shape.recordHeaders+1);header=true;stamp=undefined;return;}
     const expectsTimestamp=header;
     header=false;
     const previous=stamp;
     stamp=undefined;
     const time=value.match(/^\s*timestamp=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) pid=([0-9]{1,10}) realUid=[0-9]+ packageUid=[0-9]+ definingUid=[0-9]+ user=[0-9]+\s*$/);
+    if(time)shape.timestampRows=Math.min(256,shape.timestampRows+1);
     if(expectsTimestamp && time){stamp={timestamp:time[1],pid:Number(time[2])};return;}
     const exit=value.match(/^\s*process=app\.lazysh\.client reason=([0-9]{1,2}) \([A-Z ()_]+\) subreason=([0-9]{1,3}) \([A-Z ()_]+\) status=(-?[0-9]{1,3})\s*$/);
+    if(exit)shape.ownedProcessRows=Math.min(256,shape.ownedProcessRows+1);
     if(exit && previous && records.length<8)records.push({...previous,reason:Number(exit[1]),subreason:Number(exit[2]),status:Number(exit[3])});
   };
   owned.child.stdout!.on('data',(data:Buffer)=>{
@@ -243,8 +247,39 @@ export async function packageExitInfo(adb:string,serial:string) {
   try {
     await owned.finish('owned package exit inspection',5000);
     if(pending && !discardLine)line(pending);
-    return {state:overflow?'overflow':records.length?'available':'empty',records:overflow?[]:records};
-  } catch {return {state:'unavailable',records:[]};}
+    return {state:overflow?'overflow':records.length?'available':'empty',shape,records:overflow?[]:records};
+  } catch {return {state:'unavailable',shape,records:[]};}
+}
+
+// Only observations of the explicitly selected emulator; no raw command output is retained.
+export async function emulatorContinuity(adb:string,serial:string,reverse:string|undefined,targetPort:number) {
+  const summary:{connection:string;process:string;mainPids:number[];reverse:string}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created'};
+  await Promise.all((['connection','process','reverse'] as const).map(async kind=>{
+    if(kind==='reverse' && !reverse)return;
+    const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:['reverse','--list'];
+    const owned=new OwnedProcess(adb,['-s',serial,...args],undefined,process.env,false);
+    let output='',overflow=false;
+    owned.child.stdout!.on('data',(data:Buffer)=>{
+      if(Buffer.byteLength(output)+data.length>4096){overflow=true;output='';return;}
+      if(!overflow)output+=String(data);
+    });
+    try {
+      await owned.finish('owned emulator continuity',1000);
+      if(overflow){summary[kind]='overflow';return;}
+      if(kind==='connection')summary.connection=['device','offline','unknown'].includes(output.trim())?output.trim():'unrecognized';
+      if(kind==='process') {
+        const tokens=output.trim().split(/\s+/);
+        if(tokens.length<=16 && tokens.every(pid=>/^[1-9][0-9]{0,9}$/.test(pid))) {summary.mainPids=tokens.map(Number);summary.process='present';}
+        else summary.process='unrecognized';
+      }
+      // ADB reverse:list-forward uses the literal 'host' label on the selected transport.
+      if(kind==='reverse')summary.reverse=output.split(/\r?\n/).some(row=>{
+        const fields=row.trim().split(/\s+/);
+        return fields.length===3 && fields[0]==='host' && fields[1]===`tcp:${reverse}` && fields[2]===`tcp:${targetPort}`;
+      })?'present':'missing';
+    } catch {summary[kind]='unavailable';}
+  }));
+  return summary;
 }
 
 type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH';
@@ -287,7 +322,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     primary=true;
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
-      const summary=await packageExitInfo(adb,serial);
+      const [exitInfo,continuity]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port)]);
+      const summary={...exitInfo,continuity};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}

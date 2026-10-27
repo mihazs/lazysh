@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 0.9.1
+
+### Patch Changes
+
+- 1f4aa2b: Translate retained access-status and unlock failures when the interface language changes without repeating native access work or changing access policy.
+- @lazysh/common@0.9.1
+  - @lazysh/display-idle@0.9.1
+  - @lazysh/et-transport@0.9.1
+  - @lazysh/mosh-transport@0.9.1
+
 ## 0.9.0
 
 ### Minor Changes

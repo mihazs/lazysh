@@ -1,4 +1,5 @@
 //! Controlled shutdown discriminators, not a claim about the hosted failure's cause.
+use super::retirement::completed_transport;
 use super::*;
 use std::{
     future::{poll_fn, Future},
