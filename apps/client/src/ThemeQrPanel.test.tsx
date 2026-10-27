@@ -20,6 +20,7 @@ const scan=()=>fireEvent.click(screen.getByRole('button',{name:t('themeQrScan')}
 const pendingCleanup:Array<()=>void>=[];
 function held<T>(fallback:T,capture:(finish:(value:T)=>void)=>void){return new Promise<T>(resolve=>{capture(resolve);pendingCleanup.push(()=>resolve(fallback));});}
 beforeEach(()=>{
+  vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE',undefined);
   authority();vi.mocked(isTauri).mockReturnValue(true);vi.mocked(invoke).mockReset().mockResolvedValue(payload);
   stop=vi.fn();media={getTracks:()=>[{stop}]} as unknown as MediaStream;
   permission=vi.fn().mockResolvedValue(media);Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:permission}});
@@ -30,7 +31,34 @@ beforeEach(()=>{
   draw=vi.fn();vi.spyOn(HTMLCanvasElement.prototype,'getContext').mockReturnValue({drawImage:draw} as unknown as CanvasRenderingContext2D);
   vi.spyOn(HTMLCanvasElement.prototype,'toBlob').mockImplementation(callback=>callback(frame()));
 });
-afterEach(async()=>{cleanup();await act(async()=>{while(pendingCleanup.length)pendingCleanup.shift()!();});vi.restoreAllMocks();vi.useRealTimers();await uiI18n.changeLanguage('en');});
+afterEach(async()=>{cleanup();await act(async()=>{while(pendingCleanup.length)pendingCleanup.shift()!();});vi.restoreAllMocks();vi.unstubAllEnvs();vi.useRealTimers();await uiI18n.changeLanguage('en');});
+it.each([undefined,'true','0'])('camera diagnostics are disabled unless explicitly enabled, value=%s',async(value)=>{
+  vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE',value);const logger=vi.spyOn(console,'warn');
+  mount();scan();await screen.findByRole('heading',{name:'QR fixture'});
+  expect(logger).not.toHaveBeenCalled();expect(permission).toHaveBeenCalledExactlyOnceWith({audio:false,video:{facingMode:{ideal:'environment'}}});
+});
+it.each([false,true])('camera markers retain successful behavior when optional logger throws=%s',async(throws)=>{
+  vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');
+  const logger=vi.spyOn(console,'warn').mockImplementation(()=>{if(throws)throw new Error('private logger failure sentinel');});
+  const view=mount();scan();await screen.findByRole('heading',{name:'QR fixture'});
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached']]);
+  expect(invoke).toHaveBeenCalledTimes(1);expect(view.apply).not.toHaveBeenCalled();expect(stop).toHaveBeenCalledTimes(1);
+});
+it('a rejected real camera request logs only fixed request/rejected boundaries',async()=>{
+  vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');const logger=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  permission.mockRejectedValue(new Error('private device identity sentinel'));mount();scan();await screen.findByRole('alert');
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera rejected']]);
+  expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled();
+});
+it('pending camera work logs resolution after cancellation without attaching or publishing',async()=>{
+  vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');const logger=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  let finish!:(value:MediaStream)=>void;permission.mockImplementation(()=>held(media,resolve=>{finish=resolve;}));mount();scan();
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request']]);fireEvent.click(screen.getByRole('button',{name:t('themeQrCancel')}));
+  await act(async()=>finish(media));
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera stale']]);
+  expect((screen.getByLabelText(t('themeQrVideo')) as HTMLVideoElement).srcObject).not.toBe(media);
+  expect(stop).toHaveBeenCalledTimes(1);expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled();
+});
 it('selected PNG goes only through the native decoder and explicit existing preview/apply path',async()=>{
   const view=mount();const draft=screen.getByLabelText('Theme JSON or share code');fireEvent.change(draft,{target:{value:'unfinished manual draft'}});
   expect(permission).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled();choose();

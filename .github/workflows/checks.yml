@@ -186,6 +186,7 @@ jobs:
     timeout-minutes: 30
     env:
       ANDROID_SERIAL: emulator-5580
+      VITE_LAZYSH_QR_CAMERA_TRACE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

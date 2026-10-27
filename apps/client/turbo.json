@@ -5,7 +5,7 @@
       "cache": false,
       "passThroughEnv": ["USER", "LAZYSH_TEST_OWNED_MAC_CLIPBOARD"]
     },
-    "build": { "cache": false },
+    "build": { "cache": false, "env": ["VITE_LAZYSH_QR_CAMERA_TRACE"] },
     "test:parakeet-product": {
       "cache": false,
       "passThroughEnv": ["LAZYSH_PARAKEET_TEST_ARCHIVE", "LAZYSH_PARAKEET_SOURCE_ARCHIVE", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL"]
