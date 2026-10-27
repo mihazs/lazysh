@@ -134,6 +134,8 @@ fn owned_processes(
             let pid = fields.next()?.parse::<u32>().ok()?;
             let parent = fields.next()?.parse::<u32>().ok()?;
             let group = fields.next()?.parse::<u32>().ok()?;
+            let state = fields.next()?;
+            let flags = fields.next()?;
             let name = fields.collect::<Vec<_>>().join(" ");
             let image = std::path::Path::new(&name).file_name();
             let owned = !name.is_empty() && group == leader
@@ -153,7 +155,7 @@ fn owned_processes(
             };
             owned.then_some((
                 pid,
-                format!("pid={pid} ppid={parent} pgid={group} executable={name} observed_image_role={role}"),
+                format!("pid={pid} ppid={parent} pgid={group} state={state} flags={flags} executable={name} observed_image_role={role}"),
             ))
         })
         .collect()
@@ -169,7 +171,7 @@ fn simulator_inventory(leader: u32) -> Command {
         "-g",
         &leader.to_string(),
         "-o",
-        "pid=,ppid=,pgid=,comm=",
+        "pid=,ppid=,pgid=,state=,flags=,comm=",
     ]);
     inventory
 }
@@ -618,9 +620,9 @@ fn timeout_observer_sees_owned_process_before_its_group_is_reaped() {
 
 #[test]
 fn diagnostic_inventory_excludes_unowned_groups_and_unrelated_children() {
-    let inventory = "100 1 100 /usr/bin/simctl\n101 100 100 /tmp/ios_peer-one\n\
-                     102 100 777 /tmp/ios_peer-one\n103 100 100 /usr/bin/unrelated\n\
-                     104 999 100 /tmp/ios_peer-one\n105 1 105 private-unowned-process\n";
+    let inventory = "100 1 100 S 40000004 /usr/bin/simctl\n101 100 100 R 4 /tmp/ios_peer-one\n\
+                     102 100 777 R 4 /tmp/ios_peer-one\n103 100 100 S 4 /usr/bin/unrelated\n\
+                     104 999 100 T 4 /tmp/ios_peer-one\n105 1 105 S 4 private-unowned-process\n";
     let processes = owned_processes(inventory, 100, std::path::Path::new("/tmp/ios_peer-one"));
     assert_eq!(processes.len(), 2);
     assert_eq!(processes[0].0, 100);
@@ -635,7 +637,13 @@ fn diagnostic_inventory_selects_only_the_owned_group_without_global_selectors() 
     let arguments: Vec<_> = command.get_args().collect();
     assert_eq!(
         arguments,
-        ["-x", "-g", "12345", "-o", "pid=,ppid=,pgid=,comm="]
+        [
+            "-x",
+            "-g",
+            "12345",
+            "-o",
+            "pid=,ppid=,pgid=,state=,flags=,comm="
+        ]
     );
 }
 
@@ -648,7 +656,7 @@ fn diagnostic_image_roles_require_observed_exact_names_and_owned_relationships()
         ("/tmp/lazysh_mosh_transport-owned", "native"),
         ("/tmp/xcrun-lookalike", "unknown"),
     ] {
-        let inventory = format!("100 1 100 {name}\n101 100 100 {}\n102 1 777 /usr/bin/simctl\n103 100 100 /usr/bin/xcrun\n", executable.display());
+        let inventory = format!("100 1 100 S 40000004 {name}\n101 100 100 R 4 {}\n102 1 777 S 4 /usr/bin/simctl\n103 100 100 S 4 /usr/bin/xcrun\n", executable.display());
         let processes = owned_processes(&inventory, 100, executable);
         assert_eq!(processes.len(), 2);
         assert!(
@@ -661,6 +669,34 @@ fn diagnostic_image_roles_require_observed_exact_names_and_owned_relationships()
         assert!(!processes.iter().any(|(pid, _)| [102, 103].contains(pid)));
     }
     assert!(owned_processes("100 1 100\n", 100, executable).is_empty());
+}
+
+#[test]
+fn diagnostic_process_state_survives_a_failed_empty_sample_without_interpretation() {
+    use std::os::unix::process::ExitStatusExt;
+    let executable = std::path::Path::new("ios_peer-owned");
+    let sample = std::process::Output {
+        status: std::process::ExitStatus::from_raw(9),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    };
+    for (state, flags) in [("T", "40000004"), ("U", "40000"), ("R+", "0")] {
+        let inventory = format!("100 1 100 {state} {flags} /usr/bin/simctl\n");
+        let owned = owned_processes(&inventory, 100, executable);
+        assert_eq!(owned.len(), 1);
+        let report = sample_report(100, &owned[0].1, &sample, true, &[]);
+        assert!(report.contains("observed_image_role=simctl"));
+        assert!(report.contains(&format!("state={state} flags={flags}")));
+        assert!(report.contains("deadline_exceeded=true"));
+        assert!(report.len() <= 6144);
+    }
+    for malformed in [
+        "100 1 100 T\n",
+        "100 1 100 T 4\n",
+        "100 1 not-a-group T 4 /usr/bin/simctl\n",
+    ] {
+        assert!(owned_processes(malformed, 100, executable).is_empty());
+    }
 }
 
 #[test]
