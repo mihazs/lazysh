@@ -1,3 +1,4 @@
+// Modified by lazysh: optional guarded attach negotiation.
 use std::io;
 #[cfg(unix)]
 use std::io::IsTerminal as _;
@@ -133,6 +134,7 @@ pub(super) struct HandshakeResult {
     pub(super) encoding: RenderEncoding,
     pub(super) endpoint_methods: Option<Vec<String>>,
     pub(super) endpoint_capabilities: Option<Vec<String>>,
+    pub(super) guarded: Option<crate::guarded_input::protocol::Registered>,
 }
 
 pub(crate) fn probe_endpoint_negotiation(
@@ -149,13 +151,21 @@ pub(crate) fn probe_endpoint_negotiation(
         false,
         false,
         false,
-        false, // This probe uses an SSH bridge, not a shared filesystem.
+        HandshakeTransport {
+            local: false,
+            guard_nonce: None,
+        }, // SSH bridge, no shared filesystem.
     )
     .map_err(io::Error::other)?;
     Ok(super::endpoint::EndpointNegotiation::new(
         handshake.endpoint_methods.unwrap_or_default(),
         handshake.endpoint_capabilities.unwrap_or_default(),
     ))
+}
+
+pub(super) struct HandshakeTransport {
+    pub(super) local: bool,
+    pub(super) guard_nonce: Option<crate::guarded_input::protocol::Secret>,
 }
 
 /// Performs the client→server handshake.
@@ -175,19 +185,25 @@ pub(super) fn do_handshake(
     endpoint_keybindings: bool,
     mouse_capture: bool,
     surface_active: bool,
-    local_transport: bool,
+    transport: HandshakeTransport,
 ) -> Result<HandshakeResult, ClientError> {
+    let HandshakeTransport {
+        local: local_transport,
+        guard_nonce,
+    } = transport;
     stream
         .set_nonblocking(false)
         .map_err(ClientError::ConnectionFailed)?;
 
+    let guard_deadline = guard_nonce
+        .as_ref()
+        .map(|_| std::time::Instant::now() + Duration::from_secs(2));
     let endpoint_shell = shell_surface_size.is_some();
     let hello = if let Some(surface_size) = shell_surface_size {
         let hello = EndpointClientHello {
-            generation: ENDPOINT_PROTOCOL_GENERATION,
+            guard_nonce: guard_nonce.clone(),
             cell_width_px,
             cell_height_px,
-            surface_size,
             pixel_mouse: exact_cell_size && cfg!(unix),
             direct_graphics: direct_graphics_capability(
                 local_transport,
@@ -201,10 +217,7 @@ pub(super) fn do_handshake(
             surface_reuse: true,
             surface_delta: true,
             surface_scroll: true,
-            snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
-            surface_codecs: vec![SURFACE_CODEC_V1.into()],
-            input_codecs: vec![INPUT_CODEC_V1.into()],
-            blob_codecs: vec![BLOB_CODEC_V1.into()],
+            ..EndpointClientHello::core(surface_size)
         };
         ClientMessage::EndpointControl {
             kind: ENDPOINT_HELLO_KIND.into(),
@@ -230,17 +243,26 @@ pub(super) fn do_handshake(
     } else {
         handshake_read_timeout()
     };
-    set_handshake_recv_timeout(
-        stream,
-        Some(read_timeout),
-        "client handshake read timeout unavailable",
-    )?;
-    let welcome: ServerMessage = protocol::read_message(stream, MAX_FRAME_SIZE)?;
-    set_handshake_recv_timeout(
-        stream,
-        None,
-        "failed to clear client handshake read timeout",
-    )?;
+    let welcome: ServerMessage = if let Some(deadline) = guard_deadline {
+        crate::guarded_input::deadline::read(
+            stream,
+            deadline,
+            crate::guarded_input::protocol::MAX_ENVELOPE,
+        )?
+    } else {
+        set_handshake_recv_timeout(
+            stream,
+            Some(read_timeout),
+            "client handshake read timeout unavailable",
+        )?;
+        let welcome = protocol::read_message(stream, MAX_FRAME_SIZE)?;
+        set_handshake_recv_timeout(
+            stream,
+            None,
+            "failed to clear client handshake read timeout",
+        )?;
+        welcome
+    };
 
     if endpoint_shell {
         let ServerMessage::EndpointControl { kind, data } = welcome else {
@@ -284,7 +306,47 @@ pub(super) fn do_handshake(
             server_version = %welcome.server_version,
             "endpoint handshake succeeded"
         );
+        let guarded = if let Some(nonce) = guard_nonce {
+            use crate::guarded_input::protocol::{
+                decode, Registered, CAPABILITY, MAX_ENVELOPE, REGISTERED_KIND,
+            };
+            if !welcome.capabilities.iter().any(|value| value == CAPABILITY) {
+                return Err(ClientError::ConnectionFailed(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "guard_unavailable",
+                )));
+            }
+            let reply: ServerMessage = crate::guarded_input::deadline::read(
+                stream,
+                guard_deadline.ok_or_else(|| {
+                    ClientError::ConnectionFailed(io::Error::other("guard_unavailable"))
+                })?,
+                MAX_ENVELOPE,
+            )?;
+            let ServerMessage::EndpointControl { kind, data } = reply else {
+                return Err(ClientError::ConnectionFailed(io::Error::other(
+                    "guard_unavailable",
+                )));
+            };
+            if kind != REGISTERED_KIND {
+                return Err(ClientError::ConnectionFailed(io::Error::other(
+                    "guard_unavailable",
+                )));
+            }
+            let registered: Registered = decode(data.as_bytes()).map_err(|_| {
+                ClientError::ConnectionFailed(io::Error::other("guard_unavailable"))
+            })?;
+            if registered.nonce != nonce {
+                return Err(ClientError::ConnectionFailed(io::Error::other(
+                    "guard_unavailable",
+                )));
+            }
+            Some(registered)
+        } else {
+            None
+        };
         return Ok(HandshakeResult {
+            guarded,
             encoding: RenderEncoding::SemanticFrame,
             endpoint_methods: Some(welcome.methods),
             endpoint_capabilities: Some(welcome.capabilities),
@@ -302,6 +364,7 @@ pub(super) fn do_handshake(
             }
             info!(version, ?encoding, "handshake succeeded");
             Ok(HandshakeResult {
+                guarded: None,
                 encoding,
                 endpoint_methods: None,
                 endpoint_capabilities: None,

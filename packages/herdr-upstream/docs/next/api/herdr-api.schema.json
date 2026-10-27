@@ -1695,6 +1695,44 @@
           ],
           "type": "object"
         },
+        "CancelPreparationParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "ownership": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "preparation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "boot",
+            "ownership",
+            "preparation"
+          ],
+          "type": "object"
+        },
+        "ClaimParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "ticket": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            }
+          },
+          "required": [
+            "boot",
+            "ticket"
+          ],
+          "type": "object"
+        },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
           "properties": {
@@ -2148,6 +2186,70 @@
           },
           "required": [
             "match_event"
+          ],
+          "type": "object"
+        },
+        "Input": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "send",
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "request_stop",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "InputParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "input": {
+              "$ref": "#/schemas/request/$defs/Input"
+            },
+            "operation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "receipt": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "boot",
+            "receipt",
+            "source",
+            "operation",
+            "input"
           ],
           "type": "object"
         },
@@ -3814,6 +3916,32 @@
             }
           ]
         },
+        "PrepareParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "ownership": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "preparation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "boot",
+            "ownership",
+            "preparation",
+            "source"
+          ],
+          "type": "object"
+        },
         "ProductAnnouncementDismissParams": {
           "properties": {
             "id": {
@@ -3855,6 +3983,41 @@
             "version"
           ],
           "type": "object"
+        },
+        "ReleaseParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "receipt": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            }
+          },
+          "required": [
+            "boot",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        "RevokeParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            },
+            "ownership": {
+              "$ref": "#/schemas/request/$defs/Secret"
+            }
+          },
+          "required": [
+            "boot",
+            "ownership"
+          ],
+          "type": "object"
+        },
+        "Secret": {
+          "type": "string"
         },
         "ServerLiveHandoffParams": {
           "properties": {
@@ -4681,6 +4844,102 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "oneOf": [
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.claim",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ClaimParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.cancel_preparation",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/CancelPreparationParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.revoke",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RevokeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.prepare",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PrepareParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.input",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/InputParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "lazysh.guard.release",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ReleaseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "method": {
@@ -7784,6 +8043,28 @@
           ],
           "type": "string"
         },
+        "OwnershipReply": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/success_response/$defs/Secret"
+            },
+            "last_preparation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ownership": {
+              "$ref": "#/schemas/success_response/$defs/Secret"
+            }
+          },
+          "required": [
+            "boot",
+            "ownership",
+            "last_preparation"
+          ],
+          "type": "object"
+        },
         "PaneDirection": {
           "enum": [
             "left",
@@ -9149,6 +9430,36 @@
             }
           ]
         },
+        "PreparedReply": {
+          "additionalProperties": false,
+          "properties": {
+            "boot": {
+              "$ref": "#/schemas/success_response/$defs/Secret"
+            },
+            "preparation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "receipt": {
+              "$ref": "#/schemas/success_response/$defs/Secret"
+            },
+            "source": {
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/schemas/success_response/$defs/Target"
+            }
+          },
+          "required": [
+            "boot",
+            "receipt",
+            "target",
+            "preparation",
+            "source"
+          ],
+          "type": "object"
+        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -9167,6 +9478,38 @@
         },
         "ResponseResult": {
           "oneOf": [
+            {
+              "properties": {
+                "owner": {
+                  "$ref": "#/schemas/success_response/$defs/OwnershipReply"
+                },
+                "type": {
+                  "const": "guard_claimed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "owner"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "guard": {
+                  "$ref": "#/schemas/success_response/$defs/PreparedReply"
+                },
+                "type": {
+                  "const": "guard_prepared",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "guard"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "capabilities": {
@@ -10418,6 +10761,9 @@
             }
           ]
         },
+        "Secret": {
+          "type": "string"
+        },
         "ServerCapabilities": {
           "properties": {
             "detached_server_daemon": {
@@ -10570,6 +10916,76 @@
             "focused",
             "pane_count",
             "agent_status"
+          ],
+          "type": "object"
+        },
+        "Target": {
+          "additionalProperties": false,
+          "properties": {
+            "pane": {
+              "type": "string"
+            },
+            "runtime_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tab": {
+              "type": "string"
+            },
+            "terminal": {
+              "type": "string"
+            },
+            "viewport": {
+              "$ref": "#/schemas/success_response/$defs/Viewport"
+            },
+            "workspace": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "tab",
+            "pane",
+            "terminal",
+            "runtime_generation",
+            "viewport"
+          ],
+          "type": "object"
+        },
+        "Viewport": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "width": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
           ],
           "type": "object"
         },

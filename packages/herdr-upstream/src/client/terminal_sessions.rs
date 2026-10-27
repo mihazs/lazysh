@@ -1,3 +1,4 @@
+// Modified by lazysh: ordinary handshake requests no guarded authority.
 use std::io::{self, BufRead, Write as _};
 
 use base64::Engine;
@@ -100,7 +101,10 @@ fn connect_terminal_session_stream(
         false,
         false,
         true,
-        true,
+        super::handshake::HandshakeTransport {
+            local: true,
+            guard_nonce: None,
+        },
     ) {
         Ok(handshake) if handshake.encoding == RenderEncoding::TerminalAnsi => {}
         Ok(handshake) => {

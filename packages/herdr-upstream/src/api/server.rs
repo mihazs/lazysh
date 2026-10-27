@@ -1,3 +1,7 @@
+// Modified by lazysh: bounded private guarded request handling and cancellation.
+#[path = "../../../herdr-guard/api.rs"]
+mod guarded_input;
+
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -344,6 +348,9 @@ fn handle_connection_with_stop(
         }
     };
 
+    if crate::guarded_input::protocol::is_guard_method(&request.method) {
+        return guarded_input::serve(stream, request, line.len(), api_tx, running);
+    }
     let request_id = request.id.clone();
     let method = api_method_name(&request.method);
     let changes_ui = request_changes_ui(&request);
@@ -564,6 +571,12 @@ fn handle_request(
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
+        Method::GuardClaim(_) => "lazysh.guard.claim",
+        Method::GuardCancelPreparation(_) => "lazysh.guard.cancel_preparation",
+        Method::GuardRevoke(_) => "lazysh.guard.revoke",
+        Method::GuardPrepare(_) => "lazysh.guard.prepare",
+        Method::GuardInput(_) => "lazysh.guard.input",
+        Method::GuardRelease(_) => "lazysh.guard.release",
         Method::Ping(_) => "ping",
         Method::ServerStop(_) => "server.stop",
         Method::ServerLiveHandoff(_) => "server.live_handoff",
@@ -742,10 +755,18 @@ fn read_initial_request_line_with_limits(
     result
 }
 
+#[cfg(test)]
+fn test_stream_pair_at(path: PathBuf) -> (LocalStream, LocalStream, PathBuf) {
+    use interprocess::local_socket::traits::Listener as _;
+    let listener = crate::ipc::bind_local_listener(&path).unwrap();
+    let client = crate::ipc::connect_local_stream(&path).unwrap();
+    let server = listener.accept().unwrap();
+    (client, server, path)
+}
+
 #[cfg(all(test, windows))]
 mod windows_tests {
     use super::*;
-    use interprocess::local_socket::traits::Listener as _;
     use std::io::{BufRead, BufReader};
     use std::sync::mpsc::{self, Receiver};
 
@@ -755,10 +776,7 @@ mod windows_tests {
             std::process::id(),
             Instant::now().elapsed().as_nanos()
         ));
-        let listener = crate::ipc::bind_local_listener(&path).unwrap();
-        let client = crate::ipc::connect_local_stream(&path).unwrap();
-        let server = listener.accept().unwrap();
-        (client, server, path)
+        test_stream_pair_at(path)
     }
 
     fn spawn_connection(
@@ -967,12 +985,16 @@ fn write_text_line_allow_disconnect(stream: &mut LocalStream, value: &str) -> st
     }
 }
 
+fn encode_json_line<T: serde::Serialize>(value: &T) -> std::io::Result<String> {
+    serde_json::to_string(value)
+        .map_err(|err| std::io::Error::other(format!("failed to encode json: {err}")))
+}
+
 fn write_json_line<T: serde::Serialize>(
     stream: &mut LocalStream,
     value: &T,
 ) -> std::io::Result<()> {
-    let encoded = serde_json::to_string(value)
-        .map_err(|err| std::io::Error::other(format!("failed to encode json: {err}")))?;
+    let encoded = encode_json_line(value)?;
     write_text_line(stream, &encoded)
 }
 
@@ -980,8 +1002,7 @@ fn write_json_line_allow_disconnect<T: serde::Serialize>(
     stream: &mut LocalStream,
     value: &T,
 ) -> std::io::Result<()> {
-    let encoded = serde_json::to_string(value)
-        .map_err(|err| std::io::Error::other(format!("failed to encode json: {err}")))?;
+    let encoded = encode_json_line(value)?;
     write_text_line_allow_disconnect(stream, &encoded)
 }
 
@@ -1112,7 +1133,6 @@ fn error_response_json(id: String, code: &str, message: String) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use interprocess::local_socket::traits::Listener as _;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Read};
     use std::os::unix::fs::PermissionsExt;
@@ -1142,10 +1162,93 @@ mod tests {
 
     fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, PathBuf) {
         let path = unique_test_path(name);
-        let listener = crate::ipc::bind_local_listener(&path).unwrap();
-        let client = crate::ipc::connect_local_stream(&path).unwrap();
-        let server = listener.accept().unwrap();
-        (client, server, path)
+        test_stream_pair_at(path)
+    }
+
+    fn write_request(client: &mut LocalStream, request: &[u8]) {
+        client.write_all(request).unwrap();
+        client.write_all(b"\n").unwrap();
+        client.flush().unwrap();
+    }
+
+    fn run_connection(server: LocalStream, api_tx: &ApiRequestSender) {
+        handle_connection(
+            server,
+            api_tx,
+            &EventHub::default(),
+            &Arc::new(AtomicBool::new(true)),
+            None,
+        )
+        .unwrap();
+    }
+
+    fn read_response(client: &mut LocalStream) -> serde_json::Value {
+        serde_json::from_str(&read_line(client)).unwrap()
+    }
+
+    fn request_response(
+        name: &str,
+        request: &[u8],
+    ) -> (
+        serde_json::Value,
+        mpsc::UnboundedReceiver<ApiRequestMessage>,
+    ) {
+        let (mut client, server, _path) = local_stream_pair(name);
+        let (api_tx, api_rx) = mpsc::unbounded_channel();
+        write_request(&mut client, request);
+        run_connection(server, &api_tx);
+        (read_response(&mut client), api_rx)
+    }
+
+    fn expect_subscription_started(client: &mut LocalStream) -> serde_json::Value {
+        let ack = read_response(client);
+        assert_eq!(ack["result"]["type"], "subscription_started");
+        ack
+    }
+
+    fn read_error_response(client: LocalStream) -> ErrorResponse {
+        let mut response = String::new();
+        BufReader::new(client)
+            .read_to_string(&mut response)
+            .unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    fn spawn_connection_completion(
+        server: LocalStream,
+        api_tx: ApiRequestSender,
+        event_hub: EventHub,
+        running: &Arc<AtomicBool>,
+    ) -> (
+        std::sync::mpsc::Receiver<std::io::Result<()>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let server_running = Arc::clone(running);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let server_thread = std::thread::spawn(move || {
+            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
+            done_tx.send(result).unwrap();
+        });
+        (done_rx, server_thread)
+    }
+
+    type SubscriptionFixture = (
+        LocalStream,
+        Arc<AtomicBool>,
+        std::sync::mpsc::Receiver<std::io::Result<()>>,
+        std::thread::JoinHandle<()>,
+        PathBuf,
+        mpsc::UnboundedReceiver<ApiRequestMessage>,
+    );
+
+    fn start_subscription(name: &str, request: &[u8]) -> SubscriptionFixture {
+        let (api_tx, api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (mut client, server, path) = local_stream_pair(name);
+        write_request(&mut client, request);
+        let running = Arc::new(AtomicBool::new(true));
+        let (done_rx, server_thread) =
+            spawn_connection_completion(server, api_tx, EventHub::default(), &running);
+        (client, running, done_rx, server_thread, path, api_rx)
     }
 
     #[test]
@@ -1346,26 +1449,9 @@ mod tests {
             "pane.graphics.clear",
             "pane.graphics.stream",
         ] {
-            let (mut client, server, _path) = local_stream_pair("removed-pane-graphics");
-            let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
-            writeln!(
-                client,
-                "{{\"id\":\"removed\",\"method\":\"{method}\",\"params\":{{}}}}"
-            )
-            .unwrap();
-            client.flush().unwrap();
-
-            handle_connection(
-                server,
-                &api_tx,
-                &EventHub::default(),
-                &Arc::new(AtomicBool::new(true)),
-                None,
-            )
-            .unwrap();
-
-            let response = read_line(&mut client);
-            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            let request = format!("{{\"id\":\"removed\",\"method\":\"{method}\",\"params\":{{}}}}");
+            let (response, mut api_rx) =
+                request_response("removed-pane-graphics", request.as_bytes());
             assert_eq!(response["id"], "removed", "{method}");
             assert_eq!(response["error"]["code"], "unknown_method", "{method}");
             assert!(response["error"]["message"]
@@ -1378,24 +1464,10 @@ mod tests {
 
     #[test]
     fn unrelated_unknown_method_retains_standard_invalid_request_response() {
-        let (mut client, server, _path) = local_stream_pair("unknown-api-request");
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
-        client
-            .write_all(b"{\"id\":\"unknown\",\"method\":\"nope\",\"params\":{}}\n")
-            .unwrap();
-        client.flush().unwrap();
-
-        handle_connection(
-            server,
-            &api_tx,
-            &EventHub::default(),
-            &Arc::new(AtomicBool::new(true)),
-            None,
-        )
-        .unwrap();
-
-        let response = read_line(&mut client);
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let (response, mut api_rx) = request_response(
+            "unknown-api-request",
+            br#"{"id":"unknown","method":"nope","params":{}}"#,
+        );
         assert_eq!(response["id"], "unknown");
         assert_eq!(response["error"]["code"], "invalid_request");
         assert!(api_rx.try_recv().is_err());
@@ -1403,24 +1475,10 @@ mod tests {
 
     #[test]
     fn ordinary_api_request_still_uses_normal_connection_path() {
-        let (mut client, server, _path) = local_stream_pair("ordinary-api-request");
-        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
-        client
-            .write_all(b"{\"id\":\"ordinary\",\"method\":\"ping\",\"params\":{}}\n")
-            .unwrap();
-        client.flush().unwrap();
-
-        handle_connection(
-            server,
-            &api_tx,
-            &EventHub::default(),
-            &Arc::new(AtomicBool::new(true)),
-            None,
-        )
-        .unwrap();
-
-        let response = read_line(&mut client);
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let (response, _api_rx) = request_response(
+            "ordinary-api-request",
+            br#"{"id":"ordinary","method":"ping","params":{}}"#,
+        );
         assert_eq!(response["id"], "ordinary");
         assert_eq!(response["result"]["type"], "pong");
     }
@@ -1521,11 +1579,10 @@ mod tests {
     fn dispatched_request_reports_response_write_completion() {
         let (api_tx, mut api_rx) = mpsc::unbounded_channel();
         let (mut client, server, _path) = local_stream_pair("write-ack");
-        client
-            .write_all(br#"{"id":"req_write","method":"workspace.list","params":{}}"#)
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
+        write_request(
+            &mut client,
+            br#"{"id":"req_write","method":"workspace.list","params":{}}"#,
+        );
 
         let running = Arc::new(AtomicBool::new(true));
         let server_running = Arc::clone(&running);
@@ -1562,17 +1619,11 @@ mod tests {
             spawn_pane_get_responder(crate::api::schema::AgentStatus::Blocked);
 
         let (mut client, server, _path) = local_stream_pair("api-events-wait-initial");
-        client
-            .write_all(br#"{"id":"wait_1","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":1000}}"#)
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
+        write_request(&mut client, br#"{"id":"wait_1","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":1000}}"#);
 
-        let running = Arc::new(AtomicBool::new(true));
-        let event_hub = EventHub::default();
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        run_connection(server, &api_tx);
 
-        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        let response = read_response(&mut client);
         assert_eq!(response["id"], "wait_1");
         assert_eq!(response["result"]["type"], "wait_matched");
         assert_eq!(
@@ -1589,17 +1640,11 @@ mod tests {
             spawn_pane_get_responder(crate::api::schema::AgentStatus::Unknown);
 
         let (mut client, server, _path) = local_stream_pair("api-events-wait-timeout");
-        client
-            .write_all(br#"{"id":"wait_2","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":30}}"#)
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
+        write_request(&mut client, br#"{"id":"wait_2","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":30}}"#);
 
-        let running = Arc::new(AtomicBool::new(true));
-        let event_hub = EventHub::default();
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        run_connection(server, &api_tx);
 
-        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        let response = read_response(&mut client);
         assert_eq!(response["id"], "wait_2");
         assert_eq!(response["error"]["code"], "timeout");
         assert_eq!(
@@ -1651,11 +1696,7 @@ mod tests {
         });
 
         let (mut client, server, _path) = local_stream_pair("wait-close");
-        client
-            .write_all(br#"{"id":"wait_close","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"done"},"timeout_ms":500}}"#)
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
+        write_request(&mut client, br#"{"id":"wait_close","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"done"},"timeout_ms":500}}"#);
 
         let running = Arc::new(AtomicBool::new(true));
         handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
@@ -1704,20 +1745,11 @@ mod tests {
         });
 
         let (mut client, server, _path) = local_stream_pair("api-wait-disconnect");
-        client
-            .write_all(br#"{"id":"req_wait","method":"pane.wait_for_output","params":{"pane_id":"pane_1","source":"recent","match":{"type":"substring","value":"never"}}}"#)
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
+        write_request(&mut client, br#"{"id":"req_wait","method":"pane.wait_for_output","params":{"pane_id":"pane_1","source":"recent","match":{"type":"substring","value":"never"}}}"#);
 
         let running = Arc::new(AtomicBool::new(true));
-        let server_running = Arc::clone(&running);
-        let event_hub = EventHub::default();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
-            done_tx.send(result).unwrap();
-        });
+        let (done_rx, server_thread) =
+            spawn_connection_completion(server, api_tx, EventHub::default(), &running);
 
         first_read_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         drop(client);
@@ -1754,11 +1786,7 @@ mod tests {
             let running = Arc::new(AtomicBool::new(true));
             handle_connection(server, &api_tx, &EventHub::default(), &running, None).unwrap();
 
-            let mut response = String::new();
-            BufReader::new(client)
-                .read_to_string(&mut response)
-                .unwrap();
-            let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+            let response = read_error_response(client);
             assert_eq!(response.id, expected_id, "{request}");
             assert_eq!(response.error.code, "invalid_request");
             assert!(response.error.message.starts_with("invalid request: "));
@@ -1808,11 +1836,7 @@ mod tests {
         drop(api_tx);
         responder.join().unwrap();
 
-        let mut response = String::new();
-        BufReader::new(client)
-            .read_to_string(&mut response)
-            .unwrap();
-        let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+        let response = read_error_response(client);
         assert_eq!(response.id, "panefold:events");
         assert_eq!(response.error.code, "pane_not_found");
         assert_eq!(response.error.message, "pane w999:p9 not found");
@@ -1821,28 +1845,12 @@ mod tests {
 
     #[test]
     fn subscriptions_stop_when_client_disconnects() {
-        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
-        let (mut client, server, _path) = local_stream_pair("api-sub-disconnect");
-        client
-            .write_all(
-                br#"{"id":"sub_1","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
-            )
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
+        let (mut client, _running, done_rx, server_thread, _path, _api_rx) = start_subscription(
+            "api-sub-disconnect",
+            br#"{"id":"sub_1","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
+        );
 
-        let running = Arc::new(AtomicBool::new(true));
-        let server_running = Arc::clone(&running);
-        let event_hub = EventHub::default();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
-            done_tx.send(result).unwrap();
-        });
-
-        let ack = read_line(&mut client);
-        let ack: serde_json::Value = serde_json::from_str(&ack).unwrap();
-        assert_eq!(ack["result"]["type"], "subscription_started");
+        let ack = expect_subscription_started(&mut client);
         assert_eq!(ack["id"], "sub_1");
 
         drop(client);
@@ -1854,28 +1862,12 @@ mod tests {
 
     #[test]
     fn subscriptions_stop_when_server_shuts_down() {
-        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
-        let (mut client, server, _path) = local_stream_pair("api-sub-shutdown");
-        client
-            .write_all(
-                br#"{"id":"sub_2","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
-            )
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
+        let (mut client, running, done_rx, server_thread, _path, _api_rx) = start_subscription(
+            "api-sub-shutdown",
+            br#"{"id":"sub_2","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
+        );
 
-        let running = Arc::new(AtomicBool::new(true));
-        let server_running = Arc::clone(&running);
-        let event_hub = EventHub::default();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
-            done_tx.send(result).unwrap();
-        });
-
-        let ack = read_line(&mut client);
-        let ack: serde_json::Value = serde_json::from_str(&ack).unwrap();
-        assert_eq!(ack["result"]["type"], "subscription_started");
+        expect_subscription_started(&mut client);
 
         running.store(false, Ordering::Relaxed);
 

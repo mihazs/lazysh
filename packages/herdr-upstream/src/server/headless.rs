@@ -1,3 +1,4 @@
+// Modified by lazysh: optional original-client guarded-input actor integration.
 //! Headless server mode — runs the herdr event loop without a real terminal.
 //!
 //! The server:
@@ -13,6 +14,9 @@
 //! - Continues running after client disconnect
 //! - Handles stale socket cleanup, explicit server stop, minimum terminal size,
 //!   and pane spawn failure during restore
+
+#[path = "../../../herdr-guard/server.rs"]
+mod guarded_input_protocol;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -195,6 +199,8 @@ pub struct HeadlessServer {
     client_socket_path: PathBuf,
     client_socket_identity: SocketFileIdentity,
     clients: HashMap<u64, ClientConnection>,
+    guarded_input: Option<crate::guarded_input::state::Registry>,
+    guard_replies: HashMap<u64, guarded_input_protocol::PendingReply>,
     native_graphics: native_graphics::NativeGraphics,
     #[cfg(unix)]
     next_client_id: u64,
@@ -325,13 +331,53 @@ impl HeadlessServer {
         #[cfg(windows)]
         spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
 
+        let boot_id = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        Ok(Self::with_bound_socket(
+            app,
+            config_diagnostics,
+            api_tx,
+            api_server,
+            #[cfg(unix)]
+            listener,
+            client_path,
+            client_socket_identity,
+            should_quit,
+            (server_event_tx, server_event_rx),
+            crate::guarded_input::state::Registry::new().ok(),
+            boot_id,
+        ))
+    }
+
+    // Shared initialization after callers bind their own socket and channels.
+    // Tests retain isolated paths, inert guard state and deterministic boot IDs.
+    fn with_bound_socket(
+        app: app::App,
+        config_diagnostics: &[String],
+        api_tx: Option<api::ApiRequestSender>,
+        api_server: Option<api::ServerHandle>,
+        #[cfg(unix)] listener: LocalListener,
+        client_path: PathBuf,
+        client_socket_identity: SocketFileIdentity,
+        should_quit: Arc<AtomicBool>,
+        events: (mpsc::Sender<ServerEvent>, mpsc::Receiver<ServerEvent>),
+        guarded_input: Option<crate::guarded_input::state::Registry>,
+        boot_id: String,
+    ) -> Self {
+        let (server_event_tx, server_event_rx) = events;
         let server_keybindings = app_keybindings(&app);
         let headless_size = app.state.headless_size;
         let (server_config_diagnostic, server_config_diagnostic_without_keybindings) =
             server_config_diagnostic_summaries(config_diagnostics);
         #[cfg(not(unix))]
         let _ = api_tx;
-        Ok(Self {
+        Self {
             app,
             #[cfg(unix)]
             api_tx,
@@ -341,20 +387,15 @@ impl HeadlessServer {
             client_socket_path: client_path,
             client_socket_identity,
             clients: HashMap::new(),
+            guarded_input,
+            guard_replies: HashMap::new(),
             native_graphics: Default::default(),
             #[cfg(unix)]
             next_client_id: 1,
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
-            client_shell_boot_id: format!(
-                "{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ),
+            client_shell_boot_id: boot_id,
             sent_window_title: None,
             api_window_title: None,
             server_keybindings,
@@ -374,7 +415,7 @@ impl HeadlessServer {
             should_quit,
             server_event_rx,
             server_event_tx,
-        })
+        }
     }
 
     /// Runs the headless server event loop until shutdown.
@@ -406,6 +447,7 @@ impl HeadlessServer {
         let mut needs_graphics_render = false;
 
         loop {
+            self.guard_expire();
             crate::render_prof::event("loop.tick");
             crate::render_prof::flush_if_due();
             self.app.reap_finished_detached_processes();
@@ -753,6 +795,16 @@ impl HeadlessServer {
         );
     }
 
+    fn reset_headless_foreground_state(&mut self) {
+        self.effective_size = self.headless_size;
+        self.app.state.outer_terminal_focus = None;
+        self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
+        self.sync_runtime_view_geometry();
+        let server_keybindings = self.server_keybindings.clone();
+        apply_keybindings(&mut self.app, &server_keybindings);
+        self.sync_visible_server_config_diagnostic(false);
+    }
+
     fn sync_foreground_client_state(&mut self) {
         self.app.pixel_mouse_available = self.foreground_client_id.is_some_and(|id| {
             self.clients
@@ -760,24 +812,12 @@ impl HeadlessServer {
                 .is_some_and(|client| client.pixel_mouse)
         });
         let Some(client_id) = self.foreground_client_id else {
-            self.effective_size = self.headless_size;
-            self.app.state.outer_terminal_focus = None;
-            self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
-            self.sync_runtime_view_geometry();
-            let server_keybindings = self.server_keybindings.clone();
-            apply_keybindings(&mut self.app, &server_keybindings);
-            self.sync_visible_server_config_diagnostic(false);
+            self.reset_headless_foreground_state();
             return;
         };
         let Some(client) = self.clients.get(&client_id) else {
             self.foreground_client_id = None;
-            self.effective_size = self.headless_size;
-            self.app.state.outer_terminal_focus = None;
-            self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
-            self.sync_runtime_view_geometry();
-            let server_keybindings = self.server_keybindings.clone();
-            apply_keybindings(&mut self.app, &server_keybindings);
-            self.sync_visible_server_config_diagnostic(false);
+            self.reset_headless_foreground_state();
             return;
         };
 
@@ -896,6 +936,10 @@ impl HeadlessServer {
     }
 
     fn remove_client(&mut self, client_id: u64) -> bool {
+        self.guard_finish(client_id, Err("guard_stale"));
+        if let Some(guard) = &mut self.guarded_input {
+            guard.disconnected(client_id);
+        }
         self.disconnect_native_graphics(client_id);
         let disconnected_focus = self
             .clients
@@ -1052,6 +1096,24 @@ impl HeadlessServer {
             .cloned()
     }
 
+    fn attached_terminal_id(&self, client_id: u64) -> Option<&str> {
+        match &self.clients.get(&client_id)?.mode {
+            ClientConnectionMode::TerminalAttach { terminal_id } => Some(terminal_id),
+            _ => None,
+        }
+    }
+
+    fn terminal_state_by_string(
+        &self,
+        terminal_id: &str,
+    ) -> Option<&crate::terminal::TerminalState> {
+        self.app
+            .state
+            .terminals
+            .values()
+            .find(|terminal| terminal.id.as_str() == terminal_id)
+    }
+
     fn runtime_for_terminal_id_string(
         &self,
         terminal_id: &str,
@@ -1125,11 +1187,7 @@ impl HeadlessServer {
     ) -> bool {
         match target {
             protocol::ClientClipboardImageTarget::DirectTerminal => {
-                let Some(ClientConnection {
-                    mode: ClientConnectionMode::TerminalAttach { terminal_id },
-                    ..
-                }) = self.clients.get(&client_id)
-                else {
+                let Some(terminal_id) = self.attached_terminal_id(client_id) else {
                     return false;
                 };
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
@@ -1253,26 +1311,38 @@ impl HeadlessServer {
         Some(terminal_id)
     }
 
+    fn set_terminal_client_mode(
+        &mut self,
+        client_id: u64,
+        mode: ClientConnectionMode,
+    ) -> Option<((u16, u16), crate::kitty_graphics::HostCellSize)> {
+        let stamp = self.allocate_activity_stamp();
+        let client = self.clients.get_mut(&client_id)?;
+        let dimensions = client.terminal_size;
+        let cell_size = client.cell_size;
+        client.mode = mode;
+        client.render_state.reset_baseline();
+        client.last_activity = stamp;
+        if self.foreground_client_id == Some(client_id) {
+            self.promote_latest_remaining_client();
+        }
+        Some((dimensions, cell_size))
+    }
+
     fn observe_terminal_client(&mut self, client_id: u64, target: String) -> bool {
         let Some(terminal_id) = self.resolve_terminal_session_target(client_id, &target, "observe")
         else {
             return false;
         };
 
-        let stamp = self.allocate_activity_stamp();
-        let Some(client) = self.clients.get_mut(&client_id) else {
+        let Some(((cols, rows), _)) = self.set_terminal_client_mode(
+            client_id,
+            ClientConnectionMode::TerminalObserve {
+                terminal_id: terminal_id.clone(),
+            },
+        ) else {
             return false;
         };
-        let (cols, rows) = client.terminal_size;
-        client.mode = ClientConnectionMode::TerminalObserve {
-            terminal_id: terminal_id.clone(),
-        };
-        client.render_state.reset_baseline();
-        client.last_activity = stamp;
-        let was_foreground = self.foreground_client_id == Some(client_id);
-        if was_foreground {
-            self.promote_latest_remaining_client();
-        }
 
         info!(client_id, cols, rows, terminal_id = %terminal_id, "terminal observe client connected");
         true
@@ -1760,21 +1830,14 @@ impl HeadlessServer {
             }
         }
 
-        let stamp = self.allocate_activity_stamp();
-        let Some(client) = self.clients.get_mut(&client_id) else {
+        let Some(((cols, rows), cell_size)) = self.set_terminal_client_mode(
+            client_id,
+            ClientConnectionMode::TerminalAttach {
+                terminal_id: terminal_id.clone(),
+            },
+        ) else {
             return false;
         };
-        let (cols, rows) = client.terminal_size;
-        let cell_size = client.cell_size;
-        client.mode = ClientConnectionMode::TerminalAttach {
-            terminal_id: terminal_id.clone(),
-        };
-        client.render_state.reset_baseline();
-        client.last_activity = stamp;
-        let was_foreground = self.foreground_client_id == Some(client_id);
-        if was_foreground {
-            self.promote_latest_remaining_client();
-        }
 
         info!(client_id, cols, rows, terminal_id = %terminal_id, "terminal attach client connected");
         self.terminal_attach_owners
@@ -1797,6 +1860,35 @@ impl HeadlessServer {
             .is_some_and(|client| matches!(client.mode, ClientConnectionMode::TerminalPending))
     }
 
+    fn reject_connection_during_handoff(
+        &self,
+        writer: &crate::server::client_transport::ClientWriter,
+    ) -> bool {
+        if !self.handoff_in_progress {
+            return false;
+        }
+        if let Ok(message) = Self::frame_server_message(&ServerMessage::ServerShutdown {
+            reason: Some("live update in progress; reconnect after handoff completes".to_owned()),
+        }) {
+            let _ = writer.control.send(message);
+        }
+        true
+    }
+
+    fn shell_input_pixel_mouse(&self, client_id: u64) -> Option<bool> {
+        if self.handoff_in_progress
+            || !self
+                .clients
+                .get(&client_id)
+                .is_some_and(ClientConnection::is_active_shell_client)
+        {
+            return None;
+        }
+        Some(self.clients.get(&client_id).is_some_and(|client| {
+            client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
+        }))
+    }
+
     /// Handles a server event. Returns true if the event requires a re-render.
     fn handle_server_event(&mut self, ev: ServerEvent) -> bool {
         if self.handoff_in_progress && Self::ignore_client_event_during_handoff(&ev) {
@@ -1813,17 +1905,7 @@ impl HeadlessServer {
                 pixel_mouse,
                 writer,
             } => {
-                if self.handoff_in_progress {
-                    if let Ok(message) =
-                        Self::frame_server_message(&ServerMessage::ServerShutdown {
-                            reason: Some(
-                                "live update in progress; reconnect after handoff completes"
-                                    .to_owned(),
-                            ),
-                        })
-                    {
-                        let _ = writer.control.send(message);
-                    }
+                if self.reject_connection_during_handoff(&writer) {
                     return false;
                 }
                 info!(
@@ -1864,17 +1946,7 @@ impl HeadlessServer {
                 surface_scroll,
                 writer,
             } => {
-                if self.handoff_in_progress {
-                    if let Ok(message) =
-                        Self::frame_server_message(&ServerMessage::ServerShutdown {
-                            reason: Some(
-                                "live update in progress; reconnect after handoff completes"
-                                    .to_owned(),
-                            ),
-                        })
-                    {
-                        let _ = writer.control.send(message);
-                    }
+                if self.reject_connection_during_handoff(&writer) {
                     return false;
                 }
                 info!(
@@ -1964,6 +2036,12 @@ impl HeadlessServer {
                 connection.shell_agent_completions = Some(completion_projection);
                 connection.shell_agent_view = agent_view;
                 self.clients.insert(client_id, connection);
+                // The private registration acknowledgement must precede every
+                // projection/render message for this new machine attachment.
+                if !self.guard_startup_ack(client_id) {
+                    self.remove_client_and_resize_if_needed(client_id);
+                    return true;
+                }
                 if self.app.state.popup_pane.is_some() && self.popup_owner_tab_id.is_none() {
                     self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
                 }
@@ -2042,11 +2120,7 @@ impl HeadlessServer {
                     );
                     return false;
                 }
-                let Some(ClientConnection {
-                    mode: ClientConnectionMode::TerminalAttach { terminal_id },
-                    ..
-                }) = self.clients.get(&client_id)
-                else {
+                let Some(terminal_id) = self.attached_terminal_id(client_id) else {
                     return false;
                 };
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
@@ -2136,47 +2210,27 @@ impl HeadlessServer {
                     height_px: cell_height_px,
                 };
                 let pixel_mouse = pixel_mouse && observed.is_known();
-                let direct_terminal_id = if let Some(ClientConnection {
-                    mode: ClientConnectionMode::TerminalAttach { terminal_id },
-                    terminal_size,
-                    cell_size,
-                    pixel_mouse: client_pixel_mouse,
-                    render_state,
-                    ..
-                }) = self.clients.get_mut(&client_id)
-                {
-                    *terminal_size = (cols, rows);
-                    *cell_size = observed;
-                    *client_pixel_mouse = pixel_mouse;
-                    render_state.request_repaint();
-                    Some((terminal_id.clone(), *cell_size))
-                } else {
-                    None
+                let Some(client) = self.clients.get_mut(&client_id) else {
+                    return false;
                 };
-                if let Some((terminal_id, cell_size)) = direct_terminal_id {
-                    if let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) {
-                        runtime.resize(rows, cols, cell_size.width_px, cell_size.height_px);
+                let terminal_id = match &client.mode {
+                    ClientConnectionMode::TerminalAttach { terminal_id } => {
+                        Some(terminal_id.clone())
                     }
-                    return true;
+                    ClientConnectionMode::TerminalObserve { .. }
+                    | ClientConnectionMode::TerminalPending => None,
+                    _ => return false,
+                };
+                client.terminal_size = (cols, rows);
+                client.cell_size = observed;
+                client.pixel_mouse = pixel_mouse;
+                client.render_state.request_repaint();
+                if let Some(terminal_id) = terminal_id {
+                    if let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) {
+                        runtime.resize(rows, cols, observed.width_px, observed.height_px);
+                    }
                 }
-                if let Some(ClientConnection {
-                    mode:
-                        ClientConnectionMode::TerminalObserve { .. }
-                        | ClientConnectionMode::TerminalPending,
-                    terminal_size,
-                    cell_size,
-                    pixel_mouse: client_pixel_mouse,
-                    render_state,
-                    ..
-                }) = self.clients.get_mut(&client_id)
-                {
-                    *terminal_size = (cols, rows);
-                    *cell_size = observed;
-                    *client_pixel_mouse = pixel_mouse;
-                    render_state.request_repaint();
-                    return true;
-                }
-                false
+                true
             }
             ServerEvent::ClientShellResize {
                 client_id,
@@ -2314,17 +2368,9 @@ impl HeadlessServer {
                 pane_id,
                 events,
             } => {
-                if self.handoff_in_progress
-                    || !self
-                        .clients
-                        .get(&client_id)
-                        .is_some_and(ClientConnection::is_active_shell_client)
-                {
+                let Some(pixel_mouse) = self.shell_input_pixel_mouse(client_id) else {
                     return false;
-                }
-                let pixel_mouse = self.clients.get(&client_id).is_some_and(|client| {
-                    client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
-                });
+                };
                 let mut events = events;
                 let Some((workspace_index, runtime_pane_id)) = self.app.parse_pane_id(&pane_id)
                 else {
@@ -2355,13 +2401,9 @@ impl HeadlessServer {
                     ) else {
                         return false;
                     };
-                    let releases = events
-                        .into_iter()
-                        .filter(client_pane_input_releases_press)
-                        .collect::<Vec<_>>();
-                    if releases.is_empty() {
+                    let Some(releases) = client_shell_input_releases(events) else {
                         return false;
-                    }
+                    };
                     if let Some(client) = self.clients.get_mut(&client_id) {
                         client.track_shell_input(
                             ClientShellInputTarget::Pane(pane_id.clone()),
@@ -2401,17 +2443,9 @@ impl HeadlessServer {
                 terminal_id,
                 events,
             } => {
-                if self.handoff_in_progress
-                    || !self
-                        .clients
-                        .get(&client_id)
-                        .is_some_and(ClientConnection::is_active_shell_client)
-                {
+                let Some(pixel_mouse) = self.shell_input_pixel_mouse(client_id) else {
                     return false;
-                }
-                let pixel_mouse = self.clients.get(&client_id).is_some_and(|client| {
-                    client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
-                });
+                };
                 let mut events = events;
                 let Some(popup_terminal_id) = self
                     .app
@@ -2435,13 +2469,9 @@ impl HeadlessServer {
                     runtime.pixel_size(),
                 );
                 if self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id) {
-                    let releases = events
-                        .into_iter()
-                        .filter(client_pane_input_releases_press)
-                        .collect::<Vec<_>>();
-                    if releases.is_empty() {
+                    let Some(releases) = client_shell_input_releases(events) else {
                         return false;
-                    }
+                    };
                     if let Some(client) = self.clients.get_mut(&client_id) {
                         client.track_shell_input(
                             ClientShellInputTarget::Popup(terminal_id.clone()),
@@ -2567,6 +2597,21 @@ impl HeadlessServer {
                 );
                 navigation_changed | geometry_changed
             }
+            ServerEvent::GuardRegistration { client_id, nonce } => {
+                self.guard_register(client_id, nonce);
+                false
+            }
+            ServerEvent::GuardCommit { client_id, commit } => {
+                self.guard_commit(client_id, commit);
+                false
+            }
+            ServerEvent::GuardInvalid { client_id } => {
+                if let Some(registry) = &mut self.guarded_input {
+                    registry.revoke_client(client_id);
+                }
+                self.guard_finish(client_id, Err("guard_stale"));
+                false
+            }
             ServerEvent::ClientDetach { client_id } => {
                 info!(client_id, "client detached");
                 self.send_terminal_stream_detach_shutdown(client_id);
@@ -2631,12 +2676,7 @@ impl HeadlessServer {
             return None;
         }
         let target = self.app.resolve_agent_target(&params.target).ok()?;
-        let terminal = self
-            .app
-            .state
-            .terminals
-            .values()
-            .find(|terminal| terminal.id.as_str() == target.terminal_id)?;
+        let terminal = self.terminal_state_by_string(&target.terminal_id)?;
         if terminal.effective_known_agent().is_none()
             || terminal.state == crate::detect::AgentState::Idle
         {
@@ -2694,12 +2734,7 @@ impl HeadlessServer {
         {
             return None;
         }
-        let terminal = self
-            .app
-            .state
-            .terminals
-            .values()
-            .find(|terminal| terminal.id.as_str() == target.terminal_id)?;
+        let terminal = self.terminal_state_by_string(&target.terminal_id)?;
         if terminal.effective_known_agent().is_none()
             || terminal.state != crate::detect::AgentState::Idle
         {
@@ -2844,6 +2879,10 @@ impl HeadlessServer {
             return false;
         }
 
+        if crate::guarded_input::protocol::is_guard_method(&msg.request.method) {
+            self.guard_api(msg);
+            return false;
+        }
         let frozen_alt_screen_read = match self.alt_screen_read_conflict(&msg.request) {
             AltScreenReadConflict::None => None,
             AltScreenReadConflict::Frozen(snapshot) => Some(snapshot),
@@ -3290,6 +3329,20 @@ impl HeadlessServer {
     }
 }
 
+fn client_shell_input_releases(
+    events: Vec<protocol::ClientPaneInputEvent>,
+) -> Option<Vec<protocol::ClientPaneInputEvent>> {
+    let releases = events
+        .into_iter()
+        .filter(client_pane_input_releases_press)
+        .collect::<Vec<_>>();
+    if releases.is_empty() {
+        None
+    } else {
+        Some(releases)
+    }
+}
+
 fn client_pane_input_releases_press(event: &protocol::ClientPaneInputEvent) -> bool {
     matches!(
         event,
@@ -3344,35 +3397,7 @@ async fn sleep_until_or_pending(deadline: Option<Instant>) {
 }
 
 fn sanitize_notification_text(value: &str, max_chars: usize) -> Option<String> {
-    let mut sanitized = String::new();
-    let mut previous_space = false;
-    for ch in value.chars() {
-        let replacement = if ch == '\n' || ch == '\r' || ch == '\t' {
-            Some(' ')
-        } else if ch.is_control() {
-            None
-        } else {
-            Some(ch)
-        };
-        let Some(ch) = replacement else {
-            continue;
-        };
-        if ch.is_whitespace() {
-            if previous_space {
-                continue;
-            }
-            previous_space = true;
-            sanitized.push(' ');
-        } else {
-            previous_space = false;
-            sanitized.push(ch);
-        }
-        if sanitized.chars().count() >= max_chars {
-            break;
-        }
-    }
-    let sanitized = sanitized.trim().to_string();
-    (!sanitized.is_empty()).then_some(sanitized)
+    app::App::sanitized_notification_text(value, max_chars)
 }
 
 fn server_config_diagnostic_summaries(diagnostics: &[String]) -> (Option<String>, Option<String>) {

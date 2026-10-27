@@ -1,3 +1,4 @@
+// Modified by lazysh: optional guarded-input modules; upstream license retained.
 use std::io;
 
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
@@ -24,6 +25,8 @@ mod copy_mode;
 mod detect;
 mod events;
 use ghostty_vt as ghostty;
+#[path = "../../herdr-guard/mod.rs"]
+mod guarded_input;
 mod handoff_runtime;
 mod input;
 mod integration;
@@ -523,6 +526,7 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    let (args, guarded_attach) = guarded_input::startup::extract_flag(args)?;
     let (args, remote_launch) = match remote::extract_remote_args(&args) {
         Ok(parsed) => parsed,
         Err(err) => {
@@ -787,6 +791,10 @@ fn main() -> io::Result<()> {
 
     let loaded_config = config::Config::load();
     exit_if_nested_disabled(&loaded_config.config);
+
+    if guarded_attach {
+        return client::run_guarded_client();
+    }
 
     let saved_federation =
         client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());

@@ -40,9 +40,5 @@ pub type IosHandle<T> = std::marker::PhantomData<fn() -> T>;
 #[cfg(feature = "url")]
 pub mod urls;
 
-pub fn valid_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
+mod hex_digest;
+pub use hex_digest::valid_sha256;
