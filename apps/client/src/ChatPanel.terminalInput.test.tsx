@@ -44,14 +44,14 @@ it('enables finished IME input after a same-value composition end without dispat
   expect(screen.getByRole('button',{name:t('chatTerminalStop')})).toHaveProperty('disabled',false);
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByText(t('chatTerminalSent'));
 });
-it('does not clear an edited-away-and-back draft when a prior Send acknowledgement arrives',async()=>{
+it.each(['original','first\n\tsecond'])('preserves edited-away-and-back draft after delayed acknowledgement for %j',async text=>{
   await opened();await confirmed();let finish!:(value:unknown)=>void;
   vi.mocked(invoke).mockImplementation((command,args)=>command==='tmux_chat' && (args as {action:{kind:string}}).action.kind==='input'?new Promise(yes=>{finish=yes;}):command==='tmux_chat'?tmuxChatReply(command,args):Promise.resolve(page));
-  const draft=screen.getByLabelText('Draft for this terminal');fireEvent.change(draft,{target:{value:'original'}});
+  const draft=screen.getByLabelText('Draft for this terminal');fireEvent.change(draft,{target:{value:text}});
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await waitFor(()=>expect(finish).toBeTypeOf('function'));
-  fireEvent.change(draft,{target:{value:'new edit'}});fireEvent.change(draft,{target:{value:'original'}});
+  fireEvent.change(draft,{target:{value:'new edit'}});fireEvent.change(draft,{target:{value:text}});
   await act(async()=>{finish({kind:'delivered',nextOperation:2});});await screen.findByText(t('chatTerminalSent'));
-  expect(draft).toHaveProperty('value','original');expect(actions().filter(action=>action.kind==='input')).toHaveLength(1);
+  expect(draft).toHaveProperty('value',text);expect(actions().filter(action=>action.kind==='input')).toHaveLength(1);
 });
 it('retires on explicit Open starting, including a failed replacement, without changing continuation refresh authority',async()=>{
   await opened();await confirmed();expect(actions().filter(action=>action.kind==='bind')).toHaveLength(1);

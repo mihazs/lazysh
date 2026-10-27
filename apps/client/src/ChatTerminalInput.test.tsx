@@ -22,26 +22,26 @@ function fixture(overrides:Partial<ComponentProps<typeof ChatTerminalInput>>={})
   const props:ComponentProps<typeof ChatTerminalInput>={sessionId:'ssh-display',source,labels:{hostLabel:'Connected host',terminalLabel:'Agent terminal'},access:lease,invoke:bindProtectedInvoke(lease),draft:'  你好 😀  ',draftRevision:7,composing:{current:false},compositionActive:false,onSent:sent,...overrides};
   return {props,sent,view:render(<ChatTerminalInput {...props}/>)};
 }
-it('requires explicit snapshot and confirmation, displays only human destination labels, and sequences literal Send/Stop',async()=>{
-  const {sent}=fixture();expect(invoke).not.toHaveBeenCalled();await confirm();
+it.each(['  你好 😀  ', '  first\n\té; \'"$()#{pane_id}\\ 世界\nlast  '])('requires confirmation and sequences exact Send/Stop bytes for %j',async draft=>{
+  const {sent}=fixture({draft});expect(invoke).not.toHaveBeenCalled();expect(screen.getByText(t('chatTerminalPasteNote'))).toBeTruthy();await confirm();
   expect(screen.getByText('Agent terminal')).toBeTruthy();expect(screen.getByText('Agent work')).toBeTruthy();expect(screen.getByText('Claude workspace')).toBeTruthy();
   for(const opaque of [target.generation,target.sessionId,target.windowId,target.paneId,receipt])expect(screen.queryByText(opaque)).toBeNull();
   expect(actions()).toEqual([{kind:'snapshot'},{kind:'bind',destination:target,source}]);
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByText(t('chatTerminalSent'));
-  expect(actions()[2]).toEqual({kind:'input',receipt,source,operation:1,input:{kind:'send',text:'  你好 😀  '}});
-  expect(sent).toHaveBeenCalledExactlyOnceWith('  你好 😀  ',7);
+  expect(actions()[2]).toEqual({kind:'input',receipt,source,operation:1,input:{kind:'send',text:draft}});
+  expect(sent).toHaveBeenCalledExactlyOnceWith(draft,7);
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalStop')}));await screen.findByText(t('chatTerminalStopRequested'));
   expect(actions()[3]).toEqual({kind:'input',receipt,source,operation:2,input:{kind:'request_stop'}});
   expect(sent).toHaveBeenCalledTimes(1);
   expect(invoke).toHaveBeenLastCalledWith('tmux_chat',expect.anything(),{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
 });
-it('does not duplicate or automatically retry an uncertain input and retains draft authority only on exact acknowledgement',async()=>{
-  const {sent}=fixture();await confirm();let fail!:(error:unknown)=>void;
+it.each(['one line','first\n\tsecond'])('retains draft and never retries uncertain input for %j',async draft=>{
+  const {sent}=fixture({draft});await confirm();let fail!:(error:unknown)=>void;
   vi.mocked(invoke).mockImplementation((command,args)=>((args as {action:{kind:string}}).action.kind==='input')?new Promise((_yes,no)=>{fail=no;}):nativeReply(command,args));
   const send=screen.getByRole('button',{name:t('chatTerminalSend')});fireEvent.click(send);fireEvent.click(send);
   await waitFor(()=>expect(actions().filter(action=>action.kind==='input')).toHaveLength(1));
   await act(async()=>{fail({message:'Raw lost acknowledgement'});});
-  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Raw lost acknowledgement');expect(screen.getByText(t('chatTerminalUncertain'))).toBeTruthy();
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Raw lost acknowledgement');expect(screen.getByText(t(draft.includes('\n')?'chatTerminalPasteUncertain':'chatTerminalUncertain'))).toBeTruthy();
   expect(screen.queryByRole('button',{name:t('chatTerminalSend')})).toBeNull();expect(sent).not.toHaveBeenCalled();
   expect(actions().filter(action=>action.kind==='input')).toHaveLength(1);expect(actions().at(-1)).toEqual({kind:'release',receipt});
 });
@@ -71,27 +71,28 @@ it('rejects a malformed input acknowledgement as uncertain and never clears or r
   expect(screen.getByText(t('chatTerminalUncertain'))).toBeTruthy();expect(sent).not.toHaveBeenCalled();expect(actions().filter(action=>action.kind==='input')).toHaveLength(1);
 });
 it('checks actual UTF-8 limits and malformed Unicode before TextEncoder replacement, preserving spaces',()=>{
-  for(const value of ['  literal spaces  ','😀'.repeat(1024),'a'.repeat(4096)])expect(validTerminalDraft(value)).toBe(true);
-  for(const value of ['',...['\n','\r','\t','\x00','\x7f','\x85','\u2028','\u2029'].map(control=>'a'+control+'b'),'😀'.repeat(1024)+'x','a'.repeat(4097)])expect(validTerminalDraft(value)).toBe(false);
+  for(const value of ['  literal spaces  ','first\n\tsecond','\n'.repeat(4096),'😀'.repeat(1024),'a'.repeat(4096)])expect(validTerminalDraft(value)).toBe(true);
+  for(const value of ['',...['\r','\x00','\x08','\x0b','\x1b','\x7f','\x85','\u2028','\u2029'].map(control=>'a'+control+'b'),'😀'.repeat(1024)+'x','a'.repeat(4097)])expect(validTerminalDraft(value)).toBe(false);
   const encode=vi.spyOn(TextEncoder.prototype,'encode');
   for(const value of ['\ud800','\udfff','a\ud800z'])expect(validTerminalDraft(value)).toBe(false);
   expect(encode).not.toHaveBeenCalled();
 });
-it('does not dispatch Send or Stop while IME composition is active even before a rerender',async()=>{
-  const {props}=fixture();await confirm();props.composing.current=true;
+it.each(['one line','first\nsecond'])('does not dispatch during IME composition for %j',async draft=>{
+  const {props}=fixture({draft});await confirm();props.composing.current=true;
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));fireEvent.click(screen.getByRole('button',{name:t('chatTerminalStop')}));
   expect(actions().filter(action=>action.kind==='input')).toHaveLength(0);
 });
-const staleCases=(['snapshot','bind','input'] as const).flatMap(kind=>(['source','lease','unmount'] as const).flatMap(transition=>(['success','failure'] as const).map(outcome=>({kind,transition,outcome}))));
-it.each(staleCases)('drops stale $kind $outcome after $transition while retiring future authority',async({kind,transition,outcome})=>{
+const staleCases=(['snapshot','bind','input'] as const).flatMap(kind=>(['source','session','lease','unmount'] as const).flatMap(transition=>(['success','failure'] as const).flatMap(outcome=>(kind==='input'?['one line','first\n\tsecond']:['one line']).map(draft=>({kind,transition,outcome,draft})))));
+it.each(staleCases)('drops stale $kind $outcome after $transition for $draft',async({kind,transition,outcome,draft})=>{
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
   vi.mocked(invoke).mockImplementation((command,args)=>((args as {action:{kind:string}}).action.kind===kind)?new Promise((yes,no)=>{finish=yes;fail=no;}):nativeReply(command,args));
-  const {props,sent,view}=fixture();
+  const {props,sent,view}=fixture({draft});
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));
   if(kind!=='snapshot')fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalConfirm')}));
   if(kind==='input')fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalSend')}));
   await waitFor(()=>expect(finish).toBeTypeOf('function'));
   if(transition==='source')view.rerender(<ChatTerminalInput {...props} source={{...source,path:'/different.jsonl'}}/>);
+  else if(transition==='session')view.rerender(<ChatTerminalInput {...props} sessionId="ssh-replacement"/>);
   else if(transition==='lease')await act(async()=>{access(true);access();});
   else view.unmount();
   await act(async()=>{if(outcome==='failure')fail({message:'obsolete native detail'});else finish(kind==='snapshot'?snapshot:kind==='bind'?bound:{kind:'delivered',nextOperation:2});});
@@ -100,9 +101,9 @@ it.each(staleCases)('drops stale $kind $outcome after $transition while retiring
   if(kind==='input')expect(actions().filter(action=>action.kind==='input')).toHaveLength(1); // Already admitted intent is not recalled by closing the view.
 });
 it.each(['en','pt-BR','es'])('translates destination actions and retained raw errors without IPC replay in %s',async locale=>{
-  const {view}=fixture();await confirm();vi.mocked(invoke).mockRejectedValueOnce({message:'chatTerminalStale'});
+  const {view}=fixture({draft:'first\n\tsecond'});await confirm();vi.mocked(invoke).mockRejectedValueOnce({message:'chatTerminalStale'});
   fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByRole('alert');const count=vi.mocked(invoke).mock.calls.length;
-  try {await act(async()=>{await uiI18n.changeLanguage(locale);});expect(screen.getByRole('button',{name:t('chatTerminalChoose')})).toBeTruthy();expect(screen.getByRole('alert')).toHaveProperty('textContent','chatTerminalStale');expect(invoke).toHaveBeenCalledTimes(count);}
+  try {await act(async()=>{await uiI18n.changeLanguage(locale);});expect(screen.getByRole('button',{name:t('chatTerminalChoose')})).toBeTruthy();expect(screen.getByRole('alert')).toHaveProperty('textContent','chatTerminalStale');expect(screen.getByText(t('chatTerminalPasteNote'))).toBeTruthy();expect(screen.getByText(t('chatTerminalPasteUncertain'))).toBeTruthy();expect(invoke).toHaveBeenCalledTimes(count);}
   finally {view.unmount();await act(async()=>{await uiI18n.changeLanguage('en');});}
 });
 it.each(['generation','receipt','sessionId','windowId','paneId'] as const)('rejects a trailing terminator in returned %s before it grants authority',field=>{
