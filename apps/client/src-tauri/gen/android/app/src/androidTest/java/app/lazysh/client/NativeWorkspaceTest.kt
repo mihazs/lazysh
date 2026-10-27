@@ -101,29 +101,96 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun captureOwnedQrFrame(scenario: ActivityScenario<MainActivity>, destination: File, remaining: Long): Boolean {
-        val limit = 192 * 1024
-        val prefix = "data:image/png;base64,"
-        val encoded = evaluate(scenario, """(() => {
-          const v=document.querySelector('.theme-qr-panel video');
-          if(!v||v.readyState<2||!v.videoWidth||!v.videoHeight)return null;
-          const scale=Math.min(1,500/v.videoWidth,500/v.videoHeight),c=document.createElement('canvas');
-          c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));
-          const ctx=c.getContext('2d');if(!ctx)return null;
-          ctx.drawImage(v,0,0,c.width,c.height);
-          const png=c.toDataURL('image/png');return png.length<=262166?png:null;
-        })()""", remaining)
-        if (encoded.length > (limit * 4 / 3 + prefix.length) * 2 + 2) return false
-        val data = JSONArray("[$encoded]").optString(0)
-        if (!data.startsWith(prefix) || data.length > limit * 4 / 3 + prefix.length) return false
-        val bytes = Base64.decode(data.substring(prefix.length), Base64.DEFAULT)
-        if (bytes.size !in 24..limit || !bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(-119,80,78,71,13,10,26,10))) return false
-        val dimensions = java.nio.ByteBuffer.wrap(bytes, 16, 8)
-        if (dimensions.int !in 1..500 || dimensions.int !in 1..500) return false
-        val descriptor = Os.open(destination.absolutePath, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
-            OsConstants.S_IRUSR or OsConstants.S_IWUSR)
-        FileOutputStream(descriptor).use { it.write(bytes) }
-        return true
+    private enum class QrCaptureStage { BUDGET, DISPATCH, CALLBACK, RESULT, VIDEO, CONTEXT, DRAW, ENCODE, ENCODED_LIMIT, BASE64, HEADER, DIMENSIONS, PRIVATE_OPEN, PRIVATE_WRITE, PRIVATE_CLOSE, COMPLETE }
+    private enum class QrCaptureReason { NOT_ATTEMPTED, EMPTY_BUDGET, FAILED, UNAVAILABLE, INVALID, LIMIT, SAVED }
+
+    // Only typed categories and bounded numbers survive an exception; never its message or cause.
+    private class QrCaptureDiagnostic(budget: Long) {
+        var stage = QrCaptureStage.BUDGET
+        var reason = QrCaptureReason.NOT_ATTEMPTED
+        val budgetMs = budget.coerceIn(0, 1_000)
+        var encodedChars = 0
+        var errno: Int? = null
+        fun failed(error: Throwable) {
+            reason = QrCaptureReason.FAILED
+            errno = (error as? android.system.ErrnoException)?.errno?.takeIf { it in 1..4_095 }
+        }
+        fun report(): JSONObject = JSONObject().put("stage", stage.name).put("reason", reason.name)
+            .put("budgetMs", budgetMs).put("encodedChars", encodedChars.coerceIn(0, 1_000_000))
+            .put("errno", errno ?: JSONObject.NULL)
+    }
+
+    private fun captureOwnedQrFrame(scenario: ActivityScenario<MainActivity>, destination: File, diagnostic: QrCaptureDiagnostic): Boolean {
+        if (diagnostic.budgetMs == 0L) { diagnostic.reason = QrCaptureReason.EMPTY_BUDGET; return false }
+        try {
+            val limit = 192 * 1024
+            val prefix = "data:image/png;base64,"
+            val result = AtomicReference<String>()
+            val completed = CountDownLatch(1)
+            diagnostic.stage = QrCaptureStage.DISPATCH
+            scenario.onActivity { activity ->
+                val web = requireNotNull(webView(activity.window.decorView))
+                web.evaluateJavascript("""(() => {
+                  const out=(stage,reason,length=0,data=null)=>({stage,reason,length,data});
+                  const v=document.querySelector('.theme-qr-panel video');
+                  if(!v||v.readyState<2||!v.videoWidth||!v.videoHeight)return out('VIDEO','UNAVAILABLE');
+                  const scale=Math.min(1,500/v.videoWidth,500/v.videoHeight),c=document.createElement('canvas');
+                  c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));
+                  const ctx=c.getContext('2d');if(!ctx)return out('CONTEXT','UNAVAILABLE');
+                  try {ctx.drawImage(v,0,0,c.width,c.height);} catch {return out('DRAW','FAILED');}
+                  let png;try {png=c.toDataURL('image/png');} catch {return out('ENCODE','FAILED');}
+                  const length=Math.min(png.length,1000000);
+                  return png.length<=262166?out('COMPLETE','SAVED',length,png):out('ENCODED_LIMIT','LIMIT',length);
+                })()""") { value -> result.set(value); completed.countDown() }
+            }
+            diagnostic.stage = QrCaptureStage.CALLBACK
+            if (!completed.await(diagnostic.budgetMs, TimeUnit.MILLISECONDS)) {
+                diagnostic.reason = QrCaptureReason.UNAVAILABLE; return false
+            }
+            diagnostic.stage = QrCaptureStage.RESULT
+            diagnostic.reason = QrCaptureReason.INVALID
+            val encoded = result.get() ?: return false
+            if (encoded.length > (limit * 4 / 3 + prefix.length) * 2 + 512) return false
+            val response = JSONObject(encoded)
+            val length = response.opt("length")
+            if (length !is Number || length.toDouble() != length.toInt().toDouble() || length.toInt() !in 0..1_000_000) return false
+            diagnostic.encodedChars = length.toInt()
+            val outcome = when (response.optString("stage") to response.optString("reason")) {
+                "VIDEO" to "UNAVAILABLE" -> QrCaptureStage.VIDEO to QrCaptureReason.UNAVAILABLE
+                "CONTEXT" to "UNAVAILABLE" -> QrCaptureStage.CONTEXT to QrCaptureReason.UNAVAILABLE
+                "DRAW" to "FAILED" -> QrCaptureStage.DRAW to QrCaptureReason.FAILED
+                "ENCODE" to "FAILED" -> QrCaptureStage.ENCODE to QrCaptureReason.FAILED
+                "ENCODED_LIMIT" to "LIMIT" -> QrCaptureStage.ENCODED_LIMIT to QrCaptureReason.LIMIT
+                "COMPLETE" to "SAVED" -> QrCaptureStage.COMPLETE to QrCaptureReason.SAVED
+                else -> return false
+            }
+            if (outcome.first != QrCaptureStage.COMPLETE) {
+                diagnostic.stage = outcome.first; diagnostic.reason = outcome.second; return false
+            }
+            val data = response.opt("data")
+            if (data !is String || !data.startsWith(prefix) || data.length != diagnostic.encodedChars || data.length > limit * 4 / 3 + prefix.length) return false
+            diagnostic.stage = QrCaptureStage.BASE64
+            val bytes = Base64.decode(data.substring(prefix.length), Base64.DEFAULT)
+            diagnostic.stage = QrCaptureStage.HEADER
+            if (bytes.size !in 24..limit || !bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(-119,80,78,71,13,10,26,10))) return false
+            diagnostic.stage = QrCaptureStage.DIMENSIONS
+            val dimensions = java.nio.ByteBuffer.wrap(bytes, 16, 8)
+            if (dimensions.int !in 1..500 || dimensions.int !in 1..500) return false
+            diagnostic.stage = QrCaptureStage.PRIVATE_OPEN
+            val descriptor = Os.open(destination.absolutePath, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
+                OsConstants.S_IRUSR or OsConstants.S_IWUSR)
+            FileOutputStream(descriptor).use {
+                diagnostic.stage = QrCaptureStage.PRIVATE_WRITE
+                it.write(bytes)
+                diagnostic.stage = QrCaptureStage.PRIVATE_CLOSE
+            }
+            diagnostic.stage = QrCaptureStage.COMPLETE
+            diagnostic.reason = QrCaptureReason.SAVED
+            return true
+        } catch (error: Throwable) {
+            diagnostic.failed(error)
+            return false
+        }
     }
 
     // Public state only in messages; one attested synthetic frame is stored privately, never logged.
@@ -131,6 +198,7 @@ class NativeWorkspaceTest {
         var firstReady: JSONObject? = null
         var frameAttempted = false
         var frameSaved = false
+        var capture: QrCaptureDiagnostic? = null
         return { remaining ->
             val started = System.nanoTime()
             val encoded = evaluate(scenario, """JSON.stringify((() => {
@@ -162,11 +230,14 @@ class NativeWorkspaceTest {
                 if (frame != null) {
                     frameAttempted = true
                     val budget = remaining - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-                    if (budget > 0) frameSaved = try { captureOwnedQrFrame(scenario, frame, budget) } catch (_: Throwable) { false }
+                    val diagnostic = QrCaptureDiagnostic(budget)
+                    capture = diagnostic
+                    frameSaved = captureOwnedQrFrame(scenario, frame, diagnostic)
                 }
             }
             JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample)
-                .put("frameEnabled", frame != null).put("frameAttempted", frameAttempted).put("frameSaved", frameSaved).toString().also {
+                .put("frameEnabled", frame != null).put("frameAttempted", frameAttempted).put("frameSaved", frameSaved)
+                .put("capture", capture?.report() ?: JSONObject.NULL).toString().also {
                 require(it.length <= 2_048) { "QR diagnostic bound" }
             }
         }
@@ -456,6 +527,25 @@ class NativeWorkspaceTest {
             armed = true
         }
         @Synchronized fun openedAny() = opened.isNotEmpty()
+    }
+
+    @Test fun qrCaptureFailureMetadataIsFiniteAndExcludesPrivateExceptionData() {
+        val diagnostic = QrCaptureDiagnostic(4_000)
+        diagnostic.stage = QrCaptureStage.PRIVATE_OPEN
+        diagnostic.encodedChars = 2_000_000
+        diagnostic.failed(android.system.ErrnoException("private-frame-path-sentinel", OsConstants.EACCES))
+        val report = diagnostic.report()
+        assertEquals("PRIVATE_OPEN", report.getString("stage"))
+        assertEquals("FAILED", report.getString("reason"))
+        assertEquals(1_000, report.getInt("budgetMs"))
+        assertEquals(1_000_000, report.getInt("encodedChars"))
+        assertEquals(OsConstants.EACCES, report.getInt("errno"))
+        assertEquals(setOf("stage", "reason", "budgetMs", "encodedChars", "errno"), report.keys().asSequence().toSet())
+        assertTrue("Capture metadata must exclude exception data", !report.toString().contains("sentinel"))
+        diagnostic.failed(IllegalStateException("private-payload-sentinel"))
+        assertTrue("Other failures have no invented errno", diagnostic.report().isNull("errno"))
+        assertTrue("Capture metadata remains bounded", diagnostic.report().toString().length <= 256)
+        assertEquals(0, QrCaptureDiagnostic(-1).report().getInt("budgetMs"))
     }
 
     @Test fun qrCameraReleaseRequiresTheSuccessfulAttemptsOwnOpenAndClose() {
