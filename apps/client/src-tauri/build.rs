@@ -146,6 +146,7 @@ fn main() {
         "list_multiplexer_sessions",
         "attach_tmux",
         "agent_snapshot",
+        "agent_reported_history",
         "agent_transcript",
         "agent_usage",
         "agent_transcripts",

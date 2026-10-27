@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an opt-in Claude reported-history shortcut that prefills Chat from an exact hook-reported session/path association on the selected SSH connection. Reading still requires Open transcript, with recorded images and Follow off. Existing manual paths and older companions remain usable; reported history never grants live agent input authority.
+
 - Keep retained transcript validation and read alerts in the current interface language without repeating reads. Raw host diagnostics, parser rules, transcript contents, Follow and image behavior remain unchanged.
 
 - Resolve Tauri's native application version from the synchronized client manifest, fixing Android and Apple mobile generators falling back to unrelated version defaults. Application identifiers, stored data, protocols and permissions are unchanged.

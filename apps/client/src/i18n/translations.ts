@@ -13,6 +13,13 @@ const translations = {
   chatImageDimensions: ["As dimensões da imagem decodificada não correspondem à imagem registrada.", "Las dimensiones de la imagen decodificada no coinciden con la imagen registrada."],
   chatImageDecodeFailed: ["Não foi possível decodificar a imagem registrada neste dispositivo.", "No se pudo decodificar la imagen registrada en este dispositivo."],
 
+  agentsHistoryUse: ["Usar histórico informado", "Usar historial informado"],
+  agentsHistoryReading: ["Consultando o histórico informado…", "Buscando el historial informado…"],
+  agentsHistoryInvalid: ["O companion retornou metadados inválidos de histórico informado.", "El companion devolvió metadatos de historial informado no válidos."],
+  agentsHistoryMissing: ["Nenhum caminho de histórico foi informado para esta sessão do Claude.", "No se informó una ruta de historial para esta sesión de Claude."],
+  agentsHistoryAmbiguous: ["O histórico informado está indisponível para esta sessão do Claude. Escolha um caminho manualmente.", "El historial informado no está disponible para esta sesión de Claude. Elige una ruta manualmente."],
+  agentsHistoryManual: ["Você pode abrir Transcrição, inserir um caminho de histórico manualmente e pressionar Abrir transcrição.", "Puedes abrir Transcripción, introducir una ruta de historial manualmente y pulsar Abrir transcripción."],
+  agentsHistoryNotice: ["Este histórico informado pode estar desatualizado. Não há confirmação de um agente em execução. Pressione Abrir transcrição para ler o arquivo.", "Este historial informado puede estar desactualizado. No se verifica que haya un agente en ejecución. Pulsa Abrir transcripción para leer el archivo."],
   themeQrTitle: ["Importar QR de tema", "Importar QR de tema"],
   themeQrIntro: ["Escaneie ou escolha uma imagem QR e revise o tema antes de aplicá-lo.", "Escanea o elige una imagen QR y revisa el tema antes de aplicarlo."],
   themeQrNative: ["A leitura de QR requer o aplicativo nativo.", "La lectura de QR requiere la aplicación nativa."],

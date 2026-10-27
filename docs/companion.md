@@ -17,6 +17,59 @@ The Agents panel's [host companion settings](companion-settings.md) control new 
 
 Run `lazysh-agent claude-config` and merge the printed `hooks` entries into your Claude settings, preserving existing entries. This command only prints JSON. Run Claude in tmux to include its `TMUX_PANE` identity. The [official hook reference](https://code.claude.com/docs/en/hooks) defines the inputs this adapter handles. Lifecycle summaries include tool names but omit prompts, tool arguments, transcripts, and credentials. An informational notification does not imply a pending approval.
 
+### Optional Claude reported-history shortcut
+
+Run `lazysh-agent claude-config --reported-history` to print an explicitly opted-in
+hook fragment, then merge it into your Claude settings without replacing other
+hooks. If the ordinary lazysh ingest command is already installed, replace that
+command with the flagged form rather than installing both; keep unrelated hooks.
+The fragment adds `SessionStart` and passes `--reported-history` to Claude
+ingest commands. Neither printing the fragment nor ordinary `claude-config` or
+ingest enables capture automatically; the default remains off.
+
+For supported top-level `SessionStart` and `UserPromptSubmit` hooks, the companion
+retains the exact `session_id` and absolute `transcript_path` supplied together
+by Claude, with optional reported pane metadata and report time. No filename,
+UUID or working-directory relationship is inferred. This is the official
+[common hook input](https://code.claude.com/docs/en/hooks#common-input-fields)
+association, not evidence that the process is still running; transcript writes
+may also lag the hook event. Subagent metadata is not used for this shortcut.
+Ingest does not open a transcript, store prompts/tool arguments/content or send
+the path through lifecycle snapshots, notifications or relay publishing.
+
+Metadata lives in a separate additive table in the existing private SQLite store,
+under the existing bootstrap, transaction and filesystem admission mechanisms.
+The frozen lifecycle table and older positional writers remain compatible. At
+most 100 associations are retained for seven days after their last report.
+Conflicting or malformed path reports stay unavailable while the association is
+retained, rather than selecting a first/latest file. Invalid metadata does not
+discard an otherwise valid lifecycle event. Capture preserves the host's exact
+absolute spelling, including spaces and Unicode; it does not expand `~` or
+normalize paths. Actual file admission still occurs when the user opens it.
+
+In Agents, select **Use reported history** on the intended Claude row. The app
+looks up that exact opaque Claude session on the row's existing authenticated SSH
+connection and prefills Chat with Claude, Records, images off and Follow off.
+Press **Open transcript** to read the file through the existing guarded reader.
+The notice states that the history may be old and its running agent is
+unverified. Ordinary manual path entry remains available, including when the
+host has an older companion or no usable association. Raw host diagnostics are
+preserved rather than matching English error text or guessing versions.
+
+The companion's metadata lookup is
+`lazysh-agent reported-history --session-id=OPAQUE_ID`; use the exact reported
+session identifier, not an inferred filename. It obeys the host's transcript
+discovery setting and returns schema-v1 `available`, `missing` or `ambiguous`.
+Only `available` includes the path, report time and nullable reported pane.
+The hook opt-in controls collection independently of this lookup setting.
+
+The user action selects a destination terminal for the existing draft staging
+workflow. It is not a live transcript/process binding, direct prompt/Stop action
+or approval grant. A pane ID is server-scoped and may be stale; the shortcut does
+not infer a tmux server or running agent from it. Lookup/read publication retains
+the original app-access lease; lock, source/session changes and unmount retire
+stale callbacks without automatic replay.
+
 The displayed status is the last reported event, not proof that a process is still running. Refresh explicitly. Respond to prompts in the live terminal until race-safe approvals are implemented.
 
 ## Other agents and scripts

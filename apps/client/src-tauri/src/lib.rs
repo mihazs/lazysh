@@ -234,6 +234,7 @@ pub fn run() {
                 ssh::list_multiplexer_sessions,
                 ssh::attach_tmux,
                 ssh::agent_snapshot,
+                ssh::agent_reported_history,
                 companion_settings::get_companion_settings,
                 companion_settings::update_companion_settings,
                 ssh::agent_transcript,

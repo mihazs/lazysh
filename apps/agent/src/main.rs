@@ -70,6 +70,8 @@ enum Command {
     Ingest {
         #[arg(long, value_enum)]
         agent: Agent,
+        #[arg(long)]
+        reported_history: bool,
     },
     /// Print a bounded JSON status snapshot.
     Snapshot {
@@ -77,7 +79,15 @@ enum Command {
         limit: u8,
     },
     /// Print a configuration fragment; never changes agent settings.
-    ClaudeConfig,
+    ClaudeConfig {
+        #[arg(long)]
+        reported_history: bool,
+    },
+    /// Read a hook-reported Claude source hint, never live input authority.
+    ReportedHistory {
+        #[arg(long)]
+        session_id: String,
+    },
     /// List transcript metadata from the agent's local session directory.
     Discover {
         #[arg(long, value_enum)]
@@ -127,7 +137,9 @@ enum SettingsCommand {
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     let operation = match &cli.command {
-        Command::Discover { .. } => Some(lazysh_agent::settings::Operation::TranscriptDiscovery),
+        Command::Discover { .. } | Command::ReportedHistory { .. } => {
+            Some(lazysh_agent::settings::Operation::TranscriptDiscovery)
+        }
         Command::Usage { .. } => Some(lazysh_agent::settings::Operation::RecordedUsage),
         Command::Devices { .. } => Some(lazysh_agent::settings::Operation::DeviceTools),
         _ => None,
@@ -222,7 +234,15 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             pane_id.as_deref(),
             decision,
         )?),
-        Command::ClaudeConfig => Some(lazysh_agent::claude_config()),
+        Command::ClaudeConfig { reported_history } => Some(if reported_history {
+            lazysh_agent::reported_history::claude_config()
+        } else {
+            lazysh_agent::claude_config()
+        }),
+        Command::ReportedHistory { session_id } => Some(
+            Store::open(&lazysh_agent::state_directory()?)?
+                .reported_history(&session_id, chrono::Utc::now())?,
+        ),
         Command::Discover { agent, root, limit } => Some(
             serde_json::to_value(lazysh_agent::transcript::discover(
                 agent,
@@ -325,9 +345,25 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 .map_err(|_| Error::InvalidEvent)?,
             )
         }
-        Command::Ingest { agent } => {
+        Command::Ingest {
+            agent,
+            reported_history,
+        } => {
             let pane = std::env::var("TMUX_PANE").ok();
-            if let Some(event) =
+            if reported_history {
+                if !matches!(agent, Agent::Claude) {
+                    return Err(Error::InvalidArgument);
+                }
+                let (event, source) =
+                    lazysh_agent::reported_history::read_hook(io::stdin().lock(), pane.as_deref())?;
+                if event.is_some() || source.is_some() {
+                    Store::open(&lazysh_agent::state_directory()?)?.ingest_with_reported_history(
+                        event.as_ref(),
+                        source.as_ref(),
+                        chrono::Utc::now(),
+                    )?;
+                }
+            } else if let Some(event) =
                 lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?
             {
                 Store::open(&lazysh_agent::state_directory()?)?

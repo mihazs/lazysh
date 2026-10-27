@@ -2636,6 +2636,41 @@ pub async fn agent_transcript(
         .await
 }
 
+fn reported_history_command(agent_session_id: &str) -> Result<String> {
+    if agent_session_id.trim().is_empty()
+        || agent_session_id.len() > 1024
+        || agent_session_id.chars().count() > 256
+        || agent_session_id.chars().any(char::is_control)
+    {
+        return Err(SshError::new(
+            "invalid_input",
+            "Invalid reported Claude session identifier",
+        ));
+    }
+    Ok(format!(
+        "lazysh-agent reported-history --session-id={}",
+        quote(agent_session_id)
+    ))
+}
+
+#[tauri::command]
+pub async fn agent_reported_history(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    session_id: String,
+    agent_session_id: String,
+) -> AccessResult<serde_json::Value> {
+    lease
+        .run(async {
+            let command = reported_history_command(&agent_session_id)?;
+            let session = state.session(&session_id).await?;
+            Ok(serde_json::from_str(
+                &exec(&session, &lease, command).await?,
+            )?)
+        })
+        .await
+}
+
 #[tauri::command]
 pub async fn agent_transcripts(
     lease: AccessLease,

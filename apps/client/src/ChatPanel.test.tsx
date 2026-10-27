@@ -2,6 +2,7 @@
 import { cleanupNativeMocks } from "./test/nativeCoreMock";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -10,6 +11,9 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import ChatPanel, { parseTranscript } from "./ChatPanel";
 import {readFileSync} from 'node:fs';
+import {accessSnapshot,applyAccessStatus,captureAccess} from './access';
+import type {ReportedHistorySource} from './AgentPanel';
+import {t,uiI18n} from './i18n/core';
 
 vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
 afterEach(cleanupNativeMocks);
@@ -361,4 +365,63 @@ it('rejects malformed Grok discovery metadata without opening any record file',a
   fireEvent.click(screen.getByRole('button',{name:'Find transcripts'}));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent','Invalid transcript list.');
   expect(invoke).toHaveBeenCalledTimes(1);
+});
+
+function reportedSource():ReportedHistorySource {
+  const generation=BigInt(accessSnapshot().status?.generation ?? '0')+1n;
+  applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(generation),nonce:'a'.repeat(64)});
+  return {sessionId:'ssh-reported',agentSessionId:'claude-opaque',path:'/host/Claude 世界.jsonl ',reportedAt:'2026-10-24T19:30:00Z',paneId:null,lease:captureAccess()};
+}
+function revokeReportedSource() {
+  const generation=BigInt(accessSnapshot().status!.generation)+1n;
+  applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generation)});
+  applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(generation+1n),nonce:'b'.repeat(64)});
+}
+it('prefills reported Claude Records with images/follow off and preserves exact path only on explicit Open',async()=>{
+  const source=reportedSource();vi.mocked(invoke).mockResolvedValue({...page,view:'record_stream'});
+  render(<ChatPanel sessionId={source.sessionId} reportedHistory={source}/>);
+  expect(screen.getByLabelText('Agent')).toHaveProperty('value','claude');expect(screen.getByLabelText('View')).toHaveProperty('value','records');
+  expect(screen.getByLabelText('Transcript path')).toHaveProperty('value',source.path);expect(screen.getByLabelText('Include recorded images')).toHaveProperty('checked',false);
+  expect(screen.queryByLabelText('Follow selected Claude branch')).toBeNull();expect(screen.getByLabelText('Draft for this terminal')).toHaveProperty('value','');
+  expect(screen.getByText(t('agentsHistoryNotice'))).toBeTruthy();expect(invoke).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));await screen.findByText(/Hello/);
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('agent_transcript',{sessionId:source.sessionId,agent:'claude',path:source.path,offset:0},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+});
+it('reported prefill does not replace subsequent manual path, draft, agent, or display choices',async()=>{
+  const source=reportedSource();vi.mocked(invoke).mockResolvedValue({...page,agent:'codex'});
+  render(<ChatPanel sessionId={source.sessionId} reportedHistory={source}/>);
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'  /manual/codex.jsonl  '}});
+  fireEvent.change(screen.getByLabelText('Draft for this terminal'),{target:{value:'held unsent draft'}});
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'codex'}});
+  expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();expect(invoke).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));await screen.findByText(/Hello/);
+  expect(invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:source.sessionId,agent:'codex',path:'/manual/codex.jsonl',offset:0},expect.anything());
+  expect(screen.getByLabelText('Draft for this terminal')).toHaveProperty('value','held unsent draft');
+});
+it('does not prefill or renew a stale original reported source on a new Chat mount',async()=>{
+  const source=reportedSource();revokeReportedSource();render(<ChatPanel sessionId={source.sessionId} reportedHistory={source}/>);
+  expect(screen.getByLabelText('Transcript path')).toHaveProperty('value','');expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Find transcripts'}));await act(async()=>{});expect(invoke).not.toHaveBeenCalled();
+});
+it('does not carry reported-source prefill or read authority into a different session on the same Chat mount',async()=>{
+  const source=reportedSource();const view=render(<ChatPanel sessionId={source.sessionId} reportedHistory={source}/>);
+  view.rerender(<ChatPanel sessionId="different-ssh" reportedHistory={source}/>);
+  expect(screen.getByLabelText('Transcript path')).toHaveProperty('value','');expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/manual/new-path'}});fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  await act(async()=>{});expect(invoke).not.toHaveBeenCalled();
+});
+it.each(['success','failure'] as const)('drops reported-file pending read %s on the same old Chat mount after revoke/reunlock',async outcome=>{
+  const source=reportedSource();let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
+  vi.mocked(invoke).mockImplementationOnce(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));
+  render(<ChatPanel sessionId={source.sessionId} reportedHistory={source}/>);fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(1));
+  await act(async()=>{revokeReportedSource();if(outcome==='success')finish(page);else fail('obsolete reported-file failure');});
+  expect(screen.queryByText(/Hello/)).toBeNull();expect(screen.queryByRole('alert')).toBeNull();expect(invoke).toHaveBeenCalledTimes(1);
+});
+it.each(['en','pt-BR','es'])('explains reported provenance and explicit Open in %s without reading',async locale=>{
+  const source=reportedSource();
+  try {
+    await uiI18n.changeLanguage(locale);render(<ChatPanel sessionId={source.sessionId} reportedHistory={source}/>);
+    expect(screen.getByText(t('agentsHistoryNotice'))).toBeTruthy();expect(screen.getByRole('button',{name:t('chatOpen')})).toBeTruthy();expect(invoke).not.toHaveBeenCalled();
+  } finally {await uiI18n.changeLanguage('en');}
 });

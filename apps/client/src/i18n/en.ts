@@ -1,5 +1,12 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  agentsHistoryUse: "Use reported history",
+  agentsHistoryReading: "Looking up reported history…",
+  agentsHistoryInvalid: "The companion returned invalid reported-history metadata.",
+  agentsHistoryMissing: "No history path was reported for this Claude session.",
+  agentsHistoryAmbiguous: "Reported history is unavailable for this Claude session. Choose a path manually.",
+  agentsHistoryManual: "You can open Transcript, enter a history path manually, and press Open transcript.",
+  agentsHistoryNotice: "This reported history may be old. Its running agent is unverified. Press Open transcript to read the file.",
   themeQrTitle: "Import a theme QR",
   themeQrIntro: "Scan or choose one QR image, then review the theme before applying it.",
   themeQrNative: "QR decoding requires the native app.",

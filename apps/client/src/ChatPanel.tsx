@@ -1,7 +1,8 @@
+import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
-import { captureAccess, useAccessSnapshot, useProtectedInvoke } from './access';
-import { useCallback, useEffect, useRef, useState } from "react";
+import { bindProtectedInvoke, captureAccess, useAccessSnapshot } from './access';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import Markdown from "react-markdown";
 import {errorMessage, captureUiError, uiErrorText, LocalUiError, type UiErrorCause} from './i18n/localError';
@@ -122,10 +123,11 @@ export function parseTranscript(value: unknown): Page {
   return page;
 }
 
-export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: string; onOpenTerminal?: () => void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource }) {
   useUi();
-  const invoke = useProtectedInvoke();
-  const access = useRef(captureAccess()).current;
+  const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
+  const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
+  const initialReported=useRef(reportedHistory?.sessionId===sessionId && access.current()?reportedHistory:undefined).current;
   const accessState = useAccessSnapshot();
   const mounted = useRef(true);
   const flight = useRef(false);
@@ -140,7 +142,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
   const atLatestRef = useRef(true);
   const [atLatest, setAtLatest] = useState(true);
   const [agent, setAgent] = useState("claude");
-  const [path, setPath] = useState("");
+  const [path, setPath] = useState(initialReported?.path ?? "");
   const [view, setView] = useState("records");
   const [inlineImages,setInlineImages]=useState(false);
   const canIncludeImages = (agent==='claude' && ['records','conversation'].includes(view)) || (['grok-acp','codex'].includes(agent) && view==='records');
@@ -177,10 +179,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
   const conversation = opened?.agent === 'claude' && opened.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
   const followable = conversation || recorded;
-  const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && path.trim()===opened.path && (canIncludeImages&&inlineImages)===!!opened.inlineImages;
+  const reportedMatches=!!initialReported && initialReported.sessionId===sessionId && agent==='claude' && path===initialReported.path;
+  const selectedPath=reportedMatches?path:path.trim();
+  const sourceMatches = !!opened && agent===opened.agent && view===(opened.view??'records') && selectedPath===opened.path && (canIncludeImages&&inlineImages)===!!opened.inlineImages;
   const canFollow = followable && sourceMatches;
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
+    if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
     setDraft(''); setDraftStatus(''); composing.current = false;
     setOpened(undefined); setMessages([]); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
@@ -203,7 +208,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     return () => {document.removeEventListener('visibilitychange',visibility); window.removeEventListener('pagehide',hide); window.removeEventListener('pageshow',show);};
   }, []);
   function currentRequest(current: number) {
-    return mounted.current && access.current() && request.current === current;
+    return mounted.current && access.current() && (!initialReported || initialReported.sessionId===sessionId) && request.current === current;
   }
   function jumpToLatest() {
     atLatestRef.current = true; setAtLatest(true);
@@ -218,7 +223,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     return () => clearTimeout(timer);
   }, [following,canFollow,busy,visible,completed,accessState.epoch,access]);
   async function discover() {
-    if (flight.current || !access.current()) return;
+    if (flight.current || !access.current() || (initialReported && initialReported.sessionId!==sessionId)) return;
     flight.current = true;
     automaticRequest.current = false;
     const current = ++request.current;
@@ -247,12 +252,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     }
   }
   async function read(reset: boolean, automatic = false, prepare = false) {
-    if (flight.current || !access.current()) return;
+    if (flight.current || !access.current() || (initialReported && initialReported.sessionId!==sessionId)) return;
     if (automatic && (!followRef.current || !canFollow || pageHidden.current || document.visibilityState === 'hidden')) return;
     const source = reset
       ? {
           agent,
-          path: path.trim(),
+          path: selectedPath,
           ...(prepare ? {checkpointed:true} : {}),
           ...(inlineImages && canIncludeImages ? {inlineImages:true} : {}),
           ...(["hermes", "opencode"].includes(agent)
@@ -330,6 +335,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
       <p>
         {t("chatExplanation")}
       </p>
+      {reportedMatches && access.current() && <p className="security-note">{t('agentsHistoryNotice')}</p>}
       <form
         className="tool-bar"
         onSubmit={(event) => {
