@@ -109,7 +109,9 @@ export function parseTranscript(value: unknown): Page {
         || !['pending','in_progress','completed','failed'].includes(block.status)
         || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
         throw new LocalUiError('chatInvalidToolStatus');
-      if (block.isError !== undefined && (page.agent !== 'claude' || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
+      if (block.isError !== undefined && ((page.agent !== 'claude'
+        && !(page.agent === 'pi' && page.view === 'record_stream' && message.role === 'tool'))
+        || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
         throw new LocalUiError('chatInvalidToolError');
     }
     if (

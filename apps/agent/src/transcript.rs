@@ -491,6 +491,10 @@ fn normalize_options(
                     string(message, "toolCallId"),
                     string(message, "toolName"),
                 )];
+                if let (TranscriptAgent::Pi, Some(is_error)) = (agent, message["isError"].as_bool())
+                {
+                    blocks[0]["isError"] = json!(is_error);
+                }
             }
             let mut usage = serde_json::Map::new();
             for (source, target) in [
