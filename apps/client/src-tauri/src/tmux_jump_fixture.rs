@@ -10,6 +10,9 @@ use tauri::Manager;
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
 
+#[path = "tmux_teardown_diagnostics.rs"]
+mod teardown;
+
 fn fixture_key() -> russh::keys::PrivateKey {
     russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()
 }
@@ -1051,6 +1054,20 @@ struct NamedServers<'a> {
     names: Vec<String>,
 }
 impl NamedServers<'_> {
+    fn stop(&mut self) -> Vec<teardown::Stop> {
+        std::mem::take(&mut self.names)
+            .iter()
+            .map(|name| {
+                Command::new(&self.fixture.tmux)
+                    .args(["-L", name, "kill-server"])
+                    .env("TMUX_TMPDIR", self.fixture.dir.path())
+                    .env_remove("TMUX")
+                    .output()
+                    .map(|output| output.status)
+                    .into()
+            })
+            .collect()
+    }
     fn direct(&self, name: &str, args: &[&str]) -> String {
         lazysh_common::test_support::successful_output(
             Command::new(&self.fixture.tmux)
@@ -1067,13 +1084,7 @@ impl NamedServers<'_> {
 }
 impl Drop for NamedServers<'_> {
     fn drop(&mut self) {
-        for name in &self.names {
-            let _ = Command::new(&self.fixture.tmux)
-                .args(["-L", name, "kill-server"])
-                .env("TMUX_TMPDIR", self.fixture.dir.path())
-                .env_remove("TMUX")
-                .output();
-        }
+        let _ = self.stop();
     }
 }
 #[tokio::test]
@@ -1897,7 +1908,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     let original = f.handle.take().unwrap();
     let old_handle = Arc::downgrade(&original);
     let saved_server = "世界 '$(printf NO);";
-    let servers = NamedServers {
+    let mut servers = NamedServers {
         fixture: &f,
         names: vec![saved_server.into(), "other".into()],
     };
@@ -1958,6 +1969,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
             ]
         })
         .collect::<Vec<_>>();
+    let mut diagnostics = teardown::Processes::capture(&owned_pids);
     let authority = AccessState::disabled();
     let lease = authority.lease(None).unwrap();
     let first = tauri::test::mock_app();
@@ -2072,6 +2084,8 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     })
     .await
     .expect("fresh owned transport must retire during teardown");
+    diagnostics.before_stop();
+    let cleanup = servers.stop();
     drop(servers);
     for pid in owned_pids {
         timeout(BOUND, async {
@@ -2084,7 +2098,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
             );
         })
         .await
-        .expect("owned tmux server/workload must exit during teardown");
+        .unwrap_or_else(|error| panic!("owned tmux server/workload must exit during teardown: {error:?}; cleanup={cleanup:?}; processes(before,after)={}", diagnostics.failure()));
     }
     f.stop_listener().await;
 }
