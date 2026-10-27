@@ -70,6 +70,10 @@ not infer a tmux server or running agent from it. Lookup/read publication retain
 the original app-access lease; lock, source/session changes and unmount retire
 stale callbacks without automatic replay.
 
+This shortcut itself still grants no input authority. Claude Chat on an existing
+native tmux attachment offers a separate [confirmed terminal input](chat-terminal-input.md)
+flow; the user must choose and confirm its destination explicitly.
+
 The displayed status is the last reported event, not proof that a process is still running. Refresh explicitly. Respond to prompts in the live terminal until race-safe approvals are implemented.
 
 ## Other agents and scripts
@@ -149,6 +153,15 @@ Each message has an `id`, `role`, `blocks`, and optional `timestamp`, `parentId`
 The default view is an append-record browser. Claude sidechain, team, and meta records are omitted, but old branches/compaction records can still occur in file order. Pi and OMP use `--agent pi` or `--agent omp` with the same paging contract; only their version-3 message/tool records are normalized. Custom extension entries, external blobs, branch navigation, and context compaction reconstruction for these agents remain terminal workflows. Prompts and stop/approval actions must use the original live terminal. Additional agent formats and live lifecycle verification remain tracked by [issue #5](https://github.com/mihazs/lazysh/issues/5).
 
 The app's transcript view includes an editable **Draft for this terminal** composer. **Stage in terminal** (or Ctrl/Command-Enter after IME composition ends) moves the draft into the composer for that existing SSH terminal. Review the intended live agent pane there before using **Paste draft**. Staging does not send a prompt, launch an agent, or establish that the manually selected transcript belongs to the current pane. Permissions, plans, questions and stop requests remain live-terminal actions until their exact runtime mapping is verified. **Open terminal** returns to that terminal without staging text.
+
+Claude views on an existing native tmux attachment also offer explicit
+**Send to terminal** and **Request stop** after confirming the connected host,
+tmux session/window and pane. Send accepts one UTF-8 line up to 4 KiB plus Enter;
+Request stop sends Escape. The running agent remains unverified, and a tmux
+acknowledgement does not prove provider receipt or that a process stopped. Stage
+remains the default and the fallback for other drafts/agents/multiplexers.
+Already admitted input cannot be recalled by closing the view, and uncertainty
+never causes an automatic resend. See the [destination and lifetime contract](chat-terminal-input.md).
 
 ### Claude recorded tool errors
 

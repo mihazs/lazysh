@@ -1,5 +1,20 @@
 # @lazysh/client
 
+## 0.4.0
+
+### Minor Changes
+
+- 0232b02: Add explicit Claude Chat Send and Request stop for a confirmed existing tmux
+  terminal. Stage remains the default, unsupported drafts keep the terminal
+  fallback, and uncertain input is never resent automatically.
+
+### Patch Changes
+
+- @lazysh/common@0.4.0
+  - @lazysh/display-idle@0.4.0
+  - @lazysh/et-transport@0.4.0
+  - @lazysh/mosh-transport@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

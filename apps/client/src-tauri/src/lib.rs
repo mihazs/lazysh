@@ -204,6 +204,7 @@ pub fn run() {
                 multiplexer::multiplexer_tree,
                 tmux_jump::tmux_jump_snapshot,
                 tmux_jump::tmux_jump,
+                tmux_jump::chat::tmux_chat,
                 herdr::herdr_tree,
                 herdr::herdr_action,
                 zellij::zellij_action,

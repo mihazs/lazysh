@@ -10,6 +10,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tauri::State;
 use tokio::sync::{mpsc, oneshot, watch};
 
+#[path = "tmux_chat.rs"]
+pub(crate) mod chat;
+
 const LIMIT: usize = 1024 * 1024;
 const ROWS: usize = 4096;
 const DEADLINE: Duration = Duration::from_secs(3);
@@ -34,11 +37,21 @@ pub(crate) struct Identity {
 #[derive(Clone)]
 pub(crate) struct Binding {
     requests: mpsc::Sender<Request>,
+    input_busy: Arc<std::sync::atomic::AtomicBool>,
 }
 struct Request {
     lease: AccessLease,
-    target: Option<(String, String, String)>,
-    reply: oneshot::Sender<Result<Snapshot>>,
+    action: Action,
+    reply: oneshot::Sender<Result<Reply>>,
+    _permit: Option<chat::Permit>,
+}
+enum Action {
+    Navigation(Option<(String, String, String)>),
+    Chat(chat::Action),
+}
+enum Reply {
+    Navigation(Snapshot),
+    Chat(chat::Reply),
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +177,9 @@ pub(crate) struct Control {
     bytes: Vec<u8>,
     identity: Identity,
     generation: String,
+    chat: Option<chat::Receipt>,
+    #[cfg(test)]
+    chat_before_dispatch: Option<chat::Gate>,
 }
 impl Control {
     async fn line(&mut self, budget: &mut usize) -> Result<String> {
@@ -270,20 +286,51 @@ impl Control {
         let normal = format!("#{{&&:#{{==:#{{client_control_mode}},0}},{attached}}}");
         let guard = format!("#{{L:#{{?{normal},1,}}}}");
         let marker = format!("LAZYSH_JUMP_{}", uuid::Uuid::new_v4().simple());
-        let command=format!("if-shell -F {} {{ switch-client -E -c {} -t {}; display-message -p {} }} {{ display-message -p {} }}",ssh::quote(&guard),ssh::quote(&self.identity.tty),ssh::quote(&format!("{session}:{window}")),ssh::quote(&format!("{marker}:ok")),ssh::quote(&format!("{marker}:gone")));
+        let action = format!(
+            "switch-client -E -c {} -t {}",
+            ssh::quote(&self.identity.tty),
+            ssh::quote(&format!("{session}:{window}"))
+        );
+        self.marked_command(&guard, &action, &marker, budget)
+            .await?
+            .then_some(())
+            .ok_or_else(unavailable)
+    }
+    /// Preserve the same bounded framing for navigation and terminal input.
+    /// A negative owned marker is distinct from a malformed/partial stream.
+    async fn marked_command(
+        &mut self,
+        guard: &str,
+        action: &str,
+        marker: &str,
+        budget: &mut usize,
+    ) -> Result<bool> {
+        let command = format!(
+            "if-shell -F {} {{ {action}; display-message -p {} }} {{ display-message -p {} }}",
+            ssh::quote(guard),
+            ssh::quote(&format!("{marker}:ok")),
+            ssh::quote(&format!("{marker}:gone"))
+        );
         self.channel.data(format!("{command}\n").as_bytes()).await?;
         for _ in 0..8 {
             let rows = self.block(budget).await?;
-            if rows == [format!("{marker}:ok")] {
-                return Ok(());
-            }
-            if rows.iter().any(|s| s.starts_with(&marker)) {
-                return Err(unavailable());
-            }
-            if !rows.is_empty() {
-                return Err(protocol());
+            if let Some(completed) = marked_rows(&rows, marker)? {
+                return Ok(completed);
             }
         }
+        Err(protocol())
+    }
+}
+fn marked_rows(rows: &[String], marker: &str) -> Result<Option<bool>> {
+    if rows == [format!("{marker}:ok")] {
+        return Ok(Some(true));
+    }
+    if rows == [format!("{marker}:gone")] {
+        return Ok(Some(false));
+    }
+    if rows.is_empty() {
+        Ok(None)
+    } else {
         Err(protocol())
     }
 }
@@ -438,6 +485,9 @@ pub(crate) async fn prepare_command(
         bytes: Vec::new(),
         identity,
         generation: uuid::Uuid::new_v4().to_string(),
+        chat: None,
+        #[cfg(test)]
+        chat_before_dispatch: None,
     };
     let operation = async {
         let channel = &mut control.channel;
@@ -460,7 +510,10 @@ pub(crate) async fn prepare_command(
 pub(crate) fn start(control: Control, cancellation: watch::Receiver<bool>) -> Binding {
     let (requests, rx) = mpsc::channel::<Request>(4);
     spawn_actor(control, cancellation, rx);
-    Binding { requests }
+    Binding {
+        requests,
+        input_busy: Arc::default(),
+    }
 }
 fn spawn_actor(
     mut control: Control,
@@ -477,15 +530,29 @@ fn spawn_actor(
             // without allowing unbounded unsolicited output or stale responses.
             let request = tokio::select! {biased; _=cancellation.changed()=>break, request=rx.recv()=>match request {Some(r)=>r,None=>break}, line=control.line(&mut idle_budget)=>{match line {Ok(line) if notification(&line).is_ok()=>continue,_=>break}}};
             if request.lease.check().is_err() || request.reply.is_closed() {
+                if let Action::Chat(action) = &request.action {
+                    control.chat_abandoned(action);
+                }
                 continue;
             }
             let Request {
                 lease,
-                target,
+                action,
                 mut reply,
+                _permit,
             } = request;
+            let chat_request = matches!(&action, Action::Chat(_));
             let operation = async {
                 let mut budget = LIMIT;
+                let target = match action {
+                    Action::Chat(action) => {
+                        return control
+                            .chat_action(&lease, action, &mut budget)
+                            .await
+                            .map(Reply::Chat)
+                    }
+                    Action::Navigation(target) => target,
+                };
                 if let Some((generation, session, window)) = target {
                     if generation != control.generation || !id(&session, b'$') || !id(&window, b'@')
                     {
@@ -494,23 +561,38 @@ fn spawn_actor(
                             "Refresh this tmux view before navigating",
                         ));
                     }
+                    control.chat = None;
                     control.jump(&session, &window, &mut budget).await?;
                 }
-                control.snapshot(&mut budget).await
+                control.snapshot(&mut budget).await.map(Reply::Navigation)
             };
             // Any interruption may have left a partial write/read. Never reuse
             // that stream, even after unlock or a renderer starts another call.
             let result = tokio::select! { biased; _=cancellation.changed()=>break, _=lease.cancelled()=>break, _=reply.closed()=>break, result=tokio::time::timeout(DEADLINE,operation)=>result.unwrap_or_else(|_|Err(unavailable())) };
-            let failed = result.is_err();
+            let failed = result.as_ref().is_err_and(|error| {
+                // Known local/negative-marker rejections consumed no input and
+                // leave the framed stream synchronized. Preserve navigation.
+                !(chat_request && matches!(error.kind(), "tmux_chat_invalid" | "tmux_chat_stale"))
+            });
             if lease.check().is_err() || *cancellation.borrow() {
                 break;
             }
-            let _ = lease.with_current(|| {
-                let cancelled = cancellation.borrow();
-                if !*cancelled {
-                    let _ = reply.send(result);
-                }
-            });
+            drop(_permit);
+            let published = lease
+                .with_current(|| {
+                    let cancelled = cancellation.borrow();
+                    if !*cancelled {
+                        reply.send(result).is_ok()
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            // A waiter may close after the select completes but before reply
+            // publication. Never leave newly granted/advanced authority behind.
+            if chat_request && !published {
+                control.chat = None;
+            }
             if failed {
                 break;
             }
@@ -563,6 +645,21 @@ impl Binding {
                 "Refresh this tmux view before navigating",
             ));
         }
+        match self
+            .call_action(lease, cancel, Action::Navigation(target), None)
+            .await?
+        {
+            Reply::Navigation(snapshot) => Ok(snapshot),
+            _ => Err(protocol()),
+        }
+    }
+    async fn call_action(
+        &self,
+        lease: &AccessLease,
+        cancel: &mut watch::Receiver<bool>,
+        action: Action,
+        permit: Option<chat::Permit>,
+    ) -> Result<Reply> {
         let (reply, response) = oneshot::channel();
         lease.with_current(|| {
             // Hold the watch read guard across synchronous queue admission;
@@ -574,8 +671,9 @@ impl Binding {
             self.requests
                 .try_send(Request {
                     lease: lease.clone(),
-                    target,
+                    action,
                     reply,
+                    _permit: permit,
                 })
                 .map_err(|_| unavailable())
         })??;
@@ -590,18 +688,36 @@ pub(crate) fn start_with_revoked_queue_fixture(
 ) -> (Binding, oneshot::Receiver<Result<Snapshot>>) {
     let (requests, rx) = mpsc::channel(4);
     let (reply, response) = oneshot::channel();
+    let (old_reply, response_snapshot) = (reply, response);
     requests
         .try_send(Request {
             lease: lease.clone(),
-            target: None,
-            reply,
+            action: Action::Navigation(None),
+            reply: old_reply,
+            _permit: None,
         })
         .unwrap_or_else(|_| panic!("empty fixture queue"));
     // Enqueue AND revoke before launching the actual actor loop. A no-await
     // interval on the caller cannot synchronize Tauri's separate runtime.
     lease.state().lock().unwrap();
     spawn_actor(control, cancellation, rx);
-    (Binding { requests }, response)
+    // Preserve the navigation fixture's public result shape.
+    let (tx, response) = oneshot::channel();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(value) = response_snapshot.await {
+            let _ = tx.send(value.and_then(|value| match value {
+                Reply::Navigation(s) => Ok(s),
+                _ => Err(protocol()),
+            }));
+        }
+    });
+    (
+        Binding {
+            requests,
+            input_busy: Arc::default(),
+        },
+        response,
+    )
 }
 
 #[cfg(test)]
@@ -611,6 +727,9 @@ pub(crate) fn fixture_control(channel: russh::Channel<client::Msg>, identity: Id
         bytes: Vec::new(),
         identity,
         generation: uuid::Uuid::new_v4().to_string(),
+        chat: None,
+        #[cfg(test)]
+        chat_before_dispatch: None,
     }
 }
 #[tauri::command]
@@ -643,6 +762,32 @@ pub async fn tmux_jump(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn marked_completion_does_not_misclassify_ambiguous_dispatch_as_safe_rejection() {
+        let marker = "OWNED_MARKER";
+        assert_eq!(marked_rows(&[], marker).unwrap(), None);
+        assert_eq!(
+            marked_rows(&[format!("{marker}:ok")], marker).unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            marked_rows(&[format!("{marker}:gone")], marker).unwrap(),
+            Some(false)
+        );
+        for rows in [
+            vec![format!("{marker}:ok"), "extra".into()],
+            vec![format!("{marker}:gone"), "extra".into()],
+            vec![format!("{marker}:unknown")],
+            vec!["unrelated".into()],
+        ] {
+            assert_eq!(
+                marked_rows(&rows, marker)
+                    .expect_err("ambiguous completion must retire the stream")
+                    .kind(),
+                "tmux_protocol"
+            );
+        }
+    }
     #[test]
     fn oversized_labels_never_become_restoration_names() {
         let rows = vec![format!("$0|{}|@0|0|shell|0", "a".repeat(201))];

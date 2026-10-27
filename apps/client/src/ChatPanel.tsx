@@ -1,3 +1,4 @@
+import ChatTerminalInput,{type ClaudeTerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import type {ReportedHistorySource} from './AgentPanel';
 import {t, useUi} from './i18n/core';
 import { transcriptAgents as agents, isDiscoveredTranscript } from "./transcriptSources";
@@ -123,7 +124,7 @@ export function parseTranscript(value: unknown): Page {
   return page;
 }
 
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -156,6 +157,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }:
     { path: string; name: string; sessionId?: string }[]
   >([]);
   const [transcriptSessionId, setTranscriptSessionId] = useState("");
+  const [inputOpen,setInputOpen]=useState({generation:0,pending:false});
   const [opened, setOpened] = useState<{
     agent: string;
     path: string;
@@ -164,6 +166,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }:
     checkpointed?: boolean;
     inlineImages?: boolean;
   }>();
+  const terminalSource=useMemo<ClaudeTerminalSource|undefined>(()=>opened?.agent==='claude'
+    ? Object.freeze({agent:'claude',path:opened.path,view:opened.view==='conversation'?'conversation':'records',inlineImages:!!opened.inlineImages}) : undefined,[opened]);
   const [messages, setMessages] = useState<Message[]>([]);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
   useEffect(()=>{if(preview && !previewRetained)setPreview(undefined);},[preview,previewRetained]);
@@ -173,8 +177,10 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<UiErrorCause>("");
   const [draft, setDraft] = useState("");
+  const draftRevision=useRef(0);
   const [draftStatus, setDraftStatus] = useState<"" | "chatDraftTooLong" | "chatDraftStaged">("");
   const composing = useRef(false);
+  const [compositionActive,setCompositionActive]=useState(false);
   const request = useRef(0);
   const conversation = opened?.agent === 'claude' && opened.view === 'conversation';
   const recorded = opened?.agent === 'grok-acp' && opened.checkpointed === true;
@@ -186,7 +192,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }:
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current++;};}, []);
   useEffect(() => {
     if(initialReported && initialReported.sessionId!==sessionId && path===initialReported.path)setPath('');
-    setDraft(''); setDraftStatus(''); composing.current = false;
+    draftRevision.current++;setDraft(''); setDraftStatus(''); composing.current = false;setCompositionActive(false);
     setOpened(undefined); setMessages([]); setOffset(0); setCheckpoint(undefined); setMore(false);
     setFollowing(false); request.current++;
     return () => {request.current++;};
@@ -267,7 +273,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }:
         }
       : opened;
     if (!source) return;
-    if(reset)setPreview(undefined);
+    if(reset){setPreview(undefined);setInputOpen(value=>({generation:value.generation+1,pending:true}));}
     if (reset && source.agent === 'grok-acp') {setFollowing(false); followRef.current = false;}
     flight.current = true;
     automaticRequest.current = automatic;
@@ -320,7 +326,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }:
     } finally {
       flight.current = false;
       automaticRequest.current = false;
-      if (mounted.current && access.current()) {setBusy(false); setCompleted(value => value + 1);}
+      if (mounted.current && access.current()) {if(reset)setInputOpen(value=>({...value,pending:false}));setBusy(false); setCompleted(value => value + 1);}
     }
   }
   function stageDraft() {
@@ -523,9 +529,16 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory }:
         </button>
       )}
       <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
-        <label>{t("chatDraftLabel")}<textarea rows={4} maxLength={65536} value={draft} onChange={event => { setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} /></label>
+        <label>{t("chatDraftLabel")}<textarea rows={4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} /></label>
         <p>{t("chatDraftExplanation")}</p>
-        <div className="button-row"><button type="submit" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>{onOpenTerminal && <button type="button" onClick={onOpenTerminal}>{t("chatOpenTerminal")}</button>}<button type="button" disabled={!draft} onClick={() => { setDraft(""); setDraftStatus(""); }}>{t("chatClearDraft")}</button></div>
+        <div className="button-row"><button type="submit" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>{onOpenTerminal && <button type="button" onClick={onOpenTerminal}>{t("chatOpenTerminal")}</button>}<button type="button" disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}>{t("chatClearDraft")}</button></div>
+        {terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
+          key={`${previewSource}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput}
+          access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
+          onSent={(text,revision)=>{
+            if(draftRevision.current===revision){draftRevision.current++;setDraft(current=>current===text?'':current);setDraftStatus('');}
+          }}
+        />}
         {draftStatus && <p role="status">{t(draftStatus)}</p>}
       </form>
     </section>

@@ -132,47 +132,68 @@ class NativeWorkspaceTest {
             .put("errno", errno ?: JSONObject.NULL)
     }
 
-    private fun captureOwnedQrFrame(scenario: ActivityScenario<MainActivity>, destination: File, diagnostic: QrCaptureDiagnostic): Boolean {
-        if (diagnostic.budgetMs == 0L) { diagnostic.reason = QrCaptureReason.EMPTY_BUDGET; return false }
+    private companion object {
+        const val QR_OBSERVATION_LIMIT = 2 * 262166 + 4096
+        val QR_SAMPLE_BOOLEANS = setOf("present", "visible", "src", "permission", "scanning", "decoding", "finishing", "cancelled", "timeout", "busy", "alert")
+        val QR_SAMPLE_NULLABLE_BOOLEANS = setOf("hidden", "detailsOpen", "paused")
+        val QR_SAMPLE_NULLABLE_NUMBERS = setOf("readyState", "width", "height", "timeMs", "frames")
+        val QR_SAMPLE_NUMBERS = setOf("liveTracks", "endedTracks")
+        val QR_SAMPLE_KEYS = QR_SAMPLE_BOOLEANS + QR_SAMPLE_NULLABLE_BOOLEANS + QR_SAMPLE_NULLABLE_NUMBERS + QR_SAMPLE_NUMBERS
+    }
+
+    private class QrCaptureReservation {
+        private enum class State { AVAILABLE, IN_FLIGHT, SPENT }
+        private var state = State.AVAILABLE
+        fun reserve(): Boolean {
+            if (state != State.AVAILABLE) return false
+            state = State.IN_FLIGHT
+            return true
+        }
+        fun finishNotReady(): Boolean {
+            if (state != State.IN_FLIGHT) return false
+            state = State.AVAILABLE
+            return true
+        }
+        fun consume() { state = State.SPENT }
+    }
+
+    private fun parseQrObservation(encoded: String): JSONObject {
+        require(encoded.length <= QR_OBSERVATION_LIMIT) { "QR observation result bound" }
+        return JSONObject(encoded)
+    }
+
+    private fun validQrSample(sample: JSONObject): Boolean {
+        if (sample.length() != QR_SAMPLE_KEYS.size || !sample.keys().asSequence().all { it in QR_SAMPLE_KEYS }) return false
+        return QR_SAMPLE_KEYS.all { key ->
+            val value = sample.get(key)
+            when (key) {
+                in QR_SAMPLE_BOOLEANS -> value is Boolean
+                in QR_SAMPLE_NULLABLE_BOOLEANS -> value == JSONObject.NULL || value is Boolean
+                else -> {
+                    val nullable = key in QR_SAMPLE_NULLABLE_NUMBERS
+                    if (value == JSONObject.NULL) nullable
+                    else value is Number && value.toDouble().isFinite() &&
+                        value.toDouble() in 0.0..(if (key == "readyState") 4.0 else 1_000_000.0) &&
+                        value.toDouble() == value.toLong().toDouble()
+                }
+            }
+        }
+    }
+
+    private fun isUnattemptedQrFrame(response: JSONObject, sample: JSONObject): Boolean =
+        validQrSample(sample) && response.keys().asSequence().toSet() == setOf("attempted", "stage", "reason", "length", "data") &&
+            response.opt("attempted") == false && response.opt("stage") == "VIDEO" &&
+            response.opt("reason") == "UNAVAILABLE" && response.opt("length") == 0 && response.isNull("data") &&
+            (!sample.optBoolean("present") || sample.optInt("readyState") < 2 ||
+                sample.optInt("width") == 0 || sample.optInt("height") == 0)
+
+    private fun saveOwnedQrFrame(response: JSONObject, destination: File, diagnostic: QrCaptureDiagnostic): Boolean {
         try {
             val limit = 192 * 1024
             val prefix = "data:image/png;base64,"
-            val result = AtomicReference<String>()
-            val completed = CountDownLatch(1)
-            diagnostic.stage = QrCaptureStage.DISPATCH
-            scenario.onActivity { activity ->
-                val web = requireNotNull(webView(activity.window.decorView))
-                web.evaluateJavascript("""(() => {
-                  console.warn('lazysh.qr.capture:enter');
-                  const out=(stage,reason,length=0,data=null)=>({stage,reason,length,data});
-                  const v=document.querySelector('.theme-qr-panel video');
-                  if(!v||v.readyState<2||!v.videoWidth||!v.videoHeight)return out('VIDEO','UNAVAILABLE');
-                  const scale=Math.min(1,500/v.videoWidth,500/v.videoHeight),c=document.createElement('canvas');
-                  c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));
-                  const ctx=c.getContext('2d');if(!ctx)return out('CONTEXT','UNAVAILABLE');
-                  console.warn('lazysh.qr.capture:before_draw');
-                  try {ctx.drawImage(v,0,0,c.width,c.height);} catch {return out('DRAW','FAILED');}
-                  console.warn('lazysh.qr.capture:after_draw');
-                  console.warn('lazysh.qr.capture:before_encode');
-                  let png;try {png=c.toDataURL('image/png');} catch {return out('ENCODE','FAILED');}
-                  console.warn('lazysh.qr.capture:after_encode');
-                  const length=Math.min(png.length,1000000);
-                  console.warn('lazysh.qr.capture:return');
-                  return png.length<=262166?out('COMPLETE','SAVED',length,png):out('ENCODED_LIMIT','LIMIT',length);
-                })()""") { value ->
-                    android.util.Log.w("LazyshQrCapture", "lazysh.qr.capture:callback_entry")
-                    result.set(value); completed.countDown()
-                }
-            }
-            diagnostic.stage = QrCaptureStage.CALLBACK
-            if (!completed.await(diagnostic.budgetMs, TimeUnit.MILLISECONDS)) {
-                diagnostic.reason = QrCaptureReason.UNAVAILABLE; return false
-            }
             diagnostic.stage = QrCaptureStage.RESULT
             diagnostic.reason = QrCaptureReason.INVALID
-            val encoded = result.get() ?: return false
-            if (encoded.length > (limit * 4 / 3 + prefix.length) * 2 + 512) return false
-            val response = JSONObject(encoded)
+            if (response.opt("attempted") != true) return false
             val length = response.opt("length")
             if (length !is Number || length.toDouble() != length.toInt().toDouble() || length.toInt() !in 0..1_000_000) return false
             diagnostic.encodedChars = length.toInt()
@@ -242,49 +263,102 @@ class NativeWorkspaceTest {
     // Public state only in messages; one attested synthetic frame is stored privately, never logged.
     private fun qrVideoObservation(scenario: ActivityScenario<MainActivity>, frame: File?): (Long) -> String {
         var firstReady: JSONObject? = null
-        var frameAttempted = false
+        var frameAttempted: Boolean? = false
         var frameSaved = false
         var capture: QrCaptureDiagnostic? = null
+        val reservation = QrCaptureReservation()
         val progress = QrObservedProgress()
         return { remaining ->
-            val started = System.nanoTime()
-            val encoded = evaluate(scenario, """JSON.stringify((() => {
-              const q=document.querySelector('.theme-qr-panel'), v=q?.querySelector('video');
-              const statuses=Array.from(q?.querySelectorAll('[role=status]')??[]).map(x=>x.textContent);
-              const bounded=n=>Number.isFinite(n)?Math.min(1000000,Math.max(0,n)):null;
-              const stream=v?.srcObject, tracks=stream instanceof MediaStream?stream.getVideoTracks():[];
-              return {present:!!v,visible:document.visibilityState==='visible',hidden:v?.hidden??null,
-                detailsOpen:v?.closest('details')?.open??null,readyState:bounded(v?.readyState),
-                width:bounded(v?.videoWidth),height:bounded(v?.videoHeight),paused:v?.paused??null,
-                timeMs:bounded(Math.round((v?.currentTime??NaN)*1000)),
-                frames:bounded(v?.getVideoPlaybackQuality?.().totalVideoFrames),src:!!stream,
-                liveTracks:bounded(tracks.filter(x=>x.readyState==='live').length),
-                endedTracks:bounded(tracks.filter(x=>x.readyState==='ended').length),
-                permission:statuses.includes('Waiting for camera permission…'),
-                scanning:statuses.includes('Looking for a theme QR code…'),
-                decoding:statuses.includes('Decoding QR image…'),
-                finishing:statuses.includes('The stopped request is still finishing. Wait before scanning again.'),
-                cancelled:statuses.includes('QR scan stopped.'),timeout:statuses.includes('QR scan stopped after 30 seconds.'),
-                busy:Array.from(q?.querySelectorAll('[role=alert]')??[]).some(x=>x.textContent==='Another QR request is still finishing. Try again when it finishes.'),
-                alert:!!q?.querySelector('[role=alert]')};
-            })())""", remaining)
-            val sample = JSONObject(JSONArray("[$encoded]").getString(0))
-            assertTrue("QR diagnostics contain only finite public state", sample.keys().asSequence().all {
-                val value = sample.get(it); value == JSONObject.NULL || value is Boolean || value is Number
-            })
-            progress.observe(sample)
-            if (firstReady == null && sample.optInt("readyState") >= 2) {
-                firstReady = sample
-                if (frame != null) {
-                    frameAttempted = true
-                    val budget = remaining - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-                    val diagnostic = QrCaptureDiagnostic(budget)
-                    capture = diagnostic
-                    frameSaved = captureOwnedQrFrame(scenario, frame, diagnostic)
+            val reserved = frame != null && reservation.reserve()
+            if (reserved) frameAttempted = null
+            val diagnostic = if (reserved) QrCaptureDiagnostic(remaining) else null
+            val result = AtomicReference<String>()
+            val completed = CountDownLatch(1)
+            var callbackUnavailable = false
+            val sample = try {
+                if (diagnostic != null) { capture = diagnostic; diagnostic.stage = QrCaptureStage.DISPATCH }
+                scenario.onActivity { activity ->
+                    val web = requireNotNull(webView(activity.window.decorView))
+                    web.evaluateJavascript("""(() => {
+                      const q=document.querySelector('.theme-qr-panel'), v=q?.querySelector('video');
+                      const statuses=Array.from(q?.querySelectorAll('[role=status]')??[]).map(x=>x.textContent);
+                      const bounded=n=>Number.isFinite(n)?Math.min(1000000,Math.max(0,n)):null;
+                      const stream=v?.srcObject, tracks=stream instanceof MediaStream?stream.getVideoTracks():[];
+                      const sample={present:!!v,visible:document.visibilityState==='visible',hidden:v?.hidden??null,
+                        detailsOpen:v?.closest('details')?.open??null,readyState:bounded(v?.readyState),
+                        width:bounded(v?.videoWidth),height:bounded(v?.videoHeight),paused:v?.paused??null,
+                        timeMs:bounded(Math.round((v?.currentTime??NaN)*1000)),
+                        frames:bounded(v?.getVideoPlaybackQuality?.().totalVideoFrames),src:!!stream,
+                        liveTracks:bounded(tracks.filter(x=>x.readyState==='live').length),
+                        endedTracks:bounded(tracks.filter(x=>x.readyState==='ended').length),
+                        permission:statuses.includes('Waiting for camera permission…'),
+                        scanning:statuses.includes('Looking for a theme QR code…'),
+                        decoding:statuses.includes('Decoding QR image…'),
+                        finishing:statuses.includes('The stopped request is still finishing. Wait before scanning again.'),
+                        cancelled:statuses.includes('QR scan stopped.'),timeout:statuses.includes('QR scan stopped after 30 seconds.'),
+                        busy:Array.from(q?.querySelectorAll('[role=alert]')??[]).some(x=>x.textContent==='Another QR request is still finishing. Try again when it finishes.'),
+                        alert:!!q?.querySelector('[role=alert]')};
+                      const capture=()=>{
+                        const out=(stage,reason,length=0,data=null,attempted=true)=>({attempted,stage,reason,length,data});
+                        if(!v||v.readyState<2||!v.videoWidth||!v.videoHeight)return out('VIDEO','UNAVAILABLE',0,null,false);
+                        console.warn('lazysh.qr.capture:enter');
+                        const scale=Math.min(1,500/v.videoWidth,500/v.videoHeight),c=document.createElement('canvas');
+                        c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));
+                        const ctx=c.getContext('2d');if(!ctx)return out('CONTEXT','UNAVAILABLE');
+                        console.warn('lazysh.qr.capture:before_draw');
+                        try {ctx.drawImage(v,0,0,c.width,c.height);} catch {return out('DRAW','FAILED');}
+                        console.warn('lazysh.qr.capture:after_draw');
+                        console.warn('lazysh.qr.capture:before_encode');
+                        let png;try {png=c.toDataURL('image/png');} catch {return out('ENCODE','FAILED');}
+                        console.warn('lazysh.qr.capture:after_encode');
+                        const length=Math.min(png.length,1000000);
+                        console.warn('lazysh.qr.capture:return');
+                        return png.length<=262166?out('COMPLETE','SAVED',length,png):out('ENCODED_LIMIT','LIMIT',length);
+                      };
+                      return {sample,capture:${reserved} ? capture() : null};
+                    })()""") { value ->
+                        // Inspect only a fixed structural token, never log or parse private image bytes here.
+                        if (reserved && value.length <= QR_OBSERVATION_LIMIT && value.contains("\"attempted\":true")) {
+                            android.util.Log.w("LazyshQrCapture", "lazysh.qr.capture:callback_entry")
+                        }
+                        result.set(value); completed.countDown()
+                    }
                 }
+                if (diagnostic != null) diagnostic.stage = QrCaptureStage.CALLBACK
+                callbackUnavailable = !completed.await(remaining.coerceIn(1, 1_000), TimeUnit.MILLISECONDS)
+                assertTrue("QR observation callback unavailable", !callbackUnavailable)
+                if (diagnostic != null) { diagnostic.stage = QrCaptureStage.RESULT; diagnostic.reason = QrCaptureReason.INVALID }
+                val response = parseQrObservation(requireNotNull(result.get()) { "QR observation result unavailable" })
+                require(response.keys().asSequence().toSet() == setOf("sample", "capture")) { "QR observation shape" }
+                val current = response.getJSONObject("sample")
+                require(validQrSample(current)) { "QR observation contains only the closed public schema" }
+                if (reserved) {
+                    val encodedFrame = response.getJSONObject("capture")
+                    if (isUnattemptedQrFrame(encodedFrame, current)) {
+                        check(reservation.finishNotReady()) { "QR capture reservation" }
+                        capture = null
+                        frameAttempted = false
+                    } else {
+                        reservation.consume()
+                        require(encodedFrame.opt("attempted") == true) { "QR capture attempt shape" }
+                        frameAttempted = true
+                        frameSaved = saveOwnedQrFrame(encodedFrame, requireNotNull(frame), requireNotNull(diagnostic))
+                    }
+                } else require(response.isNull("capture")) { "Unreserved QR capture" }
+                current
+            } catch (error: Throwable) {
+                if (reserved) {
+                    reservation.consume(); diagnostic?.failed(error)
+                    if (callbackUnavailable && diagnostic != null) diagnostic.reason = QrCaptureReason.UNAVAILABLE
+                }
+                null
             }
-            JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample)
-                .put("frameEnabled", frame != null).put("frameAttempted", frameAttempted).put("frameSaved", frameSaved)
+            if (sample != null) {
+                progress.observe(sample)
+                if (firstReady == null && sample.optInt("readyState") >= 2) firstReady = sample
+            }
+            JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample ?: JSONObject.NULL)
+                .put("frameEnabled", frame != null).put("frameAttempted", frameAttempted ?: JSONObject.NULL).put("frameSaved", frameSaved)
                 .put("capture", capture?.report() ?: JSONObject.NULL).put("observed", progress.report()).toString().also {
                 require(it.length <= 2_048) { "QR diagnostic bound" }
             }
@@ -612,6 +686,60 @@ class NativeWorkspaceTest {
             armed = true
         }
         @Synchronized fun openedAny() = opened.isNotEmpty()
+    }
+
+    @Test fun qrCaptureReservationCannotRearmAfterTimeoutOrAnActualAttempt() {
+        val reservation = QrCaptureReservation()
+        assertTrue("Initial diagnostic can reserve", reservation.reserve())
+        assertTrue("Only one dispatch may own the reservation", !reservation.reserve())
+        assertTrue("Certified no-attempt can rearm", reservation.finishNotReady())
+        assertTrue("A later ready observation can reserve", reservation.reserve())
+        reservation.consume()
+        assertTrue("Actual attempt or timeout permanently consumes capacity", !reservation.reserve())
+        assertTrue("A late no-attempt callback cannot rearm consumed capacity", !reservation.finishNotReady())
+        assertTrue("A late completion cannot permit another capture", !reservation.reserve())
+    }
+
+    private fun qrNotReadySample() = JSONObject("""{
+        "present":true,"visible":true,"hidden":false,"detailsOpen":true,
+        "readyState":0,"width":0,"height":0,"paused":true,"timeMs":0,"frames":0,
+        "src":false,"liveTracks":0,"endedTracks":0,"permission":true,"scanning":false,
+        "decoding":false,"finishing":false,"cancelled":false,"timeout":false,"busy":false,"alert":false
+    }""")
+
+    private fun qrNoAttemptResponse() = JSONObject().put("attempted", false).put("stage", "VIDEO").put("reason", "UNAVAILABLE")
+        .put("length", 0).put("data", JSONObject.NULL)
+
+    @Test fun qrMalformedSamplesCannotRearmCaptureThroughOptDefaults() {
+        val response = qrNoAttemptResponse()
+        val missingPresent = qrNotReadySample().also { it.remove("present") }
+        val malformed = listOf(JSONObject(), missingPresent, qrNotReadySample().put("extra", false),
+            qrNotReadySample().put("present", 0), qrNotReadySample().put("src", 1),
+            qrNotReadySample().put("readyState", "0"), qrNotReadySample().put("hidden", 0),
+            qrNotReadySample().put("present", JSONObject.NULL), qrNotReadySample().put("liveTracks", JSONObject.NULL),
+            qrNotReadySample().put("readyState", 5), qrNotReadySample().put("frames", -1),
+            qrNotReadySample().put("timeMs", 0.5))
+        malformed.forEachIndexed { index, sample ->
+            assertTrue("Malformed sample cannot certify no attempt: case $index", !isUnattemptedQrFrame(response, sample))
+        }
+        assertTrue("Full actual not-ready shape may certify no attempt", isUnattemptedQrFrame(response, qrNotReadySample()))
+        val absent = qrNotReadySample().put("present", false)
+        for (key in listOf("hidden", "detailsOpen", "paused", "readyState", "width", "height", "timeMs", "frames")) absent.put(key, JSONObject.NULL)
+        assertTrue("Actual absent-video nullable fields remain valid", isUnattemptedQrFrame(response, absent))
+    }
+
+    @Test fun qrCombinedObservationRequiresExactNoAttemptAndBoundsBeforeParsing() {
+        val notReady = qrNotReadySample()
+        val response = qrNoAttemptResponse()
+        assertTrue("Exact not-ready response may release reservation", isUnattemptedQrFrame(response, notReady))
+        assertTrue("An attempted frame cannot rearm", !isUnattemptedQrFrame(JSONObject(response.toString()).put("attempted", true), notReady))
+        assertTrue("An extra field cannot certify no attempt", !isUnattemptedQrFrame(JSONObject(response.toString()).put("extra", false), notReady))
+        assertTrue("A ready sample cannot certify no attempt", !isUnattemptedQrFrame(response,
+            JSONObject(notReady.toString()).put("readyState", 4).put("width", 480).put("height", 640)))
+        val oversized = "{\"sample\":{},\"capture\":null}" + " ".repeat(QR_OBSERVATION_LIMIT)
+        val rejected = runCatching { parseQrObservation(oversized) }.exceptionOrNull()
+        assertEquals("QR observation result bound", rejected?.message)
+        assertTrue("Malformed JSON cannot release capacity", runCatching { parseQrObservation("{") }.isFailure)
     }
 
     @Test fun qrObservedProgressRetainsAttachmentBeforeReadyAndOnlyBoundedMilestones() {

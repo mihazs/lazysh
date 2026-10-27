@@ -10,8 +10,18 @@ use tauri::Manager;
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
 
+#[path = "tmux_teardown_diagnostics.rs"]
+mod teardown;
+
 fn fixture_key() -> russh::keys::PrivateKey {
     russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()
+}
+fn unlocked_authority() -> (AccessState, AccessLease) {
+    let access = AccessState::default();
+    access.initialize(true, true, String::new()).unwrap();
+    access.authorize(access.generation().unwrap()).unwrap();
+    let lease = crate::ssh::test_support::ready_lease(&access);
+    (access, lease)
 }
 
 struct Process(Child);
@@ -201,6 +211,22 @@ impl Fixture {
             .await
             .unwrap(),
         )
+    }
+    async fn neutral(&self, state: &AppState, lease: &AccessLease) -> Connected {
+        let (channel, initial) =
+            open_terminal_for(self.handle(), lease, 80, 24, Some("exec sleep 120".into()))
+                .await
+                .unwrap();
+        spawn_terminal(
+            state,
+            lease.clone(),
+            self.handle().clone(),
+            channel,
+            initial,
+            Channel::new(|_| Ok(())),
+        )
+        .await
+        .unwrap()
     }
     async fn stop_listener(&mut self) {
         self.daemon.0.kill().unwrap();
@@ -808,10 +834,7 @@ async fn product_actor_probe() {
         .unwrap();
     assert!(String::from_utf8_lossy(&initial).contains("owned startup banner"));
     assert!(!String::from_utf8_lossy(&initial).contains(&marker));
-    let access = AccessState::default();
-    access.initialize(true, true, String::new()).unwrap();
-    access.authorize(access.generation().unwrap()).unwrap();
-    let lease = crate::ssh::test_support::ready_lease(&access);
+    let (access, lease) = unlocked_authority();
     let control = crate::tmux_jump::prepare_command(
         f.handle(),
         identity.clone(),
@@ -1031,6 +1054,20 @@ struct NamedServers<'a> {
     names: Vec<String>,
 }
 impl NamedServers<'_> {
+    fn stop(&mut self) -> Vec<teardown::Stop> {
+        std::mem::take(&mut self.names)
+            .iter()
+            .map(|name| {
+                Command::new(&self.fixture.tmux)
+                    .args(["-L", name, "kill-server"])
+                    .env("TMUX_TMPDIR", self.fixture.dir.path())
+                    .env_remove("TMUX")
+                    .output()
+                    .map(|output| output.status)
+                    .into()
+            })
+            .collect()
+    }
     fn direct(&self, name: &str, args: &[&str]) -> String {
         lazysh_common::test_support::successful_output(
             Command::new(&self.fixture.tmux)
@@ -1047,13 +1084,7 @@ impl NamedServers<'_> {
 }
 impl Drop for NamedServers<'_> {
     fn drop(&mut self) {
-        for name in &self.names {
-            let _ = Command::new(&self.fixture.tmux)
-                .args(["-L", name, "kill-server"])
-                .env("TMUX_TMPDIR", self.fixture.dir.path())
-                .env_remove("TMUX")
-                .output();
-        }
+        let _ = self.stop();
     }
 }
 #[tokio::test]
@@ -1102,20 +1133,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         panic!("expected requested named tmux picker");
     };
     assert_eq!(server, hostile);
-    let (channel, initial) =
-        open_terminal_for(f.handle(), &lease, 80, 24, Some("exec sleep 120".into()))
-            .await
-            .unwrap();
-    let parent = spawn_terminal(
-        &state,
-        lease.clone(),
-        f.handle().clone(),
-        channel,
-        initial,
-        Channel::new(|_| Ok(())),
-    )
-    .await
-    .unwrap();
+    let parent = f.neutral(&state, &lease).await;
     attempt.finish();
     assert!(launch.begin_host(&receipt, &lease, &f.host.id).is_err());
     let neutral = state.session(&parent.session_id).await.unwrap();
@@ -1384,6 +1402,444 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
     );
 }
 
+async fn chat_fixture_call(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+    action: serde_json::Value,
+) -> Probe<serde_json::Value> {
+    crate::tmux_jump::chat::tmux_chat(
+        lease.clone(),
+        app.state(),
+        session.into(),
+        serde_json::from_value(action).unwrap(),
+    )
+    .await
+    .map_err(|error| format!("{:?}", error.into_inner()))
+    .and_then(|reply| reply.into_inner().map_err(|error| format!("{error:?}")))
+    .map(|reply| serde_json::to_value(reply).unwrap())
+}
+async fn chat_fixture_attach(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    parent: &str,
+    name: &str,
+) -> String {
+    let session = attach_tmux(
+        lease.clone(),
+        app.state(),
+        parent.into(),
+        Some("chat-a".into()),
+        name.into(),
+        80,
+        24,
+        Channel::new(|_| Ok(())),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap()
+    .session_id;
+    chat_fixture_adopt(app, lease, &session).await;
+    session
+}
+async fn chat_fixture_adopt(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+) {
+    adopt_session(lease.clone(), app.state(), app.state(), session.into())
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+}
+async fn chat_fixture_bind(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+    source: &serde_json::Value,
+) -> serde_json::Value {
+    let snapshot = chat_fixture_call(app, lease, session, serde_json::json!({"kind":"snapshot"}))
+        .await
+        .unwrap();
+    chat_fixture_call(
+        app,
+        lease,
+        session,
+        serde_json::json!({"kind":"bind","source":source,"destination":snapshot["destination"]}),
+    )
+    .await
+    .unwrap()
+}
+async fn chat_fixture_bytes(path: &std::path::Path, expected: &[u8]) {
+    timeout(BOUND, async {
+        loop {
+            if tokio::fs::read(path).await.ok().as_deref() == Some(expected) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("exact owned terminal input bytes");
+}
+async fn chat_fixture_rejected(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+    action: serde_json::Value,
+    output: &std::path::Path,
+    expected: &[u8],
+) {
+    assert!(chat_fixture_call(app, lease, session, action)
+        .await
+        .is_err());
+    assert_eq!(tokio::fs::read(output).await.unwrap().as_slice(), expected);
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux 3.4+; explicit terminal-input acceptance"]
+async fn real_tmux_chat_original_display_namespace_bytes_and_retirement() {
+    timeout(Duration::from_secs(30), chat_input_probe())
+        .await
+        .expect("bounded tmux input fixture");
+}
+async fn chat_input_probe() {
+    use serde_json::json;
+    let f = Fixture::new().await;
+    let servers = NamedServers {
+        fixture: &f,
+        names: vec!["chat-a".into(), "chat-b".into()],
+    };
+    let outputs = [
+        f.dir.path().join("selected-input"),
+        f.dir.path().join("other-server-input"),
+        f.dir.path().join("other-window-input"),
+    ];
+    for (name, path) in servers.names.iter().zip(outputs.iter()) {
+        assert_eq!(
+            servers.direct(
+                name,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "recorded",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    &format!(
+                        "stty raw -echo; exec cat > {}",
+                        quote(path.to_str().unwrap())
+                    )
+                ]
+            ),
+            "%0"
+        );
+    }
+    let other = servers.direct(
+        "chat-a",
+        &[
+            "new-window",
+            "-d",
+            "-t",
+            "$0",
+            "-P",
+            "-F",
+            "#{window_id}",
+            &format!(
+                "stty raw -echo; exec cat > {}",
+                quote(outputs[2].to_str().unwrap())
+            ),
+        ],
+    );
+    servers.direct(
+        "chat-a",
+        &["new-session", "-d", "-s", "spectator", "-t", "recorded"],
+    );
+    servers.direct(
+        "chat-a",
+        &["select-window", "-t", &format!("spectator:{other}")],
+    );
+    timeout(BOUND, async {
+        loop {
+            if outputs.iter().all(|path| path.exists()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("owned raw cat workloads ready");
+    let state = AppState::new(f.dir.path().join("chat-config")).unwrap();
+    let app = tauri::test::mock_app();
+    app.manage(state.clone());
+    app.manage(crate::local::LocalState::default());
+    let (access, lease) = unlocked_authority();
+    let parent = f.neutral(&state, &lease).await;
+    let spectator = chat_fixture_attach(&app, &lease, &parent.session_id, "spectator").await;
+    chat_fixture_adopt(&app, &lease, &parent.session_id).await;
+    let child = chat_fixture_attach(&app, &lease, &parent.session_id, "recorded").await;
+    servers.direct(
+        "chat-a",
+        &["rename-window", "-t", "@0", "Selected history | 界"],
+    );
+    let shown = chat_fixture_call(&app, &lease, &child, json!({"kind":"snapshot"}))
+        .await
+        .unwrap();
+    assert_eq!(shown["sessionName"], "recorded");
+    assert_eq!(shown["windowName"], "Selected history | 界");
+    assert_eq!(shown["paneIndex"], 0);
+    let original_process = servers.direct(
+        "chat-a",
+        &["display-message", "-p", "-t", "%0", "#{pane_pid}"],
+    );
+    let source = json!({"agent":"claude","path":"/owned/reported history ","view":"conversation","inlineImages":false});
+    eprintln!("tmux chat stage: initial binding");
+    let bound = chat_fixture_bind(&app, &lease, &child, &source).await;
+    assert_eq!(bound["destination"]["paneId"], "%0");
+    assert_eq!(bound["nextOperation"], 1);
+    let send = |receipt: &serde_json::Value, operation: u32, input: serde_json::Value| json!({"kind":"input","receipt":receipt,"source":source,"operation":operation,"input":input});
+    let text = "hé 世界; '$#{pane_id}\\";
+    let delivered = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(&bound["receipt"], 1, json!({"kind":"send","text":text})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(delivered, json!({"kind":"delivered","nextOperation":2}));
+    let stopped = chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(&bound["receipt"], 2, json!({"kind":"request_stop"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stopped, json!({"kind":"delivered","nextOperation":3}));
+    let mut expected = format!("{text}\r\u{1b}").into_bytes();
+    chat_fixture_bytes(&outputs[0], &expected).await;
+    for path in &outputs[1..] {
+        assert!(tokio::fs::read(path).await.unwrap().is_empty());
+    }
+    assert_eq!(
+        servers.direct(
+            "chat-a",
+            &["display-message", "-p", "-t", "%0", "#{pane_pid}"]
+        ),
+        original_process
+    );
+    assert_eq!(
+        servers
+            .direct("chat-a", &["list-panes", "-a", "-F", "#{pane_id}"])
+            .lines()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        2
+    );
+    // Duplicate operation cannot submit again and retires its input receipt.
+    eprintln!("tmux chat stage: duplicate operation");
+    assert!(chat_fixture_call(
+        &app,
+        &lease,
+        &child,
+        send(&bound["receipt"], 2, json!({"kind":"request_stop"}))
+    )
+    .await
+    .is_err());
+    assert_eq!(tokio::fs::read(&outputs[0]).await.unwrap(), expected);
+    disconnect(app.state(), child).await.unwrap();
+    // No automatic bind after retirement. Reattach here exercises a fresh
+    // native display/client rather than accidentally inheriting old authority.
+    eprintln!("tmux chat stage: move after preflight");
+    let child = chat_fixture_attach(&app, &lease, &parent.session_id, "recorded").await;
+    let bound = chat_fixture_bind(&app, &lease, &child, &source).await;
+    // Hold AFTER real preflight: move only the original display to another
+    // session, leaving the retained control client on its old session/pane.
+    let native = state.session(&child).await.unwrap();
+    let binding = native.tmux.lock().unwrap().clone().unwrap();
+    let clients = servers.direct(
+        "chat-a",
+        &[
+            "list-clients",
+            "-F",
+            "#{session_id}|#{client_control_mode}|#{client_tty}",
+        ],
+    );
+    let selected = clients
+        .lines()
+        .filter_map(|row| row.strip_prefix("$0|0|"))
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 1);
+    let (ready, release, configured) =
+        binding.fixture_gate(lease.clone(), native.cancel.subscribe(), true);
+    configured.await.unwrap().unwrap();
+    let pending = binding.fixture_call(
+        lease.clone(),
+        native.cancel.subscribe(),
+        send(
+            &bound["receipt"],
+            1,
+            json!({"kind":"send","text":"forbidden"}),
+        ),
+    );
+    timeout(BOUND, ready).await.unwrap().unwrap();
+    servers.direct(
+        "chat-a",
+        &["switch-client", "-c", selected[0], "-t", "spectator"],
+    );
+    release.send(()).unwrap();
+    assert!(pending.await.unwrap().is_err());
+    assert_eq!(tokio::fs::read(&outputs[0]).await.unwrap(), expected);
+    assert!(tokio::fs::read(&outputs[2]).await.unwrap().is_empty());
+    disconnect(app.state(), child).await.unwrap();
+    servers.direct("chat-a", &["select-window", "-t", "$0:@0"]);
+    let child = chat_fixture_attach(&app, &lease, &parent.session_id, "recorded").await;
+    let bound = chat_fixture_bind(&app, &lease, &child, &source).await;
+    access.lock().unwrap();
+    access.authorize(access.generation().unwrap()).unwrap();
+    let renewed = crate::ssh::test_support::ready_lease(&access);
+    chat_fixture_rejected(
+        &app,
+        &renewed,
+        &child,
+        send(&bound["receipt"], 1, json!({"kind":"request_stop"})),
+        &outputs[0],
+        &expected,
+    )
+    .await;
+    // A cancelled admitted Input queued behind owned work must retire its
+    // receipt even though the actor has not begun that Input's preflight.
+    eprintln!("tmux chat stage: fresh confirmation after relock");
+    let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
+    let native = state.session(&child).await.unwrap();
+    let binding = native.tmux.lock().unwrap().clone().unwrap();
+    let (ready, release, holding) =
+        binding.fixture_gate(renewed.clone(), native.cancel.subscribe(), false);
+    timeout(BOUND, ready).await.unwrap().unwrap();
+    let pending = binding.fixture_call(
+        renewed.clone(),
+        native.cancel.subscribe(),
+        send(&bound["receipt"], 1, json!({"kind":"request_stop"})),
+    );
+    timeout(BOUND, async {
+        while binding.fixture_queue_depth() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    pending.abort();
+    let _ = pending.await;
+    release.send(()).unwrap();
+    holding.await.unwrap().unwrap();
+    timeout(BOUND, async {
+        while binding.fixture_input_pending() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    chat_fixture_rejected(
+        &app,
+        &renewed,
+        &child,
+        send(&bound["receipt"], 1, json!({"kind":"request_stop"})),
+        &outputs[0],
+        &expected,
+    )
+    .await;
+    for (enable, disable) in [
+        (
+            vec!["set-window-option", "-t", "@0", "synchronize-panes", "on"],
+            vec!["set-window-option", "-t", "@0", "synchronize-panes", "off"],
+        ),
+        (
+            vec!["copy-mode", "-t", "%0"],
+            vec!["send-keys", "-t", "%0", "-X", "cancel"],
+        ),
+    ] {
+        eprintln!("tmux chat stage: mode or synchronization rejection");
+        let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
+        servers.direct("chat-a", &enable);
+        assert!(chat_fixture_call(
+            &app,
+            &renewed,
+            &child,
+            send(&bound["receipt"], 1, json!({"kind":"request_stop"}))
+        )
+        .await
+        .is_err());
+        servers.direct("chat-a", &disable);
+        assert_eq!(tokio::fs::read(&outputs[0]).await.unwrap(), expected);
+    }
+    let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
+    let mut mismatched = send(&bound["receipt"], 1, json!({"kind":"request_stop"}));
+    mismatched["source"]["path"] = "/other".into();
+    assert!(chat_fixture_call(&app, &renewed, &child, mismatched)
+        .await
+        .is_err());
+    assert_eq!(tokio::fs::read(&outputs[0]).await.unwrap(), expected);
+    // Explicit input is frozen at native admission. An actor-queued Release
+    // retires FUTURE authority, not that already-admitted terminal input.
+    eprintln!("tmux chat stage: admitted intent and queued release");
+    let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
+    let (ready, release, configured) =
+        binding.fixture_gate(renewed.clone(), native.cancel.subscribe(), true);
+    configured.await.unwrap().unwrap();
+    let pending = binding.fixture_call(
+        renewed.clone(),
+        native.cancel.subscribe(),
+        send(&bound["receipt"], 1, json!({"kind":"send","text":"once"})),
+    );
+    timeout(BOUND, ready).await.unwrap().unwrap();
+    let released = binding.fixture_call(
+        renewed.clone(),
+        native.cancel.subscribe(),
+        json!({"kind":"release","receipt":bound["receipt"]}),
+    );
+    timeout(BOUND, async {
+        while binding.fixture_queue_depth() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    release.send(()).unwrap();
+    pending.await.unwrap().unwrap();
+    released.await.unwrap().unwrap();
+    expected.extend_from_slice(b"once\r");
+    chat_fixture_bytes(&outputs[0], &expected).await;
+    assert!(chat_fixture_call(
+        &app,
+        &renewed,
+        &child,
+        send(&bound["receipt"], 2, json!({"kind":"request_stop"}))
+    )
+    .await
+    .is_err());
+    let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
+    eprintln!("tmux chat stage: server EOF");
+    servers.direct("chat-a", &["kill-server"]);
+    chat_fixture_rejected(
+        &app,
+        &renewed,
+        &child,
+        send(&bound["receipt"], 1, json!({"kind":"request_stop"})),
+        &outputs[0],
+        &expected,
+    )
+    .await;
+    assert!(tokio::fs::read(&outputs[1]).await.unwrap().is_empty());
+    disconnect(app.state(), child).await.unwrap();
+    disconnect(app.state(), spectator).await.unwrap();
+    disconnect(app.state(), parent.session_id).await.unwrap();
+    assert!(state.sessions.lock().await.is_empty());
+}
+
 // Exercise the same native attach boundary as saved-workspace restoration, without
 // borrowing the fixture's original connection or its AppState.
 async fn reconnect_display(
@@ -1452,7 +1908,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     let original = f.handle.take().unwrap();
     let old_handle = Arc::downgrade(&original);
     let saved_server = "世界 '$(printf NO);";
-    let servers = NamedServers {
+    let mut servers = NamedServers {
         fixture: &f,
         names: vec![saved_server.into(), "other".into()],
     };
@@ -1513,6 +1969,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
             ]
         })
         .collect::<Vec<_>>();
+    let mut diagnostics = teardown::Processes::capture(&owned_pids);
     let authority = AccessState::disabled();
     let lease = authority.lease(None).unwrap();
     let first = tauri::test::mock_app();
@@ -1627,6 +2084,8 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     })
     .await
     .expect("fresh owned transport must retire during teardown");
+    diagnostics.before_stop();
+    let cleanup = servers.stop();
     drop(servers);
     for pid in owned_pids {
         timeout(BOUND, async {
@@ -1639,7 +2098,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
             );
         })
         .await
-        .expect("owned tmux server/workload must exit during teardown");
+        .unwrap_or_else(|error| panic!("owned tmux server/workload must exit during teardown: {error:?}; cleanup={cleanup:?}; processes(before,after)={}", diagnostics.failure()));
     }
     f.stop_listener().await;
 }
