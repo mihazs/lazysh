@@ -105,6 +105,16 @@ package script because the action tokenizes its command without a shell. Any
 detected clone fails the job; no scope exception or threshold change
 is made for authored fragments, source or tests.
 
+The scanner's generated-artifact scope lists exactly the 15 owned package
+`CHANGELOG.md` paths in `.jscpd.json`. Changesets 3.0.3 produces these files;
+their history begins with the automated release PRs #220 and #239 and contains
+no handwritten entries. Shared fixed-train release notes and accumulated
+dependency entries can legitimately repeat across that output. Keep manual
+release explanations in the root `CHANGELOG.md` or authored changeset fragments,
+which remain scanned along with documentation and source/tests. Do not broaden
+this list to a changelog glob or add handwritten content to a generated file.
+Changing workspace membership requires reviewing this exact generated-path list.
+
 Current GitHub documentation says PRs opened or synchronized by `GITHUB_TOKEN`
 create approval-required workflow runs. A writer must choose **Approve workflows
 to run** and review the exact generated head. Token-created pushes do not
@@ -135,7 +145,14 @@ short version and build version in a bounded compiled-app-version.json receipt,
 alongside a path-free SHA256 of the same compiled plist snapshot. The existing
 lazysh-ios-signing artifact retains it before runtime checks and the later app
 acceptance artifact includes it again. A missing, malformed, oversized or
-unsupported value records an explicit unavailable status without changing the
+unsupported value records an explicit unavailable status and a fixed failure
+stage (input, snapshot, identifier, short-version, build-version, validation or
+publication), without retaining raw errors, private paths or additional values.
+The three scalar fields use `plutil -extract ... raw -expect string -n`; bounded
+private files preserve their exact bytes for validation without shell trimming.
+The unavailable receipt observed in #241 did not identify its failing stage and
+does not establish that scalar JSON extraction caused that outcome. These
+observations do not change the
 build or test verdict. This app-only observation does not certify embedded
 extension/watch versions or physical runtime behavior; native version acceptance
 requires inspecting a retained receipt from the exact hosted source/job.

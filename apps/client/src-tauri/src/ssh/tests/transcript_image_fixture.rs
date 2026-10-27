@@ -169,6 +169,7 @@ pub(super) async fn verify(
         assert_eq!(fs::read(&path).unwrap(), records.as_bytes());
     }
     verify_conversation(app, &lease, &id, directory).await;
+    verify_reported_history(app, &lease, &id, directory).await;
     assert!(app.state::<AppState>().session(&id).await.is_ok());
     disconnect(app.state(), id.clone()).await.unwrap();
     assert!(app.state::<AppState>().session(&id).await.is_err());
@@ -309,6 +310,15 @@ async fn invalid_image_options_reject_before_session_lookup() {
 
 #[tokio::test]
 async fn held_transcript_open_cannot_dispatch_after_original_lease_revocation() {
+    cancelled_agent_read(false).await;
+}
+
+#[tokio::test]
+async fn held_reported_history_open_cannot_dispatch_after_original_lease_revocation() {
+    cancelled_agent_read(true).await;
+}
+
+async fn cancelled_agent_read(reported: bool) {
     let authority = unlocked_access();
     let lease = ready_lease(&authority);
     let (state, _directory, _host, server, task, session) = auxiliary_fixture(lease.clone()).await;
@@ -322,6 +332,15 @@ async fn held_transcript_open_cannot_dispatch_after_original_lease_revocation() 
     server.hold_opens.store(true, Ordering::SeqCst);
     let original = lease.clone();
     let pending = tokio::spawn(async move {
+        if reported {
+            return agent_reported_history(
+                original,
+                app.state(),
+                "owned-source".into(),
+                "opaque-claude".into(),
+            )
+            .await;
+        }
         agent_transcript(
             original,
             app.state(),
@@ -355,4 +374,110 @@ async fn held_transcript_open_cannot_dispatch_after_original_lease_revocation() 
     let probe = session.handle.channel_open_session().await.unwrap();
     probe.close().await.unwrap();
     task.abort();
+}
+
+async fn reported_source(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    session: &str,
+    agent_session: &str,
+) -> Value {
+    agent_reported_history(
+        lease.clone(),
+        app.state(),
+        session.into(),
+        agent_session.into(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap()
+}
+
+async fn verify_reported_history(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    id: &str,
+    directory: &Path,
+) {
+    let opaque = "Claude' --opaque 世界";
+    let path = directory.join("unwritten history' 世界$(literal).jsonl ");
+    let mut payload = json!({"hook_event_name":"UserPromptSubmit","session_id":opaque,"transcript_path":path,"cwd":directory,"prompt":"never store prompt bytes"});
+    let session = app.state::<AppState>().session(id).await.unwrap();
+    for opted in [false, true] {
+        let command = format!(
+            "printf %s {} | lazysh-agent ingest --agent claude{}",
+            quote(&payload.to_string()),
+            if opted { " --reported-history" } else { "" }
+        );
+        assert!(exec(&session, lease, command).await.unwrap().is_empty());
+        let value = reported_source(app, lease, id, opaque).await;
+        assert_eq!(value["sessionId"], opaque);
+        assert_eq!(value["schemaVersion"], 1);
+        if opted {
+            assert_eq!(value["status"], "available");
+            assert_eq!(value["path"], path.to_str().unwrap());
+            assert!(value["reportedAt"].as_str().is_some());
+        } else {
+            assert_eq!(
+                value,
+                json!({"schemaVersion":1,"status":"missing","sessionId":opaque})
+            );
+        }
+        assert!(
+            !path.exists(),
+            "metadata capture/lookup must not open or create transcript files"
+        );
+    }
+    let snapshot = agent_snapshot(lease.clone(), app.state(), id.into())
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    assert!(
+        !snapshot.to_string().contains("unwritten")
+            && !snapshot.to_string().contains("never store prompt")
+    );
+    payload["transcript_path"] = json!(directory.join("conflicting.jsonl"));
+    exec(
+        &session,
+        lease,
+        format!(
+            "printf %s {} | lazysh-agent ingest --agent claude --reported-history",
+            quote(&payload.to_string())
+        ),
+    )
+    .await
+    .unwrap();
+    let value = reported_source(app, lease, id, opaque).await;
+    assert_eq!(
+        value,
+        json!({"schemaVersion":1,"sessionId":opaque,"status":"ambiguous"})
+    );
+}
+
+#[tokio::test]
+async fn reported_history_id_validation_precedes_session_lookup_and_quotes_literal_ids() {
+    assert_eq!(
+        reported_history_command("opaque' --id 世界").unwrap(),
+        r"lazysh-agent reported-history --session-id='opaque'\'' --id 世界'"
+    );
+    let (_directory, state) = fixture_state();
+    let app = tauri::test::mock_app();
+    app.manage(state);
+    for id in [
+        String::new(),
+        "\n".into(),
+        "x".repeat(1025),
+        "世".repeat(257),
+    ] {
+        let error =
+            agent_reported_history(access_lease(), app.state(), "missing-session".into(), id)
+                .await
+                .err()
+                .unwrap()
+                .into_inner()
+                .unwrap();
+        assert_eq!(error.kind, "invalid_input");
+    }
 }

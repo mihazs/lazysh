@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod approvals;
 pub mod devices;
 pub mod relay;
+pub mod reported_history;
 pub mod settings;
 mod storage_filesystem;
 mod storage_namespace;
@@ -411,6 +412,9 @@ impl Store {
         connection
             .execute_batch(storage_schema::V1_SESSIONS)
             .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+        connection
+            .execute_batch(reported_history::SCHEMA)
+            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
         relay::initialize(&connection)
             .map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;
         connection
@@ -419,38 +423,58 @@ impl Store {
         Ok(Self { connection })
     }
     pub fn ingest(&mut self, event: &Event, now: DateTime<Utc>) -> Result<()> {
-        event
-            .validate()
-            .map_err(|e| storage_failure(StoragePhase::IngestValidation, e))?;
-        let now = now.timestamp_micros() as f64 / 1_000_000.0;
+        self.ingest_with_reported_history(Some(event), None, now)
+    }
+    pub fn ingest_with_reported_history(
+        &mut self,
+        event: Option<&Event>,
+        source: Option<&reported_history::ReportedSource>,
+        reported_at: DateTime<Utc>,
+    ) -> Result<()> {
+        if let Some(event) = event {
+            event
+                .validate()
+                .map_err(|e| storage_failure(StoragePhase::IngestValidation, e))?;
+        }
+        if let Some(source) = source {
+            source
+                .validate()
+                .map_err(|e| storage_failure(StoragePhase::IngestValidation, e))?;
+        }
+        let now = reported_at.timestamp_micros() as f64 / 1_000_000.0;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| storage_failure(StoragePhase::IngestBegin, e.into()))?;
-        let prior: Option<String> = transaction
-            .query_row(
-                "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
-                params![event.agent, event.session_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?;
-        transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
+        if let Some(event) = event {
+            let prior: Option<String> = transaction
+                .query_row(
+                    "SELECT state FROM sessions WHERE agent=?1 AND session_id=?2",
+                    params![event.agent, event.session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| storage_failure(StoragePhase::PriorState, e.into()))?;
+            transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
             ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
             summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
             params![event.agent,event.session_id,event.project,event.state.as_str(),event.summary,event.pane_id,now]).map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
-        let kind = match event.state {
-            SessionState::Working => lazysh_notification_client::Kind::Working,
-            SessionState::NeedsAttention => lazysh_notification_client::Kind::NeedsAttention,
-            SessionState::Done => lazysh_notification_client::Kind::Done,
-        };
-        relay::admit_transition(
-            &transaction,
-            kind,
-            prior.as_deref() != Some(event.state.as_str()),
-            now as i64,
-        )
-        .map_err(|e| storage_failure(StoragePhase::RelayAdmission, e))?;
+            let kind = match event.state {
+                SessionState::Working => lazysh_notification_client::Kind::Working,
+                SessionState::NeedsAttention => lazysh_notification_client::Kind::NeedsAttention,
+                SessionState::Done => lazysh_notification_client::Kind::Done,
+            };
+            relay::admit_transition(
+                &transaction,
+                kind,
+                prior.as_deref() != Some(event.state.as_str()),
+                now as i64,
+            )
+            .map_err(|e| storage_failure(StoragePhase::RelayAdmission, e))?;
+        }
+        if let Some(source) = source {
+            reported_history::insert(&transaction, source, reported_at)?;
+        }
         transaction
             .execute(
                 "DELETE FROM sessions WHERE updated_at < ?1",
