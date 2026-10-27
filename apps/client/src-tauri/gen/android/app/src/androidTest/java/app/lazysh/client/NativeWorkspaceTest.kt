@@ -10,6 +10,10 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Build
+import android.graphics.Point
+import android.graphics.Rect
+import android.view.Display
 import android.system.Os
 import android.system.OsConstants
 import java.io.File
@@ -51,6 +55,7 @@ import java.util.regex.Pattern
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import androidx.test.uiautomator.Configurator
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -130,6 +135,41 @@ class NativeWorkspaceTest {
         fun report(): JSONObject = JSONObject().put("stage", stage.name).put("reason", reason.name)
             .put("budgetMs", budgetMs).put("encodedChars", encodedChars.coerceIn(0, 1_000_000))
             .put("errno", errno ?: JSONObject.NULL)
+    }
+
+    private enum class QrPermissionPhase { LOOKUP, WINDOW, INJECTION, EFFECT, COMPLETE }
+    private class QrPermissionProgress(private val start: Long, private val expected: Int) {
+        var phase = QrPermissionPhase.LOOKUP
+        var ready = false
+        var windows: Int? = null
+        var choices: Int? = null
+        var dismissed = false
+        var permissionBefore: Int? = null
+        var permissionAfter: Int? = null
+        var delivery: Boolean? = null
+            private set
+        var clicks = 0
+            private set
+        fun remaining(now: Long): Long = TimeUnit.NANOSECONDS.toMillis(start + TimeUnit.SECONDS.toNanos(5) - now).coerceIn(0, 5_000)
+        fun admit(now: Long): Boolean {
+            if (!ready || clicks != 0 || remaining(now) == 0L) return false
+            clicks = 1; phase = QrPermissionPhase.INJECTION
+            return true
+        }
+        fun delivered(accepted: Boolean) {
+            check(clicks == 1 && delivery == null)
+            delivery = accepted; phase = QrPermissionPhase.EFFECT
+        }
+        fun complete(now: Long): Boolean = remaining(now) > 0 && delivery == true && dismissed && permissionAfter == expected
+        private fun permissionLabel(value: Int?): String = when (value) {
+            null -> "unobserved"; PackageManager.PERMISSION_GRANTED -> "granted"; PackageManager.PERMISSION_DENIED -> "denied"; else -> "other"
+        }
+        fun report(now: Long): JSONObject = JSONObject().put("phase", phase.name).put("ready", ready)
+            .put("choice", if (expected == PackageManager.PERMISSION_GRANTED) "allowForeground" else "deny")
+            .put("windows", windows?.coerceIn(0, 17) ?: JSONObject.NULL).put("choices", choices?.coerceIn(0, 17) ?: JSONObject.NULL)
+            .put("clicks", clicks).put("deliveryAccepted", delivery ?: JSONObject.NULL).put("dialogDismissed", dismissed)
+            .put("permissionBefore", permissionLabel(permissionBefore)).put("permissionAfter", permissionLabel(permissionAfter))
+            .put("remainingMs", remaining(now))
     }
 
     private companion object {
@@ -827,6 +867,29 @@ class NativeWorkspaceTest {
         fresh.onCameraAvailable("owned-rear"); assertEquals(0L, fresh.released.count)
     }
 
+    @Test fun qrPermissionChoiceRequiresDeliveredOneShotAndEffectWithinOriginalBudget() {
+        val progress = QrPermissionProgress(0, PackageManager.PERMISSION_GRANTED)
+        assertEquals(5_000L, progress.remaining(0)); assertTrue(!progress.admit(0))
+        progress.ready = true
+        assertTrue(progress.admit(1)); progress.delivered(false)
+        progress.dismissed = true; progress.permissionAfter = PackageManager.PERMISSION_GRANTED
+        assertTrue(!progress.complete(2)); assertTrue(!progress.admit(2)); assertEquals(1, progress.clicks)
+        assertTrue(runCatching { progress.delivered(true) }.isFailure)
+        val delayed = QrPermissionProgress(0, PackageManager.PERMISSION_GRANTED)
+        delayed.ready = true; assertTrue(delayed.admit(0)); delayed.delivered(true)
+        assertTrue(!delayed.complete(TimeUnit.SECONDS.toNanos(4)))
+        delayed.dismissed = true; delayed.permissionAfter = PackageManager.PERMISSION_GRANTED
+        assertTrue(delayed.complete(TimeUnit.SECONDS.toNanos(4)))
+        assertTrue(!delayed.complete(TimeUnit.SECONDS.toNanos(5)))
+        assertTrue(!delayed.admit(TimeUnit.SECONDS.toNanos(5)))
+        assertTrue(delayed.report(Long.MAX_VALUE).toString().length <= 512)
+        val denied = QrPermissionProgress(0, PackageManager.PERMISSION_DENIED)
+        assertEquals("unobserved", denied.report(0).getString("permissionAfter"))
+        assertTrue(denied.report(0).isNull("windows"))
+        denied.dismissed = true; denied.permissionAfter = PackageManager.PERMISSION_DENIED
+        assertTrue(!denied.complete(0)) // An already-denied permission does not prove a Deny click.
+    }
+
     // Dedicated invocation with an owned emulator imagefile camera; no mocked frames or IPC.
     @Test fun ownedQrCameraRequiresPermissionAndExplicitPreview() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -862,19 +925,86 @@ class NativeWorkspaceTest {
         val draft = "manual owned QR draft stays literal"
         var permissionController: String? = null
         fun permission(id: String) {
+            val expected = when (id) {
+                "permission_deny_button" -> PackageManager.PERMISSION_DENIED
+                "permission_allow_foreground_only_button" -> PackageManager.PERMISSION_GRANTED
+                else -> throw AssertionError("Unsupported owned camera permission choice")
+            }
+            val progress = QrPermissionProgress(System.nanoTime(), expected)
             val selector = permissionController?.let { By.res(it, id) }
                 ?: By.res(Pattern.compile("[a-zA-Z0-9_.]+:id/" + Pattern.quote(id)))
             val device = UiDevice.getInstance(instrumentation)
-            assertTrue("Expected real owned camera permission choice: $id", device.wait(Until.hasObject(selector), 5_000))
-            val choices = device.findObjects(selector)
-            assertEquals("Permission choice must be unambiguous", 1, choices.size)
-            val target = choices.single()
-            val owner = requireNotNull(target.applicationPackage) { "Permission owner unavailable" }
-            val info = context.packageManager.getApplicationInfo(owner, 0)
-            assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
-            if (permissionController == null) permissionController = owner
-            assertEquals("Permission choices must retain the same system owner", permissionController, owner)
-            target.click()
+            try {
+                assertTrue("Owned permission choice requires default-display window observations", Build.VERSION.SDK_INT >= 30)
+                val lookup = progress.remaining(System.nanoTime())
+                assertTrue("Expected real owned camera permission choice: $id", lookup > 0 && device.wait(Until.hasObject(selector), lookup))
+                val choices = device.findObjects(selector)
+                assertEquals("Permission choice must be unambiguous", 1, choices.size)
+                val owner = requireNotNull(choices.single().applicationPackage) { "Permission owner unavailable" }
+                val info = context.packageManager.getApplicationInfo(owner, 0)
+                assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
+                if (permissionController == null) permissionController = owner
+                assertEquals("Permission choices must retain the same system owner", permissionController, owner)
+                // The preceding UiAutomator query configures interactive-window reporting.
+                // Use the same connection flags, without another implicit idle wait.
+                val automation = instrumentation.getUiAutomation(Configurator.getInstance().uiAutomationFlags)
+                var selected: Pair<Int, Point>? = null
+                progress.phase = QrPermissionPhase.WINDOW
+                while (progress.remaining(System.nanoTime()) > 0 && selected == null) {
+                    val windows = automation.windows
+                    progress.windows = windows.size
+                    try {
+                        assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
+                        val candidates = windows.filter { it.displayId == Display.DEFAULT_DISPLAY && it.isActive && it.isFocused }
+                        val matches = mutableListOf<Pair<Int, Point>>()
+                        progress.choices = 0
+                        for (window in candidates) {
+                            val root = window.root ?: continue
+                            try {
+                                if (root.packageName?.toString() != owner) continue
+                                val nodes = root.findAccessibilityNodeInfosByViewId("$owner:id/$id")
+                                progress.choices = (progress.choices ?: 0) + nodes.size
+                                try {
+                                    assertTrue("Owned permission choice must remain unambiguous", progress.choices!! <= 1)
+                                    for (node in nodes) {
+                                        val bounds = Rect(); node.getBoundsInScreen(bounds)
+                                        val windowBounds = Rect(); window.getBoundsInScreen(windowBounds)
+                                        if (node.windowId == window.id && node.isEnabled && node.isClickable && node.isVisibleToUser &&
+                                            !bounds.isEmpty && windowBounds.contains(bounds) && bounds.left >= 0 && bounds.top >= 0 &&
+                                            bounds.right <= device.displayWidth && bounds.bottom <= device.displayHeight) {
+                                            matches.add(window.id to Point(bounds.centerX(), bounds.centerY()))
+                                        }
+                                    }
+                                } finally { nodes.forEach { it.recycle() } }
+                            } finally { root.recycle() }
+                        }
+                        assertTrue("Owned permission focused window must be unique", matches.size <= 1)
+                        selected = matches.singleOrNull()
+                    } finally { windows.forEach { it.recycle() } }
+                    if (selected == null) Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
+                }
+                progress.ready = selected != null
+                progress.permissionBefore = context.checkSelfPermission(android.Manifest.permission.CAMERA)
+                assertTrue("Owned permission choice must be input-ready within its original budget", progress.admit(System.nanoTime()))
+                val (windowId, point) = requireNotNull(selected)
+                progress.delivered(device.click(point.x, point.y))
+                assertTrue("Owned permission click delivery must succeed", progress.delivery == true)
+                while (progress.remaining(System.nanoTime()) > 0) {
+                    progress.permissionAfter = context.checkSelfPermission(android.Manifest.permission.CAMERA)
+                    val windows = automation.windows
+                    try {
+                        progress.windows = windows.size
+                        assertTrue("Owned permission window inventory must stay bounded", windows.size <= 16)
+                        progress.dismissed = windows.none { it.id == windowId }
+                    } finally { windows.forEach { it.recycle() } }
+                    if (progress.complete(System.nanoTime())) { progress.phase = QrPermissionPhase.COMPLETE; return }
+                    Thread.sleep(progress.remaining(System.nanoTime()).coerceAtMost(50))
+                }
+                assertTrue("Owned permission effect must settle within its original budget", progress.complete(System.nanoTime()))
+            } finally {
+                // Only finite metadata leaves this helper; never UI text or raw framework errors.
+                try { println("lazysh QR permission: ${progress.report(System.nanoTime())}") } catch (_: Throwable) { }
+            }
         }
         var primary: Throwable? = null
         var propagating = false

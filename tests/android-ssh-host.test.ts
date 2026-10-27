@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
@@ -70,6 +70,8 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1')('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver',async()=>{
   const owned=await HerdrFixture.start(herdrTools());
+  let primary=false;
   try {await androidSshAcceptance(undefined,owned);}
-  finally {await owned.stop();}
+  catch(error){primary=true;throw error;}
+  finally {await androidSshCleanup(primary,[['Herdr',()=>owned.stop()]]);}
 },610_000);

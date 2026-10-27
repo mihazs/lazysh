@@ -15,11 +15,11 @@ export class OwnedProcess {
   readonly done:Promise<number>;
   private readonly original:Promise<OwnedPid|undefined>;
   stdout=''; stderr='';
-  constructor(program:string,args:string[],cwd?:string,env=process.env) {
+  constructor(program:string,args:string[],cwd?:string,env=process.env,captureOutput=true) {
     this.child=spawn(program,args,{cwd,env,detached:true,stdio:['pipe','pipe','pipe']});
     this.original=(this.child.pid?identity(this.child.pid):Promise.resolve(undefined)).catch(()=>undefined);
-    this.child.stdout!.on('data',data=>{this.stdout=(this.stdout+String(data)).slice(-OUTPUT_LIMIT);});
-    this.child.stderr!.on('data',data=>{this.stderr=(this.stderr+String(data)).slice(-OUTPUT_LIMIT);});
+    this.child.stdout!.on('data',data=>{if(captureOutput)this.stdout=(this.stdout+String(data)).slice(-OUTPUT_LIMIT);});
+    this.child.stderr!.on('data',data=>{if(captureOutput)this.stderr=(this.stderr+String(data)).slice(-OUTPUT_LIMIT);});
     this.done=new Promise((resolve,reject)=>{
       this.child.once('error',()=>reject(new Error('Owned fixture process could not start')));
       this.child.once('close',code=>resolve(code??1));
@@ -213,6 +213,46 @@ export class SshFixture {
     this.stopped=true;
   }
 }
+// Android 16 ApplicationExitInfo.dump fields; free-form descriptions/traces never leave memory.
+// https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
+export async function packageExitInfo(adb:string,serial:string) {
+  const records:{timestamp:string;pid:number;reason:number;subreason:number;status:number}[]=[];
+  const owned=new OwnedProcess(adb,['-s',serial,'shell','dumpsys','activity','exit-info','app.lazysh.client'],undefined,process.env,false);
+  let bytes=0,pending='',discardLine=false,overflow=false;
+  let stamp:{timestamp:string;pid:number}|undefined;
+  let header=false;
+  const line=(value:string)=>{
+    if(/^\s*ApplicationExitInfo #[0-9]+:\s*$/.test(value)){header=true;stamp=undefined;return;}
+    const expectsTimestamp=header;
+    header=false;
+    const previous=stamp;
+    stamp=undefined;
+    const time=value.match(/^\s*timestamp=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) pid=([0-9]{1,10}) realUid=[0-9]+ packageUid=[0-9]+ definingUid=[0-9]+ user=[0-9]+\s*$/);
+    if(expectsTimestamp && time){stamp={timestamp:time[1],pid:Number(time[2])};return;}
+    const exit=value.match(/^\s*process=app\.lazysh\.client reason=([0-9]{1,2}) \([A-Z ()_]+\) subreason=([0-9]{1,3}) \([A-Z ()_]+\) status=(-?[0-9]{1,3})\s*$/);
+    if(exit && previous && records.length<8)records.push({...previous,reason:Number(exit[1]),subreason:Number(exit[2]),status:Number(exit[3])});
+  };
+  owned.child.stdout!.on('data',(data:Buffer)=>{
+    bytes+=data.length;
+    if(bytes>64*1024){overflow=true;pending='';header=false;stamp=undefined;records.length=0;return;}
+    for(const character of String(data)) {
+      if(character==='\n') {if(!discardLine)line(pending);pending='';discardLine=false;}
+      else if(!discardLine) {if(pending.length<1024)pending+=character;else{pending='';header=false;stamp=undefined;discardLine=true;}}
+    }
+  });
+  try {
+    await owned.finish('owned package exit inspection',5000);
+    if(pending && !discardLine)line(pending);
+    return {state:overflow?'overflow':records.length?'available':'empty',records:overflow?[]:records};
+  } catch {return {state:'unavailable',records:[]};}
+}
+
+type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH';
+export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
+  let failed=false;
+  for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
+  if(failed){if(primary)console.error('Owned Android SSH cleanup failed after original failure');else throw new Error('Owned Android SSH cleanup failed');}
+}
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
   const serial=process.env.ANDROID_SERIAL;
@@ -243,13 +283,20 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await gradle.finish('actual Android SSH UI instrumentation',600_000);
     if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
     console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
-  } catch(error) {primary=true;throw error;} finally {
-    const failures:unknown[]=[];
-    for(const cleanup of [
-      ()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve(),
-      ()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve(),
-      ()=>herdr?herdr.stop():fixture.stop(),
-    ])try{await cleanup();}catch(error){failures.push(error);}
-    if(failures.length){if(primary)console.error('Owned Android SSH cleanup failed after original failure');else throw new Error('Owned Android SSH cleanup failed');}
+  } catch(error) {
+    primary=true;
+    try {
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
+      const summary=await packageExitInfo(adb,serial);
+      await mkdir(directory,{recursive:true});
+      await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
+    } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
+    throw error;
+  } finally {
+    await androidSshCleanup(primary,[
+      ['reverse',()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve()],
+      ['fixture-file',()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve()],
+      [herdr?'Herdr':'SSH',()=>herdr?herdr.stop():fixture.stop()],
+    ]);
   }
 }
