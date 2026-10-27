@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
+  realAgents:false,
   launchReceipt: null as string|null,
   hostLaunchReceipt: null as string|null,
   prepareError: null as string|null,
@@ -62,7 +63,10 @@ vi.mock("./TerminalPane", () => ({
   default: ({ active }: { active: boolean }) =>
     active ? <div>Live SSH terminal</div> : null,
 }));
-vi.mock("./AgentPanel", () => ({ default: () => <div>Agent companion</div> }));
+vi.mock('./AgentPanel',async original=>{
+  const actual=await original<typeof import('./AgentPanel')>();
+  return {...actual,default:(props:React.ComponentProps<typeof actual.AgentPanel>)=>mocks.realAgents?<actual.AgentPanel {...props}/>:<div>Agent companion</div>};
+});
 vi.mock('./PushSettingsPanel',()=>({default:()=> <div>Native push registration controls</div>}));
 vi.mock('./AppleStatusPanel',async()=>{
   const {useState}=await import('react');
@@ -86,7 +90,7 @@ const host: Host = {
 
 beforeEach(() => {
   generationBase+=10;
-  vi.clearAllMocks();
+  vi.clearAllMocks();mocks.realAgents=false;
   mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
@@ -114,6 +118,47 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+const reportedAgent={sessionId:'opaque-claude-row',agent:'Claude Code',project:'/project',state:'working',updatedAt:'2026-10-24T19:30:00Z',summary:'Reported work',paneId:'%7',eventCount:1};
+function reportedHistoryApp(response:unknown) {
+  mocks.realAgents=true;
+  mocks.invoke.mockImplementation(async(command,args)=>{
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[reportedAgent]};
+    if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
+    if(command==='get_companion_settings')return {schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+    if(command==='board_keep_awake_status')return {available:false,active:false,reason:'Synthetic reported-history fixture',epoch:'1/11111111-1111-4111-8111-111111111111',ticket:0};
+    if(command==='agent_reported_history')return typeof response==='function'?response(args):response;
+    if(command==='agent_transcript')return {schemaVersion:1,agent:'claude',messages:[],nextOffset:0,hasMore:false};
+    return false;
+  });
+}
+const reportedAppMetadata={schemaVersion:1,status:'available',sessionId:reportedAgent.sessionId,path:'/project/Claude 世界.jsonl ',reportedAt:'2026-10-24T19:30:00Z',paneId:'%7'};
+it('routes a selected actual Claude row to the exact SSH Chat prefill with read/image/follow defaults off and retires it on exit',async()=>{
+  reportedHistoryApp(reportedAppMetadata);mocks.api.connect.mockResolvedValue({sessionId:'ssh-reported-app'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
+  const path=await screen.findByLabelText('Transcript path');expect(path).toHaveProperty('value',reportedAppMetadata.path);
+  expect(screen.getByLabelText('Agent')).toHaveProperty('value','claude');expect(screen.getByLabelText('View')).toHaveProperty('value','records');
+  expect(screen.getByLabelText('Include recorded images')).toHaveProperty('checked',false);expect(screen.queryByLabelText('Follow selected Claude branch')).toBeNull();
+  expect(mocks.invoke).toHaveBeenCalledWith('agent_reported_history',{sessionId:'ssh-reported-app',agentSessionId:reportedAgent.sessionId},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(mocks.invoke.mock.calls.filter(([command])=>['agent_transcript','agent_transcripts'].includes(command))).toHaveLength(0);
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(screen.getByLabelText('Draft for this terminal')).toHaveProperty('value','');
+  await user.click(screen.getByRole('button',{name:'Open transcript'}));
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:'ssh-reported-app',agent:'claude',path:reportedAppMetadata.path,offset:0},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
+  await user.click(screen.getByRole('button',{name:'Terminal'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Transcript'}));expect(await screen.findByLabelText('Transcript path')).toHaveProperty('value','');
+  expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
+});
+it.each(['success','failure'] as const)('prevents a pending actual Agent lookup %s from reopening Chat after leaving its view',async outcome=>{
+  let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
+  reportedHistoryApp(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));mocks.api.connect.mockResolvedValue({sessionId:'ssh-reported-app'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
+  await user.click(screen.getByRole('button',{name:'Terminal'}));await screen.findByText('Live SSH terminal');
+  await act(async()=>{if(outcome==='success')finish(reportedAppMetadata);else fail('old reported route error');});
+  expect(screen.queryByLabelText('Transcript path')).toBeNull();expect(screen.queryByText('old reported route error')).toBeNull();
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(1);
 });
 
 it('keeps the current build version on the same About action through locale changes', async () => {

@@ -62,7 +62,7 @@ import {
 import type { LiveSession } from "./terminal";
 import type { AppleUsageReport } from "./UsagePanel";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
-import AgentPanel from "./AgentPanel";
+import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
 import { usePreferences } from "./preferences";
@@ -1080,10 +1080,19 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [loaded, setLoaded] = useState(!native);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const [reportedHistory,setReportedHistory]=useState<ReportedHistorySource>();
   const currentView = useRef({activeId,view});
   currentView.current = {activeId,view};
   const closingSessions=useRef(new Set<string>());
   const [closingIds,setClosingIds]=useState<string[]>([]);
+  useEffect(()=>{
+    setReportedHistory(source=>source && (source.sessionId!==activeId || view!=='chat' || !source.lease.current())?undefined:source);
+  },[activeId,view]);
+  function openReportedHistory(source:ReportedHistorySource) {
+    if(!mounted.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || currentView.current.view!=='agents'
+      || !sessionsRef.current.some(session=>session.id===source.sessionId && session.connected && !session.local))return;
+    setReportedHistory(source);setView('chat');
+  }
   const directContext = useRef({sessionId:activeId,generation:0});
   if(directContext.current.sessionId!==activeId)
     directContext.current={sessionId:activeId,generation:directContext.current.generation+1};
@@ -1815,7 +1824,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   />
                 ))}
                 {active.connected && !active.local && view === "agents" && (
-                  <AgentPanel key={active.id} sessionId={active.id} />
+                  <AgentPanel key={active.id} sessionId={active.id} onUseReportedHistory={openReportedHistory} />
                 )}
                 {active.connected && !active.local && view === "usage" && (
                   <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />
@@ -1825,6 +1834,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     key={active.id}
                     sessionId={active.id}
                     onOpenTerminal={() => setView("terminal")}
+                    reportedHistory={reportedHistory?.sessionId===active.id ? reportedHistory : undefined}
                   />
                 )}
                 {active.connected && !active.local && view === "preview" && (
