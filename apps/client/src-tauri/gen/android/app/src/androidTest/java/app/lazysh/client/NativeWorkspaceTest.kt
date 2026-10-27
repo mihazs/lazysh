@@ -566,16 +566,21 @@ class NativeWorkspaceTest {
                     override fun onPageFinished(view: WebView, url: String) { pageReady.countDown() }
                 }
                 root.addView(owned)
-                owned.loadData("<!doctype html><title>owned evaluation fixture</title>", "text/html", "UTF-8")
+                owned.loadData("""<!doctype html><title>owned evaluation fixture</title>
+                    <section class="keep-awake-control"><input type="checkbox" checked disabled>
+                    <p role="status">Native display owner is not foreground and focused</p><p role="alert">private fixture text</p></section>""", "text/html", "UTF-8")
             }
             assertTrue("Owned native WebView did not load", pageReady.await(5, TimeUnit.SECONDS))
             instrumentation.runOnMainSync {
-                assertTrue("An inserted descendant must receive evaluation", dispatchEvaluationIfPresent(root, "1===1") {
+                assertTrue("An inserted descendant must receive evaluation", dispatchEvaluationIfPresent(root, BoardReadinessObservation.expression) {
                     result.set(it); evaluated.countDown()
                 })
             }
             assertTrue("Owned native WebView did not evaluate", evaluated.await(5, TimeUnit.SECONDS))
-            assertEquals("true", result.get())
+            val sample = BoardReadinessObservation.parse(requireNotNull(result.get()))
+            for (field in listOf("board", "checkbox", "checked", "disabled", "alert")) assertEquals(true, sample.get(field))
+            assertEquals("NOT_READY", sample.getString("status"))
+            assertTrue("Observation must exclude arbitrary alert text", !sample.toString().contains("private fixture text"))
         } finally {
             instrumentation.runOnMainSync {
                 web?.let { root.removeView(it); it.destroy() }
@@ -1077,9 +1082,11 @@ class NativeWorkspaceTest {
         val checkbox = ".keep-awake-control input[type=checkbox]"
         val active = "This board owns an acknowledged idle-inhibition request."
         val off = "Keep awake is off."
+        var observedActivity: MainActivity? = null
         fun flag(): Boolean {
             var enabled = false
             scenario.onActivity { activity ->
+                observedActivity = activity
                 enabled = activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
             }
             return enabled
@@ -1138,6 +1145,7 @@ class NativeWorkspaceTest {
             println("lazysh board keep-awake: packaged opt-in/off, background/foreground and board unmount/remount verified against actual Window flag")
         } catch (failure: Throwable) {
             primaryFailure = failure
+            runCatching { failure.addSuppressed(AssertionError("Board readiness after failure: ${BoardReadinessObservation.collect(observedActivity, ::webView)}")) }
             throw failure
         } finally {
             try {
@@ -1150,6 +1158,18 @@ class NativeWorkspaceTest {
                 if (primaryFailure != null) primaryFailure.addSuppressed(AssertionError("Owned board keep-awake cleanup also failed"))
                 else throw cleanup
             }
+        }
+    }
+
+    @Test fun boardReadinessObservationRetainsOnlyClosedBooleanAndStatusFields() {
+        val sample = JSONObject().put("board", true).put("checkbox", true).put("checked", true)
+            .put("disabled", false).put("alert", false).put("visible", true).put("focused", false).put("status", "NOT_READY")
+        assertEquals(sample.toString(), BoardReadinessObservation.parse(sample.toString()).toString())
+        for (invalid in listOf("{", " ".repeat(513), JSONObject(sample.toString()).put("status", "private text").toString(),
+            JSONObject(sample.toString()).put("checked", "true").toString(),
+            JSONObject(sample.toString()).put("rawDOM", "private text").toString(),
+            JSONObject(sample.toString()).apply { remove("focused") }.toString())) {
+            assertTrue("Unexpected diagnostic fields must fail closed", runCatching { BoardReadinessObservation.parse(invalid) }.isFailure)
         }
     }
 
