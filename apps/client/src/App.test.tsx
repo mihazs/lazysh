@@ -134,21 +134,54 @@ function reportedHistoryApp(response:unknown) {
   });
 }
 const reportedAppMetadata={schemaVersion:1,status:'available',sessionId:reportedAgent.sessionId,path:'/project/Claude 世界.jsonl ',reportedAt:'2026-10-24T19:30:00Z',paneId:'%7'};
-it('routes a selected actual Claude row to the exact SSH Chat prefill with read/image/follow defaults off and retires it on exit',async()=>{
+it('routes a selected actual Claude row to the exact SSH Chat prefill with read/image/follow defaults off and retires it on exit',async({signal,onTestFailed,onTestFinished})=>{
+  type Stage='setup'|'render-app'|'open-host-dialog'|'type-password'|'connect-ssh'|'wait-live-ssh'
+    |'open-agents'|'wait-history-action'|'use-history'|'wait-prefill'|'assert-defaults'|'open-transcript'
+    |'wait-read-request'|'return-terminal'|'wait-terminal'|'return-transcript'|'wait-retired-path'|'assert-retired-notice';
+  const started=performance.now();
+  const cap=(value:number,maximum=60_000)=>Math.min(maximum,Math.max(0,Math.round(value)));
+  const counts=()=>({
+    connect:cap(mocks.api.connect.mock.calls.length,999),
+    historyLookup:cap(mocks.invoke.mock.calls.filter(([command])=>command==='agent_reported_history').length,999),
+    transcriptRead:cap(mocks.invoke.mock.calls.filter(([command])=>command==='agent_transcript').length,999),
+  });
+  const milestones:{stage:Stage;elapsedMs:number;lastObservedCounts:ReturnType<typeof counts>}[]=[];
+  const mark=(stage:Stage)=>{
+    if(!signal.aborted && milestones.length<18)milestones.push({stage,elapsedMs:cap(performance.now()-started),lastObservedCounts:counts()});
+  };
+  let atAbort:{elapsedMs:number;countsBeforeCleanup:ReturnType<typeof counts>}|undefined;
+  const freezeOnAbort=()=>{atAbort={elapsedMs:cap(performance.now()-started),countsBeforeCleanup:counts()};};
+  signal.addEventListener('abort',freezeOnAbort,{once:true});
+  onTestFinished(()=>{signal.removeEventListener('abort',freezeOnAbort);});
+  onTestFailed(()=>{
+    try {
+      console.error('Reported history routing failure progress',JSON.stringify({
+        failureObservationElapsedMs:cap(performance.now()-started),atAbort,milestones,
+      }));
+    } catch { /* Diagnostics must preserve the original failure. */ }
+  });
+  mark('setup');
   reportedHistoryApp(reportedAppMetadata);mocks.api.connect.mockResolvedValue({sessionId:'ssh-reported-app'});
-  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
-  const path=await screen.findByLabelText('Transcript path');expect(path).toHaveProperty('value',reportedAppMetadata.path);
+  const user=await openConnection(mark);
+  mark('connect-ssh');await user.click(screen.getByRole('button',{name:'Connect'}));
+  mark('wait-live-ssh');await screen.findByText('Live SSH terminal');
+  mark('open-agents');await user.click(screen.getByRole('button',{name:'Agents'}));
+  mark('wait-history-action');const historyAction=await screen.findByRole('button',{name:'Use reported history'});
+  mark('use-history');await user.click(historyAction);
+  mark('wait-prefill');const path=await screen.findByLabelText('Transcript path');
+  mark('assert-defaults');expect(path).toHaveProperty('value',reportedAppMetadata.path);
   expect(screen.getByLabelText('Agent')).toHaveProperty('value','claude');expect(screen.getByLabelText('View')).toHaveProperty('value','records');
   expect(screen.getByLabelText('Include recorded images')).toHaveProperty('checked',false);expect(screen.queryByLabelText('Follow selected Claude branch')).toBeNull();
   expect(mocks.invoke).toHaveBeenCalledWith('agent_reported_history',{sessionId:'ssh-reported-app',agentSessionId:reportedAgent.sessionId},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
   expect(mocks.invoke.mock.calls.filter(([command])=>['agent_transcript','agent_transcripts'].includes(command))).toHaveLength(0);
   expect(mocks.api.write).not.toHaveBeenCalled();expect(screen.getByLabelText('Draft for this terminal')).toHaveProperty('value','');
-  await user.click(screen.getByRole('button',{name:'Open transcript'}));
-  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:'ssh-reported-app',agent:'claude',path:reportedAppMetadata.path,offset:0},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
-  await user.click(screen.getByRole('button',{name:'Terminal'}));await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Transcript'}));expect(await screen.findByLabelText('Transcript path')).toHaveProperty('value','');
-  expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
+  mark('open-transcript');await user.click(screen.getByRole('button',{name:'Open transcript'}));
+  mark('wait-read-request');await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:'ssh-reported-app',agent:'claude',path:reportedAppMetadata.path,offset:0},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
+  mark('return-terminal');await user.click(screen.getByRole('button',{name:'Terminal'}));
+  mark('wait-terminal');await screen.findByText('Live SSH terminal');
+  mark('return-transcript');await user.click(screen.getByRole('button',{name:'Transcript'}));
+  mark('wait-retired-path');expect(await screen.findByLabelText('Transcript path')).toHaveProperty('value','');
+  mark('assert-retired-notice');expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
 });
 it.each(['success','failure'] as const)('prevents a pending actual Agent lookup %s from reopening Chat after leaving its view',async outcome=>{
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
@@ -172,12 +205,15 @@ it('keeps the current build version on the same About action through locale chan
   } finally { await act(async () => { await uiI18n.changeLanguage('en'); }); }
 });
 
-async function openConnection() {
+async function openConnection(onStep?:(stage:'render-app'|'open-host-dialog'|'type-password')=>void) {
+  onStep?.('render-app');
   const user = userEvent.setup();
   render(<App />);
+  onStep?.('open-host-dialog');
   await user.click(
     await screen.findByRole("button", { name: "Connect to Home" }),
   );
+  onStep?.('type-password');
   await user.type(screen.getByLabelText("Password"), "temporary-secret");
   return user;
 }
