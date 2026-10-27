@@ -53,7 +53,7 @@ impl OwnedDaemon {
     fn stop(&mut self) {
         if let Some(mut child) = self.0.take() {
             let _ = child.kill();
-            let _ = child.wait();
+            child.wait().expect("owned test daemon must be reaped");
         }
     }
 }
@@ -61,6 +61,51 @@ impl Drop for OwnedDaemon {
     fn drop(&mut self) {
         self.stop();
     }
+}
+fn start_bus(mut command: Command) -> (OwnedDaemon, String) {
+    let mut daemon = OwnedDaemon(Some(
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("native portal tests require dbus-daemon"),
+    ));
+    let stdout = daemon.0.as_mut().unwrap().stdout.take().unwrap();
+    let (sent, received) = mpsc::sync_channel(1);
+    let address_reader = thread::spawn(move || {
+        let mut address = String::new();
+        let result = BufReader::new(stdout)
+            .read_line(&mut address)
+            .map(|_| address.trim().to_owned());
+        let _ = sent.send(result);
+    });
+    let address = match received.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(address)) => address,
+        result => {
+            daemon.stop();
+            address_reader.join().unwrap();
+            panic!("private bus startup failed: {result:?}");
+        }
+    };
+    address_reader.join().unwrap();
+    (daemon, address)
+}
+fn event_loop() -> (glib::MainContext, glib::MainLoop, thread::JoinHandle<()>) {
+    let context = glib::MainContext::new();
+    let main_loop = glib::MainLoop::new(Some(&context), false);
+    let worker_context = context.clone();
+    let worker_loop = main_loop.clone();
+    let (ready, started) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        worker_context
+            .with_thread_default(|| {
+                ready.send(()).unwrap();
+                worker_loop.run()
+            })
+            .unwrap()
+    });
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    (context, main_loop, worker)
 }
 fn close_object(connection: &gio::DBusConnection, handle: &str, evidence: Arc<Evidence>) {
     connection
@@ -99,48 +144,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new(mode: Outcome) -> Self {
-        let mut daemon = OwnedDaemon(Some(
-            Command::new("dbus-daemon")
-                .args(["--session", "--nofork", "--print-address=1"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("native portal tests require dbus-daemon"),
-        ));
-        let stdout = daemon.0.as_mut().unwrap().stdout.take().unwrap();
-        let (sent, received) = mpsc::sync_channel(1);
+        let mut command = Command::new("dbus-daemon");
+        command.args(["--session", "--nofork", "--print-address=1"]);
+        let (daemon, address) = start_bus(command);
         let (departed_tx, departed) = mpsc::sync_channel(32);
         let (late_sent, late_attempted) = mpsc::sync_channel(32);
-        let address_reader = thread::spawn(move || {
-            let mut address = String::new();
-            let result = BufReader::new(stdout)
-                .read_line(&mut address)
-                .map(|_| address.trim().to_owned());
-            let _ = sent.send(result);
-        });
-        let address = match received.recv_timeout(Duration::from_secs(2)) {
-            Ok(Ok(address)) => address,
-            result => {
-                daemon.stop();
-                address_reader.join().unwrap();
-                panic!("private bus startup failed: {result:?}");
-            }
-        };
-        address_reader.join().unwrap();
-        let context = glib::MainContext::new();
-        let main_loop = glib::MainLoop::new(Some(&context), false);
-        let worker_context = context.clone();
-        let worker_loop = main_loop.clone();
-        let (ready, started) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || {
-            worker_context
-                .with_thread_default(|| {
-                    ready.send(()).unwrap();
-                    worker_loop.run()
-                })
-                .unwrap()
-        });
-        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (context, main_loop, worker) = event_loop();
         let evidence = Arc::new(Evidence::default());
         evidence.mode.store(mode as u8, Ordering::SeqCst);
         let observed = evidence.clone();
@@ -343,27 +352,47 @@ impl Fixture {
         assert!(!self.portal.release(&native).unwrap().active);
     }
 }
+fn retire(portal: &Portal) {
+    portal.invalidate();
+    let retiring = portal.0.state.lock().unwrap().retiring.clone();
+    if let Some(retiring) = retiring {
+        let _ = retiring.wait_closed();
+    }
+}
+fn stop_loop(
+    portal: &Portal,
+    connection: &gio::DBusConnection,
+    main_loop: &glib::MainLoop,
+    worker: &mut Option<thread::JoinHandle<()>>,
+    clear: impl FnOnce() + Send + 'static,
+) {
+    let connection = connection.clone();
+    let main_loop = main_loop.clone();
+    portal.0.context.invoke(move || {
+        clear();
+        connection.close(gio::Cancellable::NONE, |_| {});
+        main_loop.quit();
+    });
+    if let Some(worker) = worker.take() {
+        worker.join().unwrap();
+    }
+}
 impl Drop for Fixture {
     fn drop(&mut self) {
-        self.portal.invalidate();
-        let retiring = self.portal.0.state.lock().unwrap().retiring.clone();
-        if let Some(retiring) = retiring {
-            let _ = retiring.wait_closed();
-        }
-        let connection = self.connection.clone();
-        let main_loop = self.main_loop.clone();
-        self.portal.0.context.invoke(move || {
-            DELAYED.with(|tasks| {
-                for task in tasks.borrow_mut().drain(..) {
-                    task.abort();
-                }
-            });
-            connection.close(gio::Cancellable::NONE, |_| {});
-            main_loop.quit();
-        });
-        if let Some(worker) = self.thread.take() {
-            worker.join().unwrap();
-        }
+        retire(&self.portal);
+        stop_loop(
+            &self.portal,
+            &self.connection,
+            &self.main_loop,
+            &mut self.thread,
+            || {
+                DELAYED.with(|tasks| {
+                    for task in tasks.borrow_mut().drain(..) {
+                        task.abort();
+                    }
+                });
+            },
+        );
         self.daemon.stop();
     }
 }
@@ -675,3 +704,5 @@ fn setup_and_cleanup_dispatch_never_execute_inline_on_an_unowned_context() {
         );
     }
 }
+
+mod real_frontend;

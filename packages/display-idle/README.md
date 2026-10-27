@@ -75,8 +75,25 @@ Use existing Cargo/Gradle/XCTest tasks:
   or mutate the user's session bus. Fixtures cover early/late signals, denial,
   missing replies, original guards, malformed handles, owner/connection loss,
   cancellation, forced private-connection cleanup and repeated peer retirement.
-  Native Linux CI installs `dbus-daemon` and runs the uncached package task through
-  the client dependency graph.
+  The same Cargo task also launches the installed **real portal frontend** and
+  permission store with a controlled `org.freedesktop.impl.portal.Inhibit` backend.
+  Those two interoperability fixtures check acknowledged acquisition/exact backend
+  Close and cancellation during a held backend reply. The backend is controlled;
+  this is not compositor, physical timeout or complete board/WebView acceptance.
+  Each fixture owns a private bus with no installed/user activation directories, private XDG
+  configuration/data/runtime directories and explicitly reaped child processes.
+  Its sole private activation entry for the already-running frontend executes
+  `/usr/bin/false` if absent, so discovery cannot launch a desktop service.
+  The fixture asserts the activatable-name allowlist. System GSettings schemas
+  are read with the memory backend, without user settings.
+  Child-only environment settings include both bus addresses; the user's session
+  and system buses, desktop backends and configuration are never used.
+  Native Linux CI installs `dbus-daemon` and `xdg-desktop-portal` (including
+  `xdg-permission-store`) and runs the uncached package task through the client
+  dependency graph. Local Linux runs require those binaries under `/usr/libexec`
+  or `/usr/lib`; missing dependencies fail explicitly rather than silently skip.
+  To run only the real frontend fixtures:
+  `cargo test --locked -p tauri-plugin-lazysh-display-idle --lib portal::tests::real_frontend`.
 - Development GTK prototype evidence is superseded, not current API acceptance:
   the actual positive probe failed; a later actual portal-only rejection probe
   passed. Both logs were retained under `/tmp/lazysh-awake-gtk-{actual,negative}.log`
