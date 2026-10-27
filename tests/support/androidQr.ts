@@ -1,7 +1,7 @@
 import {join,resolve} from 'node:path';
 import {OwnedProcess} from './androidSsh';
 import {attestQrCamera,type QrOwnership} from './androidQrOwnership';
-import {exportQrFrame,qrFrameRelativePath,type QrFrameExport} from './androidQrFrame';
+import {exportQrFrame,qrFrameRelativePath,qrFrameFailureMetadata,type QrFrameExport,type QrFrameFailure} from './androidQrFrame';
 import {randomBytes} from 'node:crypto';
 
 export type QrCommand=(stage:string,program:string,args:string[],milliseconds:number)=>Promise<unknown>;
@@ -55,8 +55,14 @@ export async function androidQrAcceptance(env=process.env,run:QrCommand=execute,
         await ownership.check();
         const wait=allowance(3_000,permissionReserve+removalReserve);
         if(wait<1){console.error('Owned QR frame export skipped to reserve cleanup budget');return;}
-        try{await (capture.exportFrame??exportQrFrame)(adb,['-s',serial,'exec-out','run-as','app.lazysh.client','cat',relative],join(android,'app/build/outputs/androidTest-results/qr-camera',`owned-frame-${nonce}.png`),wait);}
-        catch{console.error('Owned QR frame diagnostic unavailable');}
+        let diagnostic:Readonly<QrFrameFailure>|undefined;
+        try{await (capture.exportFrame??exportQrFrame)(adb,['-s',serial,'exec-out','run-as','app.lazysh.client','cat',relative],join(android,'app/build/outputs/androidTest-results/qr-camera',`owned-frame-${nonce}.png`),wait,value=>{diagnostic=qrFrameFailureMetadata(value);});}
+        catch{
+          try{
+            console.error('Owned QR frame diagnostic unavailable');
+            if(diagnostic)console.error('Owned QR frame failure metadata',JSON.stringify(diagnostic));
+          }catch{/* Optional reporter output cannot replace the original acceptance result. */}
+        }
       });
       await cleanup(()=>ownedRun('owned QR frame cleanup',adb,['-s',serial,'exec-out','run-as','app.lazysh.client','rm','-f',relative],3_000,permissionReserve,false));
     }

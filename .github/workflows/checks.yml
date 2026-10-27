@@ -28,7 +28,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test:hooks
       - run: bun run test:ci
-      - run: bunx turbo run build check test --filter=@lazysh/client
+      - run: bunx turbo run build check test --filter=@lazysh/client --concurrency=1
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/client
       - run: bun run test:e2e

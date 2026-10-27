@@ -128,3 +128,28 @@ test.each([false,true])('cleanup reserve survives full-duration failure and opti
     expect(clock).toBe(609_000);
   }finally{warning.mockRestore();}
 });
+
+test.each([
+  {failed:false,metadata:false},{failed:false,metadata:true},
+  {failed:true,metadata:false},{failed:true,metadata:true},
+])('optional export logging cannot leak fields or change acceptance: %j',async scenario=>{
+  const original=new Error('original native failure'),events:string[]=[],logs:unknown[][]=[];
+  const warning=spyOn(console,'error').mockImplementation((...args:unknown[])=>{
+    logs.push(args);
+    const target=scenario.metadata?'Owned QR frame failure metadata':'Owned QR frame diagnostic unavailable';
+    if(args[0]===target)throw new Error('private-reporter-failure');
+  });
+  try{
+    const result=androidQrAcceptance({ANDROID_SERIAL:'emulator-5580'},async stage=>{
+      events.push(stage);if(scenario.failed&&stage==='actual Android QR camera UI instrumentation')throw original;
+    },'/owned','linux',admitted,{nonce,exportFrame:async(_program,_args,_destination,_wait,report)=>{
+      report?.({phase:'process',reason:'failed',exitCode:31,signal:null,byteCount:19,truncated:false,...{path:'private-frame-path',stderr:'private-frame-error'}});
+      throw new Error('private-export-failure');
+    }});
+    if(scenario.failed)await expect(result).rejects.toBe(original);else await result;
+    expect(events.slice(-2)).toEqual(['owned QR frame cleanup','owned QR permission cleanup']);
+    expect(logs.filter(args=>args[0]==='Owned QR frame failure metadata')).toHaveLength(scenario.metadata?1:0);
+    expect(JSON.stringify(logs).includes('private-')).toBe(false);
+    if(scenario.metadata)expect(logs).toContainEqual(['Owned QR frame failure metadata',JSON.stringify({phase:'process',reason:'failed',exitCode:31,signal:null,byteCount:19,truncated:false})]);
+  }finally{warning.mockRestore();}
+});
