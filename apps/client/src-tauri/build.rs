@@ -117,6 +117,7 @@ fn main() {
         "tmux_jump_snapshot",
         "tmux_jump",
         "tmux_chat",
+        "herdr_chat",
         "herdr_tree",
         "herdr_action",
         "zellij_action",

@@ -56,7 +56,7 @@ fn present_selector<'de, D: serde::Deserializer<'de>>(
     String::deserialize(deserializer).map(Some)
 }
 impl Source {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.path.is_empty() || self.path.len() > 4096 || self.path.chars().any(char::is_control)
         {
             return Err(invalid());
@@ -150,14 +150,14 @@ impl Action {
         }
     }
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
     Send { text: String },
     RequestStop,
 }
 impl Input {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if let Self::Send { text } = self {
             if text.is_empty()
                 || text.len() > 4096

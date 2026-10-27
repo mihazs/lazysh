@@ -10,6 +10,7 @@ mod devices;
 mod et;
 mod forward_agent;
 mod herdr;
+mod herdr_guard;
 mod host_clipboard;
 mod identities;
 mod keep_awake;
@@ -205,6 +206,7 @@ pub fn run() {
                 tmux_jump::tmux_jump_snapshot,
                 tmux_jump::tmux_jump,
                 tmux_jump::chat::tmux_chat,
+                herdr_guard::herdr_chat,
                 herdr::herdr_tree,
                 herdr::herdr_action,
                 zellij::zellij_action,

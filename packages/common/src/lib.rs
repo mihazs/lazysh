@@ -42,3 +42,6 @@ pub mod urls;
 
 mod hex_digest;
 pub use hex_digest::valid_sha256;
+
+mod guarded_target;
+pub use guarded_target::valid_guarded_target;
