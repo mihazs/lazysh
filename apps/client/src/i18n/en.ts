@@ -1,5 +1,14 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  chatHerdrExplanation: "Choose and confirm the original guarded Herdr terminal. This does not verify a running agent process.",
+  chatHerdrPasteNote: "Text and Enter are queued together. Bracketed paste depends on the terminal program. An acknowledgement confirms queue admission, not processing by an agent.",
+  chatHerdrSent: "Text and Enter queued for the confirmed terminal.",
+  chatHerdrStopRequested: "Escape queued for the confirmed terminal. The process may still be running.",
+  chatHerdrUnavailable: "Guarded input is unavailable for this Herdr terminal. Use Stage or open the terminal.",
+  chatHerdrUncertain: "Queue admission was not confirmed. Input may have arrived and was not resent. Inspect the terminal before confirming again.",
+  chatHerdrWorkspace: "Herdr workspace",
+  chatHerdrTab: "Herdr tab",
+  chatHerdrViewport: "Viewport (x, y, width, height)",
   chatTerminalTitle: "Terminal input",
   chatTerminalExplanation: "Choose and confirm a tmux destination. This does not verify a running agent process.",
   chatTerminalChoose: "Choose terminal destination",
