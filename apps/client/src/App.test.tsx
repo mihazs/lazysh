@@ -134,8 +134,9 @@ it.each(['plain','tmux'] as const)('offers explicit terminal input only on an ac
     await user.click(screen.getByRole('button',{name:'Sessions'}));await user.click(await screen.findByRole('button',{name:'Attach work'}));
     await waitFor(()=>expect(screen.getAllByRole('tab')).toHaveLength(2));
   }
-  await user.click(screen.getByRole('button',{name:'Transcript'}));await user.type(await screen.findByLabelText('Transcript path'),tmuxChatSource.path);await user.click(screen.getByRole('button',{name:'Open transcript'}));
+  await user.click(screen.getByRole('button',{name:'Transcript'}));const path=await screen.findByLabelText('Transcript path');await user.click(path);await user.paste(tmuxChatSource.path);await user.click(screen.getByRole('button',{name:'Open transcript'}));
   await screen.findByRole('button',{name:t('chatRefreshMessages')});
+  expect(mocks.invoke).toHaveBeenCalledWith('agent_transcript',{sessionId:kind==='tmux'?'retained-display':'plain-control',agent:'claude',path:tmuxChatSource.path,offset:0},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='tmux_chat')).toHaveLength(0);
   if(kind==='plain'){expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();return;}
   await user.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));const input=screen.getByRole('region',{name:t('chatTerminalTitle')});
