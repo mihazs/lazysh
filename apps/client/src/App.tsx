@@ -1835,6 +1835,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     sessionId={active.id}
                     onOpenTerminal={() => setView("terminal")}
                     reportedHistory={reportedHistory?.sessionId===active.id ? reportedHistory : undefined}
+                    terminalInput={native && active.attached?.kind==='tmux' ? {hostLabel:active.destination,terminalLabel:active.name}:undefined}
                   />
                 )}
                 {active.connected && !active.local && view === "preview" && (

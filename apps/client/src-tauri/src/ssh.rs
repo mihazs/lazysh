@@ -44,6 +44,9 @@ pub struct SshError {
     host_id: Option<String>,
 }
 impl SshError {
+    pub(crate) fn kind(&self) -> &'static str {
+        self.kind
+    }
     pub(crate) fn new(kind: &'static str, message: impl ToString) -> Self {
         Self {
             kind,

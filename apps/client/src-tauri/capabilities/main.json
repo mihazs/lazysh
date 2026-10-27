@@ -125,6 +125,7 @@
     "allow-attach-tmux",
     "allow-tmux-jump-snapshot",
     "allow-tmux-jump",
+    "allow-tmux-chat",
     "allow-agent-snapshot",
     "allow-agent-reported-history",
     "allow-agent-transcript",
