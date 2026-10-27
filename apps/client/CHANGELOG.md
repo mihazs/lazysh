@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.6.0
+
+### Minor Changes
+
+- 5791a6e: Extend explicitly chosen and confirmed tmux terminal input to all 17 native Chat readers, with immutable Hermes/OpenCode session selectors and unchanged Stage defaults.
+
+### Patch Changes
+
+- @lazysh/common@0.6.0
+  - @lazysh/display-idle@0.6.0
+  - @lazysh/et-transport@0.6.0
+  - @lazysh/mosh-transport@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes
