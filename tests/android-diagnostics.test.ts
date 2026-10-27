@@ -16,12 +16,13 @@ afterEach(async () => {
 });
 
 test.each([
-  { mosh: 0, instrumentation: 0, sdk: 0, diagnosticFailure: false, overflow: false },
-  { mosh: 37, instrumentation: 0, sdk: 0, diagnosticFailure: true, overflow: false },
-  { mosh: 0, instrumentation: 23, sdk: 0, diagnosticFailure: true, overflow: false },
-  { mosh: 0, instrumentation: 23, sdk: 0, diagnosticFailure: false, overflow: true },
-  { mosh: 0, instrumentation: 0, sdk: 31, diagnosticFailure: true, overflow: false },
-])('emulator script preserves exits and reaps collector: %j', async ({ mosh, instrumentation, sdk, diagnosticFailure, overflow }) => {
+  { mosh: 0, instrumentation: 0, qr: 0, sdk: 0, diagnosticFailure: false, overflow: false },
+  { mosh: 37, instrumentation: 0, qr: 0, sdk: 0, diagnosticFailure: true, overflow: false },
+  { mosh: 0, instrumentation: 23, qr: 0, sdk: 0, diagnosticFailure: true, overflow: false },
+  { mosh: 0, instrumentation: 23, qr: 0, sdk: 0, diagnosticFailure: false, overflow: true },
+  { mosh: 0, instrumentation: 0, qr: 29, sdk: 0, diagnosticFailure: true, overflow: false },
+  { mosh: 0, instrumentation: 0, qr: 0, sdk: 31, diagnosticFailure: true, overflow: false },
+])('emulator script preserves exits and reaps collector: %j', async ({ mosh, instrumentation, qr, sdk, diagnosticFailure, overflow }) => {
   expect(commands).toHaveLength(1);
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-android-diagnostics-'));
   temporary.push(directory);
@@ -34,6 +35,7 @@ test.each([
   const fakeCargo = join(bin, 'cargo');
   const sdkSerial = join(directory, 'sdk-serial.txt');
   const sdkArguments = join(directory, 'sdk-arguments.bin');
+  const qrPidFile = join(directory, 'qr-pid-file.txt');
   await writeFile(fakeBun, `#!/bin/bash
 for ((attempt=0; attempt<100; attempt++)); do
   test -f "$COLLECTOR_PID" && break
@@ -42,6 +44,10 @@ done
 test -f "$COLLECTOR_PID" || exit 88
 printf '%s\\n' "$*" >> "$INVOCATIONS"
 if [[ "$2" == test:android-mosh ]]; then exit "$MOSH_EXIT"; fi
+if [[ "$2" == test:android-qr ]]; then
+  printf '%s\\n' "$LAZYSH_ANDROID_QR_EMULATOR_PID_FILE" > "$QR_PID_FILE"
+  exit "$QR_EXIT"
+fi
 exit "$INSTRUMENTATION_EXIT"
 `);
   await writeFile(fakeAdb, `#!/bin/bash
@@ -64,21 +70,26 @@ exit "$SDK_EXIT"
   const child = Bun.spawn(['sh', '-c', commands[0]], {
     cwd: directory,
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLECTOR_PID: marker, INVOCATIONS: invocations,
-      MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), SDK_EXIT: String(sdk),
+      MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), SDK_EXIT: String(sdk),
       ANDROID_SERIAL: 'emulator-5580', SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
+      RUNNER_TEMP: directory, QR_PID_FILE: qrPidFile,
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
       DIAGNOSTIC_OVERFLOW: overflow ? '1' : '0' },
     stdout: 'pipe', stderr: 'pipe',
   });
   const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  const expectedExit = mosh || instrumentation || sdk;
+  const expectedExit = mosh || instrumentation || qr || sdk;
   expect(exit).toBe(expectedExit);
   expect(stdout).toBe('');
   if (!overflow) expect(stderr).toBe('');
-  const sdkExpected = mosh === 0 && instrumentation === 0;
+  const qrExpected = mosh === 0 && instrumentation === 0;
+  const sdkExpected = qrExpected && qr === 0;
+  expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
+  if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
   expect((await readFile(invocations, 'utf8')).trim().split('\n')).toEqual([
     'run test:android-mosh',
     ...(mosh === 0 ? ['run test:android-ssh'] : []),
+    ...(qrExpected ? ['run test:android-qr'] : []),
     ...(sdkExpected ? ['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture'] : []),
   ]);
   expect(await Bun.file(sdkSerial).exists()).toBe(sdkExpected);

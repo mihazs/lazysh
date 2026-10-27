@@ -11,6 +11,12 @@ export type QrState={phase:'idle'|'permission'|'scanning'|'reading'|'decoding';f
 type Run={intent:number;active:boolean;stream?:MediaStream;video?:HTMLVideoElement;deadline?:ReturnType<typeof setTimeout>;delay?:ReturnType<typeof setTimeout>;wake?:()=>void;publish:(payload:string)=>void};
 // Cancellation stops publication immediately; capacity belongs to the actual async pipeline.
 let pipeline:Run|null=null;
+const cameraMarkers={request:'lazysh qr camera request',resolved:'lazysh qr camera resolved',rejected:'lazysh qr camera rejected',stale:'lazysh qr camera stale',attached:'lazysh qr camera attached',playResolved:'lazysh qr camera play_resolved',playRejected:'lazysh qr camera play_rejected'} as const;
+function cameraMarker(stage:keyof typeof cameraMarkers){
+  if(import.meta.env.VITE_LAZYSH_QR_CAMERA_TRACE==='1'){
+    try{console.warn(cameraMarkers[stage]);}catch{/* Optional diagnostics cannot change camera behavior. */}
+  }
+}
 export function qrFrameSize(width:number,height:number){
   if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0)throw new QrFailure('encodeFailed');
   const scale=Math.min(1,500/width,500/height);
@@ -66,12 +72,16 @@ export function useThemeQr(intent:RefObject<number>,cancelRef:RefObject<(()=>voi
   async function camera(run:Run){
     if(!navigator.mediaDevices?.getUserMedia)throw new QrFailure('cameraUnavailable');
     let stream:MediaStream;
-    try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'}}});}catch{throw new QrFailure('cameraFailed');}
-    if(!current(run)){stream.getTracks().forEach(track=>track.stop());return;}
+    cameraMarker('request');
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'}}});}catch{cameraMarker('rejected');throw new QrFailure('cameraFailed');}
+    cameraMarker('resolved');
+    if(!current(run)){cameraMarker('stale');stream.getTracks().forEach(track=>track.stop());return;}
     run.stream=stream;run.video=video.current??undefined;
     if(!run.video)throw new QrFailure('cameraFailed');
     run.video.srcObject=stream;
-    try{await run.video.play();}catch{throw new QrFailure('cameraFailed');}
+    cameraMarker('attached');
+    try{await run.video.play();}catch{cameraMarker('playRejected');throw new QrFailure('cameraFailed');}
+    cameraMarker('playResolved');
     while(current(run)){
       phase(run,'scanning');
       if(run.video.readyState<2||!run.video.videoWidth||!run.video.videoHeight){await waitFrame(run);continue;}

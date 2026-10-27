@@ -186,6 +186,7 @@ jobs:
     timeout-minutes: 30
     env:
       ANDROID_SERIAL: emulator-5580
+      VITE_LAZYSH_QR_CAMERA_TRACE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -223,7 +224,7 @@ jobs:
           ram-size: 3072M
           emulator-boot-timeout: 300
           disable-linux-hw-accel: false
-          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-qr-emulator.pid
           pre-emulator-launch-script: $ANDROID_HOME/emulator/emulator -accel-check
           # The action runs each newline in a separate shell; fold this into one
           # invocation so cleanup runs before the action terminates the emulator.
@@ -261,6 +262,7 @@ jobs:
             collector_pid=$!;
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
             bun run test:android-mosh && bun run test:android-ssh &&
+            LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr &&
             LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture;
             exit $?;
             '

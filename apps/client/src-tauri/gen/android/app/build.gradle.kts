@@ -73,6 +73,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ui"
         }
     }
+    if (providers.gradleProperty("lazyshQrCameraAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/qr-camera"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/qr-camera"
+        }
+    }
     buildFeatures {
         buildConfig = true
     }
@@ -105,6 +111,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.test.espresso:espresso-web:3.7.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.0")
     androidTestImplementation("com.fasterxml.jackson.core:jackson-databind:2.15.3")
 }
 

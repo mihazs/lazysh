@@ -6,6 +6,14 @@ import android.content.Context
 import android.view.KeyEvent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Handler
+import android.os.HandlerThread
+import android.system.Os
+import android.system.OsConstants
+import java.io.File
+import java.io.FileOutputStream
 import android.net.Uri
 import android.util.Base64
 import androidx.test.platform.app.InstrumentationRegistry
@@ -39,6 +47,10 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.regex.Pattern
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -78,17 +90,278 @@ class NativeWorkspaceTest {
     private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String =
         requireNotNull(evaluateIfPresent(scenario, expression, timeoutMillis))
 
-    private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String) {
+    private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String,
+        observe: ((Long) -> String)? = null) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+        var firstObservation: String? = null
+        var lastObservation: String? = null
         while (true) {
             val native = NativeActivityFixture.readiness(scenario)
             if (native.ready && evaluateIfPresent(scenario, expression) == "true") return
             val error = evaluateIfPresent(scenario, "document.querySelector('[role=dialog] [role=alert]')?.textContent?.slice(0,320) || ''")
             assertTrue("Native workspace failed at $stage: $error", error == null || error == "\"\"")
+            val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+            if (observe != null && remaining > 0) {
+                lastObservation = try { observe(remaining.coerceAtMost(1_000)) } catch (_: Throwable) { "unavailable" }
+                if (firstObservation == null) firstObservation = lastObservation
+            }
             if (System.nanoTime() >= deadline) {
-                throw AssertionError("Native workspace not ready at $stage: $native; windows=${NativeActivityFixture.windowDiagnostics()}")
+                val observations = if (observe == null) "" else "; first=$firstObservation; last=$lastObservation"
+                throw AssertionError("Native workspace not ready at $stage: $native; windows=${NativeActivityFixture.windowDiagnostics()}$observations")
             }
             Thread.sleep(200)
+        }
+    }
+
+    private enum class QrCaptureStage { BUDGET, DISPATCH, CALLBACK, RESULT, VIDEO, CONTEXT, DRAW, ENCODE, ENCODED_LIMIT, BASE64, HEADER, DIMENSIONS, PRIVATE_OPEN, PRIVATE_WRITE, PRIVATE_CLOSE, COMPLETE }
+    private enum class QrCaptureReason { NOT_ATTEMPTED, EMPTY_BUDGET, FAILED, UNAVAILABLE, INVALID, LIMIT, SAVED }
+
+    // Only typed categories and bounded numbers survive an exception; never its message or cause.
+    private class QrCaptureDiagnostic(budget: Long) {
+        var stage = QrCaptureStage.BUDGET
+        var reason = QrCaptureReason.NOT_ATTEMPTED
+        val budgetMs = budget.coerceIn(0, 1_000)
+        var encodedChars = 0
+        var errno: Int? = null
+        fun failed(error: Throwable) {
+            reason = QrCaptureReason.FAILED
+            errno = (error as? android.system.ErrnoException)?.errno?.takeIf { it in 1..4_095 }
+        }
+        fun report(): JSONObject = JSONObject().put("stage", stage.name).put("reason", reason.name)
+            .put("budgetMs", budgetMs).put("encodedChars", encodedChars.coerceIn(0, 1_000_000))
+            .put("errno", errno ?: JSONObject.NULL)
+    }
+
+    private companion object {
+        const val QR_OBSERVATION_LIMIT = 2 * 262166 + 4096
+        val QR_SAMPLE_BOOLEANS = setOf("present", "visible", "src", "permission", "scanning", "decoding", "finishing", "cancelled", "timeout", "busy", "alert")
+        val QR_SAMPLE_NULLABLE_BOOLEANS = setOf("hidden", "detailsOpen", "paused")
+        val QR_SAMPLE_NULLABLE_NUMBERS = setOf("readyState", "width", "height", "timeMs", "frames")
+        val QR_SAMPLE_NUMBERS = setOf("liveTracks", "endedTracks")
+        val QR_SAMPLE_KEYS = QR_SAMPLE_BOOLEANS + QR_SAMPLE_NULLABLE_BOOLEANS + QR_SAMPLE_NULLABLE_NUMBERS + QR_SAMPLE_NUMBERS
+    }
+
+    private class QrCaptureReservation {
+        private enum class State { AVAILABLE, IN_FLIGHT, SPENT }
+        private var state = State.AVAILABLE
+        fun reserve(): Boolean {
+            if (state != State.AVAILABLE) return false
+            state = State.IN_FLIGHT
+            return true
+        }
+        fun finishNotReady(): Boolean {
+            if (state != State.IN_FLIGHT) return false
+            state = State.AVAILABLE
+            return true
+        }
+        fun consume() { state = State.SPENT }
+    }
+
+    private fun parseQrObservation(encoded: String): JSONObject {
+        require(encoded.length <= QR_OBSERVATION_LIMIT) { "QR observation result bound" }
+        return JSONObject(encoded)
+    }
+
+    private fun validQrSample(sample: JSONObject): Boolean {
+        if (sample.length() != QR_SAMPLE_KEYS.size || !sample.keys().asSequence().all { it in QR_SAMPLE_KEYS }) return false
+        return QR_SAMPLE_KEYS.all { key ->
+            val value = sample.get(key)
+            when (key) {
+                in QR_SAMPLE_BOOLEANS -> value is Boolean
+                in QR_SAMPLE_NULLABLE_BOOLEANS -> value == JSONObject.NULL || value is Boolean
+                else -> {
+                    val nullable = key in QR_SAMPLE_NULLABLE_NUMBERS
+                    if (value == JSONObject.NULL) nullable
+                    else value is Number && value.toDouble().isFinite() &&
+                        value.toDouble() in 0.0..(if (key == "readyState") 4.0 else 1_000_000.0) &&
+                        value.toDouble() == value.toLong().toDouble()
+                }
+            }
+        }
+    }
+
+    private fun isUnattemptedQrFrame(response: JSONObject, sample: JSONObject): Boolean =
+        validQrSample(sample) && response.keys().asSequence().toSet() == setOf("attempted", "stage", "reason", "length", "data") &&
+            response.opt("attempted") == false && response.opt("stage") == "VIDEO" &&
+            response.opt("reason") == "UNAVAILABLE" && response.opt("length") == 0 && response.isNull("data") &&
+            (!sample.optBoolean("present") || sample.optInt("readyState") < 2 ||
+                sample.optInt("width") == 0 || sample.optInt("height") == 0)
+
+    private fun saveOwnedQrFrame(response: JSONObject, destination: File, diagnostic: QrCaptureDiagnostic): Boolean {
+        try {
+            val limit = 192 * 1024
+            val prefix = "data:image/png;base64,"
+            diagnostic.stage = QrCaptureStage.RESULT
+            diagnostic.reason = QrCaptureReason.INVALID
+            if (response.opt("attempted") != true) return false
+            val length = response.opt("length")
+            if (length !is Number || length.toDouble() != length.toInt().toDouble() || length.toInt() !in 0..1_000_000) return false
+            diagnostic.encodedChars = length.toInt()
+            val outcome = when (response.optString("stage") to response.optString("reason")) {
+                "VIDEO" to "UNAVAILABLE" -> QrCaptureStage.VIDEO to QrCaptureReason.UNAVAILABLE
+                "CONTEXT" to "UNAVAILABLE" -> QrCaptureStage.CONTEXT to QrCaptureReason.UNAVAILABLE
+                "DRAW" to "FAILED" -> QrCaptureStage.DRAW to QrCaptureReason.FAILED
+                "ENCODE" to "FAILED" -> QrCaptureStage.ENCODE to QrCaptureReason.FAILED
+                "ENCODED_LIMIT" to "LIMIT" -> QrCaptureStage.ENCODED_LIMIT to QrCaptureReason.LIMIT
+                "COMPLETE" to "SAVED" -> QrCaptureStage.COMPLETE to QrCaptureReason.SAVED
+                else -> return false
+            }
+            if (outcome.first != QrCaptureStage.COMPLETE) {
+                diagnostic.stage = outcome.first; diagnostic.reason = outcome.second; return false
+            }
+            val data = response.opt("data")
+            if (data !is String || !data.startsWith(prefix) || data.length != diagnostic.encodedChars || data.length > limit * 4 / 3 + prefix.length) return false
+            diagnostic.stage = QrCaptureStage.BASE64
+            val bytes = Base64.decode(data.substring(prefix.length), Base64.DEFAULT)
+            diagnostic.stage = QrCaptureStage.HEADER
+            if (bytes.size !in 24..limit || !bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(-119,80,78,71,13,10,26,10))) return false
+            diagnostic.stage = QrCaptureStage.DIMENSIONS
+            val dimensions = java.nio.ByteBuffer.wrap(bytes, 16, 8)
+            if (dimensions.int !in 1..500 || dimensions.int !in 1..500) return false
+            diagnostic.stage = QrCaptureStage.PRIVATE_OPEN
+            val descriptor = Os.open(destination.absolutePath, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
+                OsConstants.S_IRUSR or OsConstants.S_IWUSR)
+            FileOutputStream(descriptor).use {
+                diagnostic.stage = QrCaptureStage.PRIVATE_WRITE
+                it.write(bytes)
+                diagnostic.stage = QrCaptureStage.PRIVATE_CLOSE
+            }
+            diagnostic.stage = QrCaptureStage.COMPLETE
+            diagnostic.reason = QrCaptureReason.SAVED
+            return true
+        } catch (error: Throwable) {
+            diagnostic.failed(error)
+            return false
+        }
+    }
+
+    private class QrObservedProgress {
+        private var firstAttached: JSONObject? = null
+        private var samples = 0
+        private var maxReadyState = 0
+        private var maxFrames = 0
+        private var everScanning = false
+        private var everDecoding = false
+        fun observe(sample: JSONObject) {
+            fun bounded(name: String, maximum: Int) = sample.optInt(name).coerceIn(0, maximum)
+            samples = (samples + 1).coerceAtMost(1_000)
+            maxReadyState = maxOf(maxReadyState, bounded("readyState", 4))
+            maxFrames = maxOf(maxFrames, bounded("frames", 1_000_000))
+            everScanning = everScanning || sample.optBoolean("scanning")
+            everDecoding = everDecoding || sample.optBoolean("decoding")
+            if (firstAttached == null && (sample.optBoolean("src") || bounded("liveTracks", 100) > 0)) {
+                firstAttached = JSONObject().put("readyState", bounded("readyState", 4))
+                    .put("paused", sample.optBoolean("paused")).put("liveTracks", bounded("liveTracks", 100))
+                    .put("width", bounded("width", 1_000_000)).put("height", bounded("height", 1_000_000))
+            }
+        }
+        fun report(): JSONObject = JSONObject().put("firstAttached", firstAttached ?: JSONObject.NULL)
+            .put("samples", samples).put("maxReadyState", maxReadyState).put("maxFrames", maxFrames)
+            .put("everScanning", everScanning).put("everDecoding", everDecoding)
+    }
+
+    // Public state only in messages; one attested synthetic frame is stored privately, never logged.
+    private fun qrVideoObservation(scenario: ActivityScenario<MainActivity>, frame: File?): (Long) -> String {
+        var firstReady: JSONObject? = null
+        var frameAttempted: Boolean? = false
+        var frameSaved = false
+        var capture: QrCaptureDiagnostic? = null
+        val reservation = QrCaptureReservation()
+        val progress = QrObservedProgress()
+        return { remaining ->
+            val reserved = frame != null && reservation.reserve()
+            if (reserved) frameAttempted = null
+            val diagnostic = if (reserved) QrCaptureDiagnostic(remaining) else null
+            val result = AtomicReference<String>()
+            val completed = CountDownLatch(1)
+            var callbackUnavailable = false
+            val sample = try {
+                if (diagnostic != null) { capture = diagnostic; diagnostic.stage = QrCaptureStage.DISPATCH }
+                scenario.onActivity { activity ->
+                    val web = requireNotNull(webView(activity.window.decorView))
+                    web.evaluateJavascript("""(() => {
+                      const q=document.querySelector('.theme-qr-panel'), v=q?.querySelector('video');
+                      const statuses=Array.from(q?.querySelectorAll('[role=status]')??[]).map(x=>x.textContent);
+                      const bounded=n=>Number.isFinite(n)?Math.min(1000000,Math.max(0,n)):null;
+                      const stream=v?.srcObject, tracks=stream instanceof MediaStream?stream.getVideoTracks():[];
+                      const sample={present:!!v,visible:document.visibilityState==='visible',hidden:v?.hidden??null,
+                        detailsOpen:v?.closest('details')?.open??null,readyState:bounded(v?.readyState),
+                        width:bounded(v?.videoWidth),height:bounded(v?.videoHeight),paused:v?.paused??null,
+                        timeMs:bounded(Math.round((v?.currentTime??NaN)*1000)),
+                        frames:bounded(v?.getVideoPlaybackQuality?.().totalVideoFrames),src:!!stream,
+                        liveTracks:bounded(tracks.filter(x=>x.readyState==='live').length),
+                        endedTracks:bounded(tracks.filter(x=>x.readyState==='ended').length),
+                        permission:statuses.includes('Waiting for camera permission…'),
+                        scanning:statuses.includes('Looking for a theme QR code…'),
+                        decoding:statuses.includes('Decoding QR image…'),
+                        finishing:statuses.includes('The stopped request is still finishing. Wait before scanning again.'),
+                        cancelled:statuses.includes('QR scan stopped.'),timeout:statuses.includes('QR scan stopped after 30 seconds.'),
+                        busy:Array.from(q?.querySelectorAll('[role=alert]')??[]).some(x=>x.textContent==='Another QR request is still finishing. Try again when it finishes.'),
+                        alert:!!q?.querySelector('[role=alert]')};
+                      const capture=()=>{
+                        const out=(stage,reason,length=0,data=null,attempted=true)=>({attempted,stage,reason,length,data});
+                        if(!v||v.readyState<2||!v.videoWidth||!v.videoHeight)return out('VIDEO','UNAVAILABLE',0,null,false);
+                        console.warn('lazysh.qr.capture:enter');
+                        const scale=Math.min(1,500/v.videoWidth,500/v.videoHeight),c=document.createElement('canvas');
+                        c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));
+                        const ctx=c.getContext('2d');if(!ctx)return out('CONTEXT','UNAVAILABLE');
+                        console.warn('lazysh.qr.capture:before_draw');
+                        try {ctx.drawImage(v,0,0,c.width,c.height);} catch {return out('DRAW','FAILED');}
+                        console.warn('lazysh.qr.capture:after_draw');
+                        console.warn('lazysh.qr.capture:before_encode');
+                        let png;try {png=c.toDataURL('image/png');} catch {return out('ENCODE','FAILED');}
+                        console.warn('lazysh.qr.capture:after_encode');
+                        const length=Math.min(png.length,1000000);
+                        console.warn('lazysh.qr.capture:return');
+                        return png.length<=262166?out('COMPLETE','SAVED',length,png):out('ENCODED_LIMIT','LIMIT',length);
+                      };
+                      return {sample,capture:${reserved} ? capture() : null};
+                    })()""") { value ->
+                        // Inspect only a fixed structural token, never log or parse private image bytes here.
+                        if (reserved && value.length <= QR_OBSERVATION_LIMIT && value.contains("\"attempted\":true")) {
+                            android.util.Log.w("LazyshQrCapture", "lazysh.qr.capture:callback_entry")
+                        }
+                        result.set(value); completed.countDown()
+                    }
+                }
+                if (diagnostic != null) diagnostic.stage = QrCaptureStage.CALLBACK
+                callbackUnavailable = !completed.await(remaining.coerceIn(1, 1_000), TimeUnit.MILLISECONDS)
+                assertTrue("QR observation callback unavailable", !callbackUnavailable)
+                if (diagnostic != null) { diagnostic.stage = QrCaptureStage.RESULT; diagnostic.reason = QrCaptureReason.INVALID }
+                val response = parseQrObservation(requireNotNull(result.get()) { "QR observation result unavailable" })
+                require(response.keys().asSequence().toSet() == setOf("sample", "capture")) { "QR observation shape" }
+                val current = response.getJSONObject("sample")
+                require(validQrSample(current)) { "QR observation contains only the closed public schema" }
+                if (reserved) {
+                    val encodedFrame = response.getJSONObject("capture")
+                    if (isUnattemptedQrFrame(encodedFrame, current)) {
+                        check(reservation.finishNotReady()) { "QR capture reservation" }
+                        capture = null
+                        frameAttempted = false
+                    } else {
+                        reservation.consume()
+                        require(encodedFrame.opt("attempted") == true) { "QR capture attempt shape" }
+                        frameAttempted = true
+                        frameSaved = saveOwnedQrFrame(encodedFrame, requireNotNull(frame), requireNotNull(diagnostic))
+                    }
+                } else require(response.isNull("capture")) { "Unreserved QR capture" }
+                current
+            } catch (error: Throwable) {
+                if (reserved) {
+                    reservation.consume(); diagnostic?.failed(error)
+                    if (callbackUnavailable && diagnostic != null) diagnostic.reason = QrCaptureReason.UNAVAILABLE
+                }
+                null
+            }
+            if (sample != null) {
+                progress.observe(sample)
+                if (firstReady == null && sample.optInt("readyState") >= 2) firstReady = sample
+            }
+            JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample ?: JSONObject.NULL)
+                .put("frameEnabled", frame != null).put("frameAttempted", frameAttempted ?: JSONObject.NULL).put("frameSaved", frameSaved)
+                .put("capture", capture?.report() ?: JSONObject.NULL).put("observed", progress.report()).toString().also {
+                require(it.length <= 2_048) { "QR diagnostic bound" }
+            }
         }
     }
 
@@ -411,6 +684,261 @@ class NativeWorkspaceTest {
         // through the actual UI before the ordinary native workspace suite.
         click("Reset preferences")
         awaitDocument(scenario, "theme fixture reset", appearance("forest"))
+    }
+
+    private class QrCameraObservation(private val rear: Set<String>) : CameraManager.AvailabilityCallback() {
+        private val available = mutableSetOf<String>()
+        private val opened = mutableSetOf<String>()
+        private var armed = false
+        val idle = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        @Synchronized override fun onCameraUnavailable(id: String) {
+            available.remove(id)
+            if (armed && id in rear) opened.add(id)
+        }
+        @Synchronized override fun onCameraAvailable(id: String) {
+            if (id in rear) available.add(id)
+            if (available.containsAll(rear)) idle.countDown()
+            if (armed && id in opened) released.countDown()
+        }
+        @Synchronized fun arm() {
+            assertTrue("Previous capture must release every rear camera before a new Scan", available.containsAll(rear))
+            armed = true
+        }
+        @Synchronized fun openedAny() = opened.isNotEmpty()
+    }
+
+    @Test fun qrCaptureReservationCannotRearmAfterTimeoutOrAnActualAttempt() {
+        val reservation = QrCaptureReservation()
+        assertTrue("Initial diagnostic can reserve", reservation.reserve())
+        assertTrue("Only one dispatch may own the reservation", !reservation.reserve())
+        assertTrue("Certified no-attempt can rearm", reservation.finishNotReady())
+        assertTrue("A later ready observation can reserve", reservation.reserve())
+        reservation.consume()
+        assertTrue("Actual attempt or timeout permanently consumes capacity", !reservation.reserve())
+        assertTrue("A late no-attempt callback cannot rearm consumed capacity", !reservation.finishNotReady())
+        assertTrue("A late completion cannot permit another capture", !reservation.reserve())
+    }
+
+    private fun qrNotReadySample() = JSONObject("""{
+        "present":true,"visible":true,"hidden":false,"detailsOpen":true,
+        "readyState":0,"width":0,"height":0,"paused":true,"timeMs":0,"frames":0,
+        "src":false,"liveTracks":0,"endedTracks":0,"permission":true,"scanning":false,
+        "decoding":false,"finishing":false,"cancelled":false,"timeout":false,"busy":false,"alert":false
+    }""")
+
+    private fun qrNoAttemptResponse() = JSONObject().put("attempted", false).put("stage", "VIDEO").put("reason", "UNAVAILABLE")
+        .put("length", 0).put("data", JSONObject.NULL)
+
+    @Test fun qrMalformedSamplesCannotRearmCaptureThroughOptDefaults() {
+        val response = qrNoAttemptResponse()
+        val missingPresent = qrNotReadySample().also { it.remove("present") }
+        val malformed = listOf(JSONObject(), missingPresent, qrNotReadySample().put("extra", false),
+            qrNotReadySample().put("present", 0), qrNotReadySample().put("src", 1),
+            qrNotReadySample().put("readyState", "0"), qrNotReadySample().put("hidden", 0),
+            qrNotReadySample().put("present", JSONObject.NULL), qrNotReadySample().put("liveTracks", JSONObject.NULL),
+            qrNotReadySample().put("readyState", 5), qrNotReadySample().put("frames", -1),
+            qrNotReadySample().put("timeMs", 0.5))
+        malformed.forEachIndexed { index, sample ->
+            assertTrue("Malformed sample cannot certify no attempt: case $index", !isUnattemptedQrFrame(response, sample))
+        }
+        assertTrue("Full actual not-ready shape may certify no attempt", isUnattemptedQrFrame(response, qrNotReadySample()))
+        val absent = qrNotReadySample().put("present", false)
+        for (key in listOf("hidden", "detailsOpen", "paused", "readyState", "width", "height", "timeMs", "frames")) absent.put(key, JSONObject.NULL)
+        assertTrue("Actual absent-video nullable fields remain valid", isUnattemptedQrFrame(response, absent))
+    }
+
+    @Test fun qrCombinedObservationRequiresExactNoAttemptAndBoundsBeforeParsing() {
+        val notReady = qrNotReadySample()
+        val response = qrNoAttemptResponse()
+        assertTrue("Exact not-ready response may release reservation", isUnattemptedQrFrame(response, notReady))
+        assertTrue("An attempted frame cannot rearm", !isUnattemptedQrFrame(JSONObject(response.toString()).put("attempted", true), notReady))
+        assertTrue("An extra field cannot certify no attempt", !isUnattemptedQrFrame(JSONObject(response.toString()).put("extra", false), notReady))
+        assertTrue("A ready sample cannot certify no attempt", !isUnattemptedQrFrame(response,
+            JSONObject(notReady.toString()).put("readyState", 4).put("width", 480).put("height", 640)))
+        val oversized = "{\"sample\":{},\"capture\":null}" + " ".repeat(QR_OBSERVATION_LIMIT)
+        val rejected = runCatching { parseQrObservation(oversized) }.exceptionOrNull()
+        assertEquals("QR observation result bound", rejected?.message)
+        assertTrue("Malformed JSON cannot release capacity", runCatching { parseQrObservation("{") }.isFailure)
+    }
+
+    @Test fun qrObservedProgressRetainsAttachmentBeforeReadyAndOnlyBoundedMilestones() {
+        val progress = QrObservedProgress()
+        val permission = JSONObject().put("src", false).put("liveTracks", 0).put("readyState", 0)
+            .put("frames", 0).put("paused", true).put("scanning", false).put("decoding", false)
+        progress.observe(permission)
+        assertTrue("Permission alone does not establish attachment", progress.report().isNull("firstAttached"))
+        val attached = JSONObject(permission.toString()).put("src", true).put("liveTracks", 1)
+            .put("width", 0).put("height", 0).put("privateIgnored", "private-payload-sentinel")
+        progress.observe(attached)
+        progress.observe(JSONObject(attached.toString()).put("readyState", 4).put("frames", 9)
+            .put("width", 480).put("height", 640).put("paused", false).put("scanning", true))
+        progress.observe(JSONObject(permission.toString()).put("decoding", true))
+        progress.observe(permission)
+        val report = progress.report()
+        val first = report.getJSONObject("firstAttached")
+        assertEquals(setOf("readyState", "paused", "liveTracks", "width", "height"), first.keys().asSequence().toSet())
+        assertEquals(0, first.getInt("readyState"))
+        assertTrue("Attachment can precede play", first.getBoolean("paused"))
+        assertEquals(1, first.getInt("liveTracks"))
+        assertEquals(5, report.getInt("samples"))
+        assertEquals(4, report.getInt("maxReadyState"))
+        assertEquals(9, report.getInt("maxFrames"))
+        assertTrue("Observed milestones survive timeout", report.getBoolean("everScanning") && report.getBoolean("everDecoding"))
+        assertTrue("Only whitelisted metadata is retained", !report.toString().contains("sentinel"))
+        repeat(1_010) { progress.observe(JSONObject().put("readyState", 99).put("frames", Int.MAX_VALUE)) }
+        assertEquals(1_000, progress.report().getInt("samples"))
+        assertEquals(4, progress.report().getInt("maxReadyState"))
+        assertEquals(1_000_000, progress.report().getInt("maxFrames"))
+        assertTrue("Progress metadata remains bounded", progress.report().toString().length <= 320)
+    }
+
+    @Test fun qrCaptureFailureMetadataIsFiniteAndExcludesPrivateExceptionData() {
+        val diagnostic = QrCaptureDiagnostic(4_000)
+        diagnostic.stage = QrCaptureStage.PRIVATE_OPEN
+        diagnostic.encodedChars = 2_000_000
+        diagnostic.failed(android.system.ErrnoException("private-frame-path-sentinel", OsConstants.EACCES))
+        val report = diagnostic.report()
+        assertEquals("PRIVATE_OPEN", report.getString("stage"))
+        assertEquals("FAILED", report.getString("reason"))
+        assertEquals(1_000, report.getInt("budgetMs"))
+        assertEquals(1_000_000, report.getInt("encodedChars"))
+        assertEquals(OsConstants.EACCES, report.getInt("errno"))
+        assertEquals(setOf("stage", "reason", "budgetMs", "encodedChars", "errno"), report.keys().asSequence().toSet())
+        assertTrue("Capture metadata must exclude exception data", !report.toString().contains("sentinel"))
+        diagnostic.failed(IllegalStateException("private-payload-sentinel"))
+        assertTrue("Other failures have no invented errno", diagnostic.report().isNull("errno"))
+        assertTrue("Capture metadata remains bounded", diagnostic.report().toString().length <= 256)
+        assertEquals(0, QrCaptureDiagnostic(-1).report().getInt("budgetMs"))
+    }
+
+    @Test fun qrCameraReleaseRequiresTheSuccessfulAttemptsOwnOpenAndClose() {
+        val first = QrCameraObservation(setOf("owned-rear"))
+        first.onCameraAvailable("owned-rear"); first.arm()
+        first.onCameraUnavailable("owned-rear"); first.onCameraAvailable("owned-rear")
+        assertEquals(0L, first.released.count)
+        val fresh = QrCameraObservation(setOf("owned-rear"))
+        fresh.onCameraAvailable("owned-rear"); fresh.arm()
+        first.onCameraAvailable("owned-rear") // A queued old callback cannot release fresh work.
+        assertTrue(!fresh.openedAny()); assertEquals(1L, fresh.released.count)
+        fresh.onCameraUnavailable("owned-rear"); first.onCameraAvailable("owned-rear")
+        assertTrue(fresh.openedAny()); assertEquals(1L, fresh.released.count)
+        fresh.onCameraAvailable("other-camera"); assertEquals(1L, fresh.released.count)
+        fresh.onCameraAvailable("owned-rear"); assertEquals(0L, fresh.released.count)
+    }
+
+    // Dedicated invocation with an owned emulator imagefile camera; no mocked frames or IPC.
+    @Test fun ownedQrCameraRequiresPermissionAndExplicitPreview() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val frameNonce = InstrumentationRegistry.getArguments().getString("lazyshQrFrameNonce")
+        require(frameNonce != null && Regex("[a-f0-9]{32}").matches(frameNonce)) { "Owned QR frame nonce required" }
+        val frameEnabled = InstrumentationRegistry.getArguments().getString("lazyshQrFrameEnabled")
+        require(frameEnabled == "true" || frameEnabled == "false") { "Owned QR frame budget flag required" }
+        val frame = if (frameEnabled == "true") File(context.cacheDir, "lazysh-qr-frame-$frameNonce.png") else null
+        assertEquals("Camera permission must start ungranted", PackageManager.PERMISSION_DENIED,
+            context.checkSelfPermission(android.Manifest.permission.CAMERA))
+        val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val rear = camera.cameraIdList.filter { camera.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK }.toSet()
+        assertTrue("Owned rear imagefile camera must exist", rear.isNotEmpty())
+        val scenario = NativeActivityFixture.scenario
+        val observer = HandlerThread("owned-qr-camera-observer").apply { start() }
+        var observation: QrCameraObservation? = null
+        fun observe(): QrCameraObservation {
+            observation?.let { camera.unregisterAvailabilityCallback(it) }
+            val next = QrCameraObservation(rear); observation = next
+            camera.registerAvailabilityCallback(next, Handler(observer.looper))
+            assertTrue("Rear camera must be idle before explicit Scan", next.idle.await(5, TimeUnit.SECONDS))
+            next.arm()
+            return next
+        }
+        fun button(label: String) {
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$label']")).perform(webClick())
+        }
+        val preview = "Boolean(document.querySelector('.theme-preview'))"
+        val stopped = "document.querySelector('.theme-qr-panel video')?.srcObject===null"
+        val available = "Boolean(document.querySelector('.theme-qr-panel button') && !document.querySelector('.theme-qr-panel button').disabled)"
+        val draftSelector = "[aria-label='Theme JSON or share code']"
+        val draft = "manual owned QR draft stays literal"
+        var permissionController: String? = null
+        fun permission(id: String) {
+            val selector = permissionController?.let { By.res(it, id) }
+                ?: By.res(Pattern.compile("[a-zA-Z0-9_.]+:id/" + Pattern.quote(id)))
+            val device = UiDevice.getInstance(instrumentation)
+            assertTrue("Expected real owned camera permission choice: $id", device.wait(Until.hasObject(selector), 5_000))
+            val choices = device.findObjects(selector)
+            assertEquals("Permission choice must be unambiguous", 1, choices.size)
+            val target = choices.single()
+            val owner = requireNotNull(target.applicationPackage) { "Permission owner unavailable" }
+            val info = context.packageManager.getApplicationInfo(owner, 0)
+            assertTrue("Permission choice must belong to a system application", info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0)
+            if (permissionController == null) permissionController = owner
+            assertEquals("Permission choices must retain the same system owner", permissionController, owner)
+            target.click()
+        }
+        var primary: Throwable? = null
+        var propagating = false
+        try {
+            var capture = observe()
+            awaitDocument(scenario, "QR workspace ready", "Boolean(document.querySelector('button[aria-label=Preferences]'))")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label=Preferences]")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//summary[normalize-space(text())='Import and share theme']")).perform(webClick())
+            awaitDocument(scenario, "explicit QR controls", available)
+            typeInto(scenario, draftSelector, draft)
+            closeSoftKeyboard()
+            val saved = evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')")
+            button("Scan QR with camera")
+            permission("permission_deny_button")
+            awaitDocument(scenario, "QR denied camera settles", "$available && $stopped")
+            assertEquals("Denied choice must leave camera permission ungranted", PackageManager.PERMISSION_DENIED,
+                context.checkSelfPermission(android.Manifest.permission.CAMERA))
+            assertEquals("Denied camera must not preview", "false", evaluate(scenario, preview))
+            assertEquals("Denial keeps explicit image fallback available", "true", evaluate(scenario,
+                "Boolean(document.querySelector('.theme-qr-panel input[type=file]:not(:disabled)'))"))
+            assertTrue("Denied request must not open the camera", !capture.openedAny())
+            println("lazysh QR UI: real permission denied; fallback available")
+            // This is a new explicit user action, not revival of the denied attempt.
+            capture = observe()
+            button("Scan QR with camera")
+            permission("permission_allow_foreground_only_button")
+            assertEquals("Explicit Allow must grant camera permission", PackageManager.PERMISSION_GRANTED,
+                context.checkSelfPermission(android.Manifest.permission.CAMERA))
+            awaitDocument(scenario, "QR granted permission settles", "$preview || ($available && $stopped)")
+            if (evaluate(scenario, preview) != "true") {
+                // A real permission dialog can hide/stop the Activity. The original
+                // cancelled pipeline must stay cancelled; require fresh user intent.
+                assertEquals("Only a lifecycle-cancelled attempt may need fresh Scan", "true", evaluate(scenario,
+                    "Array.from(document.querySelectorAll('.theme-qr-panel [role=status]')).some(x=>x.textContent==='QR scan stopped.')"))
+                assertEquals("Interrupted permission must not publish a stale preview", "false", evaluate(scenario, preview))
+                println("lazysh QR UI: permission lifecycle cancelled; explicit fresh scan")
+                capture = observe()
+                button("Scan QR with camera")
+            }
+            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", qrVideoObservation(scenario, frame))
+            assertEquals("QR preview must preserve the manual draft", "true", evaluate(scenario,
+                "document.querySelector(${JSONObject.quote(draftSelector)})?.value===${JSONObject.quote(draft)}"))
+            assertTrue("QR preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
+            assertTrue("The actual rear camera must have opened", capture.openedAny())
+            awaitDocument(scenario, "QR video detached after decode", stopped)
+            assertTrue("Native rear camera must be released after decode", capture.released.await(5, TimeUnit.SECONDS))
+            button("Cancel preview")
+            awaitDocument(scenario, "QR explicit preview discarded", "!($preview) && $stopped && $available")
+            assertTrue("Discarded preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
+            println("lazysh QR UI: decoded preview discarded; camera released; draft unchanged")
+        } catch (failure: Throwable) { primary = failure; propagating = true; throw failure }
+        finally {
+            fun cleanup(action: () -> Unit) { try { action() } catch (failure: Throwable) {
+                if (primary == null) primary = failure else primary!!.addSuppressed(AssertionError("Owned QR cleanup also failed"))
+            } }
+            cleanup {
+                val device = UiDevice.getInstance(instrumentation)
+                permissionController?.let { if (device.hasObject(By.pkg(it))) device.pressBack() }
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
+            }
+            cleanup { observation?.let { camera.unregisterAvailabilityCallback(it) } }
+            cleanup { observer.quitSafely(); observer.join(5_000); assertTrue("Camera observer must retire", !observer.isAlive) }
+            if (!propagating && primary != null) throw primary!!
+        }
     }
 
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
