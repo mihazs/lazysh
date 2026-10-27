@@ -12,29 +12,17 @@ type Probe<T> = std::result::Result<T, String>;
 
 #[path = "tmux_multiline_fixture.rs"]
 mod multiline;
+#[path = "tmux_retirement_fixture.rs"]
+mod retirement;
 #[cfg(target_os = "linux")]
 #[path = "tmux_shutdown_fixture.rs"]
 mod shutdown;
 #[path = "tmux_teardown_diagnostics.rs"]
 mod teardown;
+use retirement::retire_transport;
 
 #[path = "herdr_guard_fixture.rs"]
 mod herdr_guard;
-
-// Observe task completion, including an error result, without issuing another
-// disconnect or exposing a peer diagnostic. Return only whether its first poll
-// was pending.
-async fn completed_transport(mut transport: russh::client::Handle<HostVerifier>) -> bool {
-    use std::future::Future;
-    let pending = std::future::poll_fn(|cx| {
-        std::task::Poll::Ready(std::pin::Pin::new(&mut transport).poll(cx).is_pending())
-    })
-    .await;
-    if pending {
-        let _ = transport.await;
-    }
-    pending
-}
 
 fn fixture_key() -> russh::keys::PrivateKey {
     russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()
@@ -2082,16 +2070,16 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     })
     .await
     .expect("original SSH transport must actually close");
-    drop(original_transport);
     assert!(first_state.sessions.lock().await.is_empty());
     assert!(first_state.retiring.lock().await.is_empty());
-    timeout(BOUND, async {
-        while old_handle.upgrade().is_some() {
-            tokio::task::yield_now().await;
-        }
-    })
+    let mut initial_retirement_phase = "wrapper";
+    let initial_task_pending = timeout(
+        BOUND,
+        retire_transport(old_handle, original_transport, &mut initial_retirement_phase),
+    )
     .await
-    .expect("all original native SSH handles must retire before reauthentication");
+    .unwrap_or_else(|error| panic!("initial owned transport must retire before reauthentication: {error:?}; phase={initial_retirement_phase}"));
+    eprintln!("initial SSH retirement: wrapper_retired=true task_pending_after_wrapper_drop={initial_task_pending} task_completed=true");
     drop(first);
     drop(lease);
     drop(authority);
@@ -2144,22 +2132,10 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         .cancel_for_renderer_rebind()
         .await;
     let mut retirement_phase = "wrapper";
-    let task_pending = timeout(BOUND, async {
-        while fresh_weak.upgrade().is_some() {
-            tokio::task::yield_now().await;
-        }
-        retirement_phase = "raw_handle";
-        let mut core = fresh_transport;
-        let core = loop {
-            match Arc::try_unwrap(core) {
-                Ok(core) => break core,
-                Err(retained) => core = retained,
-            }
-            tokio::task::yield_now().await;
-        };
-        retirement_phase = "task";
-        completed_transport(core).await
-    })
+    let task_pending = timeout(
+        BOUND,
+        retire_transport(fresh_weak, fresh_transport, &mut retirement_phase),
+    )
     .await
     .unwrap_or_else(|error| panic!("fresh owned transport must retire during teardown: {error:?}; phase={retirement_phase}"));
     eprintln!("fresh SSH retirement: wrapper_retired=true task_pending_after_wrapper_drop={task_pending} task_completed=true");
