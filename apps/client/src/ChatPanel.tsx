@@ -40,7 +40,7 @@ type Page = {
 
 export function parseTranscript(value: unknown): Page {
   if (!value || typeof value !== "object")
-    throw new Error(t("chatInvalidResponse"));
+    throw new LocalUiError('chatInvalidResponse');
   const page = value as Page;
   if (
     page.schemaVersion !== 1 ||
@@ -54,10 +54,10 @@ export function parseTranscript(value: unknown): Page {
     page.nextOffset < 0 ||
     typeof page.hasMore !== "boolean"
   )
-    throw new Error(t("chatUnsupportedResponse"));
+    throw new LocalUiError('chatUnsupportedResponse');
   if (page.agent === "antigravity-jsonl") {
     const bytes = Number(page.checkpoint!.split(":")[1]);
-    if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new Error(t("chatInvalidCheckpoint"));
+    if (bytes > 16 * 1024 * 1024 || page.nextOffset > bytes) throw new LocalUiError('chatInvalidCheckpoint');
   }
   for (const message of page.messages) {
     if (
@@ -68,7 +68,7 @@ export function parseTranscript(value: unknown): Page {
       !Array.isArray(message.blocks) ||
       message.blocks.length > 1000
     )
-      throw new Error(t("chatInvalidMessage"));
+      throw new LocalUiError('chatInvalidMessage');
     if (page.agent === "antigravity-jsonl") {
       const metadata = message.record;
       if (message.role !== "record" || !metadata || [metadata.source, metadata.type, metadata.status].some(value => typeof value !== "string" || value.length > 256)
@@ -76,8 +76,8 @@ export function parseTranscript(value: unknown): Page {
         || (metadata.stepIndex !== undefined && (!Number.isInteger(metadata.stepIndex) || metadata.stepIndex < 0 || metadata.stepIndex > 4294967295))
         || (metadata.errorCode !== undefined && (!Number.isInteger(metadata.errorCode) || metadata.errorCode < 0 || metadata.errorCode > 4294967295))
         || (metadata.exitCode !== undefined && (!Number.isInteger(metadata.exitCode) || metadata.exitCode < -2147483648 || metadata.exitCode > 2147483647)))
-        throw new Error(t("chatInvalidRecordMetadata"));
-    } else if (message.record !== undefined) throw new Error(t("chatUnexpectedRecordMetadata"));
+        throw new LocalUiError('chatInvalidRecordMetadata');
+    } else if (message.record !== undefined) throw new LocalUiError('chatUnexpectedRecordMetadata');
     for (const block of message.blocks) {
       if (block?.imagePreview !== undefined) {
         const imageContext = (page.agent==='grok-acp' && page.view==='record_stream' && ['user','assistant'].includes(message.role))
@@ -93,20 +93,20 @@ export function parseTranscript(value: unknown): Page {
           block.type,
         )
       )
-        throw new Error(t("chatInvalidBlock"));
+        throw new LocalUiError('chatInvalidBlock');
       for (const field of ["text", "id", "name"] as const)
         if (
           block[field] !== undefined &&
           (typeof block[field] !== "string" || block[field].length > 262144)
         )
-          throw new Error(t("chatInvalidContent"));
+          throw new LocalUiError('chatInvalidContent');
       if (block.status !== undefined && (page.agent !== 'grok-acp'
         || !['tool_use','tool_result','image'].includes(block.type)
         || !['pending','in_progress','completed','failed'].includes(block.status)
         || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
-        throw new Error(t("chatInvalidToolStatus"));
+        throw new LocalUiError('chatInvalidToolStatus');
       if (block.isError !== undefined && (page.agent !== 'claude' || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
-        throw new Error(t("chatInvalidToolError"));
+        throw new LocalUiError('chatInvalidToolError');
     }
     if (
       message.usage &&
@@ -117,7 +117,7 @@ export function parseTranscript(value: unknown): Page {
             : !Number.isSafeInteger(n) || n < 0,
         ))
     )
-      throw new Error(t("chatInvalidUsage"));
+      throw new LocalUiError('chatInvalidUsage');
   }
   return page;
 }
@@ -284,15 +284,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
         throw new LocalUiError('chatImageInvalid');
       if (source.checkpointed) validateRecordedPage(page,cursor,replace ? undefined : checkpoint);
       if (source.view === "conversation" && page.view !== "active_branch")
-        throw new Error(
-          t("chatUpdateCompanion"),
-        );
+        throw new LocalUiError('chatUpdateCompanion');
       if (
         page.agent !== source.agent ||
         page.nextOffset < cursor ||
         (page.hasMore && page.nextOffset === cursor)
       )
-        throw new Error(t("chatChanged"));
+        throw new LocalUiError('chatChanged');
       if (!currentRequest(current)) return;
       setOpened(source);
       if (prepare) {setFollowing(true); followRef.current = true;}
@@ -311,7 +309,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal }: { sessionId: st
     } catch (e) {
       if (currentRequest(current)) {
         setError(source.agent === "antigravity-jsonl" && errorMessage(e).includes("TranscriptChanged")
-          ? t("chatChanged") : captureUiError(e));
+          ? new LocalUiError('chatChanged') : captureUiError(e));
         setFollowing(false); followRef.current = false;
       }
     } finally {
