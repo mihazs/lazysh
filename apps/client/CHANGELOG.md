@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.5.0
+
+### Minor Changes
+
+- 9b9a761: Support explicitly confirmed multiline Chat terminal input and tabs through bounded native tmux paste without newline normalization. Stage remains default; bracketed paste depends on the terminal program, and interrupted input is never automatically resent.
+
+### Patch Changes
+
+- @lazysh/common@0.5.0
+  - @lazysh/display-idle@0.5.0
+  - @lazysh/et-transport@0.5.0
+  - @lazysh/mosh-transport@0.5.0
+
 ## 0.4.0
 
 ### Minor Changes
