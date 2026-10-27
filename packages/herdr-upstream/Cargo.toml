@@ -1,3 +1,4 @@
+# Modified by lazysh: pinned portable OS entropy for optional guarded input.
 [package]
 name = "herdr"
 version = "0.9.3"
@@ -25,6 +26,7 @@ members = ["crates/ghostty-vt"]
 default-members = [".", "crates/ghostty-vt"]
 
 [dependencies]
+getrandom = "=0.3.4"
 ghostty-vt = { path = "crates/ghostty-vt" }
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
@@ -87,3 +89,8 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# Modified by lazysh: explicitly built native acceptance fixture, not an installed tool.
+[[example]]
+name = "guarded_ssh_fixture"
+path = "../herdr-guard/ssh_fixture.rs"

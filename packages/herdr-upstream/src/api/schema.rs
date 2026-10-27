@@ -1,3 +1,4 @@
+// Modified by lazysh: additive capability-gated guarded-input methods.
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
@@ -45,6 +46,18 @@ pub struct Request {
 // the simple serde shape and avoids boxing churn across every caller.
 #[allow(clippy::large_enum_variant)]
 pub enum Method {
+    #[serde(rename = "lazysh.guard.claim")]
+    GuardClaim(crate::guarded_input::protocol::ClaimParams),
+    #[serde(rename = "lazysh.guard.cancel_preparation")]
+    GuardCancelPreparation(crate::guarded_input::protocol::CancelPreparationParams),
+    #[serde(rename = "lazysh.guard.revoke")]
+    GuardRevoke(crate::guarded_input::protocol::RevokeParams),
+    #[serde(rename = "lazysh.guard.prepare")]
+    GuardPrepare(crate::guarded_input::protocol::PrepareParams),
+    #[serde(rename = "lazysh.guard.input")]
+    GuardInput(crate::guarded_input::protocol::InputParams),
+    #[serde(rename = "lazysh.guard.release")]
+    GuardRelease(crate::guarded_input::protocol::ReleaseParams),
     #[serde(rename = "ping")]
     Ping(PingParams),
     #[serde(rename = "server.stop")]

@@ -1,3 +1,4 @@
+// Modified by lazysh: opt-in guarded attach ticket; ordinary hello bytes unchanged.
 //! Stable endpoint compatibility contract for client-owned shells.
 //!
 //! The endpoint generation is intentionally independent from the private
@@ -45,6 +46,8 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointClientHello {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) guard_nonce: Option<crate::guarded_input::protocol::Secret>,
     pub generation: u32,
     pub cell_width_px: u32,
     pub cell_height_px: u32,
@@ -139,6 +142,28 @@ pub fn agent_view_projection_message(
 }
 
 impl EndpointClientHello {
+    pub(crate) fn core(surface_size: ClientSurfaceSize) -> Self {
+        Self {
+            guard_nonce: None,
+            generation: ENDPOINT_PROTOCOL_GENERATION,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            surface_size,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: true,
+            surface_reuse: false,
+            surface_delta: false,
+            surface_scroll: false,
+            snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
+            surface_codecs: vec![SURFACE_CODEC_V1.into()],
+            input_codecs: vec![INPUT_CODEC_V1.into()],
+            blob_codecs: vec![BLOB_CODEC_V1.into()],
+        }
+    }
+
     pub fn supports_required_codecs(&self) -> bool {
         self.snapshot_codecs
             .iter()
@@ -156,7 +181,11 @@ impl EndpointClientHello {
 }
 
 impl EndpointServerWelcome {
-    pub fn compatible(methods: Vec<String>) -> Self {
+    fn core(
+        methods: Vec<String>,
+        capabilities: Vec<String>,
+        error: Option<EndpointHandshakeError>,
+    ) -> Self {
         Self {
             generation: ENDPOINT_PROTOCOL_GENERATION,
             server_version: crate::build_info::version(),
@@ -165,7 +194,15 @@ impl EndpointServerWelcome {
             input_codec: INPUT_CODEC_V1.into(),
             blob_codec: BLOB_CODEC_V1.into(),
             methods,
-            capabilities: vec![
+            capabilities,
+            error,
+        }
+    }
+    pub fn compatible(methods: Vec<String>) -> Self {
+        Self::core(
+            methods,
+            vec![
+                crate::guarded_input::protocol::CAPABILITY.into(),
                 super::surface_reuse::CAPABILITY.into(),
                 super::surface_delta::CAPABILITY.into(),
                 super::surface_scroll::CAPABILITY.into(),
@@ -175,25 +212,18 @@ impl EndpointServerWelcome {
                 AGENT_VIEW_PROJECTION_CAPABILITY.into(),
                 AGENT_COMPLETIONS_CAPABILITY.into(),
             ],
-            error: None,
-        }
+            None,
+        )
     }
-
     pub fn incompatible(code: &str, message: impl Into<String>) -> Self {
-        Self {
-            generation: ENDPOINT_PROTOCOL_GENERATION,
-            server_version: crate::build_info::version(),
-            snapshot_codec: SNAPSHOT_CODEC_V1.into(),
-            surface_codec: SURFACE_CODEC_V1.into(),
-            input_codec: INPUT_CODEC_V1.into(),
-            blob_codec: BLOB_CODEC_V1.into(),
-            methods: Vec::new(),
-            capabilities: Vec::new(),
-            error: Some(EndpointHandshakeError {
+        Self::core(
+            Vec::new(),
+            Vec::new(),
+            Some(EndpointHandshakeError {
                 code: code.into(),
                 message: message.into(),
             }),
-        }
+        )
     }
 }
 
@@ -203,22 +233,11 @@ mod tests {
 
     fn hello() -> EndpointClientHello {
         EndpointClientHello {
-            generation: ENDPOINT_PROTOCOL_GENERATION,
             cell_width_px: 8,
             cell_height_px: 16,
-            surface_size: ClientSurfaceSize { cols: 80, rows: 24 },
             pixel_mouse: true,
-            direct_graphics: false,
-            endpoint_keybindings: false,
             mouse_capture: true,
-            surface_active: true,
-            surface_reuse: false,
-            surface_delta: false,
-            surface_scroll: false,
-            snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
-            surface_codecs: vec![SURFACE_CODEC_V1.into()],
-            input_codecs: vec![INPUT_CODEC_V1.into()],
-            blob_codecs: vec![BLOB_CODEC_V1.into()],
+            ..EndpointClientHello::core(ClientSurfaceSize { cols: 80, rows: 24 })
         }
     }
 
@@ -377,6 +396,7 @@ mod tests {
         assert_eq!(
             welcome.capabilities,
             vec![
+                crate::guarded_input::protocol::CAPABILITY.to_string(),
                 super::super::surface_reuse::CAPABILITY.to_string(),
                 super::super::surface_delta::CAPABILITY.to_string(),
                 super::super::surface_scroll::CAPABILITY.to_string(),

@@ -1,3 +1,4 @@
+// Modified by lazysh: inert guard fixture state and shared test setup/assertion helpers.
 use super::*;
 
 mod event_fairness;
@@ -59,6 +60,36 @@ fn test_headless_server() -> HeadlessServer {
     test_headless_server_with_event_hub(api::EventHub::default())
 }
 
+fn owned_test_socket_directory() -> PathBuf {
+    for _ in 0..8 {
+        let mut suffix = [0_u8; 8];
+        getrandom::fill(&mut suffix).expect("owned socket directory entropy");
+        let directory = std::env::temp_dir().join(format!(
+            "hh-{}-{:016x}",
+            std::process::id(),
+            u64::from_le_bytes(suffix)
+        ));
+        let builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut private = builder;
+            private.mode(0o700);
+            private
+        };
+        match builder.create(&directory) {
+            Ok(()) => return directory,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!(
+                "owned socket directory allocation: kind={:?}, os={:?}",
+                error.kind(),
+                error.raw_os_error()
+            ),
+        }
+    }
+    panic!("owned socket directory allocation exhausted");
+}
+
 fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
     let config = crate::config::Config::default();
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -71,18 +102,16 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
     );
 
     app.state.default_shell = crate::app::exiting_test_command().into();
-    let dir = std::env::temp_dir().join(format!(
-        "hh-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    let _ = fs::create_dir_all(&dir);
+    let dir = owned_test_socket_directory();
     let socket_path = dir.join("client.sock");
-    let _ = fs::remove_file(&socket_path);
-    let listener = bind_local_listener(&socket_path).expect("bind test listener");
+    let listener = bind_local_listener(&socket_path).unwrap_or_else(|error| {
+        panic!(
+            "bind owned test listener: path={}, kind={:?}, os={:?}",
+            socket_path.display(),
+            error.kind(),
+            error.raw_os_error()
+        )
+    });
     let client_socket_identity =
         socket_file_identity(&socket_path).expect("test listener socket identity");
     #[cfg(unix)]
@@ -93,46 +122,20 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
     let should_quit = Arc::new(AtomicBool::new(false));
     #[cfg(windows)]
     spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
-    let server_keybindings = app_keybindings(&app);
-    let headless_size = app.state.headless_size;
-
-    HeadlessServer {
+    HeadlessServer::with_bound_socket(
         app,
+        &[],
+        None,
+        None,
         #[cfg(unix)]
-        api_tx: None,
-        api_server: None,
-        #[cfg(unix)]
-        client_listener: listener,
-        client_socket_path: socket_path,
+        listener,
+        socket_path,
         client_socket_identity,
-        clients: HashMap::new(),
-        native_graphics: Default::default(),
-        #[cfg(unix)]
-        next_client_id: 1,
-        foreground_client_id: None,
-        tab_geometry_controllers: HashMap::new(),
-        popup_owner_tab_id: None,
-        client_shell_boot_id: "test-boot".into(),
-        sent_window_title: None,
-        api_window_title: None,
-        server_keybindings,
-        server_config_diagnostic: None,
-        server_config_diagnostic_without_keybindings: None,
-        terminal_attach_owners: HashMap::new(),
-        pending_alt_screen_reads: Vec::new(),
-        deferred_alt_screen_reads: Vec::new(),
-        next_activity_stamp: 1,
-        headless_size,
-        effective_size: headless_size,
-        shutting_down: false,
-        host_shutdown_requested: Arc::new(AtomicBool::new(false)),
-        handoff_in_progress: false,
-        #[cfg(unix)]
-        pending_handoff_repaint_nudge: false,
         should_quit,
-        server_event_rx,
-        server_event_tx,
-    }
+        (server_event_tx, server_event_rx),
+        None,
+        "test-boot".into(),
+    )
 }
 
 fn shutdown_test_runtimes(server: &mut HeadlessServer) {
@@ -197,11 +200,8 @@ fn default_headless_size_is_effective_without_clients() {
 async fn headless_api_reads_latest_title_without_spinner_event_flooding() {
     let event_hub = api::EventHub::default();
     let mut server = test_headless_server_with_event_hub(event_hub.clone());
-    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("one")];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server
+        .select_test_workspaces_with_terminals(vec![crate::workspace::Workspace::test_new("one")]);
     server.app.state.sidebar_agents.rows = vec![vec![
         crate::config::AgentSidebarToken::TerminalTitleStripped,
     ]];
@@ -330,16 +330,7 @@ fn window_title_test_server() -> (HeadlessServer, std::sync::mpsc::Receiver<Vec<
     server.app.state.selected = 0;
 
     let (client_tx, control_rx, _render_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(client_tx));
     server.promote_client_to_foreground(1);
     drain_window_titles(&control_rx);
     (server, control_rx)
@@ -386,16 +377,7 @@ fn window_title_waits_for_a_foreground_client_to_exist() {
     assert_eq!(server.sent_window_title, None);
 
     let (client_tx, control_rx, _render_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(client_tx));
     server.promote_client_to_foreground(1);
     server.sync_window_title();
 
@@ -409,27 +391,13 @@ fn window_title_waits_for_a_foreground_client_to_exist() {
 #[test]
 fn an_attaching_client_gets_the_title_even_when_it_has_not_changed() {
     let (mut server, first_control_rx) = window_title_test_server();
-    server.app.configure_window_title("{workspace}");
-    server.sync_window_title();
-    assert_eq!(
-        next_window_title(&first_control_rx),
-        Some(Some("herd".to_string()))
-    );
+    assert_initial_workspace_title(&mut server, &first_control_rx);
 
     // ClientConnected assigns the foreground client directly rather than
     // going through promote_client_to_foreground, so the cache must notice
     // the new client on its own.
     let (client_tx, second_control_rx, _render_rx) = test_client_writer();
-    server.clients.insert(
-        2,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(2, (80, 24), 2, Some(client_tx));
     server.foreground_client_id = Some(2);
     server.sync_window_title();
 
@@ -589,25 +557,11 @@ fn clearing_the_api_title_falls_back_to_herdr_when_window_titles_are_disabled() 
 #[test]
 fn a_newly_promoted_client_gets_the_window_title_again() {
     let (mut server, first_control_rx) = window_title_test_server();
-    server.app.configure_window_title("{workspace}");
-    server.sync_window_title();
-    assert_eq!(
-        next_window_title(&first_control_rx),
-        Some(Some("herd".to_string()))
-    );
+    assert_initial_workspace_title(&mut server, &first_control_rx);
 
     // A second terminal starts on whatever its shell or ssh left behind.
     let (client_tx, second_control_rx, _render_rx) = test_client_writer();
-    server.clients.insert(
-        2,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(2, (80, 24), 2, Some(client_tx));
     server.promote_client_to_foreground(2);
     server.sync_window_title();
 
@@ -695,6 +649,582 @@ async fn promoted_client_window_title_uses_its_own_view() {
     shutdown_test_runtimes(&mut server);
 }
 
+fn test_client(
+    mode: ClientConnectionMode,
+    size: (u16, u16),
+    activity: u64,
+    writer: Option<ClientWriter>,
+) -> ClientConnection {
+    ClientConnection::new_with_mode(
+        mode,
+        size,
+        crate::kitty_graphics::HostCellSize::default(),
+        activity,
+        RenderEncoding::SemanticFrame,
+        writer,
+    )
+}
+
+impl HeadlessServer {
+    fn send_test_api_request(
+        &mut self,
+        id: &str,
+        method: api::schema::Method,
+    ) -> std::sync::mpsc::Receiver<String> {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        self.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: id.into(),
+                method,
+            },
+            respond_to,
+            response_write_complete: None,
+        });
+        response_rx
+    }
+
+    fn install_foreground_test_workspace(
+        &mut self,
+        workspace: crate::workspace::Workspace,
+        pane_id: crate::layout::PaneId,
+    ) -> String {
+        self.select_test_workspace(workspace);
+        let public_pane_id = self.app.public_pane_id(0, pane_id).unwrap();
+        self.add_test_shell_client(11, (80, 24), 1, None);
+        self.foreground_client_id = Some(11);
+        public_pane_id
+    }
+
+    fn install_focused_test_shell(
+        &mut self,
+        screen: &[u8],
+    ) -> (String, tokio::sync::mpsc::Receiver<Bytes>) {
+        let input = install_focused_test_runtime(self, screen);
+        let pane_id = self.app.session_snapshot().focused_pane_id.unwrap();
+        self.add_test_shell_client(11, (80, 24), 1, None);
+        (pane_id, input)
+    }
+
+    fn deliver_test_shell_motion(&mut self, pane_id: String) -> RenderImpact {
+        self.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
+            client_id: 11,
+            pane_id,
+            events: vec![test_pane_mouse(
+                protocol::ClientMouseKind::Moved,
+                protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+                0,
+            )],
+        })
+    }
+
+    fn install_endpoint_test_workspace(&mut self, name: &str) -> crate::layout::PaneId {
+        let workspace = crate::workspace::Workspace::test_new(name);
+        let pane_id = workspace.tabs[0].root_pane;
+        self.app.state.workspaces = vec![workspace];
+        self.app.state.ensure_test_terminals();
+        self.app.state.active = Some(0);
+        pane_id
+    }
+
+    fn mark_test_terminal_working(
+        &mut self,
+        terminal_id: &crate::terminal::TerminalId,
+        agent: crate::detect::Agent,
+    ) {
+        self.app
+            .state
+            .terminals
+            .get_mut(terminal_id)
+            .unwrap()
+            .set_detected_state(Some(agent), crate::detect::AgentState::Working);
+    }
+
+    fn install_test_focus_tabs(
+        &mut self,
+        name: &str,
+    ) -> (
+        usize,
+        tokio::sync::mpsc::Receiver<Bytes>,
+        tokio::sync::mpsc::Receiver<Bytes>,
+    ) {
+        let (mut workspace, first_pane, second_tab, second_pane) = test_two_tab_workspace(name);
+        let (first_runtime, first_input) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80,
+                24,
+                0,
+                b"\x1b[?1004h",
+                4,
+            );
+        let (second_runtime, second_input) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80,
+                24,
+                0,
+                b"\x1b[?1004h",
+                4,
+            );
+        workspace.insert_test_runtime(first_pane, first_runtime);
+        workspace.insert_test_runtime(second_pane, second_runtime);
+        self.select_test_workspace(workspace);
+        self.app.state.mode = crate::app::Mode::Terminal;
+        (second_tab, first_input, second_input)
+    }
+
+    fn add_test_shell_client(
+        &mut self,
+        client_id: u64,
+        size: (u16, u16),
+        activity: u64,
+        writer: Option<ClientWriter>,
+    ) {
+        self.clients.insert(
+            client_id,
+            test_client(ClientConnectionMode::ClientShell, size, activity, writer),
+        );
+    }
+
+    fn select_test_workspaces_with_terminals(
+        &mut self,
+        workspaces: Vec<crate::workspace::Workspace>,
+    ) {
+        self.app.state.workspaces = workspaces;
+        self.app.state.ensure_test_terminals();
+        self.app.state.active = Some(0);
+        self.app.state.selected = 0;
+        self.app.state.mode = crate::app::Mode::Terminal;
+    }
+
+    fn select_test_workspace(&mut self, workspace: crate::workspace::Workspace) {
+        self.app.state.workspaces = vec![workspace];
+        self.app.state.active = Some(0);
+        self.app.state.selected = 0;
+    }
+}
+
+fn test_tokio_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime")
+}
+
+fn test_client_connected(client_id: u64, size: (u16, u16), writer: ClientWriter) -> ServerEvent {
+    ServerEvent::ClientConnected {
+        client_id,
+        cols: size.0,
+        rows: size.1,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+        writer,
+    }
+}
+
+fn assert_scroll_offset(runtime: &crate::terminal::TerminalRuntime, expected: usize) {
+    assert_eq!(
+        runtime
+            .scroll_metrics()
+            .expect("scroll metrics")
+            .offset_from_bottom,
+        expected
+    );
+}
+
+fn test_scrollback_lines() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for line in 0..80 {
+        bytes.extend_from_slice(format!("line {line:02}\r\n").as_bytes());
+    }
+    bytes
+}
+
+fn physical_x_test_key(
+    kind: crate::protocol::ClientKeyKind,
+    generated_text: Option<String>,
+) -> crate::protocol::ClientPaneInputEvent {
+    crate::protocol::ClientPaneInputEvent::Key {
+        code: crate::protocol::ClientKeyCode::Char('x'),
+        modifiers: 0,
+        kind,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text,
+        tracks_release: true,
+        physical_key_id: Some(0x2d),
+        windows_record: None,
+    }
+}
+
+fn test_two_tab_workspace(
+    name: &str,
+) -> (
+    crate::workspace::Workspace,
+    crate::layout::PaneId,
+    usize,
+    crate::layout::PaneId,
+) {
+    let mut workspace = crate::workspace::Workspace::test_new(name);
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    (workspace, first_pane, second_tab, second_pane)
+}
+
+fn test_split_workspace(
+    name: &str,
+    direction: ratatui::layout::Direction,
+) -> (
+    crate::workspace::Workspace,
+    crate::layout::PaneId,
+    crate::layout::PaneId,
+) {
+    let (mut workspace, first_pane, second_pane) =
+        crate::app::App::split_test_workspace(name, direction);
+    for pane in [first_pane, second_pane] {
+        workspace.insert_test_runtime(
+            pane,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+        );
+    }
+    (workspace, first_pane, second_pane)
+}
+
+fn test_terminal_attach_client(
+    terminal_id: String,
+    activity: u64,
+    writer: Option<ClientWriter>,
+) -> ClientConnection {
+    ClientConnection::new_with_mode(
+        ClientConnectionMode::TerminalAttach { terminal_id },
+        (80, 24),
+        crate::kitty_graphics::HostCellSize::default(),
+        activity,
+        RenderEncoding::TerminalAnsi,
+        writer,
+    )
+}
+
+fn test_pane_mouse(
+    kind: protocol::ClientMouseKind,
+    position: protocol::ClientMousePosition,
+    lines: u16,
+) -> protocol::ClientPaneInputEvent {
+    protocol::ClientPaneInputEvent::Mouse {
+        kind,
+        position,
+        geometry: None,
+        modifiers: 0,
+        lines,
+    }
+}
+
+fn apply_test_pane_event(
+    runtime: &crate::terminal::TerminalRuntime,
+    event: protocol::ClientPaneInputEvent,
+    context: &str,
+) {
+    apply_client_pane_input_events(runtime, &[event]).expect(context);
+}
+
+fn connect_test_terminal_controller(server: &mut HeadlessServer, client_id: u64, target: &str) {
+    connect_pending_terminal_client(server, client_id);
+    assert!(
+        server.handle_server_event(ServerEvent::ClientControlTerminal {
+            client_id,
+            target: target.to_owned(),
+            takeover: false,
+        })
+    );
+}
+
+fn removed_terminal_client_reason(
+    server: &HeadlessServer,
+    client_id: u64,
+    terminal_id: &str,
+    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
+) -> Option<String> {
+    assert!(!server.clients.contains_key(&client_id));
+    assert!(!server.terminal_attach_owners.contains_key(terminal_id));
+    read_server_shutdown_reason(receiver.recv().expect("shutdown message"))
+}
+
+fn assert_terminal_client_cleanup(
+    server: &HeadlessServer,
+    client_id: u64,
+    terminal_id: &crate::terminal::TerminalId,
+) {
+    assert!(!server.clients.contains_key(&client_id));
+    assert!(server.terminal_attach_owners.is_empty());
+    assert!(!server
+        .app
+        .state
+        .direct_attach_resize_locks
+        .contains(terminal_id));
+}
+
+type ForegroundBackgroundFixture = (
+    HeadlessServer,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+);
+
+fn foreground_background_test_server() -> ForegroundBackgroundFixture {
+    let mut server = test_headless_server();
+    let (background, background_control, background_render) = test_client_writer();
+    let (foreground, foreground_control, foreground_render) = test_client_writer();
+    server.add_test_shell_client(1, (120, 40), 1, Some(background));
+    server.add_test_shell_client(2, (80, 24), 2, Some(foreground));
+    server.foreground_client_id = Some(2);
+    (
+        server,
+        background_control,
+        background_render,
+        foreground_control,
+        foreground_render,
+    )
+}
+
+type TestClientReceivers = (
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+);
+
+fn connect_backpressured_test_shells(
+    server: &mut HeadlessServer,
+) -> (
+    crate::layout::PaneId,
+    TestClientReceivers,
+    TestClientReceivers,
+) {
+    let pane_id = install_shared_view_test_runtime(server);
+    let responsive = connect_matching_test_shell(server, 7);
+    let slow = connect_matching_test_shell(server, 8);
+    let _ = responsive.0.recv().expect("responsive snapshot");
+    let _ = slow.0.recv().expect("slow snapshot");
+    server.render_and_stream();
+    let _ = responsive.1.recv().expect("responsive initial surface");
+    (pane_id, responsive, slow)
+}
+
+fn assert_slow_shell_recovery(
+    server: &mut HeadlessServer,
+    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    assert!(server.handle_server_event(ServerEvent::ClientWriterDrained { client_id: 8 }));
+    server.render_and_stream();
+    assert!(matches!(
+        read_server_message(receiver.recv().expect("slow full recovery surface")),
+        ServerMessage::PaneSurface(_)
+    ));
+}
+
+fn assert_initial_workspace_title(
+    server: &mut HeadlessServer,
+    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    server.app.configure_window_title("{workspace}");
+    server.sync_window_title();
+    assert_eq!(next_window_title(receiver), Some(Some("herd".to_string())));
+}
+
+fn assert_forwarded_terminal_page_up(
+    runtime: &crate::terminal::TerminalRuntime,
+    input_rx: &mut tokio::sync::mpsc::Receiver<Bytes>,
+) {
+    apply_terminal_attach_page_up(runtime);
+    assert_scroll_offset(runtime, 0);
+    assert_eq!(
+        input_rx.try_recv().expect("forwarded page key"),
+        Bytes::from_static(b"\x1b[5~")
+    );
+}
+
+fn scrolled_test_runtime(
+    screen: &[u8],
+) -> (
+    crate::terminal::TerminalRuntime,
+    tokio::sync::mpsc::Receiver<Bytes>,
+) {
+    let (runtime, input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80, 2, 10_000, screen, 4,
+        );
+    runtime.scroll_up(1);
+    assert!(runtime
+        .scroll_metrics()
+        .is_some_and(|metrics| metrics.offset_from_bottom > 0));
+    (runtime, input_rx)
+}
+
+fn assert_grown_runtime(runtime: &crate::terminal::TerminalRuntime, shrunk: (u16, u16)) {
+    let grown = runtime.current_size();
+    assert!(grown.0 > shrunk.0);
+    assert_eq!(runtime.terminal_dimensions(), Some((grown.1, grown.0)));
+    assert_eq!(
+        runtime.scroll_metrics().unwrap().viewport_rows,
+        grown.0 as usize
+    );
+}
+
+fn attach_test_terminal_client(
+    server: &mut HeadlessServer,
+    terminal_id: &str,
+) -> TestClientReceivers {
+    let (writer, control_rx, render_rx) = test_client_writer();
+    assert!(!server.handle_server_event(test_client_connected(7, (80, 24), writer)));
+    assert!(
+        server.handle_server_event(ServerEvent::ClientAttachTerminal {
+            client_id: 7,
+            terminal_id: terminal_id.to_owned(),
+            takeover: false,
+        })
+    );
+    (control_rx, render_rx)
+}
+
+fn assert_terminal_client_exited(
+    server: &HeadlessServer,
+    terminal_id: &str,
+    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    let reason = removed_terminal_client_reason(server, 7, terminal_id, receiver);
+    assert_eq!(reason, Some(format!("terminal {terminal_id} exited")));
+}
+
+fn completion_guard_targets(
+    server: &HeadlessServer,
+    pane_id: crate::layout::PaneId,
+) -> (String, crate::terminal::TerminalId) {
+    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
+    let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    (public_pane_id, terminal_id)
+}
+
+fn assert_terminal_attach_paste(
+    runtime: &crate::terminal::TerminalRuntime,
+    input_rx: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    expected: &'static [u8],
+) {
+    apply_terminal_attach_input(runtime, b"\x1b[200~line one\nline two\x1b[201~".to_vec())
+        .expect("attach paste");
+    assert_eq!(
+        input_rx.try_recv().expect("forwarded paste"),
+        Bytes::from_static(expected)
+    );
+}
+
+fn test_git_refresh(
+    workspace_id: String,
+    cwd: PathBuf,
+    auto_label: &str,
+    branch: Option<String>,
+) -> AppEvent {
+    AppEvent::GitStatusRefreshed {
+        results: vec![crate::workspace::WorkspaceGitStatus {
+            workspace_id,
+            resolved_identity_cwd: cwd.clone(),
+            status_cache_key: cwd,
+            demand: crate::workspace::GitStatusRefreshDemand::ALL,
+            auto_label: auto_label.into(),
+            branch,
+            ahead_behind: None,
+            space: None,
+        }],
+        cache_updates: Vec::new(),
+    }
+}
+
+fn line_scrollback_test_runtime() -> (
+    crate::terminal::TerminalRuntime,
+    tokio::sync::mpsc::Receiver<Bytes>,
+) {
+    crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+        20,
+        5,
+        4096,
+        &test_scrollback_lines(),
+        4,
+    )
+}
+
+fn connect_ready_test_shells(
+    server: &mut HeadlessServer,
+    first_id: u64,
+    second_id: u64,
+) -> (
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    let (first_control, _) = connect_matching_test_shell(server, first_id);
+    let (second_control, _) = connect_matching_test_shell(server, second_id);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    (first_control, second_control)
+}
+
+async fn assert_encoded_test_input(
+    receiver: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    context: &str,
+) {
+    assert!(!receiver.recv().await.expect(context).is_empty());
+}
+
+fn assert_mouse_without_input(
+    server: &mut HeadlessServer,
+    receiver: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    event: ServerEvent,
+    handled: bool,
+) {
+    assert_eq!(server.handle_server_event(event), handled);
+    assert!(receiver.try_recv().is_err());
+}
+
+fn pixel_mouse_test_runtime(
+    size: (u16, u16),
+    screen: &[u8],
+) -> (
+    crate::terminal::TerminalRuntime,
+    tokio::sync::mpsc::Receiver<Bytes>,
+) {
+    let (runtime, input) = crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+        size.0, size.1, 0, screen, 4,
+    );
+    runtime.resize(size.1, size.0, 10, 20);
+    (runtime, input)
+}
+
+fn apply_test_pixel_motion(runtime: &crate::terminal::TerminalRuntime, context: &str) {
+    apply_test_pane_event(
+        runtime,
+        test_pane_mouse(
+            protocol::ClientMouseKind::Moved,
+            protocol::ClientMousePosition::Pixels {
+                x: 21,
+                y: 22,
+                column: 2,
+                row: 1,
+            },
+            3,
+        ),
+        context,
+    );
+}
+
+fn apply_test_page_key(
+    runtime: &crate::terminal::TerminalRuntime,
+    code: protocol::ClientKeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+    kind: protocol::ClientKeyKind,
+    context: &str,
+) {
+    apply_test_pane_event(runtime, client_page_key(code, modifiers, kind), context);
+}
+
 fn test_client_writer() -> (
     ClientWriter,
     std::sync::mpsc::Receiver<Vec<u8>>,
@@ -745,11 +1275,7 @@ async fn client_shell_attach_seeds_workspace() {
 #[tokio::test]
 async fn completion_guard_endpoint_pairs_runtime_completions_with_snapshots() {
     let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("endpoint");
-    let pane_id = workspace.tabs[0].root_pane;
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
+    let pane_id = server.install_endpoint_test_workspace("endpoint");
     let (writer, control_rx, _render_rx) = test_client_writer();
     server.handle_server_event(ServerEvent::ClientShellConnected {
         client_id: 78,
@@ -898,15 +1424,7 @@ fn terminal_client_endpoint_request_error_removes_client() {
     let mut server = test_headless_server();
     let (writer, _control_rx, _render_rx) = test_client_writer();
     let client_id = 42;
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
+    assert!(!server.handle_server_event(test_client_connected(client_id, (80, 24), writer)));
 
     assert!(
         server.handle_server_event(ServerEvent::ClientShellEndpointRequestError {
@@ -1016,18 +1534,9 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             b"\x1b[?1003h\x1b[?1006h\x1b[?1016hCLIENT_SHELL_LIVE",
         ),
     );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
-    server.app.state.product_announcement = Some(crate::app::state::ProductAnnouncementState {
-        version: "0.8.2".into(),
-        id: "client-shell".into(),
-        title: "Client shell".into(),
-        body: "announcement".into(),
-        scroll: 0,
-        preview: true,
-    });
+    server.app.install_test_announcement();
     server.server_config_diagnostic_without_keybindings = Some("endpoint config warning".into());
 
     let (writer, control_rx, render_rx) = test_client_writer();
@@ -1182,9 +1691,7 @@ fn install_shared_view_test_runtime(server: &mut HeadlessServer) -> crate::layou
         pane_id,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"BASE"),
     );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     pane_id
 }
@@ -1318,9 +1825,7 @@ async fn sibling_retained_output_waits_for_synchronized_pane_to_finish() {
         second,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"SECOND"),
     );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let (_control, render) = connect_matching_test_shell(&mut server, 7);
     server.render_and_stream();
@@ -1399,9 +1904,7 @@ async fn zoom_hidden_synchronized_pane_does_not_block_surface() {
         visible,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"VISIBLE"),
     );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let (_control, render) = connect_matching_test_shell(&mut server, 7);
     write_shared_test_pane(&mut server, hidden, b"\x1b[?2026h\rPARTIAL");
@@ -1605,10 +2108,8 @@ async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_
 #[tokio::test]
 async fn retained_patches_only_reach_shells_viewing_the_dirty_tab() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("divergent-retained");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
+    let (mut workspace, first_pane, second_tab, second_pane) =
+        test_two_tab_workspace("divergent-retained");
     workspace.insert_test_runtime(
         first_pane,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"FIRST"),
@@ -1617,9 +2118,7 @@ async fn retained_patches_only_reach_shells_viewing_the_dirty_tab() {
         second_pane,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"SECOND"),
     );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
 
@@ -1697,15 +2196,8 @@ async fn late_retained_fallback_leaves_all_client_baselines_unchanged() {
 #[tokio::test]
 async fn backpressured_shell_does_not_disable_retained_patches_for_responsive_peer() {
     let mut server = test_headless_server();
-    let pane_id = install_shared_view_test_runtime(&mut server);
-    let (responsive_control, responsive_render) = connect_matching_test_shell(&mut server, 7);
-    let (slow_control, slow_render) = connect_matching_test_shell(&mut server, 8);
-    let _ = responsive_control.recv().expect("responsive snapshot");
-    let _ = slow_control.recv().expect("slow snapshot");
-    server.render_and_stream();
-    let _ = responsive_render
-        .recv()
-        .expect("responsive initial surface");
+    let (pane_id, (_responsive_control, responsive_render), (_slow_control, slow_render)) =
+        connect_backpressured_test_shells(&mut server);
     let _ = slow_render.recv().expect("slow initial surface");
 
     let sources = HashSet::from([pane_id]);
@@ -1745,12 +2237,7 @@ async fn backpressured_shell_does_not_disable_retained_patches_for_responsive_pe
         read_server_message(slow_render.recv().expect("slow queued first patch")),
         ServerMessage::PaneSurfacePatch(_)
     ));
-    assert!(server.handle_server_event(ServerEvent::ClientWriterDrained { client_id: 8 }));
-    server.render_and_stream();
-    assert!(matches!(
-        read_server_message(slow_render.recv().expect("slow full recovery surface")),
-        ServerMessage::PaneSurface(_)
-    ));
+    assert_slow_shell_recovery(&mut server, &slow_render);
 
     shutdown_test_runtimes(&mut server);
 }
@@ -1758,15 +2245,8 @@ async fn backpressured_shell_does_not_disable_retained_patches_for_responsive_pe
 #[tokio::test]
 async fn full_render_backpressure_does_not_disable_responsive_peer_patches() {
     let mut server = test_headless_server();
-    let pane_id = install_shared_view_test_runtime(&mut server);
-    let (responsive_control, responsive_render) = connect_matching_test_shell(&mut server, 7);
-    let (slow_control, slow_render) = connect_matching_test_shell(&mut server, 8);
-    let _ = responsive_control.recv().expect("responsive snapshot");
-    let _ = slow_control.recv().expect("slow snapshot");
-    server.render_and_stream();
-    let _ = responsive_render
-        .recv()
-        .expect("responsive initial surface");
+    let (pane_id, (_responsive_control, responsive_render), (_slow_control, slow_render)) =
+        connect_backpressured_test_shells(&mut server);
     // Keep the slow client's initial surface queued, then force another full
     // replacement for both clients.
     server.clients.get_mut(&7).unwrap().request_repaint();
@@ -1787,12 +2267,7 @@ async fn full_render_backpressure_does_not_disable_responsive_peer_patches() {
     ));
 
     let _ = slow_render.recv().expect("slow queued initial surface");
-    assert!(server.handle_server_event(ServerEvent::ClientWriterDrained { client_id: 8 }));
-    server.render_and_stream();
-    assert!(matches!(
-        read_server_message(slow_render.recv().expect("slow full recovery surface")),
-        ServerMessage::PaneSurface(_)
-    ));
+    assert_slow_shell_recovery(&mut server, &slow_render);
 
     shutdown_test_runtimes(&mut server);
 }
@@ -1861,11 +2336,7 @@ async fn client_shell_tab_focus_changes_only_the_source_connection() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("independent-tabs");
     let second_tab = workspace.test_add_tab(Some("second"));
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.select_test_workspaces_with_terminals(vec![workspace]);
     let tab_ids = server
         .app
         .session_snapshot()
@@ -1928,11 +2399,7 @@ async fn deferred_worktree_response_moves_only_its_source_client() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("deferred-worktree");
     let created_tab = workspace.test_add_tab(Some("created"));
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.select_test_workspaces_with_terminals(vec![workspace]);
     let created_tab_id = server.app.public_tab_id(0, created_tab).unwrap();
 
     let (source_control, _) = connect_matching_test_shell(&mut server, 51);
@@ -2063,38 +2530,11 @@ async fn deferred_worktree_response_moves_only_its_source_client() {
 #[tokio::test]
 async fn client_local_navigation_does_not_emit_global_focus_transitions() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("independent-focus");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
-    let (first_runtime, mut first_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            24,
-            0,
-            b"\x1b[?1004h",
-            4,
-        );
-    let (second_runtime, mut second_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            24,
-            0,
-            b"\x1b[?1004h",
-            4,
-        );
-    workspace.insert_test_runtime(first_pane, first_runtime);
-    workspace.insert_test_runtime(second_pane, second_runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    let (second_tab, mut first_input, mut second_input) =
+        server.install_test_focus_tabs("independent-focus");
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
 
-    let (first_control, _) = connect_matching_test_shell(&mut server, 61);
-    let (second_control, _) = connect_matching_test_shell(&mut server, 62);
-    let _ = first_control.recv().expect("first snapshot");
-    let _ = second_control.recv().expect("second snapshot");
+    let (_first_control, _second_control) = connect_ready_test_shells(&mut server, 61, 62);
     assert!(server.focus_shell_client_on_tab(62, &second_tab_id));
     server.clients.get_mut(&61).unwrap().outer_terminal_focus = Some(true);
     server.clients.get_mut(&62).unwrap().outer_terminal_focus = Some(true);
@@ -2125,25 +2565,16 @@ async fn client_local_navigation_emits_pane_focused_only_when_that_client_moves(
 
     let event_hub = api::EventHub::default();
     let mut server = test_headless_server_with_event_hub(event_hub.clone());
-    let mut workspace = crate::workspace::Workspace::test_new("plugin-focus-events");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    let (workspace, first_pane, second_tab, second_pane) =
+        test_two_tab_workspace("plugin-focus-events");
+    server.select_test_workspaces_with_terminals(vec![workspace]);
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
     let first_pane_id = server.app.public_pane_id(0, first_pane).unwrap();
     let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
     let workspace_id = server.app.public_workspace_id(0);
 
-    let (first_control, _) = connect_matching_test_shell(&mut server, 61);
-    let (second_control, _) = connect_matching_test_shell(&mut server, 62);
-    let _ = first_control.recv().expect("first snapshot");
-    let _ = second_control.recv().expect("second snapshot");
+    let (_first_control, _second_control) = connect_ready_test_shells(&mut server, 61, 62);
 
     let first_tab = TabTarget {
         tab_id: first_tab_id,
@@ -2234,41 +2665,14 @@ async fn client_local_navigation_emits_pane_focused_only_when_that_client_moves(
 #[tokio::test]
 async fn public_focus_moves_shell_focus_between_tabs() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("public-focus-events");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
-    let (first_runtime, mut first_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            24,
-            0,
-            b"\x1b[?1004h",
-            4,
-        );
-    let (second_runtime, mut second_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            24,
-            0,
-            b"\x1b[?1004h",
-            4,
-        );
-    workspace.insert_test_runtime(first_pane, first_runtime);
-    workspace.insert_test_runtime(second_pane, second_runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    let (second_tab, mut first_input, mut second_input) =
+        server.install_test_focus_tabs("public-focus-events");
     let second_tab_id = server
         .app
         .public_tab_id(0, second_tab)
         .expect("second tab id");
 
-    let (first_control, _) = connect_matching_test_shell(&mut server, 63);
-    let (second_control, _) = connect_matching_test_shell(&mut server, 64);
-    let _ = first_control.recv().expect("first snapshot");
-    let _ = second_control.recv().expect("second snapshot");
+    let (_first_control, _second_control) = connect_ready_test_shells(&mut server, 63, 64);
     assert!(server.focus_shell_client_on_tab(64, &second_tab_id));
     server.clients.get_mut(&63).unwrap().outer_terminal_focus = Some(true);
     server.clients.get_mut(&64).unwrap().outer_terminal_focus = Some(true);
@@ -2294,20 +2698,9 @@ async fn public_focus_moves_shell_focus_between_tabs() {
 #[tokio::test]
 async fn repeated_layout_action_reapplies_controller_geometry() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("layout-geometry");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-    workspace.insert_test_runtime(
-        first_pane,
-        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
-    );
-    workspace.insert_test_runtime(
-        second_pane,
-        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
-    );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    let (workspace, first_pane, _second_pane) =
+        test_split_workspace("layout-geometry", ratatui::layout::Direction::Horizontal);
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let tab_id = server.app.public_tab_id(0, 0).expect("tab id");
 
@@ -2343,20 +2736,11 @@ async fn repeated_layout_action_reapplies_controller_geometry() {
 #[tokio::test]
 async fn public_close_reapplies_controller_geometry() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("public-close-geometry");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_pane = workspace.test_split(ratatui::layout::Direction::Vertical);
-    workspace.insert_test_runtime(
-        first_pane,
-        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+    let (workspace, first_pane, second_pane) = test_split_workspace(
+        "public-close-geometry",
+        ratatui::layout::Direction::Vertical,
     );
-    workspace.insert_test_runtime(
-        second_pane,
-        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
-    );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
 
@@ -2380,23 +2764,15 @@ async fn public_close_reapplies_controller_geometry() {
     );
 
     let runtime = &server.app.state.workspaces[0].test_runtimes[&first_pane];
-    let grown = runtime.current_size();
-    assert!(grown.0 > shrunk.0);
-    assert_eq!(runtime.terminal_dimensions(), Some((grown.1, grown.0)));
-    assert_eq!(
-        runtime.scroll_metrics().unwrap().viewport_rows,
-        grown.0 as usize
-    );
+    assert_grown_runtime(runtime, shrunk);
     shutdown_test_runtimes(&mut server);
 }
 
 #[tokio::test]
 async fn geometry_reapply_replaces_a_controller_that_left_the_tab() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("geometry-controller-viewer");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
+    let (mut workspace, first_pane, second_tab, second_pane) =
+        test_two_tab_workspace("geometry-controller-viewer");
     let third_tab = workspace.test_add_tab(Some("third"));
     let third_pane = workspace.tabs[third_tab].root_pane;
     for pane_id in [first_pane, second_pane, third_pane] {
@@ -2405,9 +2781,7 @@ async fn geometry_reapply_replaces_a_controller_that_left_the_tab() {
             crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
         );
     }
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
     let third_tab_id = server.app.public_tab_id(0, third_tab).unwrap();
@@ -2444,10 +2818,8 @@ async fn geometry_reapply_replaces_a_controller_that_left_the_tab() {
 #[tokio::test]
 async fn client_shell_tabs_render_accept_input_and_resize_independently() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("independent-geometry");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
+    let (mut workspace, first_pane, second_tab, second_pane) =
+        test_two_tab_workspace("independent-geometry");
     workspace.insert_test_runtime(
         first_pane,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"FIRST_TAB"),
@@ -2461,9 +2833,7 @@ async fn client_shell_tabs_render_accept_input_and_resize_independently() {
             4,
         );
     workspace.insert_test_runtime(second_pane, second_runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
     let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
@@ -2550,36 +2920,24 @@ async fn public_background_tab_create_preserves_client_locations() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("background-create");
     let second_tab = workspace.test_add_tab(Some("second"));
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.select_test_workspaces_with_terminals(vec![workspace]);
     let workspace_id = server.app.public_workspace_id(0);
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
 
-    let (first_control, _) = connect_matching_test_shell(&mut server, 71);
-    let (second_control, _) = connect_matching_test_shell(&mut server, 72);
-    let _ = first_control.recv().expect("first snapshot");
-    let _ = second_control.recv().expect("second snapshot");
+    let (_first_control, _second_control) = connect_ready_test_shells(&mut server, 71, 72);
     assert!(server.focus_shell_client_on_tab(71, &second_tab_id));
 
-    let (respond_to, _response_rx) = std::sync::mpsc::channel();
-    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
-        request: crate::api::schema::Request {
-            id: "create-background-tab".into(),
-            method: crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
-                workspace_id: Some(workspace_id),
-                cwd: None,
-                focus: false,
-                label: Some("background".into()),
-                env: std::collections::HashMap::new(),
-            }),
-        },
-        respond_to,
-        response_write_complete: None,
-    });
+    let _response_rx = server.send_test_api_request(
+        "create-background-tab",
+        crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
+            workspace_id: Some(workspace_id),
+            cwd: None,
+            focus: false,
+            label: Some("background".into()),
+            env: std::collections::HashMap::new(),
+        }),
+    );
 
     assert_eq!(
         server.shell_tab_id_for_client(71).as_deref(),
@@ -2598,11 +2956,7 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
     let mut first = crate::workspace::Workspace::test_new("first");
     let second_tab = first.test_add_tab(Some("second"));
     let second = crate::workspace::Workspace::test_new("second");
-    server.app.state.workspaces = vec![first, second];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.select_test_workspaces_with_terminals(vec![first, second]);
     let first_workspace_id = server.app.public_workspace_id(0);
     let second_workspace_id = server.app.public_workspace_id(1);
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
@@ -2614,19 +2968,12 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
     let _ = second_control.recv().expect("second snapshot");
     assert!(server.focus_shell_client_on_tab(41, &second_tab_id));
 
-    let (respond_to, _response_rx) = std::sync::mpsc::channel();
-    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
-        request: crate::api::schema::Request {
-            id: "focus-second-workspace".into(),
-            method: crate::api::schema::Method::WorkspaceFocus(
-                crate::api::schema::WorkspaceTarget {
-                    workspace_id: second_workspace_id.clone(),
-                },
-            ),
-        },
-        respond_to,
-        response_write_complete: None,
-    });
+    let _response_rx = server.send_test_api_request(
+        "focus-second-workspace",
+        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+            workspace_id: second_workspace_id.clone(),
+        }),
+    );
 
     let first_location = server.clients[&41].shell_location.as_ref().unwrap();
     let second_location = server.clients[&42].shell_location.as_ref().unwrap();
@@ -2664,11 +3011,7 @@ async fn public_agent_focus_replaces_a_diverged_client_shell_projection() {
         second_pane,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"SECOND_WORKSPACE"),
     );
-    server.app.state.workspaces = vec![first, second];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.select_test_workspaces_with_terminals(vec![first, second]);
     let first_workspace_id = server.app.public_workspace_id(0);
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
     let first_pane_id = server.app.public_pane_id(0, first_pane).unwrap();
@@ -2739,11 +3082,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
     let mut server = test_headless_server();
     let first = crate::workspace::Workspace::test_new("first");
     let second = crate::workspace::Workspace::test_new("second");
-    server.app.state.workspaces = vec![first, second];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.select_test_workspaces_with_terminals(vec![first, second]);
     let second_id = server.app.session_snapshot().workspaces[1]
         .workspace_id
         .clone();
@@ -2769,19 +3108,12 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
     );
     let initial_revision = client_shell_snapshot(&control_rx).revision;
 
-    let (respond_to, _response_rx) = std::sync::mpsc::channel();
-    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
-        request: crate::api::schema::Request {
-            id: "test.client.shell.workspace.focus".into(),
-            method: crate::api::schema::Method::WorkspaceFocus(
-                crate::api::schema::WorkspaceTarget {
-                    workspace_id: second_id.clone(),
-                },
-            ),
-        },
-        respond_to,
-        response_write_complete: None,
-    });
+    let _response_rx = server.send_test_api_request(
+        "test.client.shell.workspace.focus",
+        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+            workspace_id: second_id.clone(),
+        }),
+    );
     assert_eq!(server.app.state.active, Some(1));
     server.render_and_stream();
 
@@ -2803,67 +3135,35 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
 #[tokio::test]
 async fn client_shell_input_targets_runtime_without_server_shell_classification() {
     let mut server = test_headless_server();
-    let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[?1000h\x1b[?1006h");
-    let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
-    server.clients.insert(
-        11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
+    let (pane_id, mut input_rx) = server.install_focused_test_shell(b"\x1b[?1000h\x1b[?1006h");
 
     assert!(
         server.handle_server_event(ServerEvent::ClientShellPaneInput {
             client_id: 11,
             pane_id,
             events: vec![
-                crate::protocol::ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
-                    modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                    kind: crate::protocol::ClientKeyKind::Press,
-                    repeat_count: 1,
-                    shifted_codepoint: None,
-                    generated_text: None,
-                    tracks_release: true,
-                    physical_key_id: None,
-                    windows_record: None,
-                },
-                crate::protocol::ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
-                    modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                    kind: crate::protocol::ClientKeyKind::Release,
-                    repeat_count: 1,
-                    shifted_codepoint: None,
-                    generated_text: None,
-                    tracks_release: true,
-                    physical_key_id: None,
-                    windows_record: None,
-                },
-                crate::protocol::ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('x'),
-                    modifiers: crossterm::event::KeyModifiers::ALT.bits(),
-                    kind: crate::protocol::ClientKeyKind::Press,
-                    repeat_count: 1,
-                    shifted_codepoint: None,
-                    generated_text: None,
-                    tracks_release: true,
-                    physical_key_id: None,
-                    windows_record: None,
-                },
-                crate::protocol::ClientPaneInputEvent::Mouse {
-                    kind: crate::protocol::ClientMouseKind::Down(
+                client_page_key(
+                    crate::protocol::ClientKeyCode::Char('c'),
+                    crossterm::event::KeyModifiers::CONTROL,
+                    crate::protocol::ClientKeyKind::Press
+                ),
+                client_page_key(
+                    crate::protocol::ClientKeyCode::Char('c'),
+                    crossterm::event::KeyModifiers::CONTROL,
+                    crate::protocol::ClientKeyKind::Release
+                ),
+                client_page_key(
+                    crate::protocol::ClientKeyCode::Char('x'),
+                    crossterm::event::KeyModifiers::ALT,
+                    crate::protocol::ClientKeyKind::Press
+                ),
+                test_pane_mouse(
+                    crate::protocol::ClientMouseKind::Down(
                         crate::protocol::ClientMouseButton::Left,
                     ),
-                    position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-                    geometry: None,
-                    modifiers: 0,
-                    lines: 3,
-                },
+                    crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+                    3
+                ),
             ],
         })
     );
@@ -2935,31 +3235,10 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
             4,
         );
     workspace.insert_test_runtime(hidden_pane, runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     let pane_id = server.app.public_pane_id(0, hidden_pane).unwrap();
-    server.clients.insert(
-        11,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
-    let key = |kind| crate::protocol::ClientPaneInputEvent::Key {
-        code: crate::protocol::ClientKeyCode::Char('x'),
-        modifiers: 0,
-        kind,
-        repeat_count: 1,
-        shifted_codepoint: None,
-        generated_text: None,
-        tracks_release: true,
-        physical_key_id: Some(0x2d),
-        windows_record: None,
-    };
+    server.add_test_shell_client(11, (80, 24), 1, None);
+    let key = |kind| physical_x_test_key(kind, None);
 
     assert!(
         !server.handle_server_event(ServerEvent::ClientShellPaneInput {
@@ -2976,7 +3255,7 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
             events: vec![key(crate::protocol::ClientKeyKind::Release)],
         })
     );
-    assert!(!input_rx.recv().await.expect("encoded release").is_empty());
+    assert_encoded_test_input(&mut input_rx, "encoded release").await;
     assert_eq!(server.foreground_client_id, None);
     shutdown_test_runtimes(&mut server);
 }
@@ -3120,10 +3399,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
 #[tokio::test]
 async fn terminal_popup_is_visible_and_modal_only_on_its_owning_tab() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("tab-popup");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
+    let (mut workspace, first_pane, second_tab, second_pane) = test_two_tab_workspace("tab-popup");
     workspace.insert_test_runtime(
         first_pane,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"FIRST"),
@@ -3133,9 +3409,7 @@ async fn terminal_popup_is_visible_and_modal_only_on_its_owning_tab() {
             80, 23, 0, b"SECOND", 4,
         );
     workspace.insert_test_runtime(second_pane, second_runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
@@ -3212,16 +3486,11 @@ async fn terminal_popup_is_visible_and_modal_only_on_its_owning_tab() {
         Bytes::from_static(b"typed")
     );
 
-    let popup_key = |kind| crate::protocol::ClientPaneInputEvent::Key {
-        code: crate::protocol::ClientKeyCode::Char('x'),
-        modifiers: 0,
-        kind,
-        repeat_count: 1,
-        shifted_codepoint: None,
-        generated_text: (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".into()),
-        tracks_release: true,
-        physical_key_id: Some(0x2d),
-        windows_record: None,
+    let popup_key = |kind| {
+        physical_x_test_key(
+            kind,
+            (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".into()),
+        )
     };
     server.handle_server_event(ServerEvent::ClientShellPopupInput {
         client_id: 31,
@@ -3268,57 +3537,27 @@ async fn client_shell_release_under_popup_renders_when_it_resets_scrollback() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("popup-release-scroll");
     let pane_id = workspace.tabs[0].root_pane;
-    let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            2,
-            10_000,
-            b"one\r\ntwo\r\nthree\r\n\x1b[>3u",
-            4,
-        );
-    runtime.scroll_up(1);
-    assert!(runtime
-        .scroll_metrics()
-        .is_some_and(|metrics| metrics.offset_from_bottom > 0));
+    let (runtime, mut input_rx) = scrolled_test_runtime(b"one\r\ntwo\r\nthree\r\n\x1b[>3u");
     workspace.insert_test_runtime(pane_id, runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
     let popup_runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 5, b"");
     server.app.install_test_popup_runtime(popup_runtime);
-    server.clients.insert(
-        11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
+    server.add_test_shell_client(11, (80, 24), 1, None);
     server.foreground_client_id = Some(11);
 
     let render_impact =
         server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
             client_id: 11,
             pane_id: public_pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('x'),
-                modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Release,
-                repeat_count: 1,
-                shifted_codepoint: None,
-                generated_text: None,
-                tracks_release: true,
-                physical_key_id: Some(0x2d),
-                windows_record: None,
-            }],
+            events: vec![physical_x_test_key(
+                crate::protocol::ClientKeyKind::Release,
+                None,
+            )],
         });
 
     assert_eq!(render_impact, RenderImpact::Full);
-    assert!(!input_rx.recv().await.expect("encoded release").is_empty());
+    assert_encoded_test_input(&mut input_rx, "encoded release").await;
     shutdown_test_runtimes(&mut server);
 }
 
@@ -3342,22 +3581,7 @@ async fn worktree_discovery_does_not_block_client_typing() {
         is_linked_worktree: false,
     });
     let workspace_id = workspace.id.clone();
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
-    server.clients.insert(
-        11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
-    server.foreground_client_id = Some(11);
+    let public_pane_id = server.install_foreground_test_workspace(workspace, pane_id);
 
     for (linked, method) in [
         (
@@ -3539,35 +3763,9 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("scrolled-input");
     let pane_id = workspace.tabs[0].root_pane;
-    let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            2,
-            10_000,
-            b"one\r\ntwo\r\nthree\r\n",
-            4,
-        );
-    runtime.scroll_up(1);
-    assert!(runtime
-        .scroll_metrics()
-        .is_some_and(|metrics| metrics.offset_from_bottom > 0));
+    let (runtime, mut input_rx) = scrolled_test_runtime(b"one\r\ntwo\r\nthree\r\n");
     workspace.insert_test_runtime(pane_id, runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
-    server.clients.insert(
-        11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
-    server.foreground_client_id = Some(11);
+    let public_pane_id = server.install_foreground_test_workspace(workspace, pane_id);
 
     let render_impact =
         server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
@@ -3612,34 +3810,11 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
 #[tokio::test]
 async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
     let mut server = test_headless_server();
-    let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[?1003h\x1b[?1006h");
-    let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
-    server.clients.insert(
-        11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
+    let (pane_id, mut input_rx) = server.install_focused_test_shell(b"\x1b[?1003h\x1b[?1006h");
     server.foreground_client_id = Some(11);
     assert!(server.claim_unowned_shell_tab_geometry(11, false));
 
-    let render_impact =
-        server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
-            client_id: 11,
-            pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Moved,
-                position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-                geometry: None,
-                modifiers: 0,
-                lines: 0,
-            }],
-        });
+    let render_impact = server.deliver_test_shell_motion(pane_id);
 
     assert_eq!(render_impact, RenderImpact::None);
     assert!(
@@ -3652,32 +3827,9 @@ async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
 #[tokio::test]
 async fn client_shell_mouse_motion_promotes_and_requests_render() {
     let mut server = test_headless_server();
-    let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[?1003h\x1b[?1006h");
-    let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
-    server.clients.insert(
-        11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
+    let (pane_id, mut input_rx) = server.install_focused_test_shell(b"\x1b[?1003h\x1b[?1006h");
 
-    let render_impact =
-        server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
-            client_id: 11,
-            pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Moved,
-                position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-                geometry: None,
-                modifiers: 0,
-                lines: 0,
-            }],
-        });
+    let render_impact = server.deliver_test_shell_motion(pane_id);
 
     assert_eq!(render_impact, RenderImpact::Full);
     assert_eq!(server.foreground_client_id, Some(11));
@@ -3703,9 +3855,7 @@ fn install_focused_test_runtime(
             4,
         );
     workspace.insert_test_runtime(pane_id, runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
     input_rx
 }
@@ -3737,22 +3887,11 @@ fn retained_test_server_with_control(
         pane_id,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, initial_screen),
     );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
 
     let (client_tx, client_control_rx, client_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(client_tx));
     server.foreground_client_id = Some(1);
     server.sync_foreground_client_state();
     assert!(server.claim_unowned_shell_tab_geometry(1, true));
@@ -3776,26 +3915,8 @@ fn server_keybinding_filter_keeps_whole_config_failures() {
 #[test]
 fn client_shell_host_theme_follows_foreground_client() {
     let mut server = test_headless_server();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
-    server.clients.insert(
-        2,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, None);
+    server.add_test_shell_client(2, (80, 24), 2, None);
     server.foreground_client_id = Some(1);
 
     let dark = protocol::ClientHostColor {
@@ -3918,15 +4039,7 @@ fn terminal_attach_rejects_missing_terminal_and_removes_client() {
     let mut server = test_headless_server();
     let (writer, control_rx, _render_rx) = test_client_writer();
 
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id: 7,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
+    assert!(!server.handle_server_event(test_client_connected(7, (80, 24), writer)));
     assert!(matches!(
         server.clients.get(&7).map(|client| &client.mode),
         Some(ClientConnectionMode::TerminalPending)
@@ -3950,10 +4063,7 @@ fn terminal_attach_rejects_missing_terminal_and_removes_client() {
 fn with_terminal_session_test_server(
     test: impl FnOnce(&mut HeadlessServer, crate::terminal::TerminalId, String, String),
 ) {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
     let mut server = test_headless_server();
     let workspace = crate::workspace::Workspace::test_new("test");
@@ -3980,15 +4090,11 @@ fn terminal_observers_wait_for_synchronized_output_with_or_without_baseline() {
     with_terminal_session_test_server(|server, terminal_id, target, _| {
         let connect = |server: &mut HeadlessServer, client_id| {
             let (writer, _control, render) = test_client_writer();
-            assert!(!server.handle_server_event(ServerEvent::ClientConnected {
+            assert!(!server.handle_server_event(test_client_connected(
                 client_id,
-                cols: 80,
-                rows: 24,
-                cell_width_px: 0,
-                cell_height_px: 0,
-                pixel_mouse: false,
-                writer,
-            }));
+                (80, 24),
+                writer
+            )));
             assert!(
                 server.handle_server_event(ServerEvent::ClientObserveTerminal {
                     client_id,
@@ -4038,15 +4144,7 @@ fn connect_pending_terminal_client_with_control_rx(
     client_id: u64,
 ) -> std::sync::mpsc::Receiver<Vec<u8>> {
     let (writer, control_rx, _render_rx) = test_client_writer();
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id,
-        cols: 100,
-        rows: 30,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
+    assert!(!server.handle_server_event(test_client_connected(client_id, (100, 30), writer)));
     assert!(matches!(
         server.clients.get(&client_id).map(|client| &client.mode),
         Some(ClientConnectionMode::TerminalPending)
@@ -4114,10 +4212,7 @@ fn explicit_agent_history_read_requires_idle_on_alternate_screen() {
 
 #[test]
 fn terminal_attach_disconnect_restores_client_shell_pane_size() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("test");
@@ -4137,16 +4232,7 @@ fn terminal_attach_disconnect_restores_client_shell_pane_size() {
         terminal_id.clone(),
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
     );
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
+    server.add_test_shell_client(1, (120, 40), 1, None);
     server.foreground_client_id = Some(1);
     server.sync_foreground_client_state();
     server.reconcile_client_shell_locations();
@@ -4209,15 +4295,7 @@ fn terminal_attach_disconnect_restores_client_shell_pane_size() {
 fn backpressured_observer_skips_runtime_access_and_recovers_without_new_output() {
     with_terminal_session_test_server(|server, terminal_id, target, _| {
         let (writer, control, frames) = test_client_writer();
-        server.handle_server_event(ServerEvent::ClientConnected {
-            client_id: 7,
-            cols: 80,
-            rows: 24,
-            cell_width_px: 0,
-            cell_height_px: 0,
-            pixel_mouse: false,
-            writer,
-        });
+        server.handle_server_event(test_client_connected(7, (80, 24), writer));
         server.handle_server_event(ServerEvent::ClientObserveTerminal {
             client_id: 7,
             target,
@@ -4304,33 +4382,20 @@ fn direct_terminal_observer_keeps_hidden_pty_source_renderable_with_client_shell
         .terminal_id(background_pane)
         .expect("background terminal id")
         .to_string();
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.ensure_test_terminals();
 
     let (shell_writer, _shell_control_rx, _shell_render_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(shell_writer),
-        ),
-    );
+    server.add_test_shell_client(1, (120, 40), 1, Some(shell_writer));
     assert!(!server.pty_sources_visible_to_any_render_target(&HashSet::from([background_pane])));
 
     let (observer_writer, _observer_control_rx, _observer_render_rx) = test_client_writer();
     server.clients.insert(
         2,
-        ClientConnection::new_with_mode(
+        test_client(
             ClientConnectionMode::TerminalObserve { terminal_id },
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             Some(observer_writer),
         ),
     );
@@ -4429,11 +4494,7 @@ fn terminal_control_rejects_attach_during_alt_screen_read() {
                 takeover: false,
             })
         );
-        assert!(!server.clients.contains_key(&7));
-        assert!(!server
-            .terminal_attach_owners
-            .contains_key(&terminal_id_string));
-        let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
+        let reason = removed_terminal_client_reason(server, 7, &terminal_id_string, &control_rx);
         assert_eq!(
                 reason,
                 Some(format!(
@@ -4446,14 +4507,7 @@ fn terminal_control_rejects_attach_during_alt_screen_read() {
 #[test]
 fn terminal_control_rejects_second_controller_without_takeover() {
     with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
+        connect_test_terminal_controller(server, 7, &terminal_id_string);
 
         connect_pending_terminal_client(server, 8);
         assert!(
@@ -4476,14 +4530,7 @@ fn terminal_control_rejects_second_controller_without_takeover() {
 #[test]
 fn terminal_control_takeover_replaces_existing_controller() {
     with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
+        connect_test_terminal_controller(server, 7, &terminal_id_string);
 
         connect_pending_terminal_client(server, 8);
         assert!(
@@ -4506,14 +4553,7 @@ fn terminal_control_takeover_replaces_existing_controller() {
 #[test]
 fn terminal_observe_can_coexist_with_terminal_control() {
     with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
+        connect_test_terminal_controller(server, 7, &terminal_id_string);
 
         connect_pending_terminal_client(server, 8);
         assert!(
@@ -4553,11 +4593,7 @@ fn terminal_control_detach_sends_shutdown_before_removal() {
 
         assert!(server.handle_server_event(ServerEvent::ClientDetach { client_id: 7 }));
 
-        assert!(!server.clients.contains_key(&7));
-        assert!(!server
-            .terminal_attach_owners
-            .contains_key(&terminal_id_string));
-        let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
+        let reason = removed_terminal_client_reason(server, 7, &terminal_id_string, &control_rx);
         assert_eq!(reason, Some("detached".to_owned()));
     });
 }
@@ -4580,13 +4616,7 @@ fn terminal_observe_rejects_later_attach_upgrade() {
             })
         );
 
-        assert!(!server.clients.contains_key(&7));
-        assert!(server.terminal_attach_owners.is_empty());
-        assert!(!server
-            .app
-            .state
-            .direct_attach_resize_locks
-            .contains(&terminal_id));
+        assert_terminal_client_cleanup(server, 7, &terminal_id);
     });
 }
 
@@ -4618,13 +4648,7 @@ fn terminal_attach_rejects_later_observe_and_clears_ownership() {
             })
         );
 
-        assert!(!server.clients.contains_key(&7));
-        assert!(server.terminal_attach_owners.is_empty());
-        assert!(!server
-            .app
-            .state
-            .direct_attach_resize_locks
-            .contains(&terminal_id));
+        assert_terminal_client_cleanup(server, 7, &terminal_id);
     });
 }
 
@@ -4640,19 +4664,12 @@ fn unchanged_git_refresh_does_not_request_headless_render() {
     workspace.cached_git_branch = None;
     server.app.state.workspaces.push(workspace);
 
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::GitStatusRefreshed {
-        results: vec![crate::workspace::WorkspaceGitStatus {
-            workspace_id,
-            resolved_identity_cwd: cwd.clone(),
-            status_cache_key: cwd,
-            demand: crate::workspace::GitStatusRefreshDemand::ALL,
-            auto_label: "cached".into(),
-            branch: None,
-            ahead_behind: None,
-            space: None,
-        }],
-        cache_updates: Vec::new(),
-    });
+    let changed = server.handle_internal_event_with_forwarding(test_git_refresh(
+        workspace_id,
+        cwd,
+        "cached",
+        None,
+    ));
 
     assert!(!changed);
     assert!(!server.app.git_refresh_in_flight);
@@ -4666,19 +4683,12 @@ fn changed_git_refresh_requests_headless_render() {
     let cwd = workspace.identity_cwd.clone();
     server.app.state.workspaces.push(workspace);
 
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::GitStatusRefreshed {
-        results: vec![crate::workspace::WorkspaceGitStatus {
-            workspace_id,
-            resolved_identity_cwd: cwd.clone(),
-            status_cache_key: cwd,
-            demand: crate::workspace::GitStatusRefreshDemand::ALL,
-            auto_label: "one".into(),
-            branch: Some("changed".into()),
-            ahead_behind: None,
-            space: None,
-        }],
-        cache_updates: Vec::new(),
-    });
+    let changed = server.handle_internal_event_with_forwarding(test_git_refresh(
+        workspace_id,
+        cwd,
+        "one",
+        Some("changed".into()),
+    ));
 
     assert!(changed);
 }
@@ -4686,11 +4696,7 @@ fn changed_git_refresh_requests_headless_render() {
 #[tokio::test]
 async fn host_shutdown_preserves_panes_from_queued_and_selected_death_events() {
     let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("host-shutdown");
-    let pane_id = workspace.tabs[0].root_pane;
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
+    let pane_id = server.install_endpoint_test_workspace("host-shutdown");
     let event = || AppEvent::PaneDied {
         pane_id,
         exit_reason: crate::platform::ChildExitReason::Exited,
@@ -4730,11 +4736,7 @@ async fn pane_death_reconciles_each_client_view_and_focus() {
             4,
         );
     workspace.insert_test_runtime(second_pane, second_runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.select_test_workspaces_with_terminals(vec![workspace]);
     let second_tab_id = server
         .app
         .public_tab_id(0, second_tab)
@@ -4807,9 +4809,7 @@ async fn pane_death_reapplies_controller_geometry() {
         dead_pane,
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
     );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
+    server.select_test_workspace(workspace);
     server.app.state.mode = crate::app::Mode::Terminal;
 
     let (control, _) = connect_test_shell(&mut server, 73, 185, 46);
@@ -4825,13 +4825,7 @@ async fn pane_death_reapplies_controller_geometry() {
     );
 
     let runtime = &server.app.state.workspaces[0].test_runtimes[&first_pane];
-    let grown = runtime.current_size();
-    assert!(grown.0 > shrunk.0);
-    assert_eq!(runtime.terminal_dimensions(), Some((grown.1, grown.0)));
-    assert_eq!(
-        runtime.scroll_metrics().unwrap().viewport_rows,
-        grown.0 as usize
-    );
+    assert_grown_runtime(runtime, shrunk);
     shutdown_test_runtimes(&mut server);
 }
 
@@ -4847,35 +4841,9 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
         .expect("pane")
         .attached_terminal_id
         .clone();
-    server
-        .app
-        .state
-        .terminals
-        .get_mut(&terminal_id)
-        .unwrap()
-        .set_detected_state(
-            Some(crate::detect::Agent::Codex),
-            crate::detect::AgentState::Working,
-        );
+    server.mark_test_terminal_working(&terminal_id, crate::detect::Agent::Codex);
     let terminal_id = terminal_id.to_string();
-    let (writer, control_rx, _render_rx) = test_client_writer();
-
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id: 7,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
-    assert!(
-        server.handle_server_event(ServerEvent::ClientAttachTerminal {
-            client_id: 7,
-            terminal_id: terminal_id.clone(),
-            takeover: false,
-        })
-    );
+    let (control_rx, _render_rx) = attach_test_terminal_client(&mut server, &terminal_id);
     assert_eq!(server.terminal_attach_owners.get(&terminal_id), Some(&7));
     server
         .app
@@ -4893,10 +4861,7 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
         })
     );
 
-    assert!(!server.clients.contains_key(&7));
-    assert!(!server.terminal_attach_owners.contains_key(&terminal_id));
-    let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
-    assert_eq!(reason, Some(format!("terminal {terminal_id} exited")));
+    assert_terminal_client_exited(&server, &terminal_id, &control_rx);
 }
 
 #[test]
@@ -4933,24 +4898,7 @@ fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
         .pending_worktree_remove_runtime_exits
         .insert(pane_id, 1);
     let terminal_id = terminal_id.to_string();
-    let (writer, control_rx, _render_rx) = test_client_writer();
-
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id: 7,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
-    assert!(
-        server.handle_server_event(ServerEvent::ClientAttachTerminal {
-            client_id: 7,
-            terminal_id: terminal_id.clone(),
-            takeover: false,
-        })
-    );
+    let (control_rx, _render_rx) = attach_test_terminal_client(&mut server, &terminal_id);
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
 
     assert!(
@@ -4973,10 +4921,7 @@ fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
         )))
     );
 
-    assert!(!server.clients.contains_key(&7));
-    assert!(!server.terminal_attach_owners.contains_key(&terminal_id));
-    let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
-    assert_eq!(reason, Some(format!("terminal {terminal_id} exited")));
+    assert_terminal_client_exited(&server, &terminal_id, &control_rx);
 }
 
 #[test]
@@ -4987,16 +4932,7 @@ fn expected_worktree_runtime_exit_does_not_release_agent() {
     let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
     server.app.state.workspaces = vec![workspace];
     server.app.state.ensure_test_terminals();
-    server
-        .app
-        .state
-        .terminals
-        .get_mut(&terminal_id)
-        .unwrap()
-        .set_detected_state(
-            Some(crate::detect::Agent::Codex),
-            crate::detect::AgentState::Working,
-        );
+    server.mark_test_terminal_working(&terminal_id, crate::detect::Agent::Codex);
     server
         .app
         .pending_worktree_remove_runtime_exits
@@ -5018,15 +4954,9 @@ fn expected_worktree_runtime_exit_does_not_release_agent() {
 
 #[test]
 fn terminal_attach_scroll_moves_attached_runtime_viewport() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
-    let mut bytes = Vec::new();
-    for line in 0..80 {
-        bytes.extend_from_slice(format!("line {line:02}\r\n").as_bytes());
-    }
+    let bytes = test_scrollback_lines();
     let runtime = crate::terminal::TerminalRuntime::test_with_scrollback_bytes(20, 5, 4096, &bytes);
 
     apply_terminal_attach_scroll(
@@ -5061,37 +4991,12 @@ fn terminal_attach_scroll_moves_attached_runtime_viewport() {
 
 #[test]
 fn client_pane_pixel_mouse_uses_runtime_pixel_encoding() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
     let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            20,
-            5,
-            0,
-            b"\x1b[?1003h\x1b[?1006h\x1b[?1016h",
-            4,
-        );
-    runtime.resize(5, 20, 10, 20);
+        pixel_mouse_test_runtime((20, 5), b"\x1b[?1003h\x1b[?1006h\x1b[?1016h");
 
-    apply_client_pane_input_events(
-        &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: None,
-            modifiers: 0,
-            lines: 3,
-        }],
-    )
-    .expect("pixel mouse input");
+    apply_test_pixel_motion(&runtime, "pixel mouse input");
     assert_eq!(
         input_rx.try_recv().expect("encoded pixel mouse"),
         Bytes::from_static(b"\x1b[<35;21;22M")
@@ -5103,37 +5008,25 @@ fn client_pane_pixel_mouse_uses_runtime_pixel_encoding() {
 
 #[test]
 fn client_pane_pixel_mouse_stays_pixel_scaled_when_sgr_is_reasserted() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
     let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            24,
-            0,
-            b"\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1006h",
-            4,
-        );
-    runtime.resize(24, 80, 10, 20);
+        pixel_mouse_test_runtime((80, 24), b"\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1006h");
 
-    apply_client_pane_input_events(
+    apply_test_pane_event(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
-            position: crate::protocol::ClientMousePosition::Pixels {
+        test_pane_mouse(
+            crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
+            crate::protocol::ClientMousePosition::Pixels {
                 x: 403,
                 y: 240,
                 column: 40,
                 row: 12,
             },
-            geometry: None,
-            modifiers: 0,
-            lines: 1,
-        }],
-    )
-    .expect("pixel mouse input");
+            1,
+        ),
+        "pixel mouse input",
+    );
     assert_eq!(
         input_rx.try_recv().expect("encoded pixel mouse"),
         Bytes::from_static(b"\x1b[<0;403;240M")
@@ -5145,37 +5038,11 @@ fn client_pane_pixel_mouse_stays_pixel_scaled_when_sgr_is_reasserted() {
 
 #[test]
 fn client_pane_pixel_mouse_falls_back_to_canonical_cell_position() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
-    let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            20,
-            5,
-            0,
-            b"\x1b[?1003h\x1b[?1006h",
-            4,
-        );
-    runtime.resize(5, 20, 10, 20);
+    let (runtime, mut input_rx) = pixel_mouse_test_runtime((20, 5), b"\x1b[?1003h\x1b[?1006h");
 
-    apply_client_pane_input_events(
-        &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: None,
-            modifiers: 0,
-            lines: 3,
-        }],
-    )
-    .expect("cell mouse fallback");
+    apply_test_pixel_motion(&runtime, "cell mouse fallback");
     assert_eq!(
         input_rx.try_recv().expect("encoded cell mouse"),
         Bytes::from_static(b"\x1b[<35;3;2M")
@@ -5187,100 +5054,62 @@ fn client_pane_pixel_mouse_falls_back_to_canonical_cell_position() {
 
 #[test]
 fn client_pane_wheel_input_accumulates_scrollback_offset() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
-    let mut bytes = Vec::new();
-    for line in 0..80 {
-        bytes.extend_from_slice(format!("line {line:02}\r\n").as_bytes());
-    }
-    let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            20, 5, 4096, &bytes, 4,
-        );
-    let scroll = |kind| crate::protocol::ClientPaneInputEvent::Mouse {
-        kind,
-        position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-        geometry: None,
-        modifiers: 0,
-        lines: 3,
+    let (runtime, mut input_rx) = line_scrollback_test_runtime();
+    let scroll = |kind| {
+        test_pane_mouse(
+            kind,
+            crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+            3,
+        )
     };
 
-    apply_client_pane_input_events(
+    apply_test_pane_event(
         &runtime,
-        &[scroll(crate::protocol::ClientMouseKind::ScrollUp)],
-    )
-    .expect("first scroll up");
-    apply_client_pane_input_events(
-        &runtime,
-        &[scroll(crate::protocol::ClientMouseKind::ScrollUp)],
-    )
-    .expect("second scroll up");
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        6
+        scroll(crate::protocol::ClientMouseKind::ScrollUp),
+        "first scroll up",
     );
+    apply_test_pane_event(
+        &runtime,
+        scroll(crate::protocol::ClientMouseKind::ScrollUp),
+        "second scroll up",
+    );
+    assert_scroll_offset(&runtime, 6);
 
-    apply_client_pane_input_events(
+    apply_test_pane_event(
         &runtime,
-        &[scroll(crate::protocol::ClientMouseKind::ScrollDown)],
-    )
-    .expect("scroll down");
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        3
+        scroll(crate::protocol::ClientMouseKind::ScrollDown),
+        "scroll down",
     );
+    assert_scroll_offset(&runtime, 3);
 
     runtime.test_process_pty_bytes(b"\x1b[?1003h\x1b[?1006h");
-    apply_client_pane_input_events(
+    apply_test_pane_event(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-            geometry: None,
-            modifiers: 0,
-            lines: 3,
-        }],
-    )
-    .expect("reported mouse motion");
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        3
+        test_pane_mouse(
+            crate::protocol::ClientMouseKind::Moved,
+            crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+            3,
+        ),
+        "reported mouse motion",
     );
+    assert_scroll_offset(&runtime, 3);
     assert_eq!(
         input_rx.try_recv().expect("reported mouse motion"),
         Bytes::from_static(b"\x1b[<35;3;2M")
     );
 
-    apply_client_pane_input_events(
+    apply_test_pane_event(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
-            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-            geometry: None,
-            modifiers: 0,
-            lines: 3,
-        }],
-    )
-    .expect("mouse button");
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        0
+        test_pane_mouse(
+            crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
+            crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+            3,
+        ),
+        "mouse button",
     );
+    assert_scroll_offset(&runtime, 0);
     assert_eq!(
         input_rx.try_recv().expect("reported mouse button"),
         Bytes::from_static(b"\x1b[<0;3;2M")
@@ -5292,37 +5121,15 @@ fn client_pane_wheel_input_accumulates_scrollback_offset() {
 
 #[test]
 fn terminal_attach_input_resets_scrolled_viewport() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
-    let mut bytes = Vec::new();
-    for line in 0..80 {
-        bytes.extend_from_slice(format!("line {line:02}\r\n").as_bytes());
-    }
-    let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            20, 5, 4096, &bytes, 4,
-        );
+    let (runtime, mut input_rx) = line_scrollback_test_runtime();
 
     runtime.scroll_up(4);
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        4
-    );
+    assert_scroll_offset(&runtime, 4);
 
     apply_terminal_attach_input(&runtime, b"x".to_vec()).expect("attach input");
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        0
-    );
+    assert_scroll_offset(&runtime, 0);
     assert_eq!(
         input_rx.try_recv().expect("forwarded input"),
         Bytes::from("x")
@@ -5338,10 +5145,7 @@ fn with_terminal_attach_runtime(
     initial_scroll: usize,
     test: impl FnOnce(&crate::terminal::TerminalRuntime, &mut mpsc::Receiver<Bytes>),
 ) {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
+    let rt = test_tokio_runtime();
     let _runtime_guard = rt.enter();
     let mut bytes = initial_bytes.to_vec();
     for line in 0..80 {
@@ -5398,56 +5202,32 @@ fn client_page_key(
 #[test]
 fn client_plain_page_keys_scroll_shell_transcript_by_pane_height() {
     with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
-        apply_client_pane_input_events(
+        apply_test_page_key(
             runtime,
-            &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
-                crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Press,
-            )],
-        )
-        .expect("pane PageUp");
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            5
+            crate::protocol::ClientKeyCode::PageUp,
+            crossterm::event::KeyModifiers::empty(),
+            crate::protocol::ClientKeyKind::Press,
+            "pane PageUp",
         );
+        assert_scroll_offset(runtime, 5);
 
-        apply_client_pane_input_events(
+        apply_test_page_key(
             runtime,
-            &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
-                crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Release,
-            )],
-        )
-        .expect("pane PageUp release");
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            5
+            crate::protocol::ClientKeyCode::PageUp,
+            crossterm::event::KeyModifiers::empty(),
+            crate::protocol::ClientKeyKind::Release,
+            "pane PageUp release",
         );
+        assert_scroll_offset(runtime, 5);
 
-        apply_client_pane_input_events(
+        apply_test_page_key(
             runtime,
-            &[client_page_key(
-                crate::protocol::ClientKeyCode::PageDown,
-                crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Press,
-            )],
-        )
-        .expect("pane PageDown");
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
+            crate::protocol::ClientKeyCode::PageDown,
+            crossterm::event::KeyModifiers::empty(),
+            crate::protocol::ClientKeyKind::Press,
+            "pane PageDown",
         );
+        assert_scroll_offset(runtime, 0);
         assert!(input_rx.try_recv().is_err(), "page keys reached the shell");
     });
 }
@@ -5455,49 +5235,33 @@ fn client_plain_page_keys_scroll_shell_transcript_by_pane_height() {
 #[test]
 fn client_page_keys_forward_when_modified_or_owned_by_application() {
     with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
-        apply_client_pane_input_events(
+        apply_test_page_key(
             runtime,
-            &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
-                crossterm::event::KeyModifiers::CONTROL,
-                crate::protocol::ClientKeyKind::Press,
-            )],
-        )
-        .expect("modified pane PageUp");
+            crate::protocol::ClientKeyCode::PageUp,
+            crossterm::event::KeyModifiers::CONTROL,
+            crate::protocol::ClientKeyKind::Press,
+            "modified pane PageUp",
+        );
         assert!(
             input_rx.try_recv().is_ok(),
             "modified PageUp was not forwarded"
         );
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
+        assert_scroll_offset(runtime, 0);
     });
 
     with_terminal_attach_runtime(b"\x1b[?1h", 0, |runtime, input_rx| {
-        apply_client_pane_input_events(
+        apply_test_page_key(
             runtime,
-            &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
-                crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Press,
-            )],
-        )
-        .expect("application PageUp");
+            crate::protocol::ClientKeyCode::PageUp,
+            crossterm::event::KeyModifiers::empty(),
+            crate::protocol::ClientKeyKind::Press,
+            "application PageUp",
+        );
         assert_eq!(
             input_rx.try_recv().expect("forwarded application PageUp"),
             Bytes::from_static(b"\x1b[5~")
         );
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
+        assert_scroll_offset(runtime, 0);
     });
 }
 
@@ -5517,29 +5281,21 @@ fn client_popup_plain_page_key_remains_popup_input() {
             input_rx.try_recv().expect("forwarded popup PageUp"),
             Bytes::from_static(b"\x1b[5~")
         );
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
+        assert_scroll_offset(runtime, 0);
     });
 }
 
 #[test]
 fn terminal_attach_paste_uses_plain_text_when_runtime_did_not_enable_brackets() {
     with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
-        apply_terminal_attach_input(runtime, b"\x1b[200~line one\nline two\x1b[201~".to_vec())
-            .expect("attach paste");
-
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded paste"),
-            Bytes::from_static(if cfg!(windows) {
+        assert_terminal_attach_paste(
+            runtime,
+            input_rx,
+            if cfg!(windows) {
                 b"line one\r\nline two"
             } else {
                 b"line one\nline two"
-            })
+            },
         );
     });
 }
@@ -5547,16 +5303,14 @@ fn terminal_attach_paste_uses_plain_text_when_runtime_did_not_enable_brackets() 
 #[test]
 fn terminal_attach_paste_preserves_brackets_when_runtime_enabled_them() {
     with_terminal_attach_runtime(b"\x1b[?2004h", 0, |runtime, input_rx| {
-        apply_terminal_attach_input(runtime, b"\x1b[200~line one\nline two\x1b[201~".to_vec())
-            .expect("attach paste");
-
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded paste"),
-            Bytes::from_static(if cfg!(windows) {
+        assert_terminal_attach_paste(
+            runtime,
+            input_rx,
+            if cfg!(windows) {
                 b"\x1b[200~line one\r\nline two\x1b[201~"
             } else {
                 b"\x1b[200~line one\nline two\x1b[201~"
-            })
+            },
         );
     });
 }
@@ -5566,13 +5320,7 @@ fn terminal_attach_page_key_host_scrolls_plain_terminal() {
     with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
         apply_terminal_attach_page_up(runtime);
 
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            4
-        );
+        assert_scroll_offset(runtime, 4);
         assert!(input_rx.try_recv().is_err());
     });
 }
@@ -5580,38 +5328,14 @@ fn terminal_attach_page_key_host_scrolls_plain_terminal() {
 #[test]
 fn terminal_attach_page_key_forwards_when_mouse_reporting() {
     with_terminal_attach_runtime(b"\x1b[?1000h", 3, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded page key"),
-            Bytes::from_static(b"\x1b[5~")
-        );
+        assert_forwarded_terminal_page_up(runtime, input_rx);
     });
 }
 
 #[test]
 fn terminal_attach_page_key_forwards_when_application_cursor() {
     with_terminal_attach_runtime(b"\x1b[?1h", 3, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded page key"),
-            Bytes::from_static(b"\x1b[5~")
-        );
+        assert_forwarded_terminal_page_up(runtime, input_rx);
     });
 }
 
@@ -5620,13 +5344,7 @@ fn terminal_attach_page_key_host_scrolls_shell_like_decckm_with_bracketed_paste(
     with_terminal_attach_runtime(b"\x1b[?1h\x1b[?2004h", 0, |runtime, input_rx| {
         apply_terminal_attach_page_up(runtime);
 
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            4
-        );
+        assert_scroll_offset(runtime, 4);
         assert!(input_rx.try_recv().is_err());
     });
 }
@@ -5634,19 +5352,7 @@ fn terminal_attach_page_key_host_scrolls_shell_like_decckm_with_bracketed_paste(
 #[test]
 fn terminal_attach_page_key_forwards_in_alternate_screen_without_mouse_reporting() {
     with_terminal_attach_runtime(b"\x1b[?1049h", 3, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded page key"),
-            Bytes::from_static(b"\x1b[5~")
-        );
+        assert_forwarded_terminal_page_up(runtime, input_rx);
     });
 }
 
@@ -5798,13 +5504,7 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
 #[test]
 fn terminal_attach_resize_uses_known_cell_geometry_without_pixel_mouse() {
     with_terminal_session_test_server(|server, _other_terminal_id, terminal_id, _pane_id| {
-        let mut client = ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        );
+        let mut client = test_client(ClientConnectionMode::ClientShell, (80, 24), 1, None);
         client.mode = ClientConnectionMode::TerminalAttach {
             terminal_id: terminal_id.clone(),
         };
@@ -5860,16 +5560,7 @@ fn terminal_attach_resize_uses_known_cell_geometry_without_pixel_mouse() {
 #[test]
 fn pending_terminal_resize_does_not_take_shell_foreground_or_geometry() {
     let mut server = test_headless_server();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (100, 30),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
+    server.add_test_shell_client(1, (100, 30), 2, None);
     server.clients.insert(
         2,
         ClientConnection::new_with_mode(
@@ -5903,16 +5594,7 @@ fn pending_terminal_resize_does_not_take_shell_foreground_or_geometry() {
 fn client_shell_streams_focused_pane_report_all_demand() {
     with_terminal_session_test_server(|server, _other_terminal_id, terminal_id, _pane_id| {
         let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-        server.clients.insert(
-            1,
-            ClientConnection::new(
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                1,
-                RenderEncoding::SemanticFrame,
-                Some(client_tx),
-            ),
-        );
+        server.add_test_shell_client(1, (80, 24), 1, Some(client_tx));
         server.app.state.active = Some(0);
         server
             .runtime_for_terminal_id_string(&terminal_id)
@@ -5938,27 +5620,13 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
     let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[>3u");
     let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
     for client_id in [1, 2] {
-        server.clients.insert(
-            client_id,
-            ClientConnection::new(
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                client_id,
-                RenderEncoding::SemanticFrame,
-                None,
-            ),
-        );
+        server.add_test_shell_client(client_id, (80, 24), client_id, None);
     }
-    let key = |kind| crate::protocol::ClientPaneInputEvent::Key {
-        code: crate::protocol::ClientKeyCode::Char('x'),
-        modifiers: 0,
-        kind,
-        repeat_count: 1,
-        shifted_codepoint: None,
-        generated_text: (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".to_owned()),
-        tracks_release: true,
-        physical_key_id: Some(0x2d),
-        windows_record: None,
+    let key = |kind| {
+        physical_x_test_key(
+            kind,
+            (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".to_owned()),
+        )
     };
 
     assert!(
@@ -5968,7 +5636,7 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
             events: vec![key(crate::protocol::ClientKeyKind::Press)],
         })
     );
-    assert!(!input_rx.recv().await.expect("encoded press").is_empty());
+    assert_encoded_test_input(&mut input_rx, "encoded press").await;
     assert!(server.promote_client_to_foreground(2));
 
     assert!(
@@ -5978,7 +5646,7 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
             events: vec![key(crate::protocol::ClientKeyKind::Release)],
         })
     );
-    assert!(!input_rx.recv().await.expect("encoded release").is_empty());
+    assert_encoded_test_input(&mut input_rx, "encoded release").await;
     assert_eq!(server.foreground_client_id, Some(2));
 
     assert!(
@@ -5988,17 +5656,9 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
             events: vec![key(crate::protocol::ClientKeyKind::Press)],
         })
     );
-    assert!(!input_rx
-        .recv()
-        .await
-        .expect("second encoded press")
-        .is_empty());
+    assert_encoded_test_input(&mut input_rx, "second encoded press").await;
     assert!(server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 1 }));
-    assert!(!input_rx
-        .recv()
-        .await
-        .expect("disconnect synthesized release")
-        .is_empty());
+    assert_encoded_test_input(&mut input_rx, "disconnect synthesized release").await;
     shutdown_test_runtimes(&mut server);
 }
 
@@ -6006,16 +5666,7 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
 fn client_shell_mouse_capture_combines_local_preference_with_endpoint_demand() {
     let mut server = test_headless_server();
     let (writer, control_rx, _render_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(writer),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(writer));
 
     server.stream_host_mouse_capture_mode();
     assert!(matches!(
@@ -6057,26 +5708,8 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
             .terminal_runtimes
             .insert(terminal_id.clone(), runtime);
         server.app.state.active = Some(0);
-        server.clients.insert(
-            1,
-            ClientConnection::new(
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                1,
-                RenderEncoding::SemanticFrame,
-                None,
-            ),
-        );
-        server.clients.insert(
-            2,
-            ClientConnection::new(
-                (100, 30),
-                crate::kitty_graphics::HostCellSize::default(),
-                2,
-                RenderEncoding::SemanticFrame,
-                None,
-            ),
-        );
+        server.add_test_shell_client(1, (80, 24), 1, None);
+        server.add_test_shell_client(2, (100, 30), 2, None);
         server.foreground_client_id = Some(2);
         server.sync_foreground_client_state();
         assert!(server.claim_unowned_shell_tab_geometry(2, true));
@@ -6144,16 +5777,7 @@ fn direct_terminal_streams_child_keyboard_and_mouse_modes() {
         let (client_tx, client_control_rx, _client_rx) = test_client_writer();
         server.clients.insert(
             1,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::TerminalAttach {
-                    terminal_id: terminal_id.clone(),
-                },
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                1,
-                RenderEncoding::TerminalAnsi,
-                Some(client_tx),
-            ),
+            test_terminal_attach_client(terminal_id.clone(), 1, Some(client_tx)),
         );
         server
             .clients
@@ -6293,19 +5917,9 @@ fn direct_terminal_mouse_uses_runtime_protocol_encoding() {
             .app
             .terminal_runtimes
             .insert(runtime_terminal_id, runtime);
-        server.clients.insert(
-            1,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::TerminalAttach {
-                    terminal_id: terminal_id.clone(),
-                },
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                1,
-                RenderEncoding::TerminalAnsi,
-                None,
-            ),
-        );
+        server
+            .clients
+            .insert(1, test_terminal_attach_client(terminal_id.clone(), 1, None));
 
         assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
             client_id: 1,
@@ -6335,19 +5949,9 @@ fn direct_terminal_mouse_sends_nothing_without_mouse_reporting() {
             .app
             .terminal_runtimes
             .insert(runtime_terminal_id, runtime);
-        server.clients.insert(
-            1,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::TerminalAttach {
-                    terminal_id: terminal_id.clone(),
-                },
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                1,
-                RenderEncoding::TerminalAnsi,
-                None,
-            ),
-        );
+        server
+            .clients
+            .insert(1, test_terminal_attach_client(terminal_id.clone(), 1, None));
 
         for kind in [
             protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
@@ -6372,14 +5976,7 @@ fn direct_terminal_mouse_sends_nothing_without_mouse_reporting() {
 fn direct_terminal_pixel_mouse_uses_runtime_tracking_and_coordinates() {
     with_terminal_session_test_server(|server, runtime_terminal_id, terminal_id, _pane_id| {
         let (runtime, mut input_rx) =
-            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-                80,
-                24,
-                0,
-                b"\x1b[?1000h\x1b[?1006h\x1b[?1016h",
-                4,
-            );
-        runtime.resize(24, 80, 10, 20);
+            pixel_mouse_test_runtime((80, 24), b"\x1b[?1000h\x1b[?1006h\x1b[?1016h");
         server
             .app
             .terminal_runtimes
@@ -6400,48 +5997,46 @@ fn direct_terminal_pixel_mouse_uses_runtime_tracking_and_coordinates() {
                 None,
             ),
         );
+        let mouse = |kind, column, width_px, height_px| ServerEvent::ClientAttachMouse {
+            client_id: 1,
+            kind,
+            position: protocol::ClientMousePosition::Pixels {
+                x: 21,
+                y: 22,
+                column,
+                row: 1,
+            },
+            geometry: Some(protocol::ClientMouseGeometry {
+                cols: 80,
+                rows: 24,
+                width_px,
+                height_px,
+            }),
+            modifiers: 0,
+            lines: 1,
+        };
         let client = server.clients.get_mut(&1).expect("direct attach client");
         client.pixel_mouse = true;
         client.host_sgr_pixels_active = Some(true);
 
-        assert!(!server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 3,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
-        assert!(input_rx.try_recv().is_err());
+        assert_mouse_without_input(
+            server,
+            &mut input_rx,
+            mouse(
+                protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
+                3,
+                800,
+                480,
+            ),
+            false,
+        );
 
-        assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 805,
-                height_px: 485,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
+        assert!(server.handle_server_event(mouse(
+            protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
+            2,
+            805,
+            485
+        )));
         assert_eq!(
             input_rx
                 .try_recv()
@@ -6449,44 +6044,19 @@ fn direct_terminal_pixel_mouse_uses_runtime_tracking_and_coordinates() {
             Bytes::from_static(b"\x1b[<0;21;22M")
         );
 
-        assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Moved,
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
-        assert!(input_rx.try_recv().is_err());
+        assert_mouse_without_input(
+            server,
+            &mut input_rx,
+            mouse(protocol::ClientMouseKind::Moved, 2, 800, 480),
+            true,
+        );
 
-        assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
+        assert!(server.handle_server_event(mouse(
+            protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
+            2,
+            800,
+            480
+        )));
         assert_eq!(
             input_rx
                 .try_recv()
@@ -6501,16 +6071,7 @@ fn client_config_reload_request_refreshes_attached_clients() {
     let mut server = test_headless_server();
     let (client_tx, client_control_rx, _client_rx) = test_client_writer();
 
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(client_tx));
     server.app.state.request_client_config_reload = true;
 
     server.drain_client_config_reload_request();
@@ -6528,31 +6089,8 @@ fn client_config_reload_request_refreshes_attached_clients() {
 
 #[test]
 fn terminal_bell_targets_foreground_client_only() {
-    let mut server = test_headless_server();
-    let (background_tx, background_control_rx, _background_rx) = test_client_writer();
-    let (foreground_tx, foreground_control_rx, _foreground_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(background_tx),
-        ),
-    );
-    server.clients.insert(
-        2,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            Some(foreground_tx),
-        ),
-    );
-    server.foreground_client_id = Some(2);
+    let (mut server, background_control_rx, _background_rx, foreground_control_rx, _foreground_rx) =
+        foreground_background_test_server();
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::TerminalBell {
         pane_id: crate::layout::PaneId::from_raw(1),
@@ -6590,31 +6128,8 @@ fn terminal_bell_targets_foreground_client_only() {
 
 #[test]
 fn clipboard_write_targets_foreground_client_only() {
-    let mut server = test_headless_server();
-    let (background_tx, background_control_rx, _background_rx) = test_client_writer();
-    let (foreground_tx, foreground_control_rx, _foreground_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(background_tx),
-        ),
-    );
-    server.clients.insert(
-        2,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            Some(foreground_tx),
-        ),
-    );
-    server.foreground_client_id = Some(2);
+    let (mut server, background_control_rx, _background_rx, foreground_control_rx, _foreground_rx) =
+        foreground_background_test_server();
     server.sync_foreground_client_state();
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
@@ -6657,16 +6172,7 @@ fn clipboard_write_failed_foreground_send_removes_client_without_visual_change()
     drop(foreground_control_rx);
     foreground_tx.test_close();
 
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(foreground_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(foreground_tx));
     server.foreground_client_id = Some(1);
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
@@ -6687,17 +6193,7 @@ fn semantic_notifications_broadcast_only_to_client_shells() {
     let (shell_two_tx, shell_two_control, _shell_two_frames) = test_client_writer();
     let (terminal_tx, terminal_control, _terminal_frames) = test_client_writer();
     for (client_id, writer) in [(1, shell_one_tx), (2, shell_two_tx)] {
-        server.clients.insert(
-            client_id,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::ClientShell,
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                client_id,
-                RenderEncoding::SemanticFrame,
-                Some(writer),
-            ),
-        );
+        server.add_test_shell_client(client_id, (80, 24), client_id, Some(writer));
     }
     server.clients.insert(
         3,
@@ -6742,17 +6238,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
     let mut server = test_headless_server();
     server.app.state.toast_config.delivery = config::ToastDelivery::Off;
     let (shell_tx, shell_control, _shell_frames) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(shell_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(shell_tx));
     let response = server.handle_notification_show_api(
         "notify-shell".into(),
         api::schema::NotificationShowParams {
@@ -6789,31 +6275,8 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
 
 #[test]
 fn client_local_notifications_target_foreground_client_only() {
-    let mut server = test_headless_server();
-    let (background_tx, background_control_rx, _background_rx) = test_client_writer();
-    let (foreground_tx, foreground_control_rx, _foreground_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(background_tx),
-        ),
-    );
-    server.clients.insert(
-        2,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            Some(foreground_tx),
-        ),
-    );
-    server.foreground_client_id = Some(2);
+    let (mut server, background_control_rx, _background_rx, foreground_control_rx, _foreground_rx) =
+        foreground_background_test_server();
     server.sync_foreground_client_state();
 
     assert!(server.send_to_foreground_client(ServerMessage::Notify {
@@ -6852,26 +6315,8 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     let (sender_writer, sender_control_rx, _sender_render_rx) = test_client_writer();
     let (foreground_writer, foreground_control_rx, _foreground_render_rx) = test_client_writer();
 
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(sender_writer),
-        ),
-    );
-    server.clients.insert(
-        2,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            Some(foreground_writer),
-        ),
-    );
+    server.add_test_shell_client(1, (120, 40), 1, Some(sender_writer));
+    server.add_test_shell_client(2, (80, 24), 2, Some(foreground_writer));
     server.foreground_client_id = Some(2);
     server.sync_foreground_client_state();
 
@@ -6895,17 +6340,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
         other => panic!("expected client shell paste error, got {other:?}"),
     }
     let (shell_writer, shell_control_rx, _shell_render_rx) = test_client_writer();
-    server.clients.insert(
-        3,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (100, 30),
-            crate::kitty_graphics::HostCellSize::default(),
-            3,
-            RenderEncoding::SemanticFrame,
-            Some(shell_writer),
-        ),
-    );
+    server.add_test_shell_client(3, (100, 30), 3, Some(shell_writer));
     assert!(
         !server.handle_server_event(ServerEvent::ClientPasteRejected {
             client_id: 3,
@@ -6937,21 +6372,8 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
 
 #[test]
 fn update_notification_reaches_client_shell_independent_of_delivery() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    let (mut server, client_control_rx, _client_rx) =
+        notification_test_server(crate::config::ToastDelivery::Herdr);
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
@@ -6974,21 +6396,8 @@ fn update_notification_reaches_client_shell_independent_of_delivery() {
 
 #[test]
 fn update_notification_is_semantic_for_system_delivery() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
+    let (mut server, client_control_rx, _client_rx) =
+        notification_test_server(crate::config::ToastDelivery::System);
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
@@ -7016,44 +6425,45 @@ fn update_notification_is_semantic_for_system_delivery() {
     }
 }
 
-#[test]
-fn notification_show_api_forwards_one_semantic_client_notification() {
+fn notification_test_server(
+    delivery: crate::config::ToastDelivery,
+) -> (
+    HeadlessServer,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
     let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-
+    let (writer, control_rx, render_rx) = test_client_writer();
     server.clients.insert(
         1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
+        test_client(ClientConnectionMode::ClientShell, (80, 24), 1, Some(writer)),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
+    server.app.state.toast_config.delivery = delivery;
+    (server, control_rx, render_rx)
+}
 
+fn show_test_notification(
+    server: &mut HeadlessServer,
+    params: api::schema::NotificationShowParams,
+) -> String {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
         request: api::schema::Request {
             id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "build failed".into(),
-                body: Some("api workspace".into()),
-                position: Some(crate::config::ToastHerdrPosition::TopLeft),
-                sound: api::schema::NotificationShowSound::Request,
-            }),
+            method: api::schema::Method::NotificationShow(params),
         },
         respond_to,
         response_write_complete: None,
     });
-
     assert!(changed);
-    let response = response_rx
+    response_rx
         .recv_timeout(Duration::from_millis(100))
-        .unwrap();
-    let parsed: api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        .unwrap()
+}
+
+fn assert_notification_shown(response: &str) {
+    let parsed: api::schema::SuccessResponse = serde_json::from_str(response).unwrap();
     assert_eq!(
         parsed.result,
         api::schema::ResponseResult::NotificationShow {
@@ -7061,79 +6471,63 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
             reason: api::schema::NotificationShowReason::Shown,
         }
     );
+}
+
+fn read_api_notification(
+    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
+) -> protocol::SemanticNotification {
     match read_server_message(
-        client_control_rx
+        receiver
             .recv_timeout(Duration::from_millis(100))
             .expect("semantic api notification"),
     ) {
-        ServerMessage::SemanticNotification(notification) => {
-            assert_eq!(notification.title, "build failed");
-            assert_eq!(notification.body.as_deref(), Some("api workspace"));
-            assert_eq!(
-                notification.sound,
-                Some(protocol::SemanticNotificationSound::Request)
-            );
-        }
+        ServerMessage::SemanticNotification(notification) => notification,
         other => panic!("expected semantic api notification, got {other:?}"),
     }
 }
 
 #[test]
-fn notification_show_api_preserves_colon_in_forwarded_title() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
+fn notification_show_api_forwards_one_semantic_client_notification() {
+    let (mut server, client_control_rx, _client_rx) =
+        notification_test_server(crate::config::ToastDelivery::System);
 
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
-
-    let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "build: failed".into(),
-                body: Some("api workspace".into()),
-                position: None,
-                sound: api::schema::NotificationShowSound::None,
-            }),
+    let response = show_test_notification(
+        &mut server,
+        api::schema::NotificationShowParams {
+            title: "build failed".into(),
+            body: Some("api workspace".into()),
+            position: Some(crate::config::ToastHerdrPosition::TopLeft),
+            sound: api::schema::NotificationShowSound::Request,
         },
-        respond_to,
-        response_write_complete: None,
-    });
-
-    assert!(changed);
-    let response = response_rx
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap();
-    let parsed: api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
-    assert_eq!(
-        parsed.result,
-        api::schema::ResponseResult::NotificationShow {
-            shown: true,
-            reason: api::schema::NotificationShowReason::Shown,
-        }
     );
-    match read_server_message(
-        client_control_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("semantic api notification"),
-    ) {
-        ServerMessage::SemanticNotification(notification) => {
-            assert_eq!(notification.title, "build: failed");
-            assert_eq!(notification.body.as_deref(), Some("api workspace"));
-        }
-        other => panic!("expected semantic api notification, got {other:?}"),
-    }
+    assert_notification_shown(&response);
+    let notification = read_api_notification(&client_control_rx);
+    assert_eq!(notification.title, "build failed");
+    assert_eq!(notification.body.as_deref(), Some("api workspace"));
+    assert_eq!(
+        notification.sound,
+        Some(protocol::SemanticNotificationSound::Request)
+    );
+}
+
+#[test]
+fn notification_show_api_preserves_colon_in_forwarded_title() {
+    let (mut server, client_control_rx, _client_rx) =
+        notification_test_server(crate::config::ToastDelivery::System);
+
+    let response = show_test_notification(
+        &mut server,
+        api::schema::NotificationShowParams {
+            title: "build: failed".into(),
+            body: Some("api workspace".into()),
+            position: None,
+            sound: api::schema::NotificationShowSound::None,
+        },
+    );
+    assert_notification_shown(&response);
+    let notification = read_api_notification(&client_control_rx);
+    assert_eq!(notification.title, "build: failed");
+    assert_eq!(notification.body.as_deref(), Some("api workspace"));
 }
 
 #[test]
@@ -7141,25 +6535,15 @@ fn notification_show_api_validates_empty_title_before_disabled_delivery() {
     let mut server = test_headless_server();
     server.app.state.toast_config.delivery = crate::config::ToastDelivery::Off;
 
-    let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "\n\t".into(),
-                body: None,
-                position: None,
-                sound: api::schema::NotificationShowSound::None,
-            }),
+    let response = show_test_notification(
+        &mut server,
+        api::schema::NotificationShowParams {
+            title: "\n\t".into(),
+            body: None,
+            position: None,
+            sound: api::schema::NotificationShowSound::None,
         },
-        respond_to,
-        response_write_complete: None,
-    });
-
-    assert!(changed);
-    let response = response_rx
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap();
+    );
     let parsed: api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
     assert_eq!(parsed.error.code, "invalid_params");
     assert_eq!(parsed.error.message, "notification title is empty");
@@ -7171,25 +6555,15 @@ fn notification_show_api_reports_no_foreground_client() {
     server.foreground_client_id = None;
     server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
 
-    let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "build failed".into(),
-                body: None,
-                position: None,
-                sound: api::schema::NotificationShowSound::Request,
-            }),
+    let response = show_test_notification(
+        &mut server,
+        api::schema::NotificationShowParams {
+            title: "build failed".into(),
+            body: None,
+            position: None,
+            sound: api::schema::NotificationShowSound::Request,
         },
-        respond_to,
-        response_write_complete: None,
-    });
-
-    assert!(changed);
-    let response = response_rx
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap();
+    );
     let parsed: api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
     assert_eq!(
         parsed.result,
@@ -7202,66 +6576,25 @@ fn notification_show_api_reports_no_foreground_client() {
 
 #[test]
 fn notification_show_api_includes_sound_in_semantic_event() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
+    let (mut server, client_control_rx, _client_rx) =
+        notification_test_server(crate::config::ToastDelivery::Herdr);
 
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
+    let response = show_test_notification(
+        &mut server,
+        api::schema::NotificationShowParams {
+            title: "build failed".into(),
+            body: None,
+            position: None,
+            sound: api::schema::NotificationShowSound::Done,
+        },
     );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-
-    let (respond_to, response_rx) = std::sync::mpsc::channel();
-    assert!(
-        server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-            request: api::schema::Request {
-                id: "notify".into(),
-                method: api::schema::Method::NotificationShow(
-                    api::schema::NotificationShowParams {
-                        title: "build failed".into(),
-                        body: None,
-                        position: None,
-                        sound: api::schema::NotificationShowSound::Done,
-                    },
-                ),
-            },
-            respond_to,
-            response_write_complete: None,
-        })
-    );
-
-    let response = response_rx
-        .recv_timeout(Duration::from_millis(100))
-        .unwrap();
-    let parsed: api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+    assert_notification_shown(&response);
+    let notification = read_api_notification(&client_control_rx);
+    assert_eq!(notification.title, "build failed");
     assert_eq!(
-        parsed.result,
-        api::schema::ResponseResult::NotificationShow {
-            shown: true,
-            reason: api::schema::NotificationShowReason::Shown,
-        }
+        notification.sound,
+        Some(protocol::SemanticNotificationSound::Done)
     );
-    match read_server_message(
-        client_control_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("semantic api notification"),
-    ) {
-        ServerMessage::SemanticNotification(notification) => {
-            assert_eq!(notification.title, "build failed");
-            assert_eq!(
-                notification.sound,
-                Some(protocol::SemanticNotificationSound::Done)
-            );
-        }
-        other => panic!("expected semantic api notification, got {other:?}"),
-    }
 }
 
 fn completion_guard_server(writer: ClientWriter) -> (HeadlessServer, crate::layout::PaneId) {
@@ -7272,16 +6605,7 @@ fn completion_guard_server(writer: ClientWriter) -> (HeadlessServer, crate::layo
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(1);
     server.app.state.toast_config.delay_seconds = 0;
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            Default::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(writer),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(writer));
     let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
     (server, pane_id)
 }
@@ -7306,10 +6630,7 @@ fn completion_guard_api_report(server: &mut HeadlessServer, method: api::schema:
 fn api_report_agent_stores_valid_resume_argv_and_rejects_invalid() {
     let (writer, _control_rx, _render_rx) = test_client_writer();
     let (mut server, pane_id) = completion_guard_server(writer);
-    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
-    let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
-        .attached_terminal_id
-        .clone();
+    let (public_pane_id, terminal_id) = completion_guard_targets(&server, pane_id);
     let report = |resume_argv: Vec<&str>| {
         api::schema::Method::PaneReportAgent(api::schema::PaneReportAgentParams {
             pane_id: public_pane_id.clone(),
@@ -7404,10 +6725,7 @@ fn api_report_agent_stores_valid_resume_argv_and_rejects_invalid() {
 fn api_resume_argv_is_ignored_when_its_session_report_is_refused() {
     let (writer, _control_rx, _render_rx) = test_client_writer();
     let (mut server, pane_id) = completion_guard_server(writer);
-    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
-    let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
-        .attached_terminal_id
-        .clone();
+    let (public_pane_id, terminal_id) = completion_guard_targets(&server, pane_id);
     server.handle_internal_event_with_forwarding(AppEvent::AgentProcessDetected {
         pane_id,
         agent: crate::detect::Agent::Claude,
@@ -7624,11 +6942,7 @@ fn completion_guard_api_session_replacement_does_not_notify_finished() {
 #[test]
 fn startup_idle_does_not_forward_completion() {
     let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("active");
-    let pane_id = workspace.tabs[0].root_pane;
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
+    let pane_id = server.install_endpoint_test_workspace("active");
     server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
     server.app.state.toast_config.delay_seconds = 0;
     server.app.state.sound.enabled = true;
@@ -7642,16 +6956,7 @@ fn startup_idle_does_not_forward_completion() {
     );
 
     let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(client_tx));
     server.foreground_client_id = Some(1);
     server.sync_foreground_client_state();
     while client_control_rx
@@ -7738,16 +7043,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
     server.app.state.mode = crate::app::Mode::Terminal;
 
     let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
+    server.add_test_shell_client(1, (80, 24), 1, Some(client_tx));
     server.foreground_client_id = Some(1);
     server.sync_foreground_client_state();
 

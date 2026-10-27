@@ -1,3 +1,4 @@
+// Modified by lazysh: optional exact-context guarded-input eligibility.
 use std::collections::{HashMap, HashSet, VecDeque};
 
 mod actions;
@@ -19,6 +20,8 @@ mod endpoints;
 pub(super) use endpoints::*;
 mod global_menu;
 mod graphics;
+#[path = "../../../herdr-guard/client.rs"]
+mod guarded_input;
 mod input;
 mod input_source;
 mod link_hover;

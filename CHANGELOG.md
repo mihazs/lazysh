@@ -4,6 +4,8 @@
 
 - Defer iOS status review-channel startup registration until all native plugins finish initialization, removing a startup ordering hazard observed in a retained second-launch crash. Readiness deadlines and native privacy/authentication behavior are unchanged.
 
+- Add an optional source-built Herdr guarded-input protocol prerequisite, with exact original-client ownership, explicit expiring bindings and bounded two-stage input admission. Stock attach and lazysh Chat defaults remain unchanged; the native lazysh adapter is separate work.
+
 - Accept explicit saved-host and tmux/Herdr picker launch requests while the desktop app is running. Requests wait for normal unlock and an available connection dialog; pending launches and typed manual credentials are preserved, and Connect remains explicit. Warm directory delivery remains unsupported.
 
 - Extend explicitly chosen and confirmed tmux terminal input to all 17 native Chat readers. Hermes/OpenCode database session selectors are part of immutable authority, and changing a selector requires a new confirmation. Stage remains default; terminal acknowledgement does not establish agent identity, provider receipt or that a process stopped.

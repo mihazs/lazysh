@@ -1,3 +1,4 @@
+// Modified by lazysh: guarded input is handled only by the headless actor.
 use std::time::{Duration, Instant};
 
 mod agent_view;
@@ -787,22 +788,21 @@ impl App {
         self.sync_focus_events_with_outer_event(None);
     }
 
-    pub(crate) fn accept_current_focus_without_events(&mut self) {
-        self.last_focus = self.state.active.and_then(|idx| {
+    fn current_focus(&self) -> Option<(usize, crate::layout::PaneId)> {
+        self.state.active.and_then(|idx| {
             self.state
                 .workspaces
                 .get(idx)
                 .and_then(|workspace| workspace.focused_pane_id().map(|pane_id| (idx, pane_id)))
-        });
+        })
+    }
+
+    pub(crate) fn accept_current_focus_without_events(&mut self) {
+        self.last_focus = self.current_focus();
     }
 
     pub(crate) fn accept_current_focus_with_api_events(&mut self) {
-        let current_focus = self.state.active.and_then(|idx| {
-            self.state
-                .workspaces
-                .get(idx)
-                .and_then(|workspace| workspace.focused_pane_id().map(|pane_id| (idx, pane_id)))
-        });
+        let current_focus = self.current_focus();
         if current_focus == self.last_focus {
             return;
         }
@@ -905,6 +905,18 @@ impl App {
         };
 
         let response = match request.method {
+            Method::GuardClaim(_)
+            | Method::GuardPrepare(_)
+            | Method::GuardInput(_)
+            | Method::GuardRelease(_)
+            | Method::GuardCancelPreparation(_)
+            | Method::GuardRevoke(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "guard_unavailable",
+                    "guard_unavailable",
+                );
+            }
             Method::ServerStop(_) => {
                 self.state.should_quit = true;
                 SuccessResponse {
@@ -1241,13 +1253,13 @@ impl App {
     ) -> String {
         use crate::api::schema::{NotificationShowReason, ResponseResult};
 
-        let Some(title) = sanitized_notification_text(&params.title, 80) else {
+        let Some(title) = Self::sanitized_notification_text(&params.title, 80) else {
             return responses::encode_error(id, "invalid_params", "notification title is empty");
         };
         let body = params
             .body
             .as_deref()
-            .and_then(|body| sanitized_notification_text(body, 240));
+            .and_then(|body| Self::sanitized_notification_text(body, 240));
 
         let reason = match self.state.toast_config.delivery {
             crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
@@ -1294,36 +1306,38 @@ impl App {
     }
 }
 
-fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> {
-    let mut sanitized = String::new();
-    let mut previous_space = false;
-    for ch in value.chars() {
-        let replacement = if ch == '\n' || ch == '\r' || ch == '\t' {
-            Some(' ')
-        } else if ch.is_control() {
-            None
-        } else {
-            Some(ch)
-        };
-        let Some(ch) = replacement else {
-            continue;
-        };
-        if ch.is_whitespace() {
-            if previous_space {
+impl App {
+    pub(crate) fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> {
+        let mut sanitized = String::new();
+        let mut previous_space = false;
+        for ch in value.chars() {
+            let replacement = if ch == '\n' || ch == '\r' || ch == '\t' {
+                Some(' ')
+            } else if ch.is_control() {
+                None
+            } else {
+                Some(ch)
+            };
+            let Some(ch) = replacement else {
                 continue;
+            };
+            if ch.is_whitespace() {
+                if previous_space {
+                    continue;
+                }
+                previous_space = true;
+                sanitized.push(' ');
+            } else {
+                previous_space = false;
+                sanitized.push(ch);
             }
-            previous_space = true;
-            sanitized.push(' ');
-        } else {
-            previous_space = false;
-            sanitized.push(ch);
+            if sanitized.chars().count() >= max_chars {
+                break;
+            }
         }
-        if sanitized.chars().count() >= max_chars {
-            break;
-        }
+        let sanitized = sanitized.trim().to_string();
+        (!sanitized.is_empty()).then_some(sanitized)
     }
-    let sanitized = sanitized.trim().to_string();
-    (!sanitized.is_empty()).then_some(sanitized)
 }
 
 fn agent_manifest_info(
@@ -1347,6 +1361,56 @@ fn agent_manifest_info(
 
 #[cfg(test)]
 pub(super) mod test_support {
+    impl crate::app::App {
+        pub(crate) fn split_test_workspace(
+            name: &str,
+            direction: ratatui::layout::Direction,
+        ) -> (
+            crate::workspace::Workspace,
+            crate::layout::PaneId,
+            crate::layout::PaneId,
+        ) {
+            let mut workspace = crate::workspace::Workspace::test_new(name);
+            let first = workspace.tabs[0].root_pane;
+            let second = workspace.test_split(direction);
+            (workspace, first, second)
+        }
+
+        pub(crate) fn install_test_announcement(&mut self) {
+            self.state.product_announcement = Some(crate::app::state::ProductAnnouncementState {
+                version: "0.8.2".into(),
+                id: "client-shell".into(),
+                title: "Client shell".into(),
+                body: "announcement".into(),
+                scroll: 0,
+                preview: true,
+            });
+        }
+    }
+
+    pub(crate) fn new_app() -> (
+        tokio::sync::mpsc::UnboundedSender<crate::api::ApiRequestMessage>,
+        crate::app::App,
+    ) {
+        new_app_with_events(crate::api::EventHub::default())
+    }
+    pub(crate) fn new_app_with_events(
+        events: crate::api::EventHub,
+    ) -> (
+        tokio::sync::mpsc::UnboundedSender<crate::api::ApiRequestMessage>,
+        crate::app::App,
+    ) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            receiver,
+            events,
+        );
+        (sender, app)
+    }
+
     pub(crate) fn exiting_test_command() -> &'static str {
         #[cfg(windows)]
         {
@@ -1371,6 +1435,77 @@ mod tests {
     use super::*;
     use crate::detect::{Agent, AgentState};
 
+    fn install_workspace(
+        app: &mut App,
+        workspace: crate::workspace::Workspace,
+    ) -> (crate::layout::PaneId, crate::terminal::TerminalId) {
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        (pane, terminal)
+    }
+    type EventWorkspace = (
+        tokio::sync::mpsc::UnboundedSender<crate::api::ApiRequestMessage>,
+        App,
+        crate::api::EventHub,
+        crate::layout::PaneId,
+        crate::terminal::TerminalId,
+    );
+    fn event_workspace(name: &str) -> EventWorkspace {
+        let hub = crate::api::EventHub::default();
+        let (sender, mut app) = test_support::new_app_with_events(hub.clone());
+        let (pane, terminal) =
+            install_workspace(&mut app, crate::workspace::Workspace::test_new(name));
+        (sender, app, hub, pane, terminal)
+    }
+
+    fn detection_runtime(
+        app: &mut App,
+        terminal: crate::terminal::TerminalId,
+    ) -> (
+        std::sync::Arc<tokio::sync::Notify>,
+        tokio::sync::mpsc::Receiver<bytes::Bytes>,
+    ) {
+        let (runtime, receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        let reset = runtime.agent_detection_reset_notify_for_test();
+        app.terminal_runtimes.insert(terminal, runtime);
+        (reset, receiver)
+    }
+    fn install_runtime(
+        app: &mut App,
+        pane: crate::layout::PaneId,
+        terminal: crate::terminal::TerminalId,
+        runtime: crate::terminal::TerminalRuntime,
+    ) -> String {
+        app.terminal_runtimes.insert(terminal, runtime);
+        app.public_pane_id(0, pane).unwrap()
+    }
+    fn assert_overlay_focus(app: &App, previous: crate::layout::PaneId, zoomed: bool) {
+        let tab = &app.state.workspaces[0].tabs[0];
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(tab.layout.focused(), previous);
+        assert_eq!(tab.zoomed, zoomed);
+    }
+
+    fn api_value(app: &mut App, request: crate::api::schema::Request) -> serde_json::Value {
+        serde_json::from_str(&app.handle_api_request(request)).unwrap()
+    }
+
+    fn agent_state_changed(app: &mut App, pane_id: crate::layout::PaneId, state: AgentState) {
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Codex),
+            state,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+    }
+
     #[cfg(unix)]
     fn init_repo(path: &std::path::Path) {
         let status = std::process::Command::new("git")
@@ -1381,20 +1516,51 @@ mod tests {
         assert!(status.success(), "git init failed for {}", path.display());
     }
 
+    fn overlay_workspace(
+        name: &str,
+        restore_focus: bool,
+    ) -> (
+        crate::workspace::Workspace,
+        crate::layout::PaneId,
+        crate::layout::PaneId,
+    ) {
+        let (mut workspace, previous, overlay) =
+            App::split_test_workspace(name, ratatui::layout::Direction::Horizontal);
+        if restore_focus {
+            workspace.tabs[0].layout.focus_pane(previous);
+        }
+        workspace.tabs[0].zoomed = true;
+        (workspace, previous, overlay)
+    }
+    fn close_test_pane(app: &mut App, pane_id: crate::layout::PaneId) {
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
+    }
+    #[cfg(windows)]
+    fn powershell_app() -> (
+        tokio::sync::mpsc::UnboundedSender<crate::api::ApiRequestMessage>,
+        App,
+        crate::layout::PaneId,
+    ) {
+        let (sender, mut app) = test_support::new_app();
+        let (pane, _) = install_workspace(
+            &mut app,
+            crate::workspace::Workspace::test_new("powershell"),
+        );
+        app.state.default_shell = "powershell.exe".into();
+        app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+        (sender, app, pane)
+    }
+
     fn app_with_overlay(
         workspace: crate::workspace::Workspace,
         overlay_pane: crate::layout::PaneId,
         previous_focus: crate::layout::PaneId,
         previous_zoomed: bool,
     ) -> App {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
+        let (_api_tx, mut app) = test_support::new_app();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
@@ -1414,28 +1580,17 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_activation_event_resets_matching_agent_detection_runtime() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
+        let (_api_tx, mut app) = test_support::new_app();
+        let (_pane_id, terminal_id) = install_workspace(
+            &mut app,
+            crate::workspace::Workspace::test_new("manifest-reset"),
         );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-reset")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
         app.state
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
             .detected_agent = Some(Agent::Codex);
-        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-        app.terminal_runtimes.insert(terminal_id, runtime);
+        let (reset_notify, _rx) = detection_runtime(&mut app, terminal_id);
 
         app.handle_internal_event(AppEvent::AgentDetectionManifestsUpdated {
             updated: Vec::new(),
@@ -1453,117 +1608,95 @@ mod tests {
 
     #[test]
     fn product_announcement_dismiss_requires_current_identity() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.product_announcement = Some(crate::app::state::ProductAnnouncementState {
-            version: "0.8.2".into(),
-            id: "client-shell".into(),
-            title: "Client shell".into(),
-            body: "announcement".into(),
-            scroll: 0,
-            preview: true,
-        });
+        let (_api_tx, mut app) = test_support::new_app();
+        app.install_test_announcement();
 
-        let stale = app.handle_api_request(crate::api::schema::Request {
-            id: "stale".into(),
-            method: crate::api::schema::Method::ProductAnnouncementDismiss(
-                crate::api::schema::ProductAnnouncementDismissParams {
-                    version: "0.8.2".into(),
-                    id: "old".into(),
-                },
-            ),
-        });
-        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        let stale = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "stale".into(),
+                method: crate::api::schema::Method::ProductAnnouncementDismiss(
+                    crate::api::schema::ProductAnnouncementDismissParams {
+                        version: "0.8.2".into(),
+                        id: "old".into(),
+                    },
+                ),
+            },
+        );
         assert_eq!(stale["error"]["code"], "stale_announcement");
         assert!(app.state.product_announcement.is_some());
 
-        let dismissed = app.handle_api_request(crate::api::schema::Request {
-            id: "dismiss".into(),
-            method: crate::api::schema::Method::ProductAnnouncementDismiss(
-                crate::api::schema::ProductAnnouncementDismissParams {
-                    version: "0.8.2".into(),
-                    id: "client-shell".into(),
-                },
-            ),
-        });
-        let dismissed: serde_json::Value = serde_json::from_str(&dismissed).unwrap();
+        let dismissed = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "dismiss".into(),
+                method: crate::api::schema::Method::ProductAnnouncementDismiss(
+                    crate::api::schema::ProductAnnouncementDismissParams {
+                        version: "0.8.2".into(),
+                        id: "client-shell".into(),
+                    },
+                ),
+            },
+        );
         assert_eq!(dismissed["result"]["type"], "ok");
         assert!(app.state.product_announcement.is_none());
     }
 
     #[test]
     fn release_notes_dismiss_requires_current_version() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
+        let (_api_tx, mut app) = test_support::new_app();
         app.state.latest_release_notes = Some(crate::release_notes::ReleaseNotes {
             version: "99.99.99".into(),
             body: "release notes".into(),
             preview: true,
         });
 
-        let stale = app.handle_api_request(crate::api::schema::Request {
-            id: "stale".into(),
-            method: crate::api::schema::Method::ReleaseNotesDismiss(
-                crate::api::schema::ReleaseNotesDismissParams {
-                    version: "0.8.2".into(),
-                },
-            ),
-        });
-        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        let stale = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "stale".into(),
+                method: crate::api::schema::Method::ReleaseNotesDismiss(
+                    crate::api::schema::ReleaseNotesDismissParams {
+                        version: "0.8.2".into(),
+                    },
+                ),
+            },
+        );
         assert_eq!(stale["error"]["code"], "stale_release_notes");
 
-        let dismissed = app.handle_api_request(crate::api::schema::Request {
-            id: "dismiss".into(),
-            method: crate::api::schema::Method::ReleaseNotesDismiss(
-                crate::api::schema::ReleaseNotesDismissParams {
-                    version: "99.99.99".into(),
-                },
-            ),
-        });
-        let dismissed: serde_json::Value = serde_json::from_str(&dismissed).unwrap();
+        let dismissed = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "dismiss".into(),
+                method: crate::api::schema::Method::ReleaseNotesDismiss(
+                    crate::api::schema::ReleaseNotesDismissParams {
+                        version: "99.99.99".into(),
+                    },
+                ),
+            },
+        );
         assert_eq!(dismissed["result"]["type"], "ok");
         assert!(app.state.latest_release_notes.is_some());
     }
 
     #[tokio::test]
     async fn server_reload_agent_manifests_resets_detection_runtimes() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
+        let (_api_tx, mut app) = test_support::new_app();
+        let (_pane_id, terminal_id) = install_workspace(
+            &mut app,
+            crate::workspace::Workspace::test_new("manifest-reload"),
         );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-reload")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-        app.terminal_runtimes.insert(terminal_id, runtime);
+        let (reset_notify, _rx) = detection_runtime(&mut app, terminal_id);
 
-        let response = app.handle_api_request(crate::api::schema::Request {
-            id: "reload_manifests".into(),
-            method: crate::api::schema::Method::ServerReloadAgentManifests(
-                crate::api::schema::EmptyParams::default(),
-            ),
-        });
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let response = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "reload_manifests".into(),
+                method: crate::api::schema::Method::ServerReloadAgentManifests(
+                    crate::api::schema::EmptyParams::default(),
+                ),
+            },
+        );
         assert_eq!(response["result"]["type"], "agent_manifest_reload");
         assert!(!response["result"]["manifests"]
             .as_array()
@@ -1580,31 +1713,22 @@ mod tests {
 
     #[tokio::test]
     async fn server_agent_manifests_reports_status_without_resetting_runtimes() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
+        let (_api_tx, mut app) = test_support::new_app();
+        let (_pane_id, terminal_id) = install_workspace(
+            &mut app,
+            crate::workspace::Workspace::test_new("manifest-status"),
         );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-status")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-        app.terminal_runtimes.insert(terminal_id, runtime);
+        let (reset_notify, _rx) = detection_runtime(&mut app, terminal_id);
 
-        let response = app.handle_api_request(crate::api::schema::Request {
-            id: "manifest_status".into(),
-            method: crate::api::schema::Method::ServerAgentManifests(
-                crate::api::schema::EmptyParams::default(),
-            ),
-        });
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let response = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "manifest_status".into(),
+                method: crate::api::schema::Method::ServerAgentManifests(
+                    crate::api::schema::EmptyParams::default(),
+                ),
+            },
+        );
         assert_eq!(response["result"]["type"], "agent_manifest_status");
         assert!(!response["result"]["manifests"]
             .as_array()
@@ -1623,20 +1747,11 @@ mod tests {
 
     #[tokio::test]
     async fn agent_explain_evaluates_with_server_manifest_cache() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
+        let (_api_tx, mut app) = test_support::new_app();
+        let (pane_id, terminal_id) = install_workspace(
+            &mut app,
+            crate::workspace::Workspace::test_new("agent-explain"),
         );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("agent-explain")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
         app.state
             .terminals
             .get_mut(&terminal_id)
@@ -1647,16 +1762,17 @@ mod tests {
             24,
             b"press enter to confirm or esc to cancel",
         );
-        app.terminal_runtimes.insert(terminal_id, runtime);
-        let target = app.public_pane_id(0, pane_id).unwrap();
+        let target = install_runtime(&mut app, pane_id, terminal_id, runtime);
 
-        let response = app.handle_api_request(crate::api::schema::Request {
-            id: "agent_explain".into(),
-            method: crate::api::schema::Method::AgentExplain(crate::api::schema::AgentTarget {
-                target,
-            }),
-        });
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let response = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "agent_explain".into(),
+                method: crate::api::schema::Method::AgentExplain(crate::api::schema::AgentTarget {
+                    target,
+                }),
+            },
+        );
 
         assert_eq!(response["result"]["type"], "agent_explain");
         assert_eq!(response["result"]["explain"]["state"], "blocked");
@@ -1668,20 +1784,11 @@ mod tests {
 
     #[tokio::test]
     async fn agent_explain_rejects_hook_only_full_lifecycle_authority() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
+        let (_api_tx, mut app) = test_support::new_app();
+        let (pane_id, terminal_id) = install_workspace(
+            &mut app,
+            crate::workspace::Workspace::test_new("agent-explain-omp"),
         );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("agent-explain-omp")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
         app.state
             .terminals
             .get_mut(&terminal_id)
@@ -1694,49 +1801,42 @@ mod tests {
                 Some(1),
             );
         let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"");
-        app.terminal_runtimes.insert(terminal_id, runtime);
-        let target = app.public_pane_id(0, pane_id).unwrap();
+        let target = install_runtime(&mut app, pane_id, terminal_id, runtime);
 
-        let response = app.handle_api_request(crate::api::schema::Request {
-            id: "agent_explain_omp".into(),
-            method: crate::api::schema::Method::AgentExplain(crate::api::schema::AgentTarget {
-                target,
-            }),
-        });
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let response = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "agent_explain_omp".into(),
+                method: crate::api::schema::Method::AgentExplain(crate::api::schema::AgentTarget {
+                    target,
+                }),
+            },
+        );
 
         assert_eq!(response["error"]["code"], "agent_not_found");
     }
 
     #[tokio::test]
     async fn pane_process_info_returns_response_for_existing_pane() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
+        let (_api_tx, mut app) = test_support::new_app();
+        let (pane_id, terminal_id) = install_workspace(
+            &mut app,
+            crate::workspace::Workspace::test_new("process-info"),
         );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("process-info")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
         let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        app.terminal_runtimes.insert(terminal_id, runtime);
-        let target = app.public_pane_id(0, pane_id).unwrap();
+        let target = install_runtime(&mut app, pane_id, terminal_id, runtime);
 
-        let response = app.handle_api_request(crate::api::schema::Request {
-            id: "process_info".into(),
-            method: crate::api::schema::Method::PaneProcessInfo(
-                crate::api::schema::PaneProcessInfoParams {
-                    pane_id: Some(target.clone()),
-                },
-            ),
-        });
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let response = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "process_info".into(),
+                method: crate::api::schema::Method::PaneProcessInfo(
+                    crate::api::schema::PaneProcessInfoParams {
+                        pane_id: Some(target.clone()),
+                    },
+                ),
+            },
+        );
 
         assert_eq!(response["result"]["type"], "pane_process_info");
         assert_eq!(response["result"]["process_info"]["pane_id"], target);
@@ -1744,57 +1844,54 @@ mod tests {
 
     #[test]
     fn client_window_title_api_reports_no_foreground_client_in_app_mode() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
+        let (_api_tx, mut app) = test_support::new_app();
 
-        let set = app.handle_api_request(crate::api::schema::Request {
-            id: "title_set".into(),
-            method: crate::api::schema::Method::ClientWindowTitleSet(
-                crate::api::schema::ClientWindowTitleSetParams {
-                    title: "plugin review".into(),
-                },
-            ),
-        });
-        let set: serde_json::Value = serde_json::from_str(&set).unwrap();
+        let set = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "title_set".into(),
+                method: crate::api::schema::Method::ClientWindowTitleSet(
+                    crate::api::schema::ClientWindowTitleSetParams {
+                        title: "plugin review".into(),
+                    },
+                ),
+            },
+        );
         assert_eq!(set["result"]["type"], "client_window_title");
         assert_eq!(set["result"]["changed"], false);
         assert_eq!(set["result"]["reason"], "no_foreground_client");
 
-        let clear = app.handle_api_request(crate::api::schema::Request {
-            id: "title_clear".into(),
-            method: crate::api::schema::Method::ClientWindowTitleClear(
-                crate::api::schema::EmptyParams::default(),
-            ),
-        });
-        let clear: serde_json::Value = serde_json::from_str(&clear).unwrap();
+        let clear = api_value(
+            &mut app,
+            crate::api::schema::Request {
+                id: "title_clear".into(),
+                method: crate::api::schema::Method::ClientWindowTitleClear(
+                    crate::api::schema::EmptyParams::default(),
+                ),
+            },
+        );
         assert_eq!(clear["result"]["type"], "client_window_title");
         assert_eq!(clear["result"]["reason"], "no_foreground_client");
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
+    async fn live_toast_context(
+        prefix: &str,
+        delay_seconds: u64,
+    ) -> (
+        tokio::sync::mpsc::UnboundedSender<crate::api::ApiRequestMessage>,
+        App,
+        crate::layout::PaneId,
+        std::path::PathBuf,
+    ) {
+        let (_api_tx, mut app) = test_support::new_app();
 
         let mut workspace = crate::workspace::Workspace::test_new("stale");
         workspace.custom_name = None;
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "herdr-toast-context-{}-{}",
+            "herdr-{prefix}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1816,7 +1913,7 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-        app.state.toast_config.delay_seconds = 0;
+        app.state.toast_config.delay_seconds = delay_seconds;
 
         let (events, _) = tokio::sync::mpsc::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
@@ -1840,117 +1937,34 @@ mod tests {
         }
         app.terminal_runtimes.insert(terminal_id, runtime);
 
-        app.handle_internal_event(AppEvent::StateChanged {
-            pane_id: root,
-            agent: Some(Agent::Codex),
-            state: AgentState::Working,
-            visible_blocker: false,
-            visible_working: false,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
-        app.handle_internal_event(AppEvent::StateChanged {
-            pane_id: root,
-            agent: Some(Agent::Codex),
-            state: AgentState::Idle,
-            visible_blocker: false,
-            visible_working: false,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
+        (_api_tx, app, root, temp_root)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
+        let (_api_tx, mut app, root, temp_root) = live_toast_context("toast-context", 0).await;
+
+        agent_state_changed(&mut app, root, AgentState::Working);
+        agent_state_changed(&mut app, root, AgentState::Idle);
 
         assert_eq!(
             app.state.toast.as_ref().map(|toast| toast.context.as_str()),
             Some("__herdr_projects__ · 1")
         );
 
-        for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
-        }
+        test_support::shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
+        let (_api_tx, mut app, root, temp_root) =
+            live_toast_context("delayed-toast-context", 1).await;
 
-        let mut workspace = crate::workspace::Workspace::test_new("stale");
-        workspace.custom_name = None;
-        let root = workspace.tabs[0].root_pane;
-        let terminal_id = workspace.terminal_id(root).cloned().unwrap();
-        let temp_root = std::env::temp_dir().join(format!(
-            "herdr-delayed-toast-context-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let stale_cwd = temp_root.join("__herdr_original__");
-        let live_cwd = temp_root.join("__herdr_projects__");
-        std::fs::create_dir_all(&stale_cwd).unwrap();
-        std::fs::create_dir_all(&live_cwd).unwrap();
-        init_repo(&stale_cwd);
-        init_repo(&live_cwd);
-
-        workspace.identity_cwd = stale_cwd.clone();
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
-        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = stale_cwd;
-        app.state.active = None;
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-        app.state.toast_config.delay_seconds = 1;
-
-        let (events, _) = tokio::sync::mpsc::channel(4);
-        let runtime = crate::terminal::TerminalRuntime::spawn(
-            root,
-            24,
-            80,
-            live_cwd.clone(),
-            0,
-            crate::terminal_theme::TerminalTheme::default(),
-            None,
-            crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
-            &crate::pane::PaneLaunchEnv::default(),
-            events,
-            std::sync::Arc::new(tokio::sync::Notify::new()),
-            std::sync::Arc::new(crate::render_signal::RenderSignal::new()),
-        )
-        .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while runtime.cwd() != Some(live_cwd.clone()) && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        app.terminal_runtimes.insert(terminal_id, runtime);
-
-        app.handle_internal_event(AppEvent::StateChanged {
-            pane_id: root,
-            agent: Some(Agent::Codex),
-            state: AgentState::Working,
-            visible_blocker: false,
-            visible_working: false,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
-        app.handle_internal_event(AppEvent::StateChanged {
-            pane_id: root,
-            agent: Some(Agent::Codex),
-            state: AgentState::Idle,
-            visible_blocker: false,
-            visible_working: false,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
+        agent_state_changed(&mut app, root, AgentState::Working);
+        agent_state_changed(&mut app, root, AgentState::Idle);
 
         let notification_deadline = app
             .state
@@ -1968,26 +1982,18 @@ mod tests {
             Some("__herdr_projects__ · 1")
         );
 
-        for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
-        }
+        test_support::shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[test]
     fn overlay_exit_preserves_focus_changed_before_exit() {
-        let mut workspace = crate::workspace::Workspace::test_new("overlay");
-        let previous_focus = workspace.tabs[0].root_pane;
-        let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].zoomed = true;
+        let (mut workspace, previous_focus, overlay_pane) = overlay_workspace("overlay", false);
         let new_tab = workspace.test_add_tab(Some("new"));
         workspace.switch_tab(new_tab);
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, true);
 
-        app.handle_internal_event(AppEvent::PaneDied {
-            pane_id: overlay_pane,
-            exit_reason: crate::platform::ChildExitReason::Exited,
-        });
+        close_test_pane(&mut app, overlay_pane);
 
         let overlay_tab = &app.state.workspaces[0].tabs[0];
         assert_eq!(app.state.workspaces[0].active_tab, new_tab);
@@ -1999,24 +2005,14 @@ mod tests {
     #[test]
     fn pane_exit_emits_layout_updated_when_tab_survives() {
         let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
+        let (_api_tx, mut app) = test_support::new_app_with_events(event_hub.clone());
         let mut workspace = crate::workspace::Workspace::test_new("pane-exit-layout");
         let dead_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         let tab_id = app.public_tab_id(0, 0).unwrap();
 
-        app.handle_internal_event(AppEvent::PaneDied {
-            pane_id: dead_pane,
-            exit_reason: crate::platform::ChildExitReason::Exited,
-        });
+        close_test_pane(&mut app, dead_pane);
 
         let events = event_hub.events_after(0);
         let pane_exited = events
@@ -2038,20 +2034,8 @@ mod tests {
     #[test]
     fn idle_agent_exit_emits_release_event_without_a_state_change() {
         for agent_name in [None, Some("reviewer")] {
-            let event_hub = crate::api::EventHub::default();
-            let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-            let mut app = App::new(
-                &crate::config::Config::default(),
-                crate::app::AppPolicy::TEST,
-                None,
-                api_rx,
-                event_hub.clone(),
-            );
-            let workspace = crate::workspace::Workspace::test_new("idle-agent-exit");
-            let pane_id = workspace.tabs[0].root_pane;
-            let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-            app.state.workspaces = vec![workspace];
-            app.state.ensure_test_terminals();
+            let (_api_tx, mut app, event_hub, pane_id, terminal_id) =
+                event_workspace("idle-agent-exit");
             let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
             terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
             if let Some(agent_name) = agent_name {
@@ -2088,20 +2072,8 @@ mod tests {
 
     #[test]
     fn process_exit_releases_a_newer_hook_owned_agent() {
-        let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
-        let workspace = crate::workspace::Workspace::test_new("stale-agent-exit");
-        let pane_id = workspace.tabs[0].root_pane;
-        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
+        let (_api_tx, mut app, event_hub, pane_id, terminal_id) =
+            event_workspace("stale-agent-exit");
         let observed_at = std::time::Instant::now();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
@@ -2142,19 +2114,8 @@ mod tests {
     #[test]
     fn overlay_exit_layout_updated_uses_restored_zoom_state() {
         let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
-        let mut workspace = crate::workspace::Workspace::test_new("overlay-layout");
-        let previous_focus = workspace.tabs[0].root_pane;
-        let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(previous_focus);
-        workspace.tabs[0].zoomed = true;
+        let (_api_tx, mut app) = test_support::new_app_with_events(event_hub.clone());
+        let (workspace, previous_focus, overlay_pane) = overlay_workspace("overlay-layout", true);
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
@@ -2171,10 +2132,7 @@ mod tests {
             },
         );
 
-        app.handle_internal_event(AppEvent::PaneDied {
-            pane_id: overlay_pane,
-            exit_reason: crate::platform::ChildExitReason::Exited,
-        });
+        close_test_pane(&mut app, overlay_pane);
 
         let events = event_hub.events_after(0);
         let layout_updated = events
@@ -2190,55 +2148,29 @@ mod tests {
 
     #[test]
     fn overlay_exit_preserves_same_tab_focus_changed_before_exit() {
-        let mut workspace = crate::workspace::Workspace::test_new("overlay");
-        let previous_focus = workspace.tabs[0].root_pane;
-        let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(previous_focus);
-        workspace.tabs[0].zoomed = true;
+        let (workspace, previous_focus, overlay_pane) = overlay_workspace("overlay", true);
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, false);
 
-        app.handle_internal_event(AppEvent::PaneDied {
-            pane_id: overlay_pane,
-            exit_reason: crate::platform::ChildExitReason::Exited,
-        });
+        close_test_pane(&mut app, overlay_pane);
 
-        let tab = &app.state.workspaces[0].tabs[0];
-        assert_eq!(app.state.workspaces[0].active_tab, 0);
-        assert_eq!(tab.layout.focused(), previous_focus);
-        assert!(tab.zoomed);
+        assert_overlay_focus(&app, previous_focus, true);
         assert!(app.overlay_panes.is_empty());
     }
 
     #[test]
     fn overlay_exit_restores_previous_focus_when_overlay_still_focused() {
-        let mut workspace = crate::workspace::Workspace::test_new("overlay");
-        let previous_focus = workspace.tabs[0].root_pane;
-        let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].zoomed = true;
+        let (workspace, previous_focus, overlay_pane) = overlay_workspace("overlay", false);
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, false);
 
-        app.handle_internal_event(AppEvent::PaneDied {
-            pane_id: overlay_pane,
-            exit_reason: crate::platform::ChildExitReason::Exited,
-        });
+        close_test_pane(&mut app, overlay_pane);
 
-        let tab = &app.state.workspaces[0].tabs[0];
-        assert_eq!(app.state.workspaces[0].active_tab, 0);
-        assert_eq!(tab.layout.focused(), previous_focus);
-        assert!(!tab.zoomed);
+        assert_overlay_focus(&app, previous_focus, false);
         assert!(app.overlay_panes.is_empty());
     }
 
     #[tokio::test]
     async fn pane_died_respawns_shell_and_clears_restored_agent_session() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
+        let (_api_tx, mut app) = test_support::new_app();
         let workspace = crate::workspace::Workspace::test_new("restored");
         app.state.default_shell = test_support::exiting_test_command().into();
         let pane_id = workspace.tabs[0].root_pane;
@@ -2277,28 +2209,13 @@ mod tests {
         assert!(terminal.persisted_agent_session.is_none());
         assert!(terminal.agent_name.is_none());
 
-        for (_, runtime) in app.terminal_runtimes.drain() {
-            runtime.shutdown();
-        }
+        test_support::shutdown_test_runtimes(&mut app);
     }
 
     #[cfg(windows)]
     #[test]
     fn windows_powershell_exit_after_agent_process_exit_respawns_shell() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        let workspace = crate::workspace::Workspace::test_new("powershell");
-        let pane_id = workspace.tabs[0].root_pane;
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
-        app.state.default_shell = "powershell.exe".into();
-        app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+        let (_api_tx, mut app, pane_id) = powershell_app();
 
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id,
@@ -2319,20 +2236,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_powershell_exit_without_recent_agent_process_exit_closes_pane() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        let workspace = crate::workspace::Workspace::test_new("powershell");
-        let pane_id = workspace.tabs[0].root_pane;
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
-        app.state.default_shell = "powershell.exe".into();
-        app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+        let (_api_tx, mut app, pane_id) = powershell_app();
 
         assert_eq!(
             app.runtime_exit_action(pane_id),
@@ -2342,19 +2246,9 @@ mod tests {
 
     #[test]
     fn stalled_worktree_runtime_exit_closes_pane() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        let workspace = crate::workspace::Workspace::test_new("worktree");
-        let pane_id = workspace.tabs[0].root_pane;
-        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
+        let (_api_tx, mut app) = test_support::new_app();
+        let (pane_id, terminal_id) =
+            install_workspace(&mut app, crate::workspace::Workspace::test_new("worktree"));
         #[cfg(windows)]
         {
             app.state.default_shell = "powershell.exe".into();
@@ -2402,14 +2296,7 @@ mod tests {
 
     #[test]
     fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
+        let (_api_tx, mut app) = test_support::new_app();
         let mut workspace = crate::workspace::Workspace::test_new("stale");
         workspace.custom_name = None;
         workspace.identity_cwd = "/__herdr_original__".into();
@@ -2424,15 +2311,7 @@ mod tests {
         app.state.mode = Mode::Terminal;
         app.state.toast_config.delivery = crate::config::ToastDelivery::Terminal;
 
-        app.handle_internal_event(AppEvent::StateChanged {
-            pane_id: root,
-            agent: Some(Agent::Codex),
-            state: AgentState::Working,
-            visible_blocker: false,
-            visible_working: false,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
+        agent_state_changed(&mut app, root, AgentState::Working);
         app.state.toast = Some(crate::app::state::ToastNotification {
             kind: ToastKind::Finished,
             title: "codex finished".into(),
@@ -2444,15 +2323,7 @@ mod tests {
             }),
         });
 
-        app.handle_internal_event(AppEvent::StateChanged {
-            pane_id: root,
-            agent: Some(Agent::Codex),
-            state: AgentState::Idle,
-            visible_blocker: false,
-            visible_working: false,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
+        agent_state_changed(&mut app, root, AgentState::Idle);
 
         assert_eq!(
             app.state.toast.as_ref().map(|toast| toast.context.as_str()),

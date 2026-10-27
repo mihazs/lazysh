@@ -1,3 +1,4 @@
+// Modified by lazysh: additive guarded preparation receipt response.
 use serde::{Deserialize, Serialize};
 
 use super::agents::AgentInfo;
@@ -42,6 +43,12 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
+    GuardClaimed {
+        owner: crate::guarded_input::protocol::OwnershipReply,
+    },
+    GuardPrepared {
+        guard: crate::guarded_input::protocol::PreparedReply,
+    },
     Pong {
         version: String,
         protocol: u32,

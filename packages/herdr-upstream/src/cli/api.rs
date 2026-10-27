@@ -1,3 +1,6 @@
+#[path = "../../../herdr-guard/cli.rs"]
+mod guarded_input;
+// Modified by lazysh: explicit guarded requests on bounded private stdin.
 const API_SCHEMA_JSON: &str = include_str!("../../docs/next/api/herdr-api.schema.json");
 
 use crate::api::schema::{EmptyParams, Method, Request};
@@ -11,6 +14,7 @@ pub(super) fn run_api_command(args: &[String]) -> std::io::Result<i32> {
     match subcommand {
         "schema" => api_schema(&args[1..]),
         "snapshot" => api_snapshot(&args[1..]),
+        "guarded" => guarded_input::run(&args[1..]),
         "help" | "--help" | "-h" => {
             print_api_help();
             Ok(0)
@@ -99,6 +103,7 @@ fn schema_summary_text() -> std::io::Result<String> {
 fn print_api_help() {
     eprintln!("herdr api commands:");
     eprintln!("  herdr api snapshot");
+    eprintln!("  herdr api guarded   (private bounded JSON on stdin)");
     eprintln!("  herdr api schema [--json | --output PATH]");
 }
 

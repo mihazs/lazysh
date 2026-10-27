@@ -1,3 +1,4 @@
+// Modified by lazysh: explicit private guarded attachment and exact endpoint commits.
 //! Thin client mode — connects to the server's client socket.
 //!
 //! The client:
@@ -57,7 +58,7 @@ use transport::*;
 
 #[cfg(test)]
 pub(crate) use shell::{ClientShellConfig, ClientShellState};
-pub use startup::{run_client, run_terminal_attach};
+pub use startup::{run_client, run_guarded_client, run_terminal_attach};
 pub use terminal_sessions::{run_terminal_session_control, run_terminal_session_observe};
 
 #[cfg(not(windows))]
@@ -78,6 +79,21 @@ use terminal_setup::{
     effective_mouse_capture, effective_sgr_pixel_mouse, set_mouse_capture,
     setup_direct_attach_terminal, setup_terminal, should_draw_host_cursor, TerminalGuard,
 };
+
+fn bridge_clipboard_trigger(
+    stream: &mut impl ClientMessageSink,
+    target: &crate::protocol::ClientClipboardImageTarget,
+    triggered: bool,
+) -> Result<bool, ClientError> {
+    if triggered {
+        if let Some(image) = crate::platform::read_clipboard_image() {
+            write_remote_image_to_server(stream, target.clone(), image, "clipboard paste")?;
+            return Ok(true);
+        }
+        info!("clipboard image paste trigger received, but local clipboard has no image");
+    }
+    Ok(false)
+}
 
 fn refresh_host_mouse_capture(enabled: bool, sgr_pixels: bool) {
     if let Err(err) = set_mouse_capture(enabled, sgr_pixels) {
@@ -159,15 +175,20 @@ fn run_client_with_mode(
     attach_request: Option<(String, bool)>,
     attach_escape: Option<AttachEscapeState>,
     log_message: &'static str,
+    guarded_attach: bool,
 ) -> io::Result<()> {
-    init_logging();
+    if !guarded_attach {
+        init_logging();
+    }
 
     let loaded_config = crate::config::Config::load();
     // Windows may not have virtual terminal processing enabled until the rendered
     // client initializes the terminal, so defer the host mouse reset to
     // `setup_terminal_with_capabilities` instead of emitting raw escapes early.
     #[cfg(not(windows))]
-    crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    if !guarded_attach {
+        crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    }
     let client_rendered_shell = attach_request.is_none();
     let socket_path = client_socket_path();
     let keybinding_source = client_shell_keybinding_source();
@@ -195,7 +216,13 @@ fn run_client_with_mode(
     let endpoint_keybindings = shell_config
         .as_ref()
         .is_some_and(shell::ClientShellConfig::uses_endpoint_keybindings);
+    let guard_nonce = if guarded_attach {
+        Some(crate::guarded_input::protocol::Secret::generate()?)
+    } else {
+        None
+    };
     let mut loop_config = ClientLoopConfig {
+        guarded_boot: None,
         sound_config: loaded_config.config.ui.sound,
         mouse_scroll_lines,
         redraw_on_focus_gained,
@@ -211,17 +238,20 @@ fn run_client_with_mode(
         shell_config,
     };
 
-    crate::logging::startup("client");
-    info!(path = %socket_path.display(), "{log_message}");
+    if !guarded_attach {
+        crate::logging::startup("client");
+        info!(path = %socket_path.display(), "{log_message}");
+    }
 
-    let endpoint_catalog = if client_rendered_shell && !is_remote_client_process() {
-        endpoint::EndpointCatalog::load().unwrap_or_else(|error| {
-            warn!(%error, "saved SSH endpoint catalog is unavailable");
+    let endpoint_catalog =
+        if client_rendered_shell && !guarded_attach && !is_remote_client_process() {
+            endpoint::EndpointCatalog::load().unwrap_or_else(|error| {
+                warn!(%error, "saved SSH endpoint catalog is unavailable");
+                endpoint::EndpointCatalog::default()
+            })
+        } else {
             endpoint::EndpointCatalog::default()
-        })
-    } else {
-        endpoint::EndpointCatalog::default()
-    };
+        };
     let federated = endpoint_catalog.has_enabled_ssh();
 
     let initial_stream = match crate::ipc::connect_local_stream(&socket_path) {
@@ -248,7 +278,7 @@ fn run_client_with_mode(
     // Healthy Local attaches directly; only an actual failure enters background recovery.
     let initial = initial_stream
         .map(|mut stream| {
-            let handshake = do_handshake(
+            let mut handshake = do_handshake(
                 &mut stream,
                 cols,
                 rows,
@@ -259,7 +289,7 @@ fn run_client_with_mode(
                 endpoint_keybindings,
                 loop_config.mouse_capture_active,
                 true,
-                !is_remote_client_process(),
+                handshake::HandshakeTransport { local: !is_remote_client_process(), guard_nonce: guard_nonce.clone() },
             )
             .map_err(|error| io::Error::other(error.to_string()))?;
             if federated
@@ -282,6 +312,16 @@ fn run_client_with_mode(
                         takeover,
                     },
                 )?;
+            }
+            if guarded_attach {
+                let registered = handshake.guarded.take().ok_or_else(|| io::Error::other("guard_unavailable"))?;
+                loop_config.guarded_boot = Some(registered.boot.clone());
+                crate::guarded_input::startup::AttachTicket { boot: registered.boot, ticket: registered.ticket }
+                    .write_private_frame(&mut io::stdout().lock())?;
+                init_logging();
+                crate::logging::startup("client");
+                #[cfg(not(windows))]
+                crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
             }
             Ok((stream, handshake))
         })
@@ -427,6 +467,8 @@ async fn run_client_loop(
 ) -> Result<(), ClientError> {
     #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
+    let mut guarded_boot = config.guarded_boot.take();
+    let guarded_attachment = guarded_boot.is_some();
     let draw_host_cursor = attach_escape.is_none() && should_draw_host_cursor(config.host_cursor);
     let is_remote_client = is_remote_client_process();
     let local_unavailable = initial.is_none();
@@ -615,6 +657,11 @@ async fn run_client_loop(
     } else {
         endpoint::EndpointRegistry::empty()
     };
+    let guarded_generation = guarded_boot.as_ref().and_then(|_| {
+        write_stream
+            .connection(&endpoint::ClientEndpointId::Local)
+            .map(|connection| connection.generation)
+    });
     let mut supervisors =
         endpoint::EndpointSupervisors::new(&endpoint_catalog.ssh, std::time::Instant::now());
     if federated {
@@ -639,7 +686,11 @@ async fn run_client_loop(
     let mut pending_activation: Option<endpoint::PendingEndpointActivation> = None;
     let mut scheduled_activation = None;
     let mut pending_catalog: Option<Result<Vec<endpoint::SavedSshEndpoint>, String>> = None;
-    if state.shell.is_some() && !is_remote_client && state.attach_escape.is_none() {
+    if !guarded_attachment
+        && state.shell.is_some()
+        && !is_remote_client
+        && state.attach_escape.is_none()
+    {
         catalog_reload::watch_profiles(event_tx.clone(), should_quit.clone());
     }
 
@@ -652,7 +703,7 @@ async fn run_client_loop(
     #[cfg(windows)]
     let mut stdin_open = true;
     while !should_quit.load(Ordering::Acquire) {
-        if pending_activation.is_none() {
+        if !guarded_attachment && pending_activation.is_none() {
             if let Some(reload) = pending_catalog.take() {
                 match reload {
                     Ok(profiles) => {
@@ -741,7 +792,7 @@ async fn run_client_loop(
                 }
             }
         }
-        if let Some(shell) = state.shell.as_ref() {
+        if let Some(shell) = state.shell.as_ref().filter(|_| !guarded_attachment) {
             supervisors.spawn_due(
                 std::time::Instant::now(),
                 endpoint::EndpointConnectOptions {
@@ -798,8 +849,54 @@ async fn run_client_loop(
             shell.tick_popup_pending(now);
         }
 
+        // Keep shell input composition and dispatch in one borrow scope. The
+        // macro captures the loop-owned mutable context without retaining it
+        // between events or extending any endpoint authority lifetime.
+        macro_rules! dispatch_shell_input {
+            ($shell:ident => $handle:expr) => {{
+                let (outcome, frame) = {
+                    let $shell = state.shell.as_mut().expect("shell input mode");
+                    let outcome = $handle;
+                    let frame = outcome
+                        .repaint
+                        .then(|| $shell.compose(state.reported_size.0, state.reported_size.1))
+                        .flatten();
+                    (outcome, frame)
+                };
+                if finish_client_shell_input(
+                    &mut state,
+                    outcome,
+                    frame,
+                    &mut write_stream,
+                    &mut pending_activation,
+                    &mut endpoint_commands,
+                    &mut prefix_input_source,
+                    &mut scheduled_activation,
+                )? {
+                    return Ok(());
+                }
+            }};
+        }
+        macro_rules! complete_ready_activation {
+            ($progress:expr) => {
+                if matches!($progress, Some(endpoint::SurfaceActivationProgress::Ready)) {
+                    if let Some(event) = complete_endpoint_activation(
+                        &mut state,
+                        &mut write_stream,
+                        &mut pending_activation,
+                        &mut endpoint_commands,
+                    )? {
+                        scheduled_activation = Some(event);
+                    }
+                }
+            };
+        }
         match event {
-            ClientLoopEvent::EndpointCatalog(reload) => pending_catalog = Some(reload),
+            ClientLoopEvent::EndpointCatalog(reload) => {
+                if !guarded_attachment {
+                    pending_catalog = Some(reload);
+                }
+            }
             #[cfg(unix)]
             ClientLoopEvent::StdinInput(data) => {
                 let image_bridge_active = endpoint_accepts_local_images(
@@ -820,23 +917,16 @@ async fn run_client_loop(
                         .as_ref()
                         .and_then(|shell| shell.clipboard_image_target());
                     if let Some(target) = image_target.clone() {
-                        if should_bridge_clipboard_image_paste(
-                            &data,
-                            image_bridge_active,
-                            state.remote_image_paste_key,
-                        ) {
-                            if let Some(image) = crate::platform::read_clipboard_image() {
-                                write_remote_image_to_server(
-                                    &mut write_stream,
-                                    target,
-                                    image,
-                                    "clipboard paste",
-                                )?;
-                                continue;
-                            }
-                            info!(
-                                "clipboard image paste trigger received, but local clipboard has no image"
-                            );
+                        if bridge_clipboard_trigger(
+                            &mut write_stream,
+                            &target,
+                            should_bridge_clipboard_image_paste(
+                                &data,
+                                image_bridge_active,
+                                state.remote_image_paste_key,
+                            ),
+                        )? {
+                            continue;
                         }
                         if let Some(image) =
                             read_image_file_from_terminal_drop(&data, image_bridge_active)
@@ -857,27 +947,7 @@ async fn run_client_loop(
                             host_sgr_pixels_active.load(Ordering::Acquire),
                         );
                     }
-                    let (outcome, frame) = {
-                        let shell = state.shell.as_mut().expect("checked shell mode");
-                        let outcome = shell.handle_raw_events(events);
-                        let frame = outcome
-                            .repaint
-                            .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
-                            .flatten();
-                        (outcome, frame)
-                    };
-                    if finish_client_shell_input(
-                        &mut state,
-                        outcome,
-                        frame,
-                        &mut write_stream,
-                        &mut pending_activation,
-                        &mut endpoint_commands,
-                        &mut prefix_input_source,
-                        &mut scheduled_activation,
-                    )? {
-                        return Ok(());
-                    }
+                    dispatch_shell_input!(shell => shell.handle_raw_events(events));
                     continue;
                 }
                 let data = if let Some(attach_escape) = &mut state.attach_escape {
@@ -1049,27 +1119,7 @@ async fn run_client_loop(
             #[cfg(unix)]
             ClientLoopEvent::PixelMouse(data, geometry) => {
                 if state.shell.is_some() {
-                    let (outcome, frame) = {
-                        let shell = state.shell.as_mut().expect("checked shell mode");
-                        let outcome = shell.handle_pixel_mouse(&data, geometry);
-                        let frame = outcome
-                            .repaint
-                            .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
-                            .flatten();
-                        (outcome, frame)
-                    };
-                    if finish_client_shell_input(
-                        &mut state,
-                        outcome,
-                        frame,
-                        &mut write_stream,
-                        &mut pending_activation,
-                        &mut endpoint_commands,
-                        &mut prefix_input_source,
-                        &mut scheduled_activation,
-                    )? {
-                        return Ok(());
-                    }
+                    dispatch_shell_input!(shell => shell.handle_pixel_mouse(&data, geometry));
                     continue;
                 }
                 if let Some(attach_escape) = state.attach_escape.as_mut() {
@@ -1123,23 +1173,16 @@ async fn run_client_loop(
                         .as_ref()
                         .and_then(|shell| shell.clipboard_image_target());
                     if let Some(target) = image_target.clone() {
-                        if should_bridge_clipboard_image_events(
-                            &events,
-                            image_bridge_active,
-                            state.remote_image_paste_key,
-                        ) {
-                            if let Some(image) = crate::platform::read_clipboard_image() {
-                                write_remote_image_to_server(
-                                    &mut write_stream,
-                                    target,
-                                    image,
-                                    "clipboard paste",
-                                )?;
-                                continue;
-                            }
-                            info!(
-                                "clipboard image paste trigger received, but local clipboard has no image"
-                            );
+                        if bridge_clipboard_trigger(
+                            &mut write_stream,
+                            &target,
+                            should_bridge_clipboard_image_events(
+                                &events,
+                                image_bridge_active,
+                                state.remote_image_paste_key,
+                            ),
+                        )? {
+                            continue;
                         }
                         if let Some(image) =
                             read_image_file_from_client_events(&events, image_bridge_active)
@@ -1153,27 +1196,7 @@ async fn run_client_loop(
                             continue;
                         }
                     }
-                    let (outcome, frame) = {
-                        let shell = state.shell.as_mut().expect("checked shell mode");
-                        let outcome = shell.handle_client_events(&events);
-                        let frame = outcome
-                            .repaint
-                            .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
-                            .flatten();
-                        (outcome, frame)
-                    };
-                    if finish_client_shell_input(
-                        &mut state,
-                        outcome,
-                        frame,
-                        &mut write_stream,
-                        &mut pending_activation,
-                        &mut endpoint_commands,
-                        &mut prefix_input_source,
-                        &mut scheduled_activation,
-                    )? {
-                        return Ok(());
-                    }
+                    dispatch_shell_input!(shell => shell.handle_client_events(&events));
                     continue;
                 }
                 // Direct terminal attach is Unix-only; every Windows client uses ClientShell.
@@ -1456,17 +1479,7 @@ async fn run_client_loop(
                             let progress = pending_activation.as_mut().map(|pending| {
                                 pending.receive_surface(&endpoint_id, generation, surface)
                             });
-                            if matches!(progress, Some(endpoint::SurfaceActivationProgress::Ready))
-                            {
-                                if let Some(event) = complete_endpoint_activation(
-                                    &mut state,
-                                    &mut write_stream,
-                                    &mut pending_activation,
-                                    &mut endpoint_commands,
-                                )? {
-                                    scheduled_activation = Some(event);
-                                }
-                            }
+                            complete_ready_activation!(progress);
                             continue;
                         }
                         if !endpoint_active {
@@ -1708,7 +1721,7 @@ async fn run_client_loop(
                         unreachable!("retirements are handled before presentation gating")
                     }
                     ServerMessage::ServerShutdown { reason } => {
-                        if !federated && endpoint_id.is_local() {
+                        if (guarded_attachment || !federated) && endpoint_id.is_local() {
                             return Err(ClientError::ServerShutdown { reason });
                         }
                         write_stream.fail(
@@ -1882,30 +1895,11 @@ async fn run_client_loop(
                                 }
                             }
                         } else {
-                            let (outcome, frame) = {
-                                let shell = state.shell.as_mut().expect("shell endpoint response");
+                            dispatch_shell_input!(shell => {
                                 let mut outcome = shell.replay_mouse_events(replay_mouse);
                                 outcome.repaint |= repaint;
-                                let frame = outcome
-                                    .repaint
-                                    .then(|| {
-                                        shell.compose(state.reported_size.0, state.reported_size.1)
-                                    })
-                                    .flatten();
-                                (outcome, frame)
-                            };
-                            if finish_client_shell_input(
-                                &mut state,
-                                outcome,
-                                frame,
-                                &mut write_stream,
-                                &mut pending_activation,
-                                &mut endpoint_commands,
-                                &mut prefix_input_source,
-                                &mut scheduled_activation,
-                            )? {
-                                return Ok(());
-                            }
+                                outcome
+                            });
                         }
                     }
                     ServerMessage::Clipboard { data } => {
@@ -1993,6 +1987,50 @@ async fn run_client_loop(
                         }
                     }
                     ServerMessage::EndpointControl { kind, data } => {
+                        if kind == crate::guarded_input::protocol::CHALLENGE_KIND {
+                            use crate::guarded_input::protocol::{
+                                decode, ClientChallenge, Commit, COMMIT_KIND,
+                            };
+                            if let Ok(challenge) = decode::<ClientChallenge>(data.as_bytes()) {
+                                let accepted = guarded_boot.as_ref() == Some(&challenge.boot)
+                                    && endpoint_id.is_local()
+                                    && guarded_generation == Some(generation)
+                                    && endpoint_active
+                                    && pending_activation.is_none()
+                                    && state.shell.as_ref().is_some_and(|shell| {
+                                        shell.guarded_input_eligible(
+                                            &endpoint_id,
+                                            generation,
+                                            &challenge.target,
+                                        )
+                                    });
+                                // No await, generic key routing or state callback between
+                                // the eligibility cutoff and this exact endpoint commit.
+                                if guarded_boot.is_some() {
+                                    let commit = Commit {
+                                        boot: challenge.boot,
+                                        challenge: challenge.nonce,
+                                        accepted,
+                                    };
+                                    let sent =
+                                        serde_json::to_string(&commit).ok().is_some_and(|data| {
+                                            write_stream.send_to(
+                                                &endpoint_id,
+                                                &ClientMessage::EndpointControl {
+                                                    kind: COMMIT_KIND.into(),
+                                                    data,
+                                                },
+                                            ) == endpoint::EndpointSendOutcome::Sent
+                                        });
+                                    if !sent {
+                                        guarded_boot.take();
+                                    }
+                                }
+                            } else {
+                                guarded_boot.take();
+                            }
+                            continue;
+                        }
                         if kind == crate::protocol::endpoint::PRESENTATION_EFFECTS_READY_KIND {
                             let progress = pending_activation.as_mut().map(|activation| {
                                 activation.receive_presentation_effects_ready(
@@ -2001,17 +2039,7 @@ async fn run_client_loop(
                                     &data,
                                 )
                             });
-                            if matches!(progress, Some(endpoint::SurfaceActivationProgress::Ready))
-                            {
-                                if let Some(event) = complete_endpoint_activation(
-                                    &mut state,
-                                    &mut write_stream,
-                                    &mut pending_activation,
-                                    &mut endpoint_commands,
-                                )? {
-                                    scheduled_activation = Some(event);
-                                }
-                            }
+                            complete_ready_activation!(progress);
                             continue;
                         }
                         let snapshot = match endpoint::decode_endpoint_control(&kind, &data) {
@@ -2088,19 +2116,7 @@ async fn run_client_loop(
                             &mut write_stream,
                             &mut prefix_input_source,
                         )?;
-                        if matches!(
-                            activation_progress,
-                            Some(endpoint::SurfaceActivationProgress::Ready)
-                        ) {
-                            if let Some(event) = complete_endpoint_activation(
-                                &mut state,
-                                &mut write_stream,
-                                &mut pending_activation,
-                                &mut endpoint_commands,
-                            )? {
-                                scheduled_activation = Some(event);
-                            }
-                        }
+                        complete_ready_activation!(activation_progress);
                         write_stream.mark_ready(&endpoint_id, generation);
                         if endpoint_id.is_local() {
                             if let Some(event) =
@@ -2176,7 +2192,7 @@ async fn run_client_loop(
                         error = %failure.message,
                         "endpoint transport failed"
                     );
-                    if !federated && failure.endpoint_id.is_local() {
+                    if (guarded_attachment || !federated) && failure.endpoint_id.is_local() {
                         return Err(ClientError::ConnectionLost(io::Error::new(
                             failure.kind,
                             failure.message,

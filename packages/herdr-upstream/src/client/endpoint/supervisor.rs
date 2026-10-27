@@ -1,3 +1,4 @@
+// Modified by lazysh: ordinary handshake requests no guarded authority.
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -303,7 +304,10 @@ fn connect_once(
         options.endpoint_keybindings,
         options.mouse_capture,
         false,
-        matches!(target, ConnectTarget::Local(_)),
+        super::super::handshake::HandshakeTransport {
+            local: matches!(target, ConnectTarget::Local(_)),
+            guard_nonce: None,
+        },
     )
     .map_err(handshake_error)?;
     if handshake.encoding != RenderEncoding::SemanticFrame {
