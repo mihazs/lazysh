@@ -45,6 +45,10 @@ Native policy tests, actual OS API round trips, synthetic browser lifecycle test
 and physical hardware acceptance are separate. No simulator/unit result proves
 screen timeout, lock-screen, battery or hardware behavior. Follow the native package
 README for fixture commands and inspect PR/issue evidence for which targets ran.
+The Linux native fixtures include the installed real portal frontend on an owned
+private bus, with an explicitly controlled implementation backend and private XDG
+storage. They distinguish frontend acknowledgement/Request cleanup from a real
+compositor honoring the request; no user desktop service is contacted.
 
 Primary API references: [Android screen-on flag](https://developer.android.com/develop/background-work/background-tasks/awake/screen-on),
 [UIApplication idle timer](https://developer.apple.com/documentation/uikit/uiapplication/isidletimerdisabled),
