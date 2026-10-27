@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.8.0
+
+### Minor Changes
+
+- 0a66ded: Add native guarded Herdr attachment and access-bound terminal input prerequisites without enabling frontend controls.
+
+### Patch Changes
+
+- @lazysh/common@0.8.0
+  - @lazysh/display-idle@0.8.0
+  - @lazysh/et-transport@0.8.0
+  - @lazysh/mosh-transport@0.8.0
+
 ## 0.7.1
 
 ### Patch Changes
