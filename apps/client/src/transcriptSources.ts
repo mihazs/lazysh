@@ -1,4 +1,4 @@
-export const usageAgents: Record<string, string> = {
+export const usageAgents = {
   claude: "Claude Code",
   codex: "Codex",
   pi: "Pi",
@@ -14,12 +14,13 @@ export const usageAgents: Record<string, string> = {
   omo: "OmO Native",
   "devin-atif": "Devin ATIF export",
   "amp-json": "Amp JSON export",
-};
-export const transcriptAgents: Record<string, string> = {
+} as const;
+export const transcriptAgents = {
   ...usageAgents,
   "grok-acp": "Grok ACP records",
   "antigravity-jsonl": "Antigravity step records (explicit file)",
-};
+} as const;
+export type TranscriptAgentId=keyof typeof transcriptAgents;
 export type DiscoveredTranscript = { path: string; name: string; sessionId?: string };
 export function isDiscoveredTranscript(value: unknown, sessionIdLimit: number): value is DiscoveredTranscript {
   if (!value) return false;

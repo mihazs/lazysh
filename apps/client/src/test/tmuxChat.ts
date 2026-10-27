@@ -1,3 +1,4 @@
+import type {TranscriptAgentId} from '../transcriptSources';
 /** Synthetic retained terminal replies; no tmux, provider or remote process runs. */
 export const tmuxChatSource={agent:'claude',path:'/records/世界.jsonl',view:'records',inlineImages:false} as const;
 export const tmuxChatTarget={generation:'12345678-1234-4234-8234-123456789abc',sessionId:'$1',windowId:'@2',paneId:'%3'};
@@ -7,4 +8,13 @@ export const tmuxChatBound={kind:'bound',receipt:tmuxChatReceipt,destination:tmu
 export function tmuxChatReply(_command:string,args:unknown) {
   const action=(args as {action:{kind:string;operation?:number}}).action;
   return Promise.resolve(action.kind==='snapshot'?tmuxChatSnapshot:action.kind==='bind'?tmuxChatBound:action.kind==='release'?{kind:'released'}:{kind:'delivered',nextOperation:action.operation!+1});
+}
+
+export function tmuxChatReaderSource(agent:TranscriptAgentId,selector='database-session') {
+  return agent==='hermes'||agent==='opencode'?{...tmuxChatSource,agent,transcriptSessionId:selector}:{...tmuxChatSource,agent};
+}
+export function tmuxChatReaderPage(agent:TranscriptAgentId) {
+  return {schemaVersion:1,agent,messages:[],nextOffset:0,hasMore:false,
+    ...(['grok-acp','antigravity-jsonl'].includes(agent)?{view:'record_stream'}:{}),
+    ...(agent==='antigravity-jsonl'?{checkpoint:`v1:0:${'a'.repeat(64)}`}:{})};
 }

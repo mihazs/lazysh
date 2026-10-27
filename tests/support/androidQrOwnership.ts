@@ -3,7 +3,7 @@ import {open,readlink,realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {isAbsolute,join} from 'node:path';
 
-const REVIEWED_QR_SHA256='ccb83c409118e384e7e3fbee856a4c282984688a582ef7372fb7eb9980f0e778';
+const REVIEWED_QR_SHA256='d1c857c2360d20c170a3bfde8d65e97f02f79d60167f2e01d4f11afd4632605e';
 export type QrOwnership={check:()=>Promise<void>};
 export type QrOwnershipFiles={read:(path:string,limit:number)=>Promise<Buffer>;uid:(path:string)=>Promise<number>;real:(path:string)=>Promise<string>;link:(path:string)=>Promise<string>};
 export async function readQrMetadata(path:string,limit:number){
@@ -36,7 +36,7 @@ export async function attestQrCamera(env:NodeJS.ProcessEnv,root:string,io=files,
     if(await io.uid(pidFile)!==uid)throw error();
     const raw=(await io.read(pidFile,32)).toString('utf8').trim();
     if(!/^[1-9][0-9]{0,8}$/.test(raw))throw error();
-    const proc=`/proc/${raw}`,asset=await io.real(join(root,'apps/client/src-tauri/fixtures/theme-qr.png'));
+    const proc=`/proc/${raw}`,asset=await io.real(join(root,'apps/client/src-tauri/fixtures/theme-qr-camera-feed.png'));
     const binaries=(await Promise.all(['qemu-system-x86_64','qemu-system-x86_64-headless'].map(name=>io.real(join(sdk,'emulator/qemu/linux-x86_64',name)).catch(()=>undefined)))).filter((value):value is string=>value!==undefined);
     if(!binaries.length)throw error();
     async function identity(){

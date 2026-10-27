@@ -4,12 +4,13 @@ import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/reac
 import type {ComponentProps} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {applyAccessStatus,bindProtectedInvoke,captureAccess} from './access';
+import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
 import {t,uiI18n} from './i18n/core';
-import ChatTerminalInput,{parseTerminalBinding,parseTerminalDelivered,parseTerminalSnapshot,validClaudeTerminalSource,validTerminalDraft} from './ChatTerminalInput';
+import ChatTerminalInput,{parseTerminalBinding,parseTerminalDelivered,parseTerminalSnapshot,validTerminalSource,validTerminalDraft} from './ChatTerminalInput';
 
 import {confirmChatTerminal as confirm} from './test/confirmChatTerminal';
 vi.mock('@tauri-apps/api/core',()=>({invoke:vi.fn()}));
-import {tmuxChatSource as source,tmuxChatTarget as target,tmuxChatReceipt as receipt,tmuxChatSnapshot as snapshot,tmuxChatBound as bound,tmuxChatReply as nativeReply} from './test/tmuxChat';
+import {tmuxChatSource as source,tmuxChatTarget as target,tmuxChatReceipt as receipt,tmuxChatSnapshot as snapshot,tmuxChatBound as bound,tmuxChatReply as nativeReply,tmuxChatReaderSource} from './test/tmuxChat';
 let generation=0;
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,enabled:true,reason:'',locked,generation:String(++generation),...(locked?{}:{nonce:'a'.repeat(64)})});
@@ -63,7 +64,7 @@ it('rejects malformed/forged destination, receipt, source and operation shapes',
   for(const value of [{...bound,receipt:'forged'},{...bound,nextOperation:2},{...bound,destination:{...target,paneId:'%4'}},{...bound,unexpected:0}])expect(()=>parseTerminalBinding(value,target)).toThrow();
   for(const nextOperation of [0,1,3,-1,0x100000000])expect(()=>parseTerminalDelivered({kind:'delivered',nextOperation},1)).toThrow();
   expect(parseTerminalDelivered({kind:'delivered',nextOperation:2},1)).toBe(2);
-  for(const value of [{...source,agent:'codex'},{...source,view:'future'},{...source,path:'bad\npath'},{...source,transcriptSessionId:'invented'}])expect(validClaudeTerminalSource(value)).toBe(false);
+  for(const value of [{...source,agent:'gemini'},{...source,view:'future'},{...source,path:'bad\npath'},{...source,transcriptSessionId:'invented'}])expect(validTerminalSource(value)).toBe(false);
 });
 it('rejects a malformed input acknowledgement as uncertain and never clears or resends the draft',async()=>{
   const {sent}=fixture();await confirm();vi.mocked(invoke).mockResolvedValueOnce({kind:'delivered',nextOperation:9});
@@ -127,4 +128,26 @@ it.each([
     await uiI18n.changeLanguage(locale);fixture();await confirm();fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByText(sent);
     fireEvent.click(screen.getByRole('button',{name:t('chatTerminalStop')}));await screen.findByText(stop);
   } finally {cleanup();await uiI18n.changeLanguage('en');}
+});
+
+it.each(Object.keys(transcriptAgents))('admits explicit Records context for the supported %s adapter',agent=>{
+  const value={...source,agent,...(['hermes','opencode'].includes(agent)?{transcriptSessionId:'literal-session'}:{})};
+  expect(validTerminalSource(value)).toBe(true);
+});
+
+it.each(Object.keys(transcriptAgents) as TranscriptAgentId[])('enforces the native-reader option matrix for %s',agent=>{
+  for(const view of ['records','conversation'])for(const inlineImages of [false,true]){
+    const context={...tmuxChatReaderSource(agent),view,inlineImages};
+    const expected=(view==='records'||['claude','grok-acp'].includes(agent)) && (!inlineImages||agent==='claude'||(view==='records'&&['codex','grok-acp'].includes(agent)));
+    expect(validTerminalSource(context)).toBe(expected);
+  }
+});
+it('rejects unknown agents and extra selector fields, retaining strict UTF-8 database selectors',()=>{
+  for(const agent of ['gemini','qwen','future','constructor','__proto__','qoder_ide'])expect(validTerminalSource({...source,agent})).toBe(false);
+  for(const transcriptSessionId of [null,undefined,'','invented'])expect(validTerminalSource({...source,transcriptSessionId})).toBe(false);
+  for(const agent of ['hermes','opencode'] as const){
+    expect(validTerminalSource({...source,agent})).toBe(false);
+    for(const transcriptSessionId of [null,undefined,'','😀'.repeat(65),'a'.repeat(257),'id\n','id\u0085','\ud800'])expect(validTerminalSource({...source,agent,transcriptSessionId})).toBe(false);
+    for(const transcriptSessionId of ['  literal $t(id) 界  ','😀'.repeat(64),'a'.repeat(256)])expect(validTerminalSource({...source,agent,transcriptSessionId})).toBe(true);
+  }
 });

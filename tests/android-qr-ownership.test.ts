@@ -5,8 +5,9 @@ import {mkdtemp,open,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
-const image=Buffer.from(await Bun.file(new URL('../apps/client/src-tauri/fixtures/theme-qr.png',import.meta.url)).arrayBuffer());
-const asset='/owned/apps/client/src-tauri/fixtures/theme-qr.png';
+const image=Buffer.from(await Bun.file(new URL('../apps/client/src-tauri/fixtures/theme-qr-camera-feed.png',import.meta.url)).arrayBuffer());
+const decoderControl=Buffer.from(await Bun.file(new URL('../apps/client/src-tauri/fixtures/theme-qr.png',import.meta.url)).arrayBuffer());
+const asset='/owned/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png';
 const binary='/sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64';
 const env={ANDROID_SERIAL:'emulator-5580',ANDROID_HOME:'/sdk',LAZYSH_ANDROID_QR_EMULATOR_PID_FILE:'/owned.pid'};
 function fixture(){
@@ -49,6 +50,8 @@ test.each([
   ['dead process',(f:ReturnType<typeof fixture>)=>{f.state.status='Z';}],
   ['malformed PID',(f:ReturnType<typeof fixture>)=>{f.state.pid='../private';}],
   ['changed image bytes',(f:ReturnType<typeof fixture>)=>{f.state.image=Buffer.from('unreviewed');}],
+  ['original decoder bytes are not the camera feed',(f:ReturnType<typeof fixture>)=>{f.state.image=decoderControl;}],
+  ['original decoder path is not the camera feed',(f:ReturnType<typeof fixture>)=>{f.state.args[8]='imagefile:/owned/apps/client/src-tauri/fixtures/theme-qr.png';}],
 ] as const)('rejects %s with fixed nonsecret error',async(_name,change)=>{
   const f=fixture();change(f);
   await expect(attestQrCamera(env,'/owned',f.io,1000)).rejects.toThrow('Owned QR imagefile camera attestation failed');

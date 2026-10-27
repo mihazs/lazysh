@@ -223,7 +223,7 @@ jobs:
           ram-size: 3072M
           emulator-boot-timeout: 300
           disable-linux-hw-accel: false
-          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-qr-emulator.pid
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-qr-emulator.pid
           pre-emulator-launch-script: $ANDROID_HOME/emulator/emulator -accel-check
           # The action runs each newline in a separate shell; fold this into one
           # invocation so cleanup runs before the action terminates the emulator.

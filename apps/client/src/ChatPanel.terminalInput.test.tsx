@@ -3,9 +3,10 @@ import {beforeEach,afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import ChatPanel from './ChatPanel';
+import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
 import {t} from './i18n/core';
 import {accessSnapshot,applyAccessStatus} from './access';
-import {tmuxChatReply,tmuxChatReceipt,tmuxChatSource} from './test/tmuxChat';
+import {tmuxChatReply,tmuxChatReceipt,tmuxChatSource,tmuxChatReaderSource,tmuxChatReaderPage,tmuxChatTarget} from './test/tmuxChat';
 import {confirmChatTerminal as confirmed} from './test/confirmChatTerminal';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCore(original));
 const page={schemaVersion:1,agent:'claude',messages:[],nextOffset:10,hasMore:false};
@@ -73,10 +74,40 @@ it('source option changes retire future authority, while a previously admitted S
   await act(async()=>{finish({kind:'delivered',nextOperation:2});});
   expect(draft).toHaveProperty('value','already submitted intent');expect(screen.queryByText(t('chatTerminalSent'))).toBeNull();expect(actions().filter(action=>action.kind==='input')).toHaveLength(1);
 });
-it.each(['claude','codex'] as const)('leaves manual %s composers without a native tmux eligibility/source match unchanged',async agent=>{
-  vi.mocked(invoke).mockImplementation((command,args)=>command==='tmux_chat'?tmuxChatReply(command,args):Promise.resolve({...page,agent}));
-  render(<ChatPanel sessionId="ssh-manual" terminalInput={agent==='codex'?capability:undefined}/>);
-  if(agent==='codex')fireEvent.change(screen.getByLabelText('Agent'),{target:{value:agent}});
-  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/manual.jsonl'}});fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
-  await screen.findByRole('button',{name:t('chatRefreshMessages')});expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();expect(actions()).toEqual([]);
+async function openedReader(agent:TranscriptAgentId,selector='database-session',eligible=true){
+  const source=tmuxChatReaderSource(agent,selector);vi.mocked(invoke).mockImplementation((command,args)=>command==='tmux_chat'?tmuxChatReply(command,args):Promise.resolve(tmuxChatReaderPage(agent)));
+  const view=render(<ChatPanel sessionId="all-reader-display" terminalInput={eligible?capability:undefined}/>);
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:agent}});fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:source.path}});
+  if('transcriptSessionId' in source)fireEvent.change(screen.getByLabelText('Transcript session ID'),{target:{value:source.transcriptSessionId}});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));await screen.findByRole('button',{name:t('chatRefreshMessages')});
+  return {...view,source};
+}
+it.each(Object.keys(transcriptAgents) as TranscriptAgentId[])('offers explicit terminal confirmation for a successfully read %s source without passive destination IPC',async agent=>{
+  const {source}=await openedReader(agent);expect(screen.getByRole('button',{name:t('chatTerminalChoose')})).toBeTruthy();expect(actions()).toEqual([]);
+  await confirmed();expect(actions().find(action=>action.kind==='bind')).toEqual({kind:'bind',destination:expect.anything(),source});
+  fireEvent.change(screen.getByLabelText('Draft for this terminal'),{target:{value:'same literal 界'}});fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByText(t('chatTerminalSent'));
+  expect(actions().filter(action=>action.kind==='input')).toEqual([{kind:'input',receipt:tmuxChatReceipt,source,operation:1,input:{kind:'send',text:'same literal 界'}}]);
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalStop')}));await screen.findByText(t('chatTerminalStopRequested'));
+  expect(actions().filter(action=>action.kind==='input').at(-1)).toEqual({kind:'input',receipt:tmuxChatReceipt,source,operation:2,input:{kind:'request_stop'}});
+});
+it.each(['hermes','opencode'] as const)('retires %s selector authority on same-path edits and requires a new confirmation after A→B→A',async agent=>{
+  await openedReader(agent,'session-A');await confirmed();const selector=screen.getByLabelText('Transcript session ID');
+  fireEvent.change(selector,{target:{value:'session-B'}});expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();
+  expect(actions()).toContainEqual({kind:'release',receipt:tmuxChatReceipt});fireEvent.change(selector,{target:{value:'session-A'}});
+  expect(screen.getByRole('button',{name:t('chatTerminalChoose')})).toBeTruthy();expect(screen.queryByRole('button',{name:t('chatTerminalSend')})).toBeNull();expect(actions().filter(action=>action.kind==='bind')).toHaveLength(1);
+});
+it.each((['hermes','opencode'] as const).flatMap(agent=>(['bind','input'] as const).map(kind=>({agent,kind}))))('drops a held $agent $kind completion after selector A→B→A without rebind or draft loss',async({agent,kind})=>{
+  await openedReader(agent,'session-A');let finish!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementation((command,args)=>command==='tmux_chat'&&(args as {action:{kind:string}}).action.kind===kind?new Promise(resolve=>{finish=resolve;}):tmuxChatReply(command,args));
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalConfirm')}));
+  const draft=screen.getByLabelText('Draft for this terminal');fireEvent.change(draft,{target:{value:'retained 界 draft'}});
+  if(kind==='input')fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalSend')}));
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));const selector=screen.getByLabelText('Transcript session ID');
+  fireEvent.change(selector,{target:{value:'session-B'}});fireEvent.change(selector,{target:{value:'session-A'}});
+  await act(async()=>finish(kind==='bind'?{kind:'bound',receipt:tmuxChatReceipt,destination:tmuxChatTarget,nextOperation:1}:{kind:'delivered',nextOperation:2}));
+  expect(draft).toHaveProperty('value','retained 界 draft');expect(screen.queryByText(t('chatTerminalSent'))).toBeNull();expect(screen.queryByRole('button',{name:t('chatTerminalSend')})).toBeNull();
+  expect(actions().filter(action=>action.kind==='bind')).toHaveLength(1);expect(actions()).toContainEqual({kind:'release',receipt:tmuxChatReceipt});
+});
+it.each(['claude','codex','hermes'] as const)('keeps %s Stage-only when native tmux capability is absent',async agent=>{
+  await openedReader(agent,'session-A',false);expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();expect(actions()).toEqual([]);
 });
