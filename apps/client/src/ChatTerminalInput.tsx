@@ -33,7 +33,7 @@ export function validClaudeTerminalSource(value:unknown):value is ClaudeTerminal
 }
 export function validTerminalDraft(text:string):boolean {
   // Validate UTF-16 before TextEncoder can replace an isolated surrogate.
-  return !!text && wellFormed(text) && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(text) && utf8(text)<=4096;
+  return !!text && wellFormed(text) && !/[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]/.test(text) && utf8(text)<=4096;
 }
 export function parseTerminalSnapshot(value:unknown):Snapshot {
   const row=record(value,['kind','destination','sessionName','windowName','paneIndex']);
@@ -71,7 +71,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   const [snapshot,setSnapshot]=useState<Snapshot>();
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState<Problem>();
-  const [uncertain,setUncertain]=useState(false);
+  const [uncertain,setUncertain]=useState<''|'keys'|'paste'>('');
   const [status,setStatus]=useState<''|'chatTerminalSent'|'chatTerminalStopRequested'>('');
   const sourceValid=validClaudeTerminalSource(source);
   const current=(original:string)=>alive.current && latest.current===original && access.current();
@@ -87,20 +87,20 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     if(previous)release(previous.receipt);
   }
   useEffect(()=>{
-    alive.current=true;setBinding(undefined);setSnapshot(undefined);setError(undefined);setUncertain(false);setStatus('');setBusy(false);
+    alive.current=true;setBinding(undefined);setSnapshot(undefined);setError(undefined);setUncertain('');setStatus('');setBusy(false);
     return()=>{alive.current=false;retire();};
   },[context,access,invoke,accessState.epoch]);
-  function failed(error:unknown,original:string,afterInput=false) {
+  function failed(error:unknown,original:string,afterInput=false,pasted=false) {
     if(current(original)) {
       retire();
       setBinding(undefined);setSnapshot(undefined);setStatus('');
-      setUncertain(afterInput && !(error instanceof InputFailure && ['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy'].includes(error.key)));
+      setUncertain(afterInput && !(error instanceof InputFailure && ['chatTerminalInvalid','chatTerminalStale','chatTerminalBusy'].includes(error.key)) ? pasted?'paste':'keys' : '');
       setError(error instanceof InputFailure?{key:error.key}:{raw:errorMessage(error)});
     }
   }
   async function choose() {
     if(flight.current || !sourceValid || !access.current())return;
-    const original=context;flight.current=true;retire();setBinding(undefined);setSnapshot(undefined);setError(undefined);setUncertain(false);setStatus('');setBusy(true);
+    const original=context;flight.current=true;retire();setBinding(undefined);setSnapshot(undefined);setError(undefined);setUncertain('');setStatus('');setBusy(true);
     try {
       const value=parseTerminalSnapshot(await call({kind:'snapshot'}));
       if(current(original))setSnapshot(value);
@@ -133,11 +133,12 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       else {const next=Object.freeze({...permission,nextOperation});owned.current=next;setBinding(next);}
       setStatus(kind==='send'?'chatTerminalSent':'chatTerminalStopRequested');
       if(kind==='send')onSent(text,revision);
-    } catch(error) {failed(error,original,true);}
+    } catch(error) {failed(error,original,true,kind==='send' && /[\n\t]/.test(text));}
     finally {flight.current=false;if(current(original))setBusy(false);}
   }
   return <section aria-label={t('chatTerminalTitle')} style={{overflowWrap:'anywhere'}}>
     <h4>{t('chatTerminalTitle')}</h4><p>{t('chatTerminalExplanation')}</p>
+    <p>{t('chatTerminalPasteNote')}</p>
     <button type="button" disabled={busy || !sourceValid || !access.current()} onClick={()=>void choose()}>{t('chatTerminalChoose')}</button>
     {snapshot && <div>
       <dl><dt>{t('chatTerminalHost')}</dt><dd>{labels.hostLabel}</dd><dt>{t('chatTerminalTab')}</dt><dd>{labels.terminalLabel}</dd><dt>{t('chatTerminalSession')}</dt><dd>{snapshot.sessionName}</dd><dt>{t('chatTerminalWindow')}</dt><dd>{snapshot.windowName}</dd><dt>{t('chatTerminalPane')}</dt><dd>{formatNumber(snapshot.paneIndex)}</dd></dl>
@@ -153,7 +154,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
     {binding && !validTerminalDraft(draft) && <p>{t('chatTerminalInvalidDraft')}</p>}
     {busy && <p role="status">{t('chatTerminalPending')}</p>}
     {status && <p role="status">{t(status)}</p>}
-    {error && <div><p role="alert">{'key' in error?t(error.key):error.raw}</p><p>{t(uncertain?'chatTerminalUncertain':'chatTerminalFallback')}</p></div>}
+    {error && <div><p role="alert">{'key' in error?t(error.key):error.raw}</p><p>{t(uncertain==='paste'?'chatTerminalPasteUncertain':uncertain?'chatTerminalUncertain':'chatTerminalFallback')}</p></div>}
     <p>{t('chatTerminalCloseHint')}</p>
   </section>;
 }

@@ -8,7 +8,7 @@ export type QrCommand=(stage:string,program:string,args:string[],milliseconds:nu
 const execute:QrCommand=(stage,program,args,milliseconds)=>new OwnedProcess(program,args).finish(stage,milliseconds);
 export async function androidQrAcceptance(env=process.env,run:QrCommand=execute,root=resolve(import.meta.dir,'../..'),platform=process.platform,attest:(env:NodeJS.ProcessEnv,root:string)=>Promise<QrOwnership>=attestQrCamera,capture:{nonce?:string;exportFrame?:QrFrameExport;now?:()=>number}={}) {
   const now=capture.now??(()=>performance.now()),deadline=now()+610_000;
-  const teardown=2_000,margin=1_000,permissionReserve=10_000+teardown,removalReserve=3_000+teardown;
+  const teardown=2_000,margin=1_000,permissionReserve=10_000+teardown,removalReserve=3_000+teardown,uninstallReserve=2*(5_000+teardown);
   const remaining=()=>Math.max(0,Math.floor(deadline-now()));
   const allowance=(requested:number,reserve=0,slack=margin)=>Math.max(0,Math.min(requested,remaining()-reserve-teardown-slack));
   const unavailable=()=>new Error('Owned QR overall budget unavailable');
@@ -17,9 +17,9 @@ export async function androidQrAcceptance(env=process.env,run:QrCommand=execute,
   if(!serial||!/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
   const nonce=capture.nonce??randomBytes(16).toString('hex'),relative=qrFrameRelativePath(nonce);
   const ownership=await attest(env,root);
-  async function ownedRun(stage:string,program:string,args:string[],requested:number,reserve=0,full=true){
+  async function ownedRun(stage:string,program:string,args:string[],requested:number,reserve=0,full=true,slack=margin){
     await ownership.check();
-    const wait=allowance(requested,reserve);
+    const wait=allowance(requested,reserve,slack);
     if(wait<1||(full&&wait!==requested))throw unavailable();
     return run(stage,program,args,wait);
   }
@@ -36,13 +36,13 @@ export async function androidQrAcceptance(env=process.env,run:QrCommand=execute,
     await ownership.check();
     // Preserve the full acceptance wait and required revoke/teardown. Diagnostics
     // may be disabled before native dispatch; they never borrow these reserves.
-    if(allowance(540_000,permissionReserve)<540_000)throw unavailable();
-    captureEnabled=allowance(540_000,permissionReserve+removalReserve)===540_000;
+    if(allowance(540_000,permissionReserve+uninstallReserve)<540_000)throw unavailable();
+    captureEnabled=allowance(540_000,permissionReserve+removalReserve+uninstallReserve)===540_000;
     if(!captureEnabled)console.error('Owned QR frame capture disabled by overall budget');
     await run('actual Android QR camera UI instrumentation',join(android,'gradlew'),[
     '-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
     '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-    '-PlazyshQrCameraAcceptance=true',
+    '-PlazyshQrCameraAcceptance=true','-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',
     '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview',
     `-Pandroid.testInstrumentationRunnerArguments.lazyshQrFrameNonce=${nonce}`,
     `-Pandroid.testInstrumentationRunnerArguments.lazyshQrFrameEnabled=${captureEnabled}`,
@@ -53,7 +53,7 @@ export async function androidQrAcceptance(env=process.env,run:QrCommand=execute,
     if(captureEnabled){
       await cleanup(async()=>{
         await ownership.check();
-        const wait=allowance(3_000,permissionReserve+removalReserve);
+        const wait=allowance(3_000,permissionReserve+removalReserve+uninstallReserve);
         if(wait<1){console.error('Owned QR frame export skipped to reserve cleanup budget');return;}
         let diagnostic:Readonly<QrFrameFailure>|undefined;
         try{await (capture.exportFrame??exportQrFrame)(adb,['-s',serial,'exec-out','run-as','app.lazysh.client','cat',relative],join(android,'app/build/outputs/androidTest-results/qr-camera',`owned-frame-${nonce}.png`),wait,value=>{diagnostic=qrFrameFailureMetadata(value);});}
@@ -64,15 +64,18 @@ export async function androidQrAcceptance(env=process.env,run:QrCommand=execute,
           }catch{/* Optional reporter output cannot replace the original acceptance result. */}
         }
       });
-      await cleanup(()=>ownedRun('owned QR frame cleanup',adb,['-s',serial,'exec-out','run-as','app.lazysh.client','rm','-f',relative],3_000,permissionReserve,false));
+      await cleanup(()=>ownedRun('owned QR frame cleanup',adb,['-s',serial,'exec-out','run-as','app.lazysh.client','rm','-f',relative],3_000,permissionReserve+uninstallReserve,false));
     }
     await cleanup(async()=>{
       await ownership.check();
       // Final required cleanup may use the scheduling margin reserved for its
       // ownership read, but never the two-second process teardown allocation.
-      const wait=allowance(10_000,0,0);if(wait<1)throw unavailable();
+      const wait=allowance(10_000,uninstallReserve,0);if(wait<1)throw unavailable();
       await run('owned QR permission cleanup',adb,['-s',serial,'shell','pm','revoke','app.lazysh.client',...permission],wait);
     });
+    // Restore AGP's prior cleanup only after the private frame and permission work.
+    await cleanup(()=>ownedRun('owned QR test APK cleanup',adb,['-s',serial,'uninstall','app.lazysh.client.test'],5_000,5_000+teardown,false,0));
+    await cleanup(()=>ownedRun('owned QR app APK cleanup',adb,['-s',serial,'uninstall','app.lazysh.client'],5_000,0,false,0));
     if(cleanupError){if(!failed)throw cleanupError;console.error('Owned QR cleanup failed after original failure');}
   }
 }

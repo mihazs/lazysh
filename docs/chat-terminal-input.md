@@ -33,11 +33,40 @@ keys. Navigation retires the receipt. Known local/negative-marker rejections
 preserve navigation; interrupted writes, timeout, EOF and malformed framing retire
 the retained actor instead of reconnecting to a possibly different server.
 
-Send accepts a nonempty single line of at most 4,096 UTF-8 bytes. C0/C1 controls,
-Unicode line/paragraph separators and malformed Unicode are rejected. Text is
-encoded into literal hex byte arguments, followed by one carriage-return Enter
-byte. Request stop sends the fixed Escape key. Multiline, control-character and
-oversized drafts retain Stage; richer paste support is tracked in [#253](https://github.com/mihazs/lazysh/issues/253).
+Send accepts nonempty text of at most 4,096 UTF-8 bytes, including LF and TAB.
+CR, other C0 controls, DEL/C1, Unicode line/paragraph separators and malformed
+Unicode are rejected. Accepted bytes are preserved without newline normalization.
+Ordinary single-line text retains literal hexadecimal byte arguments followed
+by one carriage-return Enter byte. Request stop still sends fixed Escape.
+Unsupported and oversized drafts retain Stage.
+
+Text containing LF or TAB instead uses native tmux `paste-buffer -p -r -d`,
+followed by one fixed CR outside any paste brackets. `-r` preserves LF; this
+differs intentionally from ordinary xterm paste's LF/CRLF-to-CR normalization.
+`-p` brackets only when the terminal program enables bracketed paste. Otherwise
+LF/TAB are ordinary terminal input and may cause intermediate actions. tmux 3.4
+exposes no public format guard for that mode. This is not a guaranteed atomic
+agent message or provider identity proof. The existing explicit destination
+confirmation and visible explanation apply; Stage remains the default.
+
+Every payload byte is encoded as fixed octal inside a quoted argument in one
+generated ASCII control line, capped at 32 KiB before dispatch. The original
+context guard precedes creation of a UUID named buffer, then runs again before
+paste and before CR because buffer hooks can change context. A context change
+after paste withholds CR and retires the actor as uncertain; it cannot recall
+text already delivered. Before-paste context rejection deletes only the owned
+buffer and delivers no text.
+
+Named paste buffers are server-global, visible to other clients/hooks, and are
+not private storage. No clipboard flag, files, buffer-content query or payload
+logging is used. Normal paste deletes its buffer; bounded exact-name cleanup is
+limited to a demonstrably synchronized original stream. A command error may skip
+deletion, and cancellation/EOF/crash may leave a buffer. The actor still retires
+on `%error` or uncertain framing instead of resynchronizing for cleanup. Buffer
+freeing does not promise zeroization. The UI warns when delivery or cleanup is
+unknown, retains the draft and never retries automatically. No stale warning is
+published after source/access revocation; the static explanation also describes
+possible residue after interruption.
 
 An explicit input intent is frozen when native queue admission accepts it. A
 later view/source close or queued `release` retires future authority but does not
@@ -67,6 +96,9 @@ cargo test --locked -p lazysh --lib tmux_jump::chat::tests::
 cargo test --locked -p lazysh --lib \
   ssh::tmux_jump_fixture::real_tmux_chat_original_display_namespace_bytes_and_retirement \
   -- --ignored --exact
+cargo test --locked -p lazysh --lib \
+  ssh::tmux_jump_fixture::multiline::real_tmux_multiline_modes_hooks_errors_and_lost_ack \
+  -- --ignored --exact
 ```
 
 The existing owned fixture uses temporary loopback SSH credentials and isolated
@@ -77,9 +109,18 @@ after preflight and before dequeue. Its workload is synthetic `cat`, not Claude.
 These checks are not automatically run merely because the ignored case exists.
 Actual provider, native WebView, GUI and physical-device acceptance are separate.
 
-Executed on owned Linux fixtures: the new SSH/tmux case and five existing
-retained-navigation cases passed after shared framing/fixture extraction. The
-final native library regression passed 274 cases with 17 ignored, including the
+The multiline fixture additionally captures exact LF/TAB and Unicode bytes with
+paste mode enabled, disabled and changed at dispatch; it covers the full 4 KiB
+boundary, leading-option and parser metacharacters, both hook-driven context
+changes, pane exit, buffer error, original-lease revocation and a lost waiter.
+It checks unrelated-buffer preservation and no replay. These remain owned
+synthetic SSH/tmux tests, not a guarantee that a particular program consumes the
+input or that a disconnected server cleans up a buffer.
+
+Historical evidence for the original single-line slice in #256, released with
+0.4.0: on owned Linux fixtures, its SSH/tmux case and five existing
+retained-navigation cases passed after shared framing/fixture extraction. That
+original native library regression passed 274 cases with 17 ignored, including the
 nine tmux module cases. Restoring the earlier
 inherited-context guard made the held-preflight move case fail; omitting queued
 cancellation cleanup made the abandoned-receipt case fail. Restored production
@@ -96,9 +137,19 @@ behavior or timeout changed for that failure. These results establish synthetic
 terminal delivery and ownership, not actual Claude/provider, Windows/macOS,
 mobile WebView or physical-device acceptance.
 
+Separate #253 multiline implementation checkpoint on owned Linux: the native
+library suite passed 277 cases with 18 ignored. The 12-scenario multiline SSH
+oracle and original single-line SSH oracle were each executed separately and
+passed. Frontend checks passed 1,010 tests across 93 files, TypeScript and Vite;
+six desktop/phone browser cases used a synthetic native bridge. These results
+do not establish actual provider, packaged native WebView or physical-device
+behavior, and do not guarantee cleanup after transport loss.
+
 Primary contracts: [tmux 3.4 manual](https://github.com/tmux/tmux/blob/3.4/tmux.1),
 [format contexts](https://github.com/tmux/tmux/blob/3.4/format.c),
-[literal key injection](https://github.com/tmux/tmux/blob/3.4/cmd-send-keys.c), and
+[literal key injection](https://github.com/tmux/tmux/blob/3.4/cmd-send-keys.c),
+[native paste](https://github.com/tmux/tmux/blob/3.4/cmd-paste-buffer.c),
+[argument parsing](https://github.com/tmux/tmux/blob/3.4/cmd-parse.y), and
 [Moshi Chat documentation](https://getmoshi.app/docs/chat-view). Moshi's published
 behavior describes same-terminal prompts and an Escape stop request; it does not
 provide an atomic foreground-process guarantee.

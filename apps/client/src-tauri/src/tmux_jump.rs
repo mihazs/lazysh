@@ -311,6 +311,14 @@ impl Control {
             ssh::quote(&format!("{marker}:ok")),
             ssh::quote(&format!("{marker}:gone"))
         );
+        self.marked_dispatch(&command, marker, budget).await
+    }
+    async fn marked_dispatch(
+        &mut self,
+        command: &str,
+        marker: &str,
+        budget: &mut usize,
+    ) -> Result<bool> {
         self.channel.data(format!("{command}\n").as_bytes()).await?;
         for _ in 0..8 {
             let rows = self.block(budget).await?;
