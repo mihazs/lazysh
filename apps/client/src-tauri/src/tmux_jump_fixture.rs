@@ -1501,6 +1501,22 @@ async fn chat_fixture_bytes(path: &std::path::Path, expected: &[u8]) {
     .await
     .expect("exact owned terminal input bytes");
 }
+async fn chat_fixture_workload_unchanged(
+    servers: &NamedServers<'_>,
+    others: &[std::path::PathBuf],
+    process: &str,
+) {
+    for path in others {
+        assert!(tokio::fs::read(path).await.unwrap().is_empty());
+    }
+    assert_eq!(
+        servers.direct(
+            "chat-a",
+            &["display-message", "-p", "-t", "%0", "#{pane_pid}"]
+        ),
+        process
+    );
+}
 async fn chat_fixture_rejected(
     app: &tauri::App<tauri::test::MockRuntime>,
     lease: &AccessLease,
@@ -1635,16 +1651,7 @@ async fn chat_input_probe() {
     assert_eq!(stopped, json!({"kind":"delivered","nextOperation":3}));
     let mut expected = format!("{text}\r\u{1b}").into_bytes();
     chat_fixture_bytes(&outputs[0], &expected).await;
-    for path in &outputs[1..] {
-        assert!(tokio::fs::read(path).await.unwrap().is_empty());
-    }
-    assert_eq!(
-        servers.direct(
-            "chat-a",
-            &["display-message", "-p", "-t", "%0", "#{pane_pid}"]
-        ),
-        original_process
-    );
+    chat_fixture_workload_unchanged(&servers, &outputs[1..], &original_process).await;
     assert_eq!(
         servers
             .direct("chat-a", &["list-panes", "-a", "-F", "#{pane_id}"])
@@ -1664,6 +1671,32 @@ async fn chat_input_probe() {
     .await
     .is_err());
     assert_eq!(tokio::fs::read(&outputs[0]).await.unwrap(), expected);
+    // Each reader context delivers only to this same explicitly confirmed
+    // synthetic workload. These labels never prove a live provider identity.
+    eprintln!("tmux chat stage: all reader sources and database selectors");
+    for &agent in crate::tmux_jump::chat::READER_FIXTURE_IDS {
+        let mut context =
+            json!({"agent":agent,"path":"/owned/shared.db","view":"records","inlineImages":false});
+        if matches!(agent, "hermes" | "opencode") {
+            context["transcriptSessionId"] = "literal-session-A".into();
+        }
+        let mut current = chat_fixture_bind(&app, &lease, &child, &context).await;
+        assert_eq!(current["destination"]["paneId"], "%0");
+        if matches!(agent, "hermes" | "opencode") {
+            let mut different = context.clone();
+            different["transcriptSessionId"] = "literal-session-B".into();
+            chat_fixture_rejected(&app, &lease, &child, json!({"kind":"input","receipt":current["receipt"],"source":different,"operation":1,"input":{"kind":"send","text":"forbidden-selector"}}), &outputs[0], &expected).await;
+            current = chat_fixture_bind(&app, &lease, &child, &context).await;
+        }
+        let literal = format!("{agent}: literal 界");
+        let delivered = chat_fixture_call(&app, &lease, &child, json!({"kind":"input","receipt":current["receipt"],"source":context,"operation":1,"input":{"kind":"send","text":literal}})).await.unwrap();
+        assert_eq!(delivered, json!({"kind":"delivered","nextOperation":2}));
+        let stopped = chat_fixture_call(&app, &lease, &child, json!({"kind":"input","receipt":current["receipt"],"source":context,"operation":2,"input":{"kind":"request_stop"}})).await.unwrap();
+        assert_eq!(stopped, json!({"kind":"delivered","nextOperation":3}));
+        expected.extend_from_slice(format!("{literal}\r\u{1b}").as_bytes());
+        chat_fixture_bytes(&outputs[0], &expected).await;
+    }
+    chat_fixture_workload_unchanged(&servers, &outputs[1..], &original_process).await;
     disconnect(app.state(), child).await.unwrap();
     // No automatic bind after retirement. Reattach here exercises a fresh
     // native display/client rather than accidentally inheriting old authority.

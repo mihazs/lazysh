@@ -10,6 +10,12 @@ pub struct Source {
     path: String,
     view: View,
     inline_images: bool,
+    #[serde(
+        default,
+        deserialize_with = "present_selector",
+        skip_serializing_if = "Option::is_none"
+    )]
+    transcript_session_id: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -21,10 +27,51 @@ enum View {
 #[serde(rename_all = "snake_case")]
 enum Agent {
     Claude,
+    Codex,
+    Pi,
+    Omp,
+    Hermes,
+    Opencode,
+    Copilot,
+    #[serde(rename = "qoder-ide")]
+    QoderIde,
+    Kimi,
+    Jcode,
+    Droid,
+    Cursor,
+    Omo,
+    #[serde(rename = "devin-atif")]
+    DevinAtif,
+    #[serde(rename = "amp-json")]
+    AmpJson,
+    #[serde(rename = "grok-acp")]
+    GrokAcp,
+    #[serde(rename = "antigravity-jsonl")]
+    AntigravityJsonl,
+}
+// A missing selector preserves the legacy four fields; a present null is not absence.
+fn present_selector<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 impl Source {
     fn validate(&self) -> Result<()> {
         if self.path.is_empty() || self.path.len() > 4096 || self.path.chars().any(char::is_control)
+        {
+            return Err(invalid());
+        }
+        let database = matches!(&self.agent, Agent::Hermes | Agent::Opencode);
+        if database != self.transcript_session_id.is_some()
+            || self.transcript_session_id.as_deref().is_some_and(|id| {
+                id.is_empty() || id.len() > 256 || id.chars().any(char::is_control)
+            })
+            || (self.view == View::Conversation
+                && !matches!(&self.agent, Agent::Claude | Agent::GrokAcp))
+            || (self.inline_images
+                && !(matches!(&self.agent, Agent::Claude)
+                    || (self.view == View::Records
+                        && matches!(&self.agent, Agent::Codex | Agent::GrokAcp))))
         {
             return Err(invalid());
         }
@@ -595,8 +642,38 @@ pub async fn tmux_chat(
 }
 
 #[cfg(test)]
+pub(crate) const READER_FIXTURE_IDS: &[&str] = &[
+    "claude",
+    "codex",
+    "pi",
+    "omp",
+    "hermes",
+    "opencode",
+    "copilot",
+    "qoder-ide",
+    "kimi",
+    "jcode",
+    "droid",
+    "cursor",
+    "omo",
+    "devin-atif",
+    "amp-json",
+    "grok-acp",
+    "antigravity-jsonl",
+];
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    fn ordinary_source() -> Source {
+        Source {
+            agent: Agent::Claude,
+            path: "/owned".into(),
+            view: View::Records,
+            inline_images: false,
+            transcript_session_id: None,
+        }
+    }
     #[test]
     fn single_line_input_is_literal_and_terminal_keys_are_fixed() {
         let input = Input::Send {
@@ -694,12 +771,102 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn source_context_is_claude_only_and_preserves_literal_path() {
+    fn every_native_reader_has_a_closed_records_context() {
+        for &agent in READER_FIXTURE_IDS {
+            let mut value = serde_json::json!({"agent":agent,"path":"/owned/界 ","view":"records","inlineImages":false});
+            if matches!(agent, "hermes" | "opencode") {
+                value["transcriptSessionId"] = "literal-session".into();
+            }
+            let source: Source =
+                serde_json::from_value(value).unwrap_or_else(|error| panic!("{agent}: {error}"));
+            source.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn source_options_and_selector_presence_are_closed() {
+        for &agent in READER_FIXTURE_IDS {
+            for view in ["records", "conversation"] {
+                for images in [false, true] {
+                    let mut value = serde_json::json!({"agent":agent,"path":"/owned/界 ","view":view,"inlineImages":images});
+                    if matches!(agent, "hermes" | "opencode") {
+                        value["transcriptSessionId"] = "literal-session".into();
+                    }
+                    let source: Source = serde_json::from_value(value.clone()).unwrap();
+                    let expected = (view == "records" || matches!(agent, "claude" | "grok-acp"))
+                        && (!images
+                            || agent == "claude"
+                            || (view == "records" && matches!(agent, "codex" | "grok-acp")));
+                    assert_eq!(
+                        source.validate().is_ok(),
+                        expected,
+                        "{agent}/{view}/{images}"
+                    );
+                    value["transcriptSessionId"] = serde_json::Value::Null;
+                    assert!(serde_json::from_value::<Source>(value).is_err());
+                }
+            }
+            let mut context = serde_json::json!({"agent":agent,"path":"/owned","view":"records","inlineImages":false});
+            let database = matches!(agent, "hermes" | "opencode");
+            assert_eq!(
+                serde_json::from_value::<Source>(context.clone())
+                    .unwrap()
+                    .validate()
+                    .is_ok(),
+                !database
+            );
+            context["transcriptSessionId"] = "selector".into();
+            assert_eq!(
+                serde_json::from_value::<Source>(context.clone())
+                    .unwrap()
+                    .validate()
+                    .is_ok(),
+                database
+            );
+            if database {
+                for selector in [
+                    "".into(),
+                    "x".repeat(257),
+                    "😀".repeat(65),
+                    "id\n".into(),
+                    "\u{85}".into(),
+                ] {
+                    context["transcriptSessionId"] = selector.into();
+                    assert!(serde_json::from_value::<Source>(context.clone())
+                        .unwrap()
+                        .validate()
+                        .is_err());
+                }
+                for selector in [
+                    "  literal $t(id) 界  ".into(),
+                    "x".repeat(256),
+                    "😀".repeat(64),
+                ] {
+                    context["transcriptSessionId"] = selector.clone().into();
+                    let source: Source = serde_json::from_value(context.clone()).unwrap();
+                    source.validate().unwrap();
+                    assert_eq!(
+                        source.transcript_session_id.as_deref(),
+                        Some(selector.as_str())
+                    );
+                }
+                let mut other = serde_json::from_value::<Source>(context.clone()).unwrap();
+                other.transcript_session_id = Some("another-session".into());
+                assert!(other != serde_json::from_value::<Source>(context).unwrap());
+            }
+        }
+        for agent in ["gemini", "qwen", "future", "constructor", "qoder_ide"] {
+            assert!(serde_json::from_value::<Source>(serde_json::json!({"agent":agent,"path":"/owned","view":"records","inlineImages":false})).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_claude_context_preserves_the_original_four_fields_and_literal_path() {
         let value = serde_json::json!({"agent":"claude","path":"/owned/界 ","view":"conversation","inlineImages":false});
         let source: Source = serde_json::from_value(value.clone()).unwrap();
         source.validate().unwrap();
         assert_eq!(source.path, "/owned/界 ");
-        for (field, replacement) in [("agent", "codex"), ("view", "active_branch")] {
+        for (field, replacement) in [("agent", "future"), ("view", "active_branch")] {
             let mut bad = value.clone();
             bad[field] = replacement.into();
             assert!(serde_json::from_value::<Source>(bad).is_err());
@@ -723,12 +890,7 @@ mod tests {
         let owner = lease.clone();
         let action = || Action::Input {
             receipt: "fixture".into(),
-            source: Source {
-                agent: Agent::Claude,
-                path: "/owned".into(),
-                view: View::Records,
-                inline_images: false,
-            },
+            source: ordinary_source(),
             operation: 1,
             input: Input::RequestStop,
         };
@@ -765,12 +927,7 @@ mod tests {
         for text in ["\r".into(), "x".repeat(4097), "\u{2028}".into()] {
             let action = Action::Input {
                 receipt: "00000000-0000-4000-8000-000000000001".into(),
-                source: Source {
-                    agent: Agent::Claude,
-                    path: "/owned".into(),
-                    view: View::Records,
-                    inline_images: false,
-                },
+                source: ordinary_source(),
                 operation: 1,
                 input: Input::Send { text },
             };

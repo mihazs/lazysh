@@ -1,7 +1,7 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
   chatTerminalTitle: "Terminal input",
-  chatTerminalExplanation: "Choose and confirm a tmux destination. This does not verify a running Claude process.",
+  chatTerminalExplanation: "Choose and confirm a tmux destination. This does not verify a running agent process.",
   chatTerminalChoose: "Choose terminal destination",
   chatTerminalHost: "Connected host",
   chatTerminalTab: "Terminal",

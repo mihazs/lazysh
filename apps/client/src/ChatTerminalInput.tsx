@@ -1,9 +1,13 @@
 import {useEffect,useRef,useState,type RefObject} from 'react';
 import {useAccessSnapshot,type AccessLease,type bindProtectedInvoke} from './access';
+import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
 import {errorMessage} from './i18n/localError';
 import {t,useUi,formatNumber} from './i18n/core';
 
-export type ClaudeTerminalSource=Readonly<{agent:'claude';path:string;view:'records'|'conversation';inlineImages:boolean}>;
+export type TerminalSource=Readonly<{path:string;view:'records'|'conversation';inlineImages:boolean} & (
+  {agent:Exclude<TranscriptAgentId,'hermes'|'opencode'>;transcriptSessionId?:never}
+  | {agent:'hermes'|'opencode';transcriptSessionId:string}
+)>;
 export type TerminalInputLabels=Readonly<{hostLabel:string;terminalLabel:string}>;
 type Destination=Readonly<{generation:string;sessionId:string;windowId:string;paneId:string}>;
 type Snapshot=Readonly<{kind:'destination';destination:Destination;sessionName:string;windowName:string;paneIndex:number}>;
@@ -25,11 +29,19 @@ function destination(value:unknown):Destination {
   if(!uuid(row.generation) || typeof row.sessionId!=='string' || !/^\$\d{1,22}$/.test(row.sessionId) || typeof row.windowId!=='string' || !/^@\d{1,22}$/.test(row.windowId) || typeof row.paneId!=='string' || !/^%\d{1,22}$/.test(row.paneId))throw invalid();
   return Object.freeze({generation:row.generation,sessionId:row.sessionId,windowId:row.windowId,paneId:row.paneId});
 }
-export function validClaudeTerminalSource(value:unknown):value is ClaudeTerminalSource {
-  if(!value || typeof value!=='object')return false;
-  const source=value as ClaudeTerminalSource;
-  return Object.keys(value).length===4 && ['agent','path','view','inlineImages'].every(key=>Object.hasOwn(value,key)) && source.agent==='claude' && typeof source.path==='string' && !!source.path && wellFormed(source.path)
-    && utf8(source.path)<=4096 && !/[\x00-\x1f\x7f-\x9f]/.test(source.path) && ['records','conversation'].includes(source.view) && typeof source.inlineImages==='boolean';
+export function validTerminalSource(value:unknown):value is TerminalSource {
+  if(!value || typeof value!=='object' || Array.isArray(value))return false;
+  const source=value as Record<string,unknown>;
+  if(typeof source.agent!=='string' || !Object.hasOwn(transcriptAgents,source.agent))return false;
+  const database=source.agent==='hermes'||source.agent==='opencode';
+  const keys=database?['agent','path','view','inlineImages','transcriptSessionId']:['agent','path','view','inlineImages'];
+  if(Object.keys(value).length!==keys.length || keys.some(key=>!Object.hasOwn(value,key))
+    || typeof source.path!=='string' || !source.path || !wellFormed(source.path) || utf8(source.path)>4096 || /[\x00-\x1f\x7f-\x9f]/.test(source.path)
+    || (source.view!=='records' && source.view!=='conversation') || typeof source.inlineImages!=='boolean')return false;
+  if(source.view==='conversation' && source.agent!=='claude' && source.agent!=='grok-acp')return false;
+  if(source.inlineImages && !(source.agent==='claude' || (source.view==='records' && (source.agent==='codex'||source.agent==='grok-acp'))))return false;
+  return !database || (typeof source.transcriptSessionId==='string' && !!source.transcriptSessionId && wellFormed(source.transcriptSessionId)
+    && utf8(source.transcriptSessionId)<=256 && !/[\x00-\x1f\x7f-\x9f]/.test(source.transcriptSessionId));
 }
 export function validTerminalDraft(text:string):boolean {
   // Validate UTF-16 before TextEncoder can replace an isolated surrogate.
@@ -58,7 +70,7 @@ function nativeFailure(error:unknown):unknown {
 }
 
 export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent}:{
-  sessionId:string;source:ClaudeTerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
+  sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
   draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;
 }) {
   useUi();
@@ -73,7 +85,7 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   const [error,setError]=useState<Problem>();
   const [uncertain,setUncertain]=useState<''|'keys'|'paste'>('');
   const [status,setStatus]=useState<''|'chatTerminalSent'|'chatTerminalStopRequested'>('');
-  const sourceValid=validClaudeTerminalSource(source);
+  const sourceValid=validTerminalSource(source);
   const current=(original:string)=>alive.current && latest.current===original && access.current();
   async function call(action:Record<string,unknown>):Promise<unknown> {
     // Only this actual native await may interpret native error kinds.

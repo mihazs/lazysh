@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Extend explicitly chosen and confirmed tmux terminal input to all 17 native Chat readers. Hermes/OpenCode database session selectors are part of immutable authority, and changing a selector requires a new confirmation. Stage remains default; terminal acknowledgement does not establish agent identity, provider receipt or that a process stopped.
+
 - Extend explicitly confirmed Chat terminal input to bounded multiline text and tabs, preserving exact accepted UTF-8 bytes through native tmux paste and one final Enter. Stage remains default. Paste brackets depend on the terminal program; server-global paste buffers may remain after interrupted delivery, and uncertain input is never automatically resent.
 
 - Add explicit Send and Request stop in Claude Chat after choosing an existing tmux terminal. Stage remains the default; direct Send supports single-line drafts up to 4 KiB. Closing the view does not recall already submitted input, and failed or uncertain sends are never retried automatically.

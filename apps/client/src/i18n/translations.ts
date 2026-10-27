@@ -14,7 +14,7 @@ const translations = {
   chatImageDecodeFailed: ["Não foi possível decodificar a imagem registrada neste dispositivo.", "No se pudo decodificar la imagen registrada en este dispositivo."],
 
   chatTerminalTitle: ["Entrada no terminal", "Entrada en el terminal"],
-  chatTerminalExplanation: ["Escolha e confirme um destino no tmux. Isso não confirma um processo do Claude em execução.", "Elige y confirma un destino de tmux. Esto no verifica un proceso de Claude en ejecución."],
+  chatTerminalExplanation: ["Escolha e confirme um destino no tmux. Isso não confirma um processo de agente em execução.", "Elige y confirma un destino de tmux. Esto no verifica un proceso de agente en ejecución."],
   chatTerminalChoose: ["Escolher destino no terminal", "Elegir destino del terminal"],
   chatTerminalHost: ["Host conectado", "Host conectado"],
   chatTerminalTab: ["Terminal", "Terminal"],
