@@ -114,14 +114,21 @@ impl Input {
         if let Self::Send { text } = self {
             if text.is_empty()
                 || text.len() > 4096
-                || text
-                    .chars()
-                    .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+                || text.chars().any(|c| {
+                    (c.is_control() && !matches!(c, '\n' | '\t'))
+                        || matches!(c, '\u{2028}' | '\u{2029}')
+                })
             {
                 return Err(invalid());
             }
         }
         Ok(())
+    }
+    fn paste_text(&self) -> Option<&str> {
+        match self {
+            Self::Send { text } if text.contains(['\n', '\t']) => Some(text),
+            _ => None,
+        }
     }
     fn keys(&self, pane: &str) -> Result<String> {
         self.validate()?;
@@ -142,6 +149,47 @@ impl Input {
         };
         Ok(command)
     }
+}
+
+fn paste_command(
+    guard: &str,
+    pane: &str,
+    text: &str,
+    buffer: &str,
+    marker: &str,
+) -> Result<String> {
+    let octal = text
+        .as_bytes()
+        .iter()
+        .map(|b| format!("\\{b:03o}"))
+        .collect::<String>();
+    let guard = ssh::quote(guard);
+    let pane = ssh::quote(pane);
+    let report = |state| {
+        format!(
+            "display-message -p {}",
+            ssh::quote(&format!("{marker}:{state}"))
+        )
+    };
+    // Every payload byte is decoded once by tmux, never a shell/control-line token.
+    // Both buffer hooks can change context: recheck before paste AND before CR.
+    let submit = format!(
+        "if-shell -F {guard} {{ send-keys -t {pane} -H 0d; {} }} {{ {} }}",
+        report("ok"),
+        report("partial")
+    );
+    let paste = format!(
+        "if-shell -F {guard} {{ paste-buffer -p -r -d -b {buffer} -t {pane}; {submit} }} {{ delete-buffer -b {buffer}; {} }}",
+        report("gone")
+    );
+    let command = format!(
+        "if-shell -F {guard} {{ set-buffer -b {buffer} -- \"{octal}\"; {paste} }} {{ {} }}",
+        report("gone")
+    );
+    if command.len() + 1 > 32 * 1024 || !command.is_ascii() || command.contains(['\r', '\n']) {
+        return Err(invalid());
+    }
+    Ok(command)
 }
 #[derive(Serialize)]
 #[serde(
@@ -290,7 +338,7 @@ impl Control {
     async fn chat_dispatch(
         &mut self,
         target: &Destination,
-        keys: &str,
+        input: &Input,
         budget: &mut usize,
     ) -> Result<()> {
         let client_checks = [
@@ -323,10 +371,17 @@ impl Control {
         // User labels are format values, never embedded into format syntax.
         let guard = format!("#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}}");
         let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
-        self.marked_command(&guard, keys, &marker, budget)
-            .await?
-            .then_some(())
-            .ok_or_else(stale)
+        input.validate()?;
+        let delivered = if let Some(text) = input.paste_text() {
+            let buffer = format!("lazysh-{}", uuid::Uuid::new_v4().simple());
+            let command = paste_command(&guard, &target.pane_id, text, &buffer, &marker)?;
+            // Partial/error/cancelled streams still retire; never resync to clean a buffer.
+            self.marked_dispatch(&command, &marker, budget).await
+        } else {
+            self.marked_command(&guard, &input.keys(&target.pane_id)?, &marker, budget)
+                .await
+        };
+        delivered?.then_some(()).ok_or_else(stale)
     }
     pub(super) async fn chat_action(
         &mut self,
@@ -393,7 +448,7 @@ impl Control {
                     return Err(stale());
                 }
                 bound.owner.check().map_err(|_| stale())?;
-                let keys = input.keys(&bound.destination.pane_id)?;
+                input.validate()?;
                 self.chat_ready(&bound.destination, budget).await?;
                 bound.owner.check().map_err(|_| stale())?;
                 lease.check()?;
@@ -407,7 +462,7 @@ impl Control {
                 }
                 // Dispatch cutoff: after this write begins, cancellation cannot
                 // recall bytes. A failed/partial response retires the actor.
-                self.chat_dispatch(&bound.destination, &keys, budget)
+                self.chat_dispatch(&bound.destination, &input, budget)
                     .await?;
                 bound.owner.check()?;
                 let next_operation = bound.next;
@@ -418,6 +473,22 @@ impl Control {
     }
 }
 impl Binding {
+    #[cfg(test)]
+    pub(crate) async fn fixture_held_input(
+        &self,
+        lease: &AccessLease,
+        cancel: watch::Receiver<bool>,
+        action: serde_json::Value,
+    ) -> (oneshot::Sender<()>, tokio::task::JoinHandle<Result<Reply>>) {
+        let (ready, release, configured) = self.fixture_gate(lease.clone(), cancel.clone(), true);
+        configured.await.unwrap().unwrap();
+        let pending = self.fixture_call(lease.clone(), cancel, action);
+        tokio::time::timeout(DEADLINE, ready)
+            .await
+            .unwrap()
+            .unwrap();
+        (release, pending)
+    }
     #[cfg(test)]
     pub(crate) fn fixture_gate(
         &self,
@@ -541,15 +612,7 @@ mod tests {
             "send-keys -t %12 Escape"
         );
         for text in [
-            "",
-            "line\nnext",
-            "line\r",
-            "tab\t",
-            "\u{1b}",
-            "\0",
-            "\u{85}",
-            "\u{2028}",
-            "\u{2029}",
+            "", "line\r", "\u{1b}", "\0", "\u{85}", "\u{2028}", "\u{2029}",
         ] {
             assert!(Input::Send { text: text.into() }.keys("%12").is_err());
         }
@@ -572,6 +635,63 @@ mod tests {
         assert!(
             serde_json::from_str::<Action>(r#"{"kind":"gate","before_dispatch":false}"#).is_err()
         );
+    }
+
+    #[test]
+    fn multiline_paste_is_one_bounded_octal_line_with_three_context_guards() {
+        let text = "é\n\t; '$#{pane_id}\\ 界";
+        let input = Input::Send { text: text.into() };
+        input.validate().unwrap();
+        assert_eq!(input.paste_text(), Some(text));
+        let command = paste_command(
+            "original-context",
+            "%12",
+            text,
+            "lazysh-owned",
+            "OWNED_MARKER",
+        )
+        .unwrap();
+        assert!(command.is_ascii());
+        assert!(!command.contains(['\n', '\r', '\t']));
+        assert!(command.contains("\\303\\251\\012\\011\\073"));
+        assert!(!command.contains("#{pane_id}"));
+        assert_eq!(command.matches("original-context").count(), 3);
+        assert_eq!(command.matches("send-keys -t '%12' -H 0d").count(), 1);
+        assert!(command.contains("paste-buffer -p -r -d -b lazysh-owned -t '%12';"));
+        assert!(command.contains("set-buffer -b lazysh-owned -- "));
+        assert!(command.contains("delete-buffer -b lazysh-owned"));
+        assert!(super::marked_rows(&["OWNED_MARKER:partial".into()], "OWNED_MARKER").is_err());
+        let maximum = format!("{}\n", "x".repeat(4095));
+        assert!(Input::Send {
+            text: maximum.clone()
+        }
+        .validate()
+        .is_ok());
+        assert!(
+            paste_command(
+                "bounded-guard",
+                "%12",
+                &maximum,
+                "lazysh-owned",
+                "OWNED_MARKER"
+            )
+            .unwrap()
+            .len()
+                < 32 * 1024
+        );
+        assert!(paste_command(
+            &"g".repeat(11000),
+            "%12",
+            "one\ntwo",
+            "lazysh-owned",
+            "OWNED_MARKER"
+        )
+        .is_err());
+        assert!(Input::Send {
+            text: maximum + "x"
+        }
+        .validate()
+        .is_err());
     }
     #[test]
     fn source_context_is_claude_only_and_preserves_literal_path() {
@@ -642,7 +762,7 @@ mod tests {
         let lease = crate::app_lock::AccessState::disabled()
             .lease(None)
             .unwrap();
-        for text in ["\n".into(), "x".repeat(4097), "\u{2028}".into()] {
+        for text in ["\r".into(), "x".repeat(4097), "\u{2028}".into()] {
             let action = Action::Input {
                 receipt: "00000000-0000-4000-8000-000000000001".into(),
                 source: Source {

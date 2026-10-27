@@ -10,6 +10,8 @@ use tauri::Manager;
 const BOUND: Duration = Duration::from_secs(3);
 type Probe<T> = std::result::Result<T, String>;
 
+#[path = "tmux_multiline_fixture.rs"]
+mod multiline;
 #[path = "tmux_teardown_diagnostics.rs"]
 mod teardown;
 
@@ -1419,6 +1421,21 @@ async fn chat_fixture_call(
     .and_then(|reply| reply.into_inner().map_err(|error| format!("{error:?}")))
     .map(|reply| serde_json::to_value(reply).unwrap())
 }
+fn chat_fixture_app(
+    config: std::path::PathBuf,
+) -> (
+    AppState,
+    tauri::App<tauri::test::MockRuntime>,
+    AccessState,
+    AccessLease,
+) {
+    let state = AppState::new(config).unwrap();
+    let app = tauri::test::mock_app();
+    app.manage(state.clone());
+    app.manage(crate::local::LocalState::default());
+    let (access, lease) = unlocked_authority();
+    (state, app, access, lease)
+}
 async fn chat_fixture_attach(
     app: &tauri::App<tauri::test::MockRuntime>,
     lease: &AccessLease,
@@ -1572,11 +1589,7 @@ async fn chat_input_probe() {
     })
     .await
     .expect("owned raw cat workloads ready");
-    let state = AppState::new(f.dir.path().join("chat-config")).unwrap();
-    let app = tauri::test::mock_app();
-    app.manage(state.clone());
-    app.manage(crate::local::LocalState::default());
-    let (access, lease) = unlocked_authority();
+    let (state, app, access, lease) = chat_fixture_app(f.dir.path().join("chat-config"));
     let parent = f.neutral(&state, &lease).await;
     let spectator = chat_fixture_attach(&app, &lease, &parent.session_id, "spectator").await;
     chat_fixture_adopt(&app, &lease, &parent.session_id).await;
@@ -1674,19 +1687,17 @@ async fn chat_input_probe() {
         .filter_map(|row| row.strip_prefix("$0|0|"))
         .collect::<Vec<_>>();
     assert_eq!(selected.len(), 1);
-    let (ready, release, configured) =
-        binding.fixture_gate(lease.clone(), native.cancel.subscribe(), true);
-    configured.await.unwrap().unwrap();
-    let pending = binding.fixture_call(
-        lease.clone(),
-        native.cancel.subscribe(),
-        send(
-            &bound["receipt"],
-            1,
-            json!({"kind":"send","text":"forbidden"}),
-        ),
-    );
-    timeout(BOUND, ready).await.unwrap().unwrap();
+    let (release, pending) = binding
+        .fixture_held_input(
+            &lease,
+            native.cancel.subscribe(),
+            send(
+                &bound["receipt"],
+                1,
+                json!({"kind":"send","text":"forbidden"}),
+            ),
+        )
+        .await;
     servers.direct(
         "chat-a",
         &["switch-client", "-c", selected[0], "-t", "spectator"],
@@ -1787,15 +1798,13 @@ async fn chat_input_probe() {
     // retires FUTURE authority, not that already-admitted terminal input.
     eprintln!("tmux chat stage: admitted intent and queued release");
     let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
-    let (ready, release, configured) =
-        binding.fixture_gate(renewed.clone(), native.cancel.subscribe(), true);
-    configured.await.unwrap().unwrap();
-    let pending = binding.fixture_call(
-        renewed.clone(),
-        native.cancel.subscribe(),
-        send(&bound["receipt"], 1, json!({"kind":"send","text":"once"})),
-    );
-    timeout(BOUND, ready).await.unwrap().unwrap();
+    let (release, pending) = binding
+        .fixture_held_input(
+            &renewed,
+            native.cancel.subscribe(),
+            send(&bound["receipt"], 1, json!({"kind":"send","text":"once"})),
+        )
+        .await;
     let released = binding.fixture_call(
         renewed.clone(),
         native.cancel.subscribe(),
