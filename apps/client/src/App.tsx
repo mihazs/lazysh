@@ -1139,7 +1139,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return()=>{alive=false;};
   },[]);
   useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
-  useDesktopLaunch(native,localCapability.available,openingLocal,
+  const launchBusy=openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || !!jumpSession
+    || pushSettings || preferences || sync || sharing || mobileTools || about || inbox || restoring
+    || (view==='sessions' && muxLaunch?.sessionId===activeId);
+  useDesktopLaunch(native,localCapability.available,launchBusy,
     receipt=>openLocalTerminal(receipt),setError,async launch=>{
       launch.lease.assert();
       setHostLaunch(launch);setConnectingHost(launch.hosts[0]);setPalette(false);setSidebar(false);

@@ -65,9 +65,8 @@ fn owned_flag(value: &str) -> bool {
 }
 
 #[cfg(desktop)]
-pub(crate) fn parse(
+fn parse_arguments(
     args: impl IntoIterator<Item = OsString>,
-    cwd: impl FnOnce() -> std::io::Result<PathBuf>,
 ) -> Result<Option<LaunchTarget>, String> {
     let mut args = args.into_iter().skip(1);
     let mut directory = None;
@@ -141,8 +140,17 @@ pub(crate) fn parse(
     if mux.is_some() {
         return Err(USAGE.into());
     }
-    let Some(mut path) = directory else {
-        return Ok(None);
+    Ok(directory.map(LaunchTarget::Directory))
+}
+
+#[cfg(desktop)]
+pub(crate) fn parse(
+    args: impl IntoIterator<Item = OsString>,
+    cwd: impl FnOnce() -> std::io::Result<PathBuf>,
+) -> Result<Option<LaunchTarget>, String> {
+    let mut path = match parse_arguments(args)? {
+        Some(LaunchTarget::Directory(path)) => path,
+        target => return Ok(target),
     };
     #[cfg(windows)]
     if !path.is_absolute()
@@ -176,6 +184,17 @@ struct Intent {
     prepared: Option<PreparedHost>,
     connecting: bool,
 }
+impl Intent {
+    fn new(target: LaunchTarget) -> Self {
+        Self {
+            receipt: uuid::Uuid::new_v4().to_string(),
+            owner: None,
+            target,
+            prepared: None,
+            connecting: false,
+        }
+    }
+}
 #[derive(Clone, Serialize)]
 pub(crate) struct PreparedHost {
     pub(crate) hosts: Vec<Host>,
@@ -195,11 +214,36 @@ impl PreparedHost {
 #[derive(Clone, Serialize)]
 pub(crate) struct Notice {
     receipt: String,
+    #[cfg(desktop)]
+    kind: NoticeKind,
+}
+#[cfg(desktop)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum NoticeKind {
+    Unsupported,
+    Busy,
+    Invalid,
 }
 #[derive(Default)]
 struct Pending {
     intent: Option<Intent>,
     notice: Option<Notice>,
+}
+impl Pending {
+    #[cfg(desktop)]
+    fn notice(&mut self, kind: NoticeKind) {
+        if self
+            .notice
+            .as_ref()
+            .is_none_or(|notice| notice.kind != kind)
+        {
+            self.notice = Some(Notice {
+                receipt: uuid::Uuid::new_v4().to_string(),
+                kind,
+            });
+        }
+    }
 }
 #[derive(Clone, Default)]
 pub(crate) struct LaunchState(Arc<Mutex<Pending>>);
@@ -222,13 +266,7 @@ impl LaunchState {
     }
     pub(crate) fn new(target: Option<LaunchTarget>) -> Self {
         Self(Arc::new(Mutex::new(Pending {
-            intent: target.map(|target| Intent {
-                receipt: uuid::Uuid::new_v4().to_string(),
-                owner: None,
-                target,
-                prepared: None,
-                connecting: false,
-            }),
+            intent: target.map(Intent::new),
             notice: None,
         })))
     }
@@ -449,14 +487,30 @@ impl LaunchState {
         .map_err(launch_error)
     }
     #[cfg(desktop)]
-    fn reject_secondary(&self, args: &[String]) -> bool {
+    fn receive_secondary(&self, args: &[String]) -> bool {
         if !args.iter().skip(1).any(|arg| owned_flag(arg)) {
             return false;
         }
+        // The singleton transport is lossy. Never resolve its directory/cwd.
+        let target = match parse_arguments(args.iter().map(|arg| OsString::from(arg.as_str()))) {
+            Ok(Some(LaunchTarget::Host { .. }))
+                if args.iter().skip(1).any(|arg| arg.contains('\u{fffd}')) =>
+            {
+                Err(NoticeKind::Invalid)
+            }
+            Ok(Some(target @ LaunchTarget::Host { .. })) => Ok(target),
+            Ok(Some(LaunchTarget::Directory(_))) => Err(NoticeKind::Unsupported),
+            _ => Err(NoticeKind::Invalid),
+        };
         if let Ok(mut pending) = self.0.lock() {
-            pending.notice.get_or_insert_with(|| Notice {
-                receipt: uuid::Uuid::new_v4().to_string(),
-            });
+            match target {
+                Ok(target) if pending.intent.is_none() => {
+                    pending.intent = Some(Intent::new(target));
+                    pending.notice = None;
+                }
+                Ok(_) => pending.notice(NoticeKind::Busy),
+                Err(kind) => pending.notice(kind),
+            }
         }
         true
     }
@@ -551,7 +605,7 @@ pub(crate) fn desktop_launch_cancel(
 
 #[cfg(desktop)]
 pub(crate) fn secondary(app: &tauri::AppHandle, args: Vec<String>) {
-    if app.state::<LaunchState>().reject_secondary(&args) {
+    if app.state::<LaunchState>().receive_secondary(&args) {
         let _ = app.emit("lazysh-desktop-launch", ());
     }
 }
@@ -598,6 +652,145 @@ mod tests {
             .chain(values.iter().copied())
             .map(OsString::from)
             .collect()
+    }
+    fn forwarded(values: &[&str]) -> Vec<String> {
+        arguments(values)
+            .into_iter()
+            .map(|value| value.into_string().unwrap())
+            .collect()
+    }
+    fn assert_warm_refused(values: &[&str], kind: NoticeKind) {
+        let launch = LaunchState::default();
+        assert!(launch.receive_secondary(&forwarded(values)));
+        assert!(launch.queued_receipt().is_none());
+        assert_eq!(launch.0.lock().unwrap().notice.as_ref().unwrap().kind, kind);
+    }
+    #[test]
+    fn warm_host_selectors_keep_literal_ids_and_mux_context() {
+        for id in ["saved 世界 '$(printf NO);", "--dir"] {
+            for selector in [
+                None,
+                Some("tmux"),
+                Some("tmux:世界 '$(printf NO);"),
+                Some("herdr"),
+            ] {
+                let mut values = vec!["--host", id];
+                if let Some(mux) = selector {
+                    values.extend(["--mux", mux]);
+                }
+                let expected = parse(arguments(&values), || unreachable!())
+                    .unwrap()
+                    .unwrap();
+                let launch = LaunchState::default();
+                assert!(launch.receive_secondary(&forwarded(&values)));
+                assert_eq!(
+                    launch.0.lock().unwrap().intent.as_ref().unwrap().target,
+                    expected
+                );
+                let (_dir, hosts) = saved_hosts(&[id]);
+                let authority = crate::ssh::test_support::unlocked_access();
+                let lease = crate::ssh::test_support::ready_lease(&authority);
+                let receipt = launch.read(&lease).unwrap().host_receipt.unwrap();
+                let prepared = launch.prepare_host(&hosts, &receipt, &lease).unwrap();
+                assert_eq!(prepared.hosts[0].id, id);
+                let attempt = launch.begin_host(&receipt, &lease, id).unwrap();
+                attempt.check_host(&prepared.hosts[0]).unwrap();
+                attempt.finish();
+                assert!(launch.read(&lease).unwrap().host_receipt.is_none());
+                assert!(launch.begin_host(&receipt, &lease, id).is_err());
+            }
+        }
+    }
+    #[test]
+    fn warm_requests_never_overwrite_pending_prepared_or_connecting_intents() {
+        let launch = LaunchState::default();
+        let original = forwarded(&["--host", "first"]);
+        let replacement = forwarded(&["--host", "second", "--mux", "herdr"]);
+        launch.receive_secondary(&original);
+        let receipt = launch.queued_receipt().unwrap();
+        let authority = crate::ssh::test_support::unlocked_access();
+        let lease = crate::ssh::test_support::ready_lease(&authority);
+        let (_dir, hosts) = saved_hosts(&["first", "second"]);
+        for stage in 0..3 {
+            assert!(launch.receive_secondary(&replacement));
+            assert_eq!(launch.queued_receipt().as_deref(), Some(receipt.as_str()));
+            let notice = launch.read(&lease).unwrap().notice.unwrap();
+            assert_eq!(notice.kind, NoticeKind::Busy);
+            if stage == 0 {
+                launch.prepare_host(&hosts, &receipt, &lease).unwrap();
+            }
+            if stage == 1 {
+                let attempt = launch.begin_host(&receipt, &lease, "first").unwrap();
+                assert!(launch.receive_secondary(&replacement));
+                assert!(attempt
+                    .check_host(&hosts.launch_hosts("first").unwrap()[0])
+                    .is_ok());
+                drop(attempt);
+            }
+        }
+        launch.cancel(&receipt, &lease).unwrap();
+        assert!(launch.receive_secondary(&replacement));
+        let second = launch.read(&lease).unwrap();
+        assert_ne!(second.host_receipt.as_deref(), Some(receipt.as_str()));
+        assert!(second.notice.is_none());
+    }
+    #[test]
+    fn warm_host_waits_for_unlock_but_admitted_requests_never_renew_their_owner() {
+        let launch = LaunchState::default();
+        let args = forwarded(&["--host", "saved"]);
+        let authority = crate::ssh::test_support::unlocked_access();
+        let old = crate::ssh::test_support::ready_lease(&authority);
+        authority.lock().unwrap();
+        launch.receive_secondary(&args);
+        assert!(launch.read(&old).is_err());
+        authority
+            .authorize(authority.generation().unwrap())
+            .unwrap();
+        let original = crate::ssh::test_support::ready_lease(&authority);
+        let receipt = launch.read(&original).unwrap().host_receipt.unwrap();
+        assert!(launch.read(&original).unwrap().host_receipt.is_none());
+        authority.lock().unwrap();
+        authority
+            .authorize(authority.generation().unwrap())
+            .unwrap();
+        let fresh = crate::ssh::test_support::ready_lease(&authority);
+        assert!(launch.read(&fresh).unwrap().host_receipt.is_none());
+        assert!(launch.cancel(&receipt, &original).is_err());
+        launch.receive_secondary(&args);
+        assert_ne!(
+            launch.read(&fresh).unwrap().host_receipt.as_deref(),
+            Some(receipt.as_str())
+        );
+    }
+    #[test]
+    fn malformed_warm_host_arguments_never_queue_a_partial_launch() {
+        for values in [
+            vec!["--host"],
+            vec!["--host", ""],
+            vec!["--host", "a", "--host", "b"],
+            vec!["--host", "line\nbreak"],
+            vec!["--host", "saved", "--mux", "zellij"],
+            vec!["--dir", "ignored", "--host", "saved"],
+            vec!["--mux", "tmux"],
+            vec!["--host", "saved", "lazysh://theme?data=YWJj"],
+        ] {
+            assert_warm_refused(&values, NoticeKind::Invalid);
+        }
+        let launch = LaunchState::default();
+        assert_warm_refused(&["--dir", "lossy-�"], NoticeKind::Unsupported);
+        assert!(!launch.receive_secondary(&forwarded(&["lazysh://theme?data=YWJj"])));
+    }
+    #[test]
+    fn replacement_characters_cannot_alias_forwarded_saved_ids_or_mux_names() {
+        for values in [
+            vec!["--host", "saved-�"],
+            vec!["--host", "saved", "--mux", "tmux:agents-�"],
+        ] {
+            assert!(parse(arguments(&values), || unreachable!())
+                .unwrap()
+                .is_some());
+            assert_warm_refused(&values, NoticeKind::Invalid);
+        }
     }
     #[test]
     fn a_read_admitted_directory_is_not_passively_offered_after_revoke_before_claim() {
@@ -1093,14 +1286,16 @@ mod tests {
             vec!["lazysh", "--dir", "lossy-�"],
             vec!["lazysh", "--dir=/another/path"],
         ] {
-            assert!(state.reject_secondary(&args.into_iter().map(String::from).collect::<Vec<_>>()));
+            assert!(
+                state.receive_secondary(&args.into_iter().map(String::from).collect::<Vec<_>>())
+            );
             assert_eq!(state.queued_receipt().as_deref(), Some(receipt.as_str()));
             assert!(state.read(&access).unwrap().directory_receipt.is_none());
         }
         let notice = state.read(&access).unwrap().notice.unwrap().receipt;
-        assert!(state.reject_secondary(&["lazysh".into(), "-dir=third".into()]));
+        assert!(state.receive_secondary(&["lazysh".into(), "-dir=third".into()]));
         assert_eq!(state.read(&access).unwrap().notice.unwrap().receipt, notice);
-        assert!(!state.reject_secondary(&["lazysh".into(), "lazysh://theme?data=YWJj".into()]));
+        assert!(!state.receive_secondary(&["lazysh".into(), "lazysh://theme?data=YWJj".into()]));
         assert_eq!(state.claim(&receipt, &access).unwrap(), base.path());
         assert!(state.claim(&receipt, &access).is_err());
         assert!(state.read(&access).unwrap().directory_receipt.is_none());

@@ -5,7 +5,7 @@ import type {Host} from './bridge';
 import {validTmuxServer} from './workspace';
 import {captureUiError, LocalUiError, type UiErrorCause} from './i18n/localError';
 
-type Snapshot = {directoryReceipt:string|null; hostReceipt?:string|null; notice:{receipt:string}|null};
+type Snapshot = {directoryReceipt:string|null; hostReceipt?:string|null; notice:{receipt:string;kind?:'unsupported'|'busy'|'invalid'}|null};
 export type DesktopMux = Readonly<{kind:'tmux';tmuxServer:string}|{kind:'herdr'}>;
 export type DesktopMuxRequest = Readonly<{sessionId:string;lease:AccessLease;mux:DesktopMux}>;
 export type DesktopHostLaunch = Readonly<{receipt:string;lease:AccessLease;hosts:readonly Host[];mux:DesktopMux|null}>;
@@ -31,7 +31,8 @@ function snapshot(value:unknown):Snapshot {
   if(!(state.directoryReceipt===null || uuid(state.directoryReceipt))
     || !(state.hostReceipt==null || uuid(state.hostReceipt))
     || !!(state.directoryReceipt && state.hostReceipt)
-    || !(state.notice===null || (typeof state.notice==='object' && uuid(state.notice.receipt))))throw new LocalUiError('desktopLaunchUnavailable');
+    || !(state.notice===null || (typeof state.notice==='object' && uuid(state.notice.receipt)
+      && (state.notice.kind===undefined || ['unsupported','busy','invalid'].includes(state.notice.kind)))))throw new LocalUiError('desktopLaunchUnavailable');
   return state;
 }
 
@@ -55,51 +56,63 @@ function preparedMux(value:unknown):DesktopMux|null {
   throw new LocalUiError('desktopLaunchHostInvalid');
 }
 
-/** A locked or replaced mount cannot start an initial intent or show old errors. */
+/** A locked or replaced mount cannot start an intent or show old errors. */
 export function useDesktopLaunch(native:boolean, available:boolean, busy:boolean,
   open:(receipt:string)=>Promise<void>, notice:(message:UiErrorCause)=>void, openHost?:(launch:DesktopHostLaunch)=>Promise<void>) {
   const lease=useRef(captureAccess()).current;
-  const attempted=useRef(false);
+  const attempted=useRef(new Set<string>());
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
-  const callbacks=useRef({open,notice,openHost}); callbacks.current={open,notice,openHost};
+  const refreshCurrent=useRef<(()=>void)|undefined>(undefined);
+  const callbacks=useRef({open,notice,openHost,busy}); callbacks.current={open,notice,openHost,busy};
   useEffect(()=>{
-    if(!native || !available || busy)return;
+    if(!native || !available)return;
     let alive=true, running=false, dirty=false, stopEvent:(()=>void)|undefined;
+    let waitingSnapshot:Snapshot|null=null, waitingHost:DesktopHostLaunch|null=null;
     const current=()=>alive && lease.current() && isAccessReady();
     const refresh=async()=>{
-      if(!current())return;
+      if(!current() || callbacks.current.busy)return;
       if(running){dirty=true;return;}
       running=true;
       try {
         do {
           dirty=false;
-          const value=snapshot(await invoke<unknown>('desktop_launch_read').catch(error=>{throw captureLaunchError(error);}));
-          if(!current())return;
-          if(value.directoryReceipt && !attempted.current) {
-            attempted.current=true;
+          const value=waitingSnapshot ?? snapshot(await invoke<unknown>('desktop_launch_read').catch(error=>{throw captureLaunchError(error);}));
+          waitingSnapshot=value;
+          if(!current() || callbacks.current.busy)return;
+          if(value.directoryReceipt && !attempted.current.has(value.directoryReceipt)) {
+            attempted.current.add(value.directoryReceipt);
             await callbacks.current.open(value.directoryReceipt);
           }
-          if(value.hostReceipt && !attempted.current) {
-            attempted.current=true;
-            const prepared=await invoke<unknown>('desktop_launch_prepare_host',{receipt:value.hostReceipt}).catch(error=>{throw captureLaunchError(error);});
-            const hosts=preparedHosts(prepared);
-            const mux=preparedMux((prepared as {mux?:unknown}).mux);
-            if(!current())return;
+          if(value.hostReceipt && (!attempted.current.has(value.hostReceipt) || waitingHost?.receipt===value.hostReceipt)) {
+            if(!waitingHost) {
+              attempted.current.add(value.hostReceipt);
+              const prepared=await invoke<unknown>('desktop_launch_prepare_host',{receipt:value.hostReceipt}).catch(error=>{throw captureLaunchError(error);});
+              const hosts=preparedHosts(prepared);
+              const mux=preparedMux((prepared as {mux?:unknown}).mux);
+              if(!current())return;
+              waitingHost=Object.freeze({receipt:value.hostReceipt,lease,hosts,mux});
+            }
+            if(!current() || callbacks.current.busy)return;
             if(!callbacks.current.openHost)throw new LocalUiError('desktopLaunchHostInvalid');
-            await callbacks.current.openHost(Object.freeze({receipt:value.hostReceipt,lease,hosts,mux}));
+            const launch=waitingHost;waitingHost=null;
+            await callbacks.current.openHost(launch);
           }
           if(value.notice && current()) {
-            callbacks.current.notice(new LocalUiError('desktopLaunchWarmUnsupported'));
+            callbacks.current.notice(new LocalUiError(value.notice.kind==='busy' ? 'desktopLaunchPending'
+              : value.notice.kind==='invalid' ? 'desktopLaunchHostInvalid' : 'desktopLaunchWarmUnsupported'));
             await invoke('desktop_launch_ack',{receipt:value.notice.receipt}).catch(error=>{throw captureLaunchError(error);});
           }
-        } while(dirty && current());
-      } catch(error) { if(current()) callbacks.current.notice(captureUiError(error)); }
+          waitingSnapshot=null;
+        } while(dirty && current() && !callbacks.current.busy);
+      } catch(error) { waitingSnapshot=null;waitingHost=null;if(current()) callbacks.current.notice(captureUiError(error)); }
       finally { running=false; }
     };
+    refreshCurrent.current=()=>void refresh();
     const stopAccess=subscribeAccess(()=>void refresh());
     void listen('lazysh-desktop-launch',()=>void refresh()).then(stop=>{if(!alive)stop();else{stopEvent=stop;void refresh();}}).catch(()=>{});
     // A StrictMode setup cleaned up immediately must not spend native admission.
     void Promise.resolve().then(()=>refresh());
-    return()=>{alive=false;stopAccess();stopEvent?.();};
-  },[native,available,busy,lease,invoke]);
+    return()=>{alive=false;refreshCurrent.current=undefined;stopAccess();stopEvent?.();};
+  },[native,available,lease,invoke]);
+  useEffect(()=>{void Promise.resolve().then(()=>refreshCurrent.current?.());},[busy]);
 }

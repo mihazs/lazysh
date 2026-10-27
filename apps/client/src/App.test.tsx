@@ -298,6 +298,22 @@ it('opens the exact saved host through its normal dialog and binds the native re
   await screen.findByText('Live SSH terminal');
   expect(mocks.api.connect).toHaveBeenCalledWith('legacy=host 世界',{password:'entered-only-here'},expect.any(Function),{launchReceipt:hostLaunchReceipt});
 });
+it('defers a warm saved-host launch without replacing a manual password dialog',async()=>{
+  const warm={...host,id:'warm',name:'Warm destination'};
+  enableHostLaunch(warm);mocks.hostLaunchReceipt=null;mocks.api.listHosts.mockResolvedValue([host,warm]);
+  const user=userEvent.setup();render(<App/>);
+  await user.click(await screen.findByRole('button',{name:'Connect to Home'}));
+  await user.type(await screen.findByLabelText('Password'),'manual-value');
+  await act(async()=>{mocks.hostLaunchReceipt=hostLaunchReceipt;mocks.launchEvent?.({payload:null});});
+  expect(screen.getByRole('dialog',{name:'Connect to Home'})).toBeTruthy();
+  expect(screen.getByLabelText('Password')).toHaveProperty('value','manual-value');
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='desktop_launch_prepare_host')).toHaveLength(0);
+  await user.click(screen.getByRole('button',{name:'Cancel'}));
+  await screen.findByRole('dialog',{name:'Connect to Warm destination'});
+  expect(screen.getByLabelText('Password')).toHaveProperty('value','');
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='desktop_launch_prepare_host')).toHaveLength(1);
+  expect(mocks.api.connect).not.toHaveBeenCalled();
+});
 
 it.each([
   ['HOST_LAUNCH_MISSING','This saved host no longer exists. Copy an existing host ID and run the command again.'],
