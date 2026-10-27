@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 0.7.1
+
+### Patch Changes
+
+- a73287a: Defer iOS status review registration until native plugin initialization completes, preserving existing readiness and privacy behavior.
+- @lazysh/common@0.7.1
+  - @lazysh/display-idle@0.7.1
+  - @lazysh/et-transport@0.7.1
+  - @lazysh/mosh-transport@0.7.1
+
 ## 0.7.0
 
 ### Minor Changes
