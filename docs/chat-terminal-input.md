@@ -203,3 +203,29 @@ Frontend tests use synthetic native replies. They establish UI routing and lifec
 behavior, separately from the native adapter's owned SSH/guarded-server acceptance.
 They do not prove provider identity, physical-device behavior or atomic agent-message
 processing.
+
+## Packaged Android guarded Herdr acceptance
+
+The native Android instrumentation contains a dedicated
+`NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi` case. Its Bun host fixture
+uses the existing explicit owned-emulator/ADB reverse and ephemeral SSH trust
+flow. It requires current-source `LAZYSH_TEST_HERDR`, `LAZYSH_TEST_AGENT_BIN`
+and `LAZYSH_TEST_RECEIVER_BIN` executables plus `LAZYSH_ANDROID_UI_HERDR=1`; it never downloads or guesses a tool.
+CI obtains Herdr from the same run's source-verified build and checks the separately
+transmitted SHA256 before use, then builds the actual companion and Linux native Cargo receiver fixture from its checkout. The receiver uses native termios and bounded byte copying; no receiver shell script is installed.
+
+The shipping WebView selects the owned Herdr session, reads a synthetic record
+through the real companion/native SSH path, and explicitly chooses/confirms the
+terminal before Send and Escape. Native clipboard input preserves a bounded
+synthetic UTF-8/LF/TAB draft; it does not inject a native reply or receipt. The host
+checks the raw receiver's exact text/CR/Escape bytes and original process start
+identity. A source edit retires the controls, and returning to the source does not
+restore a confirmation. Only this fixture's host, tabs, clipboard label, ADB
+reverse, files and process trees are cleaned up.
+
+Ordinary SSH fixture behavior and its existing deadlines remain unchanged. The
+opt-in Herdr variant alone supports remote exec, with private HOME/XDG/tmux and
+captured tool binaries; it never uses the operator's session catalogs or services.
+This acceptance is not an agent/provider integration or physical-device proof.
+Execution results must be recorded separately: preparing or compiling this case is
+not a passing packaged-app acceptance receipt.

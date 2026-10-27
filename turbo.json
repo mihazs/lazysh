@@ -29,7 +29,7 @@
     "build:android": { "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "NDK_HOME", "ANDROID_NDK_HOME"] },
     "build:android:emulator": { "cache": false, "env": ["VITE_LAZYSH_QR_CAMERA_TRACE"], "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "NDK_HOME", "ANDROID_NDK_HOME"] },
     "test:android-theme-links": { "dependsOn": ["build:android:emulator"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME"] },
-    "test:android-ssh": { "dependsOn": ["test:android"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME", "USER"] },
+    "test:android-ssh": { "dependsOn": ["test:android"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME", "USER", "LAZYSH_ANDROID_UI_HERDR", "LAZYSH_TEST_HERDR", "LAZYSH_TEST_AGENT_BIN", "LAZYSH_TEST_RECEIVER_BIN"] },
     "test:android-qr": { "dependsOn": ["build:android:emulator"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME", "LAZYSH_ANDROID_QR_EMULATOR_PID_FILE"] },
     "test:android": { "dependsOn": ["test:android-theme-links"], "cache": false, "passThroughEnv": ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SERIAL", "NDK_HOME", "ANDROID_NDK_HOME"] },
     "init:ios": { "cache": false, "passThroughEnv": ["DEVELOPER_DIR", "SDKROOT"] },

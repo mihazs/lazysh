@@ -1,9 +1,10 @@
 import {spawn, type ChildProcess} from 'node:child_process';
-import {chmod, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir, userInfo} from 'node:os';
-import {join, resolve} from 'node:path';
+import {isAbsolute, join, resolve} from 'node:path';
 import {createServer, connect} from 'node:net';
 import {randomUUID} from 'node:crypto';
+import type {HerdrFixture} from './androidHerdr';
 
 const OUTPUT_LIMIT=16*1024;
 // shortcut: foreground fixture tools only. A background child can outlive a reaped
@@ -82,8 +83,8 @@ export async function listening(port:number) {
     socket.setTimeout(500,()=>finish(false));
   });
 }
-type OwnedPid={pid:number,parent:number,start:string,state:string};
-async function identity(pid:number):Promise<OwnedPid|undefined> {
+export type OwnedPid={pid:number,parent:number,start:string,state:string};
+export async function identity(pid:number):Promise<OwnedPid|undefined> {
   try {
     const text=await readFile(`/proc/${pid}/stat`,'utf8');
     const fields=text.slice(text.lastIndexOf(')')+2).trim().split(/\s+/);
@@ -121,17 +122,18 @@ async function retireDescendants(parent:OwnedPid) {
   }
   if((await Promise.all(owned.map(same))).some(Boolean))throw new Error('Owned SSH descendants survived teardown');
 }
-async function stopSshd(daemon:OwnedProcess) {
+export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH') {
   let primary:unknown;
   try {
     const root=await daemon.liveIdentity();
-    if(!root)throw new Error('Owned SSH root identity unavailable');
+    if(!root)throw new Error(`Owned ${label} root identity unavailable`);
     await retireDescendants(root);
-    if((await daemon.liveIdentity())?.start!==root.start)throw new Error('Owned SSH root identity lost');
+    if((await daemon.liveIdentity())?.start!==root.start)throw new Error(`Owned ${label} root identity lost`);
   } catch(error){primary=error;}
   try{await daemon.stop();}catch(error){primary??=error;}
   if(primary)throw primary;
 }
+export type HerdrTools={herdrBinary:string;agentBinary:string;receiverBinary:string};
 export class SshFixture {
   private stopped=false;
   readonly nonce:string;
@@ -139,10 +141,10 @@ export class SshFixture {
   get expected(){return `SSH_${this.nonce}_END`;}
   get challenge(){return `printf 'SSH_%s_END\\n' '${this.nonce}'`;}
   readonly username=userInfo().username;
-  private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string) {this.nonce=nonce;}
-  static async start() {
+  private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv) {this.nonce=nonce;}
+  static async start(tools?:HerdrTools) {
     if(process.platform!=='linux')throw new Error('Owned Android SSH host fixture requires Linux');
-    const directory=await mkdtemp(join(tmpdir(),'lazysh-android-ssh-'));
+    const directory=await mkdtemp(join(tools?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
     try {
       await chmod(directory,0o700);
@@ -160,16 +162,28 @@ export class SshFixture {
       if(/[\s"\\]/.test(directory))throw new Error('Unsupported owned fixture directory');
       const nonce=randomUUID().replaceAll('-','');
       const prompt=`UI_PROMPT_${nonce}> `;
+      let environment:NodeJS.ProcessEnv|undefined;
+      if(tools) {
+        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700});
+        for(const [name,binary] of [['herdr',tools.herdrBinary],['lazysh-agent',tools.agentBinary],['owned-terminal-receiver',tools.receiverBinary]]) {
+          if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit current owned fixture binary required');
+          await copyFile(binary,join(bin,name));await chmod(join(bin,name),0o700);
+        }
+        environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:bin+':/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
+        for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_CACHE_HOME','cache'],['XDG_STATE_HOME','state'],['XDG_RUNTIME_DIR','runtime'],['TMUX_TMPDIR','tmux']]) {
+          const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
+        }
+      }
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
         `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no','PasswordAuthentication no','KbdInteractiveAuthentication no','UsePAM no','StrictModes no','LogLevel ERROR',
-        `SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
-        `ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`,
+        environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
+        environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s 90s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`,
         `Banner none`,''].join('\n'),{mode:0o600});
       daemon=new OwnedProcess(sshd,['-D','-e','-f',config]);
       if(!await daemon.liveIdentity())throw new Error('Owned SSH root identity unavailable');
-      const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce);
+      const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment);
       const deadline=performance.now()+3000;
       while(!await listening(port)) {
         if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error('Owned sshd not ready');
@@ -177,34 +191,34 @@ export class SshFixture {
       }
       return fixture;
     } catch(error) {
-      try{if(daemon)await stopSshd(daemon);}catch{console.error('Owned SSH startup cleanup failed');}
+      try{if(daemon)await stopOwnedTree(daemon);}catch{console.error('Owned SSH startup cleanup failed');}
       try{await rm(directory,{recursive:true,force:true});}catch{console.error('Owned SSH startup directory cleanup failed');}
       throw error;
     }
   }
-  async client(identity=true) {
+  async client(identity=true,remoteCommand?:string) {
     const known=join(this.directory,'known_hosts');
     await writeFile(known,`[127.0.0.1]:${this.port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
-    return new OwnedProcess('ssh',['-F','/dev/null','-tt','-p',String(this.port),'-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
+    return new OwnedProcess('ssh',['-F','/dev/null',remoteCommand===undefined?'-tt':'-T','-p',String(this.port),'-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
       '-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${known}`,'-o','GlobalKnownHostsFile=/dev/null',
-      ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none']),`${this.username}@127.0.0.1`]);
+      ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none']),`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
   }
   async stop() {
     if(this.stopped)return;
     let primary:unknown;
-    try {await stopSshd(this.daemon);if(await listening(this.port))throw new Error('Owned SSH listener survived teardown');}
+    try {await stopOwnedTree(this.daemon);if(await listening(this.port))throw new Error('Owned SSH listener survived teardown');}
     catch(error){primary=error;}
     try{await rm(this.directory,{recursive:true,force:true});}catch(error){primary??=error;}
     if(primary)throw primary;
     this.stopped=true;
   }
 }
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')) {
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
   const serial=process.env.ANDROID_SERIAL;
   if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
   const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
-  const fixture=await SshFixture.start();
+  const fixture=herdr?.ssh??await SshFixture.start();
   const remote=`/data/local/tmp/lazysh-ui-ssh-${fixture.nonce}`;
   let reverse:string|undefined;
   let remoteCreated=false;
@@ -217,22 +231,24 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:Number(reverse),username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce}),{mode:0o600});
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{})}),{mode:0o600});
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
     const android=join(root,'apps/client/src-tauri/gen/android');
     const gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      '-PlazyshSshAcceptance=true',
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi',
+      herdr?'-PlazyshHerdrAcceptance=true':'-PlazyshSshAcceptance=true',
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     await gradle.finish('actual Android SSH UI instrumentation',600_000);
+    if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
+    console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {primary=true;throw error;} finally {
     const failures:unknown[]=[];
     for(const cleanup of [
       ()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve(),
       ()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve(),
-      ()=>fixture.stop(),
+      ()=>herdr?herdr.stop():fixture.stop(),
     ])try{await cleanup();}catch(error){failures.push(error);}
     if(failures.length){if(primary)console.error('Owned Android SSH cleanup failed after original failure');else throw new Error('Owned Android SSH cleanup failed');}
   }

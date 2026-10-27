@@ -2,6 +2,7 @@ import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance} from './support/androidSsh';
+import {HerdrFixture,herdrTools} from './support/androidHerdr';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -51,4 +52,24 @@ test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails ex
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app performs explicit trust and authenticated interactive SSH',async()=>{
   await androidSshAcceptance();
+},610_000);
+
+// Real tools are explicit; ordinary host checks never download or guess a binary.
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr SSH exec reads its real companion transcript in the private namespace',async()=>{
+  const owned=await HerdrFixture.start(herdrTools());
+  try {
+    const companion=await owned.ssh.client(true,'lazysh-agent transcript --agent claude --path='+owned.transcript+' --offset 0');
+    const value=JSON.parse(await companion.finish('owned real companion transcript',5000));
+    expect(value.schemaVersion).toBe(1);expect(value.agent).toBe('claude');expect(value.messages).toHaveLength(1);
+    expect(JSON.stringify(value.messages)).toContain(owned.record);
+    const listing=await owned.ssh.client(true,'herdr session list --json');
+    expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
+    await owned.expectBytes(Buffer.alloc(0));
+  } finally {await owned.stop();}
+},15_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1')('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver',async()=>{
+  const owned=await HerdrFixture.start(herdrTools());
+  try {await androidSshAcceptance(undefined,owned);}
+  finally {await owned.stop();}
 },610_000);
