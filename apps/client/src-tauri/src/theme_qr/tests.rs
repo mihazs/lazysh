@@ -45,18 +45,23 @@ fn owned_qr_fixture_decodes_png_jpeg_and_blank_pixels_without_url_actions() {
     );
 }
 
-#[test]
-fn camera_feed_fixture_preserves_original_pixels_and_decodes_rotated_preview() {
+fn camera_feed_pixels(offset_x: i64) -> RgbImage {
     let original = image::load_from_memory(FIXTURE).unwrap().into_rgb8();
     assert_eq!(original.dimensions(), (212, 212));
-    // Retained API36 HAL configureStreams: width640,height480,rotation0. Copy,
-    // never resample, the entire original symbol and its existing quiet border.
+    // The retained camera frame matches the converter's top-left 360x480 crop.
+    // x74 centers the original pixels there; x214 recreates the previous input.
     let mut canvas = RgbImage::from_pixel(640, 480, image::Rgb([255, 255, 255]));
-    image::imageops::replace(&mut canvas, &original, 214, 134);
+    image::imageops::replace(&mut canvas, &original, offset_x, 134);
+    canvas
+}
+
+#[test]
+fn camera_feed_fixture_preserves_original_pixels_and_decodes_cropped_preview() {
+    let canvas = camera_feed_pixels(74);
     let bytes = include_bytes!("../../fixtures/theme-qr-camera-feed.png");
     assert_eq!(
         format!("{:x}", Sha256::digest(bytes)),
-        "d1c857c2360d20c170a3bfde8d65e97f02f79d60167f2e01d4f11afd4632605e"
+        "16df0b90fe352b80ae22dbdd68b7e0289d2c150df279a70231ce016cc940d9ae"
     );
     let feed = image::load_from_memory(bytes).unwrap().into_rgb8();
     assert_eq!(feed.dimensions(), (640, 480));
@@ -67,44 +72,70 @@ fn camera_feed_fixture_preserves_original_pixels_and_decodes_rotated_preview() {
         );
     }
     assert!(decode(bytes).unwrap().as_deref() == Some(PAYLOAD));
-    let portrait = image::imageops::rotate90(&feed);
-    let preview = DynamicImage::ImageRgb8(portrait).resize_exact(
-        375,
-        500,
-        image::imageops::FilterType::Triangle,
-    );
-    for format in [ImageFormat::Png, ImageFormat::Jpeg] {
-        assert!(
-            decode(&encoded(preview.clone(), format))
-                .unwrap()
-                .as_deref()
-                == Some(PAYLOAD),
-            "Native rotated/scaled feed control must retain the payload"
+    for (kind, pixels) in [
+        (
+            "top-left crop",
+            image::imageops::crop_imm(&feed, 0, 0, 360, 480).to_image(),
+        ),
+        ("rotated", image::imageops::rotate90(&feed)),
+    ] {
+        let preview = DynamicImage::ImageRgb8(pixels).resize_exact(
+            375,
+            500,
+            image::imageops::FilterType::Triangle,
         );
+        for format in [ImageFormat::Png, ImageFormat::Jpeg] {
+            assert!(
+                decode(&encoded(preview.clone(), format))
+                    .unwrap()
+                    .as_deref()
+                    == Some(PAYLOAD),
+                "Native {kind}/resize control must retain the complete symbol"
+            );
+        }
     }
 }
 
 #[test]
 fn captured_owned_emulator_crop_is_not_a_complete_qr_symbol() {
-    let captured = include_bytes!("../../fixtures/theme-qr-camera-cropped.png");
-    assert_eq!(captured.len(), 42_949);
-    assert_eq!(
-        format!("{:x}", Sha256::digest(captured)),
-        "ae3599cc82aaf2723be4e7657e70ec6b37b52efadaaa8dd15680e22c17c9d76a"
-    );
-    let pixels = image::load_from_memory(captured).unwrap();
-    assert_eq!((pixels.width(), pixels.height()), (375, 500));
-    let result = decode(captured);
-    let classification = match &result {
-        Ok(None) => "no_code",
-        Ok(Some(_)) => "decoded_payload",
-        Err(_) => "decoder_error",
-    };
-    eprintln!("Owned captured camera crop classification: {classification}");
-    assert!(
-        matches!(result, Ok(None)),
-        "Unexpected captured-frame classification: {classification}"
-    );
+    let captures: &[(&[u8], usize, &str)] = &[
+        (
+            include_bytes!("../../fixtures/theme-qr-camera-cropped.png"),
+            42_949,
+            "ae3599cc82aaf2723be4e7657e70ec6b37b52efadaaa8dd15680e22c17c9d76a",
+        ),
+        (
+            include_bytes!("../../fixtures/theme-qr-camera-centered-cropped.png"),
+            21_923,
+            "d7a3a963cfd01fdfa9da850de14f39f70829bdbe801d4692340f192fd59ac4c8",
+        ),
+    ];
+    for (captured, length, digest) in captures {
+        assert_eq!(captured.len(), *length);
+        assert_eq!(format!("{:x}", Sha256::digest(captured)), *digest);
+        let pixels = image::load_from_memory(captured).unwrap();
+        assert_eq!((pixels.width(), pixels.height()), (375, 500));
+        let result = decode(captured);
+        let classification = match &result {
+            Ok(None) => "no_code",
+            Ok(Some(_)) => "decoded_payload",
+            Err(_) => "decoder_error",
+        };
+        eprintln!("Owned captured camera crop classification: {classification}");
+        assert!(
+            matches!(result, Ok(None)),
+            "Unexpected captured-frame classification: {classification}"
+        );
+    }
+}
+
+#[test]
+fn previously_centered_feed_loses_the_right_finders_in_the_observed_crop() {
+    let previous = camera_feed_pixels(214);
+    let crop = image::imageops::crop_imm(&previous, 0, 0, 360, 480).to_image();
+    let preview =
+        DynamicImage::ImageRgb8(crop).resize_exact(375, 500, image::imageops::FilterType::Triangle);
+    assert_eq!(decode(&encoded(preview, ImageFormat::Png)).unwrap(), None);
 }
 
 #[test]

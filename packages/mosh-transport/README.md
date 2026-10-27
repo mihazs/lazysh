@@ -61,6 +61,14 @@ Original vendored files remain unchanged. `build.rs` applies the following dated
 - Bound queued input to 64 KiB of events and one returned ANSI frame to 8 MiB. The caller must apply its own bounded output delivery/backpressure before forwarding frames to a WebView.
 - Use `OPENSSL_cleanse` on native raw key copies and fixed xterm display initialization.
 
+The iOS native fixture's timeout diagnostics retain only the owned process group's
+PID/parent/group IDs, executable image, and opaque process state/flags before
+attempting bounded sampling. The same one-second inventory and five-second total
+diagnostic budgets remain in effect; no argv/environment or broader process list
+is collected. The [Apple ps manual](https://keith.github.io/xcode-man-pages/ps.1.html)
+documents these fields. A retained state is an observation, not proof of native
+entry, a blocked function or the cause of #45's intermittent empty `--list` timeout.
+
 Prediction/local echo, reconnect indicators, automatic control-connection reauthentication, Android app acceptance, iOS native/app acceptance, Windows support, app background/resume hooks, and native roaming/performance measurements remain open. Basic protocol and desktop bootstrap interoperability do not establish complete Mosh parity.
 
 Native application regression peers enable the development-only `test-fixtures`

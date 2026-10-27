@@ -17,7 +17,7 @@
     "duplicates:check": "jscpd --config .jscpd.json --threshold 0 --fail-on-empty .",
     "duplicates:staged": "lint-staged --hide-all --config lint-staged.config.mjs",
     "test:hooks": "bun test ./tests/pre-commit.test.ts",
-    "test:ci": "bun test ./tests/android-diagnostics.test.ts ./tests/ios-workspace-metadata.test.ts ./tests/android-ssh.test.ts ./tests/android-qr.test.ts ./tests/android-qr-ownership.test.ts ./tests/android-qr-frame.test.ts",
+    "test:ci": "bun test ./tests/android-diagnostics.test.ts ./tests/ios-workspace-metadata.test.ts ./tests/android-ssh.test.ts ./tests/android-qr.test.ts ./tests/android-qr-ownership.test.ts ./tests/android-qr-frame.test.ts ./tests/herdr-source.test.ts",
     "dev": "turbo run dev:native --filter=@lazysh/client",
     "build": "turbo run build",
     "build:native": "turbo run build:native --filter=@lazysh/client",
