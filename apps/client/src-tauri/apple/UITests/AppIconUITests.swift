@@ -1,7 +1,36 @@
+import CoreGraphics
 import XCTest
+
+private enum IconConfirmationOwner: String, Hashable { case springboard, app }
+
+private func iconConfirmationRecord(owner: IconConfirmationOwner, frame: CGRect?) -> String {
+  let prefix = "LAZYSH_ICON_CONFIRM owner=\(owner.rawValue) stage=before_hittability"
+  guard let frame else { return prefix + " snapshot=unavailable" }
+  let finite = !frame.isInfinite && [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height].allSatisfy { $0.isFinite }
+  let positive = finite && frame.size.width > 0 && frame.size.height > 0
+  return prefix + " snapshot=available frame_finite=\(finite) frame_positive=\(positive)"
+}
 
 /// Valid UIKit mutations run out-of-process so SpringBoard confirmation remains controllable.
 final class AppIconUITests: XCTestCase {
+  func testConfirmationProbeRetainsOnlyFiniteBoundedFields() {
+    let prefix = "LAZYSH_ICON_CONFIRM owner=app stage=before_hittability"
+    let cases: [(CGRect?, String)] = [
+      (nil, " snapshot=unavailable"),
+      (CGRect(x: -12345.5, y: 99.25, width: 16, height: 12), " snapshot=available frame_finite=true frame_positive=true"),
+      (.zero, " snapshot=available frame_finite=true frame_positive=false"),
+      (.infinite, " snapshot=available frame_finite=false frame_positive=false"),
+      (CGRect(x: CGFloat.nan, y: 0, width: 10, height: 10), " snapshot=available frame_finite=false frame_positive=false"),
+      (CGRect(x: 0, y: 0, width: -10, height: 10), " snapshot=available frame_finite=true frame_positive=false"),
+    ]
+    for (frame, suffix) in cases {
+      let record = iconConfirmationRecord(owner: .app, frame: frame)
+      XCTAssertEqual(record, prefix + suffix)
+      XCTAssertLessThanOrEqual(record.utf8.count, 160)
+    }
+    XCTAssertEqual(iconConfirmationRecord(owner: .springboard, frame: nil),
+      "LAZYSH_ICON_CONFIRM owner=springboard stage=before_hittability snapshot=unavailable")
+  }
   @MainActor
   func testActualHomeScreenIconRoundtripAndRelaunch() throws {
     continueAfterFailure = false
@@ -105,10 +134,19 @@ final class AppIconUITests: XCTestCase {
   @MainActor
   private func awaitIcon(_ value: String, app: XCUIApplication, springboard: XCUIApplication) -> Bool {
     let current = app.webViews.staticTexts["Current icon: " + value].firstMatch
+    var observed = Set<IconConfirmationOwner>()
     let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-      for owner in [springboard, app] {
+      for (name, owner) in [(IconConfirmationOwner.springboard, springboard), (.app, app)] {
         let ok = owner.alerts.buttons["OK"].firstMatch
-        if ok.exists && ok.isHittable { ok.tap() }
+        if ok.exists {
+          // One extra throwing snapshot per owner, never a new wait or retry.
+          // Do not print labels, values, coordinates, hierarchy or raw errors.
+          if observed.insert(name).inserted {
+            print("LAZYSH_ICON_CONFIRM owner=\(name.rawValue) stage=before_snapshot")
+            print(iconConfirmationRecord(owner: name, frame: try? ok.snapshot().frame))
+          }
+          if ok.isHittable { ok.tap() }
+        }
       }
       return current.exists
     }, object: nil)
