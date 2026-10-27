@@ -193,12 +193,38 @@ class NativeWorkspaceTest {
         }
     }
 
+    private class QrObservedProgress {
+        private var firstAttached: JSONObject? = null
+        private var samples = 0
+        private var maxReadyState = 0
+        private var maxFrames = 0
+        private var everScanning = false
+        private var everDecoding = false
+        fun observe(sample: JSONObject) {
+            fun bounded(name: String, maximum: Int) = sample.optInt(name).coerceIn(0, maximum)
+            samples = (samples + 1).coerceAtMost(1_000)
+            maxReadyState = maxOf(maxReadyState, bounded("readyState", 4))
+            maxFrames = maxOf(maxFrames, bounded("frames", 1_000_000))
+            everScanning = everScanning || sample.optBoolean("scanning")
+            everDecoding = everDecoding || sample.optBoolean("decoding")
+            if (firstAttached == null && (sample.optBoolean("src") || bounded("liveTracks", 100) > 0)) {
+                firstAttached = JSONObject().put("readyState", bounded("readyState", 4))
+                    .put("paused", sample.optBoolean("paused")).put("liveTracks", bounded("liveTracks", 100))
+                    .put("width", bounded("width", 1_000_000)).put("height", bounded("height", 1_000_000))
+            }
+        }
+        fun report(): JSONObject = JSONObject().put("firstAttached", firstAttached ?: JSONObject.NULL)
+            .put("samples", samples).put("maxReadyState", maxReadyState).put("maxFrames", maxFrames)
+            .put("everScanning", everScanning).put("everDecoding", everDecoding)
+    }
+
     // Public state only in messages; one attested synthetic frame is stored privately, never logged.
     private fun qrVideoObservation(scenario: ActivityScenario<MainActivity>, frame: File?): (Long) -> String {
         var firstReady: JSONObject? = null
         var frameAttempted = false
         var frameSaved = false
         var capture: QrCaptureDiagnostic? = null
+        val progress = QrObservedProgress()
         return { remaining ->
             val started = System.nanoTime()
             val encoded = evaluate(scenario, """JSON.stringify((() => {
@@ -225,6 +251,7 @@ class NativeWorkspaceTest {
             assertTrue("QR diagnostics contain only finite public state", sample.keys().asSequence().all {
                 val value = sample.get(it); value == JSONObject.NULL || value is Boolean || value is Number
             })
+            progress.observe(sample)
             if (firstReady == null && sample.optInt("readyState") >= 2) {
                 firstReady = sample
                 if (frame != null) {
@@ -237,7 +264,7 @@ class NativeWorkspaceTest {
             }
             JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample)
                 .put("frameEnabled", frame != null).put("frameAttempted", frameAttempted).put("frameSaved", frameSaved)
-                .put("capture", capture?.report() ?: JSONObject.NULL).toString().also {
+                .put("capture", capture?.report() ?: JSONObject.NULL).put("observed", progress.report()).toString().also {
                 require(it.length <= 2_048) { "QR diagnostic bound" }
             }
         }
@@ -527,6 +554,37 @@ class NativeWorkspaceTest {
             armed = true
         }
         @Synchronized fun openedAny() = opened.isNotEmpty()
+    }
+
+    @Test fun qrObservedProgressRetainsAttachmentBeforeReadyAndOnlyBoundedMilestones() {
+        val progress = QrObservedProgress()
+        val permission = JSONObject().put("src", false).put("liveTracks", 0).put("readyState", 0)
+            .put("frames", 0).put("paused", true).put("scanning", false).put("decoding", false)
+        progress.observe(permission)
+        assertTrue("Permission alone does not establish attachment", progress.report().isNull("firstAttached"))
+        val attached = JSONObject(permission.toString()).put("src", true).put("liveTracks", 1)
+            .put("width", 0).put("height", 0).put("privateIgnored", "private-payload-sentinel")
+        progress.observe(attached)
+        progress.observe(JSONObject(attached.toString()).put("readyState", 4).put("frames", 9)
+            .put("width", 480).put("height", 640).put("paused", false).put("scanning", true))
+        progress.observe(JSONObject(permission.toString()).put("decoding", true))
+        progress.observe(permission)
+        val report = progress.report()
+        val first = report.getJSONObject("firstAttached")
+        assertEquals(setOf("readyState", "paused", "liveTracks", "width", "height"), first.keys().asSequence().toSet())
+        assertEquals(0, first.getInt("readyState"))
+        assertTrue("Attachment can precede play", first.getBoolean("paused"))
+        assertEquals(1, first.getInt("liveTracks"))
+        assertEquals(5, report.getInt("samples"))
+        assertEquals(4, report.getInt("maxReadyState"))
+        assertEquals(9, report.getInt("maxFrames"))
+        assertTrue("Observed milestones survive timeout", report.getBoolean("everScanning") && report.getBoolean("everDecoding"))
+        assertTrue("Only whitelisted metadata is retained", !report.toString().contains("sentinel"))
+        repeat(1_010) { progress.observe(JSONObject().put("readyState", 99).put("frames", Int.MAX_VALUE)) }
+        assertEquals(1_000, progress.report().getInt("samples"))
+        assertEquals(4, progress.report().getInt("maxReadyState"))
+        assertEquals(1_000_000, progress.report().getInt("maxFrames"))
+        assertTrue("Progress metadata remains bounded", progress.report().toString().length <= 320)
     }
 
     @Test fun qrCaptureFailureMetadataIsFiniteAndExcludesPrivateExceptionData() {
