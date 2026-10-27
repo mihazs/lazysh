@@ -47,13 +47,33 @@ replacement and failed preparation never automatically reoffer an old request.
 Manual connections and workspace restoration do not consume the launch receipt.
 Prepared metadata contains no credentials and is not persisted as a launch queue.
 
-If lazysh is already running, no host connection is started. The app presents a
-localized unsupported-warm-launch notice after normal unlock; singleton handoff
-success is not connection success. Close the app before retrying. Desktop URLs
-retain their existing ingress behavior. This independent saved-ID contract does
-not establish Moshi's undocumented runtime host grammar; only its help flags were
-observed. Warm delivery remains open in
-[issue #86](https://github.com/mihazs/lazysh/issues/86).
+### Already-running app
+
+The same saved-host and optional multiplexer arguments also work while lazysh is
+running. One native request waits for normal unlock and for any open dialog,
+local-terminal startup, workspace restoration or requested multiplexer picker to
+finish. The original connection form and typed credentials are preserved. The
+request then opens the normal saved-host dialog and still requires explicit
+Connect and host-key/credential checks.
+
+A second request cannot replace a queued, prepared or connecting launch. It is
+refused with a localized notice; finish or cancel the current launch and run the
+command again. Each distinct accepted receipt is offered once. Failed preparation,
+lock/reunlock and renderer replacement do not replay an admitted request. The
+singleton handoff exit status confirms delivery only, not authentication or a
+terminal. Warm directory requests remain unsupported; close the app before using
+`--dir`. Existing desktop URLs retain their prior ingress behavior.
+
+Forwarded saved IDs and multiplexer names containing the Unicode replacement
+character `U+FFFD` are refused, even if that character was entered literally:
+the singleton's lossy transport cannot distinguish it from replaced OS bytes.
+Cold launch keeps the original lossless argument validation and can use a literal
+replacement character in a valid Unicode selector.
+
+This independent saved-ID contract does not establish Moshi's undocumented host
+grammar; only its help flags were observed. Native admission and frontend tests
+do not prove actual OS singleton/GUI delivery or credential prompts. Those gates
+and warm directory delivery remain in [issue #86](https://github.com/mihazs/lazysh/issues/86).
 
 Native controlled SSH tests cover changed target metadata before authentication,
 unknown-key trust/retry and revocation while waiting for the credential guard.
@@ -64,7 +84,7 @@ gates; a Linux test pass alone does not establish them.
 
 ### Multiplexer picker launches
 
-With the app closed, use one of:
+Use one of:
 
 ```sh
 lazysh --host SAVED_ID --mux tmux

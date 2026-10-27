@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Accept explicit saved-host and tmux/Herdr picker launch requests while the desktop app is running. Requests wait for normal unlock and an available connection dialog; pending launches and typed manual credentials are preserved, and Connect remains explicit. Warm directory delivery remains unsupported.
+
 - Extend explicitly chosen and confirmed tmux terminal input to all 17 native Chat readers. Hermes/OpenCode database session selectors are part of immutable authority, and changing a selector requires a new confirmation. Stage remains default; terminal acknowledgement does not establish agent identity, provider receipt or that a process stopped.
 
 - Extend explicitly confirmed Chat terminal input to bounded multiline text and tabs, preserving exact accepted UTF-8 bytes through native tmux paste and one final Enter. Stage remains default. Paste brackets depend on the terminal program; server-global paste buffers may remain after interrupted delivery, and uncertain input is never automatically resent.

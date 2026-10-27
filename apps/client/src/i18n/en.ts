@@ -330,6 +330,7 @@ export const english = {
   desktopLaunchHostIdCopied: "Host ID copied.",
   desktopLaunchHostIdCopyFailed: "Could not copy the host ID. Select and copy it manually.",
   desktopLaunchWarmUnsupported: "This launch requires a new app instance. Close lazysh, then run the command again. No new connection was opened.",
+  desktopLaunchPending: "Finish or cancel the current launch request, then run this command again.",
   desktopLaunchWindowsUnsupported: "This directory is not supported by the Windows local shell. Choose an ordinary local drive directory with a compatible name and length.",
   desktopLaunchUnavailable: "This launch request is no longer available. Run the command again.",
   appUnsupportedTmuxRestoreName: "This tmux destination cannot be restored automatically because its exact name is unsupported. The live terminal and Jump To remain available.",

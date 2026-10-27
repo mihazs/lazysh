@@ -108,14 +108,69 @@ it('translates a finite native Windows directory refusal across all UI locales',
   }
   expect(open).not.toHaveBeenCalled();
 });
-it('rejects malformed native metadata instead of guessing a successful or empty launch',async()=>{
-  vi.mocked(invoke).mockResolvedValue({directoryReceipt:'not-a-receipt',notice:null});
+it.each([
+  {directoryReceipt:'not-a-receipt',notice:null},
+  {directoryReceipt:null,notice:{receipt,kind:'unexpected'}},
+])('rejects malformed native metadata instead of guessing a successful or empty launch: %j',async value=>{
+  vi.mocked(invoke).mockResolvedValue(value);
   const open=vi.fn(async()=>{}); render(<Harness open={open}/>);
   await screen.findByText('This launch request is no longer available. Run the command again.');
   expect(open).not.toHaveBeenCalled();
 });
 
 const launchHost={id:'legacy-host 世界',name:'Saved host',hostname:'host.test',port:22,username:'owner'};
+it('delivers distinct warm receipts once and never replays an earlier spent receipt',async()=>{
+  const next='8b6d0fc9-a755-4e10-b2e3-0dbdc1259326';
+  let offered:string|null=receipt;
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='desktop_launch_prepare_host')return {hosts:[launchHost],mux:{kind:'herdr'}};
+    const hostReceipt=offered;offered=null;return {directoryReceipt:null,hostReceipt,notice:null};
+  });
+  const openHost=vi.fn(async(_launch:DesktopHostLaunch)=>{});
+  render(<Harness open={vi.fn(async()=>{})} openHost={openHost}/>);
+  await waitFor(()=>expect(openHost).toHaveBeenCalledTimes(1));
+  await act(async()=>{offered=next;event.refresh?.();});
+  await waitFor(()=>expect(openHost).toHaveBeenCalledTimes(2));
+  expect(openHost.mock.calls.map(([launch])=>launch.receipt)).toEqual([receipt,next]);
+  expect(openHost.mock.calls[1][0].mux).toEqual({kind:'herdr'});
+  await act(async()=>{offered=receipt;event.refresh?.();});
+  expect(openHost).toHaveBeenCalledTimes(2);
+});
+it.each(['read','prepare'] as const)('retains an original host %s response while a manual dialog becomes busy',async stage=>{
+  let resolve!:(value:unknown)=>void;
+  let offered=true;
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='desktop_launch_prepare_host')return stage==='prepare'?new Promise(yes=>{resolve=yes;}):{hosts:[launchHost]};
+    if(offered){offered=false;return stage==='read'?new Promise(yes=>{resolve=yes;}):{directoryReceipt:null,hostReceipt:receipt,notice:null};}
+    return {directoryReceipt:null,hostReceipt:null,notice:null};
+  });
+  const openHost=vi.fn(async(_launch:DesktopHostLaunch)=>{}),open=vi.fn(async()=>{});
+  const view=render(<Harness open={open} openHost={openHost}/>);
+  await waitFor(()=>expect(resolve).toBeTypeOf('function'));
+  view.rerender(<Harness open={open} openHost={openHost} busy/>);
+  await act(async()=>{resolve(stage==='read'?{directoryReceipt:null,hostReceipt:receipt,notice:null}:{hosts:[launchHost]});});
+  expect(openHost).not.toHaveBeenCalled();
+  view.rerender(<Harness open={open} openHost={openHost}/>);
+  await waitFor(()=>expect(openHost).toHaveBeenCalledTimes(1));
+  expect(openHost.mock.calls[0][0].receipt).toBe(receipt);
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='desktop_launch_prepare_host')).toHaveLength(1);
+});
+it('localizes a refused busy request and acknowledges it without preparing a host',async()=>{
+  let notice:{receipt:string;kind:'busy'}|null={receipt,kind:'busy'};
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='desktop_launch_ack'){notice=null;return;}
+    return {directoryReceipt:null,hostReceipt:null,notice};
+  });
+  const openHost=vi.fn(async(_launch:DesktopHostLaunch)=>{});
+  render(<Harness open={vi.fn(async()=>{})} openHost={openHost}/>);
+  await screen.findByText('Finish or cancel the current launch request, then run this command again.');
+  await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
+  expect(screen.getByRole('status').textContent).toMatch(/^Conclua ou cancele/);
+  await act(async()=>{await uiI18n.changeLanguage('es');});
+  expect(screen.getByRole('status').textContent).toMatch(/^Termina o cancela/);
+  expect(openHost).not.toHaveBeenCalled();
+  expect(invoke).toHaveBeenCalledWith('desktop_launch_ack',{receipt},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+});
 it('defers host admission until desktop capability and prepares once with its original lease under StrictMode',async()=>{
   let offered=false;
   vi.mocked(invoke).mockImplementation(async command=>command==='desktop_launch_prepare_host'?{hosts:[launchHost]}:{directoryReceipt:null,hostReceipt:offered?null:(offered=true,receipt),notice:null});
