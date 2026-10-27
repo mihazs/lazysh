@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 0.10.1
+
+### Patch Changes
+
+- 3ec508c: Preserve explicit Pi tool-result error booleans in recorded chat and reuse the recorded-error badge without inferring live state or changing other adapters.
+- @lazysh/common@0.10.1
+  - @lazysh/display-idle@0.10.1
+  - @lazysh/et-transport@0.10.1
+  - @lazysh/mosh-transport@0.10.1
+
 ## 0.10.0
 
 ### Minor Changes
