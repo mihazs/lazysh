@@ -206,6 +206,28 @@ observed bytes/metadata, and changes after the last observation, remain outside
 its guarantee. Legacy append Records and the separate Unix-only Grok `g1`
 checkpoint contract are unchanged.
 
+### Pi recorded tool errors
+
+Pi Records preserve an explicit boolean `message.isError` on `toolResult`
+messages as optional `isError` metadata on the normalized tool-result block.
+Only `true` adds the existing **Recorded tool error** label; explicit `false`
+does not invent a success/completion badge. Missing, null and non-boolean flags
+remain unknown. Original output, tool ID/name, parent links, usage and record
+cursor semantics are retained, including empty recorded results. This is a
+recorded outcome, not current working state, an approval, or a retry action.
+OMP and OmO remain unchanged despite sharing the message normalizer.
+
+Primary pinned evidence: Pi commit
+[`85c2ee3e761e4fc4f901ff0ed584fb2465aa552e`](https://github.com/badlogic/pi-mono/tree/85c2ee3e761e4fc4f901ff0ed584fb2465aa552e),
+[`ToolResultMessage`](https://github.com/badlogic/pi-mono/blob/85c2ee3e761e4fc4f901ff0ed584fb2465aa552e/packages/ai/src/types.ts#L605)
+defines `isError: boolean`; the
+[`message` entry writer](https://github.com/badlogic/pi-mono/blob/85c2ee3e761e4fc4f901ff0ed584fb2465aa552e/packages/coding-agent/src/core/session-manager.ts#L1130)
+retains that message, and
+[`_persist`](https://github.com/badlogic/pi-mono/blob/85c2ee3e761e4fc4f901ff0ed584fb2465aa552e/packages/coding-agent/src/core/session-manager.ts#L1090)
+serializes the full entry. Native/component fixtures are synthetic; installed
+Pi compatibility, provider execution and physical WebView behavior are not
+established by these tests.
+
 ### Claude current branch
 
 Use `lazysh-agent transcript --agent claude --view conversation --path /absolute/path/session.jsonl --limit 100` to reconstruct the current main conversation branch. This reads a bounded complete snapshot, picks the latest main user/assistant leaf, follows `parentUuid`, and recovers sibling tool calls and results belonging to responses on that branch. Compaction follows the new summary chain without reconnecting `logicalParentUuid` to obsolete context. Duplicate UUIDs use their latest record; cycles fail closed.

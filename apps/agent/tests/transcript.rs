@@ -155,10 +155,72 @@ fn pi_records_preserve_messages_tools_usage_and_tree_parent_without_running_agen
     assert_eq!(page.messages[2]["role"], "tool");
     assert_eq!(page.messages[2]["blocks"][0]["id"], "tool1");
     assert_eq!(page.messages[2]["blocks"][0]["text"], "passed");
+    assert_eq!(page.messages[2]["blocks"][0]["isError"], false);
     assert!(!serde_json::to_string(&page).unwrap().contains("SECRET"));
     let omp = read_page(&path, TranscriptAgent::Omp, 0, 50).unwrap();
-    assert_eq!(omp.messages, page.messages);
+    let mut without_error = page.messages.clone();
+    without_error[2]["blocks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("isError");
+    assert_eq!(omp.messages, without_error);
     assert_eq!(serde_json::to_value(omp).unwrap()["agent"], "omp");
+}
+
+#[test]
+fn pi_tool_errors_are_recorded_booleans_without_changing_other_family_adapters() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("pi-errors.jsonl");
+    let cases = [
+        ("failed", Some(json!(true)), Some(true)),
+        ("ok", Some(json!(false)), Some(false)),
+        ("missing", None, None),
+        ("null", Some(Value::Null), None),
+        ("string", Some(json!("true")), None),
+        ("number", Some(json!(1)), None),
+        ("object", Some(json!({})), None),
+        ("array", Some(json!([])), None),
+        ("empty", Some(json!(true)), Some(true)),
+    ];
+    let records: Vec<_> = cases.iter().map(|(id, flag, _)| {
+        let mut record = json!({"type":"message","id":id,"parentId":"original-parent","message":{"role":"toolResult","toolCallId":id,"toolName":"bash","content":[{"type":"text","text":"RAW {{output}} <native>"}],"usage":{"input":3}}});
+        if let Some(flag) = flag {record["message"]["isError"] = flag.clone();}
+        if *id == "empty" {record["message"]["content"] = json!([]);}
+        record
+    }).collect();
+    write_records(&path, &records);
+    let page = read_page(&path, TranscriptAgent::Pi, 0, 50).unwrap();
+    assert_eq!(page.next_offset, fs::metadata(&path).unwrap().len());
+    assert!(!page.has_more);
+    assert_eq!(page.messages.len(), cases.len());
+    for (message, (id, _, expected)) in page.messages.iter().zip(&cases) {
+        assert_eq!(message["role"], "tool");
+        assert_eq!(message["id"], *id);
+        assert_eq!(message["parentId"], "original-parent");
+        assert_eq!(message["usage"]["inputTokens"], 3);
+        let block = &message["blocks"][0];
+        assert_eq!(block.get("isError"), expected.map(Value::Bool).as_ref());
+        assert_eq!(block["id"], *id);
+        assert_eq!(block["name"], "bash");
+        assert_eq!(
+            block["text"],
+            if *id == "empty" {
+                ""
+            } else {
+                "RAW {{output}} <native>"
+            }
+        );
+    }
+    let mut plain = page.messages.clone();
+    for message in &mut plain {
+        message["blocks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("isError");
+    }
+    for agent in [TranscriptAgent::Omp, TranscriptAgent::Omo] {
+        assert_eq!(read_page(&path, agent, 0, 50).unwrap().messages, plain);
+    }
 }
 
 #[test]
