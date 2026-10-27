@@ -4,7 +4,7 @@ The native `tmux_chat` command adds an explicit terminal destination to a suppor
 recorded Chat view. It does not establish that the recorded file and a running agent
 process are the same session. It never launches an agent or uses a provider API.
 Without a verified display-owned tmux binding, ordinary terminal input and Stage
-remain the fallback. Herdr, Zellij and plain shells are outside this first slice.
+remain the fallback. Zellij and plain shells remain outside confirmed input. Guarded Herdr input is described below.
 
 The destination comes from the retained control channel on the authenticated
 terminal's immutable tmux server. It matches the original displayed client by
@@ -173,3 +173,33 @@ Primary contracts: [tmux 3.4 manual](https://github.com/tmux/tmux/blob/3.4/tmux.
 [Moshi Chat documentation](https://getmoshi.app/docs/chat-view). Moshi's published
 behavior describes same-terminal prompts and an Escape stop request; it does not
 provide an atomic foreground-process guarantee.
+
+## Guarded Herdr Chat controls
+
+An attached original guarded Herdr terminal can expose the same explicit Choose,
+Confirm, Send and Request stop controls. Stage remains the default. Choosing checks
+native availability and prepares the exact opened transcript source under the
+original attached child SSH session and access lease. Stock or unsupported Herdr
+keeps Stage and ordinary terminal use; the UI does not upgrade, attach or reconnect
+automatically.
+
+The confirmation displays public workspace, tab, pane and terminal identifiers
+and viewport geometry. These labels do not establish agent or provider identity.
+Confirmation reprepares and checks the same destination. Send preserves the same
+4,096-byte UTF-8/LF/TAB boundary; Request stop queues Escape. Acknowledgements mean
+queue admission, not execution, agent processing or that a process stopped. The
+Herdr path does not use tmux server-global paste buffers.
+
+An unconfirmed preparation candidate is already native-owned authority. Cancel,
+Clear, source/selector/view/image changes, transcript refresh, session/backend
+changes, access invalidation and unmount retire the matching local candidate or
+receipt with the original session and lease. Late replies are discarded and their
+known UUIDs are released best-effort. Revocation can prevent cleanup; no fresh
+authority is acquired to retry it. Submitted native work can outlive the view.
+Missing or malformed acknowledgements retain the draft, retire the confirmation
+and require inspection of the terminal; nothing is automatically resent.
+
+Frontend tests use synthetic native replies. They establish UI routing and lifecycle
+behavior, separately from the native adapter's owned SSH/guarded-server acceptance.
+They do not prove provider identity, physical-device behavior or atomic agent-message
+processing.

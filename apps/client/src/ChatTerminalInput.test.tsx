@@ -6,8 +6,9 @@ import {invoke} from '@tauri-apps/api/core';
 import {applyAccessStatus,bindProtectedInvoke,captureAccess} from './access';
 import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
 import {t,uiI18n} from './i18n/core';
-import ChatTerminalInput,{parseTerminalBinding,parseTerminalDelivered,parseTerminalSnapshot,validTerminalSource,validTerminalDraft} from './ChatTerminalInput';
+import ChatTerminalInput,{parseTerminalBinding,parseTerminalDelivered,parseTerminalSnapshot,parseHerdrPrepared,validTerminalSource,validTerminalDraft} from './ChatTerminalInput';
 
+import {herdrCandidate,herdrReceipt,herdrTarget,herdrPrepared,herdrBound,herdrChatReply} from './test/herdrChat';
 import {confirmChatTerminal as confirm} from './test/confirmChatTerminal';
 vi.mock('@tauri-apps/api/core',()=>({invoke:vi.fn()}));
 import {tmuxChatSource as source,tmuxChatTarget as target,tmuxChatReceipt as receipt,tmuxChatSnapshot as snapshot,tmuxChatBound as bound,tmuxChatReply as nativeReply,tmuxChatReaderSource} from './test/tmuxChat';
@@ -20,7 +21,7 @@ beforeEach(()=>{generation+=10;access();vi.mocked(invoke).mockReset().mockImplem
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 function fixture(overrides:Partial<ComponentProps<typeof ChatTerminalInput>>={}) {
   const lease=captureAccess(),sent=vi.fn();
-  const props:ComponentProps<typeof ChatTerminalInput>={sessionId:'ssh-display',source,labels:{hostLabel:'Connected host',terminalLabel:'Agent terminal'},access:lease,invoke:bindProtectedInvoke(lease),draft:'  你好 😀  ',draftRevision:7,composing:{current:false},compositionActive:false,onSent:sent,...overrides};
+  const props:ComponentProps<typeof ChatTerminalInput>={sessionId:'ssh-display',source,labels:{backend:'tmux' as const,hostLabel:'Connected host',terminalLabel:'Agent terminal'},access:lease,invoke:bindProtectedInvoke(lease),draft:'  你好 😀  ',draftRevision:7,composing:{current:false},compositionActive:false,onSent:sent,...overrides};
   return {props,sent,view:render(<ChatTerminalInput {...props}/>)};
 }
 it.each(['  你好 😀  ', '  first\n\té; \'"$()#{pane_id}\\ 世界\nlast  '])('requires confirmation and sequences exact Send/Stop bytes for %j',async draft=>{
@@ -150,4 +151,63 @@ it('rejects unknown agents and extra selector fields, retaining strict UTF-8 dat
     for(const transcriptSessionId of [null,undefined,'','😀'.repeat(65),'a'.repeat(257),'id\n','id\u0085','\ud800'])expect(validTerminalSource({...source,agent,transcriptSessionId})).toBe(false);
     for(const transcriptSessionId of ['  literal $t(id) 界  ','😀'.repeat(64),'a'.repeat(256)])expect(validTerminalSource({...source,agent,transcriptSessionId})).toBe(true);
   }
+});
+
+const herdrLabels={backend:'herdr' as const,hostLabel:'Original host',terminalLabel:'Original Herdr display'};
+function herdrFixture(overrides:Partial<ComponentProps<typeof ChatTerminalInput>>={}) {
+  vi.mocked(invoke).mockImplementation(herdrChatReply);
+  return fixture({labels:herdrLabels,...overrides});
+}
+it('requires explicit guarded Herdr preparation and confirmation on the original child session',async()=>{
+  const {sent}=herdrFixture({source:tmuxChatReaderSource('hermes','original-db-session'),draft:'- first\n\t世界'});
+  expect(invoke).not.toHaveBeenCalled();expect(screen.queryByText(t('chatTerminalPasteNote'))).toBeNull();await confirm();
+  expect(actions()).toEqual([{kind:'status'},{kind:'prepare',source:tmuxChatReaderSource('hermes','original-db-session')},{kind:'confirm',candidate:herdrCandidate,source:tmuxChatReaderSource('hermes','original-db-session')}]);
+  for(const value of [herdrTarget.workspace,herdrTarget.tab,herdrTarget.pane,herdrTarget.terminal])expect(screen.getByText(value)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByText(t('chatHerdrSent'));
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalStop')}));await screen.findByText(t('chatHerdrStopRequested'));
+  expect(actions().slice(3)).toEqual([{kind:'input',receipt:herdrReceipt,source:tmuxChatReaderSource('hermes','original-db-session'),operation:1,input:{kind:'send',text:'- first\n\t世界'}},{kind:'input',receipt:herdrReceipt,source:tmuxChatReaderSource('hermes','original-db-session'),operation:2,input:{kind:'request_stop'}}]);
+  expect(sent).toHaveBeenCalledExactlyOnceWith('- first\n\t世界',7);
+  expect(vi.mocked(invoke).mock.calls.every(([command,args])=>command==='herdr_chat' && (args as {sessionId:string}).sessionId==='ssh-display')).toBe(true);
+  expect(invoke).toHaveBeenLastCalledWith('herdr_chat',expect.anything(),{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+});
+it('releases an unconfirmed candidate on Cancel and never auto prepares again',async()=>{
+  herdrFixture();fireEvent.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalCancel')}));
+  expect(actions()).toEqual([{kind:'status'},{kind:'prepare',source},{kind:'release',receipt:herdrCandidate}]);
+  expect(screen.queryByRole('button',{name:t('chatTerminalSend')})).toBeNull();
+});
+it('keeps stock Herdr unavailable with Stage fallback and no preparation',async()=>{
+  herdrFixture();vi.mocked(invoke).mockResolvedValueOnce({kind:'status',available:false});
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));expect(await screen.findByRole('alert')).toHaveProperty('textContent',t('chatHerdrUnavailable'));
+  expect(actions()).toEqual([{kind:'status'}]);
+});
+it('validates exact public Herdr destinations without losing u64 precision',()=>{
+  expect(parseHerdrPrepared(herdrPrepared).destination.runtimeGeneration).toBe('18446744073709551615');
+  for(const generation of ['0','01','18446744073709551616','1\n',1])expect(()=>parseHerdrPrepared({...herdrPrepared,destination:{...herdrTarget,runtimeGeneration:generation}})).toThrow();
+  for(const destination of [{...herdrTarget,ownership:'never-display'},{...herdrTarget,workspace:'x'.repeat(129)},{...herdrTarget,pane:'bad\n'},{...herdrTarget,viewport:{...herdrTarget.viewport,width:0}},{...herdrTarget,viewport:{...herdrTarget.viewport,x:65536}}])expect(()=>parseHerdrPrepared({...herdrPrepared,destination})).toThrow();
+  expect(parseTerminalBinding({...herdrBound,destination:{...herdrTarget,viewport:{height:24,width:80,y:1,x:0}}},herdrTarget).receipt).toBe(herdrReceipt);
+  expect(()=>parseTerminalBinding({...herdrBound,destination:{...herdrTarget,terminal:'other'}},herdrTarget)).toThrow();
+});
+const herdrStaleCases=(['status','prepare','confirm','input'] as const).flatMap(stage=>(['session','source','backend','lease','unmount'] as const).flatMap(change=>(['success','failure'] as const).map(outcome=>({stage,change,outcome}))));
+it.each(herdrStaleCases)('retires Herdr $stage $outcome after $change without replay',async({stage,change,outcome})=>{
+  const {props,sent,view}=herdrFixture();let finish!:(value:unknown)=>void,reject!:(error:unknown)=>void;
+  vi.mocked(invoke).mockImplementation((command,args)=>(args as {action:{kind:string}}).action.kind===stage?new Promise((yes,no)=>{finish=yes;reject=no;}):herdrChatReply(command,args));
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalChoose')}));
+  if(stage==='confirm'||stage==='input')fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalConfirm')}));
+  if(stage==='input')fireEvent.click(await screen.findByRole('button',{name:t('chatTerminalSend')}));
+  await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  if(change==='session')view.rerender(<ChatTerminalInput {...props} sessionId="replacement"/>);
+  else if(change==='source')view.rerender(<ChatTerminalInput {...props} source={{...source,path:'/replacement.jsonl'}}/>);
+  else if(change==='backend')view.rerender(<ChatTerminalInput {...props} labels={{...herdrLabels,backend:'tmux'}}/>);
+  else if(change==='lease')await act(async()=>{access(true);access();});
+  else view.unmount();
+  await act(async()=>{if(outcome==='failure')reject({message:'obsolete detail'});else finish(stage==='status'?{kind:'status',available:true}:stage==='prepare'?herdrPrepared:stage==='confirm'?herdrBound:{kind:'delivered',nextOperation:2});});
+  expect(sent).not.toHaveBeenCalled();expect(screen.queryByRole('alert')).toBeNull();
+  if(stage==='status')expect(actions().filter(action=>action.kind==='prepare')).toHaveLength(0);
+  if(outcome==='success' && ['prepare','confirm'].includes(stage) && change!=='lease')expect(actions()).toContainEqual({kind:'release',receipt:stage==='prepare'?herdrCandidate:herdrReceipt});
+  expect(actions().filter(action=>action.kind==='input')).toHaveLength(stage==='input'?1:0);
+});
+it.each(['en','pt-BR','es'])('keeps Herdr confirmation and raw target labels through %s locale changes',async locale=>{
+  const {view}=herdrFixture();await confirm();const count=vi.mocked(invoke).mock.calls.length;
+  try {await act(async()=>{await uiI18n.changeLanguage(locale);});expect(screen.getByText(herdrTarget.tab)).toBeTruthy();expect(screen.getByRole('button',{name:t('chatTerminalSend')})).toBeTruthy();expect(invoke).toHaveBeenCalledTimes(count);}
+  finally {view.unmount();await act(async()=>{await uiI18n.changeLanguage('en');});}
 });

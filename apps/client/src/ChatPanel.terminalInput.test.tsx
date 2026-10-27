@@ -10,7 +10,7 @@ import {tmuxChatReply,tmuxChatReceipt,tmuxChatSource,tmuxChatReaderSource,tmuxCh
 import {confirmChatTerminal as confirmed} from './test/confirmChatTerminal';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCore(original));
 const page={schemaVersion:1,agent:'claude',messages:[],nextOffset:10,hasMore:false};
-const capability={hostLabel:'Actual connected host label',terminalLabel:'Attached tmux terminal'};
+const capability={backend:'tmux' as const,hostLabel:'Actual connected host label',terminalLabel:'Attached tmux terminal'};
 function actions(){return vi.mocked(invoke).mock.calls.filter(([command])=>command==='tmux_chat').map(([,args])=>(args as {action:Record<string,unknown>}).action);}
 beforeEach(()=>{
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(BigInt(accessSnapshot().status?.generation ?? '0')+1n),nonce:'a'.repeat(64)});
