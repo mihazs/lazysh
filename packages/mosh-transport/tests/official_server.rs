@@ -4,8 +4,61 @@ use std::{
     ffi::CStr,
     net::UdpSocket,
     process::{Command, Stdio},
+    sync::{Arc, Mutex},
     thread,
+    time::Instant,
 };
+
+const CAPTURE_LIMIT: usize = 16 * 1024 * 1024;
+
+#[derive(Default)]
+struct CaptureProgress {
+    retained_bytes: usize,
+    eof: bool,
+    first_read_ms: Option<u64>,
+    last_read_ms: Option<u64>,
+}
+
+fn capture(
+    mut input: impl std::io::Read,
+    progress: Arc<Mutex<CaptureProgress>>,
+    started: Instant,
+) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = input.read(&mut buffer).unwrap();
+        let elapsed = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let retained = count.min(CAPTURE_LIMIT.saturating_sub(output.len()));
+        output.extend_from_slice(&buffer[..retained]);
+        {
+            let mut progress = progress.lock().unwrap();
+            progress.retained_bytes = output.len();
+            if count == 0 {
+                progress.eof = true;
+            } else {
+                progress.first_read_ms.get_or_insert(elapsed);
+                progress.last_read_ms = Some(elapsed);
+            }
+        }
+        if count == 0 {
+            return output;
+        }
+    }
+}
+
+fn capture_snapshot(name: &str, progress: &Mutex<CaptureProgress>) -> String {
+    // Never wait for the reader at the timeout boundary. Each successful
+    // snapshot is coherent, but stdout/stderr are observed separately.
+    match progress.try_lock() {
+        Ok(progress) => format!(
+            "{name} retained_bytes={} eof={} first_read_ms={:?} last_read_ms={:?}\n",
+            progress.retained_bytes, progress.eof, progress.first_read_ms, progress.last_read_ms,
+        ),
+        Err(std::sync::TryLockError::WouldBlock) => format!("{name} snapshot=busy\n"),
+        Err(std::sync::TryLockError::Poisoned(_)) => format!("{name} snapshot=unavailable\n"),
+    }
+}
 
 fn bounded_output(
     mut command: Command,
@@ -13,22 +66,7 @@ fn bounded_output(
     on_timeout: impl FnOnce(u32) -> String,
 ) -> std::io::Result<(std::process::Output, bool, String)> {
     use std::os::unix::process::CommandExt;
-    use std::{
-        io::Read,
-        time::{Duration, Instant},
-    };
-    fn capture(mut input: impl Read) -> Vec<u8> {
-        let mut output = Vec::new();
-        let mut buffer = [0; 8192];
-        loop {
-            let count = input.read(&mut buffer).unwrap();
-            if count == 0 {
-                return output;
-            }
-            let retained = count.min((16 * 1024 * 1024_usize).saturating_sub(output.len()));
-            output.extend_from_slice(&buffer[..retained]);
-        }
-    }
+    use std::time::Duration;
     // Keep Cargo/compiler or adb children inside this fixture's process group.
     command.process_group(0);
     let mut child = command
@@ -37,8 +75,13 @@ fn bounded_output(
         .spawn()?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let out = thread::spawn(move || capture(stdout));
-    let err = thread::spawn(move || capture(stderr));
+    let started = Instant::now();
+    let out_progress = Arc::new(Mutex::new(CaptureProgress::default()));
+    let err_progress = Arc::new(Mutex::new(CaptureProgress::default()));
+    let out_state = out_progress.clone();
+    let err_state = err_progress.clone();
+    let out = thread::spawn(move || capture(stdout, out_state, started));
+    let err = thread::spawn(move || capture(stderr, err_state, started));
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
     let mut diagnostics = String::new();
@@ -48,9 +91,17 @@ fn bounded_output(
         }
         if Instant::now() >= deadline {
             timed_out = true;
+            // Freeze metadata before diagnostic work can produce later output.
+            // This observes pipe progress, never native process entry or exit.
+            let elapsed = started.elapsed().as_millis();
+            diagnostics = format!(
+                "capture_timeout elapsed_ms={elapsed} leader_pending=true\n{}{}",
+                capture_snapshot("stdout", &out_progress),
+                capture_snapshot("stderr", &err_progress),
+            );
             // Observe this still-owned process before reaping it. Diagnostics
             // have a separate fixed budget; they never retry the timed-out job.
-            diagnostics = on_timeout(child.id());
+            diagnostics.push_str(&on_timeout(child.id()));
             // SAFETY: this child created its own process group above. Its PID is
             // still owned and unreaped, so the group cannot refer to another job.
             unsafe {
@@ -562,6 +613,74 @@ fn ios_simulator_official_server_interoperability() {
 }
 
 #[test]
+fn capture_snapshot_freezes_progress_before_later_bytes_and_eof() {
+    use std::{io::Read, sync::mpsc, time::Duration};
+    struct ControlledRead {
+        chunks: mpsc::Receiver<Option<Vec<u8>>>,
+        requested: mpsc::SyncSender<()>,
+    }
+    impl Read for ControlledRead {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.requested.send(()).unwrap();
+            let Some(bytes) = self.chunks.recv().unwrap() else {
+                return Ok(0);
+            };
+            buffer[..bytes.len()].copy_from_slice(&bytes);
+            Ok(bytes.len())
+        }
+    }
+    let (chunks, input) = mpsc::sync_channel(0);
+    let (requested, reads) = mpsc::sync_channel(0);
+    let progress = Arc::new(Mutex::new(CaptureProgress::default()));
+    let worker_progress = progress.clone();
+    let worker = thread::spawn(move || {
+        capture(
+            ControlledRead {
+                chunks: input,
+                requested,
+            },
+            worker_progress,
+            Instant::now(),
+        )
+    });
+    reads.recv_timeout(Duration::from_secs(2)).unwrap();
+    chunks.send(Some(b"listing".to_vec())).unwrap();
+    reads.recv_timeout(Duration::from_secs(2)).unwrap();
+    let snapshot = capture_snapshot("stdout", &progress);
+    assert!(snapshot.contains("retained_bytes=7 eof=false"));
+    assert!(snapshot.contains("first_read_ms=Some("));
+    assert!(snapshot.contains("last_read_ms=Some("));
+    assert!(!snapshot.contains("listing"));
+    chunks.send(Some(b"-late".to_vec())).unwrap();
+    reads.recv_timeout(Duration::from_secs(2)).unwrap();
+    chunks.send(None).unwrap();
+    assert_eq!(worker.join().unwrap(), b"listing-late");
+    assert!(capture_snapshot("stdout", &progress).contains("retained_bytes=12 eof=true"));
+    assert!(snapshot.contains("retained_bytes=7 eof=false"));
+}
+
+#[test]
+fn capture_metadata_stays_capped_and_busy_snapshots_never_wait() {
+    use std::io::Read;
+    let progress = Arc::new(Mutex::new(CaptureProgress::default()));
+    let output = capture(
+        std::io::repeat(b'x').take((CAPTURE_LIMIT + 8192) as u64),
+        progress.clone(),
+        Instant::now(),
+    );
+    assert_eq!(output.len(), CAPTURE_LIMIT);
+    let snapshot = capture_snapshot("stderr", &progress);
+    assert!(snapshot.contains(&format!("retained_bytes={CAPTURE_LIMIT} eof=true")));
+    assert!(snapshot.len() < 256);
+    let held = progress.lock().unwrap();
+    assert_eq!(
+        capture_snapshot("stderr", &progress),
+        "stderr snapshot=busy\n"
+    );
+    assert!(held.first_read_ms <= held.last_read_ms);
+}
+
+#[test]
 fn timed_out_fixture_reports_captured_diagnostics() {
     let started = std::time::Instant::now();
     let failure = std::panic::catch_unwind(|| {
@@ -581,6 +700,9 @@ fn timed_out_fixture_reports_captured_diagnostics() {
         .downcast_ref::<String>()
         .expect("diagnostic panic text");
     assert!(message.contains("exceeded its deadline"));
+    assert!(message.contains("capture_timeout elapsed_ms="));
+    assert!(message.contains("stdout retained_bytes="));
+    assert!(message.contains("stderr retained_bytes="));
     assert!(message.contains("native-fixture-ready"));
     assert!(message.contains("LAZYSH_MOSH_TEST_ONE_KEY=<redacted>"));
     assert!(!message.contains("private-argv-value"));
@@ -609,7 +731,8 @@ fn timeout_observer_sees_owned_process_before_its_group_is_reaped() {
         })
         .unwrap();
     assert!(timed_out);
-    assert_eq!(diagnostics, "owned process observed");
+    assert!(diagnostics.starts_with("capture_timeout elapsed_ms="));
+    assert_eq!(diagnostics.lines().last(), Some("owned process observed"));
     let pid = observed.expect("deadline must observe the child before terminating it");
     assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
     assert_eq!(
