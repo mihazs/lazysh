@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add the native guarded-Herdr SSH prerequisite: consume private startup credentials before display output and bind explicit terminal preparations to the original connection and access proof. Frontend Herdr Chat controls remain disabled; unsupported builds keep ordinary attachment, and uncertain guarded starts are not retried automatically.
+
 - Defer iOS status review-channel startup registration until all native plugins finish initialization, removing a startup ordering hazard observed in a retained second-launch crash. Readiness deadlines and native privacy/authentication behavior are unchanged.
 
 - Add an optional source-built Herdr guarded-input protocol prerequisite, with exact original-client ownership, explicit expiring bindings and bounded two-stage input admission. Stock attach and lazysh Chat defaults remain unchanged; the native lazysh adapter is separate work.

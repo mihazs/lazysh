@@ -66,16 +66,17 @@ pub struct Viewport {
     pub(crate) height: u16,
 }
 
+#[path = "../common/src/guarded_target.rs"]
+mod guarded_target;
+
 impl Target {
     pub(crate) fn valid(&self) -> bool {
-        [&self.workspace, &self.tab, &self.pane, &self.terminal]
-            .iter()
-            .all(|value| {
-                !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-            })
-            && self.runtime_generation > 0
-            && self.viewport.width > 0
-            && self.viewport.height > 0
+        guarded_target::valid_guarded_target(
+            [&self.workspace, &self.tab, &self.pane, &self.terminal],
+            self.runtime_generation,
+            self.viewport.width,
+            self.viewport.height,
+        )
     }
 }
 

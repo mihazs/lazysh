@@ -18,6 +18,9 @@ mod shutdown;
 #[path = "tmux_teardown_diagnostics.rs"]
 mod teardown;
 
+#[path = "herdr_guard_fixture.rs"]
+mod herdr_guard;
+
 // Observe task completion, including an error result, without issuing another
 // disconnect or exposing a peer diagnostic. Return only whether its first poll
 // was pending.
@@ -2255,7 +2258,14 @@ impl HerdrServers<'_> {
             output.stdout.len() <= 1024 * 1024,
             "owned Herdr response exceeded fixture bound"
         );
-        serde_json::from_slice(&output.stdout).unwrap()
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "owned Herdr JSON failed: {error}; command={:?}; stdout_bytes={}; stderr_bytes={}",
+                &args[..args.len().min(2)],
+                output.stdout.len(),
+                output.stderr.len()
+            )
+        })
     }
     async fn start(&mut self, name: &'static str) {
         let mut command = self.command(name);
@@ -2431,6 +2441,36 @@ async fn herdr_source_probe(
         "attachment command reached source foreground"
     );
 }
+fn herdr_native_app(fixture: &Fixture) -> (tauri::App<tauri::test::MockRuntime>, AppState) {
+    let state = AppState::new(fixture.dir.path().join("herdr-hosts")).unwrap();
+    state.config().unwrap().hosts.push(fixture.host.clone());
+    let app = tauri::test::mock_app();
+    app.manage(state.clone());
+    app.manage(crate::local::LocalState::default());
+    (app, state)
+}
+async fn herdr_echo_source(
+    fixture: &Fixture,
+    state: &AppState,
+    lease: &AccessLease,
+) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
+    let (events, receiver) = super::test_support::json_events();
+    let (channel, initial) =
+        open_terminal_for(fixture.handle(), lease, 80, 24, Some("exec cat".into()))
+            .await
+            .unwrap();
+    let source = spawn_terminal(
+        state,
+        lease.clone(),
+        fixture.handle().clone(),
+        channel,
+        initial,
+        events,
+    )
+    .await
+    .unwrap();
+    (source, receiver)
+}
 async fn herdr_child(
     app: &tauri::App<tauri::test::MockRuntime>,
     lease: &AccessLease,
@@ -2537,11 +2577,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
             )
             .await;
     }
-    let state = AppState::new(f.dir.path().join("herdr-hosts")).unwrap();
-    state.config().unwrap().hosts.push(f.host.clone());
-    let app = tauri::test::mock_app();
-    app.manage(state.clone());
-    app.manage(crate::local::LocalState::default());
+    let (app, state) = herdr_native_app(&f);
     let authority = unlocked_access();
     let lease = ready_lease(&authority);
     let (launch, receipt, prepared) = f.prepare_launch(&state, &lease, "herdr");
@@ -2554,20 +2590,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         .await
         .unwrap();
     assert_eq!(bound.credential_binding(), f.host.credential_binding());
-    let (events, mut source_events) = super::test_support::json_events();
-    let (channel, initial) = open_terminal_for(f.handle(), &lease, 80, 24, Some("exec cat".into()))
-        .await
-        .unwrap();
-    let source = spawn_terminal(
-        &state,
-        lease.clone(),
-        f.handle().clone(),
-        channel,
-        initial,
-        events,
-    )
-    .await
-    .unwrap();
+    let (source, mut source_events) = herdr_echo_source(&f, &state, &lease).await;
     attempt.finish();
     drop(guard);
     adopt_session(

@@ -71,6 +71,8 @@ jobs:
   # Source/build contract: packages/herdr-upstream/PROVENANCE.md and ../herdr-guard/README.md.
   herdr-native:
     runs-on: ubuntu-24.04
+    outputs:
+      guarded-sha256: ${{ steps.guarded-artifact.outputs.sha256 }}
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: "2"
@@ -93,10 +95,11 @@ jobs:
           mkdir -p "$HERDR_CI_ROOT/common/src"
           cp -a packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           cp -a packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
-          cp packages/common/src/hex_digest.rs "$HERDR_CI_ROOT/common/src/hex_digest.rs"
+          cp packages/common/src/{hex_digest,guarded_target}.rs "$HERDR_CI_ROOT/common/src/"
           diff --recursive --brief --no-dereference packages/herdr-upstream "$HERDR_CI_ROOT/herdr-upstream"
           diff --recursive --brief --no-dereference packages/herdr-guard "$HERDR_CI_ROOT/herdr-guard"
           diff packages/common/src/hex_digest.rs "$HERDR_CI_ROOT/common/src/hex_digest.rs"
+          diff packages/common/src/guarded_target.rs "$HERDR_CI_ROOT/common/src/guarded_target.rs"
       - name: Check the pinned official Rust release manifest
         # Receipt: https://static.rust-lang.org/dist/channel-rust-1.96.1.toml.sha256
         # Rustup independently verifies the component archives against this release manifest.
@@ -144,7 +147,21 @@ jobs:
           unset HERDR_UPDATE_API_SCHEMA
           cargo +1.96.1 test --locked --bin herdr api::schema::tests::generated_protocol_schema_artifact_is_current -- --exact
 
+      - name: Retain the exact guarded binary for native SSH interoperability
+        id: guarded-artifact
+        run: |
+          mkdir -p "$HERDR_CI_ROOT/guarded-artifact"
+          cp "$CARGO_TARGET_DIR/debug/herdr" "$HERDR_CI_ROOT/guarded-artifact/herdr"
+          printf 'sha256=%s\n' "$(sha256sum "$HERDR_CI_ROOT/guarded-artifact/herdr" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-herdr-native/guarded-artifact/herdr
+          if-no-files-found: error
+          retention-days: 3
+
   native-linux:
+    needs: herdr-native
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -166,6 +183,20 @@ jobs:
       - run: bun run test:mosh
       - name: Exercise retained tmux display navigation and hostile control streams
         run: bunx turbo run test:tmux --filter=@lazysh/client
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-guarded-herdr
+      - name: Verify same-run guarded binary and exercise owned SSH binding
+        env:
+          GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
+          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-guarded-herdr/herdr
+        run: |
+          cd "$RUNNER_TEMP/lazysh-guarded-herdr"
+          printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
+          chmod 700 herdr
+          cd "$GITHUB_WORKSPACE"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
 
   native-desktop:
     strategy:

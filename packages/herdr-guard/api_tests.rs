@@ -195,3 +195,41 @@ fn guarded_publication_does_not_swallow_closed_peer_write_failure() {
         "uncertain guarded publication reported success"
     );
 }
+
+#[test]
+fn invalid_preparation_availability_probe_never_enters_the_actor() {
+    use interprocess::local_socket::traits::Stream as _;
+    use std::io::Read;
+    let (client, server, _directory) = pair();
+    client
+        .set_recv_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let (sender, mut receive) = tokio::sync::mpsc::unbounded_channel();
+    let placeholder = Secret::try_from("0".repeat(64)).unwrap();
+    let request = Request {
+        id: "guard".into(),
+        method: Method::GuardCancelPreparation(CancelPreparationParams {
+            boot: placeholder.clone(),
+            ownership: placeholder,
+            preparation: 0,
+        }),
+    };
+    serve(
+        server,
+        request,
+        512,
+        &sender,
+        &Arc::new(AtomicBool::new(true)),
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    client.take(1024).read_to_end(&mut response).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&response).unwrap(),
+        serde_json::json!({"id":"guard","error":{"code":"guard_invalid","message":"guard_invalid"}})
+    );
+    assert!(matches!(
+        receive.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}

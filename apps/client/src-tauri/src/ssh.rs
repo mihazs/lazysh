@@ -30,6 +30,8 @@ const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+pub(crate) use tests::guard_admission_fixture;
 #[cfg(all(test, unix))]
 #[path = "tmux_jump_fixture.rs"]
 mod tmux_jump_fixture;
@@ -691,6 +693,7 @@ pub(crate) struct Session {
     pub(crate) cancel: watch::Sender<bool>,
     validate_size: fn(u32, u32) -> Result<()>,
     pub(crate) tmux: StdMutex<Option<crate::tmux_jump::Binding>>,
+    pub(crate) herdr: StdMutex<Option<crate::herdr_guard::Binding>>,
     pub(crate) tmux_server: StdMutex<Option<crate::tmux_server::TmuxServer>>,
 }
 impl Session {
@@ -708,6 +711,7 @@ impl Session {
             cancel,
             validate_size,
             tmux: StdMutex::new(None),
+            herdr: StdMutex::new(None),
             tmux_server: StdMutex::new(None),
             output_credits: Semaphore::new(OUTPUT_WINDOW as usize),
             output_inflight: StdMutex::new(0),
@@ -1348,7 +1352,7 @@ async fn start_session(
     )
     .await
 }
-const OUTPUT_WINDOW: u32 = 256 * 1024;
+pub(crate) const OUTPUT_WINDOW: u32 = 256 * 1024;
 /// A channel must remain close-owned even before a terminal task is registered.
 /// russh's raw Channel Drop does not request remote close on retained SSH.
 pub(crate) struct OwnedChannel {
@@ -2830,19 +2834,39 @@ pub async fn attach_multiplexer(
                 ));
             }
             check_size(cols, rows)?;
-            let command = crate::multiplexer::attach_command(kind, &name)?;
+            let ordinary_command = crate::multiplexer::attach_command(kind, &name)?;
             let parent = state.session(&session_id).await?;
-            let (channel, initial) =
-                open_terminal_for(&parent.handle, &lease, cols, rows, Some(command)).await?;
-            spawn_terminal(
-                &state,
-                lease.clone(),
-                parent.handle.clone(),
-                channel,
-                initial,
-                events,
-            )
-            .await
+            let guarded = matches!(kind, crate::multiplexer::MultiplexerKind::Herdr)
+                && crate::herdr_guard::available(&parent, &name, &lease).await;
+            lease.check()?;
+            let mut cancellation = parent.cancel.subscribe();
+            if *cancellation.borrow() {
+                return Err(SshError::new("disconnected", "Session closed"));
+            }
+            let command = if guarded { crate::herdr_guard::attach_command(&name) } else { ordinary_command };
+            let (mut channel, initial) = tokio::select! { biased;
+                _ = cancellation.changed() => return Err(SshError::new("disconnected", "Session closed")),
+                result = open_terminal_for(&parent.handle, &lease, cols, rows, Some(command)) => result?,
+            };
+            let (startup, initial) = if guarded {
+                // A failed/uncertain private start closes this owned channel. Never
+                // retry ordinary attachment or expose any unconsumed startup bytes.
+                let (startup, initial) = crate::herdr_guard::acquire(&parent, &lease, &name, &mut channel, initial).await?;
+                (Some(startup), initial)
+            } else { (None, initial) };
+            let connected = spawn_terminal(
+                &state, lease.clone(), parent.handle.clone(), channel, initial, events,
+            ).await?;
+            if *cancellation.borrow() {
+                disconnect_inner(&state, connected.session_id).await?;
+                return Err(SshError::new("disconnected", "Session closed"));
+            }
+            if let Some(startup) = startup {
+                let child = state.session(&connected.session_id).await?;
+                *child.herdr.lock().map_err(|_| SshError::new("herdr_chat_unavailable", "Cannot bind Herdr display"))? =
+                    Some(crate::herdr_guard::start(startup, child.handle.clone(), child.cancel.subscribe()));
+            }
+            Ok(connected)
         })
         .await
 }
@@ -3721,6 +3745,67 @@ mod tests {
         let (cancel, _) = watch::channel(false);
         let session = Arc::new(Session::new(handle, input, cancel, lease, check_size));
         (state, directory, host, server, task, session)
+    }
+    pub(crate) struct GuardAdmissionFixture {
+        pub(crate) session: Arc<Session>,
+        server: TestServer,
+        task: tokio::task::JoinHandle<()>,
+        _directory: tempfile::TempDir,
+        _state: AppState,
+    }
+    impl GuardAdmissionFixture {
+        pub(crate) fn hold(&self) {
+            self.server.hold_opens.store(true, Ordering::SeqCst);
+        }
+        pub(crate) fn quiet(&self) {
+            self.server.tmux_metadata.store(true, Ordering::SeqCst);
+        }
+        pub(crate) async fn channel(&self, lease: &AccessLease) -> OwnedChannel {
+            open_owned_channel(
+                &self.session.handle,
+                lease,
+                tokio::time::Instant::now() + OP_TIMEOUT,
+            )
+            .await
+            .unwrap()
+        }
+        pub(crate) async fn opened(&self) {
+            timeout(OP_TIMEOUT, self.server.open_started.notified())
+                .await
+                .unwrap();
+        }
+        pub(crate) async fn release(&self) {
+            release_held_opens(&self.server).await;
+        }
+        pub(crate) fn private_execs(&self) -> usize {
+            self.server
+                .commands
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|command| command.ends_with("api guarded"))
+                .count()
+        }
+        pub(crate) async fn closed(&self) {
+            let channel = self.server.opening_channel.lock().unwrap().unwrap();
+            assert!(observe_channel_close(&self.server, channel).await);
+        }
+    }
+    impl Drop for GuardAdmissionFixture {
+        fn drop(&mut self) {
+            self.session.cancel.send_replace(true);
+            self.task.abort();
+        }
+    }
+    pub(crate) async fn guard_admission_fixture(lease: AccessLease) -> GuardAdmissionFixture {
+        let (state, directory, _, server, task, session) = auxiliary_fixture(lease).await;
+        GuardAdmissionFixture {
+            session,
+            server,
+            task,
+            _directory: directory,
+            _state: state,
+        }
     }
     async fn release_held_opens(server: &TestServer) {
         server.hold_opens.store(false, Ordering::SeqCst);
