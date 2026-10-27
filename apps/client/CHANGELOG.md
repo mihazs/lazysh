@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.9.0
+
+### Minor Changes
+
+- ee9c0a9: Add explicit confirmed Chat input for original guarded Herdr terminals with candidate cleanup, preserved transcript/session authority and manual fallback.
+
+### Patch Changes
+
+- @lazysh/common@0.9.0
+  - @lazysh/display-idle@0.9.0
+  - @lazysh/et-transport@0.9.0
+  - @lazysh/mosh-transport@0.9.0
+
 ## 0.8.0
 
 ### Minor Changes
