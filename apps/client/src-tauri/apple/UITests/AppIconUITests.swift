@@ -1,7 +1,51 @@
 import CoreGraphics
+import Dispatch
 import XCTest
 
-private enum IconConfirmationOwner: String, Hashable { case springboard, app }
+private enum IconConfirmationOwner: String, Hashable, Encodable { case springboard, app }
+private enum IconWaitPhase: String, Encodable { case exists, snapshot, hittability, tap, readback }
+private enum IconReadback: String, Encodable { case defaultIcon = "Default", amber = "Amber", unknown }
+
+private final class IconWaitTiming: Encodable {
+  private struct Sample: Encodable {
+    let owner: IconConfirmationOwner
+    let phase: IconWaitPhase
+    let elapsedMs: UInt64
+    let durationMs: UInt64
+    let clamped: Bool
+    let result: Bool?
+  }
+  private enum CodingKeys: String, CodingKey { case expected, count, saturated, first, last, slowest }
+  private let start: UInt64
+  private let expected: IconReadback
+  private var count = 0
+  private var saturated = false
+  private var first: Sample?
+  private var last: Sample?
+  private var slowest: Sample?
+  init(start: UInt64, expected: String) { self.start = start; self.expected = IconReadback(rawValue: expected) ?? .unknown }
+  func record(_ owner: IconConfirmationOwner, _ phase: IconWaitPhase, from: UInt64, to: UInt64, result: Bool?) {
+    let elapsed = to >= start ? (to - start) / 1_000_000 : 0
+    let duration = to >= from ? (to - from) / 1_000_000 : 0
+    let sample = Sample(owner: owner, phase: phase, elapsedMs: min(elapsed, 120_000),
+      durationMs: min(duration, 120_000), clamped: elapsed > 120_000 || duration > 120_000, result: result)
+    if count < 1_000 { count += 1 } else { saturated = true }
+    if first == nil { first = sample }
+    last = sample
+    if slowest == nil || sample.durationMs > slowest!.durationMs { slowest = sample }
+  }
+  func measure<T>(_ owner: IconConfirmationOwner, _ phase: IconWaitPhase, _ action: () -> T,
+    result: (T) -> Bool? = { _ in nil }) -> T {
+    let before = DispatchTime.now().uptimeNanoseconds
+    let value = action()
+    record(owner, phase, from: before, to: DispatchTime.now().uptimeNanoseconds, result: result(value))
+    return value
+  }
+  func report() -> String? {
+    guard let data = try? JSONEncoder().encode(self), data.count <= 1_024 else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+}
 
 private func iconConfirmationRecord(owner: IconConfirmationOwner, frame: CGRect?) -> String {
   let prefix = "LAZYSH_ICON_CONFIRM owner=\(owner.rawValue) stage=before_hittability"
@@ -13,6 +57,43 @@ private func iconConfirmationRecord(owner: IconConfirmationOwner, frame: CGRect?
 
 /// Valid UIKit mutations run out-of-process so SpringBoard confirmation remains controllable.
 final class AppIconUITests: XCTestCase {
+  func testIconWaitTimingIsFiniteBoundedAndUsesOnlyExistingResults() throws {
+    let timing = IconWaitTiming(start: 1_000_000, expected: "Default")
+    timing.record(.springboard, .exists, from: 1_000_000, to: 11_171_000_000, result: true)
+    timing.record(.springboard, .snapshot, from: 11_171_000_000, to: 11_338_000_000, result: true)
+    timing.record(.app, .readback, from: 13_000_000_000, to: 13_001_000_000, result: false)
+    func decoded(_ value: IconWaitTiming) throws -> [String: Any] {
+      try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(value.report()).utf8)) as? [String: Any])
+    }
+    let report = try decoded(timing)
+    XCTAssertEqual(Set(report.keys), Set(["expected", "count", "saturated", "first", "last", "slowest"]))
+    XCTAssertEqual(report["expected"] as? String, "Default")
+    XCTAssertEqual(report["count"] as? Int, 3)
+    let slowest = try XCTUnwrap(report["slowest"] as? [String: Any])
+    XCTAssertEqual(Set(slowest.keys), Set(["owner", "phase", "elapsedMs", "durationMs", "clamped", "result"]))
+    XCTAssertEqual(slowest["phase"] as? String, "exists")
+    XCTAssertEqual(slowest["durationMs"] as? Int, 11_170)
+    XCTAssertEqual((report["last"] as? [String: Any])?["result"] as? Bool, false)
+    let capped = IconWaitTiming(start: 1_000_000, expected: "private-label-sentinel")
+    capped.record(.app, .tap, from: 0, to: UInt64.max, result: nil)
+    for _ in 0..<1_001 { capped.record(.app, .readback, from: 2, to: 1, result: false) }
+    let bound = try decoded(capped)
+    XCTAssertEqual(bound["expected"] as? String, "unknown")
+    XCTAssertFalse(try XCTUnwrap(capped.report()).contains("sentinel"))
+    XCTAssertEqual(bound["count"] as? Int, 1_000); XCTAssertEqual(bound["saturated"] as? Bool, true)
+    let maximum = try XCTUnwrap(bound["slowest"] as? [String: Any])
+    XCTAssertEqual(maximum["elapsedMs"] as? Int, 120_000)
+    XCTAssertEqual(maximum["durationMs"] as? Int, 120_000)
+    XCTAssertEqual(maximum["clamped"] as? Bool, true)
+    XCTAssertNil(maximum["result"]) // A completed tap call does not claim input delivery.
+    XCTAssertEqual((bound["last"] as? [String: Any])?["durationMs"] as? Int, 0)
+    XCTAssertLessThanOrEqual(try XCTUnwrap(capped.report()).utf8.count, 1_024)
+    var calls = 0
+    let measured = IconWaitTiming(start: DispatchTime.now().uptimeNanoseconds, expected: "Amber")
+    XCTAssertFalse(measured.measure(.app, .readback, { calls += 1; return false }, result: { $0 }))
+    XCTAssertEqual(calls, 1)
+    XCTAssertEqual(try decoded(measured)["count"] as? Int, 1)
+  }
   func testConfirmationProbeRetainsOnlyFiniteBoundedFields() {
     let prefix = "LAZYSH_ICON_CONFIRM owner=app stage=before_hittability"
     let cases: [(CGRect?, String)] = [
@@ -135,22 +216,28 @@ final class AppIconUITests: XCTestCase {
   private func awaitIcon(_ value: String, app: XCUIApplication, springboard: XCUIApplication) -> Bool {
     let current = app.webViews.staticTexts["Current icon: " + value].firstMatch
     var observed = Set<IconConfirmationOwner>()
+    let timing = IconWaitTiming(start: DispatchTime.now().uptimeNanoseconds, expected: value)
     let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
       for (name, owner) in [(IconConfirmationOwner.springboard, springboard), (.app, app)] {
         let ok = owner.alerts.buttons["OK"].firstMatch
-        if ok.exists {
+        if timing.measure(name, .exists, { ok.exists }, result: { $0 }) {
           // One extra throwing snapshot per owner, never a new wait or retry.
           // Do not print labels, values, coordinates, hierarchy or raw errors.
           if observed.insert(name).inserted {
             print("LAZYSH_ICON_CONFIRM owner=\(name.rawValue) stage=before_snapshot")
-            print(iconConfirmationRecord(owner: name, frame: try? ok.snapshot().frame))
+            let frame = timing.measure(name, .snapshot, { try? ok.snapshot().frame }, result: { $0 != nil })
+            print(iconConfirmationRecord(owner: name, frame: frame))
           }
-          if ok.isHittable { ok.tap() }
+          if timing.measure(name, .hittability, { ok.isHittable }, result: { $0 }) {
+            timing.measure(name, .tap, { ok.tap() })
+          }
         }
       }
-      return current.exists
+      return timing.measure(.app, .readback, { current.exists }, result: { $0 })
     }, object: nil)
     let result = XCTWaiter.wait(for: [completed], timeout: 20)
+    // Reuse existing observations; never add an accessibility query to time one.
+    if let record = timing.report() { print("LAZYSH_ICON_WAIT " + record) }
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = "Actual icon readback: " + value
     attachment.lifetime = .keepAlways

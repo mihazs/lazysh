@@ -3,7 +3,7 @@ import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'no
 import {tmpdir, userInfo} from 'node:os';
 import {isAbsolute, join, resolve} from 'node:path';
 import {createServer, connect} from 'node:net';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import type {HerdrFixture} from './androidHerdr';
 
 const OUTPUT_LIMIT=16*1024;
@@ -253,10 +253,10 @@ export async function packageExitInfo(adb:string,serial:string) {
 
 // Only observations of the explicitly selected emulator; no raw command output is retained.
 export async function emulatorContinuity(adb:string,serial:string,reverse:string|undefined,targetPort:number) {
-  const summary:{connection:string;process:string;mainPids:number[];reverse:string}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created'};
-  await Promise.all((['connection','process','reverse'] as const).map(async kind=>{
+  const summary:{connection:string;process:string;mainPids:number[];reverse:string;transport:string;transportHash:string|null;boot:string;bootHash:string|null}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created',transport:'unavailable',transportHash:null,boot:'unavailable',bootHash:null};
+  await Promise.all((['connection','process','reverse','transport','boot'] as const).map(async kind=>{
     if(kind==='reverse' && !reverse)return;
-    const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:['reverse','--list'];
+    const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:kind==='transport'?['transport-id']:kind==='boot'?['shell','cat','/proc/sys/kernel/random/boot_id']:['reverse','--list'];
     const owned=new OwnedProcess(adb,['-s',serial,...args],undefined,process.env,false);
     let output='',overflow=false;
     owned.child.stdout!.on('data',(data:Buffer)=>{
@@ -266,6 +266,12 @@ export async function emulatorContinuity(adb:string,serial:string,reverse:string
     try {
       await owned.finish('owned emulator continuity',1000);
       if(overflow){summary[kind]='overflow';return;}
+      if(kind==='transport' || kind==='boot') {
+        const value=output.trim();
+        const valid=kind==='transport'?/^[1-9][0-9]{0,19}$/.test(value) && BigInt(value)<=18446744073709551615n:/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+        summary[kind]=valid?'available':'unrecognized';
+        if(valid)summary[kind==='boot'?'bootHash':'transportHash']=createHash('sha256').update(value.toLowerCase()).digest('hex');
+      }
       if(kind==='connection')summary.connection=['device','offline','unknown'].includes(output.trim())?output.trim():'unrecognized';
       if(kind==='process') {
         const tokens=output.trim().split(/\s+/);
@@ -280,6 +286,15 @@ export async function emulatorContinuity(adb:string,serial:string,reverse:string
     } catch {summary[kind]='unavailable';}
   }));
   return summary;
+}
+
+// Equality brackets two samples only; ADB can reuse transport IDs after a restart.
+export function compareEmulatorContinuity(before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined,after:Awaited<ReturnType<typeof emulatorContinuity>>) {
+  const compare=(kind:'transport'|'boot')=>{
+    const key=kind==='boot'?'bootHash':'transportHash';
+    return before?.[kind]==='available' && after[kind]==='available' && before[key] && after[key]?(before[key]===after[key]?'same':'changed'):'unknown';
+  };
+  return {transport:compare('transport'),boot:compare('boot'),reverseLost:before && ['present','missing'].includes(before.reverse) && ['present','missing'].includes(after.reverse)?before.reverse==='present' && after.reverse==='missing':null};
 }
 
 type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH';
@@ -297,6 +312,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const remote=`/data/local/tmp/lazysh-ui-ssh-${fixture.nonce}`;
   let reverse:string|undefined;
   let remoteCreated=false;
+  let before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined;
   let primary=false;
   const shell=(args:string[])=>command('owned emulator command',adb,['-s',serial,...args]);
   try {
@@ -309,6 +325,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{})}),{mode:0o600});
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
+    try {before=await emulatorContinuity(adb,serial,reverse,fixture.port);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
     const android=join(root,'apps/client/src-tauri/gen/android');
     const gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
@@ -323,7 +340,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
       const [exitInfo,continuity]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port)]);
-      const summary={...exitInfo,continuity};
+      const summary={...exitInfo,continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}

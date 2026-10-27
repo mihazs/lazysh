@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.10.0
+
+### Minor Changes
+
+- 491a8b9: Add uploaded host-local attachment paths explicitly to an existing Chat draft without automatic send or clipboard effects.
+
+### Patch Changes
+
+- @lazysh/common@0.10.0
+  - @lazysh/display-idle@0.10.0
+  - @lazysh/et-transport@0.10.0
+  - @lazysh/mosh-transport@0.10.0
+
 ## 0.9.1
 
 ### Patch Changes

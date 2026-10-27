@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an explicit attachment editor within Chat. Uploads preserve the existing draft; Add uploaded path appends only the canonical host path without sending, staging or copying automatically. Existing upload/access/cancellation guards and defaults remain unchanged.
+
 - Keep retained native access-status and unlock errors in the current interface language without repeating authentication checks, ready acknowledgements or protected workspace mounts. Access policy and defaults are unchanged.
 
 - Add explicit confirmed Chat input for original guarded Herdr terminals. Stage remains default; preparation candidates are retired on cancellation or context changes, uncertain input is never retried, and acknowledgements establish queue admission rather than agent execution.
