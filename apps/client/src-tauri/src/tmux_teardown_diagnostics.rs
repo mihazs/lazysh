@@ -132,6 +132,18 @@ mod linux {
                 *before = read(*pid);
             }
         }
+        pub(super) fn same_state(&self, index: usize) -> Option<char> {
+            let (pid, original, _) = self.0.get(index)?;
+            match (*original, read(*pid)) {
+                (
+                    Sample::Observed {
+                        start: expected, ..
+                    },
+                    Sample::Observed { start, state },
+                ) if expected == start => Some(state),
+                _ => None,
+            }
+        }
         pub(super) fn failure(&self) -> String {
             // Only ordinal, finite state, identity comparison and I/O kind leave
             // this module. Never format comm, raw stat bytes, paths or errors.
@@ -216,6 +228,10 @@ impl Processes {
     pub(super) fn before_stop(&mut self) {
         #[cfg(target_os = "linux")]
         self.inner.before_stop();
+    }
+    #[cfg(target_os = "linux")]
+    pub(super) fn same_state(&self, index: usize) -> Option<char> {
+        self.inner.same_state(index)
     }
     pub(super) fn failure(&self) -> String {
         #[cfg(target_os = "linux")]

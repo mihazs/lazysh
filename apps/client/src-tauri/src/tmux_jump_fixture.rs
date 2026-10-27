@@ -12,8 +12,26 @@ type Probe<T> = std::result::Result<T, String>;
 
 #[path = "tmux_multiline_fixture.rs"]
 mod multiline;
+#[cfg(target_os = "linux")]
+#[path = "tmux_shutdown_fixture.rs"]
+mod shutdown;
 #[path = "tmux_teardown_diagnostics.rs"]
 mod teardown;
+
+// Observe task completion, including an error result, without issuing another
+// disconnect or exposing a peer diagnostic. Return only whether its first poll
+// was pending.
+async fn completed_transport(mut transport: russh::client::Handle<HostVerifier>) -> bool {
+    use std::future::Future;
+    let pending = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::pin::Pin::new(&mut transport).poll(cx).is_pending())
+    })
+    .await;
+    if pending {
+        let _ = transport.await;
+    }
+    pending
+}
 
 fn fixture_key() -> russh::keys::PrivateKey {
     russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()
@@ -2091,6 +2109,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     let fresh = f.fresh_handle(&second.state()).await;
     assert!(!fresh.is_closed());
     let fresh_weak = Arc::downgrade(&fresh);
+    let fresh_transport = fresh.handle.clone();
     let (restored, mut restored_events) =
         reconnect_display(&second, &lease, fresh, saved_server, &saved_name).await;
     assert_reconnected_output(
@@ -2119,13 +2138,26 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         .state::<AppState>()
         .cancel_for_renderer_rebind()
         .await;
-    timeout(BOUND, async {
+    let mut retirement_phase = "wrapper";
+    let task_pending = timeout(BOUND, async {
         while fresh_weak.upgrade().is_some() {
             tokio::task::yield_now().await;
         }
+        retirement_phase = "raw_handle";
+        let mut core = fresh_transport;
+        let core = loop {
+            match Arc::try_unwrap(core) {
+                Ok(core) => break core,
+                Err(retained) => core = retained,
+            }
+            tokio::task::yield_now().await;
+        };
+        retirement_phase = "task";
+        completed_transport(core).await
     })
     .await
-    .expect("fresh owned transport must retire during teardown");
+    .unwrap_or_else(|error| panic!("fresh owned transport must retire during teardown: {error:?}; phase={retirement_phase}"));
+    eprintln!("fresh SSH retirement: wrapper_retired=true task_pending_after_wrapper_drop={task_pending} task_completed=true");
     diagnostics.before_stop();
     let cleanup = servers.stop();
     drop(servers);
