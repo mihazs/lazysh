@@ -10,6 +10,10 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Handler
 import android.os.HandlerThread
+import android.system.Os
+import android.system.OsConstants
+import java.io.File
+import java.io.FileOutputStream
 import android.net.Uri
 import android.util.Base64
 import androidx.test.platform.app.InstrumentationRegistry
@@ -97,10 +101,38 @@ class NativeWorkspaceTest {
         }
     }
 
-    // QR-only public state, never frame pixels, track labels, payloads or renderer globals.
-    private fun qrVideoObservation(scenario: ActivityScenario<MainActivity>): (Long) -> String {
+    private fun captureOwnedQrFrame(scenario: ActivityScenario<MainActivity>, destination: File, remaining: Long): Boolean {
+        val limit = 192 * 1024
+        val prefix = "data:image/png;base64,"
+        val encoded = evaluate(scenario, """(() => {
+          const v=document.querySelector('.theme-qr-panel video');
+          if(!v||v.readyState<2||!v.videoWidth||!v.videoHeight)return null;
+          const scale=Math.min(1,500/v.videoWidth,500/v.videoHeight),c=document.createElement('canvas');
+          c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));
+          const ctx=c.getContext('2d');if(!ctx)return null;
+          ctx.drawImage(v,0,0,c.width,c.height);
+          const png=c.toDataURL('image/png');return png.length<=262166?png:null;
+        })()""", remaining)
+        if (encoded.length > (limit * 4 / 3 + prefix.length) * 2 + 2) return false
+        val data = JSONArray("[$encoded]").optString(0)
+        if (!data.startsWith(prefix) || data.length > limit * 4 / 3 + prefix.length) return false
+        val bytes = Base64.decode(data.substring(prefix.length), Base64.DEFAULT)
+        if (bytes.size !in 24..limit || !bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(-119,80,78,71,13,10,26,10))) return false
+        val dimensions = java.nio.ByteBuffer.wrap(bytes, 16, 8)
+        if (dimensions.int !in 1..500 || dimensions.int !in 1..500) return false
+        val descriptor = Os.open(destination.absolutePath, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
+            OsConstants.S_IRUSR or OsConstants.S_IWUSR)
+        FileOutputStream(descriptor).use { it.write(bytes) }
+        return true
+    }
+
+    // Public state only in messages; one attested synthetic frame is stored privately, never logged.
+    private fun qrVideoObservation(scenario: ActivityScenario<MainActivity>, frame: File?): (Long) -> String {
         var firstReady: JSONObject? = null
+        var frameAttempted = false
+        var frameSaved = false
         return { remaining ->
+            val started = System.nanoTime()
             val encoded = evaluate(scenario, """JSON.stringify((() => {
               const q=document.querySelector('.theme-qr-panel'), v=q?.querySelector('video');
               const statuses=Array.from(q?.querySelectorAll('[role=status]')??[]).map(x=>x.textContent);
@@ -125,8 +157,16 @@ class NativeWorkspaceTest {
             assertTrue("QR diagnostics contain only finite public state", sample.keys().asSequence().all {
                 val value = sample.get(it); value == JSONObject.NULL || value is Boolean || value is Number
             })
-            if (firstReady == null && sample.optInt("readyState") >= 2) firstReady = sample
-            JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample).toString().also {
+            if (firstReady == null && sample.optInt("readyState") >= 2) {
+                firstReady = sample
+                if (frame != null) {
+                    frameAttempted = true
+                    val budget = remaining - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                    if (budget > 0) frameSaved = try { captureOwnedQrFrame(scenario, frame, budget) } catch (_: Throwable) { false }
+                }
+            }
+            JSONObject().put("firstReady", firstReady ?: JSONObject.NULL).put("current", sample)
+                .put("frameEnabled", frame != null).put("frameAttempted", frameAttempted).put("frameSaved", frameSaved).toString().also {
                 require(it.length <= 2_048) { "QR diagnostic bound" }
             }
         }
@@ -437,6 +477,11 @@ class NativeWorkspaceTest {
     @Test fun ownedQrCameraRequiresPermissionAndExplicitPreview() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        val frameNonce = InstrumentationRegistry.getArguments().getString("lazyshQrFrameNonce")
+        require(frameNonce != null && Regex("[a-f0-9]{32}").matches(frameNonce)) { "Owned QR frame nonce required" }
+        val frameEnabled = InstrumentationRegistry.getArguments().getString("lazyshQrFrameEnabled")
+        require(frameEnabled == "true" || frameEnabled == "false") { "Owned QR frame budget flag required" }
+        val frame = if (frameEnabled == "true") File(context.cacheDir, "lazysh-qr-frame-$frameNonce.png") else null
         assertEquals("Camera permission must start ungranted", PackageManager.PERMISSION_DENIED,
             context.checkSelfPermission(android.Manifest.permission.CAMERA))
         val camera = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -515,7 +560,7 @@ class NativeWorkspaceTest {
                 capture = observe()
                 button("Scan QR with camera")
             }
-            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", qrVideoObservation(scenario))
+            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", qrVideoObservation(scenario, frame))
             assertEquals("QR preview must preserve the manual draft", "true", evaluate(scenario,
                 "document.querySelector(${JSONObject.quote(draftSelector)})?.value===${JSONObject.quote(draft)}"))
             assertTrue("QR preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))

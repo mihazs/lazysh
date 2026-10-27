@@ -20,7 +20,7 @@ test.skipIf(process.platform!=='linux')('background escape is unsupported and ne
   let originalStart='';
   const start=async()=>{
       try {const stat=await readFile(`/proc/${pid}/stat`,'utf8');return stat.slice(stat.lastIndexOf(')')+2).split(/\s+/)[19];}
-      catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return '';throw error;}
+      catch(error){if(['ENOENT','ESRCH'].includes((error as NodeJS.ErrnoException).code??''))return '';throw error;}
     };
   const warning=spyOn(console,'error').mockImplementation(()=>{});
   const pending=child.finish('unsupported background escape',50).catch(error=>error as Error);
