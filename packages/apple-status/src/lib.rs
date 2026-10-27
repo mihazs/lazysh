@@ -273,35 +273,50 @@ pub trait AppleStatusExt<R: Runtime>: Manager<R> {
 impl<R: Runtime, T: Manager<R>> AppleStatusExt<R> for T {}
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_lazysh_apple_status);
+fn register_review<R: Runtime>(app: &tauri::AppHandle<R>) {
+    #[cfg(target_os = "ios")]
+    {
+        let handle = app.state::<AppleStatus<R>>().handle.clone();
+        let app = app.clone();
+        let review = tauri::ipc::Channel::<serde_json::Value>::new(move |response| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = response {
+                if let Ok(value) = serde_json::from_str::<Review>(&json) {
+                    if SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .is_ok_and(|now| value.valid(now.as_secs()))
+                    {
+                        let _ = app.emit("lazysh-apple-review", value);
+                    }
+                }
+            }
+            Ok(())
+        });
+        let registration = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = registration
+                .run_mobile_plugin_async::<()>(
+                    "registerReview",
+                    serde_json::json!({"review": review}),
+                )
+                .await;
+        });
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = app;
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
+    init_with_review_registration(register_review)
+}
+
+fn init_with_review_registration<R: Runtime>(
+    register: impl Fn(&tauri::AppHandle<R>) + Send + Sync + 'static,
+) -> TauriPlugin<R> {
     Builder::new("lazysh-apple-status")
         .setup(|app, api| {
             #[cfg(target_os = "ios")]
             let status = {
                 let handle = api.register_ios_plugin(init_plugin_lazysh_apple_status)?;
-                let app = app.clone();
-                let review = tauri::ipc::Channel::<serde_json::Value>::new(move |response| {
-                    if let tauri::ipc::InvokeResponseBody::Json(json) = response {
-                        if let Ok(value) = serde_json::from_str::<Review>(&json) {
-                            if SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .is_ok_and(|now| value.valid(now.as_secs()))
-                            {
-                                let _ = app.emit("lazysh-apple-review", value);
-                            }
-                        }
-                    }
-                    Ok(())
-                });
-                let registration = handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = registration
-                        .run_mobile_plugin_async::<()>(
-                            "registerReview",
-                            serde_json::json!({"review": review}),
-                        )
-                        .await;
-                });
                 AppleStatus { handle }
             };
             #[cfg(not(target_os = "ios"))]
@@ -314,7 +329,12 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             app.manage(status);
             Ok(())
         })
-        .on_event(|app, event| {
+        .on_event(move |app, event| {
+            // Tauri's iOS bridge looks up its mutable plugin registry on the calling
+            // thread before dispatching commands. Wait until plugin setup is complete.
+            if matches!(event, tauri::RunEvent::Ready) {
+                register(app);
+            }
             #[cfg(target_os = "ios")]
             if let tauri::RunEvent::Opened { urls } = event {
                 if let Some(subscription_id) = urls.iter().find_map(review_subscription) {
@@ -339,6 +359,57 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(desktop)]
+    fn review_registration_waits_for_all_plugin_and_app_setup() {
+        use std::sync::{Arc, Mutex};
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let registration = phases.clone();
+        let later = phases.clone();
+        let setup = phases.clone();
+        let app = tauri::test::mock_builder()
+            .plugin(init_with_review_registration(move |_| {
+                registration.lock().unwrap().push("registerReview");
+            }))
+            .plugin(
+                Builder::<_, ()>::new("later-plugin")
+                    .setup(move |_, _| {
+                        assert_eq!(*later.lock().unwrap(), Vec::<&str>::new());
+                        later.lock().unwrap().push("later-plugin");
+                        Ok(())
+                    })
+                    .build(),
+            )
+            .setup(move |app| {
+                tauri::WebviewWindowBuilder::new(app, "lifecycle", tauri::WebviewUrl::default())
+                    .build()?;
+                assert_eq!(*setup.lock().unwrap(), vec!["later-plugin"]);
+                setup.lock().unwrap().push("app-setup");
+                Ok(())
+            })
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        assert_eq!(*phases.lock().unwrap(), vec!["later-plugin"]);
+        let ready = phases.clone();
+        let exit = app.run_return(move |app, event| {
+            if matches!(event, tauri::RunEvent::Ready) {
+                assert_eq!(
+                    *ready.lock().unwrap(),
+                    vec!["later-plugin", "app-setup", "registerReview"]
+                );
+                app.get_webview_window("lifecycle")
+                    .unwrap()
+                    .close()
+                    .unwrap();
+            }
+        });
+        assert_eq!(exit, 0);
+        assert_eq!(
+            *phases.lock().unwrap(),
+            vec!["later-plugin", "app-setup", "registerReview"]
+        );
+    }
+
     fn snapshot() -> Snapshot {
         Snapshot {
             subscription_id: "b11c6ca6-e4f7-4f63-859c-d08e66df2239".into(),
