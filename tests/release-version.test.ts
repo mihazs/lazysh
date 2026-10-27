@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from 'bun:test';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { synchronizeWorkspaceVersions } from '../.changeset/bun-lock';
 
 const source = new URL('../', import.meta.url).pathname;
+const tauriCli = join(source, 'node_modules/@tauri-apps/cli/tauri.js');
 const json = (directory: string, path: string) => Bun.file(join(directory, path)).json();
 const temporary: string[] = [];
 const platformSources = [
@@ -81,6 +82,7 @@ async function fixture(fragment?: string, sourceVersion?: string) {
   }
   if (fragment !== undefined) await writeFile(join(directory, '.changeset', 'owned-test.md'), fragment);
   await writeFile(join(directory, 'apps/client/src-tauri/tauri.conf.json'), JSON.stringify({
+    version: (await json(source, 'apps/client/src-tauri/tauri.conf.json')).version,
     productName: 'lazysh', identifier: 'app.lazysh.client', bundle: { active: true, targets: ['deb'], icon: ['icon.png'] },
   }));
   await copyFile(join(source, 'apps/client/src-tauri/icons/32x32.png'), join(directory, 'apps/client/src-tauri/icon.png'));
@@ -96,6 +98,38 @@ async function fixture(fragment?: string, sourceVersion?: string) {
 }
 
 const fragment = (impact: string) => `---\n"@lazysh/client": ${impact}\n---\n\nOwned release fixture entry.\n`;
+
+test('actual locked Tauri CLI receipt identifies the native version under test', async () => {
+  expect((await json(source, 'node_modules/@tauri-apps/cli/package.json')).version).toBe('2.12.4');
+  const receipt = await successful(source, [process.execPath, tauriCli, '--version']);
+  expect(receipt.stdout.trim()).toBe('tauri-cli 2.12.4');
+  console.info(receipt.stdout.trim());
+});
+
+const androidSdkReady = process.platform === 'linux' && process.env.ANDROID_HOME
+  && (process.env.NDK_HOME || process.env.ANDROID_NDK_HOME) && process.env.JAVA_HOME;
+test.skipIf(!androidSdkReady)('actual Android generator resolves client JSON version before the deliberate precompile stop', async () => {
+  const directory = await fixture();
+  const manifest = await json(directory, 'apps/client/package.json');
+  manifest.version = '9.4.2'; // Deliberately differs from Cargo: prove this reader uses the client JSON.
+  await writeFile(join(directory, 'apps/client/package.json'), JSON.stringify(manifest));
+  const path = 'apps/client/src-tauri/tauri.conf.json';
+  const config = await json(directory, path);
+  config.build = { beforeBuildCommand: 'false' };
+  await writeFile(join(directory, path), JSON.stringify(config));
+  const project = join(directory, 'apps/client/src-tauri/gen/android');
+  await mkdir(join(project, 'app/src/main/java/app/lazysh/client'), { recursive: true });
+  await copyFile(join(source, 'apps/client/src-tauri/gen/android/gradlew'), join(project, 'gradlew'));
+  const propertiesPath = join(project, 'app/tauri.properties');
+  await expect(stat(propertiesPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  const result = await command(directory, [process.execPath, tauriCli, 'android', 'build', '--target', 'aarch64', '--debug', '--apk', '--ci'], { cwd: join(directory, 'apps/client') });
+  expect(result.code).not.toBe(0);
+  expect(result.stderr).toContain('beforeBuildCommand `false` failed with exit code 1');
+  expect((await stat(propertiesPath)).isFile()).toBe(true);
+  const properties = await readFile(propertiesPath, 'utf8');
+  expect(properties).toContain('tauri.android.versionName=9.4.2');
+  expect(properties).toContain('tauri.android.versionCode=9004002');
+}, 60_000);
 
 test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source tooling version %s', async sourceVersion => {
   const directory = await fixture(fragment('patch'), sourceVersion);
@@ -137,9 +171,9 @@ test.each([['patch', '0.1.1'], ['minor', '0.2.0'], ['major', '1.0.0']])(
     expect((await command(directory, ['bun', 'run', 'release:version'])).code).not.toBe(0);
     expect(await readFile(join(directory, 'Cargo.lock'))).toEqual(unchanged);
     if (impact === 'patch') {
-      // Exercise the installed Tauri CLI's inherited Cargo version and real bundler.
+      // Exercise the installed Tauri CLI's managed client-JSON version and real bundler.
       await successful(directory, ['cargo', 'build', '--offline', '-p', 'lazysh']);
-      await successful(directory, [process.execPath, join(source, 'node_modules/@tauri-apps/cli/tauri.js'), 'bundle', '--debug', '--bundles', 'deb', '--ci'], { cwd: join(directory, 'apps/client') });
+      await successful(directory, [process.execPath, tauriCli, 'bundle', '--debug', '--bundles', 'deb', '--ci'], { cwd: join(directory, 'apps/client') });
       const debs = [...new Bun.Glob('target/debug/bundle/deb/*.deb').scanSync({ cwd: directory })];
       expect(debs).toHaveLength(1);
       expect(await debianVersion(directory, join(directory, debs[0]))).toEqual([expected]);
@@ -227,6 +261,24 @@ test('lock compatibility rejects unknown schema, corrupt membership and malforme
   await writeFile(join(directory, 'bun.lock'), crlf);
   await synchronizeWorkspaceVersions(directory);
   expect(await Bun.file(join(directory, 'bun.lock')).text()).toBe(crlf);
+}, 60_000);
+
+test('release validation permits only the exact client manifest path and rejects platform overrides before writes', async () => {
+  const directory = await fixture();
+  const base = 'apps/client/src-tauri/tauri.conf.json';
+  const config = await json(directory, base);
+  const original = await Bun.file(join(directory, 'bun.lock')).text();
+  for (const version of [undefined, '0.1.0', '../../package.json', 'https://example.invalid/package.json']) {
+    await writeFile(join(directory, base), JSON.stringify({ ...config, version }));
+    await expect(synchronizeWorkspaceVersions(directory)).rejects.toThrow('Tauri version must use the client manifest path');
+    expect(await Bun.file(join(directory, 'bun.lock')).text()).toBe(original);
+  }
+  await writeFile(join(directory, base), JSON.stringify(config));
+  for (const version of [null, '../package.json', '0.1.0']) {
+    await writeFile(join(directory, 'apps/client/src-tauri/tauri.android.conf.json'), JSON.stringify({ version }));
+    await expect(synchronizeWorkspaceVersions(directory)).rejects.toThrow('platform Tauri version overrides are not allowed');
+    expect(await Bun.file(join(directory, 'bun.lock')).text()).toBe(original);
+  }
 }, 60_000);
 
 test('canonical Apple and Android sources inherit product versions without changing app IDs', async () => {

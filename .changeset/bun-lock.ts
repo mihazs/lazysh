@@ -68,8 +68,10 @@ async function inspect(root: string, allowPreviousVersion: boolean) {
     requireRelease(locked.length === 1 && locked[0].version === version, 'mismatched Cargo lock version');
   }
   requireRelease(nativeMembers.size === 0 && oldVersions.size === 1, 'inconsistent release membership or previous versions');
+  const tauriBase = 'apps/client/src-tauri/tauri.conf.json';
+  requireRelease((await json(tauriBase)).version === '../package.json', 'Tauri version must use the client manifest path');
   for (const path of new Bun.Glob('apps/client/src-tauri/tauri*.conf.json').scanSync({ cwd: root })) {
-    requireRelease(!('version' in await json(path)), 'Tauri version must inherit Cargo');
+    if (path !== tauriBase) requireRelease(!('version' in await json(path)), 'platform Tauri version overrides are not allowed');
   }
   return { lock, lockText, version };
 }

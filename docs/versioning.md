@@ -43,8 +43,15 @@ fails closed on unexpected metadata/layout. It neither deletes nor regenerates
 the lockfile, installs packages, or resolves dependency versions. Repeated
 synchronization with the same version leaves the file unchanged.
 
-Tauri has no competing literal version: its CLI resolves the inherited Cargo
-workspace version. Android's tracked Gradle source reads the generated
+Tauri's base config uses its supported `version: "../package.json"` facility.
+The actual locked CLI 2.12.4 resolves that path relative to the config directory,
+so its parsed config contains the same synchronized client semver. The strict
+release gate permits only this exact base path and rejects platform config
+version overrides; Cargo packages still inherit the Rust workspace authority.
+Desktop Cargo fallback alone does not populate the mobile config: Android would
+omit version properties and Apple would default to `1.0.0`. An independently
+inspected pre-fix compiled APK reported `versionName=1.0` / `versionCode=1`.
+Android's tracked Gradle source reads the generated
 `tauri.android.versionName`/`versionCode` properties. The canonical Apple
 XcodeGen template already uses Tauri's `apple.bundle-version-short` and
 `apple.bundle-version` for the app, Live Activity, Watch app/widget and privacy
@@ -112,11 +119,21 @@ The standard Bun integration tests execute Changesets, Bun's version/install
 commands, cargo-edit, Cargo metadata and a tiny owned Rust client build. On Linux
 the installed Tauri CLI bundles that fixture into a Debian package and its
 version is read back from its control archive with `ar` and `tar`. These are real local tools, not application
-store uploads or production application builds. Apple template/Android property
-inheritance and identifier preservation are inspected separately; actual macOS,
+store uploads or production application builds. A Linux Android-SDK fixture
+also invokes the actual CLI with a deliberately failing supported
+`beforeBuildCommand: "false"`: it must report that exact hook failure and leave
+the expected manifest-derived `tauri.android.versionName` and semver-derived
+code in its generated properties, proving generation happened before the
+intentional compilation stop. This is not a successful APK build. The case is
+explicitly skipped without Linux, `ANDROID_HOME`, `NDK_HOME` (or
+`ANDROID_NDK_HOME`) and `JAVA_HOME`. Apple mobile effective-version handling is
+separately traced in the pinned CLI and its checksum-verified cargo-mobile2
+dependency; it consumes the parsed config's version. Actual macOS,
 iOS and Android packaging/version acceptance require their native SDK jobs.
-Hosted release-PR creation and approval require the repository setting above and
-remain unverified until the first generated PR is observed.
+Hosted release-PR creation and default-token CI approval were observed in #220.
+Completion also requires correct effective native versions, reviewed checks and
+a normal merge; #215 tracks that acceptance and current evidence. These steps
+still do not publish packages, installers, tags or store submissions.
 
 Primary references: [Changesets configuration](https://changesets.dev/guide/config),
 [non-npm packages](https://changesets.dev/guide/beyond-npm),
