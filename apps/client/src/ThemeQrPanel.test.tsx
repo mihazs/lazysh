@@ -41,7 +41,7 @@ it.each([false,true])('camera markers retain successful behavior when optional l
   vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');
   const logger=vi.spyOn(console,'warn').mockImplementation(()=>{if(throws)throw new Error('private logger failure sentinel');});
   const view=mount();scan();await screen.findByRole('heading',{name:'QR fixture'});
-  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached']]);
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached'],['lazysh qr camera play_resolved']]);
   expect(invoke).toHaveBeenCalledTimes(1);expect(view.apply).not.toHaveBeenCalled();expect(stop).toHaveBeenCalledTimes(1);
 });
 it('a rejected real camera request logs only fixed request/rejected boundaries',async()=>{
@@ -58,6 +58,22 @@ it('pending camera work logs resolution after cancellation without attaching or 
   expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera stale']]);
   expect((screen.getByLabelText(t('themeQrVideo')) as HTMLVideoElement).srcObject).not.toBe(media);
   expect(stop).toHaveBeenCalledTimes(1);expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled();
+});
+it('attached camera work does not log play resolution until the actual play promise settles',async()=>{
+  vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');const logger=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  let finish!:(value:void)=>void;vi.mocked(HTMLMediaElement.prototype.play).mockImplementation(()=>held<void>(undefined,resolve=>{finish=resolve;}));
+  mount();scan();await waitFor(()=>expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1));
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached']]);
+  expect(draw).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled();
+  await act(async()=>finish());await screen.findByRole('heading',{name:'QR fixture'});
+  expect(logger).toHaveBeenLastCalledWith('lazysh qr camera play_resolved');expect(invoke).toHaveBeenCalledTimes(1);
+});
+it('play rejection logs only its finite boundary and preserves the existing camera failure',async()=>{
+  vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');const logger=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValue(new Error('private media failure sentinel'));mount();scan();
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent',t('themeQrCameraFailed'));
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached'],['lazysh qr camera play_rejected']]);
+  expect(draw).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled();expect(stop).toHaveBeenCalledTimes(1);
 });
 it('selected PNG goes only through the native decoder and explicit existing preview/apply path',async()=>{
   const view=mount();const draft=screen.getByLabelText('Theme JSON or share code');fireEvent.change(draft,{target:{value:'unfinished manual draft'}});
