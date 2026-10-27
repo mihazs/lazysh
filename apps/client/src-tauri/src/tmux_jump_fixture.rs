@@ -1088,18 +1088,20 @@ impl NamedServers<'_> {
             })
             .collect()
     }
+    fn command(&self, name: &str) -> Command {
+        let mut command = Command::new(&self.fixture.tmux);
+        command
+            .args(["-f", "/dev/null", "-L", name])
+            .env("TMUX_TMPDIR", self.fixture.dir.path())
+            .env_remove("TMUX")
+            .env("HOME", self.fixture.dir.path())
+            .env("SHELL", "/bin/sh");
+        command
+    }
     fn direct(&self, name: &str, args: &[&str]) -> String {
-        lazysh_common::test_support::successful_output(
-            Command::new(&self.fixture.tmux)
-                .args(["-f", "/dev/null", "-L", name])
-                .args(args)
-                .env("TMUX_TMPDIR", self.fixture.dir.path())
-                .env_remove("TMUX")
-                .env("HOME", self.fixture.dir.path())
-                .env("SHELL", "/bin/sh"),
-        )
-        .trim_end_matches('\n')
-        .to_owned()
+        lazysh_common::test_support::successful_output(self.command(name).args(args))
+            .trim_end_matches('\n')
+            .to_owned()
     }
 }
 impl Drop for NamedServers<'_> {
@@ -2158,6 +2160,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     .await
     .unwrap_or_else(|error| panic!("fresh owned transport must retire during teardown: {error:?}; phase={retirement_phase}"));
     eprintln!("fresh SSH retirement: wrapper_retired=true task_pending_after_wrapper_drop={task_pending} task_completed=true");
+    diagnostics.clients(servers.command(saved_server)).await;
     diagnostics.before_stop();
     let cleanup = servers.stop();
     drop(servers);

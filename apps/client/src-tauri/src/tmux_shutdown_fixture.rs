@@ -126,6 +126,15 @@ async fn probe() {
     })
     .await
     .expect("owned client must be stopped before cleanup");
+    observations.clients(servers.command("shutdown")).await;
+    let before = observations.failure();
+    assert!(
+        before
+            .split("children=")
+            .nth(1)
+            .is_some_and(|rows| rows.contains("Same(")),
+        "owned live workload must appear in bounded direct-child observation"
+    );
     observations.before_stop();
     let cleanup = servers.stop();
     // Keep existing private-namespace cleanup armed on assertion failure. The
@@ -153,6 +162,17 @@ async fn probe() {
         .await
         .expect("owned workload must exit even while client acknowledgement is held");
     assert_eq!(observations.same_state(2), Some('T'));
+    let receipt = observations.failure();
+    let clients = receipt
+        .split("clients(index,control,written,discarded,state)=")
+        .nth(1)
+        .unwrap()
+        .split("; children=")
+        .next()
+        .unwrap();
+    assert!(clients.starts_with("[(0, true,") && clients.ends_with("\"Same(T)\")]"),
+        "bounded receipt must identify only the stopped owned control client, excluding its observer");
+    eprintln!("controlled remaining shutdown: {receipt}");
     eprintln!("controlled shutdown: wrapper_gone_task_pending=true kill_request_ok=true same_server_state={server_state:?} workload_absent=true client_stopped=true");
 
     assert!(client.0.try_wait().unwrap().is_none());
