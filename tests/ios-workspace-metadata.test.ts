@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,11 +10,17 @@ const workflow = Bun.YAML.parse(await Bun.file(join(root, '.github/workflows/che
 };
 const steps = workflow.jobs['native-ios-simulator'].steps;
 const capture = steps.find(step => step.name === 'Capture failed workspace filesystem metadata')!;
+const productCapture = steps.find(step => step.name === 'Retain compiled iOS app version receipt')!;
 const uuid = 'EB74BECE-E495-447F-94D4-1A3AF75F6ADF';
 const temporary: string[] = [];
 afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
 });
+
+async function silentSuccess(child: { exited: Promise<number>; stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array> }) {
+  const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(exit).toBe(0); expect(stdout).toBe(''); expect(stderr).toBe('');
+}
 
 function project(settings: Record<string, unknown> = {}) {
   return { rootObject: 'project', objects: {
@@ -27,6 +34,56 @@ function project(settings: Record<string, unknown> = {}) {
     } },
   } };
 }
+
+async function productFixture(data?: unknown, link = false, conversionFailure = false) {
+  const directory = await mkdtemp(join(tmpdir(), 'lazysh-ios-product-'));
+  temporary.push(directory);
+  const bin = join(directory, 'bin'), runnerTemp = join(directory, 'runner');
+  const app = join(directory, 'apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app');
+  await Promise.all([mkdir(bin), mkdir(runnerTemp), mkdir(app, { recursive: true })]);
+  const source = typeof data === 'string' ? data : JSON.stringify(data);
+  if (source !== undefined) {
+    const destination = link ? join(directory, 'private-source') : join(app, 'Info.plist');
+    await writeFile(destination, source);
+    if (link) await symlink(destination, join(app, 'Info.plist'));
+  }
+  // Execute the workflow's exact capture body. Only the Apple plist converter
+  // is replaced; filtering, snapshotting, hashing and bounds remain real.
+  const converter = join(bin, 'plutil');
+  await writeFile(converter, '#!/bin/bash\ntest "$CONVERSION_FAILURE" != 1 || exit 9\njq -e --arg key "$2" \'.[$key]\' "$6" > "$5"\n');
+  await chmod(converter, 0o755);
+  const child = Bun.spawn(['bash', '-e', '-c', productCapture.run!], { cwd: directory,
+    env: { ...process.env, PATH: bin + ':' + process.env.PATH, RUNNER_TEMP: runnerTemp,
+      CONVERSION_FAILURE: conversionFailure ? '1' : '0' }, stdout: 'pipe', stderr: 'pipe' });
+  await silentSuccess(child);
+  expect((await readdir(runnerTemp)).some(name => name.includes('private'))).toBe(false);
+  const receipt = await readFile(join(runnerTemp, 'lazysh-ios-signing/compiled-app-version.json'), 'utf8');
+  expect(new TextEncoder().encode(receipt).length).toBeLessThanOrEqual(2048);
+  return { receipt: JSON.parse(receipt), source };
+}
+
+test('compiled app version capture only adds finite observations to the existing early artifact', async () => {
+  expect(productCapture.if).toBe("${{ !cancelled() && steps.ios-app-build.outcome == 'success' }}");
+  expect(steps.indexOf(productCapture)).toBeLessThan(steps.findIndex(step => step.name === 'Retain simulator signing evidence before runtime checks'));
+  const fields = { CFBundleIdentifier: 'app.lazysh.client', CFBundleShortVersionString: '1.2.3', CFBundleVersion: '1002003' };
+  const result = await productFixture({ ...fields, PRIVATE_SIGNING: 'must not escape', CFBundleURLTypes: [{ secret: 'not retained' }] });
+  expect(result.receipt).toEqual({ status: 'retained', ...fields, plistSha256: createHash('sha256').update(result.source!).digest('hex') });
+  expect(JSON.stringify(result.receipt)).not.toContain('secret');
+  expect(JSON.stringify(result.receipt)).not.toContain('must not escape');
+});
+
+test('missing, unsafe or failed compiled metadata stays explicitly unavailable without changing verdicts', async () => {
+  const fields = { CFBundleIdentifier: 'app.lazysh.client', CFBundleShortVersionString: '1.2.3', CFBundleVersion: '1002003' };
+  for (const [data, link, failure] of [
+    [undefined, false, false], [fields, true, false], [fields, false, true],
+    ['not a plist', false, false], ['x'.repeat(65537), false, false],
+    [{ ...fields, CFBundleVersion: 123 }, false, false],
+    [{ ...fields, CFBundleVersion: '' }, false, false],
+    [{ ...fields, CFBundleVersion: 'x'.repeat(129) }, false, false],
+    [{ ...fields, CFBundleVersion: '1\n2' }, false, false],
+    [{ CFBundleIdentifier: 'app.lazysh.client' }, false, false],
+  ] as const) expect((await productFixture(data, link, failure)).receipt).toEqual({ status: 'unavailable' });
+});
 
 async function fixture(data: unknown, outcome = 'failure', conversionFailure = false) {
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-ios-metadata-'));
@@ -47,10 +104,7 @@ async function fixture(data: unknown, outcome = 'failure', conversionFailure = f
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: runnerTemp,
       APPLE_STATUS_SIMULATOR_ID: uuid, WORKSPACE_OUTCOME: outcome, CALLS: invocationFile,
       CONVERSION_FAILURE: conversionFailure ? '1' : '0' }, stdout: 'pipe', stderr: 'pipe' });
-  const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect(exit).toBe(0);
-  expect(stdout).toBe('');
-  expect(stderr).toBe('');
+  await silentSuccess(child);
   const calls = await Bun.file(invocationFile).exists() ? await readFile(invocationFile, 'utf8') : '';
   expect(calls.split('\n').filter(Boolean).every(call => call === 'plutil')).toBe(true);
   expect((await readdir(runnerTemp)).filter(name => name.includes('private'))).toEqual([]);

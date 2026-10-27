@@ -416,6 +416,15 @@ verifies no command dispatch after reauthorization, late channel closure and
 recovered channel capacity. That deterministic cancellation check is not proof
 of cancelling an already-running remote image decoder.
 
+The same explicitly selected SSH case also reads a synthetic Claude fork with
+`view=conversation` and image opt-in. It checks the existing latest eligible
+branch's exact IDs, text and original PNG/JPEG bytes, excludes the abandoned
+branch's distinct image and text, and recovers the default-off page exactly after
+removing preview fields. The original lease, protected SSH source session and
+disk bytes are retained. There is no caller-supplied branch selector or inferred
+UUID grammar. This verifies recorded reconstruction/transport composition, not
+live provider branching or GUI/WebView behavior.
+
 To reproduce the real transport case, build `cargo build -p lazysh-agent --locked`
 in the same checkout, set `LAZYSH_TEST_AGENT_BIN` to the absolute path of that
 checkout's private `target/debug/lazysh-agent`, then run

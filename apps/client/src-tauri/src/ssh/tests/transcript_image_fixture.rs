@@ -52,7 +52,7 @@ async fn read(
     app: &tauri::App<tauri::test::MockRuntime>,
     lease: &AccessLease,
     id: &str,
-    agent: &str,
+    (agent, view): (&str, Option<&str>),
     path: &Path,
     offset: u64,
     images: Option<bool>,
@@ -66,7 +66,7 @@ async fn read(
             agent.into(),
             path.to_str().unwrap().into(),
             offset,
-            None,
+            view.map(str::to_owned),
             None,
             None,
             images,
@@ -119,7 +119,7 @@ pub(super) async fn verify(
             })
             .collect::<String>();
         fs::write(&path, &records).unwrap();
-        let legacy = read(app, &lease, &id, agent, &path, 0, None).await;
+        let legacy = read(app, &lease, &id, (agent, None), &path, 0, None).await;
         assert!(legacy["messages"]
             .as_array()
             .unwrap()
@@ -129,7 +129,7 @@ pub(super) async fn verify(
         let mut count = 0;
         let mut ids = std::collections::HashSet::new();
         loop {
-            let mut page = read(app, &lease, &id, agent, &path, offset, Some(true)).await;
+            let mut page = read(app, &lease, &id, (agent, None), &path, offset, Some(true)).await;
             assert_eq!(page["schemaVersion"], 1);
             assert_eq!(page["view"], "record_stream");
             assert_eq!(page["agent"], agent);
@@ -143,27 +143,12 @@ pub(super) async fn verify(
             }
             for row in page["messages"].as_array_mut().unwrap() {
                 assert!(ids.insert(row["id"].as_str().unwrap().to_owned()));
-                let preview = row["blocks"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("imagePreview")
-                    .unwrap();
                 let (bytes, mime) = if count == 0 {
                     (PNG, "image/png")
                 } else {
                     (JPEG, "image/jpeg")
                 };
-                assert_eq!(preview["mimeType"], mime);
-                assert_eq!(preview["data"], encoded(bytes));
-                assert_eq!(
-                    (preview["width"].as_u64(), preview["height"].as_u64()),
-                    (Some(32), Some(16))
-                );
-                let mut decoded = vec![0; preview["data"].as_str().unwrap().len()];
-                assert_eq!(
-                    Base64::decode(preview["data"].as_str().unwrap(), &mut decoded).unwrap(),
-                    bytes
-                );
+                verify_preview(&mut row["blocks"][0], bytes, mime);
                 count += 1;
             }
             if offset == 0 {
@@ -183,10 +168,111 @@ pub(super) async fn verify(
         assert_eq!(offset, records.len() as u64);
         assert_eq!(fs::read(&path).unwrap(), records.as_bytes());
     }
+    verify_conversation(app, &lease, &id, directory).await;
     assert!(app.state::<AppState>().session(&id).await.is_ok());
     disconnect(app.state(), id.clone()).await.unwrap();
     assert!(app.state::<AppState>().session(&id).await.is_err());
     assert!(app.state::<AppState>().sessions.lock().await.is_empty());
+}
+
+fn verify_preview(block: &mut Value, bytes: &[u8], mime: &str) {
+    let preview = block
+        .as_object_mut()
+        .unwrap()
+        .remove("imagePreview")
+        .unwrap();
+    assert_eq!(preview["mimeType"], mime);
+    assert_eq!(preview["data"], encoded(bytes));
+    assert_eq!(
+        (preview["width"].as_u64(), preview["height"].as_u64()),
+        (Some(32), Some(16))
+    );
+    let mut decoded = vec![0; preview["data"].as_str().unwrap().len()];
+    assert_eq!(
+        Base64::decode(preview["data"].as_str().unwrap(), &mut decoded).unwrap(),
+        bytes
+    );
+}
+
+async fn verify_conversation(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    id: &str,
+    directory: &Path,
+) {
+    let abandoned: &[u8] =
+        include_bytes!("../../../../e2e/fixtures/recorded-images/regions-progressive.jpg");
+    let mut records = [
+        record("claude", 0, PNG, "image/png"),
+        record("claude", 1, abandoned, "image/jpeg"),
+        record("claude", 2, JPEG, "image/jpeg"),
+    ];
+    // Latest eligible leaf selects this explicit fork; IDs remain opaque.
+    records[2]["parentUuid"] = json!("owned-0");
+    for (row, text) in records
+        .iter_mut()
+        .zip(["Root text", "Abandoned text", "Selected text"])
+    {
+        row["message"]["content"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"text","text":text}));
+    }
+    let source = records
+        .iter()
+        .map(|row| serde_json::to_string(row).unwrap() + "\n")
+        .collect::<String>();
+    let path = directory.join("Claude branch' 世界$(literal).jsonl");
+    fs::write(&path, &source).unwrap();
+    let legacy = read(
+        app,
+        lease,
+        id,
+        ("claude", Some("conversation")),
+        &path,
+        0,
+        None,
+    )
+    .await;
+    let mut page = read(
+        app,
+        lease,
+        id,
+        ("claude", Some("conversation")),
+        &path,
+        0,
+        Some(true),
+    )
+    .await;
+    assert_eq!(page["schemaVersion"], 1);
+    assert_eq!(page["agent"], "claude");
+    assert_eq!(page["view"], "active_branch");
+    assert_eq!(page["branchId"], "owned-2");
+    assert_eq!(page["hasMore"], false);
+    assert_eq!(page["truncated"], false);
+    assert_eq!(page["nextOffset"], source.len() as u64);
+    let serialized = serde_json::to_string(&page).unwrap();
+    assert!(!serialized.contains("owned-1") && !serialized.contains("Abandoned text"));
+    assert!(!serialized.contains(&encoded(abandoned)));
+    let messages = page["messages"].as_array_mut().unwrap();
+    assert_eq!(messages.len(), 2);
+    for (row, (expected_id, text, bytes, mime)) in messages.iter_mut().zip([
+        ("owned-0", "Root text", PNG, "image/png"),
+        ("owned-2", "Selected text", JPEG, "image/jpeg"),
+    ]) {
+        assert_eq!(row["id"], expected_id);
+        assert_eq!(row["role"], "user");
+        assert_eq!(row["blocks"].as_array().unwrap().len(), 2);
+        assert_eq!(row["blocks"][1]["text"], text);
+        verify_preview(&mut row["blocks"][0], bytes, mime);
+    }
+    assert_eq!(
+        page, legacy,
+        "selected branch default-off equivalence must be exact"
+    );
+    assert_eq!(fs::read(&path).unwrap(), source.as_bytes());
+    lease.check().unwrap();
+    assert_eq!(app.state::<AppState>().sessions.lock().await.len(), 1);
 }
 
 #[tokio::test]

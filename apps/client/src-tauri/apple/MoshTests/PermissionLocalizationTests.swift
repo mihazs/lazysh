@@ -6,7 +6,7 @@ final class PermissionLocalizationTests: XCTestCase {
     XCTAssertEqual(Bundle.main.bundleIdentifier, "app.lazysh.client")
     XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDevelopmentRegion") as? String, "en")
     for (name, keys) in [
-      ("InfoPlist", Set(["NSFaceIDUsageDescription", "NSMicrophoneUsageDescription"])),
+      ("InfoPlist", Set(["NSFaceIDUsageDescription", "NSMicrophoneUsageDescription", "NSCameraUsageDescription"])),
       ("NativeUI", Set(["resume.title", "resume.message", "resume.unlock", "resume.failure", "auth.unlock", "auth.protect", "action.cancel"]))
     ] {
     for locale in ["en", "pt-BR", "es"] {

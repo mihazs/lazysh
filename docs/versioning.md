@@ -130,6 +130,15 @@ explicitly skipped without Linux, `ANDROID_HOME`, `NDK_HOME` (or
 separately traced in the pinned CLI and its checksum-verified cargo-mobile2
 dependency; it consumes the parsed config's version. Actual macOS,
 iOS and Android packaging/version acceptance require their native SDK jobs.
+The iOS job records the already-built simulator app's public identifier,
+short version and build version in a bounded compiled-app-version.json receipt,
+alongside a path-free SHA256 of the same compiled plist snapshot. The existing
+lazysh-ios-signing artifact retains it before runtime checks and the later app
+acceptance artifact includes it again. A missing, malformed, oversized or
+unsupported value records an explicit unavailable status without changing the
+build or test verdict. This app-only observation does not certify embedded
+extension/watch versions or physical runtime behavior; native version acceptance
+requires inspecting a retained receipt from the exact hosted source/job.
 Hosted release-PR creation and default-token CI approval were observed in #220.
 Completion also requires correct effective native versions, reviewed checks and
 a normal merge; #215 tracks that acceptance and current evidence. These steps
