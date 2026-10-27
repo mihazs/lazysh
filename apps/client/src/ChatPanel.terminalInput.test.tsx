@@ -1,3 +1,6 @@
+import {selectChatAttachment,attachmentReply} from './test/chatAttachment';
+import {attachmentUploadedPath} from './test/attachmentData';
+import {shellPath} from './attachment';
 // @vitest-environment jsdom
 import {beforeEach,afterEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
@@ -110,4 +113,24 @@ it.each((['hermes','opencode'] as const).flatMap(agent=>(['bind','input'] as con
 });
 it.each(['claude','codex','hermes'] as const)('keeps %s Stage-only when native tmux capability is absent',async agent=>{
   await openedReader(agent,'session-A',false);expect(screen.queryByRole('button',{name:t('chatTerminalChoose')})).toBeNull();expect(actions()).toEqual([]);
+});
+
+it('retains the appended attachment when an older confirmed Send acknowledgement arrives',async()=>{
+  await opened();await confirmed();let finish!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    if(command!=='tmux_chat')return attachmentReply(command);
+    if((args as {action:{kind:string}}).action.kind==='input')return new Promise(resolve=>{finish=resolve;});
+    return tmuxChatReply(command,args);
+  });
+  const draft=screen.getByLabelText(t('chatDraftLabel'));
+  fireEvent.change(draft,{target:{value:'Originally confirmed text'}});
+  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await waitFor(()=>expect(finish).toBeTypeOf('function'));
+  await selectChatAttachment();await screen.findByLabelText(t('attachmentHostPath'));
+  fireEvent.click(screen.getByRole('button',{name:t('attachmentAddToChat')}));
+  const attached=`Originally confirmed text\n${shellPath(attachmentUploadedPath)}`;
+  expect(draft).toHaveProperty('value',attached);
+  await act(async()=>{finish({kind:'delivered',nextOperation:2});});
+  await screen.findByText(t('chatTerminalSent'));
+  expect(draft).toHaveProperty('value',attached);
+  expect(actions().filter(action=>action.kind==='input')).toHaveLength(1);
 });

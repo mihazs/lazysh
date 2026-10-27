@@ -119,3 +119,21 @@ owned OpenSSH server and system pbcopy/pbpaste on a disposable CI runner; it is
 never intended to run against a user's clipboard. Its hosted execution is required
 before claiming actual Mac-host capability acceptance. SFTP/shell namespace
 identity and GUI-session clipboard availability remain host-specific limits.
+
+## Add an attachment to Chat
+
+In Chat, select **Add attachment** to open the same host-local editor without
+leaving the existing draft. Choosing a file and completing its upload do not
+change that draft. Select **Add uploaded path to Chat draft** to append the
+shell-quoted canonical path, separated from existing text by a newline. This
+preserves text edited while the upload was pending. Overflow beyond the existing
+65,536-character draft limit is refused without truncation; shorten the draft and
+retry the explicit action without another upload.
+
+Closing the editor cancels pending upload work under the same existing partial-file
+warning. A session change, expired original access lease or unmount cannot attach
+an old result. The handoff advances the draft revision, so an older Send result
+cannot clear the updated draft. Nothing is sent automatically: terminal staging
+and any separately confirmed Chat Send keep their existing consent and destination
+guards. This is a path handoff, not a provider-specific attachment API or proof of
+physical camera/photo/clipboard permissions.
