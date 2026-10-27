@@ -366,25 +366,33 @@ jobs:
             plist_path="apps/client/src-tauri/gen/apple/build/arm64-sim/lazysh.app/Info.plist"
             mkdir -p "$diagnostic_dir" || exit 0
             receipt="$diagnostic_dir/compiled-app-version.json"
-            printf '{"status":"unavailable"}\n' > "$receipt" || exit 0
+            unavailable() { printf '{"status":"unavailable","stage":"%s"}\n' "$1" > "$receipt"; }
+            unavailable input || exit 0
             test -f "$plist_path" && test ! -L "$plist_path" || exit 0
             test "$(wc -c < "$plist_path")" -le 65536 || exit 0
+            unavailable snapshot || exit 0
             private_dir="$(mktemp -d "$RUNNER_TEMP/lazysh-ios-version-private.XXXXXX")" || exit 0
             trap 'rm -rf "$private_dir"' EXIT
             (ulimit -f 128; cp "$plist_path" "$private_dir/compiled.plist") 2>/dev/null || exit 0
             plist_path="$private_dir/compiled.plist"
             test "$(wc -c < "$plist_path")" -le 65536 || exit 0
             for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
-              (ulimit -f 128; plutil -extract "$key" json -o "$private_dir/$key.json" "$plist_path") 2>/dev/null || exit 0
+              case "$key" in
+                CFBundleIdentifier) unavailable identifier ;;
+                CFBundleShortVersionString) unavailable short-version ;;
+                CFBundleVersion) unavailable build-version ;;
+              esac || exit 0
+              (ulimit -f 128; plutil -extract "$key" raw -expect string -n -o "$private_dir/$key.raw" "$plist_path") 2>/dev/null || exit 0
             done
+            unavailable validation || exit 0
             digest="$(shasum -a 256 "$plist_path" 2>/dev/null | awk '{print $1}')"
             (ulimit -f 8; jq -n \
-              --slurpfile identifier "$private_dir/CFBundleIdentifier.json" \
-              --slurpfile short "$private_dir/CFBundleShortVersionString.json" \
-              --slurpfile build "$private_dir/CFBundleVersion.json" --arg digest "$digest" '
+              --rawfile identifier "$private_dir/CFBundleIdentifier.raw" \
+              --rawfile short "$private_dir/CFBundleShortVersionString.raw" \
+              --rawfile build "$private_dir/CFBundleVersion.raw" --arg digest "$digest" '
               def field:
-                if length == 1 and (.[0] | type == "string" and length > 0 and length <= 128 and (explode | all(. >= 32 and . != 127)))
-                then .[0] else error("invalid compiled version field") end;
+                if type == "string" and length > 0 and length <= 128 and (explode | all(. >= 32 and . != 127))
+                then . else error("invalid compiled version field") end;
               if ($digest | test("^[a-f0-9]{64}$")) then
                 {status:"retained", CFBundleIdentifier:($identifier | field),
                   CFBundleShortVersionString:($short | field), CFBundleVersion:($build | field),
@@ -392,6 +400,7 @@ jobs:
               else error("unavailable compiled plist hash") end
               ' > "$private_dir/receipt.json") 2>/dev/null || exit 0
             test "$(wc -c < "$private_dir/receipt.json")" -le 2048 || exit 0
+            unavailable publication || exit 0
             mv "$private_dir/receipt.json" "$receipt" || exit 0
             exit 0
           )
