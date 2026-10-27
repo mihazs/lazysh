@@ -1,5 +1,11 @@
 # @lazysh/apple-status
 
+## 0.7.0
+
+### Patch Changes
+
+- @lazysh/common@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.7.0
+
+### Minor Changes
+
+- f852631: Accept one explicit saved-host or multiplexer request in an already-running desktop app, preserving current dialogs, original access receipts and normal authentication.
+
+### Patch Changes
+
+- @lazysh/common@0.7.0
+  - @lazysh/display-idle@0.7.0
+  - @lazysh/et-transport@0.7.0
+  - @lazysh/mosh-transport@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes
