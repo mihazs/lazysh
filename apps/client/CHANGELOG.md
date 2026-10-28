@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.20.0
+
+### Minor Changes
+
+- 5a4cef4: Add explicit pinned Noto Sans Mono CJK SC download into existing local font storage, with integrity checks, cancellation and a narrowly scoped asset CSP. No automatic download or font selection.
+
+### Patch Changes
+
+- @lazysh/common@0.20.0
+  - @lazysh/display-idle@0.20.0
+  - @lazysh/et-transport@0.20.0
+  - @lazysh/mosh-transport@0.20.0
+
 ## 0.19.0
 
 ### Minor Changes
