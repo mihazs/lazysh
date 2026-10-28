@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an explicit F-Droid Android build variant without Google remote push dependencies. It reports remote registration unavailable and retains local inbox notifications. Normal Android Firebase and iOS APNs defaults remain unchanged; this variant alone does not establish F-Droid listing or release delivery.
+
 - Add truthful English Fastlane-compatible Android listing text for future F-Droid preparation. No store publication, screenshots, application behavior or defaults change.
 
 - Expose checked Android version metadata for source-based update discovery. Release validation now rejects colliding or out-of-range Android versions and version-code overrides; current valid APK codes remain unchanged. Tag publication and F-Droid submission are not enabled.

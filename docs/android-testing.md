@@ -1,5 +1,13 @@
 # Android instrumentation
 
+## F-Droid push variant
+
+`bun run build:android:fdroid` produces an unsigned ARM64 release APK with the opt-in Rust `fdroid` feature. The feature excludes the Android Google push Gradle project and native registration path. Remote push is reported unavailable; local inbox notifications remain independent. Normal Android builds retain Firebase, and iOS retains APNs. This does not establish F-Droid.org inclusion, release signing or automatic delivery.
+
+On the workflow-owned AVD only, `bun run test:android-fdroid` builds the FOSS emulator APK, inspects its actual resolved runtime dependencies and packaged manifest/dex using SDK `apkanalyzer`, then runs the protected native push status/control case through the bundled WebView. The same case in ordinary instrumentation verifies normal Android reports its packaged FCM plugin. It never registers a real device or contacts a provider to prove the unsupported variant; both unsupported controls must reject. A missing local KVM device prevents AVD acceptance and must be reported rather than replaced with a desktop mock pass.
+
+`LAZYSH_ANDROID_PUSH_VARIANT=google bunx turbo run test:android-push-artifact --filter=@lazysh/client` checks a previously built normal APK. Use `fdroid` for the Google-free variant; optionally set `LAZYSH_ANDROID_PUSH_APK` and `LAZYSH_ANDROID_PUSH_CONFIGURATION=universalReleaseRuntimeClasspath` for the unsigned release artifact. Both variants require the unchanged package/version identity and matching debug/release flag. The retained JSON contains the APK hash and fixed Google dependency/class/manifest booleans, not arbitrary manifest metadata. This verifies the identified Firebase/GMS blocker only; it is not a complete F-Droid licensing/scanner audit.
+
 ## Owned QR camera acceptance
 
 The owned runtime build explicitly sets `VITE_LAZYSH_QR_CAMERA_TRACE=1`. Only that exact build-time value enables seven fixed console warnings at the real camera continuation boundaries: request, resolved, rejected, stale, attached, play_resolved and play_rejected. Normal builds do not log these markers. They contain no stream identifiers, payloads, device details or exception data, and logger failures are ignored. Turbo declares this input for the emulator/frontend build. These markers distinguish a pending media request from late stale resolution, actual video attachment and play-promise settlement without wrapping the API, adding observers or changing the original deadlines. They do not establish pixel delivery or successful decoding.

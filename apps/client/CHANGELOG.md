@@ -1,5 +1,28 @@
 # @lazysh/client
 
+## 0.13.0
+
+### Minor Changes
+
+- 1f890f6: Add an explicit F-Droid Android variant without Google remote push dependencies. Local inbox notifications remain available; normal Android Firebase and iOS APNs builds retain their behavior.
+
+### Patch Changes
+
+- @lazysh/common@0.13.0
+  - @lazysh/display-idle@0.13.0
+  - @lazysh/et-transport@0.13.0
+  - @lazysh/mosh-transport@0.13.0
+
+## 0.12.2
+
+### Patch Changes
+
+- 1da4cad: Add English Android listing descriptions with development-preview and host-dependency limits, without claiming F-Droid publication or changing application behavior.
+- @lazysh/common@0.12.2
+  - @lazysh/display-idle@0.12.2
+  - @lazysh/et-transport@0.12.2
+  - @lazysh/mosh-transport@0.12.2
+
 ## 0.12.1
 
 ### Patch Changes

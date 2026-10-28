@@ -3,7 +3,8 @@ import {chmod,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses} from './support/androidSsh';
+import {OwnedCaseCrashParser} from './support/androidCaseCrash';
+import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses,captureOwnedCaseCrashes} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -243,4 +244,91 @@ test.each([
   expect(selected).toEqual(expected);
   expect(flags.unclassified).toBe(expected.length===0);
   expect(JSON.stringify(flags)).not.toContain('private-secret');
+});
+
+const nonce='a'.repeat(32);
+const row=(tag:string,message:string,pid=123)=>`10-28 01:37:10.123 ${pid} 124 F ${tag}: ${message}\n`;
+const marker=(verb='start',pid=123,value=nonce)=>row('LazyshOwnedCase',`${verb}:${value}:pid:${pid}`,pid);
+const java=(pid=123)=>row('AndroidRuntime','FATAL EXCEPTION: private-secret',pid);
+const native=(target=123,process='app.lazysh.client')=>row('DEBUG',`pid: ${target}, tid: ${target}, name: private-name  >>> ${process} <<<`,999)+
+  row('DEBUG','uid: 10155',999)+row('DEBUG','signal 11 (SIGSEGV), code 1, fault addr private-address',999);
+
+test('owned case crash records require the exact live marker and emitting PID',()=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  parser.push(Buffer.from(java()+native()+marker('start',456,'b'.repeat(32))+java(456)));
+  expect(parser.summary().correlated).toBe(false);
+  parser.push(Buffer.from(row('LazyshOwnedCase',`start:${nonce}:pid:123`,456)+java()));
+  expect(parser.summary().correlated).toBe(false);
+  parser.push(Buffer.from(marker()+java(456)+native(456)+native(123,'other.app')+java()+native()));
+  expect(parser.summary().records).toEqual([
+    {kind:'java',pid:123,time:'10-28 01:37:10.123'},
+    {kind:'native',pid:123,time:'10-28 01:37:10.123',signal:11},
+  ]);
+  expect(JSON.stringify(parser.summary())).not.toMatch(/private|address|name|SIGSEGV|app\.lazysh|aaaa/);
+});
+
+test('case end and a second process never rebind the original case window',()=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  parser.push(Buffer.from(marker()+marker('start',456)+java(456)+marker('end',456)+java()+marker('end')+java()+native()));
+  expect(parser.summary()).toMatchObject({correlated:true,ended:true,overflow:false});
+  expect(parser.summary().records).toHaveLength(1);
+});
+
+test('fragmented native records retain only finite correlated fields',()=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  const data=Buffer.from(marker()+native());
+  for(const value of data)parser.push(Buffer.from([value]));
+  expect(parser.summary().records).toEqual([{kind:'native',pid:123,time:'10-28 01:37:10.123',signal:11}]);
+});
+
+test('native records require the same debugger emitter within a bounded header window',()=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  parser.push(Buffer.from(marker()+native().split('\n')[0]+'\n'+row('DEBUG','signal 11 (SIGSEGV), private',998)));
+  expect(parser.summary().records).toHaveLength(0);
+  parser.push(Buffer.from(row('DEBUG','unrelated').repeat(16)+row('DEBUG','signal 11 (SIGSEGV), private',999)));
+  expect(parser.summary().records).toHaveLength(0);
+});
+
+test('any foreign or malformed native process header retires the previous owned header',()=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  const owned=native().split('\n')[0]+'\n';
+  parser.push(Buffer.from(marker()+owned+native(456,'other.app')));
+  expect(parser.summary().records).toHaveLength(0);
+  parser.push(Buffer.from(owned+row('DEBUG','pid: malformed private-header',999)+row('DEBUG','signal 11 (SIGSEGV), private',999)));
+  expect(parser.summary().records).toHaveLength(0);
+});
+
+test.each(['line','total','records'] as const)('crash classifier enforces its %s bound without retaining content',kind=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  parser.push(Buffer.from(marker()));
+  if(kind==='line')parser.push(Buffer.from('private'.repeat(200)));
+  if(kind==='total')parser.push(Buffer.alloc(64*1024,120));
+  if(kind==='records')parser.push(Buffer.from(java().repeat(20)));
+  expect(parser.summary().overflow).toBe(kind!=='records');
+  expect(parser.summary().records).toHaveLength(kind==='records'?8:0);
+  expect(JSON.stringify(parser.summary())).not.toContain('private');
+});
+
+test.skipIf(process.platform!=='linux')('owned crash collector selects only its emulator and reaps its child without raw output',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-case-crash-'));
+  const adb=join(directory,'adb'),args=join(directory,'argv'),pidFile=join(directory,'pid');
+  let collector:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
+  try {
+    // Native Bun fixture executable; never launches a user adb/session or shell.
+    await writeFile(adb,`#!${process.execPath}\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(args)},JSON.stringify(process.argv.slice(2)));fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.stdout.write(${JSON.stringify(marker()+java())});setInterval(()=>{},1000);\n`);
+    await chmod(adb,0o700);
+    collector=captureOwnedCaseCrashes(adb,'emulator-5580',nonce);
+    const deadline=performance.now()+1000;
+    while(!await Bun.file(pidFile).exists()) {expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    while(collector.snapshot().records.length===0) {expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    const summary=await collector.stop();
+    expect(summary.stream).toBe('stopped');
+    expect(summary.correlated).toBe(true);
+    expect(summary.records).toHaveLength(1);
+    expect(JSON.stringify(summary)).not.toContain('private-secret');
+    expect(JSON.parse(await readFile(args,'utf8'))).toEqual(['-s','emulator-5580','logcat','-b','main','-b','crash','-v','threadtime','-T','1','LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S']);
+    const pid=Number(await readFile(pidFile,'utf8'));
+    expect(()=>process.kill(pid,0)).toThrow();
+    expect(await collector.stop()).toEqual(summary);
+  } finally {await collector?.stop();await rm(directory,{recursive:true,force:true});}
 });

@@ -1425,6 +1425,7 @@ export const english = {
   pushTitle: "Remote push registration",
   pushScope: "Register this device with {{provider}} only if this native build is configured for remote push. Registration alone does not connect a delivery service or send host events.",
   pushNativeRequired: "Remote push registration requires the native app.",
+  pushUnavailable: "Remote push registration is unavailable in this build. Local inbox notifications remain available; no remote push provider is contacted.",
   pushInspecting: "Inspecting native push configuration…",
   pushPrivacy: "This control does not upload SSH credentials, transcripts, prompts or host addresses. {{provider}} receives device registration and application information. Local inbox notifications work separately.",
   pushConsent: "I agree to contact {{provider}} to register this device.",

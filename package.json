@@ -1,6 +1,6 @@
 {
   "name": "lazysh",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "private": true,
   "packageManager": "bun@1.3.14",
   "workspaces": [
@@ -42,6 +42,8 @@
     "test:ios-workspace": "turbo run test:ios-workspace --filter=@lazysh/client",
     "test:android-theme-links": "turbo run test:android-theme-links --filter=@lazysh/client",
     "test:android-ssh": "turbo run test:android-ssh --filter=@lazysh/client",
+    "build:android:fdroid": "turbo run build:android:fdroid --filter=@lazysh/client",
+    "test:android-fdroid": "turbo run test:android-fdroid --filter=@lazysh/client",
     "test:android-qr": "turbo run test:android-qr --filter=@lazysh/client"
   },
   "devDependencies": {

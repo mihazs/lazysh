@@ -5,6 +5,7 @@ import {isAbsolute, join, resolve} from 'node:path';
 import {createServer, connect} from 'node:net';
 import {createHash,randomUUID} from 'node:crypto';
 import type {HerdrFixture} from './androidHerdr';
+import {OwnedCaseCrashParser} from './androidCaseCrash';
 
 const OUTPUT_LIMIT=16*1024;
 // shortcut: foreground fixture tools only. A background child can outlive a reaped
@@ -317,6 +318,41 @@ export async function androidSshCleanup(primary:boolean,steps:readonly (readonly
   for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
   if(failed){if(primary)console.error('Owned Android SSH cleanup failed after original failure');else throw new Error('Owned Android SSH cleanup failed');}
 }
+
+// No raw crash output enters OwnedProcess's retained output windows. This is a
+// best-effort diagnostic child on the explicitly selected owned emulator only.
+export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
+  const parser=new OwnedCaseCrashParser(nonce);
+  const child=new OwnedProcess(adb,['-s',serial,'logcat','-b','main','-b','crash','-v','threadtime','-T','1',
+    'LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S'],undefined,process.env,false);
+  let stream:'running'|'stopped'|'closed'|'unavailable'|'overflow'|'deadline'='running';
+  let bytes=0;
+  let stopping=false;
+  let finished:Promise<ReturnType<typeof parser.summary>&{stream:typeof stream}>|undefined;
+  let timer:ReturnType<typeof setTimeout>;
+  const snapshot=()=>({...parser.summary(),stream});
+  const stop=()=>{
+    if(!finished) {
+      stopping=true;clearTimeout(timer);
+      if(stream==='running')stream='stopped';
+      finished=child.stop().catch(()=>{stream='unavailable';}).then(snapshot);
+    }
+    return finished;
+  };
+  child.child.stdout!.on('data',(chunk:Buffer)=>{
+    bytes+=chunk.length;
+    if(bytes>64*1024){stream='overflow';void stop();return;}
+    parser.push(chunk);
+    if(parser.summary().overflow){stream='overflow';void stop();}
+  });
+  child.child.stderr!.on('data',(chunk:Buffer)=>{
+    bytes+=chunk.length;
+    if(bytes>64*1024){stream='overflow';void stop();}
+  });
+  void child.done.then(code=>{if(!stopping)stream=code===0?'closed':'unavailable';},()=>{stream='unavailable';});
+  timer=setTimeout(()=>{stream='deadline';void stop();},600_000);
+  return {stop,snapshot};
+}
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
   const serial=process.env.ANDROID_SERIAL;
@@ -328,6 +364,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let remoteCreated=false;
   let before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined;
   let gradle:OwnedProcess|undefined;
+  let crashes:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
   let primary=false;
   const shell=(args:string[])=>command('owned emulator command',adb,['-s',serial,...args]);
   try {
@@ -341,6 +378,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
     try {before=await emulatorContinuity(adb,serial,reverse,fixture.port);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
+    try {crashes=captureOwnedCaseCrashes(adb,serial,fixture.nonce);} catch {/* Never change test admission for unavailable diagnostics. */}
     const android=join(root,'apps/client/src-tauri/gen/android');
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
@@ -348,19 +386,22 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     await gradle.finish('actual Android SSH UI instrumentation',600_000);
+    await crashes?.stop();
     if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
     console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
+      const crash=await crashes?.stop();
       const [exitInfo,continuity]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port)]);
-      const summary={...exitInfo,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
+      const summary={...exitInfo,crash:crash??{stream:'unavailable'},gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
     throw error;
   } finally {
+    await crashes?.stop();
     await androidSshCleanup(primary,[
       ['reverse',()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve()],
       ['fixture-file',()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve()],
