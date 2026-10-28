@@ -7,7 +7,7 @@ exclude = ["packages/portable-pty-vendor", "packages/deep-link-vendor", "package
 tauri-plugin-deep-link = { path = "packages/deep-link-vendor" }
 
 [workspace.package]
-version = "0.15.0"
+version = "0.16.0"
 license = "GPL-3.0-or-later"
 
 [profile.release]
