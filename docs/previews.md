@@ -24,4 +24,25 @@ Only successful UTF-8 HTML responses up to 2 MiB receive the static picker scrip
 
 Annotation mode accepts only requests addressed to its own device loopback origin and forwards only to the original confirmed host loopback address and port. It never follows server redirects natively. Original HTTP headers are bounded to 64 KiB/64 fields and checked before HTTP normalization; ambiguous framing and unsupported hop-by-hop extensions are rejected. Ordinary annotation HTTP connections close after one request, so another uninspected pipelined request cannot reach the host; WebSocket upgrades retain bidirectional forwarding. Requests are bounded to 10 MiB, two simultaneous nonempty request bodies, fifteen seconds for body collection/upstream connection/response headers, and sixteen connections per preview. HTML buffering uses four permits held until its response body is sent or dropped; there is no unbounded decode or page collection. The existing one-hour connection lifetime and session/preview cancellation close streams and upstream workers. These bounds can reject large uploads or slow responses; ordinary forwarding remains available.
 
-This implements explicit host forwarding and a browser surface from the [Moshi preview behavior](https://getmoshi.app/docs/browser-preview). Other framework recognition, periodic discovery and simulator streaming remain separate parity work. The opt-in picker supports explicit element selection, with the compatibility and trust limits above. No full preview or native-device parity is claimed by these tests.
+This implements explicit host forwarding and a browser surface from the [Moshi preview behavior](https://getmoshi.app/docs/browser-preview). Other framework recognition and simulator streaming remain separate parity work. The opt-in picker supports explicit element selection, with the compatibility and trust limits above. No full preview or native-device parity is claimed by these tests.
+
+### Optional periodic discovery
+
+Refresh listeners automatically is off by default and lasts only for the current
+panel/session. It waits five seconds after initialization or a settled scan before
+starting the next scan. A manual scan resets that cadence. The port filter and
+optional HTTP check are fixed while enabled; turn refresh off before editing them.
+Opening a tunnel remains a separate explicit action. Listener refresh preserves
+the selected preview page, element selection and comment draft.
+
+Hidden documents, unmounted panels and revoked original access stop scheduling.
+Disabling refresh or changing the source invalidates late results; this is not a
+new native cancellation facility. An already-issued scan can finish under the
+existing SSH command/probe bounds. One discovery IPC per SSH session is admitted at a
+time, including pending calls from a previous panel. This gate lasts until the raw
+IPC promise settles; it does not prove that all underlying native workers have
+retired after native cancellation. Existing native resource bounds still apply. No results or consent transfer
+from an old view to its replacement. A finishing scan can temporarily prevent a
+new manual scan. There is no background daemon, persisted opt-in or automatic
+forwarding. Five seconds is lazysh's chosen interval; Moshi documents periodic
+updates within a few seconds, not an exact interval.

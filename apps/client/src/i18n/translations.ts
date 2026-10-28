@@ -2,6 +2,9 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  previewAutomatic: ["Atualizar portas automaticamente", "Actualizar puertos automáticamente"],
+  previewAutomaticHint: ["Desativado por padrão. Enquanto este painel estiver visível, atualiza cinco segundos após cada busca terminar. Desative para alterar filtros. Parar oculta resultados tardios; uma busca já iniciada pode terminar. Verificar HTTP e abrir uma prévia continuam sendo escolhas separadas.", "Desactivado por defecto. Mientras este panel esté visible, actualiza cinco segundos después de finalizar cada búsqueda. Desactiva para cambiar filtros. Detener oculta resultados tardíos; una búsqueda ya iniciada puede terminar. Comprobar HTTP y abrir una vista previa siguen siendo opciones separadas."],
+  previewDiscoveryFinishing: ["Uma busca anterior ainda está terminando. Aguarde e tente novamente.", "Una búsqueda anterior aún está terminando. Espera e inténtalo de nuevo."],
   chatImageInclude: ["Incluir imagens registradas", "Incluir imágenes registradas"],
   chatImageView: ["Ver imagem registrada", "Ver imagen registrada"],
   chatImagePreview: ["Prévia da imagem registrada", "Vista previa de imagen registrada"],
