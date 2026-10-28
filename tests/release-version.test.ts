@@ -186,6 +186,18 @@ test.skipIf(!androidSdkReady)('actual Android generator resolves client JSON ver
   expect(properties.split('\n').filter(line => line.startsWith('tauri.android.version')).map(line => line.replace('tauri.android.', '')).join('\n') + '\n').toBe(android);
 }, 60_000);
 
+test.each([['title.txt',50],['short_description.txt',80],['full_description.txt',4000]] as const)(
+  'English Fastlane listing %s has valid bounded plain text',async(file,limit)=>{
+    const bytes=await Bun.file(join(source,'fastlane/metadata/android/en-US',file)).arrayBuffer();
+    const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+    expect(text.trim().length).toBeGreaterThan(0);
+    expect(Array.from(text.trim()).length).toBeLessThanOrEqual(limit);
+    expect(text).toBe(text.trimEnd()+'\n');
+    expect(text).not.toMatch(/[\r\x00-\x08\x0b\x0c\x0e-\x1f<>]/);
+    if(file==='title.txt')expect(text.trim()).toBe((await json(source,'apps/client/src-tauri/tauri.conf.json')).productName);
+  },
+);
+
 test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source tooling version %s', async sourceVersion => {
   const directory = await fixture(fragment('patch'), sourceVersion);
   const initial = (await json(directory, 'package.json')).version;

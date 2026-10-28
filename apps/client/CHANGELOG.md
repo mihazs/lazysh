@@ -1,5 +1,25 @@
 # @lazysh/client
 
+## 0.12.2
+
+### Patch Changes
+
+- 1da4cad: Add English Android listing descriptions with development-preview and host-dependency limits, without claiming F-Droid publication or changing application behavior.
+- @lazysh/common@0.12.2
+  - @lazysh/display-idle@0.12.2
+  - @lazysh/et-transport@0.12.2
+  - @lazysh/mosh-transport@0.12.2
+
+## 0.12.1
+
+### Patch Changes
+
+- 04d4085: Expose synchronized Android version metadata and reject ambiguous or out-of-range release version codes.
+- @lazysh/common@0.12.1
+  - @lazysh/display-idle@0.12.1
+  - @lazysh/et-transport@0.12.1
+  - @lazysh/mosh-transport@0.12.1
+
 ## 0.12.0
 
 ### Minor Changes
