@@ -3741,7 +3741,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "age",
  "axum",
@@ -3789,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-agent"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3819,7 +3819,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-common"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "axum",
  "hyper-util",
@@ -3832,7 +3832,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-et-transport"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "lazysh-common",
  "prost",
@@ -3844,7 +3844,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-mosh-transport"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "cc",
  "cmake",
@@ -3858,7 +3858,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-notification-client"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "lazysh-common",
  "rand 0.10.3",
@@ -3872,7 +3872,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-notifications"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3901,7 +3901,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-parakeet-runtime"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "bzip2",
  "cmake",
@@ -3915,7 +3915,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-share"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "axum",
  "clap",
@@ -3940,7 +3940,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-transcription"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "axum",
  "clap",
@@ -7380,7 +7380,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-apple-speech"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "lazysh-common",
  "serde",
@@ -7391,7 +7391,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-apple-status"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "lazysh-common",
  "serde",
@@ -7403,7 +7403,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-display-idle"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "core-foundation-sys",
  "gio",
@@ -7417,7 +7417,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-push"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "serde",
  "tauri",
@@ -7426,7 +7426,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-vault"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "block2",
  "core-foundation 0.10.1",
