@@ -1,5 +1,14 @@
 # @lazysh/client
 
+## 0.22.0
+
+### Patch Changes
+
+- @lazysh/common@0.22.0
+  - @lazysh/display-idle@0.22.0
+  - @lazysh/et-transport@0.22.0
+  - @lazysh/mosh-transport@0.22.0
+
 ## 0.21.0
 
 ### Minor Changes
