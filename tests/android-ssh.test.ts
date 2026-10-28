@@ -343,6 +343,38 @@ const java=(pid=123)=>row('AndroidRuntime','FATAL EXCEPTION: private-secret',pid
 const native=(target=123,process='app.lazysh.client')=>row('DEBUG',`pid: ${target}, tid: ${target}, name: private-name  >>> ${process} <<<`,999)+
   row('DEBUG','uid: 10155',999)+row('DEBUG','signal 11 (SIGSEGV), code 1, fault addr private-address',999);
 
+test.each([
+  {packageName:'app.lazysh.client',reason:'finished inst',expected:'finished-instrumentation'},
+  {packageName:'app.lazysh.client',reason:'start instr',expected:'start-instrumentation'},
+  {packageName:'app.lazysh.client',reason:'from pid 2345',expected:'external-request'},
+  {packageName:'app.lazysh.client',reason:'from pid 2345 (private-caller)',expected:'external-request'},
+  {packageName:'app.lazysh.client',reason:'private-trigger',expected:'other'},
+  {packageName:'app.lazysh.client.test',reason:'finished inst',expected:null},
+  {packageName:'app.lazysh.client.other',reason:'finished inst',expected:null},
+  {packageName:'other.app',reason:'finished inst',expected:null},
+])('package force-stop classification retains a finite reason only: $packageName/$expected',({packageName,reason,expected})=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  const event=row('ActivityManager',`Force stopping ${packageName} appid=10155 user=0: ${reason}`,624);
+  parser.push(Buffer.from(event));
+  expect(parser.summary().forceStop).toEqual({state:'unknown',records:[]});
+  parser.push(Buffer.from(marker()+event));
+  const records=expected?[{time:'10-28 01:37:10.123',reason:expected}]:[];
+  expect(parser.summary().forceStop).toEqual({state:expected?'reported':'unknown',records});
+  parser.push(Buffer.from(marker('end')+event));
+  expect(parser.summary().forceStop.records).toEqual(records);
+  expect(JSON.stringify(parser.summary())).not.toMatch(/private-|2345|10155|app[.]lazysh|other[.]app/);
+});
+
+test('force-stop rows share the eight-record limit with fatal records and reject malformed boundaries',()=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  const event=(appid:string,user:string)=>row('ActivityManager',`Force stopping app.lazysh.client appid=${appid} user=${user}: finished inst`,624);
+  parser.push(Buffer.from(marker()+event('2147483648','0')+event('10155','-2')+row('ActivityManager','prefix Force stopping app.lazysh.client appid=10155 user=0: finished inst',624)));
+  expect(parser.summary().forceStop.state).toBe('unknown');
+  parser.push(Buffer.from(java()+event('10155','0').repeat(10)+native()));
+  expect(parser.summary().records).toHaveLength(1);
+  expect(parser.summary().forceStop.records).toHaveLength(7);
+});
+
 test('owned case crash records require the exact live marker and emitting PID',()=>{
   const parser=new OwnedCaseCrashParser(nonce);
   parser.push(Buffer.from(java()+native()+marker('start',456,'b'.repeat(32))+java(456)));
@@ -463,7 +495,7 @@ test.skipIf(process.platform!=='linux')(`owned crash collector records ${mode} p
     expect(summary.close).toEqual({elapsedMs:summary.close.elapsedMs,phase:mode==='hold'||mode==='overflow'||mode==='stop-failure'?'during-stop':'before-stop',exitCode:mode==='exit255'?255:mode==='reported-eof'?1:null,signal:mode==='exit255'||mode==='reported-eof'?'none':'SIGTERM',processError:false,stopFailed:mode==='stop-failure'});
     expect(summary.stderr.unexpectedEof).toBe(mode==='reported-eof');
     expect(JSON.stringify(summary)).not.toMatch(/private-secret|private-stop-error/);
-    expect(JSON.parse(await readFile(args,'utf8'))).toEqual(['-s','emulator-5580','logcat','-b','main','-b','crash','-v','threadtime','-T','1','LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S']);
+    expect(JSON.parse(await readFile(args,'utf8'))).toEqual(['-s','emulator-5580','logcat','-b','main','-b','crash','-v','threadtime','-T','1','LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','ActivityManager:I','*:S']);
     const pid=Number(await readFile(pidFile,'utf8'));
     expect(()=>process.kill(pid,0)).toThrow();
     expect(await collector.stop()).toEqual(summary);

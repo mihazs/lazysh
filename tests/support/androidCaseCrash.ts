@@ -8,6 +8,7 @@ export class OwnedCaseCrashParser {
   private overflow=false;
   private ended=false;
   private records:{kind:'java'|'native',pid:number,time:string,signal?:number}[]=[];
+  private forceStops:{time:string,reason:'finished-instrumentation'|'start-instrumentation'|'external-request'|'other'}[]=[];
   // These describe this adb child's collector lifetime, not the app's crash cause.
   private stderr={unexpectedEof:false,readFailure:false,deviceUnavailable:false,waitingForDevice:false,other:false};
   constructor(private readonly nonce:string) {
@@ -62,7 +63,14 @@ export class OwnedCaseCrashParser {
       this.pid??=emitter;return;
     }
     if(tag==='LazyshOwnedCase' && emitter===this.pid && message===`end:${this.nonce}:pid:${emitter}`){this.ended=true;this.native=undefined;return;}
-    if(!this.pid || this.records.length>=8)return;
+    if(!this.pid || this.records.length+this.forceStops.length>=8)return;
+    if(tag==='ActivityManager') {
+      const stop=/^Force stopping app[.]lazysh[.]client appid=([0-9]{1,10}) user=(-?[0-9]{1,10}): (.+)$/.exec(message);
+      if(!stop || Number(stop[1])>2147483647 || Number(stop[2]) < -1 || Number(stop[2])>2147483647)return;
+      const reason=stop[3]==='finished inst'?'finished-instrumentation':stop[3]==='start instr'?'start-instrumentation':/^from pid [1-9][0-9]{0,9}(?: \([^\r\n]{1,128}\))?$/.test(stop[3])?'external-request':'other';
+      // Package-scoped OS text: this does not identify the affected PID or caller.
+      this.forceStops.push({time,reason});return;
+    }
     if(tag==='AndroidRuntime' && emitter===this.pid && /^FATAL EXCEPTION:/.test(message)) {
       this.records.push({kind:'java',pid:this.pid,time});return;
     }
@@ -81,6 +89,6 @@ export class OwnedCaseCrashParser {
     }
   }
   summary() {
-    return {scope:'owned-case-marker-window',correlated:this.pid!==undefined,ended:this.ended,overflow:this.overflow,records:this.records.map(record=>({...record})),stderr:{...this.stderr}};
+    return {scope:'owned-case-marker-window',correlated:this.pid!==undefined,ended:this.ended,overflow:this.overflow,records:this.records.map(record=>({...record})),forceStop:{state:this.forceStops.length?'reported':'unknown',records:this.forceStops.map(record=>({...record}))},stderr:{...this.stderr}};
   }
 }

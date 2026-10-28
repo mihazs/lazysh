@@ -355,7 +355,7 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   const elapsedMs=()=>Math.min(3_600_000,Math.max(0,Math.floor(performance.now()-started)));
   const parser=new OwnedCaseCrashParser(nonce);
   const child=new OwnedProcess(adb,['-s',serial,'logcat','-b','main','-b','crash','-v','threadtime','-T','1',
-    'LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S'],undefined,process.env,false);
+    'LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','ActivityManager:I','*:S'],undefined,process.env,false);
   let stream:'running'|'stopped'|'closed'|'unavailable'|'overflow'|'deadline'='running';
   let stopping=false;
   const close:{phase:'unobserved'|'before-stop'|'during-stop',exitCode:number|null,signal:'none'|'SIGTERM'|'SIGKILL'|'SIGPIPE'|'SIGABRT'|'SIGSEGV'|'other',processError:boolean,stopFailed:boolean,elapsedMs:number|null}={phase:'unobserved',exitCode:null,signal:'none',processError:false,stopFailed:false,elapsedMs:null};

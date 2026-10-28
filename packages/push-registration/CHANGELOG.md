@@ -1,5 +1,11 @@
 # @lazysh/push-registration
 
+## 0.18.0
+
+### Minor Changes
+
+- 37c6f53: Add explicit private F-Droid Android relay enrollment and encrypted challenge confirmation with Keystore-protected state. Registration defaults remain unchanged; event messages and actual remote notification display remain disconnected.
+
 ## 0.17.2
 
 No changes in this release.
