@@ -1,19 +1,23 @@
 use super::*;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use std::os::unix::fs::PermissionsExt;
 use web_push_native::p256::{self, elliptic_curve::sec1::ToEncodedPoint};
 const ENROLLMENT: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 const DEVICE: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
-struct Fixture {
-    _directory: tempfile::TempDir,
-    sink: support::Server,
-    service: Service,
+pub(super) struct Fixture {
+    pub(super) _directory: tempfile::TempDir,
+    pub(super) sink: support::Server,
+    pub(super) service: Service,
     received: tokio::sync::mpsc::Receiver<(String, Vec<u8>)>,
     key: p256::SecretKey,
     worker: Option<JoinHandle<Result<(), ApiError>>>,
 }
 impl Fixture {
     async fn new() -> Self {
+        Self::with_format(push::EventFormat::Legacy).await
+    }
+    pub(super) async fn with_format(format: push::EventFormat) -> Self {
         let (sender, received) = tokio::sync::mpsc::channel(16);
         let router = Router::new()
             .route(
@@ -23,7 +27,11 @@ impl Fixture {
                         let sender = sender.clone();
                         async move {
                             assert_eq!(headers["Content-Encoding"], "aes128gcm");
-                            assert_eq!(headers["TTL"], "300");
+                            let ttl = headers["TTL"].to_str().unwrap().parse::<u32>().unwrap();
+                            match format {
+                                push::EventFormat::Legacy => assert_eq!(ttl, 300),
+                                push::EventFormat::BoundV2 => assert!((1..=300).contains(&ttl)),
+                            }
                             assert!(headers["Authorization"]
                                 .to_str()
                                 .unwrap()
@@ -46,14 +54,16 @@ impl Fixture {
             )
             .layer(DefaultBodyLimit::max(push::MAX_WIRE_BYTES));
         let sink = support::Server::new(router).await;
-        let config = push::PushConfig::generate(
+        let config = push::PushConfig::generate_with_event_format(
             sink.origin.clone(),
             vec!["127.0.0.1".parse().unwrap()],
             "mailto:test@example.invalid".into(),
+            format,
         )
         .unwrap()
         .with_test_root(reqwest::Certificate::from_pem(sink.pem.as_bytes()).unwrap());
         let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let service =
             Service::open(Config::web_push(directory.path().join("state"), ADMIN, config).unwrap())
                 .unwrap();
@@ -98,21 +108,53 @@ impl Fixture {
         assert_eq!(code, StatusCode::OK);
         body
     }
-    async fn message(&mut self) -> (String, serde_json::Value) {
+    pub(super) fn decrypt(&self, wire: Vec<u8>) -> serde_json::Value {
+        let plaintext =
+            web_push_native::decrypt(wire, &self.key, &web_push_native::Auth::from([9; 16]))
+                .unwrap();
+        serde_json::from_slice(&plaintext).unwrap()
+    }
+    pub(super) async fn message(&mut self) -> (String, serde_json::Value) {
         let (path, wire) = tokio::time::timeout(Duration::from_secs(3), self.received.recv())
             .await
             .unwrap()
             .unwrap();
-        let plaintext =
-            web_push_native::decrypt(wire, &self.key, &web_push_native::Auth::from([9; 16]))
-                .unwrap();
-        (path, serde_json::from_slice(&plaintext).unwrap())
+        (path, self.decrypt(wire))
     }
     async fn confirm(&self, challenge: &serde_json::Value) {
         assert_eq!(self.post("/v1/push/confirm",DEVICE,serde_json::json!({"challengeId":challenge["challengeId"],"nonce":challenge["nonce"]})).await.0,StatusCode::OK);
     }
-    async fn activate(&mut self) {
-        self.bootstrap().await;
+    pub(super) async fn rotate(&mut self, slot: &str) {
+        assert_eq!(
+            self.post(
+                "/v1/push/subscription",
+                DEVICE,
+                self.subscription(slot, Uuid::new_v4())
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let (_, challenge) = self.message().await;
+        assert_eq!(challenge["schemaVersion"], 1);
+        self.confirm(&challenge).await;
+    }
+    pub(super) async fn revoke(&self) {
+        assert_eq!(
+            self.post("/v1/push/revoke", DEVICE, serde_json::Value::Null)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert!(self
+            .service
+            .db(|store| store.claim())
+            .await
+            .unwrap()
+            .is_none());
+    }
+    pub(super) async fn activate(&mut self) -> serde_json::Value {
+        let bootstrap = self.bootstrap().await;
         let (code, response) = self
             .post(
                 "/v1/push/subscription",
@@ -125,6 +167,7 @@ impl Fixture {
         let (_, challenge) = self.message().await;
         self.confirm(&challenge).await;
         enable(&self.service).await;
+        bootstrap
     }
 }
 impl Drop for Fixture {
@@ -243,19 +286,7 @@ async fn rotation_cannot_redirect_already_admitted_event_and_revocation_stops_fu
         .db(move |store| store.finish(&job, false))
         .await
         .unwrap();
-    assert_eq!(
-        fixture
-            .post(
-                "/v1/push/subscription",
-                DEVICE,
-                fixture.subscription("rotated", Uuid::new_v4())
-            )
-            .await
-            .0,
-        StatusCode::OK
-    );
-    let (_, challenge) = fixture.message().await;
-    fixture.confirm(&challenge).await;
+    fixture.rotate("rotated").await;
     let retry = fixture
         .service
         .db(|store| {
@@ -282,26 +313,8 @@ async fn rotation_cannot_redirect_already_admitted_event_and_revocation_stops_fu
         .unwrap()
         .endpoint
         .contains("/up/rotated?"));
-    assert_eq!(
-        fixture
-            .post("/v1/push/revoke", DEVICE, serde_json::Value::Null)
-            .await
-            .0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        fixture
-            .post("/v1/push/revoke", DEVICE, serde_json::Value::Null)
-            .await
-            .0,
-        StatusCode::OK
-    );
-    assert!(fixture
-        .service
-        .db(|store| store.claim())
-        .await
-        .unwrap()
-        .is_none());
+    fixture.revoke().await;
+    fixture.revoke().await;
     assert_eq!(
         fixture
             .post(

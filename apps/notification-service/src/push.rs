@@ -14,6 +14,19 @@ pub const MAX_CLEAR_BYTES: usize = 2048;
 pub const MAX_WIRE_BYTES: usize = 4096;
 const INVALID: &str = "Invalid private Web Push configuration";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum EventFormat {
+    #[default]
+    Legacy,
+    BoundV2,
+}
+impl EventFormat {
+    fn legacy(&self) -> bool {
+        *self == Self::Legacy
+    }
+}
+
 pub(crate) fn read_private<'de, D: Deserializer<'de>>(
     decoder: D,
 ) -> Result<Zeroizing<String>, D::Error> {
@@ -31,6 +44,8 @@ struct Settings {
     origin: String,
     addresses: Vec<IpAddr>,
     contact: String,
+    #[serde(default, skip_serializing_if = "EventFormat::legacy")]
+    event_format: EventFormat,
     #[serde(deserialize_with = "read_private", serialize_with = "write_private")]
     private_vapid: Zeroizing<String>,
 }
@@ -49,6 +64,15 @@ impl PushConfig {
         addresses: Vec<IpAddr>,
         contact: String,
     ) -> Result<Self, String> {
+        Self::generate_with_event_format(origin, addresses, contact, EventFormat::Legacy)
+    }
+
+    pub fn generate_with_event_format(
+        origin: String,
+        addresses: Vec<IpAddr>,
+        contact: String,
+        event_format: EventFormat,
+    ) -> Result<Self, String> {
         let key = ES256KeyPair::generate();
         let bytes = Zeroizing::new(key.to_bytes());
         Self::validate(Settings {
@@ -57,6 +81,7 @@ impl PushConfig {
             origin,
             addresses,
             contact,
+            event_format,
             private_vapid: Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_slice())),
         })
     }
@@ -128,14 +153,21 @@ impl PushConfig {
     pub fn slot_id(&self) -> Uuid {
         self.settings.slot_id
     }
+    pub fn event_format(&self) -> EventFormat {
+        self.settings.event_format
+    }
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_test_root(mut self, root: reqwest::Certificate) -> Self {
         self.root = Some(root);
         self
     }
     pub(crate) fn identity(&self) -> [u8; 32] {
+        let format = match self.event_format() {
+            EventFormat::Legacy => "webpush-v1",
+            EventFormat::BoundV2 => "webpush-bound-v2",
+        };
         crate::digest(&format!(
-            "webpush-v1\0{}\0{}\0{}\0{:?}",
+            "{format}\0{}\0{}\0{}\0{:?}",
             self.settings.slot_id, self.settings.origin, self.public_key, self.settings.addresses
         ))
     }
@@ -441,5 +473,65 @@ mod tests {
             "mailto:a@example.invalid".into()
         )
         .is_err());
+    }
+
+    #[test]
+    fn legacy_configuration_bytes_and_identity_stay_compatible_and_bound_format_is_explicit() {
+        let config = config();
+        assert_eq!(config.event_format(), EventFormat::Legacy);
+        let raw = serde_json::to_value(&config.settings).unwrap();
+        assert!(raw.get("eventFormat").is_none());
+        let old_identity = crate::digest(&format!(
+            "webpush-v1\0{}\0{}\0{}\0{:?}",
+            config.settings.slot_id,
+            config.settings.origin,
+            config.public_key,
+            config.settings.addresses
+        ));
+        assert_eq!(config.identity(), old_identity);
+        let decoded = PushConfig::validate(serde_json::from_value(raw.clone()).unwrap()).unwrap();
+        assert!(
+            serde_json::to_vec(&decoded.settings).unwrap()
+                == serde_json::to_vec(&config.settings).unwrap()
+        );
+        for value in [
+            serde_json::json!("unknown"),
+            serde_json::Value::Null,
+            serde_json::json!(2),
+        ] {
+            let mut bad = raw.clone();
+            bad["eventFormat"] = value;
+            assert!(serde_json::from_value::<Settings>(bad).is_err());
+        }
+        let mut bound = raw;
+        bound["eventFormat"] = serde_json::json!("bound-v2");
+        let bound = PushConfig::validate(serde_json::from_value(bound).unwrap()).unwrap();
+        assert_eq!(bound.event_format(), EventFormat::BoundV2);
+        assert_ne!(bound.identity(), old_identity);
+        assert_eq!(bound.public_key(), config.public_key());
+    }
+
+    #[test]
+    fn legacy_event_ciphertext_preserves_the_exact_existing_clear_payload() {
+        let config = config();
+        let (subscription, key) = subscriber(&config);
+        let receipt = crate::Receipt {
+            receipt_id: Uuid::new_v4().to_string(),
+            event_id: Uuid::new_v4().to_string(),
+            kind: "done".into(),
+            alias: "public alias".into(),
+            state: "sending".into(),
+            may_have_reached_destination: true,
+        };
+        let snapshot = serde_json::to_string(&subscription).unwrap();
+        let wire = crate::push_event::encrypted(&config, &snapshot, &receipt, 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(wire.ttl, 300);
+        let clear =
+            web_push_native::decrypt(wire.body, &key, &web_push_native::Auth::from([9; 16]))
+                .unwrap();
+        let expected = serde_json::json!({"schemaVersion":1,"receiptId":receipt.receipt_id,"eventId":receipt.event_id,"kind":receipt.kind,"alias":receipt.alias});
+        assert_eq!(clear, serde_json::to_vec(&expected).unwrap());
     }
 }
