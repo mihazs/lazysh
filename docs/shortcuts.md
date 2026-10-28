@@ -14,17 +14,25 @@ does not rewrite them. Nothing is sent while building or saving a shortcut. Pres
 its toolbar button explicitly to send it to the active terminal.
 
 Under Terminal touch gestures, choose Custom key chord for a body gesture,
-two-finger swipe or D-pad corner. The same Advanced / Simple custom-text builder
+two-finger swipe or D-pad corner. The same Advanced / Simple custom-text / Named key builder
 is available for each slot. Press that slot's **Save … chord** button to save;
 Advanced edits now also require Save instead of saving when the field loses
 focus. Changing builders does not convert or save the existing binding. Each
-slot keeps separate Advanced and Simple drafts, modifiers and validation errors
+slot keeps separate Advanced, Simple and Named key drafts and modifier choices
 while its editor is open; drafts are not persisted across reload or leaving the
 custom action. When a slot's saved binding changes, including after saving or a
 settings import/sync, its editor returns to Advanced showing the saved string and
 discards that slot's old drafts. Other slots' drafts remain untouched. Only
 performing the configured gesture or pressing its D-pad corner sends input to a
 connected terminal.
+
+Choose **Named or function key** to select Enter, Tab, Escape, Backspace, Space, an arrow,
+Home/End, Insert/Delete, PageUp/PageDown, or F1–F12. Optional Control, Option/Alt
+and Shift modifiers use the same validated Advanced grammar. Saving stores one
+ordinary key binding; it does not send input. Named-key and Simple-text modifier
+choices are independent, and switching builders preserves their drafts. The
+editor labels follow the interface language while stored key names stay stable.
+Advanced remains the default. A multi-step sequence still uses Advanced.
 
 Choose Simple custom text for the bounded text-and-modifiers builder. With no
 modifiers, text is literal: Unicode, commas, and leading/trailing spaces survive
@@ -58,18 +66,18 @@ are rejected with an error. No input is trimmed or silently truncated. A literal
 comma at a group's start still needs a supported modifier combination: Alt+comma
 works, while Ctrl+comma is rejected by the existing grammar.
 
-This implements the documented [Moshi simple custom-text rules](https://getmoshi.app/docs/keyboard)
+This implements the documented reference client simple custom-text rules (source URL omitted)
 within lazysh's current bounds. That source describes the simple modifier and
 comma behavior under “Key sequences (simple builder)”; its named-key table is
-under Advanced bindings. Simple named/function-key pickers and arbitrary Unicode
-tails after modified keys are not implemented. Use Advanced for named keys,
-function keys or modifiers that differ between steps.
+under Advanced bindings. Arbitrary Unicode tails after modified keys remain
+unsupported. Use Advanced for multi-step named/function-key sequences or
+modifiers that differ between steps.
 
 Advanced chords and modified Simple shortcuts now preserve their compiled key
 boundaries through the native input queue. Once an item reaches its transport
 driver, the first step dispatches immediately;
 subsequent steps wait at least 50 ms after the preceding step finishes its native
-dispatch. This conservative fixed interval is lazysh's choice: Moshi documents a
+dispatch. This conservative fixed interval is lazysh's choice: the reference client documents a
 small delay but does not publish a numeric value. It is not a guarantee about
 packet spacing or remote execution time. There is no trailing delay. Literal
 `text:` bindings remain one write, including Unicode, commas and trailing spaces.

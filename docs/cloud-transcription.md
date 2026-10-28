@@ -13,7 +13,7 @@ By default the operator supplies an OpenAI API key on the server. An explicit
 Device credentials are
 separate revocable tokens; the provider key and administrator token must never be
 given to a device client. This is an operator-hosted integration, not enrollment
-in Moshi's hosted service or a promise of any vendor subscription allowance.
+in the reference client's hosted service or a promise of any vendor subscription allowance.
 
 ## Run and enroll
 

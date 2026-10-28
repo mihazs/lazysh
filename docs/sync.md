@@ -1,6 +1,6 @@
 # Optional encrypted sync
 
-lazysh works locally without sync or an account. Sync is an explicit backup/merge workflow for a self-hosted WebDAV folder. It makes no background uploads and does not use Moshi's services.
+lazysh works locally without sync or an account. Sync is an explicit backup/merge workflow for a self-hosted WebDAV folder. It makes no background uploads and does not use the reference client's services.
 
 ## Configure and enroll devices
 

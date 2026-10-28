@@ -20,8 +20,8 @@ this does not establish gesture behavior while those popups are open. Frontend
 tests check gesture routing, rejection and settings
 round-trips. Physical touch and mobile lifecycle acceptance remain open.
 
-This is the bounded Zellij tab/pane part of Moshi's documented
-[hierarchy-aware gestures](https://getmoshi.app/docs/gestures). Tmux and Herdr
+This is the bounded Zellij tab/pane part of the reference client's documented
+hierarchy-aware gestures (source URL omitted). Tmux and Herdr
 navigation, workspace/session-level gestures and pane-zoom pinch bindings remain
 separate work. Current Zellij exposes `switch-session`, but lazysh does not yet
 use it or reconcile remembered attachment names after a host-side session switch.
@@ -36,7 +36,7 @@ All tmux client invocations also select UTF-8 (`-u`), preserving literal metadat
 
 **Changed default:** every command explicitly uses `-L default` or its selected named server. Previously, bare tmux commands could inherit a different socket from the remote `TMUX` environment variable. Legacy workspaces without server metadata now consistently select the standard default server. Saved attachment intentions preserve the server plus exact human session name; Jump To changes the destination without dropping server identity. Native session context rejects conflicting action/tree requests, and the retained control channel never reconnects to a restarted server with reused IDs.
 
-This follows documented [tmux named-server semantics](https://man.openbsd.org/tmux.1) and [upstream 3.4 socket-label construction](https://github.com/tmux/tmux/blob/3.4/tmux.c#L175-L219). Moshi help exposed `tmux:<server>`, but the exact private gateway meaning was not recovered. This is independent implementation from the public interface. Agent pane IDs alone do not establish server identity: transcript/approval identity remains explicit, and no pane-only routing is added. Notifications open their recorded existing native connection ID, never a first session-name match. Companion snapshots are host-wide: that connection is not proof of a matching agent pane/server, and this slice does not infer one. Desktop theme deep links do not attach multiplexers. Cold or warm saved-host CLI composition opens the exact requested tmux/Herdr picker through normal SSH authentication; see [launch usage](connections.md#multiplexer-picker-launches). Warm directory and actual OS GUI acceptance remain tracked in issue #86.
+This follows documented [tmux named-server semantics](https://man.openbsd.org/tmux.1) and [upstream 3.4 socket-label construction](https://github.com/tmux/tmux/blob/3.4/tmux.c#L175-L219). The reference client help exposed `tmux:<server>`, but the exact private gateway meaning was not recovered. This is independent implementation from the public interface. Agent pane IDs alone do not establish server identity: transcript/approval identity remains explicit, and no pane-only routing is added. Notifications open their recorded existing native connection ID, never a first session-name match. Companion snapshots are host-wide: that connection is not proof of a matching agent pane/server, and this slice does not infer one. Desktop theme deep links do not attach multiplexers. Cold or warm saved-host CLI composition opens the exact requested tmux/Herdr picker through normal SSH authentication; see [launch usage](connections.md#multiplexer-picker-launches). Warm directory and actual OS GUI acceptance remain tracked in issue #86.
 
 The workspace tree lists real session, window and pane IDs, current commands, directories and active state. Create/rename sessions and windows, choose a project directory, select windows/panes, split panes and toggle zoom. Refresh reads current host state. Actions use exact IDs instead of injecting prefix sequences into a foreground agent.
 
@@ -131,7 +131,7 @@ prefix or decimal digits into a terminal. The host's error remains visible if a
 tab is unavailable. Only one action runs at a time; language changes preserve
 drafts and do not dispatch actions, and retired owners cannot publish late results.
 The manual 1–1000 native index bound is unchanged. This implements the documented
-[Moshi numbered selector affordance](https://getmoshi.app/docs/zellij#shortcut-panel-notes)
+reference client numbered selector affordance (source URL omitted)
 without inheriting its documented multi-digit chord timing dependency. It does
 not establish current tabs, exact-client binding, automatic restoration, or physical
 device/runtime acceptance. Hiding/persisting this row remains separate work.

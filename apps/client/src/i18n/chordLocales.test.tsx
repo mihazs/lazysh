@@ -86,3 +86,56 @@ it('retains a simple-mode parser cause without changing text, modifiers or callb
     expect(save).not.toHaveBeenCalled();
   }
 });
+
+it('saves named and function keys through the existing parser without sending on selection',async()=>{
+  const {parseChordSteps}=await import('../preferences');
+  const save=vi.fn(()=>true);render(<ChordBuilder onSave={save}/>);
+  fireEvent.change(screen.getByLabelText('Shortcut builder'),{target:{value:'named'}});
+  const picker=screen.getByLabelText('Named key');
+  expect(Array.from((picker as HTMLSelectElement).options,option=>option.value)).toEqual(['Enter','Tab','Escape','Backspace','Space','Up','Down','Left','Right','Home','End','Insert','Delete','PageUp','PageDown',...Array.from({length:12},(_,i)=>`F${i+1}`)]);
+  expect(save).not.toHaveBeenCalled();
+  for(const [key,bytes] of [['Enter','\r'],['Backspace','\x7f'],['Space',' '],['Home','\x1b[H'],['F1','\x1bOP'],['F4','\x1bOS'],['F5','\x1b[15~'],['F12','\x1b[24~']]){
+    const before=save.mock.calls.length;
+    fireEvent.change(picker,{target:{value:key}});
+    expect(save).toHaveBeenCalledTimes(before);
+    fireEvent.click(screen.getByRole('button',{name:'Add chord'}));
+    expect(save).toHaveBeenLastCalledWith(key);
+    expect(parseChordSteps(key)).toEqual([bytes]);
+  }
+  fireEvent.click(screen.getByLabelText('Control'));
+  fireEvent.click(screen.getByLabelText('Option / Alt'));
+  fireEvent.click(screen.getByLabelText('Shift'));
+  fireEvent.click(screen.getByRole('button',{name:'Add chord'}));
+  expect(save).toHaveBeenLastCalledWith('C-M-S-F12');
+  expect(parseChordSteps('C-M-S-F12')).toEqual(['\x1b[24;8~']);
+});
+
+it('retains independent named, literal and Advanced drafts across locale changes and failed saves',async()=>{
+  const save=vi.fn(()=>false);render(<ChordBuilder label="RAW {{slot}}" binding="C-b, 1" onSave={save}/>);
+  const builder=screen.getByRole('combobox',{name:'RAW {{slot}} shortcut builder'});
+  fireEvent.change(builder,{target:{value:'simple'}});
+  fireEvent.change(screen.getByRole('textbox'),{target:{value:' literal 世界 '}});
+  fireEvent.click(screen.getByLabelText('RAW {{slot}} Control'));
+  fireEvent.change(builder,{target:{value:'named'}});
+  const picker=screen.getByLabelText('RAW {{slot}} named key');
+  fireEvent.change(picker,{target:{value:'Tab'}});
+  expect(screen.getByLabelText('RAW {{slot}} Control')).toHaveProperty('checked',false);
+  fireEvent.click(screen.getByLabelText('RAW {{slot}} Shift'));picker.focus();
+  const{enablePseudoLocale}=await import('../test/pseudoLocale');
+  for(const locale of ['pt-BR','es','en-XA']){
+    await act(async()=>{if(locale==='en-XA')await enablePseudoLocale(uiI18n);else await uiI18n.changeLanguage(locale);});
+    expect(screen.getByLabelText(t('shortcutNamedKeyForLabel',{label:'RAW {{slot}}'}))).toBe(picker);
+    expect(picker).toHaveProperty('value','Tab');expect(document.activeElement).toBe(picker);
+    expect(screen.getByLabelText(t('shortcutModifierForLabel',{label:'RAW {{slot}}',modifier:t('shortcutShift')}))).toHaveProperty('checked',true);
+    expect(save).not.toHaveBeenCalled();
+  }
+  fireEvent.click(screen.getByRole('button',{name:t('shortcutSaveValue1Chord',{value1:'RAW {{slot}}'})}));
+  expect(save).toHaveBeenLastCalledWith('S-Tab');
+  expect(picker).toHaveProperty('value','Tab');
+  fireEvent.change(builder,{target:{value:'simple'}});
+  expect(screen.getByRole('textbox')).toHaveProperty('value',' literal 世界 ');
+  expect(screen.getByLabelText(t('shortcutModifierForLabel',{label:'RAW {{slot}}',modifier:t('shortcutControl')}))).toHaveProperty('checked',true);
+  expect(screen.getByLabelText(t('shortcutModifierForLabel',{label:'RAW {{slot}}',modifier:t('shortcutShift')}))).toHaveProperty('checked',false);
+  fireEvent.change(builder,{target:{value:'advanced'}});
+  expect(screen.getByRole('textbox')).toHaveProperty('value','C-b, 1');
+});

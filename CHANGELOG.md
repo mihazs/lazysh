@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Add a localized Named key shortcut builder for toolbar and gesture bindings, including F1–F12 and optional modifiers. Drafts remain separate between builder modes; Advanced stays the default, and saving never sends terminal input.
+
+- Remove reference-vendor names and URLs from the current source and documentation. Theme import now accepts only `lazysh-theme:` share codes and raw JSON; third-party-prefixed share codes must be converted to JSON before import. Stored themes and existing defaults are unchanged.
+
 - Track the delivery roadmap in GitHub Projects using existing issues and their current statuses; the public delivery epic remains available to readers without project access.
 
 - Add a delivery roadmap linking open feature and platform-verification work, and describe lazysh in its own terms in the README. Application behavior and defaults are unchanged.
@@ -197,7 +201,7 @@
 
 - Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux now uses bounded asynchronous XDG portal acknowledgements, with exact cancellation, private-connection cleanup and visible owner-loss reporting. Acknowledgement does not establish physical idle-timeout or battery behavior; hardware validation remains pending.
 
-This is a development preview, not a stable release or a claim of complete Moshi
+This is a development preview, not a stable release or a claim of complete reference client
 parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
@@ -387,7 +391,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   cannot interleave. Unsent steps retain their original access lease and are
   discarded on revocation or disconnect; ET also discards timed remainders and
   queued chords after observed connection loss. The interval is a lazysh choice,
-  not a verified Moshi timing value. Prefix settings now reject comma-separated
+  not a verified reference client timing value. Prefix settings now reject comma-separated
   multi-step and `text:` literal bindings because a prefix must be one key.
   No gesture defaults change.
 
@@ -519,11 +523,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Slow-storage exhaustion remains possible and issue #36 is not declared fixed.
 
 - Paper and explicitly light imported terminal themes now darken bright indexed
-  cube colors and reverse the indexed grayscale ramp using the pinned Moshi
+  cube colors and reverse the indexed grayscale ramp using the pinned reference client
   desktop 0.5.28 palette math. This changes their default 256-color rendering;
   base ANSI colors, literal RGB, dark themes and legacy palettes without mode
   metadata keep their behavior. Browser rendering is verified; physical mobile
-  WebView and current Moshi mobile pixel parity remain unverified.
+  WebView and current reference client mobile pixel parity remain unverified.
 
 ### Fixed
 

@@ -45,7 +45,7 @@ describe('bounded reviewed theme documents',()=>{
     const encoded=exportTheme({...value,name:'Theme 日本語'});
     expect(parseThemeImport(encoded.json,info)).toEqual({...value,name:'Theme 日本語'});
     expect(parseThemeImport(encoded.code,info)).toEqual({...value,name:'Theme 日本語'});
-    expect(parseThemeImport(encoded.code.replace('lazysh-theme:','moshi-theme:'),info)).toEqual({...value,name:'Theme 日本語'});
+    expect(()=>parseThemeImport(encoded.code.replace('lazysh-theme:','other-theme:'),info)).toThrow();
     const old=parsePreferences({...defaults,customTheme:{background:'#010203',foreground:'#fefefe'}});
     expect(old.appTheme).toBe(defaults.appTheme);expect(old.theme).toBe('custom');
     expect(terminalOptions(old).theme).toEqual(old.customTheme);

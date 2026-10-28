@@ -4,7 +4,7 @@ import {installNativeBridge} from './fixtures/nativeBridge';
 import {openLocalizedApp} from './fixtures/localizedApp';
 const pngPath=new URL('../src-tauri/fixtures/theme-qr.png',import.meta.url).pathname;
 const png=Array.from(readFileSync(pngPath));
-const payload='moshi-theme:'+Buffer.from(JSON.stringify({v:1,name:'QR fixture',mode:'dark',colors:{background:'#000000',foreground:'#ffffff'}})).toString('base64');
+const payload='lazysh-theme:'+Buffer.from(JSON.stringify({v:1,name:'QR fixture',mode:'dark',colors:{background:'#000000',foreground:'#ffffff'}})).toString('base64');
 declare global{interface Window{themeQrFixture:{requests:number[][];permissions:MediaStreamConstraints[];stops:number;encodes:{width:number;height:number;type:string|undefined;quality:number|undefined}[];finish:(value:string|null)=>void;permission:()=>void;}}}
 async function fixture(page:import('@playwright/test').Page){
   await installNativeBridge(page,undefined,{nativeEvents:true});

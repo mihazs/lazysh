@@ -50,7 +50,7 @@ fix and a status-only preflight before attempting mutation. Safe stage attachmen
 record callback receipt and icon state, not credentials. The marker is not evidence
 of a successful icon change until the controlled runtime checks actually pass.
 
-References: [Moshi personalization](https://getmoshi.app/docs/personalization),
+References: reference client personalization (source URL omitted),
 [UIKit alternate icon API](https://developer.apple.com/documentation/uikit/uiapplication/setalternateiconname(_:completionhandler:)).
 
 The second controlled run, [40208351521](https://github.com/mihazs/lazysh/actions/runs/40208351521),

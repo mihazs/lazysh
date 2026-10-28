@@ -70,7 +70,7 @@ the singleton's lossy transport cannot distinguish it from replaced OS bytes.
 Cold launch keeps the original lossless argument validation and can use a literal
 replacement character in a valid Unicode selector.
 
-This independent saved-ID contract does not establish Moshi's undocumented host
+This independent saved-ID contract does not establish the reference client's undocumented host
 grammar; only its help flags were observed. Native admission and frontend tests
 do not prove actual OS singleton/GUI delivery or credential prompts. Those gates
 and warm directory delivery remain in [issue #86](https://github.com/mihazs/lazysh/issues/86).

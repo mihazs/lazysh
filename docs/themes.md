@@ -25,8 +25,9 @@ colors, and the sixteen ANSI colors accepted by xterm. Values are hexadecimal
 `#rgb`, `#rrggbb` or `#rrggbbaa`; shorthand is normalized. Whole-app background and
 foreground must be opaque. Unknown fields and CSS expressions are rejected.
 JSON is bounded to 8 KiB, encoded input to 16 KiB, and
-share codes contain UTF-8 JSON encoded as base64url. Compatible `moshi-theme:`
-payloads can be pasted as data; lazysh does not register Moshi's URL scheme.
+share codes contain UTF-8 JSON encoded as base64url. Only `lazysh-theme:` share
+codes are accepted; third-party-prefixed codes must be converted to JSON before
+import. Existing stored theme palettes remain valid.
 
 The terminal honors supplied colors. App surfaces derive opaque colors from the
 palette and choose readable text/accent colors, so low-contrast terminal colors
@@ -57,17 +58,17 @@ buffer rewrite or minimum-contrast override is involved.
 
 ### Evidence and limits
 
-The [Moshi personalization documentation](https://getmoshi.app/docs/personalization)
+The reference client personalization documentation (source URL omitted)
 describes an inverted light-mode ramp for built-in and imported light themes,
 without specifying a formula. The formula above was independently recovered by
 read-only static analysis of the pinned Linux desktop Go alpha 0.5.28 executable
-recorded in [Moshi evidence](moshi-evidence.md), SHA-256
+recorded in [reference client evidence](reference-evidence.md), SHA-256
 `c3043607369f45f8e57fc0aed7ab20e9570b9b6175a4e1291dceebc47a3601b0`.
 
 Its `.gopclntab` starts at file offset `0x188f5a0`. Decoding the Go function
 table using the installed Go `debug/gosym` layout matched all 26,661 entry
 offsets to their function records. This identified
-`moshi-go/internal/theme.lightExtendedAnsi` at virtual addresses
+the light extended-ANSI palette function (symbol path omitted) at virtual addresses
 `0xaed0c0..0xaed740` (end exclusive) and `DeriveXtermTheme` at
 `0xaed740..0xaed9a0`. Binutils disassembly of these bounded ranges established
 the arithmetic, cube loop order, rounding and exact `light` dispatch. Referenced
@@ -78,14 +79,14 @@ and no proprietary source or assets were copied. REA native decompilers were
 unavailable; GoReSym did not parse this artifact, so neither supplied this result.
 
 This establishes the pinned desktop artifact's palette math, not byte-identical
-current Moshi mobile rendering. Browser tests verify lazysh's actual xterm
+current reference client mobile rendering. Browser tests verify lazysh's actual xterm
 foreground/background, inverse, selection, decoration, bold/faint, scrollback,
 alternate-buffer and theme-change behavior; physical Android/iOS WebView pixels
 and vendor mobile inverse/selection details remain unverified.
 
 ## Terminal bold colors
 
-The [documented v1 `colors.bold` field](https://getmoshi.app/docs/personalization)
+The documented v1 `colors.bold` field (source URL omitted)
 is optional. Omit it to keep the normal text color while using a bold font;
 `"bright"` brightens the first eight ANSI foreground colors without changing the
 default foreground. A `#rgb` or `#rrggbb` value supplies the default bold
@@ -99,7 +100,7 @@ The hex color is a logical foreground: inverse video moves it to the background.
 Selection and decoration overrides retain xterm's ordering. Default bold text
 keeps faint opacity, and xterm's minimum-contrast option evaluates the actual
 custom foreground/background, including inverse and selected text. This logical
-SGR policy is tested; Moshi's exact custom-bold/inverse pixel behavior is not
+SGR policy is tested; the reference client's exact custom-bold/inverse pixel behavior is not
 documented and is not claimed to match.
 
 Hex rendering uses a narrow adapter in `terminalBold.ts` against the pinned
@@ -196,4 +197,4 @@ theme changes, contrast, wide/combined characters and unchanged buffer attribute
 A test-only proposed character joiner exercises joined cells; the application
 keeps proposed APIs disabled. Native Cargo tests cover settings import validation.
 Browser checks do not establish physical mobile WebView, clipboard or native
-system-bar behavior or Moshi's mobile rendering.
+system-bar behavior or the reference client's mobile rendering.
