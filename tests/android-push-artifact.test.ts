@@ -46,11 +46,27 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     pushService:manifest.includes('app.lazysh.push.PushMessagingService'),
     firebaseManifest:manifest.includes('com.google.firebase'),
     googleMessagingPermission:manifest.includes('com.google.android.c2dm.permission.RECEIVE'),
+    unifiedDependency:graph.includes('org.unifiedpush.android:connector:3.3.5'),
+    unifiedClasses:/\borg\.unifiedpush\.android\.connector\b/.test(dex),
+    unifiedService:manifest.includes('app.lazysh.unifiedpush.RegistrationService'),
+    androidCrypto:graph.includes('com.google.crypto.tink:tink-android:1.23.0'),
+    serverCrypto:graph.includes('com.google.crypto.tink:tink:'),
+    embeddedFcm:/\borg\.unifiedpush\.android\.(?:foss_)?embedded_fcm_distributor\b/.test(dex),
   };
   const receipt={variant,configuration,applicationId,versionName,versionCode,debuggable,
     sha256:createHash('sha256').update(await readFile(apk)).digest('hex'),observed};
   const directory=join(android,'app/build/outputs/androidTest-results/push-artifact');
   await mkdir(directory,{recursive:true});
   await writeFile(join(directory,`${variant}.json`),JSON.stringify(receipt,null,2)+'\n');
-  for(const [field,present] of Object.entries(observed))expect(present,field).toBe(google);
+  expect(observed).toEqual({
+    nativeProject:true,firebaseDependency:google,playDependency:google,firebaseClasses:google,
+    playClasses:google,pushService:google,firebaseManifest:google,googleMessagingPermission:google,
+    unifiedDependency:!google,unifiedClasses:!google,unifiedService:!google,androidCrypto:!google,
+    serverCrypto:false,embeddedFcm:false,
+  });
+  if(!google){
+    const service=manifest.match(/<service\b[^>]*>/g)?.find(tag=>tag.includes('"app.lazysh.unifiedpush.RegistrationService"'));
+    expect(service).toMatch(/android:exported="false"/);
+    expect(manifest).toContain('org.unifiedpush.android.connector.internal.MessagingReceiverImpl');
+  }
 },300_000);

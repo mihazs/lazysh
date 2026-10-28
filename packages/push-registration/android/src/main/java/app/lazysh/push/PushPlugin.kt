@@ -1,25 +1,16 @@
 package app.lazysh.push
 
-import android.Manifest
 import android.app.Activity
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
+import app.lazysh.push.common.RegistrationPlugin
 import app.tauri.annotation.Command
-import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
-import app.tauri.plugin.JSObject
-import app.tauri.plugin.Plugin
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
-
-@InvokeArg class PushControl { var operationEpoch: Long = 0 }
 
 internal object PushRegistration {
     private var instance: RegistrationController? = null
@@ -58,19 +49,13 @@ class PushMessagingService : FirebaseMessagingService() {
 }
 
 @TauriPlugin
-class PushPlugin(private val activity: Activity) : Plugin(activity) {
+class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) {
     private fun controller() = PushRegistration.controller(activity.applicationContext)
-    private fun statusValue(): JSObject {
+    private fun statusValue() = run {
         val controller = controller()
         val services = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(activity) == ConnectionResult.SUCCESS
-        return JSObject().apply {
-            put("provider", "fcm")
-            put("supported", true)
-            put("configured", controller != null && services)
-            put("enabled", controller?.enabled == true)
-            put("tokenPresent", controller?.tokenPresent == true)
-            put("busy", controller?.busy == true)
-            put("reason", when {
+        registrationStatus("fcm", controller != null && services, controller?.enabled == true,
+            controller?.tokenPresent == true, controller?.busy == true, when {
                 controller == null -> "This build has no Firebase application configuration. Remote push is unavailable."
                 !services -> "Compatible Google Play services are required for FCM registration."
                 controller.busy -> "Native registration or token revocation is in progress."
@@ -78,7 +63,6 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
                 controller.tokenPresent -> "Registration is paused; token revocation needs retry."
                 else -> "Remote registration is off. Enabling contacts Google's Firebase service."
             })
-        }
     }
     @Command fun status(invoke: Invoke) {
         try { invoke.resolve(statusValue()) } catch (_: Exception) { invoke.reject("Cannot inspect native push registration") }
@@ -87,10 +71,8 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
         try {
             val controller = controller() ?: run { invoke.reject("This build has no Firebase application configuration"); return }
             if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(activity) != ConnectionResult.SUCCESS) { invoke.reject("Compatible Google Play services are required"); return }
-            val permitted = NotificationManagerCompat.from(activity).areNotificationsEnabled() &&
-                (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
-            if (!permitted) { invoke.reject("Enable system notification permission from the inbox first"); return }
-            controller.register(invoke.parseArgs(PushControl::class.java).operationEpoch) { success ->
+            if (!notificationPermission()) { invoke.reject("Enable system notification permission from the inbox first"); return }
+            controller.register(operationEpoch(invoke)) { success ->
                 if (success) invoke.resolve(statusValue()) else invoke.reject("Registration failed, was paused, or another operation is active; inspect status and retry")
             }
         } catch (_: Exception) { invoke.reject("Cannot register this device for remote push") }
@@ -98,7 +80,7 @@ class PushPlugin(private val activity: Activity) : Plugin(activity) {
     @Command fun disable(invoke: Invoke) {
         try {
             val controller = controller() ?: run { invoke.resolve(statusValue()); return }
-            controller.disable(invoke.parseArgs(PushControl::class.java).operationEpoch) { success ->
+            controller.disable(operationEpoch(invoke)) { success ->
                 if (success) invoke.resolve(statusValue()) else invoke.reject("Registration is paused, but token revocation failed; retry when online")
             }
         } catch (_: Exception) { invoke.reject("Cannot revoke native push registration; inspect status and retry") }

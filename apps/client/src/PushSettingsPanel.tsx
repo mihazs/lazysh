@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 
 type RegistrationStatus = {
-  provider: 'apns' | 'fcm' | 'none';
+  provider: 'apns' | 'fcm' | 'unifiedpush' | 'none';
   supported: boolean;
   configured: boolean;
   enabled: boolean;
@@ -50,7 +50,8 @@ export default function PushSettingsPanel() {
 
   const busy = pending || status?.busy === true;
   const apple = status?.provider === 'apns';
-  const provider = apple ? 'Apple APNs' : 'Google Firebase';
+  const unified = status?.provider === 'unifiedpush';
+  const provider = apple ? 'Apple APNs' : unified ? 'UnifiedPush' : 'Google Firebase';
   return <section className="tool-panel" aria-label={t('pushTitle')}>
     <h3>{t('pushTitle')}</h3>
     {status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}
@@ -66,10 +67,11 @@ export default function PushSettingsPanel() {
         {status.enabled ? t('pushRefreshDevice') : t('pushRegister')}
       </button>}
       {status?.supported && (status.enabled || status.tokenPresent || activeCommand === 'push_registration_register') && <button type="button" onClick={() => void run('push_registration_disable')} disabled={pending && activeCommand !== 'push_registration_register'}>
-        {apple ? t('pushDisableApns') : status.enabled || activeCommand === 'push_registration_register' ? t('pushPause') : t('pushRetryRevocation')}
+        {apple ? t('pushDisableApns') : status.enabled || activeCommand === 'push_registration_register' ? t(unified ? 'pushUnifiedPause' : 'pushPause') : t(unified ? 'pushUnifiedRetry' : 'pushRetryRevocation')}
       </button>}
     </div>
     {apple && <p>{t('pushApnsHint')}</p>}
+    {unified && <p>{t('pushUnifiedHint')}</p>}
     {error && <p role="alert">{t(error)}</p>}
   </section>;
 }

@@ -4,7 +4,9 @@
 
 - Add an initial manual F-Droid source-build recipe and actual metadata/scanner checks. Automatic updates and publishing remain disabled; official inclusion and reproducibility are separate acceptance gates.
 
-- Add an explicit F-Droid Android build variant without Google remote push dependencies. It reports remote registration unavailable and retains local inbox notifications. Normal Android Firebase and iOS APNs defaults remain unchanged; this variant alone does not establish F-Droid listing or release delivery.
+- Add opt-in UnifiedPush distributor selection and native registration to the F-Droid build, with consent, stale-callback protection and local registration removal. Registration remains off by default; this slice ignores incoming push messages and does not connect remote delivery.
+
+- Add an explicit F-Droid Android build variant without Google remote push dependencies, retaining local inbox notifications. Normal Android Firebase and iOS APNs defaults remain unchanged; this variant alone does not establish F-Droid listing or release delivery.
 
 - Add truthful English Fastlane-compatible Android listing text for future F-Droid preparation. No store publication, screenshots, application behavior or defaults change.
 
