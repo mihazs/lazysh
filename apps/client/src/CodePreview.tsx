@@ -10,19 +10,20 @@ const languages: Record<string, string> = { js: 'javascript', jsx: 'javascript',
 export default function CodePreview({ path, text }: { path: string; text: string }) {
   useUi();
   const [highlight, setHighlight] = useState(false);
-  const [nodes, setNodes] = useState<SyntaxNode[]>();
+  const [parsed, setParsed] = useState<{text:string;language:string;nodes:SyntaxNode[]}>();
   const language = languages[path.split('.').at(-1)?.toLowerCase() || ''];
+  const nodes = highlight && parsed?.text === text && parsed.language === language ? parsed.nodes : undefined;
   useEffect(() => {
     let active = true;
-    setNodes(undefined);
+    setParsed(undefined);
     if (highlight && language && text.length <= 100000) void import('lowlight').then(({ createLowlight, common }) => {
       const parser = createLowlight(common);
-      if (active && parser.registered(language)) setNodes(parser.highlight(language, text).children);
+      if (active && parser.registered(language)) setParsed({text,language,nodes:parser.highlight(language, text).children});
     }).catch(() => { /* Plain text remains available. */ });
     return () => { active = false; };
   }, [highlight, language, text]);
   return <>
     {language && text.length <= 100000 && <button onClick={() => setHighlight(!highlight)}>{highlight ? t('codePlain') : t('codeHighlight')}</button>}
-    <pre className="file-content repository-code"><code>{nodes ? renderNodes(nodes) : text}</code></pre>
+    <pre tabIndex={0} className="file-content repository-code"><code>{nodes ? renderNodes(nodes) : text}</code></pre>
   </>;
 }

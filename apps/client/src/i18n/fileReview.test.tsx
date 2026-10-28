@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,within,waitFor} from '@testing-library/react';
 import {invoke} from '@tauri-apps/api/core';
 import {FilesPanel,DiffPanel} from '../SessionTools';
 import RepositoryPanel,{parseRepositoryStatus} from '../RepositoryPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../access';
-import {fileReviewName,fileReviewOid,fileReviewPatch,fileReviewReply,fileReviewRoot,fileReviewSession} from '../test/fileReviewData';
+import {fileReviewName,fileReviewOid,fileReviewPatch,fileReviewReply,fileReviewRoot,fileReviewSession,fileReviewSource} from '../test/fileReviewData';
 import {t,uiI18n} from './core';
 vi.mock('@tauri-apps/api/core',async original=>(await import('../test/nativeCoreMock')).mockNativeCore(original));
 beforeEach(()=>{
@@ -23,6 +23,16 @@ it.each(['en','pt-BR','es'])('%s file and historical review actions preserve ori
     const files=within(screen.getByRole('region',{name:t('filesRemote')}));
     fireEvent.click(await files.findByRole('button',{name:new RegExp(fileReviewName)}));
     const rawFile=await files.findByText(/const literal =/);
+    const preview=rawFile.closest('pre')!;
+    expect(preview.tabIndex).toBe(0);
+    const reads=vi.mocked(invoke).mock.calls.length;
+    fireEvent.click(files.getByRole('button',{name:t('codeHighlight')}));
+    await waitFor(()=>expect(preview.querySelector('.hljs-keyword')).not.toBeNull());
+    expect(preview.textContent).toBe(fileReviewSource);
+    fireEvent.click(files.getByRole('button',{name:t('codePlain')}));
+    expect(preview.textContent).toBe(fileReviewSource);
+    expect(preview.querySelector('.hljs-keyword')).toBeNull();
+    expect(invoke).toHaveBeenCalledTimes(reads);
     fireEvent.click(screen.getByRole('button',{name:t('repoOpen')}));
     await screen.findByRole('option',{name:/Literal commit subject/});
     fireEvent.change(screen.getByRole('combobox',{name:t('repoRevisionLabel')}),{target:{value:fileReviewOid}});
@@ -67,4 +77,19 @@ it.each(['en','pt-BR','es'])('%s keeps file-size validation and pending reposito
   expect(screen.getByText(t('repoReading'))).toBeTruthy();
   await act(async()=>{reject(new Error('EXACT remote /path failure: <literal>'));});
   expect(screen.getByText('EXACT remote /path failure: <literal>')).toBeTruthy();
+});
+
+it.each(['session','unmount','lease'] as const)('does not expose a late source preview after %s changes',async transition=>{
+  let complete!: (text:string)=>void;
+  vi.mocked(invoke).mockImplementation(async command=>command==='read_file'
+    ? new Promise<string>(resolve=>{complete=resolve;}) : fileReviewReply(command));
+  const view=render(<FilesPanel sessionId={fileReviewSession}/>);
+  fireEvent.click(await screen.findByRole('button',{name:new RegExp(fileReviewName)}));
+  if(transition==='session')view.rerender(<FilesPanel sessionId="replacement-session"/>);
+  else if(transition==='unmount')view.unmount();
+  else await act(async()=>{applyAccessStatus({initialized:true,supported:true,enabled:true,locked:true,reason:'Synthetic revoked file lease',generation:String(BigInt(accessSnapshot().status!.generation)+1n)});});
+  await act(async()=>{complete('const obsoletePrivate = 1;');});
+  expect(screen.queryByText('const obsoletePrivate = 1;')).toBeNull();
+  expect(screen.queryByRole('button',{name:t('codeHighlight')})).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='read_file')).toHaveLength(1);
 });
