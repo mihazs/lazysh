@@ -2,6 +2,10 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  repoDiffAdd: ["Comentar em {{side}}, linha {{line}}", "Comentar en {{side}}, línea {{line}}"],
+  repoDiffReference: ["{{path}} ({{stage}} observado, {{side}}){{rename}}", "{{path}} ({{stage}} observado, {{side}}){{rename}}"],
+  repoDiffRename: [" · renomeação {{from}} → {{to}}", " · cambio de nombre {{from}} → {{to}}"],
+  repoSnapshotWarning: ["Os comentários se referem ao retrato exibido. Os arquivos no host podem ter mudado; revise caminhos e linhas antes de enviar.", "Los comentarios se refieren a la captura mostrada. Los archivos del host pueden haber cambiado; revisa rutas y líneas antes de enviar."],
   previewAutomatic: ["Atualizar portas automaticamente", "Actualizar puertos automáticamente"],
   previewAutomaticHint: ["Desativado por padrão. Enquanto este painel estiver visível, atualiza cinco segundos após cada busca terminar. Desative para alterar filtros. Parar oculta resultados tardios; uma busca já iniciada pode terminar. Verificar HTTP e abrir uma prévia continuam sendo escolhas separadas.", "Desactivado por defecto. Mientras este panel esté visible, actualiza cinco segundos después de finalizar cada búsqueda. Desactiva para cambiar filtros. Detener oculta resultados tardíos; una búsqueda ya iniciada puede terminar. Comprobar HTTP y abrir una vista previa siguen siendo opciones separadas."],
   previewDiscoveryFinishing: ["Uma busca anterior ainda está terminando. Aguarde e tente novamente.", "Una búsqueda anterior aún está terminando. Espera e inténtalo de nuevo."],
