@@ -1,0 +1,31 @@
+import {expect, test} from '@playwright/test';
+import {routePreviewPage} from './fixtures/previewPage';
+import type {mountPreviewHarness} from './fixtures/PreviewHarness';
+declare global {interface Window {previewPeriodic: ReturnType<typeof mountPreviewHarness>;}}
+test('explicit periodic discovery updates listeners while the existing page and comment survive', async ({page}) => {
+  await routePreviewPage(page);
+  await page.goto('/');
+  await page.evaluate(async () => { const {mountPreviewHarness} = await import('/e2e/fixtures/PreviewHarness.tsx'); window.previewPeriodic = mountPreviewHarness(); });
+  await expect(page.getByRole('button', {name: 'Select page element', exact: true})).toBeEnabled();
+  const iframe = await page.locator('iframe').elementHandle();
+  await page.getByRole('textbox', {name: 'Comment', exact: true}).fill('Retain this draft');
+  await page.clock.install();
+  const count = () => page.evaluate(() => window.previewPeriodic.calls.filter(row => row.command === 'discover_preview_ports').length);
+  await page.clock.fastForward(15000); expect(await count()).toBe(0);
+  await page.evaluate(() => window.previewPeriodic.setListeners([{port:3000,address:'127.0.0.1',process:'node',pid:null,http:null}]));
+  const toggle = page.getByRole('checkbox', {name: 'Refresh listeners automatically'});
+  await toggle.check();
+  await expect(page.getByLabel('Discover ports')).toBeDisabled();
+  await page.clock.fastForward(5000);
+  await expect(page.getByRole('button', {name: 'node · 127.0.0.1:3000'})).toBeVisible();
+  await page.evaluate(() => window.previewPeriodic.setListeners([]));
+  await page.clock.fastForward(5000);
+  await expect(page.getByRole('button', {name: 'node · 127.0.0.1:3000'})).toHaveCount(0);
+  await expect(page.getByRole('textbox', {name: 'Comment', exact: true})).toHaveValue('Retain this draft');
+  expect(await iframe!.evaluate(element => element.isConnected)).toBe(true);
+  await toggle.uncheck();
+  const stopped = await count(); await page.clock.fastForward(15000); expect(await count()).toBe(stopped);
+  const args = await page.evaluate(() => window.previewPeriodic.calls.filter(row => row.command === 'discover_preview_ports').map(row => row.args));
+  expect(args).toEqual(Array.from({length: stopped}, () => ({sessionId:'fixture-session',allowPorts:null,probeHttp:false})));
+  expect(await page.evaluate(() => window.previewPeriodic.calls.some(row => row.command === 'start_preview'))).toBe(false);
+});

@@ -1,7 +1,8 @@
 import {t, useUi} from './i18n/core';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
+import {discoverPreviewListeners} from './previewDiscovery';
 import { observeCurrent } from "./asyncState";
-import { useProtectedInvoke } from './access';
+import { useAccessSnapshot, useMountedAccess, useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Globe, RefreshCw, X } from 'lucide-react';
@@ -45,6 +46,12 @@ export function parsePreview(value: unknown): Preview {
 export default function PreviewPanel({ sessionId }: { sessionId: string }) {
   useUi();
   const invoke = useProtectedInvoke();
+  const {access, mounted} = useMountedAccess();
+  const authority = useAccessSnapshot();
+  const [automatic, setAutomatic] = useState(false);
+  const [discoveryCycle, setDiscoveryCycle] = useState(0);
+  const discoveryRevision = useRef(0);
+  const working = useRef(false);
   const [previews, setPreviews] = useState<Preview[]>([]);
   const [selected, setSelected] = useState('');
   const [port, setPort] = useState('5173');
@@ -67,46 +74,73 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
   const generation = useRef(0);
   useEffect(() => {
     const current = ++generation.current;
+    setAutomatic(false); discoveryRevision.current++; working.current = true;
     setPreviews([]); setSelected(''); setListeners([]); setError(''); setBusy(true);
     const loading = invoke<unknown[]>('list_previews', { sessionId }).then(rows => {
       if (!Array.isArray(rows) || rows.length > 4) throw new LocalUiError('previewInvalidList');
       return rows.map(parsePreview);
     });
-    observeCurrent(loading, () => generation.current === current,
+    observeCurrent(loading, () => generation.current === current && mounted.current && access.current(),
       values => { setPreviews(values); setSelected(values[0]?.id ?? ''); },
-      error => setError(captureUiError(error)), () => setBusy(false));
-    return () => { generation.current++; };
+      error => setError(captureUiError(error)), () => { working.current = false; setBusy(false); });
+    return () => { generation.current++; discoveryRevision.current++; };
   }, [sessionId]);
 
   async function run(operation: () => Promise<void>) {
     const current = generation.current;
-    setBusy(true); setError('');
-    try { await operation(); } catch (e) { if (generation.current === current) setError(captureUiError(e)); }
-    finally { if (generation.current === current) setBusy(false); }
+    if (working.current || !access.current()) return;
+    working.current = true; setBusy(true); setError('');
+    try { await operation(); } catch (e) { if (generation.current === current && mounted.current && access.current()) setError(captureUiError(e)); }
+    finally { if (generation.current === current && mounted.current && access.current()) { working.current = false; setBusy(false); } }
   }
   async function start() {
     if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) { setError(new LocalUiError('previewPortRange')); return; }
     const current = generation.current;
     await run(async () => {
       const preview = parsePreview(await invoke('start_preview', { sessionId, remotePort: Number(port), remoteAddress: address, ...(annotations ? { annotations: true } : {}) }));
-      if (generation.current === current) { setPreviews(rows => [...rows, preview]); setSelected(preview.id); }
+      if (generation.current === current && mounted.current && access.current()) { setPreviews(rows => [...rows, preview]); setSelected(preview.id); }
     });
   }
-  async function discover() {
+  const discover = useCallback(async () => {
+    if (working.current || (document.visibilityState === 'hidden') || !mounted.current || !access.current()) return;
     const current = generation.current;
-    await run(async () => {
+    const revision = discoveryRevision.current;
+    const owns = () => mounted.current && generation.current === current && access.current();
+    const accepts = () => owns() && discoveryRevision.current === revision && !(document.visibilityState === 'hidden');
+    working.current = true; setBusy(true); setError('');
+    try {
       const allowPorts = parseAllowedPorts(allowlist);
-      try { localStorage.setItem('lazysh.preview.ports', allowlist); } catch { /* A session can still use this filter without persistent storage. */ }
-      const rows = await invoke<Listener[]>('discover_preview_ports', { sessionId, allowPorts, probeHttp });
+      try { localStorage.setItem('lazysh.preview.ports', allowlist); } catch { /* Filter storage is optional. */ }
+      const rows = await discoverPreviewListeners(access, sessionId, allowPorts, probeHttp) as Listener[];
       if (!Array.isArray(rows) || rows.length > 256 || rows.some(row => !row || !Number.isInteger(row.port) || row.port < 1 || row.port > 65535 || typeof row.address !== 'string' || row.address.length > 100 || (row.process !== null && (typeof row.process !== 'string' || row.process.length > 256)) || (row.pid !== null && (!Number.isInteger(row.pid) || row.pid < 1)) || (row.http !== null && typeof row.http !== 'boolean') || (row.framework != null && (row.framework !== 'nextJs' || row.http !== true)))) throw new LocalUiError('previewInvalidListeners');
-      if (generation.current === current) setListeners(rows);
-    });
+      if (accepts()) setListeners(rows);
+    } catch (e) { if (accepts()) setError(captureUiError(e)); }
+    finally {
+      if (owns()) { working.current = false; setBusy(false); setDiscoveryCycle(value => value + 1); }
+    }
+  }, [sessionId, allowlist, probeHttp, invoke, access, mounted]);
+  useEffect(() => {
+    const changed = () => { discoveryRevision.current++; setDiscoveryCycle(value => value + 1); };
+    document.addEventListener('visibilitychange', changed);
+    return () => document.removeEventListener('visibilitychange', changed);
+  }, []);
+  useEffect(() => {
+    if (!automatic || busy || (document.visibilityState === 'hidden') || !access.current()) return;
+    const timer = setTimeout(() => void discover(), 5000);
+    return () => clearTimeout(timer);
+  }, [automatic, busy, discoveryCycle, authority, discover, access]);
+  function toggleAutomatic() {
+    discoveryRevision.current++;
+    if (!automatic) {
+      try { parseAllowedPorts(allowlist); } catch (e) { setError(captureUiError(e)); return; }
+    }
+    setAutomatic(value => !value);
   }
   async function close(id: string) {
     const current = generation.current;
     await run(async () => {
       await invoke('stop_preview', { sessionId, previewId: id });
-      if (generation.current === current) {
+      if (generation.current === current && mounted.current && access.current()) {
         setPreviews(rows => rows.filter(row => row.id !== id));
         if (selected === id) setSelected(previews.find(row => row.id !== id)?.id ?? '');
       }
@@ -124,8 +158,10 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
   return <section className="tool-panel preview-panel" aria-label={t('previewRegion')}>
     <div className="tool-bar"><h3><Globe size={17} /> {t('previewTitle')}</h3><button className="subtle-button" disabled={busy} onClick={() => void discover()}>{t('previewDiscover')}</button></div>
     <p className="agent-note">{t('previewConnectionHint')}</p>
-    <label className="preview-filter">{t('previewDiscoverPorts')} <input value={allowlist} onChange={event => setAllowlist(event.target.value)} maxLength={2048} placeholder={t('previewPortsHint')} /></label>
-    <label className="preview-filter"><input type="checkbox" checked={probeHttp} onChange={event => setProbeHttp(event.target.checked)} /> {t('previewProbe')}</label>
+    <label className="preview-filter">{t('previewDiscoverPorts')} <input disabled={automatic} value={allowlist} onChange={event => { discoveryRevision.current++; setAllowlist(event.target.value); }} maxLength={2048} placeholder={t('previewPortsHint')} /></label>
+    <label className="preview-filter"><input type="checkbox" disabled={automatic} checked={probeHttp} onChange={event => { discoveryRevision.current++; setProbeHttp(event.target.checked); }} /> {t('previewProbe')}</label>
+    <label className="preview-filter"><input type="checkbox" checked={automatic} onChange={toggleAutomatic} /> {t('previewAutomatic')}</label>
+    <p className="agent-note">{t('previewAutomaticHint')}</p>
     <form className="preview-connect" onSubmit={event => { event.preventDefault(); void start(); }}><label>{t('previewLoopback')} <select value={address} onChange={event => setAddress(event.target.value)}><option value="127.0.0.1">IPv4</option><option value="::1">IPv6</option></select></label><label>{t('previewRemotePort')} <input type="text" inputMode="numeric" value={port} onChange={event => setPort(event.target.value)} maxLength={5} /></label><button className="subtle-button" disabled={busy || previews.length >= 4} type="submit">{t('previewOpen')}</button></form>
     <label className="preview-filter"><input type="checkbox" checked={annotations} onChange={event => setAnnotations(event.target.checked)} /> {t('previewEnablePicker')}</label>
     {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}

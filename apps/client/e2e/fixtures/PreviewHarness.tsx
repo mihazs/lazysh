@@ -3,9 +3,11 @@ import { useEffect, useState } from 'react';
 import PreviewPanel from '../../src/PreviewPanel';
 const token = '11111111-1111-4111-8111-111111111111';
 export function mountPreviewHarness() {
+  let listeners: unknown[] = [];
   const calls:{command:string;args:unknown}[]=[];
   Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: { invoke: async (command: string,args:unknown) => {
     calls.push({command,args});
+    if (command === 'discover_preview_ports') return listeners;
     if (command === 'list_previews') return [{ id: 'fixture', remotePort: 5173, remoteAddress: '127.0.0.1', localPort: 41234, url: 'http://127.0.0.1:41234/', pickerToken: token }];
     throw new Error(`Unexpected native command: ${command}`);
   } } });
@@ -19,5 +21,5 @@ export function mountPreviewHarness() {
     return <main><PreviewPanel sessionId="fixture-session" /><pre aria-label="Staged annotation draft">{draft}</pre></main>;
   }
   const container = document.createElement('div'); document.body.replaceChildren(container); createRoot(container).render(<Harness />);
-  return {calls};
+  return {calls, setListeners(rows: unknown[]) { listeners = rows; }};
 }
