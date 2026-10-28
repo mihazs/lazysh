@@ -8,24 +8,32 @@ use tokio::{
 pub struct Identity {
     pub acceptor: tokio_rustls::TlsAcceptor,
     pub pem: String,
+    pub rejected: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 pub fn identity() -> Identity {
     let generated = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let der = generated.cert.der().clone();
     let pem = generated.cert.pem();
     let key = rustls::pki_types::PrivatePkcs8KeyDer::from(generated.signing_key.serialize_der());
+    Identity {
+        acceptor: server_acceptor(vec![der], key.into()),
+        pem,
+        rejected: None,
+    }
+}
+pub fn server_acceptor(
+    chain: Vec<rustls::pki_types::CertificateDer<'static>>,
+    key: rustls::pki_types::PrivateKeyDer<'static>,
+) -> tokio_rustls::TlsAcceptor {
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
     .with_safe_default_protocol_versions()
     .unwrap()
     .with_no_client_auth()
-    .with_single_cert(vec![der.clone()], key.into())
+    .with_single_cert(chain, key)
     .unwrap();
-    Identity {
-        acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
-        pem,
-    }
+    tokio_rustls::TlsAcceptor::from(Arc::new(config))
 }
 pub struct Server {
     pub origin: String,
@@ -34,7 +42,9 @@ pub struct Server {
 }
 impl Server {
     pub async fn new(router: axum::Router) -> Self {
-        let identity = identity();
+        Self::with_identity(router, identity()).await
+    }
+    pub async fn with_identity(router: axum::Router, identity: Identity) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!(
             "https://localhost:{}",
@@ -45,8 +55,8 @@ impl Server {
             let mut tasks = JoinSet::new();
             loop {
                 tokio::select! {
-                    connection=listener.accept()=>{let(tcp,_)=connection.unwrap();let Ok(permit)=slots.clone().try_acquire_owned()else{continue};let acceptor=identity.acceptor.clone();let router=router.clone();tasks.spawn(async move {
-                        let _permit=permit;let Ok(stream)=acceptor.accept(tcp).await else{return};
+                    connection=listener.accept()=>{let(tcp,_)=connection.unwrap();let Ok(permit)=slots.clone().try_acquire_owned()else{continue};let acceptor=identity.acceptor.clone();let rejected=identity.rejected.clone();let router=router.clone();tasks.spawn(async move {
+                        let _permit=permit;let Ok(stream)=acceptor.accept(tcp).await else{if let Some(rejected)=rejected {rejected.fetch_add(1,std::sync::atomic::Ordering::SeqCst);}return};
                         let builder=hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
                         let _=builder.serve_connection(hyper_util::rt::TokioIo::new(stream),hyper_util::service::TowerToHyperService::new(router)).await;
                     });},

@@ -27,6 +27,20 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64']);
   const manifest=await run(analyzer,['manifest','print',apk]);
   const dex=await run(analyzer,['dex','packages','--defined-only',apk]);
+  const files=await run(analyzer,['files','list',apk]);
+  const trustPath=(await run(analyzer,['resources','value','--config','default','--name','network_security_config','--type','xml',apk])).trim();
+  expect(trustPath).toMatch(/^res\/[A-Za-z0-9_/.]+\.xml$/);
+  const trust=await run(analyzer,['resources','xml','--file',`/${trustPath}`,apk]);
+  const acceptanceTrustAbsent=!files.includes('lazysh_unifiedpush_test_ca') && !trust.includes('debug-overrides');
+  let rejected:unknown;
+  try {
+    await run(join(android,'gradlew'),[google?':app:assembleUniversalDebug':':app:assembleUniversalRelease','--dry-run','--no-daemon',
+      '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64',`-PlazyshUnifiedPushAcceptanceCa=${apk}`]);
+  } catch(error){rejected=error;}
+  const failure=rejected as {stdout?:string;stderr?:string}|undefined;
+  const guardReason=google?'UnifiedPush acceptance trust requires the F-Droid native provider':'UnifiedPush acceptance trust requires an explicit debug acceptance task';
+  const unsafeAcceptanceTaskRejected=Boolean(failure&&`${failure.stdout??''}${failure.stderr??''}`.includes(guardReason));
+  expect(unsafeAcceptanceTaskRejected).toBe(true);
   const applicationId=(await run(analyzer,['manifest','application-id',apk])).trim();
   const versionName=(await run(analyzer,['manifest','version-name',apk])).trim();
   const versionCode=Number((await run(analyzer,['manifest','version-code',apk])).trim());
@@ -58,11 +72,12 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     nativeHttp:release?null:/\bapp\.lazysh\.unifiedpush\.EnrollmentHttp\b/.test(dex),
     privateStorage:release?null:/\bapp\.lazysh\.unifiedpush\.PrivateEnrollmentStore\b/.test(dex),
   };
-  const receipt={variant,configuration,applicationId,versionName,versionCode,debuggable,enrollment,
+  const receipt={variant,configuration,applicationId,versionName,versionCode,debuggable,enrollment,acceptanceTrustAbsent,unsafeAcceptanceTaskRejected,
     sha256:createHash('sha256').update(await readFile(apk)).digest('hex'),observed};
   const directory=join(android,'app/build/outputs/androidTest-results/push-artifact');
   await mkdir(directory,{recursive:true});
   await writeFile(join(directory,`${variant}.json`),JSON.stringify(receipt,null,2)+'\n');
+  expect(acceptanceTrustAbsent).toBe(true);
   expect(observed).toEqual({
     nativeProject:true,firebaseDependency:google,playDependency:google,firebaseClasses:google,
     playClasses:google,pushService:google,firebaseManifest:google,googleMessagingPermission:google,
