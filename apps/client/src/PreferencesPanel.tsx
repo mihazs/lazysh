@@ -1,6 +1,7 @@
 import {t, useUi, formatNumber} from './i18n/core';
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
+import FontDownloadPanel from "./FontDownloadPanel";
 import AppIconPanel from "./AppIconPanel";
 import {useMountedAccess} from './access';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
@@ -17,6 +18,7 @@ export default function PreferencesPanel() {
   const current=()=>owner.mounted.current && owner.access.current();
   const languageBusy=locale.phase!=='ready';
   const fonts = useDeviceFonts();
+  const fontOperation=useRef(false);
   const [fontBusy, setFontBusy] = useState(false);
   const [error, setError] = useState<UiErrorCause>("");
   const [languageError, setLanguageError] = useState<'language'|'settings'|undefined>();
@@ -25,9 +27,10 @@ export default function PreferencesPanel() {
   const [text, setText] = useState("");
   const [chordLabel, setChordLabel] = useState("");
   async function fontAction(action: () => Promise<unknown>) {
-    if (fontBusy) return;
+    if (fontOperation.current || !current()) return;
+    fontOperation.current=true;
     setFontBusy(true); setError("");
-    try {await action();} catch (error) {setError(fontErrorCause(error));} finally {setFontBusy(false);}
+    try {await action();} catch (error) {if(current())setError(fontErrorCause(error));} finally {fontOperation.current=false;if(current())setFontBusy(false);}
   }
   function update(patch: Partial<Preferences>) {
     try { savePreferences({ ...preferences, ...patch }); setError(""); return true; }
@@ -71,8 +74,9 @@ export default function PreferencesPanel() {
     <label>{t("preferencesCJKFallbackFamilies")}<input maxLength={256} value={preferences.cjkFallback} onChange={e => update({cjkFallback: e.target.value})} /></label>
     <p>{t("preferencesUseInstalledFontFamiliesOrImportLocalFontFiles")}</p>
     <details><summary>{t("preferencesImportedFonts")}</summary>
+      <FontDownloadPanel busy={fontBusy} run={fontAction} />
       {fonts.warnings.map(warning => <p key={fontWarningKey(warning)} role="status">{fontWarningText(warning)}</p>)}
-      <label>{t("preferencesImportFontFile")}<input type="file" accept=".ttf,.otf,.woff,.woff2,.ttc" disabled={fontBusy} onChange={event => {const file = event.target.files?.[0]; event.target.value = ""; if (file) void fontAction(() => importFont(file));}} /></label>
+      <label>{t("preferencesImportFontFile")}<input type="file" accept=".ttf,.otf,.woff,.woff2,.ttc" disabled={fontBusy} onChange={event => {const file = event.target.files?.[0]; event.target.value = ""; if (file) void fontAction(() => importFont(file,current));}} /></label>
       <p>{t("preferencesAtMost4Fonts24MiBPerFontAnd")}</p>
       {(["primary", "cjk"] as const).map(role => <label key={role}>{role === "primary" ? t("preferencesImportedTerminalFont") : t("preferencesImportedCJKFallback")}<select disabled={fontBusy} value={fonts.selection[role] ?? ""} onChange={e => void fontAction(() => selectFont(role, e.target.value || undefined))}>
         <option value="">{t("preferencesUseInstalledFallbackFamilies")}</option>

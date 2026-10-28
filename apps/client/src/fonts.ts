@@ -118,14 +118,17 @@ export function useDeviceFonts() {
 export function fontFamilyFor(preferences: Preferences, fonts = state) {
   return [fonts.primaryFamily, fonts.cjkFamily, preferences.fontFamily, preferences.cjkFallback].filter(Boolean).join(", ");
 }
-export async function importFont(file: File): Promise<string> {
+export async function importFont(file: Pick<File, 'name' | 'size' | 'arrayBuffer'>, permitted: () => boolean = () => true): Promise<string> {
+  const check=()=>{if(!permitted())throw new LocalUiError('fontDownloadCancelled');};
+  check();
   if (file.size > FONT_LIMIT || file.size < 12) throw new LocalUiError('validationChooseAFontFileNoLargerThan24MiB');
   if (!globalThis.FontFace || !document.fonts) throw new LocalUiError('validationThisDeviceCannotLoadImportedFonts');
   const bytes = await file.arrayBuffer();
-  validateFont(bytes);
+  check(); validateFont(bytes);
   const id = crypto.randomUUID();
   const name = file.name.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 128) || t("fontImported");
   try {await new FontFace(family(id), bytes).load();} catch {throw new LocalUiError('validationTheBrowserRejectedThisFontChooseAValidSupported');}
+  check();
   const db = await open();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -135,6 +138,7 @@ export async function importFont(file: File): Promise<string> {
       const request = store.getAll();
       request.onsuccess = () => {
         try {
+          check();
           const existing = request.result.map(validateRecord);
           assertFontBudget([...existing.map(font => font.size), bytes.byteLength]);
           store.add({id, name, size: bytes.byteLength, bytes} satisfies FontRecord);

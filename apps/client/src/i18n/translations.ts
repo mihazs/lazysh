@@ -2,6 +2,23 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  fontDownloadRegion: ["Fonte CJK para download", "Fuente CJK para descargar"],
+  fontDownloadTitle: ["Fallback Noto CJK opcional", "Fuente de respaldo Noto CJK opcional"],
+  fontDownloadHint: ["Baixe {{size}} MiB da fonte oficial Noto no GitHub. Nada é baixado automaticamente. Depois escolha em Fallback CJK importado; a seleção atual não muda. Os limites de armazenamento existentes se aplicam.", "Descarga {{size}} MiB desde la fuente oficial de Noto en GitHub. Nada se descarga automáticamente. Después elige en Fuente CJK de respaldo importada; tu selección actual no cambia. Se aplican los límites de almacenamiento existentes."],
+  fontDownloadNoto: ["Baixar Noto Sans Mono CJK SC", "Descargar Noto Sans Mono CJK SC"],
+  fontDownloadCancel: ["Cancelar download da fonte", "Cancelar descarga de la fuente"],
+  fontDownloadProgress: ["Baixando fonte: {{received}} / {{total}} bytes.", "Descargando fuente: {{received}} / {{total}} bytes."],
+  fontDownloadSaving: ["Verificando e importando a fonte localmente…", "Verificando e importando la fuente localmente…"],
+  fontDownloadStopping: ["Parando. A validação da fonte no navegador ou uma importação local já admitida ainda pode terminar.", "Deteniendo. La validación de la fuente en el navegador o una importación local ya admitida aún puede terminar."],
+  fontDownloadCancelled: ["Download da fonte cancelado. Uma importação local concluída pode permanecer; sua seleção de fonte não mudou.", "Descarga de la fuente cancelada. Una importación local completada puede permanecer; tu selección de fuente no cambió."],
+  fontDownloadComplete: ["Fonte salva localmente. Escolha em Fallback CJK importado; a seleção não mudou automaticamente.", "Fuente guardada localmente. Elige en Fuente CJK de respaldo importada; la selección no cambió automáticamente."],
+  fontDownloadLicense: ["Origem da fonte e SIL Open Font License 1.1", "Origen de la fuente y SIL Open Font License 1.1"],
+  fontDownloadSource: ["Noto Sans Mono CJK SC sem modificações, do commit oficial f8d157532fbfaeda587e826d4cd5b21a49186f7c de notofonts/noto-cjk. Origem do download: raw.githubusercontent.com. A fonte não está incluída no download do aplicativo.", "Noto Sans Mono CJK SC sin modificaciones, del commit oficial f8d157532fbfaeda587e826d4cd5b21a49186f7c de notofonts/noto-cjk. Origen de la descarga: raw.githubusercontent.com. La fuente no está incluida en la descarga de la aplicación."],
+  fontDownloadBusy: ["Um download ou uma importação anterior de fonte ainda está terminando. Aguarde e tente novamente.", "Una descarga o importación anterior de fuente aún está terminando. Espera e inténtalo de nuevo."],
+  fontDownloadUnavailable: ["Este dispositivo não consegue baixar e armazenar uma fonte pelas APIs de navegador necessárias. A importação de arquivo local continua separada.", "Este dispositivo no puede descargar y guardar una fuente mediante las API de navegador necesarias. La importación de archivos locales sigue separada."],
+  fontDownloadInvalid: ["A resposta da fonte tem status ou tamanho inesperado. Nada foi importado.", "La respuesta de la fuente tiene un estado o tamaño inesperado. No se importó nada."],
+  fontDownloadIntegrity: ["A fonte baixada não corresponde ao SHA-256 fixado. Nada foi importado.", "La fuente descargada no coincide con el SHA-256 fijado. No se importó nada."],
+  fontDownloadTimeout: ["O download da fonte excedeu o limite de dois minutos de transferência. Sua seleção de fonte não mudou.", "La descarga de la fuente superó el límite de dos minutos de transferencia. Tu selección de fuente no cambió."],
   repoDiffAdd: ["Comentar em {{side}}, linha {{line}}", "Comentar en {{side}}, línea {{line}}"],
   repoDiffReference: ["{{path}} ({{stage}} observado, {{side}}){{rename}}", "{{path}} ({{stage}} observado, {{side}}){{rename}}"],
   repoDiffRename: [" · renomeação {{from}} → {{to}}", " · cambio de nombre {{from}} → {{to}}"],
