@@ -16,8 +16,10 @@ jobs:
   client:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - &source-checkout
+        uses: actions/checkout@v4
+      - &source-bun
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - uses: actions/cache@v4
@@ -391,6 +393,50 @@ jobs:
           path: |
             apps/client/src-tauri/gen/android/app/build/reports/androidTests/
             apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/
+          if-no-files-found: warn
+
+  native-android-ntfy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      ANDROID_SERIAL: emulator-5580
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *android-java
+      - *android-sdk
+      - *android-toolchains
+      - *android-ndk
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - *android-cache-identity
+      - uses: Swatinem/rust-cache@v2
+        with: *android-cache-environment
+      - run: bun install --frozen-lockfile
+      - name: Admit this runner's owned emulator acceleration
+        run: |
+          test -c /dev/kvm
+          sudo chown "$(id -u):$(id -g)" /dev/kvm
+          sudo chmod 0600 /dev/kvm
+      - name: Real ntfy encrypted native enrollment
+        uses: mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b
+        with:
+          api-level: 36
+          target: default
+          arch: x86_64
+          avd-name: lazysh-runtime-api36
+          emulator-port: 5580
+          ram-size: 3072M
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -accel on -camera-back imagefile:${{ github.workspace }}/apps/client/src-tauri/fixtures/theme-qr-camera-feed.png -camera-front none -qemu -pidfile ${{ runner.temp }}/lazysh-ntfy-emulator.pid
+          script: LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-ntfy-emulator.pid" bun run test:android-ntfy
+      - name: Retain finite ntfy acceptance receipts only
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazysh-ntfy-acceptance
+          path: apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/ntfy/*.json
           if-no-files-found: warn
 
   native-ios-simulator:

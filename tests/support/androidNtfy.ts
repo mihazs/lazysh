@@ -1,0 +1,252 @@
+import {constants} from 'node:fs';
+import {chmod,mkdtemp,mkdir,open,readFile,rm,writeFile,readdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {createHash,randomUUID} from 'node:crypto';
+import {OwnedProcess} from './androidSsh';
+import {attestQrCamera} from './androidQrOwnership';
+
+const packages=['io.heckel.ntfy','app.lazysh.client.test','app.lazysh.client'] as const;
+export class OwnedNtfyPackages {
+  private pending:string[]=[];
+  constructor(private readonly run:(args:string[])=>Promise<string>) {}
+  admit(name:typeof packages[number]) {
+    if(!packages.includes(name))throw new Error('Unknown fixture package');
+    if(!this.pending.includes(name))this.pending.push(name);
+  }
+  async install(name:typeof packages[number],path:string) {
+    this.admit(name);
+    await this.run(['install','-t',path]);
+  }
+  async cleanup() {
+    const errors:unknown[]=[];
+    for(const name of this.pending.splice(0).reverse())try{
+      const present=(await this.run(['shell','pm','list','packages',name])).trim().split('\n');
+      if(present.includes(`package:${name}`))await this.run(['uninstall',name]);
+    }catch(error){errors.push(error);}
+    return errors;
+  }
+}
+const fixtureCase='ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback';
+const invalid=()=>new Error('Owned ntfy acceptance admission failed');
+export function ntfyEnvironment(env:NodeJS.ProcessEnv):NodeJS.ProcessEnv {
+  return Object.fromEntries(['PATH','HOME','LANG'].flatMap(name=>env[name]===undefined?[]:[[name,env[name]]]));
+}
+export async function inspectAcceptanceTrust(apk:string,ca:string,sdk:string,
+  run:(stage:string,program:string,args:string[])=>Promise<string>) {
+  const analyzer=join(sdk,'cmdline-tools/latest/bin/apkanalyzer');
+  const trust=await run('fixture-only trust configuration',analyzer,['resources','xml','--file','/res/xml/network_security_config.xml',apk]);
+  const debug=(await run('fixture-only debuggable APK',analyzer,['manifest','debuggable',apk])).trim();
+  if(!trust.includes('debug-overrides')||debug!=='true')throw new Error('Explicit fixture trust missing');
+  const packaged=await run('exact owned fixture CA','unzip',['-p',apk,'res/raw/lazysh_unifiedpush_test_ca.pem']);
+  if(packaged!==(await boundedFile(ca,8192)).toString('utf8'))throw new Error('Fixture trust identity mismatch');
+}
+async function boundedFile(path:string,limit:number) {
+  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  try {
+    const stat=await file.stat();if(!stat.isFile()||stat.size<1||stat.size>limit)throw invalid();
+    const bytes=Buffer.alloc(Math.min(stat.size+1,limit+1));
+    let count=0;
+    while(count<bytes.length){const result=await file.read(bytes,count,bytes.length-count,null);if(!result.bytesRead)break;count+=result.bytesRead;}
+    if(count!==stat.size)throw invalid();
+    return bytes.subarray(0,count);
+  } finally {await file.close();}
+}
+async function receipt(directory:string) {
+  const entries=await readdir(directory,{recursive:true});
+  const xml=entries.filter(name=>name.startsWith('android-results/')&&name.endsWith('.xml'));
+  if(xml.length!==1)throw new Error('Expected one owned native ntfy report');
+  const text=(await boundedFile(join(directory,xml[0]),256*1024)).toString('utf8');
+  if(!text.includes(`name="${fixtureCase}"`)||!text.includes('classname="app.lazysh.client.NativeWorkspaceTest"')||
+      /<(?:failure|error|skipped)\b/.test(text)||[...text.matchAll(/<testcase\b/g)].length!==1)throw new Error('Actual native ntfy case did not pass without skips');
+  return {nativeCase:fixtureCase,passed:1,failed:0,skipped:0};
+}
+async function nativeFailure(directory:string) {
+  try {
+    const files=(await readdir(directory,{recursive:true})).filter(name=>name.startsWith('android-results/')&&name.endsWith('.xml'));
+    if(files.length!==1)return {};
+    const text=(await boundedFile(join(directory,files[0]),256*1024)).toString('utf8');
+    const failure=/<failure\b[\s\S]*?<\/failure>/.exec(text)?.[0]??'';
+    const stages=[['Distributor menu','distributor_menu'],['Default server field','distributor_server'],
+      ['Certificate fingerprint review','certificate_review'],['Exact owned server certificate required','certificate_identity'],
+      ['Actual native credential dialog required','native_dialog'],['Explicit notification permission','notification_permission'],
+      ['Real SDK challenge must confirm native state','challenge_confirmation'],
+      ['Authenticated relay cleanup must remove private enrollment','authenticated_cleanup']];
+    const stage=stages.find(([label])=>failure.includes(label))?.[1]??'other_native_failure';
+    const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
+    return {nativeStage:stage,nativeSourceLine:line?Number(line):null};
+  }catch{return {};}
+}
+
+export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
+  if(process.platform!=='linux'||process.arch!=='x64')throw invalid();
+  const owned=await attestQrCamera(process.env,root);
+  const sdk=process.env.ANDROID_HOME,serial=process.env.ANDROID_SERIAL;
+  if(!sdk||!serial)throw invalid();
+  const adb=join(sdk,'platform-tools/adb');
+  const android=join(root,'apps/client/src-tauri/gen/android');
+  const finite=join(android,'app/build/outputs/androidTest-results/ntfy');
+  for(const name of ['receipt.json','failure.json'])await rm(join(finite,name),{force:true});
+  const directory=await mkdtemp(join(tmpdir(),'.lazysh-ntfy-'));
+  await chmod(directory,0o700);
+  const nonce=randomUUID().replaceAll('-','');
+  const children:OwnedProcess[]=[],reverses:string[]=[];
+  let primary=false;
+  let phase='owned admission';
+  const run=async(stage:string,program:string,args:string[],milliseconds=10_000)=>{
+    phase=stage;
+    await owned.check();
+    return new OwnedProcess(program,args,root).finish(stage,milliseconds);
+  };
+  const shell=(stage:string,args:string[])=>run(stage,adb,['-s',serial,...args]);
+  const installed=new OwnedNtfyPackages(args=>shell('owned package operation',args));
+  const stream=async(stage:string,program:string,args:string[],limit:number,consume:(bytes:Buffer)=>void)=>{
+    phase=stage;
+    await owned.check();
+    const child=new OwnedProcess(program,args,root);
+    let total=0,overflow=false;
+    child.child.stdout!.on('data',(bytes:Buffer)=>{
+      total+=bytes.length;
+      if(total<=limit)consume(bytes);
+      else if(!overflow){overflow=true;void child.stop().catch(()=>{});}
+    });
+    await child.finish(stage,60_000);
+    if(overflow||total===0)throw new Error('Owned artifact stream bound failed');
+  };
+  const nativeDigest=async(apk:string)=>{
+    const hash=createHash('sha256');
+    await stream('owned current native library','unzip',['-p',apk,'lib/x86_64/liblazysh_lib.so'],512*1024*1024,bytes=>{hash.update(bytes);});
+    return hash.digest('hex');
+  };
+  const normalArtifact=async(configuration='universalDebugRuntimeClasspath',apk?:string)=>{
+    phase='normal APK trust and FOSS absence';
+    await owned.check();
+    const child=new OwnedProcess(process.execPath,['test',join(root,'tests/android-push-artifact.test.ts')],root,
+      {...process.env,LAZYSH_ANDROID_PUSH_VARIANT:'fdroid',LAZYSH_ANDROID_PUSH_CONFIGURATION:configuration,
+        ...(apk?{LAZYSH_ANDROID_PUSH_APK:apk}:{})});
+    await child.finish('normal APK trust and FOSS absence',120_000);
+  };
+  try {
+    for(const name of packages)if((await shell('fixture package absence',['shell','pm','list','packages',name])).trim())throw new Error('Native ntfy acceptance requires absent fixture packages');
+    const pins=JSON.parse(await readFile(join(root,'apps/client/src-tauri/fixtures/ntfy-provenance.json'),'utf8'));
+    for(const [name,pin] of [['server',pins.server],['distributor',pins.android]] as const){
+      const path=join(directory,name==='server'?'server.tar.gz':'distributor.apk');
+      await run('official ntfy artifact download','curl',['--fail','--silent','--show-error','--location','--proto','=https','--tlsv1.2',
+        '--connect-timeout','10','--max-time','90','--max-filesize','134217728',pin.url,'--output',path],95_000);
+      const bytes=await boundedFile(path,128*1024*1024);
+      if(createHash('sha256').update(bytes).digest('hex')!==pin.sha256)throw new Error('Official ntfy artifact digest mismatch');
+    }
+    const listed=await run('official ntfy archive member','tar',['--list','--verbose','--gzip','--file',join(directory,'server.tar.gz'),pins.server.member]);
+    if(!listed.startsWith('-')||listed.trim().split('\n').length!==1)throw invalid();
+    await run('official ntfy extraction','tar',['--extract','--gzip','--file',join(directory,'server.tar.gz'),'--directory',directory,
+      '--no-same-owner','--no-same-permissions','--strip-components=1',pins.server.member]);
+    const binary=join(directory,'ntfy');
+    await chmod(binary,0o700);
+    const signer=await run('official distributor signature',join(sdk,'build-tools/36.0.0/apksigner'),['verify','--print-certs',join(directory,'distributor.apk')]);
+    const fingerprints=[...signer.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([a-f\d]{64})$/gm)].map(match=>match[1]);
+    if(fingerprints.length!==1||fingerprints[0]!==pins.android.signerSha256)throw new Error('Official distributor signing identity mismatch');
+    const analyzer=join(sdk,'cmdline-tools/latest/bin/apkanalyzer');
+    const appId=(await run('official distributor identity',analyzer,['manifest','application-id',join(directory,'distributor.apk')])).trim();
+    if(appId!==pins.android.applicationId)throw invalid();
+    // Scan every chunk rather than relying on OwnedProcess's bounded text tail.
+    let forbidden=false,tail='';
+    const inspectGoogle=(data:Buffer)=>{
+      const text=tail+String(data);tail=text.slice(-128);
+      forbidden ||= /\bcom\.google\.(?:firebase|android\.(?:gms|c2dm))\b|\borg\.unifiedpush\.android\.(?:foss_)?embedded_fcm_distributor\b/.test(text);
+    };
+    await stream('actual FOSS distributor dex',analyzer,['dex','packages','--defined-only',join(directory,'distributor.apk')],32*1024*1024,inspectGoogle);
+    tail='';
+    await stream('actual FOSS distributor manifest',analyzer,['manifest','print',join(directory,'distributor.apk')],256*1024,inspectGoogle);
+    if(forbidden)throw new Error('Distributor FOSS graph admission failed');
+    const apk=join(android,'app/build/outputs/apk/universal/debug/app-universal-debug.apk');
+    await normalArtifact();
+    const baselineNative=await nativeDigest(apk);
+    phase='owned native relay readiness';
+    const relay=new OwnedProcess('cargo',['test','-p','lazysh-notifications','--locked','--lib',
+      'tests::ntfy_android::real_ntfy_android_encrypted_challenge','--','--ignored','--exact','--nocapture'],root,
+      {...process.env,LAZYSH_ANDROID_NTFY:'1',LAZYSH_NTFY_FIXTURE_DIRECTORY:directory,LAZYSH_NTFY_FIXTURE_NONCE:nonce});
+    children.push(relay);
+    const ready=join(directory,'input.json'),deadline=performance.now()+120_000;
+    let input:Buffer|undefined;
+    while(!input){
+      await owned.check();
+      try {input=await boundedFile(ready,4096);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      if(relay.child.exitCode!==null||performance.now()>deadline)throw new Error('Owned native relay readiness deadline');
+      if(!input)await Bun.sleep(50);
+    }
+    const data=JSON.parse(input.toString('utf8'));
+    const origins=[data.relayOrigin,data.ntfyOrigin,data.untrustedOrigin];
+    if(data.nonce!==nonce||!origins.every(value=>typeof value==='string'&&/^https:\/\/localhost:[1-9]\d{0,4}$/.test(value)&&Number(new URL(value).port)<=65535))throw invalid();
+    const ntfy=new OwnedProcess(binary,['serve','--config',join(directory,'ntfy.yml')],directory,ntfyEnvironment(process.env));children.push(ntfy);
+    const healthDeadline=performance.now()+10_000;
+    while(true){
+      try {await run('owned ntfy HTTPS health','curl',['--fail','--silent','--cacert',join(directory,'ca.pem'),'--max-time','1',data.ntfyOrigin+'/v1/health'],2000);break;}
+      catch{if(ntfy.child.exitCode!==null||performance.now()>healthDeadline)throw new Error('Owned ntfy HTTPS readiness deadline');await Bun.sleep(50);}
+    }
+    for(const origin of origins){
+      const port=new URL(origin).port;
+      await shell('owned TLS reverse',['reverse','--no-rebind',`tcp:${port}`,`tcp:${port}`]);reverses.push(port);
+    }
+    const gradleArgs=['-p',android,'--no-daemon','-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64',
+      '-x',':app:rustBuildX86_64Debug',`-PlazyshUnifiedPushAcceptanceCa=${join(directory,'ca.pem')}`];
+    await run('native acceptance APK resources',join(android,'gradlew'),[':app:assembleUniversalDebug',...gradleArgs],120_000);
+    if(await nativeDigest(apk)!==baselineNative)throw new Error('Acceptance cannot replace the current native library');
+    await inspectAcceptanceTrust(apk,join(directory,'ca.pem'),sdk,run);
+    await installed.install('io.heckel.ntfy',join(directory,'distributor.apk'));
+    await installed.install('app.lazysh.client',apk);
+    const privateInput=`files/.lazysh-ntfy-${nonce}.json`;
+    const transfer=new OwnedProcess(adb,['-s',serial,'shell','run-as','app.lazysh.client','sh','-c',`'umask 077; cat > ${privateInput}'`],root);
+    phase='private native fixture transfer';
+    transfer.child.stdin!.end(input);input.fill(0);
+    await transfer.finish('private native fixture transfer',5000);
+    installed.admit('app.lazysh.client.test');
+    await run('actual native ntfy instrumentation',join(android,'gradlew'),[':app:connectedUniversalDebugAndroidTest',...gradleArgs,
+      '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',
+      `-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#${fixtureCase}`,
+      '-Pandroid.testInstrumentationRunnerArguments.lazyshNtfyAcceptance=true',
+      `-Pandroid.testInstrumentationRunnerArguments.lazyshNtfyNonce=${nonce}`],240_000);
+    const native=await receipt(directory);
+    await relay.finish('actual relay confirmation and cleanup',10_000);
+    if(!relay.stdout.includes('actualServerConfirmed=true oneConfirmation=true'))throw new Error('Owned relay proof missing');
+    // Rebuild without the opt-in property: stale generated resources must never
+    // survive into an ordinary debug or release artifact.
+    const ordinaryArgs=['-p',android,'--no-daemon','-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64'];
+    await run('restore ordinary debug trust',join(android,'gradlew'),[':app:assembleUniversalDebug',...ordinaryArgs,'-x',':app:rustBuildX86_64Debug'],120_000);
+    await normalArtifact();
+    if(await nativeDigest(apk)!==baselineNative)throw new Error('Normal artifact changed its owned native library');
+    await run('ordinary release resource assembly',join(android,'gradlew'),[':app:assembleUniversalRelease',...ordinaryArgs,'-x',':app:rustBuildX86_64Release'],120_000);
+    await normalArtifact('universalReleaseRuntimeClasspath',join(android,'app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk'));
+    const head=(await run('source checkout identity','git',['rev-parse','HEAD'])).trim();
+    if(!/^[a-f0-9]{40}$/.test(head))throw invalid();
+    const source:Record<string,string>={};
+    for(const path of ['apps/notification-service/src/tests/ntfy_android.rs',
+      'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',
+      'apps/client/src-tauri/gen/android/app/build.gradle.kts','tests/support/androidNtfy.ts']){
+      source[path]=createHash('sha256').update(await boundedFile(join(root,path),1024*1024)).digest('hex');
+    }
+    await mkdir(finite,{recursive:true});
+    await writeFile(join(finite,'receipt.json'),JSON.stringify({schemaVersion:1,head,source,...native,serverVersion:pins.server.version,
+      distributorVersion:pins.android.version,serverArchiveSha256:pins.server.sha256,distributorSha256:pins.android.sha256,
+      distributorSignerSha256:pins.android.signerSha256,googleComponentsAbsent:true,actualEncryptedChallenge:true,
+      activityBackground:true,authenticatedPause:true,normalDebugAndReleaseTrustAbsent:true,nativeLibraryUnchanged:true,
+      releaseRustCompilation:false,notificationDelivery:false})+'\n');
+  }catch(error){
+    primary=true;
+    const code=error instanceof Error?/; exit=([0-9]{1,3})$/.exec(error.message):null;
+    try {
+      await mkdir(finite,{recursive:true});
+      await writeFile(join(finite,'failure.json'),JSON.stringify({schemaVersion:1,phase,exit:code?Number(code[1]):null,
+        ...await nativeFailure(directory),runtimePassed:false,notificationDelivery:false})+'\n');
+    }catch{console.error('Finite ntfy failure receipt could not be retained');}
+    // Framework/private protocol errors may contain values. Keep only the fixed
+    // source stage and finite exit; raw logs remain private until owned cleanup.
+    throw new Error(`Native ntfy acceptance failed at ${phase}${code?`; exit=${code[1]}`:''}`);
+  }finally{
+    const errors:unknown[]=[];
+    for(const child of children.reverse())try{await child.stop();}catch(error){errors.push(error);}
+    for(const port of reverses)try{await shell('owned reverse cleanup',['reverse','--remove',`tcp:${port}`]);}catch(error){errors.push(error);}
+    errors.push(...await installed.cleanup());
+    try{await rm(directory,{recursive:true,force:true});}catch(error){errors.push(error);}
+    if(errors.length){if(primary)console.error('Owned ntfy cleanup failed after original failure');else throw new Error('Owned ntfy cleanup failed');}
+  }
+}

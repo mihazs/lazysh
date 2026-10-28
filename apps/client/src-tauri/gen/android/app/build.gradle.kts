@@ -1,10 +1,53 @@
 import java.util.Properties
+import java.io.File
+import java.io.ByteArrayInputStream
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("rust")
+}
+
+abstract class PrepareUnifiedPushAcceptanceTrust : DefaultTask() {
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
+    abstract val certificate: RegularFileProperty
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
+    abstract val baseTrust: RegularFileProperty
+    @get:OutputDirectory abstract val destination: DirectoryProperty
+    @TaskAction fun generate() {
+        val ca=Files.newInputStream(certificate.get().asFile.toPath(),LinkOption.NOFOLLOW_LINKS)
+            .use {it.readNBytes(8193)}
+        check(ca.isNotEmpty() && ca.size<=8192) {"UnifiedPush acceptance CA changed or exceeded its bound"}
+        val certificates=CertificateFactory.getInstance("X.509")
+            .generateCertificates(ByteArrayInputStream(ca))
+        check(certificates.size==1 && (certificates.single() as X509Certificate).basicConstraints>=0) {
+            "UnifiedPush acceptance requires exactly one CA certificate"
+        }
+        val directory=destination.get().asFile
+        val output=directory.resolve("raw/lazysh_unifiedpush_test_ca.pem")
+        output.parentFile.mkdirs();output.writeBytes(ca)
+        val xml=directory.resolve("xml/network_security_config.xml")
+        xml.parentFile.mkdirs()
+        val original=baseTrust.get().asFile.readText()
+        check(original.split("</network-security-config>").size==2)
+        xml.writeText(original.replace("</network-security-config>",
+            "<debug-overrides><trust-anchors><certificates src=\"@raw/lazysh_unifiedpush_test_ca\"/>"+
+                "</trust-anchors></debug-overrides></network-security-config>"))
+    }
 }
 
 val tauriProperties = Properties().apply {
@@ -14,10 +57,54 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Only the owned ntfy acceptance invocation may add a private test CA. Ordinary
+// debug/release builds never include this resource directory or change trust.
+val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAcceptanceCa").orNull?.let { path ->
+    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshQrCameraAcceptance")
+        .none {providers.gradleProperty(it).orNull=="true"}) {"UnifiedPush acceptance requires its private report namespace"}
+    val allowed = setOf("assembleUniversalDebug", "assembleUniversalDebugAndroidTest",
+        "connectedUniversalDebugAndroidTest", "compileUniversalDebugAndroidTestKotlin",
+        "processUniversalDebugResources")
+    check(gradle.startParameter.taskNames.isNotEmpty() &&
+        gradle.startParameter.taskNames.all { it.substringAfterLast(':') in allowed }) {
+        "UnifiedPush acceptance trust requires an explicit debug acceptance task"
+    }
+    val expected = rootProject.file("../../../../../packages/push-registration/android-unifiedpush").canonicalFile
+    check(rootProject.findProject(":tauri-plugin-lazysh-push")?.projectDir?.canonicalFile == expected) {
+        "UnifiedPush acceptance trust requires the F-Droid native provider"
+    }
+    check(File(path).isAbsolute) { "UnifiedPush acceptance requires an absolute owned CA path" }
+    file(path).also {
+        check(it.isFile && !Files.isSymbolicLink(it.toPath()) && it.length() in 1..8192) {
+            "UnifiedPush acceptance requires a bounded owned CA file"
+        }
+    }
+}
+val unifiedPushAcceptanceResources = layout.buildDirectory.dir("generated/unifiedpush-acceptance/res")
+if (unifiedPushAcceptanceCa != null) {
+    val prepareTrust = tasks.register<PrepareUnifiedPushAcceptanceTrust>("prepareUnifiedPushAcceptanceTrust") {
+        certificate.set(unifiedPushAcceptanceCa)
+        baseTrust.set(file("src/main/res/xml/network_security_config.xml"))
+        destination.set(unifiedPushAcceptanceResources)
+    }
+    val components=extensions.getByType<ApplicationAndroidComponentsExtension>()
+    components.onVariants(components.selector().withBuildType("debug")) {variant ->
+        checkNotNull(variant.sources.res).addGeneratedSourceDirectory(prepareTrust) {it.destination}
+    }
+}
+
 android {
     compileSdk = 37
     ndkVersion = "29.0.14206865"
     namespace = "app.lazysh.client"
+    if (unifiedPushAcceptanceCa != null) {
+        // Framework logcat/reports may contain upstream registration details.
+        // The owner exports only a finite receipt, never these private raw files.
+        testOptions {
+            reportDir = unifiedPushAcceptanceCa.parentFile.resolve("android-reports").path
+            resultsDir = unifiedPushAcceptanceCa.parentFile.resolve("android-results").path
+        }
+    }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "app.lazysh.client"

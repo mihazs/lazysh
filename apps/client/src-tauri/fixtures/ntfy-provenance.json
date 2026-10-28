@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "server": {
+    "version": "2.34.0",
+    "url": "https://github.com/binwiederhier/ntfy/releases/download/v2.34.0/ntfy_2.34.0_linux_amd64.tar.gz",
+    "sha256": "f78e2645c6457363f37d5d1c4f7cddb7e9658abd197824a7387a1a38d92bb895",
+    "member": "ntfy_2.34.0_linux_amd64/ntfy",
+    "license": "Apache-2.0",
+    "source": "https://github.com/binwiederhier/ntfy/tree/v2.34.0"
+  },
+  "android": {
+    "version": "1.25.2",
+    "url": "https://github.com/binwiederhier/ntfy-android/releases/download/v1.25.2/ntfy-1.25.2-fdroid-release.apk",
+    "sha256": "8a1075c0963caa1e0dc404996531bc641cb2b982f92a4bc692d4999f9eb53f39",
+    "signerSha256": "6e145d7ae685eff75468e5067e03a6c3645453343e4e181dac8b6b17ff67489d",
+    "applicationId": "io.heckel.ntfy",
+    "license": "Apache-2.0",
+    "source": "https://github.com/binwiederhier/ntfy-android/tree/v1.25.2"
+  }
+}
