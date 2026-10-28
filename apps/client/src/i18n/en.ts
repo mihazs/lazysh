@@ -335,6 +335,8 @@ export const english = {
   zellijDirectory: "Zellij project directory",
   zellijCreateTab: "Create Zellij tab",
   zellijTabNumber: "Tab number",
+  zellijQuickTabs: "Zellij quick tabs",
+  zellijQuickHint: "Choose a tab number in this named session. These shortcuts do not list existing tabs or mark the current tab; unavailable tabs report the host's error.",
   zellijSelectTab: "Select Zellij tab",
   zellijSplitRight: "Split Zellij right",
   zellijSplitDown: "Split Zellij down",

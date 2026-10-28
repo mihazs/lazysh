@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit Zellij tab 1–20 quick-access buttons using the existing typed native action, without timing-sensitive digit chords or automatic tab discovery. Preserve manual drafts, original session/access ownership and raw host errors; the row does not infer existing or current tabs.
+
 - Add an explicit, integrity-checked Noto Sans Mono CJK SC font download from its pinned official source into existing device-local font storage. Downloads stay off until requested; font selection remains a separate action. Existing font budgets, manual imports and delete controls remain, with bounded transfer/cancellation and no broad network permission. Other downloadable font families and native-device runtime acceptance remain incomplete.
 
 - Add explicit **Paste uploaded path** in standalone Attachments: send only the current upload's validated, quoted host path to its original selected terminal without Enter, honoring public terminal bracketed-paste mode. No automatic write, retry or provider integration is added; copy, editable prompt staging and Chat attachment behavior remain unchanged.

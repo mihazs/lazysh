@@ -123,6 +123,19 @@ Attached tmux and Herdr terminals also offer prefix shortcuts and numbered windo
 
 List running sessions or enter a name to create/attach one. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
 
+The Zellij panel includes a tab 1–20 quick-access row alongside the existing manual
+tab-number form. These are explicit shortcuts, not a discovered tab list or a
+current-tab indicator. Each button sends the existing typed `goToTab` action to
+the original named session over its original access lease; it does not type a
+prefix or decimal digits into a terminal. The host's error remains visible if a
+tab is unavailable. Only one action runs at a time; language changes preserve
+drafts and do not dispatch actions, and retired owners cannot publish late results.
+The manual 1–1000 native index bound is unchanged. This implements the documented
+[Moshi numbered selector affordance](https://getmoshi.app/docs/zellij#shortcut-panel-notes)
+without inheriting its documented multi-digit chord timing dependency. It does
+not establish current tabs, exact-client binding, automatic restoration, or physical
+device/runtime acceptance. Hiding/persisting this row remains separate work.
+
 The [public Zellij commands](https://zellij.dev/documentation/commands) were verified against **0.45.1**. Session names beginning with a dash are rejected: Zellij's attach CLI uses `--` for an initial command rather than to disambiguate that positional name.
 
 ## Native checks

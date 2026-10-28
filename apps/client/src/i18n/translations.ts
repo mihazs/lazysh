@@ -365,6 +365,8 @@ const translations = {
   zellijDirectory: ["Diretório do projeto Zellij", "Directorio del proyecto Zellij"],
   zellijCreateTab: ["Criar aba Zellij", "Crear pestaña Zellij"],
   zellijTabNumber: ["Número da aba", "Número de pestaña"],
+  zellijQuickTabs: ["Acesso rápido às abas Zellij", "Acceso rápido a pestañas Zellij"],
+  zellijQuickHint: ["Escolha um número de aba nesta sessão nomeada. Estes atalhos não listam as abas existentes nem indicam a aba atual; abas indisponíveis exibem o erro do servidor.", "Elige un número de pestaña en esta sesión con nombre. Estos atajos no enumeran las pestañas existentes ni indican la actual; las pestañas no disponibles muestran el error del servidor."],
   zellijSelectTab: ["Selecionar aba Zellij", "Seleccionar pestaña Zellij"],
   zellijSplitRight: ["Dividir Zellij à direita", "Dividir Zellij a la derecha"],
   zellijSplitDown: ["Dividir Zellij abaixo", "Dividir Zellij abajo"],
