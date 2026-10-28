@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 0.17.2
+
+### Patch Changes
+
+- b1b4f3b: Use the selected terminal font in repository side-by-side diffs without reloading the review or changing its contents.
+- cc8d477: Refresh agent-board display metadata on native main-window focus without polling or retrying failed acquisition.
+- @lazysh/common@0.17.2
+  - @lazysh/display-idle@0.17.2
+  - @lazysh/et-transport@0.17.2
+  - @lazysh/mosh-transport@0.17.2
+
 ## 0.17.1
 
 ### Patch Changes
