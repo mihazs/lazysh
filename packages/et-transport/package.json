@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/et-transport",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "private": true,
   "scripts": {
     "check:rust": "cargo check --manifest-path Cargo.toml --locked",

@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 0.17.1
+
+### Patch Changes
+
+- cf917f9: Remove the twelve-entry shortcut and snippet cap, retain all valid saved entries, and keep snippet drafts when device storage refuses a save.
+- @lazysh/common@0.17.1
+  - @lazysh/display-idle@0.17.1
+  - @lazysh/et-transport@0.17.1
+  - @lazysh/mosh-transport@0.17.1
+
 ## 0.17.0
 
 ### Minor Changes
