@@ -1,17 +1,24 @@
 #![cfg(unix)]
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     os::unix::fs::PermissionsExt,
     process::{Child, Command, Stdio},
     time::Duration,
 };
 const ADMIN: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+#[cfg(target_os = "linux")]
+#[path = "support/real_whisper.rs"]
+mod real_whisper;
 struct Process(Child);
 impl Drop for Process {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        // A fixture may already have reaped this child explicitly. Never send
+        // a signal to its former PID after that identity can be reused.
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 }
 fn command() -> Command {
@@ -107,8 +114,17 @@ async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_p
 }
 async fn check_compiled_service(whisper: Option<&str>) {
     let fixture = Fixture::new();
-    let child = fixture
-        .serve_with("30", "60", "127.0.0.1:0", whisper)
+    let (process, base) = start_relay(fixture.serve_with("30", "60", "127.0.0.1:0", whisper));
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+    check_enrollment(&fixture, process, &base, &client, whisper.is_some()).await;
+}
+fn start_relay(mut command: Command) -> (Process, String) {
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -118,20 +134,24 @@ async fn check_compiled_service(whisper: Option<&str>) {
     let (send, receive) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
         let mut line = String::new();
-        let result = BufReader::new(stdout).read_line(&mut line);
+        let result = BufReader::new(stdout).take(1025).read_line(&mut line);
         let _ = send.send((result, line));
     });
     let (read, line) = receive.recv_timeout(Duration::from_secs(5)).unwrap();
     read.unwrap();
     reader.join().unwrap();
+    assert!(line.len() <= 1024);
     let address = line.trim().strip_prefix("LISTENING ").unwrap();
     let base = format!("http://{address}");
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(3))
-        .build()
-        .unwrap();
+    (process, base)
+}
+async fn check_enrollment(
+    fixture: &Fixture,
+    process: Process,
+    base: &str,
+    client: &reqwest::Client,
+    whisper: bool,
+) {
     assert_eq!(
         client
             .get(format!("{base}/v1/devices"))
@@ -167,7 +187,7 @@ async fn check_compiled_service(whisper: Option<&str>) {
     .unwrap();
     assert_eq!(
         capabilities["model"],
-        if whisper.is_some() {
+        if whisper {
             "whisper.cpp"
         } else {
             "gpt-transcribe"
