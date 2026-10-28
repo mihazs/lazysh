@@ -37,9 +37,11 @@ state and Google-free graph/manifest/dex assertions must pass. Receipts persist
 and the owned container is removed even on failure. This is the ordinary local
 container build path, not a claim of Vagrant `--server` execution or hermeticity.
 
-Only the dependent tag job has a contents-write token, supplied to the final
-native release command. It rechecks the candidate and observes the exact main
-SHA immediately before using GitHub's create-reference API. Existing lightweight
+Only the dependent tag and publication jobs have contents-write tokens. Every
+platform installation build and the independent F-Droid source build must pass
+before tagging. The tag command rechecks synchronized current-main metadata and
+requires the candidate within its bounded first-parent ancestry with the same
+release version; a newer version supersedes it. Existing lightweight
 tags at the same commit are idempotent; different/annotated targets fail. A
 concurrent create can succeed only if its new ref resolves to that same commit.
 The workflow never updates/deletes/forces a tag and never ignores a failed
@@ -48,7 +50,11 @@ repository tag protection remains separate. The main-head check and reference
 creation are separate API requests, so main can advance between them; the tag
 always names the verified candidate rather than an inferred moving branch.
 The normal GITHUB_TOKEN does not trigger downstream workflows through tags;
-no token privilege escalation is introduced for that purpose.
+installation publication is an explicit dependent job in the same workflow.
+It rechecks every package/checksum, creates a draft, verifies each uploaded asset's
+acknowledged digest, and publishes only after all uploads succeed. Existing
+releases are never overwritten or automatically resumed after uncertain outcomes.
+See [release-artifacts.md](release-artifacts.md) for signing and activation limits.
 
 `bun run test:release` runs the native Bun release tests. The tag tests use
 in-memory HTTP responses and do not create real refs, containers or builds.
