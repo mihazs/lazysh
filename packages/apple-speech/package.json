@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/apple-speech",
-  "version": "0.12.2",
+  "version": "0.13.0",
   "private": true,
   "scripts": {
     "check:rust": "cargo check --manifest-path Cargo.toml --locked",
