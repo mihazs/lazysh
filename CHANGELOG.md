@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Add explicit opt-in native acceptance for the self-hosted whisper.cpp relay using pinned public engine/model/audio fixtures. This records bounded Linux interoperability, not general accuracy or physical-device acceptance; application defaults are unchanged.
+
+- Add an explicit self-hosted whisper.cpp Cloud dictation relay option with a fixed operator-configured loopback endpoint and distinct backend identity. OpenAI remains the default; no provider fallback, model download or hosting is bundled.
+
+- Prepare a disabled stable-tag gate for verified main version transitions, requiring current-candidate F-Droid source/binary checks before create-only tags. Automatic tags, signing and publication remain disabled pending free-software push and official submission prerequisites; product defaults are unchanged.
+
+- Add an initial manual F-Droid source-build recipe and actual metadata/scanner checks. Automatic updates and publishing remain disabled; official inclusion and reproducibility are separate acceptance gates.
+
 - Add an explicit F-Droid Android build variant without Google remote push dependencies. It reports remote registration unavailable and retains local inbox notifications. Normal Android Firebase and iOS APNs defaults remain unchanged; this variant alone does not establish F-Droid listing or release delivery.
 
 - Add truthful English Fastlane-compatible Android listing text for future F-Droid preparation. No store publication, screenshots, application behavior or defaults change.

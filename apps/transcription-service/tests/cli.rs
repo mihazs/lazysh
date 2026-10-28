@@ -1,17 +1,24 @@
 #![cfg(unix)]
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     os::unix::fs::PermissionsExt,
     process::{Child, Command, Stdio},
     time::Duration,
 };
 const ADMIN: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+#[cfg(target_os = "linux")]
+#[path = "support/real_whisper.rs"]
+mod real_whisper;
 struct Process(Child);
 impl Drop for Process {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        // A fixture may already have reaped this child explicitly. Never send
+        // a signal to its former PID after that identity can be reused.
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 }
 fn command() -> Command {
@@ -34,12 +41,27 @@ impl Fixture {
         Self(directory)
     }
     fn serve(&self, device: &str, global: &str, listen: &str) -> Command {
+        self.serve_with(device, global, listen, None)
+    }
+    fn serve_with(
+        &self,
+        device: &str,
+        global: &str,
+        listen: &str,
+        whisper: Option<&str>,
+    ) -> Command {
         let mut command = command();
         command
             .args(["serve", "--admin-token-file"])
-            .arg(self.0.path().join("admin"))
-            .arg("--provider-key-file")
-            .arg(self.0.path().join("provider"))
+            .arg(self.0.path().join("admin"));
+        if let Some(port) = whisper {
+            command.args(["--whisper-cpp-port", port]);
+        } else {
+            command
+                .arg("--provider-key-file")
+                .arg(self.0.path().join("provider"));
+        }
+        command
             .arg("--data-dir")
             .arg(self.0.path().join("state"))
             .args([
@@ -86,9 +108,23 @@ fn keygen_and_failed_configuration_are_bounded_without_secret_echo_or_state_crea
 
 #[tokio::test]
 async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_provider_calls() {
+    for whisper in [None, Some("1")] {
+        check_compiled_service(whisper).await;
+    }
+}
+async fn check_compiled_service(whisper: Option<&str>) {
     let fixture = Fixture::new();
-    let child = fixture
-        .serve("30", "60", "127.0.0.1:0")
+    let (process, base) = start_relay(fixture.serve_with("30", "60", "127.0.0.1:0", whisper));
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+    check_enrollment(&fixture, process, &base, &client, whisper.is_some()).await;
+}
+fn start_relay(mut command: Command) -> (Process, String) {
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -98,20 +134,24 @@ async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_p
     let (send, receive) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
         let mut line = String::new();
-        let result = BufReader::new(stdout).read_line(&mut line);
+        let result = BufReader::new(stdout).take(1025).read_line(&mut line);
         let _ = send.send((result, line));
     });
     let (read, line) = receive.recv_timeout(Duration::from_secs(5)).unwrap();
     read.unwrap();
     reader.join().unwrap();
+    assert!(line.len() <= 1024);
     let address = line.trim().strip_prefix("LISTENING ").unwrap();
     let base = format!("http://{address}");
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(3))
-        .build()
-        .unwrap();
+    (process, base)
+}
+async fn check_enrollment(
+    fixture: &Fixture,
+    process: Process,
+    base: &str,
+    client: &reqwest::Client,
+    whisper: bool,
+) {
     assert_eq!(
         client
             .get(format!("{base}/v1/devices"))
@@ -133,6 +173,26 @@ async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_p
     let value: serde_json::Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
     let token = value["token"].as_str().unwrap();
     let device = value["device"]["id"].as_str().unwrap();
+    let capabilities: serde_json::Value = serde_json::from_str(
+        &client
+            .get(format!("{base}/v1/capabilities"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        capabilities["model"],
+        if whisper {
+            "whisper.cpp"
+        } else {
+            "gpt-transcribe"
+        }
+    );
     let response = client
         .post(format!("{base}/v1/transcriptions"))
         .bearer_auth(token)
@@ -180,4 +240,30 @@ async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_p
             .windows(hidden.len())
             .any(|window| window == hidden.as_bytes()));
     }
+}
+
+#[test]
+fn whisper_port_is_numeric_nonzero_and_exclusive_with_provider_credentials() {
+    let fixture = Fixture::new();
+    for port in [
+        "0",
+        "65536",
+        "example.com",
+        "127.0.0.1:8080",
+        "8080/inference",
+    ] {
+        let output = fixture
+            .serve_with("1", "2", "127.0.0.1:0", Some(port))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!fixture.0.path().join("state").exists());
+    }
+    let output = fixture
+        .serve("1", "2", "127.0.0.1:0")
+        .args(["--whisper-cpp-port", "8080"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!fixture.0.path().join("state").exists());
 }

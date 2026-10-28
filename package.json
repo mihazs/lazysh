@@ -1,6 +1,6 @@
 {
   "name": "lazysh",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "packageManager": "bun@1.3.14",
   "workspaces": [
@@ -12,7 +12,8 @@
     "release:check": "bun test ./tests/release-consistency.test.ts",
     "release:prepare": "bun run release:version && bun run duplicates:check",
     "release:version": "bun run release:check && bun run changeset version && LAZYSH_RELEASE_VERSION=$(bun -p \"require('./apps/client/package.json').version\") && bun pm version \"$LAZYSH_RELEASE_VERSION\" --no-git-tag-version && cargo set-version --workspace \"$LAZYSH_RELEASE_VERSION\" && bun .changeset/bun-lock.ts && bun run release:check",
-    "test:release": "bun test ./tests/release-consistency.test.ts ./tests/release-version.test.ts",
+    "test:release": "bun test ./tests/release-consistency.test.ts ./tests/release-version.test.ts ./tests/release-tag.test.ts",
+    "test:fdroid": "bun test ./tests/fdroid-recipe.test.ts",
     "hooks:install": "sh .githooks/pre-commit --install",
     "duplicates:check": "jscpd --config .jscpd.json --threshold 0 --fail-on-empty .",
     "duplicates:staged": "lint-staged --hide-all --config lint-staged.config.mjs",

@@ -10,7 +10,7 @@ export type CloudQuota = {
 };
 export type CloudSnapshot = {
   origin: string; checkedAt: number;
-  capabilities: { schemaVersion: 1; model: 'gpt-transcribe'; languages: string[]; maxWavBytes: 960044; sampleRate: 16000; maxSamples: 480000 };
+  capabilities: { schemaVersion: 1; model: 'gpt-transcribe' | 'whisper.cpp'; languages: string[]; maxWavBytes: 960044; sampleRate: 16000; maxSamples: 480000 };
   quota: CloudQuota;
 };
 export function validCloudOrigin(origin: string): boolean {
@@ -34,7 +34,7 @@ export function validateCloudQuota(value: CloudQuota): CloudQuota {
 export function validateCloudSnapshot(value: CloudSnapshot): CloudSnapshot {
   const caps = value?.capabilities;
   if (!value || !validCloudOrigin(value.origin) || !Number.isSafeInteger(value.checkedAt) || value.checkedAt < 0
-    || !caps || caps.schemaVersion !== 1 || caps.model !== 'gpt-transcribe' || caps.sampleRate !== 16000
+    || !caps || caps.schemaVersion !== 1 || !['gpt-transcribe','whisper.cpp'].includes(caps.model) || caps.sampleRate !== 16000
     || caps.maxSamples !== 480000 || caps.maxWavBytes !== 960044 || !Array.isArray(caps.languages)
     || caps.languages.length < 1 || caps.languages.length > 8 || new Set(caps.languages).size !== caps.languages.length
     || caps.languages.some(code => typeof code !== 'string' || !Object.hasOwn(CLOUD_LANGUAGES, code)))

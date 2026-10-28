@@ -309,26 +309,80 @@ test.each(['line','total','records'] as const)('crash classifier enforces its %s
   expect(JSON.stringify(parser.summary())).not.toContain('private');
 });
 
-test.skipIf(process.platform!=='linux')('owned crash collector selects only its emulator and reaps its child without raw output',async()=>{
+test.each([
+  {text:'logcat: Unexpected EOF! private-secret',flag:'unexpectedEof'},
+  {text:'logcat: Logcat read failure: private-secret',flag:'readFailure'},
+  {text:'logcat: Unexpected length. private-secret',flag:'readFailure'},
+  {text:'adb: device offline private-secret',flag:'deviceUnavailable'},
+  {text:'- waiting for device -',flag:'waitingForDevice'},
+  {text:'private-secret',flag:'other'},
+  {text:'',flag:null},
+])('collector stderr retains fixed flags only: $flag',({text,flag})=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  for(const byte of Buffer.from(text))parser.pushStderr(Buffer.from([byte]));
+  parser.finish();
+  expect(Object.entries(parser.summary().stderr).filter(([,selected])=>selected).map(([name])=>name)).toEqual(flag?[flag]:[]);
+  expect(JSON.stringify(parser.summary())).not.toContain('private-secret');
+  expect(parser.summary().overflow).toBe(false);
+});
+
+test('stdout and stderr share the same total and per-line diagnostic bounds',()=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  parser.push(Buffer.from('x\n'.repeat(16384)));
+  parser.pushStderr(Buffer.from('y\n'.repeat(16385)));
+  expect(parser.summary().overflow).toBe(true);
+  const long=new OwnedCaseCrashParser(nonce);
+  long.pushStderr(Buffer.from('private-secret'.repeat(100)));
+  expect(long.summary().overflow).toBe(true);
+  long.finish();
+  expect(long.summary().stderr.other).toBe(false);
+});
+
+for(const mode of ['hold','exit255','reported-eof','signal','overflow','stop-failure'] as const) {
+test.skipIf(process.platform!=='linux')(`owned crash collector records ${mode} provenance without raw output`,async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-case-crash-'));
-  const adb=join(directory,'adb'),args=join(directory,'argv'),pidFile=join(directory,'pid');
+  const adb=join(directory,'adb'),args=join(directory,'argv'),pidFile=join(directory,'pid'),gate=join(directory,'continue');
   let collector:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
+  let restoreStop:(()=>void)|undefined;
   try {
     // Native Bun fixture executable; never launches a user adb/session or shell.
-    await writeFile(adb,`#!${process.execPath}\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(args)},JSON.stringify(process.argv.slice(2)));fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.stdout.write(${JSON.stringify(marker()+java())});setInterval(()=>{},1000);\n`);
+    const action=mode==='exit255'?'process.exit(255)':mode==='reported-eof'?`process.stderr.write('logcat: Unexpected EOF! private-secret',()=>process.exit(1))`:mode==='signal'?`process.kill(process.pid,'SIGTERM')`:mode==='overflow'?`process.stderr.write('private-secret'.repeat(6000));setInterval(()=>{},1000)`:'setInterval(()=>{},1000)';
+    await writeFile(adb,`#!${process.execPath}\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(args)},JSON.stringify(process.argv.slice(2)));fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.stdout.write(${JSON.stringify(marker()+java())});const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(gate)})){clearInterval(timer);${action}}},5);\n`);
     await chmod(adb,0o700);
     collector=captureOwnedCaseCrashes(adb,'emulator-5580',nonce);
     const deadline=performance.now()+1000;
     while(!await Bun.file(pidFile).exists()) {expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
     while(collector.snapshot().records.length===0) {expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    // Admit the synthetic exit only after the host observed this child's marker.
+    await writeFile(gate,'');
+    if(mode!=='hold' && mode!=='stop-failure')while(collector.snapshot().close.phase==='unobserved') {expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    if(mode==='stop-failure') {
+      const originalStop=OwnedProcess.prototype.stop;
+      const failure=spyOn(OwnedProcess.prototype,'stop').mockImplementation(async function(this:OwnedProcess){await originalStop.call(this);throw new Error('private-stop-error');});
+      restoreStop=()=>failure.mockRestore();
+    }
     const summary=await collector.stop();
-    expect(summary.stream).toBe('stopped');
+    expect(summary.stream).toBe(mode==='hold'?'stopped':mode==='overflow'?'overflow':'unavailable');
     expect(summary.correlated).toBe(true);
     expect(summary.records).toHaveLength(1);
-    expect(JSON.stringify(summary)).not.toContain('private-secret');
+    expect(summary.close).toEqual({phase:mode==='hold'||mode==='overflow'||mode==='stop-failure'?'during-stop':'before-stop',exitCode:mode==='exit255'?255:mode==='reported-eof'?1:null,signal:mode==='exit255'||mode==='reported-eof'?'none':'SIGTERM',processError:false,stopFailed:mode==='stop-failure'});
+    expect(summary.stderr.unexpectedEof).toBe(mode==='reported-eof');
+    expect(JSON.stringify(summary)).not.toMatch(/private-secret|private-stop-error/);
     expect(JSON.parse(await readFile(args,'utf8'))).toEqual(['-s','emulator-5580','logcat','-b','main','-b','crash','-v','threadtime','-T','1','LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S']);
     const pid=Number(await readFile(pidFile,'utf8'));
     expect(()=>process.kill(pid,0)).toThrow();
     expect(await collector.stop()).toEqual(summary);
-  } finally {await collector?.stop();await rm(directory,{recursive:true,force:true});}
+  } finally {restoreStop?.();await collector?.stop();await rm(directory,{recursive:true,force:true});}
+});
+}
+
+test('collector process-start failure is finite and cannot masquerade as a correlated stream',async()=>{
+  const collector=captureOwnedCaseCrashes('/nonexistent-owned-case-adb','emulator-5580',nonce);
+  const deadline=performance.now()+1000;
+  try {
+    while(collector.snapshot().close.phase==='unobserved') {expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    const summary=await collector.stop();
+    expect(summary).toMatchObject({stream:'unavailable',correlated:false,close:{phase:'before-stop',exitCode:null,signal:'none',processError:true,stopFailed:true}});
+    expect(JSON.stringify(summary)).not.toContain('nonexistent');
+  } finally {await collector.stop();}
 });

@@ -72,7 +72,7 @@ pub struct Capabilities {
 impl Capabilities {
     fn validate(&self) -> Result<()> {
         if self.schema_version != 1
-            || self.model != "gpt-transcribe"
+            || !matches!(self.model.as_str(), "gpt-transcribe" | "whisper.cpp")
             || self.max_wav_bytes != 960044
             || self.sample_rate != 16000
             || self.max_samples != 480000

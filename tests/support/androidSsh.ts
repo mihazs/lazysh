@@ -326,28 +326,33 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   const child=new OwnedProcess(adb,['-s',serial,'logcat','-b','main','-b','crash','-v','threadtime','-T','1',
     'LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S'],undefined,process.env,false);
   let stream:'running'|'stopped'|'closed'|'unavailable'|'overflow'|'deadline'='running';
-  let bytes=0;
   let stopping=false;
-  let finished:Promise<ReturnType<typeof parser.summary>&{stream:typeof stream}>|undefined;
+  const close:{phase:'unobserved'|'before-stop'|'during-stop',exitCode:number|null,signal:'none'|'SIGTERM'|'SIGKILL'|'SIGPIPE'|'SIGABRT'|'SIGSEGV'|'other',processError:boolean,stopFailed:boolean}={phase:'unobserved',exitCode:null,signal:'none',processError:false,stopFailed:false};
   let timer:ReturnType<typeof setTimeout>;
-  const snapshot=()=>({...parser.summary(),stream});
+  const snapshot=()=>({...parser.summary(),stream,close:{...close}});
+  let finished:Promise<ReturnType<typeof snapshot>>|undefined;
   const stop=()=>{
     if(!finished) {
       stopping=true;clearTimeout(timer);
       if(stream==='running')stream='stopped';
-      finished=child.stop().catch(()=>{stream='unavailable';}).then(snapshot);
+      finished=child.stop().catch(()=>{close.stopFailed=true;stream='unavailable';}).then(()=>{parser.finish();return snapshot();});
     }
     return finished;
   };
   child.child.stdout!.on('data',(chunk:Buffer)=>{
-    bytes+=chunk.length;
-    if(bytes>64*1024){stream='overflow';void stop();return;}
     parser.push(chunk);
     if(parser.summary().overflow){stream='overflow';void stop();}
   });
   child.child.stderr!.on('data',(chunk:Buffer)=>{
-    bytes+=chunk.length;
-    if(bytes>64*1024){stream='overflow';void stop();}
+    parser.pushStderr(chunk);
+    if(parser.summary().overflow){stream='overflow';void stop();}
+  });
+  child.child.once('error',()=>{close.processError=true;});
+  child.child.once('close',(code,signal)=>{
+    close.phase=stopping?'during-stop':'before-stop';
+    close.exitCode=code!==null && Number.isInteger(code) && code>=0 && code<=255?code:null;
+    close.signal=signal==null?'none':(['SIGTERM','SIGKILL','SIGPIPE','SIGABRT','SIGSEGV'] as const).find(value=>value===signal)??'other';
+    parser.finish();
   });
   void child.done.then(code=>{if(!stopping)stream=code===0?'closed':'unavailable';},()=>{stream='unavailable';});
   timer=setTimeout(()=>{stream='deadline';void stop();},600_000);

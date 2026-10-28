@@ -17,8 +17,14 @@ enum Command {
     Serve {
         #[arg(long)]
         admin_token_file: PathBuf,
+        #[arg(
+            long,
+            required_unless_present = "whisper_cpp_port",
+            conflicts_with = "whisper_cpp_port"
+        )]
+        provider_key_file: Option<PathBuf>,
         #[arg(long)]
-        provider_key_file: PathBuf,
+        whisper_cpp_port: Option<std::num::NonZeroU16>,
         #[arg(long)]
         data_dir: PathBuf,
         #[arg(long)]
@@ -38,6 +44,7 @@ async fn run() -> Result<(), String> {
         Command::Serve {
             admin_token_file,
             provider_key_file,
+            whisper_cpp_port,
             data_dir,
             device_seconds_per_day,
             global_seconds_per_day,
@@ -47,14 +54,26 @@ async fn run() -> Result<(), String> {
                 return Err("Require a loopback listen address behind an HTTPS proxy".into());
             }
             let admin = lazysh_transcription::read_secret(&admin_token_file)?;
-            let key = lazysh_transcription::read_secret(&provider_key_file)?;
-            let config = Config::new(
-                data_dir,
-                admin.trim(),
-                key.trim(),
-                device_seconds_per_day,
-                global_seconds_per_day,
-            )?;
+            let config = if let Some(port) = whisper_cpp_port {
+                Config::whisper_cpp(
+                    data_dir,
+                    admin.trim(),
+                    port,
+                    device_seconds_per_day,
+                    global_seconds_per_day,
+                )?
+            } else {
+                let path = provider_key_file
+                    .ok_or("Require a provider key or explicit whisper.cpp port")?;
+                let key = lazysh_transcription::read_secret(&path)?;
+                Config::new(
+                    data_dir,
+                    admin.trim(),
+                    key.trim(),
+                    device_seconds_per_day,
+                    global_seconds_per_day,
+                )?
+            };
             let service = Service::open(config)?;
             let listener = tokio::net::TcpListener::bind(listen)
                 .await
