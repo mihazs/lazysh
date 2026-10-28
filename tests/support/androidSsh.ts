@@ -278,10 +278,10 @@ export async function emulatorContinuity(adb:string,serial:string,reverse:string
         if(tokens.length<=16 && tokens.every(pid=>/^[1-9][0-9]{0,9}$/.test(pid))) {summary.mainPids=tokens.map(Number);summary.process='present';}
         else summary.process='unrecognized';
       }
-      // ADB reverse:list-forward uses the literal 'host' label on the selected transport.
+      // The selected transport scopes this query; Android16 emits host-N/(reverse) display labels.
       if(kind==='reverse')summary.reverse=output.split(/\r?\n/).some(row=>{
         const fields=row.trim().split(/\s+/);
-        return fields.length===3 && fields[0]==='host' && fields[1]===`tcp:${reverse}` && fields[2]===`tcp:${targetPort}`;
+        return fields.length===3 && fields[1]===`tcp:${reverse}` && fields[2]===`tcp:${targetPort}`;
       })?'present':'missing';
     } catch {summary[kind]='unavailable';}
   }));

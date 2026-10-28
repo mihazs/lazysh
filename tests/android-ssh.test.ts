@@ -152,7 +152,7 @@ test('exit shape distinguishes a recognized empty service from unrecognized outp
 
 test.each([
   {body:'device\n3438\nhost tcp:46867 tcp:45678\n',code:0,connection:'device',process:'present',mainPids:[3438],reverse:'present'},
-  {body:'offline\n3438 3439\nemulator-5580 tcp:46867 tcp:45678\n',code:0,connection:'offline',process:'present',mainPids:[3438,3439],reverse:'missing'},
+  {body:'offline\n3438 3439\nemulator-5580 tcp:46867 tcp:45678\n',code:0,connection:'offline',process:'present',mainPids:[3438,3439],reverse:'present'},
   {body:'private-secret\n3438 private-pid\nhost tcp:46867 tcp:9999\n',code:0,connection:'unrecognized',process:'unrecognized',mainPids:[],reverse:'missing'},
   {body:'device\n3438\nhost tcp:46866 tcp:45678\n',code:0,connection:'device',process:'present',mainPids:[3438],reverse:'missing'},
   {body:'device\n3438\nhost tcp:46867 tcp:45678\n',code:31,connection:'unavailable',process:'unavailable',mainPids:[],reverse:'unavailable'},
@@ -207,5 +207,16 @@ test.each([
     expect(compareEmulatorContinuity(before,after)).toEqual(expected);
     expect(compareEmulatorContinuity(undefined,after)).toEqual({transport:'unknown',boot:'unknown',reverseLost:null});
     expect((await readFile(args,'utf8')).trim().split('\n')).toHaveLength(10);
+  });
+});
+
+// Android16 adb_listeners.cpp129 and daemon/transport_socket_server.cpp78 generate these labels.
+test.each(['host-35','(reverse)'])('reverse metadata is discarded on the explicitly selected owned transport: %s',async metadata=>{
+  const body=continuityBody('42',bootA).replace('host tcp:',metadata+' tcp:');
+  await withDiagnosticAdb(body,0,async(adb,args)=>{
+    const summary=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(summary.reverse).toBe('present');
+    expect(JSON.stringify(summary)).not.toContain(metadata);
+    expect((await readFile(args,'utf8')).split('\n')).toContain('-s emulator-5580 reverse --list');
   });
 });

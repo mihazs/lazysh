@@ -1,5 +1,28 @@
 # @lazysh/client
 
+## 0.11.0
+
+### Minor Changes
+
+- 87e923a: Compose review dictation with the latest editable draft without losing concurrent edits. Preserve bounded drafts, per-clip history and separate clip-only direct delivery.
+
+### Patch Changes
+
+- @lazysh/common@0.11.0
+  - @lazysh/display-idle@0.11.0
+  - @lazysh/et-transport@0.11.0
+  - @lazysh/mosh-transport@0.11.0
+
+## 0.10.1
+
+### Patch Changes
+
+- 3ec508c: Preserve explicit Pi tool-result error booleans in recorded chat and reuse the recorded-error badge without inferring live state or changing other adapters.
+- @lazysh/common@0.10.1
+  - @lazysh/display-idle@0.10.1
+  - @lazysh/et-transport@0.10.1
+  - @lazysh/mosh-transport@0.10.1
+
 ## 0.10.0
 
 ### Minor Changes

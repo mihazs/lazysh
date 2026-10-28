@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Offer opt-in syntax highlighting in Remote Files text previews using the existing safe code renderer. Plain text remains the default, keyboard scrolling stays available, and SFTP paths, read limits and upload consent are unchanged. Keep highlighted previews tied to the current source when file contents refresh.
+
+- Compose completed review dictation with the latest editable draft instead of replacing typed text or prior clips. Empty results preserve the draft; overflow keeps it intact without truncation. Review remains default, while direct delivery still queues only the newly recorded clip and history remains per clip.
+
+- Preserve Pi Records' explicit tool-error booleans and label recorded failures while retaining original output and tool IDs. Other adapters, defaults and live terminal behavior are unchanged.
+
 - Add an explicit attachment editor within Chat. Uploads preserve the existing draft; Add uploaded path appends only the canonical host path without sending, staging or copying automatically. Existing upload/access/cancellation guards and defaults remain unchanged.
 
 - Keep retained native access-status and unlock errors in the current interface language without repeating authentication checks, ready acknowledgements or protected workspace mounts. Access policy and defaults are unchanged.

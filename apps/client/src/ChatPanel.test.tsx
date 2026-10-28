@@ -48,7 +48,7 @@ it('admits returned image bytes only in supported recorded image contexts and re
       {...block,imagePreview:{...imagePreview,width:16,height:32}}].map(value=>({...response,messages:[{...message,blocks:[value]}]})),
   ])expect(()=>parseTranscript(invalid)).toThrow('Invalid recorded-image preview response.');
 });
-it('validates Claude-only boolean tool errors and renders recorded failures without changing output',async()=>{
+it('validates Claude boolean tool errors and renders recorded failures without changing output',async()=>{
   const blocks=[{type:'tool_result',id:'failed-call',text:'Permission denied',isError:true},
     {type:'tool_result',id:'ok-call',text:'Original success',isError:false},
     {type:'tool_result',id:'unknown-call',text:'Unknown outcome'},
@@ -67,6 +67,28 @@ it('validates Claude-only boolean tool errors and renders recorded failures with
   expect(screen.getByText('Permission denied')).toBeTruthy();
   expect(screen.getByText('Original success')).toBeTruthy();
   expect(screen.getAllByText(/Recorded tool error/)).toHaveLength(2);
+  expect(screen.queryByRole('button',{name:/approve|deny|stop|retry/i})).toBeNull();
+});
+it('admits Pi recorded tool errors only on tool result records, preserving raw output without live actions',async()=>{
+  const blocks=[{type:'tool_result',id:'pi-failed',name:'bash',text:'RAW {{output}} <native>',isError:true},
+    {type:'tool_result',id:'pi-ok',text:'Original success',isError:false},
+    {type:'tool_result',id:'pi-unknown',text:'Unknown outcome'}];
+  const response={...page,agent:'pi',view:'record_stream',messages:[{id:'pi-result',role:'tool',blocks}]};
+  expect(parseTranscript(response)).toEqual(response);
+  for(const agent of ['omp','omo','codex','qoder-ide'])expect(()=>parseTranscript({...response,agent})).toThrow('Invalid recorded tool error');
+  for(const view of [undefined,'active_branch'])expect(()=>parseTranscript({...response,view})).toThrow('Invalid recorded tool error');
+  for(const role of ['user','assistant'])expect(()=>parseTranscript({...response,messages:[{id:'bad',role,blocks}]})).toThrow('Invalid recorded tool error');
+  for(const type of ['text','thinking','tool_use','image'])expect(()=>parseTranscript({...response,messages:[{id:'bad',role:'tool',blocks:[{...blocks[0],type}]}]})).toThrow('Invalid recorded tool error');
+  for(const isError of [null,'true',1,{},[]])expect(()=>parseTranscript({...response,messages:[{id:'bad',role:'tool',blocks:[{...blocks[0],isError}]}]})).toThrow('Invalid recorded tool error');
+  vi.mocked(invoke).mockResolvedValue(response);
+  render(<ChatPanel sessionId="pi-host"/>);
+  fireEvent.change(screen.getByLabelText('Agent'),{target:{value:'pi'}});
+  fireEvent.change(screen.getByLabelText('Transcript path'),{target:{value:'/owned/pi.jsonl'}});
+  fireEvent.click(screen.getByRole('button',{name:'Open transcript'}));
+  expect(await screen.findByText(/Recorded tool error · Tool ID: pi-failed/)).toBeTruthy();
+  expect(screen.getAllByText(/Recorded tool error/)).toHaveLength(1);
+  expect(screen.getByText('RAW {{output}} <native>')).toBeTruthy();
+  expect(screen.getByText('Original success')).toBeTruthy();
   expect(screen.queryByRole('button',{name:/approve|deny|stop|retry/i})).toBeNull();
 });
 it('renders Grok statuses as recorded tool metadata without claiming live state or inventing output',async()=>{

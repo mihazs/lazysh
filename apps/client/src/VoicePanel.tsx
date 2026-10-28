@@ -73,7 +73,10 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
   const [appleLanguage, setAppleLanguage] = useState("en-US");
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftValue] = useState("");
+  // Include edits already queued by the composer, not an inference-start snapshot.
+  const latestDraft = useRef("");
+  function setDraft(value:string) {latestDraft.current=value;setDraftValue(value);}
   const [direct, setDirect] = useState(false);
   const [autoSend, setAutoSend] = useState(false);
   const [deliveryStatus, setDeliveryStatus] = useState<'' | 'voiceQueuedEnter' | 'voiceQueuedNoEnter'>('');
@@ -409,8 +412,13 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
       if (typeof text !== "string" || text.length > 65536)
         throw new LocalUiError('voiceInvalidResult');
       if (current === generation.current && canPublish()) {
-        setDraft(text);
         void history.add(text,historyCapture);
+        if (delivery.direct) setDraft(text);
+        else if (text.trim()) {
+          const next=latestDraft.current?`${latestDraft.current}\n${text}`:text;
+          if(next.length>65536)throw new LocalUiError('voiceComposeTooLong');
+          setDraft(next);
+        }
         if (delivery.direct && sessionId && onDirectDictation) {
           await onDirectDictation({sessionId,text,autoSend:delivery.autoSend,claim:()=>{
             if (current !== generation.current || !canPublish() || delivery.claimed) return false;

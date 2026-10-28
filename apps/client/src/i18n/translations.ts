@@ -1176,6 +1176,7 @@ const translations = {
   voiceParakeetRemoving: ["Removendo o modelo Parakeet…", "Eliminando el modelo Parakeet…"],
   voiceParakeetTranscribing: ["Transcrevendo com Parakeet neste dispositivo…", "Transcribiendo con Parakeet en este dispositivo…"],
   voiceEngineBusy: ["O mecanismo de fala local está ocupado. Aguarde o término do trabalho atual.", "El motor de voz local está ocupado. Espera a que termine el trabajo actual."],
+  voiceComposeTooLong: ["O rascunho foi mantido porque adicionar este ditado excederia 65.536 caracteres. Encurte-o antes de gravar novamente.", "El borrador se conservó porque añadir este dictado superaría los 65.536 caracteres. Acórtalo antes de volver a grabar."],
   voiceDraft: ["Rascunho do ditado", "Borrador del dictado"],
   voiceCopyDraft: ["Copiar rascunho", "Copiar borrador"],
   voiceStageTerminal: ["Preparar no editor do terminal", "Preparar en el editor del terminal"],
