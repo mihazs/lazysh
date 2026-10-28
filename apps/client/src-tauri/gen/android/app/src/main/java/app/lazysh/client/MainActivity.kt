@@ -1,6 +1,7 @@
 package app.lazysh.client
 
 import android.os.Bundle
+import android.util.Log
 import android.webkit.WebView
 import app.lazysh.vault.VaultPlugin
 import app.lazysh.displayidle.DisplayIdlePlugin
@@ -13,7 +14,10 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
   }
   override fun onCreate(savedInstanceState: Bundle?) {
+    if (BuildConfig.DEBUG) Log.i("LazyshActivityCreate", "onCreate:enter")
     enableEdgeToEdge()
+    if (BuildConfig.DEBUG) Log.i("LazyshActivityCreate", "onCreate:afterEdgeToEdge")
     super.onCreate(savedInstanceState)
+    if (BuildConfig.DEBUG) Log.i("LazyshActivityCreate", "onCreate:afterSuper")
   }
 }
