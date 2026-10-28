@@ -30,6 +30,7 @@ export class OwnedNtfyPackages {
   }
 }
 const fixtureCase='ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback';
+const fixtureCases=['ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy',fixtureCase];
 const invalid=()=>new Error('Owned ntfy acceptance admission failed');
 export function privateInputCommand(nonce:string) {
   if(!/^[a-f\d]{32}$/.test(nonce))throw invalid();
@@ -160,14 +161,24 @@ export async function realNtfyStartup(archive:string,root=resolve(import.meta.di
     if(failed){if(primary)console.error('Owned startup cleanup failed after original failure');else throw new Error('Owned startup cleanup failed');}
   }
 }
+export function validateNtfyReport(text:string) {
+  const xml=text.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,'');
+  const cases=[...xml.matchAll(/<testcase\b[^>]*>/g)].map(([tag])=>({name:/\sname="([^"]*)"/.exec(tag)?.[1],className:/\sclassname="([^"]*)"/.exec(tag)?.[1]}));
+  if(cases.length!==fixtureCases.length||new Set(cases.map(row=>row.name)).size!==fixtureCases.length||
+      cases.some(row=>row.className!=='app.lazysh.client.NativeWorkspaceTest'||!fixtureCases.includes(row.name??''))||
+      /<(?:failure|error|skipped)\b/.test(xml))throw new Error('Actual native ntfy cases did not pass without skips');
+  return {nativeCase:fixtureCase,nativeCases:fixtureCases,passed:fixtureCases.length,failed:0,skipped:0};
+}
 async function receipt(directory:string) {
   const entries=await readdir(directory,{recursive:true});
   const xml=entries.filter(name=>name.startsWith('android-results/')&&name.endsWith('.xml'));
   if(xml.length!==1)throw new Error('Expected one owned native ntfy report');
-  const text=(await boundedFile(join(directory,xml[0]),256*1024)).toString('utf8');
-  if(!text.includes(`name="${fixtureCase}"`)||!text.includes('classname="app.lazysh.client.NativeWorkspaceTest"')||
-      /<(?:failure|error|skipped)\b/.test(text)||[...text.matchAll(/<testcase\b/g)].length!==1)throw new Error('Actual native ntfy case did not pass without skips');
-  return {nativeCase:fixtureCase,passed:1,failed:0,skipped:0};
+  return validateNtfyReport((await boundedFile(join(directory,xml[0]),256*1024)).toString('utf8'));
+}
+export function firstLaunchObservation(text:string) {
+  const match=/Distributor menu; foreground=(ntfy|permission|lazysh|other) allow=(true|false) deny=(true|false) toolbar=(true|false) ownedPrompt=(true|false) attempted=(true|false)/.exec(text);
+  if(!match)return;
+  return {foreground:match[1],allow:match[2]==='true',deny:match[3]==='true',toolbar:match[4]==='true',ownedPrompt:match[5]==='true',attempted:match[6]==='true'};
 }
 async function nativeFailure(directory:string) {
   try {
@@ -182,7 +193,8 @@ async function nativeFailure(directory:string) {
       ['Authenticated relay cleanup must remove private enrollment','authenticated_cleanup']];
     const stage=stages.find(([label])=>failure.includes(label))?.[1]??'other_native_failure';
     const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
-    return {nativeStage:stage,nativeSourceLine:line?Number(line):null};
+    const firstLaunch=firstLaunchObservation(failure);
+    return {nativeStage:stage,nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{})};
   }catch{return {};}
 }
 
@@ -293,7 +305,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     installed.admit('app.lazysh.client.test');
     await run('actual native ntfy instrumentation',join(android,'gradlew'),[':app:connectedUniversalDebugAndroidTest',...gradleArgs,
       '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',
-      `-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#${fixtureCase}`,
+      `-Pandroid.testInstrumentationRunnerArguments.class=${fixtureCases.map(name=>`app.lazysh.client.NativeWorkspaceTest#${name}`).join(',')}`,
       '-Pandroid.testInstrumentationRunnerArguments.lazyshNtfyAcceptance=true',
       `-Pandroid.testInstrumentationRunnerArguments.lazyshNtfyNonce=${nonce}`],240_000);
     const native=await receipt(directory);

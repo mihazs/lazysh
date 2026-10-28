@@ -88,6 +88,15 @@ generation. The server independently observes an accepted confirmation with an
 active exact-generation subscription. The app then pauses through protected IPC,
 and both native cleanup and authenticated server revocation must complete.
 
+Distributor first launch retains the original combined six-second permission/menu
+budget. It permits one explicit Allow attempt only on the system controller's
+notification prompt naming the pinned ntfy app, then requires its foreground menu.
+Failure receipts contain only an enumerated foreground kind and finite control
+presence/attempt flags. A separate named native policy case checks the unchanged
+deadline and one-attempt admission; both native cases must pass without skips.
+Synchronous accessibility queries/clicks may themselves consume time; no retry or
+additional wait budget is granted to compensate for that overhead.
+
 The original encrypted wire is replayed through real ntfy while confirmed and
 after pause. The bounded observation requires only one server confirmation and
 no restored native authority. Transport acceptance of a replay is not proof that

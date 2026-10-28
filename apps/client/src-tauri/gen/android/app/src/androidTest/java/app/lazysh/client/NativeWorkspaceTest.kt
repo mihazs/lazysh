@@ -64,6 +64,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
+private class NtfyFirstLaunch(started: Long) {
+    val deadline = started + TimeUnit.SECONDS.toNanos(6)
+    var attempted = false
+        private set
+    fun active(now: Long) = now < deadline
+    fun allow(now: Long, ownedPrompt: Boolean): Boolean {
+        if (!active(now) || !ownedPrompt || attempted) return false
+        attempted = true
+        return true
+    }
+}
+
 @RunWith(AndroidJUnit4::class)
 class NativeWorkspaceTest {
     private fun webView(view: View): WebView? {
@@ -1400,6 +1412,15 @@ class NativeWorkspaceTest {
         }
     }
 
+    @Test fun ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy() {
+        val policy=NtfyFirstLaunch(0)
+        assertTrue("Unowned permission cannot be admitted",!policy.allow(TimeUnit.SECONDS.toNanos(1),false))
+        assertTrue("Delayed owned prompt fits original combined budget",policy.allow(TimeUnit.SECONDS.toNanos(5),true))
+        assertTrue("Permission action is consumed before dispatch",!policy.allow(TimeUnit.SECONDS.toNanos(5),true))
+        assertTrue("Menu must settle before original total deadline",!policy.active(TimeUnit.SECONDS.toNanos(6)))
+        assertTrue("Expired policy cannot dispatch",!NtfyFirstLaunch(0).allow(TimeUnit.SECONDS.toNanos(6),true))
+    }
+
     @Test(timeout = 120_000) fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {
         val arguments=InstrumentationRegistry.getArguments()
         org.junit.Assume.assumeTrue("Owned ntfy acceptance only",arguments.getString("lazyshNtfyAcceptance")=="true")
@@ -1433,10 +1454,31 @@ class NativeWorkspaceTest {
             assertTrue(stage,result!=null);return checkNotNull(result)
         }
         fun ntfyResource(name:String)=By.res("io.heckel.ntfy",name)
+        assertTrue("Permission controller must be a system application",
+            context.packageManager.getApplicationInfo("com.android.permissioncontroller",0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM!=0)
         val launch=context.packageManager.getLaunchIntentForPackage("io.heckel.ntfy") ?: error("Owned distributor not installed")
         context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        device.wait(Until.findObject(By.res("com.android.permissioncontroller","permission_allow_button")),1000)?.click()
-        node(By.pkg("io.heckel.ntfy").desc("More options"),"Distributor menu").click()
+        val firstLaunch=NtfyFirstLaunch(System.nanoTime())
+        val menuSelector=By.pkg("io.heckel.ntfy").desc("More options")
+        var menu:androidx.test.uiautomator.UiObject2?=null
+        var foreground="other";var allow=false;var deny=false;var toolbar=false;var ownedPrompt=false
+        while(firstLaunch.active(System.nanoTime())) {
+            foreground=when(device.currentPackageName) {"io.heckel.ntfy"->"ntfy";"com.android.permissioncontroller"->"permission";"app.lazysh.client"->"lazysh";else->"other"}
+            val choice=device.findObject(By.res("com.android.permissioncontroller","permission_allow_button"))
+            allow=choice!=null
+            deny=device.hasObject(By.res("com.android.permissioncontroller","permission_deny_button"))
+            toolbar=device.hasObject(ntfyResource("toolbar"))
+            val prompt=device.findObject(By.res("com.android.permissioncontroller","permission_message"))?.text
+            ownedPrompt=foreground=="permission" && prompt?.contains(Regex("\\bntfy\\b"))==true && prompt?.contains("notifications",ignoreCase=true)==true
+            menu=device.findObject(menuSelector)
+            if(foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime())) break
+            if(firstLaunch.allow(System.nanoTime(),ownedPrompt && allow))checkNotNull(choice).click()
+            val remaining=firstLaunch.deadline-System.nanoTime()
+            if(remaining>0)Thread.sleep(TimeUnit.NANOSECONDS.toMillis(remaining).coerceIn(1,20))
+        }
+        assertTrue("Distributor menu; foreground=$foreground allow=$allow deny=$deny toolbar=$toolbar ownedPrompt=$ownedPrompt attempted=${firstLaunch.attempted}",
+            foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime()))
+        checkNotNull(menu).click()
         node(By.pkg("io.heckel.ntfy").text("Settings"),"Distributor settings").click()
         node(By.pkg("io.heckel.ntfy").text("Default server"),"Owned default server").click()
         node(ntfyResource("default_server_dialog_url"),"Default server field").text=data.getString("ntfyOrigin")

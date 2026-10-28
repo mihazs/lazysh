@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
@@ -17,6 +17,26 @@ test('owned ntfy cannot inherit operator server, proxy or provider credentials',
   expect(ntfyEnvironment({PATH:'/tools',HOME:'/original-home',LANG:'C.UTF-8',NTFY_BASE_URL:'https://personal.invalid',
     NTFY_AUTH_FILE:'/personal/store',NTFY_FIREBASE_KEY_FILE:'/personal/key',HTTP_PROXY:'https://proxy.invalid',
     TOKEN:'private-provider-token'})).toEqual({PATH:'/tools',HOME:'/original-home',LANG:'C.UTF-8'});
+});
+
+test('first-launch failures retain only enumerated package state and finite flags',()=>{
+  const diagnostic='Distributor menu; foreground=permission allow=true deny=true toolbar=false ownedPrompt=true attempted=false';
+  expect(firstLaunchObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:'permission',allow:true,deny:true,toolbar:false,ownedPrompt:true,attempted:false});
+  expect(firstLaunchObservation(diagnostic.replace('foreground=permission','foreground=private.application'))).toBeUndefined();
+  expect(firstLaunchObservation(diagnostic.replace('allow=true','allow=private-data'))).toBeUndefined();
+});
+
+test('native receipt requires both exact owned cases without substitution or skips',()=>{
+  const cases=['ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback','ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy'];
+  const rows=cases.map(name=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" />`);
+  const report=`<testsuite>${rows.join('')}</testsuite>`;
+  expect(validateNtfyReport(report).passed).toBe(2);
+  for(const invalid of [rows[0],rows[0]+rows[0],rows[0]+rows[0]+`<system-out>name="${cases[1]}"</system-out>`,
+    rows[0]+`<system-out><![CDATA[${rows[1]}]]></system-out>`,rows[0]+`<!--${rows[1]}-->`,
+    report.replace('classname="app.lazysh.client.NativeWorkspaceTest"','classname="foreign.Case"'),
+    report.replace('</testsuite>','<skipped /></testsuite>'),report+rows[0]]){
+    expect(()=>validateNtfyReport(invalid)).toThrow('did not pass without skips');
+  }
 });
 
 test('private transfer creates an absent owned directory, rejects symlinks and cannot replace a receipt',async()=>{
