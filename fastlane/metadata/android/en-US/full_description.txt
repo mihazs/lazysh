@@ -1,0 +1,11 @@
+Work on your own SSH hosts from an Android terminal.
+
+lazysh is free and open-source, and all app features are free to use. External hosts, AI providers and other services may charge their own fees.
+
+lazysh combines a terminal with SFTP transfers and controls for remote tmux, Herdr and Zellij sessions. Multiplexer features need the corresponding tools installed on the host.
+
+An optional Rust companion lets you inspect supported coding-agent transcript records. Support varies by agent; recorded chat is not proof that an agent is currently working.
+
+First connections ask you to review the server fingerprint. Credentials are kept in memory unless you choose to save them in the device credential store.
+
+This is a development preview. Features and device workflows have different verification limits, and some functions need separately configured host software or services. There is no required hosted account for an ordinary SSH connection.
