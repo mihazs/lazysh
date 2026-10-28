@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+- Add a localized Named key shortcut builder for toolbar and gesture bindings, including F1–F12 and optional modifiers. Drafts remain separate between builder modes; Advanced stays the default, and saving never sends terminal input.
+
+- Remove reference-vendor names and URLs from the current source and documentation. Theme import now accepts only `lazysh-theme:` share codes and raw JSON; third-party-prefixed share codes must be converted to JSON before import. Stored themes and existing defaults are unchanged.
+
+- Track the delivery roadmap in GitHub Projects using existing issues and their current statuses; the public delivery epic remains available to readers without project access.
+
+- Add a delivery roadmap linking open feature and platform-verification work, and describe lazysh in its own terms in the README. Application behavior and defaults are unchanged.
+
+- Enable GitHub release publication by default for verified Android, Linux and Windows installers after Changesets version merges. Apple releases and official F-Droid inclusion remain deferred.
+
+- Prepare Android, Linux and Windows release artifacts without requiring Apple packages. Apple releases remain deferred; publication remains gated on verified build and distribution prerequisites.
+
+- Reorganize the README around mobile SSH, persistent sessions, and optional AI-agent workflows, with a source-preview quickstart, clearer release caveats, and contributor calls to action. Documentation only; application behavior and defaults are unchanged.
+
+- Prepare a verified cross-platform release installation pipeline with checksums, changelog and install/update guides. Publication and stable tags remain disabled pending signing credentials and reviewed F-Droid/free-push prerequisites; debug APKs and simulator apps are not advertised as production installers. Existing application defaults are unchanged.
+
+- Add explicit `push-config-generate --event-format bound-v2` for encrypted Web Push events with a frozen device generation and absolute expiry. Legacy Web Push remains the default; webhook and enrollment formats are unchanged. Switching the private target requires deliberate reconfiguration and fresh enrollment. Native event display remains incomplete.
+
+- Add explicit Zellij tab 1–20 quick-access buttons using the existing typed native action, without timing-sensitive digit chords or automatic tab discovery. Preserve manual drafts, original session/access ownership and raw host errors; the row does not infer existing or current tabs.
+
+- Add an explicit, integrity-checked Noto Sans Mono CJK SC font download from its pinned official source into existing device-local font storage. Downloads stay off until requested; font selection remains a separate action. Existing font budgets, manual imports and delete controls remain, with bounded transfer/cancellation and no broad network permission. Other downloadable font families and native-device runtime acceptance remain incomplete.
+
+- Add explicit **Paste uploaded path** in standalone Attachments: send only the current upload's validated, quoted host path to its original selected terminal without Enter, honoring public terminal bracketed-paste mode. No automatic write, retry or provider integration is added; copy, editable prompt staging and Chat attachment behavior remain unchanged.
+
+- Add explicit line comments on both sides of staged and unstaged repository diffs. Notes preserve the observed selected path, side, line, diff selection and rename context, remain editable across review changes, and enter the existing prompt draft only when requested. A snapshot warning explains that host files may have changed; no note is sent automatically.
+
 - Add opt-in listener refresh in the visible Preview panel, five seconds after each scan settles. It defaults off per panel/session, preserves preview pages and drafts, and shares the existing explicit port filter and optional HTTP checks. Hiding, closing or disabling the panel stops scheduling and suppresses late results; already-issued native scans may finish under existing bounds.
 
 - Refresh agent-board display readiness on native main-window focus as well as browser focus, so an opted-in board can resume after an earlier unavailable observation. Original access/visibility gates and the explicit re-enable requirement after failed acquisition remain unchanged; this does not establish the cause of the separately tracked Android readiness failures.
@@ -175,7 +201,7 @@
 
 - Add an optional, default-off agent-board display keep-awake control backed by native display-idle ownership. Leaving the board, loss of foreground, app lock and renderer replacement release ownership. Linux now uses bounded asynchronous XDG portal acknowledgements, with exact cancellation, private-connection cleanup and visible owner-loss reporting. Acknowledgement does not establish physical idle-timeout or battery behavior; hardware validation remains pending.
 
-This is a development preview, not a stable release or a claim of complete Moshi
+This is a development preview, not a stable release or a claim of complete reference client
 parity. Remaining capability and platform gates are tracked in issue #1.
 
 ### Fixed
@@ -365,7 +391,7 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   cannot interleave. Unsent steps retain their original access lease and are
   discarded on revocation or disconnect; ET also discards timed remainders and
   queued chords after observed connection loss. The interval is a lazysh choice,
-  not a verified Moshi timing value. Prefix settings now reject comma-separated
+  not a verified reference client timing value. Prefix settings now reject comma-separated
   multi-step and `text:` literal bindings because a prefix must be one key.
   No gesture defaults change.
 
@@ -497,11 +523,11 @@ parity. Remaining capability and platform gates are tracked in issue #1.
   Slow-storage exhaustion remains possible and issue #36 is not declared fixed.
 
 - Paper and explicitly light imported terminal themes now darken bright indexed
-  cube colors and reverse the indexed grayscale ramp using the pinned Moshi
+  cube colors and reverse the indexed grayscale ramp using the pinned reference client
   desktop 0.5.28 palette math. This changes their default 256-color rendering;
   base ANSI colors, literal RGB, dark themes and legacy palettes without mode
   metadata keep their behavior. Browser rendering is verified; physical mobile
-  WebView and current Moshi mobile pixel parity remain unverified.
+  WebView and current reference client mobile pixel parity remain unverified.
 
 ### Fixed
 

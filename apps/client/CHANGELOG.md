@@ -1,5 +1,67 @@
 # @lazysh/client
 
+## 0.23.0
+
+### Minor Changes
+
+- 3dc44f4: Prepare verified cross-platform installer artifacts, release notes, checksums and installation guidance.
+
+### Patch Changes
+
+- @lazysh/common@0.23.0
+  - @lazysh/display-idle@0.23.0
+  - @lazysh/et-transport@0.23.0
+  - @lazysh/mosh-transport@0.23.0
+
+## 0.22.0
+
+### Patch Changes
+
+- @lazysh/common@0.22.0
+  - @lazysh/display-idle@0.22.0
+  - @lazysh/et-transport@0.22.0
+  - @lazysh/mosh-transport@0.22.0
+
+## 0.21.0
+
+### Minor Changes
+
+- a8c7fba: Add Zellij tab 1–20 quick access through existing typed native actions while preserving drafts and original session/access ownership.
+
+### Patch Changes
+
+- @lazysh/common@0.21.0
+  - @lazysh/display-idle@0.21.0
+  - @lazysh/et-transport@0.21.0
+  - @lazysh/mosh-transport@0.21.0
+
+## 0.20.0
+
+### Minor Changes
+
+- 5a4cef4: Add explicit pinned Noto Sans Mono CJK SC download into existing local font storage, with integrity checks, cancellation and a narrowly scoped asset CSP. No automatic download or font selection.
+
+### Patch Changes
+
+- @lazysh/common@0.20.0
+  - @lazysh/display-idle@0.20.0
+  - @lazysh/et-transport@0.20.0
+  - @lazysh/mosh-transport@0.20.0
+
+## 0.19.0
+
+### Minor Changes
+
+- 1b5a350: Add explicit editable comments to numbered before/after diff lines, preserving observed staged/unstaged and rename context until the user stages a prompt draft.
+- 65a81e4: Add an explicit action to paste a completed uploaded path into its original terminal without Enter, preserving terminal bracketed-paste mode and the editable prompt.
+
+### Patch Changes
+
+- @lazysh/common@0.19.0
+  - @lazysh/display-idle@0.19.0
+  - @lazysh/et-transport@0.19.0
+  - @lazysh/mosh-transport@0.19.0
+
 ## 0.18.0
 
 ### Minor Changes

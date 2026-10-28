@@ -1,6 +1,7 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
-import { useProtectedApi, useProtectedCallback } from './access';
+import { useMountedAccess, useProtectedApi, useProtectedCallback } from './access';
+import type {AttachmentPathPaste} from './attachmentPaste';
 import {useHostUpload} from './useHostUpload';
 import {useHostClipboard} from './useHostClipboard';
 import { useEffect, useRef, useState } from 'react';
@@ -10,10 +11,16 @@ import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageS
 type Selected = { file: File; bytes: Uint8Array; size: ImageSize | null };
 type Stroke = { points: Point[]; color: string; width: number };
 
-export default function AttachmentPanel({ sessionId, onAttach }: { sessionId: string; onAttach?: (path:string)=>void }) {
+export default function AttachmentPanel({ sessionId, onAttach, onPastePath }: { sessionId: string; onAttach?: (path:string)=>void; onPastePath?:(request:AttachmentPathPaste)=>Promise<void> }) {
   useUi();
   const api = useProtectedApi(nativeApi);
   const guard = useProtectedCallback();
+  const owner=useMountedAccess();
+  const originalSession=useRef(sessionId).current;
+  const latestSession=useRef(sessionId);latestSession.current=sessionId;
+  const completed=useRef<{path:string}|null>(null);
+  const pasting=useRef<{target:{path:string};claimed:boolean}|null>(null);
+  const [pasteBusy,setPasteBusy]=useState(false);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [destination, setDestination] = useState('');
   const [crop, setCrop] = useState<Crop>({ x: 0, y: 0, width: 1, height: 1 });
@@ -25,19 +32,38 @@ export default function AttachmentPanel({ sessionId, onAttach }: { sessionId: st
   const [uploaded, setUploaded] = useState('');
   const [attachable,setAttachable]=useState(false);
   const [prompt, setPrompt] = useState('');
-  const [notice, setNotice] = useState<UiErrorCause | {key:'attachmentUploaded'|'attachmentCopied'|'attachmentStaged'|'attachmentHostCopied'|'attachmentHostCopyCancelled'}>('');
+  const [notice, setNotice] = useState<UiErrorCause | {key:'attachmentUploaded'|'attachmentCopied'|'attachmentStaged'|'attachmentHostCopied'|'attachmentHostCopyCancelled'|'attachmentPasted'}>('');
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLImageElement | null>(null);
   const generation = useRef(0);
   const stroke = useRef<Stroke | null>(null);
   const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
   const hostClipboard=useHostClipboard(api,sessionId,error=>setError(captureUiError(error)),kind=>setNotice({key:kind==='copied'?'attachmentHostCopied':'attachmentHostCopyCancelled'}));
-  const busy=uploadJob.busy||hostClipboard.busy;
-  function clearCompletion(){hostClipboard.clear();setAttachable(false);}
+  const busy=uploadJob.busy||hostClipboard.busy||pasteBusy;
+  const renderedPasteTarget=completed.current;
+  function clearCompletion(){completed.current=null;hostClipboard.clear();setAttachable(false);}
+  const currentPasteOwner=()=>owner.mounted.current&&owner.access.current()&&latestSession.current===originalSession;
+  async function pastePath(target:{path:string}|null){
+    if(!onPastePath||!target||completed.current!==target||pasting.current||uploadJob.active()||hostClipboard.active()
+      ||!currentPasteOwner()||document.visibilityState!=='visible')return;
+    const job={target,claimed:false};pasting.current=job;setPasteBusy(true);setError('');setNotice('');
+    const current=()=>currentPasteOwner()&&completed.current===target&&pasting.current===job;
+    try{
+      await onPastePath({sessionId:originalSession,path:target.path,claim:()=>{
+        if(!current()||job.claimed||document.visibilityState!=='visible')return false;
+        job.claimed=true;return true;
+      }});
+      if(current()&&document.visibilityState==='visible'){
+        if(!job.claimed)throw new LocalUiError('attachmentPasteUnavailable');
+        setNotice({key:'attachmentPasted'});
+      }
+    }catch(error){if(current()&&document.visibilityState==='visible')setError(captureUiError(error));}
+    finally{if(pasting.current===job){pasting.current=null;if(currentPasteOwner())setPasteBusy(false);}}
+  }
   useEffect(() => () => { generation.current++; source.current = null; }, [sessionId]);
 
   async function choose(file: File) {
-    if (uploadJob.active()||hostClipboard.active()) return;
+    if (uploadJob.active()||hostClipboard.active()||pasting.current) return;
     clearCompletion();
     const current = ++generation.current;
     setError(''); setNotice(''); setSelected(null); setUploaded(''); setStrokes([]); setEditing(false); source.current = null;
@@ -131,6 +157,7 @@ export default function AttachmentPanel({ sessionId, onAttach }: { sessionId: st
       }
       return {path:destination,bytes};
     },(path,uploadId)=>{
+      completed.current=Object.freeze({path});
       setAttachable(true);hostClipboard.completed(uploadId);
       setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
     });
@@ -159,8 +186,8 @@ export default function AttachmentPanel({ sessionId, onAttach }: { sessionId: st
           onPointerMove={event => { if (!stroke.current || !selected.size || stroke.current.points.length >= 1000) return; stroke.current.points.push(imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), selected.size)); redraw(stroke.current); }}
           onPointerUp={() => { if (stroke.current) { const completed = stroke.current; stroke.current = null; setStrokes(values => [...values, completed]); } }} onPointerCancel={() => { stroke.current = null; redraw(); }} />
       </div>}
-      <div className="button-row"><button type="button" className="primary-button" disabled={busy || !destination.trim()} onClick={() => void upload()}>{busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={uploadJob.cancelling} onClick={() => { generation.current++; clearCompletion();if(busy){uploadJob.cancel();setUploaded('');setPrompt('');}else{setSelected(null);setUploaded('');setNotice('');} }}>{uploadJob.cancelling?t('uploadCancelling'):t('attachmentCancel')}</button></div>
+      <div className="button-row"><button type="button" className="primary-button" disabled={busy || !destination.trim()} onClick={() => void upload()}>{uploadJob.busy ? t('attachmentUploading') : t('attachmentUpload')}</button><button type="button" disabled={uploadJob.cancelling||pasteBusy} onClick={() => { generation.current++; clearCompletion();if(busy){uploadJob.cancel();setUploaded('');setPrompt('');}else{setSelected(null);setUploaded('');setNotice('');} }}>{uploadJob.cancelling?t('uploadCancelling'):t('attachmentCancel')}</button></div>
     </div>}
-    {uploaded && <div className="form-stack"><label>{t('attachmentHostPath')}<input readOnly value={shellPath(uploaded)} /></label><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button><div className="button-row"><button type="button" disabled={!hostClipboard.ready||busy} onClick={()=>{setError('');setNotice('');void hostClipboard.copy();}}>{hostClipboard.busy?t('attachmentHostCopying'):t('attachmentHostCopy')}</button>{hostClipboard.busy&&<button type="button" onClick={()=>hostClipboard.clear()}>{t('attachmentHostCancel')}</button>}</div><label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row">{onAttach && attachable && <button type="button" disabled={busy} onClick={guard(()=>{if(!uploadJob.active()&&!hostClipboard.active())onAttach(uploaded);})}>{t('attachmentAddToChat')}</button>}<button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></div>}
+    {uploaded && <div className="form-stack"><label>{t('attachmentHostPath')}<input readOnly value={shellPath(uploaded)} /></label><button type="button" onClick={() => void copy(shellPath(uploaded))}>{t('attachmentCopyPath')}</button>{onPastePath&&!onAttach&&attachable&&<><button type="button" disabled={busy} onClick={()=>void pastePath(renderedPasteTarget)}>{t(pasteBusy?'attachmentPasting':'attachmentPastePath')}</button><small>{t('attachmentPasteHint')}</small></>}<div className="button-row"><button type="button" disabled={!hostClipboard.ready||busy} onClick={()=>{setError('');setNotice('');void hostClipboard.copy();}}>{hostClipboard.busy?t('attachmentHostCopying'):t('attachmentHostCopy')}</button>{hostClipboard.busy&&<button type="button" onClick={()=>hostClipboard.clear()}>{t('attachmentHostCancel')}</button>}</div><label>{t('attachmentPrompt')}<textarea rows={3} value={prompt} onChange={event => setPrompt(event.target.value)} /></label><div className="button-row">{onAttach && attachable && <button type="button" disabled={busy} onClick={guard(()=>{if(!uploadJob.active()&&!hostClipboard.active())onAttach(uploaded);})}>{t('attachmentAddToChat')}</button>}<button type="button" onClick={() => void copy(prompt)}>{t('attachmentCopyPrompt')}</button><button type="button" disabled={!prompt.trim()} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: prompt } })); setNotice({key:'attachmentStaged'}); }}>{t('attachmentStage')}</button></div><p>{t('attachmentReview')}</p></div>}
   </section>;
 }

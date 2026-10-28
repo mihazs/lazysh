@@ -1,5 +1,44 @@
 # @lazysh/notification-service
 
+## 0.23.0
+
+### Patch Changes
+
+- @lazysh/common@0.23.0
+  - @lazysh/notification-client@0.23.0
+
+## 0.22.0
+
+### Minor Changes
+
+- 54ff6ca: Add opt-in device-bound expiring Web Push event envelopes while retaining legacy and webhook defaults. Native notification display remains separate.
+
+### Patch Changes
+
+- @lazysh/common@0.22.0
+  - @lazysh/notification-client@0.22.0
+
+## 0.21.0
+
+### Patch Changes
+
+- @lazysh/common@0.21.0
+  - @lazysh/notification-client@0.21.0
+
+## 0.20.0
+
+### Patch Changes
+
+- @lazysh/common@0.20.0
+  - @lazysh/notification-client@0.20.0
+
+## 0.19.0
+
+### Patch Changes
+
+- @lazysh/common@0.19.0
+  - @lazysh/notification-client@0.19.0
+
 ## 0.18.0
 
 ### Patch Changes

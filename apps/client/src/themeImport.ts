@@ -48,7 +48,7 @@ export function importedTheme(value: unknown): ImportedTheme {
 export function parseThemeImport(source: string, legacyInfo: ThemeInfo): ImportedTheme {
   if (source.length > 16384 || bytes(source).length > 16384) throw new LocalUiError('validationThemeInputExceeds16KiB');
   let json = source.trim();
-  const shared = json.startsWith('lazysh-theme:') || json.startsWith('moshi-theme:');
+  const shared = json.startsWith('lazysh-theme:');
   if (!shared && bytes(source).length > 8192) throw new LocalUiError('validationThemeJSONExceeds8KiB');
   if (shared) {
     const encoded = json.slice(json.indexOf(':') + 1);

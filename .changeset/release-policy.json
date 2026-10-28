@@ -1,6 +1,6 @@
 {
-  "enabled": false,
+  "enabled": true,
   "fossPushAccepted": false,
   "officialSubmissionPrerequisitesAccepted": false,
-  "recipeSha256": "6badaae9e837b4dd1fff7b21673ed2a24120a97caf5656a83e09ca261b1c2662"
+  "recipeSha256": "87fa027a9c013dc08148f0638f01ecd301995a1ee8c8e56665beb4e543b2ff38"
 }

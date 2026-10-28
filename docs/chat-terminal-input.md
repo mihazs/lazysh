@@ -170,7 +170,7 @@ Primary contracts: [tmux 3.4 manual](https://github.com/tmux/tmux/blob/3.4/tmux.
 [literal key injection](https://github.com/tmux/tmux/blob/3.4/cmd-send-keys.c),
 [native paste](https://github.com/tmux/tmux/blob/3.4/cmd-paste-buffer.c),
 [argument parsing](https://github.com/tmux/tmux/blob/3.4/cmd-parse.y), and
-[Moshi Chat documentation](https://getmoshi.app/docs/chat-view). Moshi's published
+reference client Chat documentation (source URL omitted). The reference client's published
 behavior describes same-terminal prompts and an Escape stop request; it does not
 provide an atomic foreground-process guarantee.
 

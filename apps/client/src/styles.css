@@ -1541,6 +1541,7 @@ button svg {
 .repository-diff td:nth-child(1), .repository-diff td:nth-child(3) { color: var(--muted); user-select: none; width: 3ch; }
 .repository-diff .change td:nth-child(2) { background: rgba(220, 80, 80, .10); }
 .repository-diff .change td:nth-child(4) { background: rgba(80, 180, 110, .10); }
+.repository-diff .diff-line-comment { display: block; min-width: 28px; min-height: 28px; padding: 2px 6px; margin-top: 3px; }
 .repository-diff .diff-hunk { font-family: inherit; font-weight: normal; color: var(--muted); }
 @media (max-width: 700px) { .repository-layout { grid-template-columns: minmax(0, 1fr); } .repository-list { max-height: 230px; } }
 .terminal-toolbar-toggle { text-align: right; padding: 0 12px; }
@@ -1670,3 +1671,5 @@ button svg {
 .theme-qr-panel { margin-block: 12px; padding: 10px; border: 1px solid var(--theme-border, #343d31); border-radius: 7px; }
 .theme-qr-panel video { display: block; width: 100%; max-width: 500px; max-height: 320px; object-fit: contain; background: #000; }
 .theme-qr-panel video[hidden] { display: none; }
+
+.font-license { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }

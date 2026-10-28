@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/agent",
-  "version": "0.18.0",
+  "version": "0.23.0",
   "private": true,
   "scripts": {
     "build": "cargo build --release --locked --package lazysh-agent",

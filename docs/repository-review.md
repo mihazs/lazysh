@@ -8,7 +8,7 @@ unavailable faces fall through to the same configured fallback stack. Changing a
 font updates the displayed diff without fetching it again, replacing the selected
 file or changing annotation drafts. The diff keeps its existing text size; file
 source previews and the legacy raw patch view are outside this font-matching slice.
-This implements the documented [Moshi diff font behavior](https://getmoshi.app/docs/diff-viewer#font)
+This implements the documented reference client diff font behavior (source URL omitted)
 without a subscription gate. Desktop/phone Chromium acceptance checks actual
 loaded font styles; physical native WebView rendering is not established by them.
 
@@ -27,3 +27,33 @@ To comment on source, enter a line number, choose **Add line comment**, and edit
 - Historical submodules are identified without accessing another repository. Historical symlinks show their stored target text; image previews require regular files.
 
 Repository review is read-only. It does not stage changes, run external diff/text conversion helpers, check out revisions or write fetched content to the device. Paths are passed as quoted literal pathspecs, and historical revisions use full Git object identifiers.
+
+
+## Comment on a diff line
+
+In a staged or unstaged text diff, choose **+** beside a numbered Before or After
+line. Edit the note, then choose **Use in next prompt** to stage it with the
+original SSH session. Nothing is sent automatically. Both sides are independent;
+removed lines can be discussed without pretending they still exist in the current
+file. Hunk headings, empty sides and binary files have no line-comment action.
+
+A note records the displayed repository, selected file, side, line and staged or
+unstaged selection. Rename source/destination are retained as observed context.
+The existing native command deliberately uses `--no-renames` with the selected
+literal pathspec: for a staged rename followed by unstaged edits, both sides of
+that unstaged diff refer to the selected **new** path. The old rename path is not
+substituted as the before-side location. Pure staged additions expose only actual
+after-side lines. The note is not a Git object ID or a guarantee the file remains
+unchanged; review paths and lines before sending if the agent continued editing.
+
+Switching files or diff selections preserves the original note references and
+text. Editing or removing notes clears the old staging/copy status. Session
+changes discard that panel's notes, and an old mount/access lease cannot stage
+or copy after revocation. The existing shared limit remains twenty notes, two
+thousand characters per note, and 65,536 characters for staged prompt text.
+
+This implements the documented reference client diff/file annotation behavior (source URL omitted)
+within the diff-review feature group (source URL omitted).
+The desktop product itself is free; this does not claim annotation is a separate
+paid entitlement. Browser/native IPC fixtures do not establish remote-device or
+full repository-review parity.

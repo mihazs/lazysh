@@ -9,7 +9,7 @@ import {t,uiI18n} from './i18n/core';
 import {qrFrameSize,qrImageBytes,QR_IMAGE_LIMIT} from './themeQr';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn(),isTauri:vi.fn()}));
 const png=new Uint8Array([137,80,78,71,13,10,26,10]),jpeg=new Uint8Array([255,216,255,1]);
-const payload='moshi-theme:'+btoa(JSON.stringify({v:1,name:'QR fixture',mode:'dark',colors:{background:'#000000',foreground:'#ffffff'}}));
+const payload='lazysh-theme:'+btoa(JSON.stringify({v:1,name:'QR fixture',mode:'dark',colors:{background:'#000000',foreground:'#ffffff'}}));
 let permission:ReturnType<typeof vi.fn>,stop:ReturnType<typeof vi.fn>,media:MediaStream,draw:ReturnType<typeof vi.fn>;
 function authority(locked=false){applyAccessStatus({initialized:true,supported:true,enabled:true,locked,reason:'QR fixture',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),...(locked?{}:{nonce:'a'.repeat(64)})});}
 function image(bytes=png){const file=new File([bytes],'qr.png',{type:'image/png'});Object.defineProperty(file,'arrayBuffer',{configurable:true,value:vi.fn(async()=>bytes.slice().buffer)});return file;}

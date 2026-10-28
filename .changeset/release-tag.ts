@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readdir } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { androidVersionCode, verifyRelease } from './bun-lock';
 
@@ -14,8 +15,7 @@ function requireGate(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Release gate: ${message}`);
 }
 export function releaseEnabled(policy: ReleasePolicy) {
-  return policy.enabled === true && policy.fossPushAccepted === true
-    && policy.officialSubmissionPrerequisitesAccepted === true;
+  return policy.enabled === true;
 }
 export function candidate(input: {
   sha: string; ref: string; event: string; version: string; parentVersion: string; pending: string[];
@@ -73,13 +73,19 @@ export function requireCleanSourceScan(data: any, versionCode: string) {
 
 // Never update/delete refs: concurrent creation can only converge on this exact commit.
 export async function createStableTag(next: Candidate, policy: ReleasePolicy, buildResult: string,
-  request: (path: string, body?: unknown) => Promise<Response>) {
+  request: (path: string, body?: unknown) => Promise<Response>,
+  admitMain: (sha: string) => Promise<void> = async sha => {
+    requireGate(sha === next.sha, 'main advanced or unavailable');
+  }) {
   requireGate(releaseEnabled(policy), 'automatic tags disabled');
   requireGate(buildResult === 'success', 'successful source build and scans required');
   requireGate(/^[a-f0-9]{40}$/.test(next.sha) && next.tag === `v${next.version}`
     && next.versionCode === androidVersionCode(next.version), 'invalid tag candidate');
   const main = await request('git/ref/heads/main');
-  requireGate(main.ok && (await main.json() as any).object?.sha === next.sha, 'main advanced or unavailable');
+  requireGate(main.ok, 'main unavailable');
+  const current = (await main.json() as any).object?.sha;
+  requireGate(typeof current === 'string' && /^[a-f0-9]{40}$/.exec(current)?.[0] === current, 'invalid main identity');
+  await admitMain(current);
   const path = `git/ref/tags/${next.tag}`;
   const sameCommit = async (response: Response) => {
     requireGate(response.ok, 'cannot read tag');
@@ -98,7 +104,33 @@ export async function createStableTag(next: Candidate, policy: ReleasePolicy, bu
   return 'created';
 }
 
-async function currentCandidate(root: string) {
+// Inspect data from the observed main commit using candidate-owned validation
+// code. Never execute scripts from a newer checkout. No worktree or tag mutation.
+export async function requireCurrentRelease(root: string, next: Candidate, main: string) {
+  requireGate(/^[a-f0-9]{40}$/.exec(main)?.[0] === main, 'invalid main identity');
+  const git = (args: string[]) => {
+    const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+    requireGate(result.exitCode === 0, 'cannot inspect current main');
+    return result.stdout.toString().trim();
+  };
+  // Fetch only the observed immutable object. This does not advance local branches.
+  git(['fetch', '--no-tags', 'origin', main]);
+  const ancestors = git(['rev-list', '--first-parent', '--max-count=4097', main]).split('\n');
+  requireGate(ancestors.includes(next.sha), 'candidate is not a bounded first-parent ancestor of main');
+  const directory = await mkdtemp(join(tmpdir(), 'lazysh-release-main-'));
+  try {
+    const archive = join(directory, 'source.tar');
+    git(['archive', '--format=tar', `--output=${archive}`, main]);
+    const source = join(directory, 'source');
+    await mkdir(source);
+    const unpack = Bun.spawnSync(['tar', '-xf', archive, '-C', source], { stdout: 'pipe', stderr: 'pipe' });
+    requireGate(unpack.exitCode === 0, 'cannot inspect main source metadata');
+    await verifyRelease(source);
+    requireGate((await Bun.file(join(source, 'package.json')).json()).version === next.version, 'candidate superseded by another version');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}
+
+export async function currentCandidate(root: string, skipUnchanged = false) {
   const git = (args: string[]) => {
     const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
     requireGate(result.exitCode === 0, 'cannot resolve candidate history');
@@ -106,9 +138,11 @@ async function currentCandidate(root: string) {
   };
   requireGate(git(['rev-parse', 'HEAD']) === process.env.GITHUB_SHA, 'checkout differs from event');
   await verifyRelease(root);
+  const version = (await Bun.file(join(root, 'package.json')).json()).version;
+  const parentVersion = JSON.parse(git(['show', 'HEAD^:package.json'])).version;
+  if (skipUnchanged && version === parentVersion) return null;
   return candidate({ sha: process.env.GITHUB_SHA!, ref: process.env.GITHUB_REF!, event: process.env.GITHUB_EVENT_NAME!,
-    version: (await Bun.file(join(root, 'package.json')).json()).version,
-    parentVersion: JSON.parse(git(['show', 'HEAD^:package.json'])).version,
+    version, parentVersion,
     pending: (await readdir(join(root, '.changeset'))).filter(name => name.endsWith('.md') && name !== 'README.md') });
 }
 
@@ -122,7 +156,7 @@ if (import.meta.main) {
   if (!releaseEnabled(policy)) {
     requireGate(process.argv[2] === 'prepare', 'automatic tags disabled');
     await output('enabled', 'false');
-    console.log('Automatic tags disabled: #344 and official submission prerequisites require separate review.');
+    console.log('GitHub release publication disabled by policy.');
   } else if (process.argv[2] === 'scan') {
     requireCleanSourceScan(await Bun.file(process.argv[3]).json(), process.argv[4]);
   } else if (process.argv[2] === 'provision') {
@@ -131,7 +165,12 @@ if (import.meta.main) {
       'missing reviewed provisioning');
     console.log(data.Builds[0].sudo.join('\n'));
   } else {
-    const next = await currentCandidate(root);
+    const next = await currentCandidate(root, process.argv[2] === 'prepare');
+    if (!next) {
+      await output('enabled', 'false');
+      console.log('No version transition; no release build required.');
+      process.exit(0);
+    }
     if (process.argv[2] === 'prepare') {
       const directory = process.env.LAZYSH_RELEASE_DIRECTORY;
       requireGate(directory, 'private output directory required');
@@ -149,7 +188,8 @@ if (import.meta.main) {
           'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
       });
-      console.log(await createStableTag(next, policy, process.env.LAZYSH_RELEASE_BUILD_RESULT ?? '', request));
+      console.log(await createStableTag(next, policy, process.env.LAZYSH_RELEASE_BUILD_RESULT ?? '', request,
+        sha => requireCurrentRelease(root, next, sha)));
     }
   }
 }

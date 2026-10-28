@@ -26,7 +26,7 @@ stacked feature branch. Merging an ordinary PR does not publish a release.
 
 Changesets updates the private Bun package versions. `bun run release:version`
 then uses Bun's native `pm version --no-git-tag-version` for the root tooling
-package and **cargo-edit 0.13.8** `cargo set-version --workspace` for the Rust
+package and the checked-in release synchronizer for the Rust
 workspace version and lockfile. All owned Cargo packages inherit that workspace
 version. Vendored `portable-pty` and deep-link versions remain independent.
 The App's About action and About description read the same client manifest
@@ -94,11 +94,9 @@ separate work under #333. The SDK-gated generator fixture compares the real
 Tauri-generated properties with this committed format; it deliberately stops
 before compilation and does not establish successful release APK acceptance.
 
-Install the native editor explicitly before a local version operation:
+Run the checked-in synchronizer through the normal local version operation:
 
 ```sh
-cargo install cargo-edit --version 0.13.8 --locked --no-default-features --features set-version --root "$HOME/.cache/lazysh-release-tools"
-export PATH="$HOME/.cache/lazysh-release-tools/bin:$PATH"
 bun install --frozen-lockfile
 bun run release:check
 bun run test:release

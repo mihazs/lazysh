@@ -38,7 +38,7 @@ Browser previews bind only device loopback and connect through existing SSH. The
 
 ## Acceptance and delivery
 
-The [Project](https://github.com/users/mihazs/projects/2) and [parity epic](https://github.com/mihazs/lazysh/issues/1) are the delivery record. The [evidence catalog](moshi-evidence.md) lists the full Moshi boundary and unresolved runtime claims. Current implementation work is reviewed through PRs; future features are separate sub-issues with executable acceptance criteria.
+The [Project](https://github.com/users/mihazs/projects/2) and [parity epic](https://github.com/mihazs/lazysh/issues/1) are the delivery record. The [evidence catalog](reference-evidence.md) lists the full reference client boundary and unresolved runtime claims. Current implementation work is reviewed through PRs; future features are separate sub-issues with executable acceptance criteria.
 
 For this first slice: build the native Linux app; establish real SSH password/key and first-use/changed-key tests; test UTF-8 PTY/resize/close; exercise host/credential UI and native IPC contracts; run the companion CLI under malformed/oversized/concurrent input; verify file limits and no-overwrite transfers. Mobile releases and performance claims need real device measurements.
 
@@ -46,4 +46,4 @@ Rollback is removal of the client/optional hooks. Multiplexer sessions remain ow
 
 ## Unresolved delivery work
 
-This remains **not full Moshi parity**. Mosh iOS/Windows and mobile transport roaming acceptance, remaining native transcript formats and live verification, broader same-pane chat/approvals, Windows/Linux biometric gating and app resume locks, remaining gesture/appearance controls, additional voice engines, visual DOM annotations, background push delivery, Apple extension/watchOS acceptance, real SDK/device validation of continuous simulator video and iOS touch, and full native release/performance gates remain open. Encrypted sync, sharing, biometric hardware and Apple speech still require real-service/device acceptance. Implemented subsets do not close their broader issues; see #5–#20 for acceptance conditions.
+This remains **not full reference client parity**. Mosh iOS/Windows and mobile transport roaming acceptance, remaining native transcript formats and live verification, broader same-pane chat/approvals, Windows/Linux biometric gating and app resume locks, remaining gesture/appearance controls, additional voice engines, visual DOM annotations, background push delivery, Apple extension/watchOS acceptance, real SDK/device validation of continuous simulator video and iOS touch, and full native release/performance gates remain open. Encrypted sync, sharing, biometric hardware and Apple speech still require real-service/device acceptance. Implemented subsets do not close their broader issues; see #5–#20 for acceptance conditions.

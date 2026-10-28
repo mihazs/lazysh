@@ -9,9 +9,9 @@ RepoType: git
 Repo: https://github.com/mihazs/lazysh.git
 
 Builds:
-  - versionName: 0.14.0
-    versionCode: 14000
-    commit: 9c8d067f378b676d37097bf3bf883e9946b516b9
+  - versionName: 0.22.0
+    versionCode: 22000
+    commit: 3dc44f47dac1c5fa29a8e3220ee82efd46484f4d
     sudo:
       - apt-get update
       - apt-get install -y rustup nodejs golang-go build-essential cmake ninja-build
@@ -58,5 +58,5 @@ Builds:
 # Initial recipe validation only; tagging and automatic publishing are separate gates.
 AutoUpdateMode: None
 UpdateCheckMode: None
-CurrentVersion: 0.14.0
-CurrentVersionCode: 14000
+CurrentVersion: 0.22.0
+CurrentVersionCode: 22000

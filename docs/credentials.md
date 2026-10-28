@@ -40,7 +40,7 @@ background entry. Temporary inactivity from a system sheet applies a privacy cov
 without cancelling that sheet's authentication. macOS covers and locks on hiding,
 minimizing, display/system sleep and user-session deactivation. Simply focusing
 another desktop application does not lock this implementation. These are explicit
-lazysh policies; Moshi's documentation does not specify its desktop triggers.
+lazysh policies; the reference client's documentation does not specify its desktop triggers.
 Enabled protection also starts locked after a cold launch. A separate nonsecret,
 device-local policy file records enable intent atomically with private permissions.
 Startup keeps recorded protection on even if the protected proof is missing. A

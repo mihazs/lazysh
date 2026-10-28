@@ -4,6 +4,7 @@ pub use lazysh_notification_client::{
 };
 pub mod push;
 mod push_enrollment;
+mod push_event;
 mod store;
 use axum::{
     extract::{DefaultBodyLimit, Path, State},

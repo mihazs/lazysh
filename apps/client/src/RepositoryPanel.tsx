@@ -1,5 +1,5 @@
 import {t, useUi, formatNumber} from './i18n/core';
-import { useProtectedApi } from './access';
+import { useMountedAccess, useProtectedApi } from './access';
 import { useProtectedInvoke } from './access';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -12,12 +12,26 @@ import {usePreferences} from './preferences';
 import {fontFamilyFor,useDeviceFonts} from './fonts';
 
 type Change = { path: string; originalPath: string | null; index: string; worktree: string };
+function renamePath(change?: Change) { return change && (change.index === 'R' || change.worktree === 'R') ? change.originalPath : null; }
 type Commit = { oid: string; subject: string };
 type Entry = { path: string; oid: string; kind: string; size: number | null };
 type Blob = { text: string | null; binary: boolean; bytes: number };
 type Diff = { patch: string; binary: boolean };
 type Review = { path: string; revision: string; file: string; staged?: boolean };
-type Annotation = { repository: string; file: string; revision: string; line: number; text: string };
+type DiffSide = 'before' | 'after';
+type DiffSource = Readonly<{sessionId: string; repository: string; file: string; originalPath: string | null; staged: boolean}>;
+type Annotation = { sessionId: string; repository: string; file: string; revision: string; line: number; text: string; diff?: Readonly<{staged: boolean; side: DiffSide; originalPath: string | null}> };
+function annotationPath(note: Annotation) { return `${note.repository.replace(/\/$/, '')}/${note.file}:${note.line}`; }
+function annotationKey(note: Annotation) { return JSON.stringify([note.sessionId, note.repository, note.file, note.revision, note.line, note.diff]); }
+function annotationReference(note: Annotation) {
+  if (!note.diff) return `${annotationPath(note)}${note.revision ? ` (commit ${note.revision})` : ' (working tree)'}`;
+  const {staged, side, originalPath} = note.diff;
+  return `${annotationPath(note)} (observed ${staged ? 'staged' : 'unstaged'} diff, ${side}${originalPath ? `; rename ${originalPath} -> ${note.file}` : ''})`;
+}
+function annotationLabel(note: Annotation) {
+  if (!note.diff) return `${note.repository}/${note.file}:${note.line}`;
+  return t('repoDiffReference', {path: annotationPath(note), stage: t(note.diff.staged ? 'repoStaged' : 'repoUnstaged'), side: t(note.diff.side === 'before' ? 'repoBefore' : 'repoAfter'), rename: note.diff.originalPath ? t('repoDiffRename', {from: note.diff.originalPath, to: note.file}) : ''});
+}
 type Image = { mime: string; data: number[] };
 type Line = { before?: number; after?: number; left?: string; right?: string; kind: 'context' | 'change' | 'hunk' };
 
@@ -88,6 +102,9 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
   const fonts=useDeviceFonts();
   const api = useProtectedApi(nativeApi);
   const invoke = useProtectedInvoke();
+  const {access, mounted} = useMountedAccess();
+  const currentSession = useRef(sessionId); currentSession.current = sessionId;
+  const noteRevision = useRef(0);
   const [path, setPath] = useState('.');
   const [draft, setDraft] = useState('.');
   const [changes, setChanges] = useState<Change[]>([]);
@@ -100,7 +117,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState('');
   const [content, setContent] = useState<Blob | null>(null);
-  const [diff, setDiff] = useState<Diff | null>(null);
+  const [diff, setDiff] = useState<(Diff & {source: DiffSource}) | null>(null);
   const [preview, setPreview] = useState('');
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [draftStatus, setDraftStatus] = useState<'' | 'repoCommentsStaged' | 'repoCommentsCopied'>('');
@@ -110,28 +127,30 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<FileErrorState>('');
   const request = useRef(0);
   useEffect(() => {
+    setAnnotations([]); setDraftStatus(''); noteRevision.current++;
     const saved = readReview(sessionId);
     if (saved) void load(saved.path, saved);
     return () => { request.current++; };
   }, [sessionId]);
 
+  const ownsRequest = (value: number) => value === request.current && mounted.current && access.current();
   async function load(next: string, saved?: Review) {
     const current = ++request.current;
     setBusy(true); setError('');
     try {
       const result = parseRepositoryStatus(await invoke('repository_status', { sessionId, path: next }));
-      if (current !== request.current) return;
+      if (!ownsRequest(current)) return;
       setPath(result.path); setDraft(result.path); setChanges(result.changes); setRevision(''); setDirectory(''); setEntries([]); setSelected(''); setContent(null); setDiff(null); setPreview('');
       try {
         const commits = parseHistory(await invoke('repository_history', { sessionId, path: result.path }));
-        if (current === request.current) { setHistory(commits); setHistoryOffset(commits.length); setOlderHistory(commits.length === 50); }
-        if (current === request.current && saved?.path === result.path && saved.file) {
+        if (ownsRequest(current)) { setHistory(commits); setHistoryOffset(commits.length); setOlderHistory(commits.length === 50); }
+        if (ownsRequest(current) && saved?.path === result.path && saved.file) {
           if (saved.revision) await browse(saved.revision, result.path, saved);
-          else await open(saved.file, saved.staged, undefined, result.path, '');
+          else await open(saved.file, saved.staged, undefined, result.path, '', renamePath(result.changes.find(change => change.path === saved.file)));
         }
-      } catch (e) { if (current === request.current) { setHistory([]); setError({history:captureUiError(e)}); } }
-    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
-    finally { if (current === request.current) setBusy(false); }
+      } catch (e) { if (ownsRequest(current)) { setHistory([]); setError({history:captureUiError(e)}); } }
+    } catch (e) { if (ownsRequest(current)) setError(captureUiError(e)); }
+    finally { if (ownsRequest(current)) setBusy(false); }
   }
   async function browse(value: string, repositoryPath = path, saved?: Review, targetDirectory = '') {
     const current = ++request.current;
@@ -141,56 +160,86 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
     setBusy(true);
     try {
       const tree = parseTree(await invoke('repository_tree', { sessionId, path: repositoryPath, revision: value, directory: nextDirectory }));
-      if (current === request.current) setEntries(tree);
-      if (current === request.current && saved?.file) {
+      if (ownsRequest(current)) setEntries(tree);
+      if (ownsRequest(current) && saved?.file) {
         const entry = tree.find(entry => entry.path === saved.file);
         if (entry) await open(entry.path, undefined, entry, repositoryPath, value);
       }
-    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
-    finally { if (current === request.current) setBusy(false); }
+    } catch (e) { if (ownsRequest(current)) setError(captureUiError(e)); }
+    finally { if (ownsRequest(current)) setBusy(false); }
   }
-  async function open(filePath: string, staged?: boolean, entry?: Entry, repositoryPath = path, selectedRevision = revision) {
+  async function open(filePath: string, staged?: boolean, entry?: Entry, repositoryPath = path, selectedRevision = revision, originalPath: string | null = null) {
     if (entry?.kind === 'tree') { await browse(selectedRevision, repositoryPath, undefined, entry.path); return; }
     const current = ++request.current;
     setSelected(filePath); setContent(null); setDiff(null); setPreview(''); setBusy(true); setError(''); setMarkdown(false);
     try {
       if (staged === undefined && /\.(png|jpe?g|gif|webp)$/i.test(filePath) && (!entry || entry.kind === 'blob')) {
         const value = imageUrl(await invoke('repository_image', { sessionId, path: repositoryPath, filePath, objectId: entry?.oid || null }));
-        if (current === request.current) setPreview(value);
+        if (ownsRequest(current)) setPreview(value);
       } else if (entry) {
         if (entry.kind !== 'blob' && entry.kind !== 'symlink') throw new LocalUiError('repoSubmodule');
         const value = parseBlob(await invoke('repository_blob', { sessionId, path: repositoryPath, objectId: entry.oid }));
-        if (current === request.current) setContent(value);
+        if (ownsRequest(current)) setContent(value);
       } else if (staged === undefined) {
         const text = await api.readFile(sessionId, `${repositoryPath.replace(/\/$/, '')}/${filePath}`);
         if (typeof text !== 'string' || text.length > 1048576) throw new LocalUiError('repoInvalidFile');
-        if (current === request.current) setContent({ text: text.includes('\0') ? null : text, binary: text.includes('\0'), bytes: new TextEncoder().encode(text).length });
+        if (ownsRequest(current)) setContent({ text: text.includes('\0') ? null : text, binary: text.includes('\0'), bytes: new TextEncoder().encode(text).length });
       } else {
         const value = parseDiff(await invoke('repository_diff', { sessionId, path: repositoryPath, filePath, staged }));
-        if (current === request.current) setDiff(value);
+        if (ownsRequest(current)) setDiff({...value, source: {sessionId, repository: repositoryPath, file: filePath, originalPath, staged}});
       }
-      if (current === request.current) {
+      if (ownsRequest(current)) {
         try { sessionStorage.setItem(`lazysh-review:${sessionId}`, JSON.stringify({ path: repositoryPath, revision: selectedRevision, file: filePath, staged })); } catch { /* Storage is optional. */ }
       }
-    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
-    finally { if (current === request.current) setBusy(false); }
+    } catch (e) { if (ownsRequest(current)) setError(captureUiError(e)); }
+    finally { if (ownsRequest(current)) setBusy(false); }
   }
   const visibleEntries = entries.filter(entry => entry.path.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
   const visibleChanges = changes.filter(change => change.path.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
+  const diffRows = useMemo(() => diff ? diffLines(diff.patch) : [], [diff]);
   const lineCount = useMemo(() => (content?.text || '').split('\n').length, [content?.text]);
-  function annotate(line: number) {
-    if (annotations.length >= 20 || annotations.some(note => note.repository === path && note.file === selected && note.revision === revision && note.line === line)) return;
-    setAnnotations([...annotations, { repository: path, file: selected, revision, line, text: '' }]);
+  function changeNotes(update: (notes: Annotation[]) => Annotation[]) {
+    if (!mounted.current || !access.current()) return;
+    noteRevision.current++; setDraftStatus(''); setAnnotations(update);
   }
-  const annotationText = annotations.filter(note => note.text.trim()).map(note => `${note.repository.replace(/\/$/, '')}/${note.file}:${note.line}${note.revision ? ` (commit ${note.revision})` : ' (working tree)'}\n${note.text.trim()}`).join('\n\n');
+  function appendNote(note: Annotation) {
+    if (note.sessionId !== currentSession.current) return;
+    changeNotes(notes => notes.length >= 20 || notes.some(existing => annotationKey(existing) === annotationKey(note)) ? notes : [...notes, note]);
+  }
+  function annotate(line: number) {
+    if (busy || !Number.isSafeInteger(line) || line < 1 || line > lineCount) return;
+    appendNote({sessionId, repository: path, file: selected, revision, line, text: ''});
+  }
+  function annotateDiff(side: DiffSide, line: number) {
+    if (!diff || busy || !Number.isSafeInteger(line) || line < 1) return;
+    const source = diff.source;
+    appendNote({sessionId: source.sessionId, repository: source.repository, file: source.file, revision: '', line, text: '', diff: {staged: source.staged, side, originalPath: source.originalPath}});
+  }
+  const annotationText = annotations.filter(note => note.text.trim()).map(note => `${annotationReference(note)}\n${note.text.trim()}`).join('\n\n');
+  function notesCurrent() { return mounted.current && access.current() && currentSession.current === sessionId && annotations.every(note => note.sessionId === sessionId); }
+  function stageNotes() {
+    if (!notesCurrent() || !annotationText || annotationText.length > 65536) return;
+    noteRevision.current++;
+    window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', {detail: {sessionId, text: annotationText}})); setDraftStatus('repoCommentsStaged');
+  }
+  async function copyNotes() {
+    if (!notesCurrent() || !annotationText) return;
+    const original = ++noteRevision.current;
+    try { await navigator.clipboard.writeText(annotationText); if (notesCurrent() && original === noteRevision.current) setDraftStatus('repoCommentsCopied'); }
+    catch (e) { if (notesCurrent() && original === noteRevision.current) setError(captureUiError(e)); }
+  }
+  function diffLineNumber(side: DiffSide, line?: number) {
+    if (!Number.isSafeInteger(line) || !line || line < 1) return line;
+    return <>{line}<button className="diff-line-comment" aria-label={t('repoDiffAdd', {side: t(side === 'before' ? 'repoBefore' : 'repoAfter'), line})} disabled={busy || annotations.length >= 20} onClick={() => annotateDiff(side, line)}>+</button></>;
+  }
   async function older() {
     const current = ++request.current;
     setBusy(true); setError('');
     try {
       const commits = parseHistory(await invoke('repository_history', { sessionId, path, offset: historyOffset, revision: history[0]?.oid }));
-      if (current === request.current) { setHistory(previous => [...new Map([...previous, ...commits].map(commit => [commit.oid, commit])).values()]); setHistoryOffset(historyOffset + commits.length); setOlderHistory(commits.length === 50); }
-    } catch (e) { if (current === request.current) setError(captureUiError(e)); }
-    finally { if (current === request.current) setBusy(false); }
+      if (ownsRequest(current)) { setHistory(previous => [...new Map([...previous, ...commits].map(commit => [commit.oid, commit])).values()]); setHistoryOffset(historyOffset + commits.length); setOlderHistory(commits.length === 50); }
+    } catch (e) { if (ownsRequest(current)) setError(captureUiError(e)); }
+    finally { if (ownsRequest(current)) setBusy(false); }
   }
   return <section className="tool-panel repository-panel" aria-label={t('repoTitle')}>
     <h3>{t('repoTitle')}</h3>
@@ -209,8 +258,8 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
         {changes.length === 0 && history.length > 0 && <p>{t('repoClean')}</p>}
         {visibleChanges.slice(0, 500).map(change => <article key={change.path} className="repository-change"><code>{change.index}{change.worktree} {change.path}</code>{change.originalPath && <small>{t('repoFrom',{path:change.originalPath})}</small>}<div>
           <button disabled={busy} onClick={() => void open(change.path)}>{t('repoRead')}</button>
-          {change.index !== ' ' && change.index !== '?' && <button disabled={busy} onClick={() => void open(change.path, true)}>{t('repoStaged')}</button>}
-          {change.worktree !== ' ' && change.worktree !== '?' && <button disabled={busy} onClick={() => void open(change.path, false)}>{t('repoUnstaged')}</button>}
+          {change.index !== ' ' && change.index !== '?' && <button disabled={busy} onClick={() => void open(change.path, true, undefined, path, revision, renamePath(change))}>{t('repoStaged')}</button>}
+          {change.worktree !== ' ' && change.worktree !== '?' && <button disabled={busy} onClick={() => void open(change.path, false, undefined, path, revision, renamePath(change))}>{t('repoUnstaged')}</button>}
           {change.index === '?' && <small>{t('repoUntracked')}</small>}
         </div></article>)}
       </>}
@@ -222,8 +271,8 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
         <div className="tool-bar"><label>{t('repoCommentLine')}<input type="number" min={1} max={lineCount} value={commentLine} onChange={event => setCommentLine(Number(event.target.value))} /></label><button disabled={!Number.isSafeInteger(commentLine) || commentLine < 1 || commentLine > lineCount || annotations.length >= 20} onClick={() => annotate(commentLine)}>{t('repoAddComment')}</button></div>
         {markdown ? <Markdown components={{ img: () => <span>{t('repoRemoteImage')}</span>, a: ({ children }) => <span>{children}</span> }}>{content.text || ''}</Markdown> : <CodePreview path={selected} text={content.text || ''} />}
       </>)}
-      {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" style={{fontFamily:fontFamilyFor(preferences,fonts)}} aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffLines(diff.patch).map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{line.before}</td><td><pre>{line.left}</pre></td><td>{line.after}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
+      {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" style={{fontFamily:fontFamilyFor(preferences,fonts)}} aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffRows.map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{diffLineNumber('before', line.before)}</td><td><pre>{line.left}</pre></td><td>{diffLineNumber('after', line.after)}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
     </div></div>
-    {annotations.length > 0 && <section className="repository-comments" aria-label={t('repoComments')}><h4>{t('repoNextPrompt')}</h4>{annotations.map((note, index) => <label key={`${note.repository}:${note.file}:${note.revision}:${note.line}`}>{note.repository}/{note.file}:{note.line}<textarea maxLength={2000} value={note.text} onChange={event => setAnnotations(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => setAnnotations(current => current.filter((_, i) => i !== index))}>{t('repoRemoveComment')}</button></label>)}{annotationText.length > 65536 && <p>{t('repoShorten')}</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: annotationText } })); setDraftStatus('repoCommentsStaged'); }}>{t('repoUsePrompt')}</button><button disabled={!annotationText} onClick={() => void navigator.clipboard.writeText(annotationText).then(() => setDraftStatus('repoCommentsCopied')).catch(e => setError(captureUiError(e)))}>{t('repoCopyComments')}</button>{draftStatus && <p role="status">{t(draftStatus)}</p>}</section>}
+    {annotations.length > 0 && <section className="repository-comments" aria-label={t('repoComments')}><h4>{t('repoNextPrompt')}</h4><p className="agent-note">{t('repoSnapshotWarning')}</p>{annotations.map((note, index) => <label key={annotationKey(note)}>{annotationLabel(note)}<textarea maxLength={2000} value={note.text} onChange={event => changeNotes(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => changeNotes(current => current.filter((_, i) => i !== index))}>{t('repoRemoveComment')}</button></label>)}{annotationText.length > 65536 && <p>{t('repoShorten')}</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={stageNotes}>{t('repoUsePrompt')}</button><button disabled={!annotationText} onClick={() => void copyNotes()}>{t('repoCopyComments')}</button>{draftStatus && <p role="status">{t(draftStatus)}</p>}</section>}
   </section>;
 }

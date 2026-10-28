@@ -361,10 +361,11 @@ impl Store {
         connection.query_row("SELECT receipt,event,kind,alias,state,may_sent FROM events WHERE source=?1 AND receipt=?2",params![source.to_string(),id],|r|Ok(Receipt{receipt_id:r.get(0)?,event_id:r.get(1)?,kind:r.get(2)?,alias:r.get(3)?,state:r.get(4)?,may_have_reached_destination:r.get(5)?})).optional()?.ok_or_else(ApiError::not_found)
     }
     pub fn claim(&mut self) -> Result<Option<Job>, ApiError> {
+        let at = now();
         let transaction = self.connection.transaction()?;
-        transaction.execute("UPDATE events SET state=CASE WHEN may_sent=1 THEN 'expired_unknown' ELSE 'expired' END WHERE state='queued' AND expires<=?1",[now()])?;
-        let row:Option<(String,String,i64,i64)>=transaction.query_row("SELECT e.source,e.receipt,e.generation,e.attempts FROM events e JOIN sources s ON s.id=e.source JOIN account a ON a.enabled=1 AND a.generation=e.generation WHERE e.state='queued' AND e.attempts<3 AND e.next<=?1 AND s.active=1 ORDER BY e.rowid LIMIT 1",[now()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-        let Some((source, id, generation, attempts)) = row else {
+        transaction.execute("UPDATE events SET state=CASE WHEN may_sent=1 THEN 'expired_unknown' ELSE 'expired' END WHERE state='queued' AND expires<=?1",[at])?;
+        let row:Option<(String,String,i64,i64,i64)>=transaction.query_row("SELECT e.source,e.receipt,e.generation,e.attempts,e.expires FROM events e JOIN sources s ON s.id=e.source JOIN account a ON a.enabled=1 AND a.generation=e.generation WHERE e.state='queued' AND e.attempts<3 AND e.next<=?1 AND s.active=1 ORDER BY e.rowid LIMIT 1",[at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        let Some((source, id, generation, attempts, event_expires)) = row else {
             transaction.commit()?;
             return Ok(None);
         };
@@ -384,30 +385,35 @@ impl Store {
             let snapshot = match snapshot {
                 Some(value) => value,
                 None => {
-                    let active: Option<String> = transaction
+                    let active: Option<(Option<String>, i64)> = transaction
                         .query_row(
-                            "SELECT active FROM push_device WHERE id=1 AND revoked=0",
+                            "SELECT active,generation FROM push_device WHERE id=1 AND revoked=0",
                             [],
-                            |r| r.get(0),
+                            |r| Ok((r.get(0)?, r.get(1)?)),
                         )
-                        .optional()?
-                        .flatten();
-                    let Some(active) = active else {
+                        .optional()?;
+                    let Some((Some(active), device_generation)) = active else {
                         transaction.commit()?;
                         return Ok(None);
                     };
+                    let active = crate::push_event::capture(
+                        config,
+                        active,
+                        device_generation,
+                        at,
+                        event_expires,
+                    )?;
                     transaction
                         .execute("INSERT INTO event_push VALUES(?1,?2)", params![id, active])?;
                     active
                 }
             };
-            let subscription = serde_json::from_str(&snapshot).map_err(|_| ApiError::storage())?;
-            let payload = serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"receiptId":receipt.receipt_id,"eventId":receipt.event_id,"kind":receipt.kind,"alias":receipt.alias})).map_err(|_|ApiError::storage())?;
-            Some(
-                config
-                    .encrypt(&subscription, &payload, 300)
-                    .map_err(|_| ApiError::storage())?,
-            )
+            let Some(wire) = crate::push_event::encrypted(config, &snapshot, &receipt, at)? else {
+                transaction.execute("UPDATE events SET state=CASE WHEN may_sent=1 THEN 'expired_unknown' ELSE 'expired' END WHERE receipt=?1",[&id])?;
+                transaction.commit()?;
+                return Ok(None);
+            };
+            Some(wire)
         } else {
             None
         };

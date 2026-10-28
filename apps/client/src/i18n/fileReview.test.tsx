@@ -93,3 +93,27 @@ it.each(['session','unmount','lease'] as const)('does not expose a late source p
   expect(screen.queryByRole('button',{name:t('codeHighlight')})).toBeNull();
   expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='read_file')).toHaveLength(1);
 });
+it('translates diff-side actions and snapshot references without changing note identity or original authority',async()=>{
+  const events=vi.fn();window.addEventListener('lazysh-prompt-draft',events);
+  try{
+    render(<RepositoryPanel sessionId={fileReviewSession}/>);
+    fireEvent.click(screen.getByRole('button',{name:t('repoOpen')}));
+    fireEvent.click(await screen.findByRole('button',{name:t('repoUnstaged')}));
+    fireEvent.click(await screen.findByRole('button',{name:t('repoDiffAdd',{side:t('repoBefore'),line:1})}));
+    const note=screen.getByRole('textbox',{name:new RegExp(fileReviewName+':1')});
+    const literal=' literal {{side}} <img src=never-fetch> ';
+    fireEvent.change(note,{target:{value:literal}});(note as HTMLTextAreaElement).focus();
+    const calls=vi.mocked(invoke).mock.calls.slice();
+    for(const locale of ['pt-BR','es','en']){
+      await act(async()=>{await uiI18n.changeLanguage(locale);});
+      expect(screen.getByRole('button',{name:t('repoDiffAdd',{side:t('repoAfter'),line:1})})).toBeTruthy();
+      expect(screen.getByText(t('repoSnapshotWarning'))).toBeTruthy();
+      expect(screen.getByRole('textbox',{name:new RegExp(fileReviewName+':1')})).toBe(note);
+      expect(document.activeElement).toBe(note);expect(note).toHaveProperty('value',literal);
+      expect(vi.mocked(invoke).mock.calls).toEqual(calls);
+    }
+    fireEvent.click(screen.getByRole('button',{name:t('repoUsePrompt')}));
+    expect(events.mock.calls[0][0].detail).toEqual({sessionId:fileReviewSession,text:`${fileReviewRoot}/${fileReviewName}:1 (observed unstaged diff, before)\nliteral {{side}} <img src=never-fetch>`});
+    expect(document.querySelector('img,script')).toBeNull();
+  }finally{window.removeEventListener('lazysh-prompt-draft',events);}
+});

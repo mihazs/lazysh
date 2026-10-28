@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
 const FIXTURE: &[u8] = include_bytes!("../../fixtures/theme-qr.png");
-const PAYLOAD: &str = "moshi-theme:eyJ2IjoxLCJuYW1lIjoiUVIgZml4dHVyZSIsIm1vZGUiOiJkYXJrIiwiY29sb3JzIjp7ImJhY2tncm91bmQiOiIjMDAwMDAwIiwiZm9yZWdyb3VuZCI6IiNmZmZmZmYifX0=";
+const PAYLOAD: &str = "lazysh-theme:eyJ2IjoxLCJuYW1lIjoiUVIgZml4dHVyZSIsIm1vZGUiOiJkYXJrIiwiY29sb3JzIjp7ImJhY2tncm91bmQiOiIjMDAwMDAwIiwiZm9yZWdyb3VuZCI6IiNmZmZmZmYifX0=";
 fn encoded(image: DynamicImage, format: ImageFormat) -> Vec<u8> {
     let mut output = Cursor::new(Vec::new());
     image.write_to(&mut output, format).unwrap();
@@ -61,7 +61,7 @@ fn camera_feed_fixture_preserves_original_pixels_and_decodes_cropped_preview() {
     let bytes = include_bytes!("../../fixtures/theme-qr-camera-feed.png");
     assert_eq!(
         format!("{:x}", Sha256::digest(bytes)),
-        "16df0b90fe352b80ae22dbdd68b7e0289d2c150df279a70231ce016cc940d9ae"
+        "d3488beef1c4d76d5910c17ff6a67165d3392079533480d4927648d63780f681"
     );
     let feed = image::load_from_memory(bytes).unwrap().into_rgb8();
     assert_eq!(feed.dimensions(), (640, 480));

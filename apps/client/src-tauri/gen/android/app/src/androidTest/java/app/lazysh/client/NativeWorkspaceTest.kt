@@ -64,6 +64,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
+private class NtfyFirstLaunch(started: Long) {
+    val deadline = started + TimeUnit.SECONDS.toNanos(6)
+    var attempted = false
+        private set
+    fun active(now: Long) = now < deadline
+    fun allow(now: Long, ownedPrompt: Boolean): Boolean {
+        if (!active(now) || !ownedPrompt || attempted) return false
+        attempted = true
+        return true
+    }
+}
+private class NtfySettingsScroll(started: Long) {
+    val deadline = started + TimeUnit.SECONDS.toNanos(5)
+    var attempts = 0
+        private set
+    fun active(now: Long) = now < deadline
+    fun scroll(now: Long, ownedSettings: Boolean): Boolean {
+        if (!active(now) || !ownedSettings || attempts >= 2) return false
+        attempts++
+        return true
+    }
+}
+
 @RunWith(AndroidJUnit4::class)
 class NativeWorkspaceTest {
     private fun webView(view: View): WebView? {
@@ -1474,6 +1497,213 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
             awaitDocument(scenario, "fixture deletion", "!document.querySelector(\"$selector\")")
         }
+    }
+
+    @Test fun ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy() {
+        val policy=NtfyFirstLaunch(0)
+        assertTrue("Unowned permission cannot be admitted",!policy.allow(TimeUnit.SECONDS.toNanos(1),false))
+        assertTrue("Delayed owned prompt fits original combined budget",policy.allow(TimeUnit.SECONDS.toNanos(5),true))
+        assertTrue("Permission action is consumed before dispatch",!policy.allow(TimeUnit.SECONDS.toNanos(5),true))
+        assertTrue("Menu must settle before original total deadline",!policy.active(TimeUnit.SECONDS.toNanos(6)))
+        assertTrue("Expired policy cannot dispatch",!NtfyFirstLaunch(0).allow(TimeUnit.SECONDS.toNanos(6),true))
+        val settings=NtfySettingsScroll(0)
+        assertTrue("Unowned settings cannot scroll",!settings.scroll(0,false))
+        repeat(2) { assertTrue("Only two owned preference scrolls allowed",settings.scroll(TimeUnit.SECONDS.toNanos(4),true)) }
+        assertTrue("Scroll allowance cannot be reused",!settings.scroll(TimeUnit.SECONDS.toNanos(4),true))
+        assertTrue("Expired settings cannot scroll",!NtfySettingsScroll(0).scroll(TimeUnit.SECONDS.toNanos(5),true))
+    }
+
+    @Test(timeout = 120_000) fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {
+        val arguments=InstrumentationRegistry.getArguments()
+        org.junit.Assume.assumeTrue("Owned ntfy acceptance only",arguments.getString("lazyshNtfyAcceptance")=="true")
+        val nonce=arguments.getString("lazyshNtfyNonce") ?: error("Owned ntfy nonce required")
+        assertTrue("Invalid owned nonce",nonce.matches(Regex("[a-f0-9]{32}")))
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        assertTrue("Explicit fixture-only debug trust required before private input",
+            (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0 &&
+                context.resources.getIdentifier("lazysh_unifiedpush_test_ca","raw",context.packageName)!=0)
+        val input=File(context.filesDir,".lazysh-ntfy-$nonce.json")
+        val descriptor=Os.open(input.path,OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_NONBLOCK,0)
+        val bytes=java.io.FileInputStream(descriptor).use { stream ->
+            val stat=Os.fstat(descriptor)
+            assertTrue("Private bounded native fixture required",OsConstants.S_ISREG(stat.st_mode) && stat.st_uid==android.os.Process.myUid()
+                && (stat.st_mode and 0x1ff)==0x180 && stat.st_size in 1L..4096L)
+            stream.readNBytes(4097).also { assertTrue("Native fixture bound",it.size==stat.st_size.toInt()) }
+        }
+        assertTrue("Owned input cleanup",input.delete())
+        val data=try { JSONObject(Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .decode(java.nio.ByteBuffer.wrap(bytes)).toString()) } finally { bytes.fill(0) }
+        assertTrue("Owned fixture nonce binding",data.getString("nonce")==nonce)
+        for(name in listOf("relayOrigin","ntfyOrigin","untrustedOrigin")) {
+            val value=data.getString(name)
+            assertTrue("Only owned loopback TLS fixture origins",value.matches(Regex("https://localhost:[1-9][0-9]{0,4}"))
+                && java.net.URI(value).port in 1..65535)
+        }
+        assertTrue("Bounded fixture enrollment",data.getString("enrollment").matches(Regex("[a-f0-9]{64}")))
+        val device=UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        fun node(selector:androidx.test.uiautomator.BySelector,stage:String):androidx.test.uiautomator.UiObject2 {
+            val result=device.wait(Until.findObject(selector),5000)
+            assertTrue(stage,result!=null);return checkNotNull(result)
+        }
+        fun ntfyResource(name:String)=By.res("io.heckel.ntfy",name)
+        assertTrue("Permission controller must be a system application",
+            context.packageManager.getApplicationInfo("com.android.permissioncontroller",0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM!=0)
+        val launch=context.packageManager.getLaunchIntentForPackage("io.heckel.ntfy") ?: error("Owned distributor not installed")
+        context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val firstLaunch=NtfyFirstLaunch(System.nanoTime())
+        val menuSelector=By.pkg("io.heckel.ntfy").desc("More options")
+        var menu:androidx.test.uiautomator.UiObject2?=null
+        var foreground="other";var allow=false;var deny=false;var toolbar=false;var ownedPrompt=false
+        while(firstLaunch.active(System.nanoTime())) {
+            foreground=when(device.currentPackageName) {"io.heckel.ntfy"->"ntfy";"com.android.permissioncontroller"->"permission";"app.lazysh.client"->"lazysh";else->"other"}
+            val choice=device.findObject(By.res("com.android.permissioncontroller","permission_allow_button"))
+            allow=choice!=null
+            deny=device.hasObject(By.res("com.android.permissioncontroller","permission_deny_button"))
+            toolbar=device.hasObject(ntfyResource("toolbar"))
+            val prompt=device.findObject(By.res("com.android.permissioncontroller","permission_message"))?.text
+            ownedPrompt=foreground=="permission" && prompt?.contains(Regex("\\bntfy\\b"))==true && prompt?.contains("notifications",ignoreCase=true)==true
+            menu=device.findObject(menuSelector)
+            if(foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime())) break
+            if(firstLaunch.allow(System.nanoTime(),ownedPrompt && allow))checkNotNull(choice).click()
+            val remaining=firstLaunch.deadline-System.nanoTime()
+            if(remaining>0)Thread.sleep(TimeUnit.NANOSECONDS.toMillis(remaining).coerceIn(1,20))
+        }
+        assertTrue("Distributor menu; foreground=$foreground allow=$allow deny=$deny toolbar=$toolbar ownedPrompt=$ownedPrompt attempted=${firstLaunch.attempted}",
+            foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime()))
+        checkNotNull(menu).click()
+        node(By.pkg("io.heckel.ntfy").text("Settings"),"Distributor settings").click()
+        val settings=NtfySettingsScroll(System.nanoTime())
+        var preference:androidx.test.uiautomator.UiObject2?=null
+        var settingsForeground=false;var settingsToolbar=false;var preferenceList=false
+        while(settings.active(System.nanoTime())) {
+            settingsForeground=device.currentPackageName=="io.heckel.ntfy"
+            settingsToolbar=device.hasObject(ntfyResource("toolbar").hasDescendant(By.text("Settings")))
+            val lists=device.findObjects(By.pkg("io.heckel.ntfy").clazz("androidx.recyclerview.widget.RecyclerView"))
+            preferenceList=lists.size==1
+            val ownedSettings=settingsForeground && settingsToolbar && preferenceList
+            preference=device.findObject(By.pkg("io.heckel.ntfy").text("Default server"))
+            if(ownedSettings && preference!=null && settings.active(System.nanoTime()))break
+            if(settings.scroll(System.nanoTime(),ownedSettings))lists.single().scroll(androidx.test.uiautomator.Direction.DOWN,0.75f)
+            val remaining=settings.deadline-System.nanoTime()
+            if(remaining>0)Thread.sleep(TimeUnit.NANOSECONDS.toMillis(remaining).coerceIn(1,20))
+        }
+        assertTrue("Owned default server; settingsForeground=$settingsForeground settingsToolbar=$settingsToolbar preferenceList=$preferenceList preferenceTarget=${preference!=null} scrollAttempts=${settings.attempts}",
+            settingsForeground && settingsToolbar && preferenceList && preference!=null && settings.active(System.nanoTime()))
+        checkNotNull(preference).click()
+        node(ntfyResource("default_server_dialog_url"),"Default server field").text=data.getString("ntfyOrigin")
+        node(ntfyResource("default_server_dialog_action_save"),"Save owned default server").click()
+        device.pressBack()
+        node(By.pkg("io.heckel.ntfy").desc("Add subscription"),"Owned TLS trust topic").click()
+        node(ntfyResource("add_dialog_subscribe_topic_text"),"Owned trust topic field").text="lazysh-$nonce"
+        node(ntfyResource("add_dialog_action_button").enabled(true),"Review owned TLS certificate").click()
+        val fingerprint=node(ntfyResource("trusted_certificate_fingerprint"),"Certificate fingerprint review")
+            .text.replace(Regex("[^a-fA-F0-9]"),"").lowercase()
+        assertTrue("Exact owned server certificate required",fingerprint==data.getString("ntfyFingerprint"))
+        node(ntfyResource("trusted_certificate_action_trust"),"Trust only the owned server certificate").click()
+        device.pressBack()
+        val scenario=NativeActivityFixture.scenario
+        awaitUnlockedWorkspace(scenario,"Owned ntfy native workspace")
+        assertTrue("No pre-existing private enrollment",!context.getSharedPreferences("lazysh-unifiedpush-enrollment-v1",Context.MODE_PRIVATE).contains("ciphertext"))
+        val loader=context.classLoader
+        fun native(name:String)=Class.forName("app.lazysh.unifiedpush.$name",true,loader)
+        fun singleton(name:String)=native(name).getDeclaredField("INSTANCE").get(null)
+        val controller=native("PushEnrollment").getDeclaredMethod("controller",Context::class.java).invoke(singleton("PushEnrollment"),context)
+        val stateMethod=native("EnrollmentController").getDeclaredMethod("state")
+        fun state()=stateMethod.invoke(controller)
+        fun phase(value:Any?)=value?.javaClass?.getDeclaredMethod("getPhase")?.invoke(value)?.toString()
+        // Use the unmodified production TLS constructor; no client or CA is injected.
+        val stateType=native("EnrollmentState")
+        val enumType=native("EnrollmentPhase")
+        val initial=checkNotNull(enumType.enumConstants).single {it.toString()=="BOOTSTRAP"}
+        val rejected=stateType.declaredConstructors.single {it.parameterTypes.size==14}.newInstance(
+            UUID.randomUUID().toString(),1L,data.getString("untrustedOrigin"),"e".repeat(64),UUID.randomUUID().toString(),
+            data.getString("enrollment"),initial,null,null,null,null,null,null,null)
+        val call=native("EnrollmentCall").getDeclaredConstructor().newInstance()
+        val transport=native("EnrollmentHttp").getDeclaredConstructor().newInstance()
+        var tlsRejected=false
+        try { native("EnrollmentHttp").getDeclaredMethod("bootstrap",stateType,native("EnrollmentCall")).invoke(transport,rejected,call) }
+        catch(error:java.lang.reflect.InvocationTargetException) {
+            val failure=error.targetException
+            tlsRejected=failure is IllegalStateException && failure.message=="Cannot complete private relay request" && failure.cause==null
+        } finally {native("EnrollmentCall").getDeclaredMethod("cancel").invoke(call)}
+        assertTrue("Unknown CA must preserve the exact redacted production failure",tlsRejected)
+        evaluate(scenario,"""(() => {
+          window.__lazyshNtfyPermission=undefined;
+          window.__TAURI_INTERNALS__.invoke('plugin:notification|request_permission',{}).then(
+            value=>{window.__lazyshNtfyPermission=value;},()=>{window.__lazyshNtfyPermission='failed';});return true;
+        })()""")
+        node(By.res("com.android.permissioncontroller","permission_allow_button"),"Explicit notification permission").click()
+        awaitDocument(scenario,"Native notification permission","window.__lazyshNtfyPermission==='granted'")
+        fun command(name:String) {
+            assertTrue("Fixed native fixture command",name in listOf("push_registration_enroll","push_registration_disable"))
+            evaluate(scenario,"""(() => {
+              window.__lazyshNtfyControl=undefined;
+              (async()=>{
+                const access=await window.__TAURI_INTERNALS__.invoke('app_lock_status',{});
+                await window.__TAURI_INTERNALS__.invoke('$name',{},
+                  {headers:access.nonce?{'X-Lazysh-Access':access.nonce}:{}});
+                window.__lazyshNtfyControl=true;
+              })().catch(()=>{window.__lazyshNtfyControl=false;});return true;
+            })()""")
+        }
+        command("push_registration_enroll")
+        val dialogClass=native("EnrollmentDialog")
+        val dialogField=dialogClass.getDeclaredField("current").apply {isAccessible=true}
+        val dialogDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
+        var dialog:android.app.AlertDialog?=null
+        while(dialog==null && System.nanoTime()<dialogDeadline) {
+            scenario.onActivity {dialog=dialogField.get(null) as? android.app.AlertDialog}
+            if(dialog==null)Thread.sleep(10)
+        }
+        assertTrue("Actual native credential dialog required",dialog!=null)
+        scenario.onActivity {
+            val current=checkNotNull(dialog)
+            assertTrue("Native credential secure window",checkNotNull(current.window).attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE!=0)
+            fun fields(view:View):List<android.widget.EditText> = when(view) {
+                is android.widget.EditText -> listOf(view)
+                is ViewGroup -> (0 until view.childCount).flatMap {fields(view.getChildAt(it))}
+                else -> emptyList()
+            }
+            val entries=fields(checkNotNull(current.window).decorView)
+            assertTrue("Exact native credential fields",entries.size==2)
+            // Native fields only; no value is typed into the renderer or assertion output.
+            entries.single {it.hint=="HTTPS relay origin"}.setText(data.getString("relayOrigin"))
+            entries.single {it.hint=="One-time enrollment code"}.setText(data.getString("enrollment"))
+            current.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+            assertTrue("Native credential fields cleared after admission",entries.all {it.text.isEmpty()})
+        }
+        awaitDocument(scenario,"Actual distributor registration","window.__lazyshNtfyControl===true")
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        fun signal(name:String) {
+            assertTrue("Fixed fixture control",name in listOf("background","replay","complete"))
+            val connection=java.net.URL(data.getString("relayOrigin")+"/__fixture/"+name).openConnection(java.net.Proxy.NO_PROXY) as javax.net.ssl.HttpsURLConnection
+            try {
+                connection.connectTimeout=2000;connection.readTimeout=2000;connection.instanceFollowRedirects=false
+                connection.requestMethod="POST";connection.setRequestProperty("X-Lazysh-Fixture",nonce)
+                assertTrue("Owned fixture control acknowledged",connection.responseCode==204)
+            } finally {connection.disconnect()}
+        }
+        signal("background")
+        val confirmedDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
+        while(phase(state())!="CONFIRMED" && System.nanoTime()<confirmedDeadline)Thread.sleep(20)
+        val confirmed=state()
+        assertTrue("Real SDK challenge must confirm native state",phase(confirmed)=="CONFIRMED")
+        assertTrue("Exact server device binding",stateType.getDeclaredMethod("getDeviceId").invoke(confirmed)==data.getString("deviceId"))
+        assertTrue("Exact server generation binding",(stateType.getDeclaredMethod("getGeneration").invoke(confirmed) as Number).toLong()==data.getLong("generation"))
+        assertTrue("Challenge arrived while Activity backgrounded",scenario.state==androidx.lifecycle.Lifecycle.State.CREATED)
+        signal("replay")
+        assertTrue("Confirmed state survives an owned encrypted replay",phase(state())=="CONFIRMED")
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        awaitUnlockedWorkspace(scenario,"Original native workspace after remote challenge")
+        command("push_registration_disable")
+        awaitDocument(scenario,"Explicit authenticated native pause","window.__lazyshNtfyControl===true")
+        val pauseDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(12)
+        while(state()!=null && System.nanoTime()<pauseDeadline)Thread.sleep(20)
+        assertTrue("Authenticated relay cleanup must remove private enrollment",state()==null)
+        signal("replay")
+        assertTrue("Paused state cannot regain enrollment from the old encrypted message",state()==null)
+        signal("complete")
+        println("lazysh real ntfy native: nativeDialog=true unknownCaRejected=true sdkEncryptedChallengeConfirmed=true exactDeviceGeneration=true activityBackground=true authenticatedPause=true notificationDelivery=false")
     }
 
     @Test fun pushRegistrationMatchesPackagedNativeProvider() {
