@@ -5,7 +5,7 @@ import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses,captureOwnedCaseCrashes,ownedAndroidPackagePresence,androidSshAcceptance} from './support/androidSsh';
+import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -215,6 +215,9 @@ test.skipIf(process.platform!=='linux')('dedicated retained packages are probed 
       const packages=calls.indexOf('-s emulator-5580 shell pm list packages app.lazysh.client');
       const testCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client.test');
       const appCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client');
+      const diagnostics=JSON.parse(await readFile(join(android,'app/build/outputs/androidTest-results/herdr-ui/package-exit.json'),'utf8'));
+      expect(diagnostics.persistedCrash).toEqual({scope:'persisted-crash-buffer-sample',state:'ineligible',exceptions:[]});
+      expect(calls.some(call=>call.includes('logcat -b crash -d'))).toBe(false);
       expect(probe).toBeGreaterThanOrEqual(0);expect(packages).toBeGreaterThanOrEqual(0);
       expect(testCleanup).toBeGreaterThan(Math.max(probe,packages));expect(appCleanup).toBeGreaterThan(testCleanup);
       expect(stopped).toBe(true);
@@ -342,6 +345,92 @@ const marker=(verb='start',pid=123,value=nonce)=>row('LazyshOwnedCase',`${verb}:
 const java=(pid=123)=>row('AndroidRuntime','FATAL EXCEPTION: private-secret',pid);
 const native=(target=123,process='app.lazysh.client')=>row('DEBUG',`pid: ${target}, tid: ${target}, name: private-name  >>> ${process} <<<`,999)+
   row('DEBUG','uid: 10155',999)+row('DEBUG','signal 11 (SIGSEGV), code 1, fault addr private-address',999);
+
+const persistedJava=(exception='java.lang.IllegalStateException',pid=123)=>java(pid)+
+  row('AndroidRuntime',`Process: app.lazysh.client, PID: ${pid}`,pid)+
+  row('AndroidRuntime',`${exception}: private-secret /private/path`,pid)+
+  row('AndroidRuntime','\tat app.lazysh.privateSecret.method(private-file:42)',pid);
+
+test.each(['missing','foreign','mismatched-pid','ended','overflow'] as const)('persisted recovery requires an unfinished original marker: %s',async kind=>{
+  const parser=new OwnedCaseCrashParser(nonce);
+  const input=kind==='foreign'?marker('start',123,'b'.repeat(32)):kind==='mismatched-pid'?row('LazyshOwnedCase',`start:${nonce}:pid:456`):kind==='missing'?'':marker();
+  parser.push(Buffer.from(input+(kind==='ended'?marker('end'):kind==='overflow'?'x'.repeat(1025):'')));
+  expect(parser.persistedParser()).toBeUndefined();
+  expect(await recoverOwnedCaseCrash('/nonexistent-owned-adb','emulator-5580',parser)).toEqual({state:'ineligible',exceptions:[]});
+});
+
+test('persisted framing rejects stale/foreign/unanchored crashes and keeps only closed categories',()=>{
+  const original=new OwnedCaseCrashParser(nonce);
+  original.push(Buffer.from(marker()+marker('start',456)));
+  const target=original.persistedParser()!;
+  expect({pid:target.pid,time:target.time}).toEqual({pid:123,time:'10-28 01:37:10.123'});
+  const data=Buffer.from(persistedJava().replaceAll('01:37:10.123','01:37:09.999')+persistedJava('java.lang.SecurityException',456)+
+    row('AndroidRuntime','java.lang.NullPointerException: unanchored-private')+java()+
+    row('AndroidRuntime','Process: other.app, PID: 123')+row('AndroidRuntime','java.lang.NullPointerException: foreign-private')+
+    persistedJava()+row('AndroidRuntime','Caused by: private.secret.Exception: secret-key')+
+    persistedJava('java.lang.OutOfMemoryError'));
+  for(const byte of data)target.parser.push(Buffer.from([byte]));
+  target.parser.finish();
+  expect(target.parser.recoverySummary()).toEqual({overflow:false,exceptions:['illegal-state','other','out-of-memory']});
+  expect(original.summary()).toMatchObject({correlated:true,ended:false,records:[]});
+  expect(JSON.stringify(target.parser.recoverySummary())).not.toMatch(/private|secret|path|Exception|app[.]lazysh/);
+});
+
+test('persisted recovery retains bounded wrapped JNI causes beyond the first framework frames',()=>{
+  const original=new OwnedCaseCrashParser(nonce);original.push(Buffer.from(marker()));
+  const parser=original.persistedParser()!.parser;
+  parser.push(Buffer.from(persistedJava('java.lang.RuntimeException')+
+    row('AndroidRuntime','\tat android.app.ActivityThread.performResumeActivity(ActivityThread.java:1)').repeat(32)+
+    row('AndroidRuntime','Caused by: java.lang.NoSuchMethodError: private-method-and-arguments')));
+  parser.finish();
+  expect(parser.recoverySummary()).toEqual({overflow:false,exceptions:['runtime','method-linkage']});
+});
+
+test.each(['line','total','records','window','unfinished-line'] as const)('persisted parser enforces %s bounds',kind=>{
+  const original=new OwnedCaseCrashParser(nonce);original.push(Buffer.from(marker()));
+  const parser=original.persistedParser()!.parser;
+  const input=kind==='line'?'x'.repeat(1025):kind==='total'?'x\n'.repeat(32769):
+    kind==='records'?persistedJava().repeat(12):kind==='unfinished-line'?persistedJava().split('\n').slice(0,3).join('\n'):
+    java()+row('AndroidRuntime','Process: app.lazysh.client, PID: 123')+row('AndroidRuntime','private-noise').repeat(64)+row('AndroidRuntime','java.lang.NullPointerException: stale');
+  parser.push(Buffer.from(input));parser.finish();
+  expect(parser.recoverySummary()).toEqual({overflow:kind==='line'||kind==='total',exceptions:
+    kind==='records'?Array(8).fill('illegal-state'):kind==='unfinished-line'?['illegal-state']:[]});
+});
+
+test.each([
+  {body:persistedJava(),code:0,state:'available',exceptions:['illegal-state']},
+  {body:persistedJava('java.lang.SecurityException',456),code:0,state:'empty',exceptions:[]},
+  {body:persistedJava(),code:31,state:'unavailable',exceptions:[]},
+  {body:persistedJava()+'x'.repeat(1025),code:0,state:'overflow',exceptions:[]},
+])('owned persisted child reports $state separately from live failure',async({body,code,state,exceptions})=>{
+  await withDiagnosticAdb(body,code,async(adb,args)=>{
+    const original=new OwnedCaseCrashParser(nonce);original.push(Buffer.from(marker()));
+    original.pushStderr(Buffer.from('logcat: Unexpected EOF! private-secret\n'));
+    const live=original.summary();
+    expect(await recoverOwnedCaseCrash(adb,'emulator-5580',original)).toEqual({state,exceptions});
+    expect(original.summary()).toEqual(live);
+    expect(await readFile(args,'utf8')).toBe('-s emulator-5580 logcat -b crash -d --pid 123 -T 10-28 01:37:10.123 -v threadtime AndroidRuntime:E *:S\n');
+  });
+});
+
+test('persisted child rejects unowned serials and reports spawn errors without private output',async()=>{
+  const parser=new OwnedCaseCrashParser(nonce);parser.push(Buffer.from(marker()));
+  expect(await recoverOwnedCaseCrash('/nonexistent-owned-adb','personal-device',parser)).toEqual({state:'ineligible',exceptions:[]});
+  expect(await recoverOwnedCaseCrash('/nonexistent-owned-adb','emulator-5580',parser)).toEqual({state:'unavailable',exceptions:[]});
+});
+
+test.each([
+  {tail:'setInterval(()=>{},1000)',state:'unavailable'},
+  {tail:"process.stderr.write('x'.repeat(65537));setInterval(()=>{},1000)",state:'overflow'},
+]).skipIf(process.platform!=='linux')('persisted child $state retires its owned process without retaining partial evidence',async({tail,state})=>{
+  await withDiagnosticAdb('',0,async(adb,args,fixture)=>{
+    await writeFile(adb,`#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.EXIT_INFO_FIXTURE,String(process.pid));process.stdout.write(${JSON.stringify(persistedJava())});process.stderr.write('private-secret');${tail};\n`);
+    const parser=new OwnedCaseCrashParser(nonce);parser.push(Buffer.from(marker()));
+    expect(await recoverOwnedCaseCrash(adb,'emulator-5580',parser)).toEqual({state,exceptions:[]});
+    const pid=Number(await readFile(fixture,'utf8'));
+    expect(pid).toBeGreaterThan(0);expect(()=>process.kill(pid,0)).toThrow();
+  });
+},5000);
 
 test.each([
   {packageName:'app.lazysh.client',reason:'finished inst',expected:'finished-instrumentation'},

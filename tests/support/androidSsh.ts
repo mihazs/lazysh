@@ -350,6 +350,21 @@ export async function androidSshCleanup(primary:boolean,steps:readonly (readonly
 
 // No raw crash output enters OwnedProcess's retained output windows. This is a
 // best-effort diagnostic child on the explicitly selected owned emulator only.
+export async function recoverOwnedCaseCrash(adb:string,serial:string,source:OwnedCaseCrashParser) {
+  const target=source.persistedParser();
+  if(!target || !/^emulator-[0-9]{4,5}$/.test(serial))return {state:'ineligible' as const,exceptions:[]};
+  const child=new OwnedProcess(adb,['-s',serial,'logcat','-b','crash','-d','--pid',String(target.pid),'-T',target.time,'-v','threadtime','AndroidRuntime:E','*:S'],undefined,process.env,false);
+  child.child.stdout!.on('data',(chunk:Buffer)=>{target.parser.push(chunk);if(target.parser.recoverySummary().overflow)void child.stop().catch(()=>{});});
+  child.child.stderr!.on('data',(chunk:Buffer)=>{target.parser.pushStderr(chunk);if(target.parser.recoverySummary().overflow)void child.stop().catch(()=>{});});
+  try {
+    await child.finish('owned persisted crash inspection',1000);
+    target.parser.finish();
+    const summary=target.parser.recoverySummary();
+    return {state:summary.overflow?'overflow':summary.exceptions.length?'available':'empty',exceptions:summary.exceptions};
+  } catch {
+    return {state:target.parser.recoverySummary().overflow?'overflow':'unavailable',exceptions:[]};
+  }
+}
 export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   const started=performance.now();
   const elapsedMs=()=>Math.min(3_600_000,Math.max(0,Math.floor(performance.now()-started)));
@@ -389,7 +404,7 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   });
   void child.done.then(code=>{if(!stopping)stream=code===0?'closed':'unavailable';},()=>{stream='unavailable';});
   timer=setTimeout(()=>{stream='deadline';void stop();},600_000);
-  return {stop,snapshot,elapsedMs};
+  return {stop,snapshot,elapsedMs,recover:()=>recoverOwnedCaseCrash(adb,serial,parser)};
 }
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
@@ -438,8 +453,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
       const crash=await crashes?.stop();
+      const persistedCrash={scope:'persisted-crash-buffer-sample',...await crashes?.recover()??{state:'ineligible',exceptions:[]}};
       const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
-      const summary={...exitInfo,...(packages?{packages}:{}),timing,crash:crash??{stream:'unavailable'},gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
+      const summary={...exitInfo,...(packages?{packages}:{}),timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}

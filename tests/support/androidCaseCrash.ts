@@ -4,6 +4,11 @@ export class OwnedCaseCrashParser {
   private carry={out:'',err:''};
   private bytes=0;
   private pid:number|undefined;
+  private startTime:string|undefined;
+  private persisted=false;
+  private javaWindow=0;
+  private ownedJava=false;
+  private exceptions:string[]=[];
   private native:{emitter:number,remaining:number}|undefined;
   private overflow=false;
   private ended=false;
@@ -37,8 +42,18 @@ export class OwnedCaseCrashParser {
   }
   private clear() {this.carry.out='';this.carry.err='';}
   finish() {
+    if(this.persisted && !this.overflow && this.carry.out)this.row(this.carry.out);
     if(!this.overflow && this.carry.err)this.errorRow(this.carry.err);
     this.clear();
+  }
+  persistedParser() {
+    if(!this.pid || !this.startTime || this.ended || this.overflow || this.persisted)return;
+    const parser=new OwnedCaseCrashParser(this.nonce);
+    parser.pid=this.pid;parser.startTime=this.startTime;parser.persisted=true;
+    return {pid:this.pid,time:this.startTime,parser};
+  }
+  recoverySummary() {
+    return {overflow:this.overflow,exceptions:this.overflow?[]:[...this.exceptions]};
   }
   private errorRow(text:string) {
     if(!text.trim())return;
@@ -57,10 +72,35 @@ export class OwnedCaseCrashParser {
     const [,time,emitterText,tag,message]=line;
     const emitter=Number(emitterText);
     if(emitter<1||emitter>2147483647)return;
+    if(this.persisted) {
+      // shortcut: yearless time can reject New Year-spanning cases; use year-bearing markers if recovery must cover them.
+      if(emitter!==this.pid || time<this.startTime! || tag!=='AndroidRuntime')return;
+      if(message.startsWith('FATAL EXCEPTION:')){this.javaWindow=64;this.ownedJava=false;return;}
+      if(!this.javaWindow || --this.javaWindow<=0)return;
+      if(message.startsWith('Process:')) {
+        this.ownedJava=message===`Process: app.lazysh.client, PID: ${this.pid}`;return;
+      }
+      const exception=/^(?:Caused by: )?([A-Za-z_$][\w$]*(?:[.][A-Za-z_$][\w$]*)+)(?::|$)/.exec(message);
+      if(!this.ownedJava || !exception || this.exceptions.length>=8)return;
+      // Closed categories only: exception messages, class names and frames remain private.
+      const known:Record<string,string>={
+        'java.lang.NullPointerException':'null-pointer','java.lang.IllegalStateException':'illegal-state',
+        'java.lang.IllegalArgumentException':'illegal-argument','java.lang.SecurityException':'security',
+        'java.lang.OutOfMemoryError':'out-of-memory','java.lang.ClassNotFoundException':'class-not-found',
+        'java.lang.NoClassDefFoundError':'class-linkage','java.lang.UnsatisfiedLinkError':'native-linkage',
+        'java.lang.NoSuchMethodError':'method-linkage',
+        'java.lang.RuntimeException':'runtime','android.os.DeadObjectException':'dead-object',
+        'java.lang.AssertionError':'assertion','android.util.AndroidRuntimeException':'android-runtime',
+        'androidx.test.espresso.PerformException':'espresso-action','androidx.test.espresso.NoMatchingViewException':'espresso-view',
+        'android.os.RemoteException':'remote','android.view.WindowManager$BadTokenException':'window-token',
+        'android.content.res.Resources$NotFoundException':'resource-not-found',
+      };
+      this.exceptions.push(known[exception[1]]??'other');return;
+    }
     if(this.ended)return;
     if(tag==='LazyshOwnedCase' && message===`start:${this.nonce}:pid:${emitter}`) {
       // A second process cannot silently rebind this case's original marker.
-      this.pid??=emitter;return;
+      if(this.pid===undefined){this.pid=emitter;this.startTime=time;}return;
     }
     if(tag==='LazyshOwnedCase' && emitter===this.pid && message===`end:${this.nonce}:pid:${emitter}`){this.ended=true;this.native=undefined;return;}
     if(!this.pid || this.records.length+this.forceStops.length>=8)return;
