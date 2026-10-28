@@ -105,6 +105,8 @@ at most two downward scrolls only on ntfy's verified foreground Settings toolbar
 and single preference RecyclerView. It performs no coordinate fallback or click
 retry. Its failure receipt retains only surface/list/target flags and scroll count;
 the named native policy case checks ownership, deadline and exhausted allowance.
+Topic subscription selects the pinned toolbar action resource only after it is
+enabled by native validation, within its unchanged five-second lookup budget.
 
 The original encrypted wire is replayed through real ntfy while confirmed and
 after pause. The bounded observation requires only one server confirmation and

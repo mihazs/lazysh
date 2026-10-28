@@ -1519,7 +1519,7 @@ class NativeWorkspaceTest {
         device.pressBack()
         node(By.pkg("io.heckel.ntfy").desc("Add subscription"),"Owned TLS trust topic").click()
         node(ntfyResource("add_dialog_subscribe_topic_text"),"Owned trust topic field").text="lazysh-$nonce"
-        node(By.pkg("io.heckel.ntfy").text("Subscribe"),"Review owned TLS certificate").click()
+        node(ntfyResource("add_dialog_action_button").enabled(true),"Review owned TLS certificate").click()
         val fingerprint=node(ntfyResource("trusted_certificate_fingerprint"),"Certificate fingerprint review")
             .text.replace(Regex("[^a-fA-F0-9]"),"").lowercase()
         assertTrue("Exact owned server certificate required",fingerprint==data.getString("ntfyFingerprint"))
