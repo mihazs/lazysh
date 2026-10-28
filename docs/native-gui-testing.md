@@ -6,6 +6,8 @@ The specification starts the actual application without launch arguments, opens 
 
 ## Isolation and process ownership
 
+The entire Vitest process runs in an outer private user/network namespace with loopback only. The target listener, test worker and GUI drivers therefore share that private network; host processes cannot reach its listener. A controlled case verifies that a nested namespace cannot reach its parent listener while its own loopback still works. This removes ambient host traffic from the test boundary; it does not identify the source of historical failures.
+
 Every run creates a mode-0700 directory under `/tmp`, an authenticated fresh Xvfb display, and its own D-Bus daemon with no installed activation directories. Child-only environment values point HOME, XDG storage and both bus addresses into this directory. Wayland, user bus, SSH-agent, loader and desktop variables are not inherited. No user desktop, existing application or saved host is used.
 
 The driver and application live inside a bubblewrap PID namespace with `--die-with-parent`. The foreground-process helper remains deliberately unsuitable for a daemonizing workload on its own; the kernel namespace supplies the descendant lifetime boundary. Host home/runtime/temp mounts are hidden, with only the private display socket, private test directory and exact compiled executables made available. Namespace setup must succeed; the test does not disable AppArmor, user-namespace policy, WebKit sandboxing or other security controls to obtain a pass.

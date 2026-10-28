@@ -1,4 +1,4 @@
-import {mkdir,mkdtemp,realpath,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,readlink,realpath,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {connect,createServer,type Server,type Socket} from 'node:net';
 import {afterEach,expect,it,vi} from 'vitest';
@@ -147,3 +147,26 @@ it('routes only explicit clients to their owned listener across exact driver-por
   expect(events.map(event=>event.callback)).toEqual(['driver','native','replacement','target']);
   expect(events.at(-1)!.tuple).toEqual({listener:'target',local:'target',peer:'other',loopback:true,selfTuple:false});
 },5000);
+
+
+it('isolates loopback from its parent namespace while retaining owned local connectivity',async()=>{
+  const port=await listenForPeers();
+  const parentNamespace=await readlink('/proc/self/ns/net');
+  client=new OwnedProcess('/usr/bin/bwrap',['--unshare-user','--unshare-net','--dev-bind','/','/','--',process.execPath,'-e',`
+    const net=require('node:net'),fs=require('node:fs');
+    if(fs.readlinkSync('/proc/self/ns/net')===process.argv[2])process.exit(2);
+    const outside=net.connect({host:'127.0.0.1',port:Number(process.argv[1])});
+    outside.setTimeout(1000,()=>process.exit(3));
+    outside.once('connect',()=>process.exit(4));
+    outside.once('error',error=>{
+      if(error.code!=='ECONNREFUSED')process.exit(5);
+      const server=net.createServer(socket=>socket.end('isolated'));
+      server.listen(0,'127.0.0.1',()=>{
+        const local=net.connect({host:'127.0.0.1',port:server.address().port});
+        local.pipe(process.stdout);local.once('end',()=>server.close());
+      });
+    });
+  `,String(port),parentNamespace],undefined,{PATH:'/usr/bin:/bin',LANG:'C'});
+  expect(await client.finish('private loopback namespace contract',5000)).toBe('isolated');
+  expect(sockets.size).toBe(0);
+},10000);
