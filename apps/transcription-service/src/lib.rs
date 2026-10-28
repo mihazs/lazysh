@@ -51,7 +51,8 @@ fn day() -> u64 {
 pub struct Config {
     directory: PathBuf,
     admin_hash: [u8; 32],
-    provider_key: HeaderValue,
+    provider_key: Option<HeaderValue>,
+    whisper_port: Option<std::num::NonZeroU16>,
     device_limit: u64,
     global_limit: u64,
 }
@@ -60,6 +61,36 @@ impl Config {
         directory: PathBuf,
         admin: &str,
         provider_key: &str,
+        device_seconds: u64,
+        global_seconds: u64,
+    ) -> Result<Self, String> {
+        let mut config = Self::base(directory, admin, device_seconds, global_seconds)?;
+        if provider_key.is_empty()
+            || provider_key.len() > 512
+            || !provider_key.bytes().all(|b| b.is_ascii_graphic())
+        {
+            return Err("Invalid provider key".into());
+        }
+        let mut provider_key = HeaderValue::from_str(&format!("Bearer {provider_key}"))
+            .map_err(|_| "Invalid provider key")?;
+        provider_key.set_sensitive(true);
+        config.provider_key = Some(provider_key);
+        Ok(config)
+    }
+    pub fn whisper_cpp(
+        directory: PathBuf,
+        admin: &str,
+        port: std::num::NonZeroU16,
+        device_seconds: u64,
+        global_seconds: u64,
+    ) -> Result<Self, String> {
+        let mut config = Self::base(directory, admin, device_seconds, global_seconds)?;
+        config.whisper_port = Some(port);
+        Ok(config)
+    }
+    fn base(
+        directory: PathBuf,
+        admin: &str,
         device_seconds: u64,
         global_seconds: u64,
     ) -> Result<Self, String> {
@@ -72,19 +103,11 @@ impl Config {
         {
             return Err("Require positive daily audio quotas within the supported bounds".into());
         }
-        if provider_key.is_empty()
-            || provider_key.len() > 512
-            || !provider_key.bytes().all(|b| b.is_ascii_graphic())
-        {
-            return Err("Invalid provider key".into());
-        }
-        let mut provider_key = HeaderValue::from_str(&format!("Bearer {provider_key}"))
-            .map_err(|_| "Invalid provider key")?;
-        provider_key.set_sensitive(true);
         Ok(Self {
             directory,
             admin_hash: digest(admin),
-            provider_key,
+            provider_key: None,
+            whisper_port: None,
             device_limit: device_seconds * 16000,
             global_limit: global_seconds * 16000,
         })
@@ -177,7 +200,10 @@ impl Service {
             provider: Provider {
                 client,
                 key: config.provider_key,
-                endpoint: ENDPOINT.into(),
+                endpoint: config.whisper_port.map_or_else(
+                    || ENDPOINT.into(),
+                    |port| format!("http://127.0.0.1:{port}/inference"),
+                ),
             },
             device_limit: config.device_limit,
             global_limit: config.global_limit,
@@ -364,11 +390,12 @@ async fn revoke(
     Ok(StatusCode::NO_CONTENT)
 }
 async fn capabilities(
+    State(service): State<Service>,
     Extension(identity): Extension<Identity>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     device(identity)?;
     Ok(Json(
-        serde_json::json!({"schemaVersion":1,"model":"gpt-transcribe","languages":LANGUAGES,"maxWavBytes":MAX_WAV,"sampleRate":16000,"maxSamples":480000}),
+        serde_json::json!({"schemaVersion":1,"model":service.0.provider.profile(),"languages":LANGUAGES,"maxWavBytes":MAX_WAV,"sampleRate":16000,"maxSamples":480000}),
     ))
 }
 async fn quota(
@@ -560,10 +587,17 @@ async fn transcribe(
 }
 struct Provider {
     client: reqwest::Client,
-    key: HeaderValue,
+    key: Option<HeaderValue>,
     endpoint: String,
 }
 impl Provider {
+    fn profile(&self) -> &'static str {
+        if self.key.is_some() {
+            "gpt-transcribe"
+        } else {
+            "whisper.cpp"
+        }
+    }
     async fn transcribe(
         &self,
         audio: Zeroizing<Vec<u8>>,
@@ -582,15 +616,18 @@ impl Provider {
             .map_err(|_| ApiError::storage())?;
         let mut form = reqwest::multipart::Form::new()
             .part("file", file)
-            .text("model", "gpt-transcribe")
             .text("response_format", "json");
-        if language != "auto" {
+        if self.key.is_some() {
+            form = form.text("model", "gpt-transcribe");
+        }
+        if self.key.is_none() || language != "auto" {
             form = form.text("language", language.to_owned());
         }
-        let mut response = self
-            .client
-            .post(&self.endpoint)
-            .header(header::AUTHORIZATION, self.key.clone())
+        let mut request = self.client.post(&self.endpoint);
+        if let Some(key) = &self.key {
+            request = request.header(header::AUTHORIZATION, key.clone());
+        }
+        let mut response = request
             .multipart(form)
             .send()
             .await

@@ -1091,7 +1091,7 @@ export const english = {
   cloudSettingsRefresh: "Refresh Cloud service",
   cloudSettingsForget: "Forget Cloud device",
   cloudSettingsChecking: "Checking Cloud service…",
-  cloudSettingsServiceModel: "Service: {{origin}} · Model: {{model}}",
+  cloudSettingsServiceModel: "Service: {{origin}} · Backend: {{model}}",
   cloudSettingsChecked: "Last checked: {{time}}",
   cloudSettingsRemaining: "Service audio quota remaining: device {{device}} seconds; shared {{shared}} seconds.",
   cloudSettingsTotals: "Service audio quota totals: device {{device}} seconds; shared {{shared}} seconds.",

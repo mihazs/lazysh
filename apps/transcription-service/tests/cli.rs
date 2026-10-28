@@ -34,12 +34,27 @@ impl Fixture {
         Self(directory)
     }
     fn serve(&self, device: &str, global: &str, listen: &str) -> Command {
+        self.serve_with(device, global, listen, None)
+    }
+    fn serve_with(
+        &self,
+        device: &str,
+        global: &str,
+        listen: &str,
+        whisper: Option<&str>,
+    ) -> Command {
         let mut command = command();
         command
             .args(["serve", "--admin-token-file"])
-            .arg(self.0.path().join("admin"))
-            .arg("--provider-key-file")
-            .arg(self.0.path().join("provider"))
+            .arg(self.0.path().join("admin"));
+        if let Some(port) = whisper {
+            command.args(["--whisper-cpp-port", port]);
+        } else {
+            command
+                .arg("--provider-key-file")
+                .arg(self.0.path().join("provider"));
+        }
+        command
             .arg("--data-dir")
             .arg(self.0.path().join("state"))
             .args([
@@ -86,9 +101,14 @@ fn keygen_and_failed_configuration_are_bounded_without_secret_echo_or_state_crea
 
 #[tokio::test]
 async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_provider_calls() {
+    for whisper in [None, Some("1")] {
+        check_compiled_service(whisper).await;
+    }
+}
+async fn check_compiled_service(whisper: Option<&str>) {
     let fixture = Fixture::new();
     let child = fixture
-        .serve("30", "60", "127.0.0.1:0")
+        .serve_with("30", "60", "127.0.0.1:0", whisper)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -133,6 +153,26 @@ async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_p
     let value: serde_json::Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
     let token = value["token"].as_str().unwrap();
     let device = value["device"]["id"].as_str().unwrap();
+    let capabilities: serde_json::Value = serde_json::from_str(
+        &client
+            .get(format!("{base}/v1/capabilities"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        capabilities["model"],
+        if whisper.is_some() {
+            "whisper.cpp"
+        } else {
+            "gpt-transcribe"
+        }
+    );
     let response = client
         .post(format!("{base}/v1/transcriptions"))
         .bearer_auth(token)
@@ -180,4 +220,30 @@ async fn compiled_service_enrolls_cancels_and_revokes_over_actual_http_without_p
             .windows(hidden.len())
             .any(|window| window == hidden.as_bytes()));
     }
+}
+
+#[test]
+fn whisper_port_is_numeric_nonzero_and_exclusive_with_provider_credentials() {
+    let fixture = Fixture::new();
+    for port in [
+        "0",
+        "65536",
+        "example.com",
+        "127.0.0.1:8080",
+        "8080/inference",
+    ] {
+        let output = fixture
+            .serve_with("1", "2", "127.0.0.1:0", Some(port))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!fixture.0.path().join("state").exists());
+    }
+    let output = fixture
+        .serve("1", "2", "127.0.0.1:0")
+        .args(["--whisper-cpp-port", "8080"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!fixture.0.path().join("state").exists());
 }
