@@ -1055,6 +1055,7 @@ const translations = {
   previewEnablePicker: ["Ativar seletor de elementos para novas prévias (proxy HTTP opcional)", "Activar selector de elementos para nuevas vistas previas (proxy HTTP opcional)"],
   previewUpdating: ["Atualizando prévia…", "Actualizando vista previa…"],
   previewListeners: ["Serviços TCP em escuta detectados", "Servicios TCP en escucha detectados"],
+  previewFrameworkHint: ["Indicação de framework informada pelo servidor", "Indicio de framework declarado por el servidor"],
   previewNoHttp: [" · Sem resposta HTTP", " · Sin respuesta HTTP"],
   previewListenerHint: ["A lista pode incluir serviços TCP que não usam HTTP. Selecione uma porta e abra a prévia.", "La lista puede incluir servicios TCP que no usan HTTP. Selecciona un puerto y abre la vista previa."],
   previewServers: ["Servidores encaminhados", "Servidores reenviados"],
