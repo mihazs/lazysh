@@ -51,8 +51,8 @@ pub fn run() {
     let directory = None;
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-        desktop_launch::secondary(app, args)
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        desktop_launch::secondary(app, args, cwd)
     }));
     builder
         .plugin(tauri_plugin_deep_link::init())

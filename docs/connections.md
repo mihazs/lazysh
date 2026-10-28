@@ -61,8 +61,8 @@ refused with a localized notice; finish or cancel the current launch and run the
 command again. Each distinct accepted receipt is offered once. Failed preparation,
 lock/reunlock and renderer replacement do not replay an admitted request. The
 singleton handoff exit status confirms delivery only, not authentication or a
-terminal. Warm directory requests remain unsupported; close the app before using
-`--dir`. Existing desktop URLs retain their prior ingress behavior.
+terminal. Warm directory requests use the same bounded intent and access guards; see
+[local directory launch](local-terminal.md). Existing desktop URLs retain their prior ingress behavior.
 
 Forwarded saved IDs and multiplexer names containing the Unicode replacement
 character `U+FFFD` are refused, even if that character was entered literally:
@@ -73,7 +73,7 @@ replacement character in a valid Unicode selector.
 This independent saved-ID contract does not establish the reference client's undocumented host
 grammar; only its help flags were observed. Native admission and frontend tests
 do not prove actual OS singleton/GUI delivery or credential prompts. Those gates
-and warm directory delivery remain in [issue #86](https://github.com/mihazs/lazysh/issues/86).
+remain in [issue #86](https://github.com/mihazs/lazysh/issues/86).
 
 Native controlled SSH tests cover changed target metadata before authentication,
 unknown-key trust/retry and revocation while waiting for the credential guard.
