@@ -96,6 +96,10 @@ presence/attempt flags. A separate named native policy case checks the unchanged
 deadline and one-attempt admission; both native cases must pass without skips.
 Synchronous accessibility queries/clicks may themselves consume time; no retry or
 additional wait budget is granted to compensate for that overhead.
+Every subsequent fixed native selector label maps to a finite receipt stage;
+a source-coverage regression rejects missing mappings. Unknown failure text is
+never copied into the receipt. This diagnostic does not scroll, retry a click or
+increase any selector deadline.
 
 The original encrypted wire is replayed through real ntfy while confirmed and
 after pause. The bounded observation requires only one server confirmation and

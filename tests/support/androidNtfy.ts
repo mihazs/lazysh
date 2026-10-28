@@ -180,21 +180,26 @@ export function firstLaunchObservation(text:string) {
   if(!match)return;
   return {foreground:match[1],allow:match[2]==='true',deny:match[3]==='true',toolbar:match[4]==='true',ownedPrompt:match[5]==='true',attempted:match[6]==='true'};
 }
+export function nativeFailureStage(failure:string) {
+  const stages=[['Distributor menu','distributor_menu'],['Distributor settings','distributor_settings'],
+    ['Owned default server','default_server_preference'],['Default server field','distributor_server'],
+    ['Save owned default server','default_server_save'],['Owned TLS trust topic','trust_topic_action'],
+    ['Owned trust topic field','trust_topic_field'],['Review owned TLS certificate','certificate_subscribe'],
+    ['Certificate fingerprint review','certificate_review'],['Exact owned server certificate required','certificate_identity'],
+    ['Trust only the owned server certificate','certificate_trust'],['Actual native credential dialog required','native_dialog'],
+    ['Explicit notification permission','notification_permission'],['Real SDK challenge must confirm native state','challenge_confirmation'],
+    ['Authenticated relay cleanup must remove private enrollment','authenticated_cleanup']];
+  return stages.find(([label])=>failure.includes(label))?.[1]??'other_native_failure';
+}
 async function nativeFailure(directory:string) {
   try {
     const files=(await readdir(directory,{recursive:true})).filter(name=>name.startsWith('android-results/')&&name.endsWith('.xml'));
     if(files.length!==1)return {};
     const text=(await boundedFile(join(directory,files[0]),256*1024)).toString('utf8');
     const failure=/<failure\b[\s\S]*?<\/failure>/.exec(text)?.[0]??'';
-    const stages=[['Distributor menu','distributor_menu'],['Default server field','distributor_server'],
-      ['Certificate fingerprint review','certificate_review'],['Exact owned server certificate required','certificate_identity'],
-      ['Actual native credential dialog required','native_dialog'],['Explicit notification permission','notification_permission'],
-      ['Real SDK challenge must confirm native state','challenge_confirmation'],
-      ['Authenticated relay cleanup must remove private enrollment','authenticated_cleanup']];
-    const stage=stages.find(([label])=>failure.includes(label))?.[1]??'other_native_failure';
     const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
     const firstLaunch=firstLaunchObservation(failure);
-    return {nativeStage:stage,nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{})};
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{})};
   }catch{return {};}
 }
 

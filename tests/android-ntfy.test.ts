@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport,nativeFailureStage} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
@@ -24,6 +24,21 @@ test('first-launch failures retain only enumerated package state and finite flag
   expect(firstLaunchObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:'permission',allow:true,deny:true,toolbar:false,ownedPrompt:true,attempted:false});
   expect(firstLaunchObservation(diagnostic.replace('foreground=permission','foreground=private.application'))).toBeUndefined();
   expect(firstLaunchObservation(diagnostic.replace('allow=true','allow=private-data'))).toBeUndefined();
+});
+
+test('every fixed native selector label retains a finite failure stage without private text',async()=>{
+  const source=await readFile(resolve(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=source.split('fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {')[1]?.split('\n    @Test')[0];
+  expect(body).toBeTruthy();
+  const labels=[...(body??'').matchAll(/\bnode\([^\r\n]*,"([^"]+)"\)/g)].map(match=>match[1]);
+  expect(labels.length).toBeGreaterThan(8);
+  for(const label of labels){
+    const stage=nativeFailureStage(label+' private-selector-data');
+    expect(stage).not.toBe('other_native_failure');expect(stage).toMatch(/^[a-z_]+$/);
+  }
+  expect(nativeFailureStage('unrecognized-private-data')).toBe('other_native_failure');
+  expect(nativeFailureStage('Owned default server')).toBe('default_server_preference');
+  expect(nativeFailureStage('Save owned default server')).toBe('default_server_save');
 });
 
 test('native receipt requires both exact owned cases without substitution or skips',()=>{
