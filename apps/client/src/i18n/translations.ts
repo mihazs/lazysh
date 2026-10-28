@@ -1129,6 +1129,7 @@ const translations = {
   voiceSpeechEngine: ["Mecanismo de fala", "Motor de voz"],
   voiceEngineUnavailable: ["{{engine}} — indisponível", "{{engine}} — no disponible"],
   voiceParakeetOption: ["Parakeet · local", "Parakeet · local"],
+  voiceCloudOption: ["Nuvem", "Nube"],
   voiceEngineReason: ["{{engine}}: {{reason}}", "{{engine}}: {{reason}}"],
   voiceParakeetInitial: ["Parakeet exige um desktop Linux x86_64 compatível.", "Parakeet requiere un equipo de escritorio Linux x86_64 compatible."],
   voiceAppleInitial: ["Apple SpeechAnalyzer exige um dispositivo iOS compatível.", "Apple SpeechAnalyzer requiere un dispositivo iOS compatible."],
