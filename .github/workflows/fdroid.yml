@@ -1,0 +1,39 @@
+name: F-Droid recipe
+
+on:
+  pull_request:
+    paths:
+      - fdroid/**
+      - tests/fdroid-recipe.test.ts
+      - .github/workflows/fdroid.yml
+  push:
+    branches: [main]
+    paths:
+      - fdroid/**
+      - tests/fdroid-recipe.test.ts
+      - .github/workflows/fdroid.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata-and-scanner:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The recipe names an immutable earlier source commit.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install isolated official metadata tools
+        run: |
+          python -m venv "$RUNNER_TEMP/fdroid-tools"
+          "$RUNNER_TEMP/fdroid-tools/bin/pip" install fdroidserver==2.4.5
+      - name: Exercise actual metadata parser and source scanner
+        run: LAZYSH_FDROID_CLI="$RUNNER_TEMP/fdroid-tools/bin/fdroid" bun run test:fdroid

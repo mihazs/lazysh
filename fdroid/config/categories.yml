@@ -1,0 +1,4 @@
+# Selected unchanged entry from official fdroiddata/config/categories.yml.
+Remote Access:
+  name: Remote Access
+  description: Control desktops, servers, and devices remotely via RDP, VNC, or SSH
