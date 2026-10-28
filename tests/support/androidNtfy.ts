@@ -30,7 +30,8 @@ export class OwnedNtfyPackages {
   }
 }
 const fixtureCase='ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback';
-const fixtureCases=['ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy',fixtureCase];
+const fixtureCases=['ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy',
+  'ownedUnifiedPushEventParserAndKeystoreReplayStateFailClosed',fixtureCase];
 const invalid=()=>new Error('Owned ntfy acceptance admission failed');
 export function privateInputCommand(nonce:string) {
   if(!/^[a-f\d]{32}$/.test(nonce))throw invalid();
@@ -188,6 +189,10 @@ export function nativeFailureStage(failure:string) {
     ['Certificate fingerprint review','certificate_review'],['Exact owned server certificate required','certificate_identity'],
     ['Trust only the owned server certificate','certificate_trust'],['Actual native credential dialog required','native_dialog'],
     ['Explicit notification permission','notification_permission'],['Real SDK challenge must confirm native state','challenge_confirmation'],
+    ['Actual native display consent dialog required','display_dialog'],['Original lease commits native display consent','display_consent'],
+    ['Actual bound-event notification required','event_notification'],['Actual private generic notification','notification_privacy'],
+    ['Actual immutable own-app intent without remote actions','notification_intent'],
+    ['Actual replay callback reached bound admission','replay_callback'],['Replay cannot replace actual notification','replay_notification'],
     ['Authenticated relay cleanup must remove private enrollment','authenticated_cleanup']];
   return stages.find(([label])=>failure.includes(label))?.[1]??'other_native_failure';
 }
@@ -322,6 +327,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     const native=await receipt(directory);
     await relay.finish('actual relay confirmation and cleanup',10_000);
     if(!relay.stdout.includes('actualServerConfirmed=true oneConfirmation=true'))throw new Error('Owned relay proof missing');
+    if(!relay.stdout.includes('boundEventAccepted=true eventReplayPublished=true'))throw new Error('Owned relay event proof missing');
     // Rebuild without the opt-in property: stale generated resources must never
     // survive into an ordinary debug or release artifact.
     const ordinaryArgs=['-p',android,'--no-daemon','-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64'];
@@ -343,7 +349,7 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
       distributorVersion:pins.android.version,serverArchiveSha256:pins.server.sha256,distributorSha256:pins.android.sha256,
       distributorSignerSha256:pins.android.signerSha256,googleComponentsAbsent:true,actualEncryptedChallenge:true,
       activityBackground:true,authenticatedPause:true,normalDebugAndReleaseTrustAbsent:true,nativeLibraryUnchanged:true,
-      releaseRustCompilation:false,notificationDelivery:false})+'\n');
+      releaseRustCompilation:false,notificationDelivery:true,replayCallbackObserved:true,privateGenericNotification:true})+'\n');
   }catch(error){
     primary=true;
     const code=error instanceof Error?/; exit=([0-9]{1,3})$/.exec(error.message):null;

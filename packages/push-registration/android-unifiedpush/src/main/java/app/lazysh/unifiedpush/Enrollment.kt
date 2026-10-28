@@ -114,6 +114,22 @@ internal class EnrollmentController(
     fun busy(): Boolean = synchronized(lock) { active != null }
     fun unavailable():Boolean = synchronized(lock) { storageFailed }
 
+    /** Keep original consent and the confirmed private binding live through the
+     * bounded display admission/post; do not capture authority and use it later. */
+    fun withConfirmed(instance:String, action:(DisplayBinding)->Unit):Boolean {
+        var accepted=false
+        gate.current(instance) {
+            synchronized(lock) {
+                val state=store.value ?: return@synchronized
+                if (state.instance!=instance || state.phase!=EnrollmentPhase.CONFIRMED) return@synchronized
+                action(DisplayBinding(state.localId,state.epoch,instance,checkNotNull(state.deviceId),
+                    checkNotNull(state.generation),checkNotNull(state.subscriptionId)))
+                accepted=true
+            }
+        }
+        return accepted
+    }
+
     fun begin(epoch: Long, origin: String, enrollment: String, done: (Boolean) -> Unit) {
         val canonical = relayOrigin(origin)
         require(capability(enrollment))

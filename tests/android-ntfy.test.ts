@@ -48,11 +48,12 @@ test('every fixed native selector label retains a finite failure stage without p
   expect(nativeFailureStage('Save owned default server')).toBe('default_server_save');
 });
 
-test('native receipt requires both exact owned cases without substitution or skips',()=>{
-  const cases=['ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback','ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy'];
+test('native receipt requires every exact owned case without substitution or skips',()=>{
+  const cases=['ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback','ownedNtfyFirstLaunchBudgetAndOneTimePermissionPolicy',
+    'ownedUnifiedPushEventParserAndKeystoreReplayStateFailClosed'];
   const rows=cases.map(name=>`<testcase name="${name}" classname="app.lazysh.client.NativeWorkspaceTest" />`);
   const report=`<testsuite>${rows.join('')}</testsuite>`;
-  expect(validateNtfyReport(report).passed).toBe(2);
+  expect(validateNtfyReport(report).passed).toBe(3);
   for(const invalid of [rows[0],rows[0]+rows[0],rows[0]+rows[0]+`<system-out>name="${cases[1]}"</system-out>`,
     rows[0]+`<system-out><![CDATA[${rows[1]}]]></system-out>`,rows[0]+`<!--${rows[1]}-->`,
     report.replace('classname="app.lazysh.client.NativeWorkspaceTest"','classname="foreign.Case"'),

@@ -10,6 +10,29 @@ Use trunk-based development.
 - Review changes, address findings, and run relevant checks. Once ready, merge autonomously; do not leave a ready pull request open awaiting user confirmation.
 - Create every Git worktree under `~/dev/.worktrees/`.
 
+# Continuing implementation
+
+Treat “continue”, “resume”, and “keep implementing” as requests to execute the
+unfinished objective in the conversation. Across sessions, use
+`lazysh-history-research` and the installed ai-memory handoff skill to recover it,
+then verify progress against the checkout, open PRs, linked issues, and the live
+roadmap in `docs/roadmap.md`. Memory supplies evidence of prior work; the current
+user request supplies authorization.
+
+Context recovery, a plan, a status report, or completion of one issue does not
+finish a request to keep implementing the broader roadmap. After recovery, take
+the next actionable acceptance criterion through implementation and relevant
+checks; review and merge ready work using the workflow above, then continue with
+the next remaining item in the requested scope. Join an existing PR for that work
+instead of starting a duplicate. Keep progress updates in commentary.
+
+End the turn when the requested scope is complete, the user asks to stop or pause,
+or further progress requires specific missing input, access, or an external event.
+If one item is blocked, continue independent work in scope when available; report
+the exact blocker and remaining work when no such work remains. Do not require
+the user to invoke Codex `/goal` or repeat “continue”. Create a goal only when
+explicitly requested. A recap-only or planning-only request remains read-only.
+
 # Naming
 
 - Commit messages and PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<type>[optional scope][!]: <description>`. Use a nonempty description and one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. Examples: `fix(ssh): preserve the original host binding`, `docs: clarify setup`, and `feat(sync)!: change the export format`. Include a breaking-change explanation when using `!` or a `BREAKING CHANGE:` footer.

@@ -10,6 +10,10 @@ pub struct RegistrationStatus {
     pub enabled: bool,
     pub token_present: bool,
     pub busy: bool,
+    #[serde(default)]
+    pub display_supported: bool,
+    #[serde(default)]
+    pub display_enabled: bool,
     pub reason: String,
 }
 
@@ -29,6 +33,12 @@ struct Control {
     operation_epoch: u64,
 }
 
+#[cfg(mobile)]
+#[derive(Serialize)]
+struct DisplayControl {
+    permit: String,
+}
+
 #[cfg(desktop)]
 fn unsupported() -> RegistrationStatus {
     RegistrationStatus {
@@ -38,6 +48,8 @@ fn unsupported() -> RegistrationStatus {
         enabled: false,
         token_present: false,
         busy: false,
+        display_supported: false,
+        display_enabled: false,
         reason: "Remote push registration requires a configured Android or iOS build. Local inbox notifications remain available.".into(),
     }
 }
@@ -118,6 +130,30 @@ pub mod commands {
     ) -> Result<RegistrationStatus, String> {
         change(app, "disable", "Native push revocation interrupted").await
     }
+
+    #[tauri::command]
+    pub async fn push_registration_display<R: Runtime>(
+        app: AppHandle<R>,
+        permit: String,
+    ) -> Result<RegistrationStatus, String> {
+        if !cfg!(all(target_os = "android", feature = "fdroid")) {
+            return Err("Remote notification display requires the F-Droid Android build".into());
+        }
+        #[cfg(mobile)]
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Push<R>>()
+                .handle
+                .run_mobile_plugin("display", DisplayControl { permit })
+                .map_err(|_| "Cannot complete native notification consent".to_owned())
+        })
+        .await
+        .map_err(|_| "Native notification consent interrupted".to_owned())?;
+        #[cfg(desktop)]
+        {
+            let _ = (app, permit);
+            unreachable!("F-Droid Android only")
+        }
+    }
 }
 pub use commands::*;
 
@@ -180,6 +216,11 @@ mod tests {
         assert!(
             tauri::async_runtime::block_on(push_registration_enroll(app.handle().clone())).is_err()
         );
+        assert!(tauri::async_runtime::block_on(push_registration_display(
+            app.handle().clone(),
+            String::new()
+        ))
+        .is_err());
         assert_eq!(call(app.handle(), "status", 0).unwrap().provider, "none");
     }
 

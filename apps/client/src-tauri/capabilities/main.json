@@ -140,6 +140,7 @@
     "allow-push-registration-status",
     "allow-push-registration-register",
     "allow-push-registration-enroll",
-    "allow-push-registration-disable"
+    "allow-push-registration-disable",
+    "allow-push-registration-display"
   ]
 }

@@ -39,6 +39,7 @@ fn main() {
         "push_registration_register",
         "push_registration_enroll",
         "push_registration_disable",
+        "push_registration_display",
         "apple_speech_capability",
         "apple_speech_install",
         "apple_speech_remove",

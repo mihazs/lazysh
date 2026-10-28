@@ -3,20 +3,63 @@ use super::*;
 use sha2::{Digest, Sha256};
 use std::{fs, os::unix::fs::MetadataExt, path::PathBuf};
 
+fn fixture_authorized(headers: &HeaderMap, nonce: &str) -> bool {
+    headers
+        .get("X-Lazysh-Fixture")
+        .and_then(|h| h.to_str().ok())
+        == Some(nonce)
+}
+
 fn signal(nonce: String, gate: Arc<Semaphore>) -> axum::routing::MethodRouter {
     post(move |headers: HeaderMap| {
         let gate = gate.clone();
         let nonce = nonce.clone();
         async move {
-            if headers
-                .get("X-Lazysh-Fixture")
-                .and_then(|h| h.to_str().ok())
-                != Some(nonce.as_str())
-            {
+            if !fixture_authorized(&headers, &nonce) {
                 return StatusCode::UNAUTHORIZED;
             }
             gate.add_permits(1);
             StatusCode::NO_CONTENT
+        }
+    })
+}
+
+type ReplayWire = Arc<Mutex<Option<Zeroizing<String>>>>;
+fn encrypted_replay(
+    nonce: String,
+    replay: ReplayWire,
+    replays: Arc<std::sync::atomic::AtomicUsize>,
+    service: Service,
+) -> axum::routing::MethodRouter {
+    post(move |headers: HeaderMap| {
+        let nonce = nonce.clone();
+        let replay = replay.clone();
+        let replays = replays.clone();
+        let service = service.clone();
+        async move {
+            if !fixture_authorized(&headers, &nonce) {
+                return StatusCode::UNAUTHORIZED;
+            }
+            if replays.fetch_add(1, Ordering::SeqCst) >= 2 {
+                return StatusCode::CONFLICT;
+            }
+            let encoded = { replay.lock().unwrap().clone() };
+            let Some(encoded) = encoded else {
+                return StatusCode::CONFLICT;
+            };
+            let Ok(wire) = serde_json::from_str::<push::EncryptedPush>(encoded.as_str()) else {
+                return StatusCode::CONFLICT;
+            };
+            let Some(config) = service.0.config.push() else {
+                return StatusCode::CONFLICT;
+            };
+            let Ok(request) = config.request(&wire, &service.0.client) else {
+                return StatusCode::CONFLICT;
+            };
+            match request.send().await {
+                Ok(response) if response.status().is_success() => StatusCode::NO_CONTENT,
+                _ => StatusCode::BAD_GATEWAY,
+            }
         }
     })
 }
@@ -148,10 +191,11 @@ async fn real_ntfy_android_encrypted_challenge() {
         client::write_private(&directory.join(name), bytes).unwrap();
     }
     let ca = reqwest::Certificate::from_pem(identity.pem.as_bytes()).unwrap();
-    let push = push::PushConfig::generate(
+    let push = push::PushConfig::generate_with_event_format(
         ntfy_origin.clone(),
         vec!["127.0.0.1".parse().unwrap()],
         "mailto:test@example.invalid".into(),
+        push::EventFormat::BoundV2,
     )
     .unwrap()
     .with_test_root(ca);
@@ -171,8 +215,17 @@ async fn real_ntfy_android_encrypted_challenge() {
     let generation = response.1["generation"].as_i64().unwrap();
     let background = Arc::new(Semaphore::new(0));
     let complete = Arc::new(Semaphore::new(0));
-    let replay: Arc<Mutex<Option<Zeroizing<String>>>> = Arc::new(Mutex::new(None));
+    let replay: ReplayWire = Arc::new(Mutex::new(None));
     let replays = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let event_replay: ReplayWire = Arc::new(Mutex::new(None));
+    let event_replays = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let event_requested = Arc::new(AtomicBool::new(false));
+    let event_accepted = Arc::new(AtomicBool::new(false));
+    let confirmed = Arc::new(AtomicBool::new(false));
+    let source_id = source(&service, SOURCE, "owned public event").await;
+    let (worker_stop, receiver) = watch::channel(false);
+    let worker_service = service.clone();
+    let worker = tokio::spawn(async move { worker_service.worker(receiver).await });
     let control = Router::new()
         .route(
             "/__fixture/background",
@@ -184,53 +237,92 @@ async fn real_ntfy_android_encrypted_challenge() {
         )
         .route(
             "/__fixture/replay",
+            encrypted_replay(
+                nonce.clone(),
+                replay.clone(),
+                replays.clone(),
+                service.clone(),
+            ),
+        )
+        .route(
+            "/__fixture/event-replay",
+            encrypted_replay(
+                nonce.clone(),
+                event_replay.clone(),
+                event_replays.clone(),
+                service.clone(),
+            ),
+        )
+        .route(
+            "/__fixture/event",
             post({
                 let nonce = nonce.clone();
-                let replay = replay.clone();
-                let replays = replays.clone();
                 let service = service.clone();
+                let confirmed = confirmed.clone();
+                let requested = event_requested.clone();
+                let accepted = event_accepted.clone();
+                let replay = event_replay.clone();
                 move |headers: HeaderMap| {
                     let nonce = nonce.clone();
-                    let replay = replay.clone();
-                    let replays = replays.clone();
                     let service = service.clone();
+                    let confirmed = confirmed.clone();
+                    let requested = requested.clone();
+                    let accepted = accepted.clone();
+                    let replay = replay.clone();
                     async move {
-                        if headers
-                            .get("X-Lazysh-Fixture")
-                            .and_then(|h| h.to_str().ok())
-                            != Some(nonce.as_str())
-                        {
+                        if !fixture_authorized(&headers, &nonce) {
                             return StatusCode::UNAUTHORIZED;
                         }
-                        if replays.fetch_add(1, Ordering::SeqCst) >= 2 {
+                        if !confirmed.load(Ordering::SeqCst)
+                            || requested.swap(true, Ordering::SeqCst)
+                        {
                             return StatusCode::CONFLICT;
                         }
-                        let encoded = { replay.lock().unwrap().clone() };
-                        let Some(encoded) = encoded else {
-                            return StatusCode::CONFLICT;
-                        };
-                        let Ok(wire) =
-                            serde_json::from_str::<push::EncryptedPush>(encoded.as_str())
-                        else {
-                            return StatusCode::CONFLICT;
-                        };
-                        let Some(config) = service.0.config.push() else {
-                            return StatusCode::CONFLICT;
-                        };
-                        let Ok(request) = config.request(&wire, &service.0.client) else {
-                            return StatusCode::CONFLICT;
-                        };
-                        match request.send().await {
-                            Ok(response) if response.status().is_success() => {
-                                StatusCode::NO_CONTENT
+                        // An explicit test-operator action, not Android authority:
+                        // the original admin/source APIs and production worker deliver it.
+                        enable(&service).await;
+                        let receipt = enqueue(&service, SOURCE, &event()).await;
+                        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+                        while std::time::Instant::now() < deadline {
+                            let id = receipt.receipt_id.clone();
+                            let current = service
+                                .db(move |store| store.receipt(source_id, &id))
+                                .await
+                                .unwrap();
+                            if current.state == "accepted" {
+                                let id = receipt.receipt_id.clone();
+                                let snapshot: String = service
+                                    .db(move |store| {
+                                        Ok(store.connection.query_row(
+                                            "SELECT subscription FROM event_push WHERE receipt=?1",
+                                            [&id],
+                                            |row| row.get(0),
+                                        )?)
+                                    })
+                                    .await
+                                    .unwrap();
+                                let config = service.0.config.push().unwrap();
+                                let wire = crate::push_event::encrypted(
+                                    &config,
+                                    &snapshot,
+                                    &receipt,
+                                    crate::store::now(),
+                                )
+                                .unwrap()
+                                .unwrap();
+                                let encoded = serde_json::to_string(&wire).unwrap();
+                                assert!(encoded.len() <= 16384, "Bounded owned event replay");
+                                *replay.lock().unwrap() = Some(Zeroizing::new(encoded));
+                                accepted.store(true, Ordering::SeqCst);
+                                return StatusCode::NO_CONTENT;
                             }
-                            _ => StatusCode::BAD_GATEWAY,
+                            tokio::time::sleep(Duration::from_millis(10)).await;
                         }
+                        StatusCode::GATEWAY_TIMEOUT
                     }
                 }
             }),
         );
-    let confirmed = Arc::new(AtomicBool::new(false));
     let confirms = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let router=service.router().layer(axum::middleware::from_fn({
         let background=background.clone();let confirmed=confirmed.clone();let confirms=confirms.clone();let service=service.clone();let replay=replay.clone();
@@ -314,6 +406,21 @@ async fn real_ntfy_android_encrypted_challenge() {
         2,
         "Both owned encrypted replays must pass through real ntfy"
     );
+    assert!(
+        event_accepted.load(Ordering::SeqCst),
+        "Production worker must obtain actual ntfy event acceptance"
+    );
+    assert_eq!(
+        event_replays.load(Ordering::SeqCst),
+        2,
+        "Both owned bound-event replays must pass through ntfy"
+    );
+    worker_stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(3), worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     let revoked = service
         .db(|store| {
             Ok(store.connection.query_row(
@@ -336,9 +443,21 @@ async fn real_ntfy_android_encrypted_challenge() {
         untrusted_rejections.load(Ordering::SeqCst) > 0,
         "Owned peer must independently observe the rejected TLS handshake"
     );
+    assert_eq!(
+        call(
+            &service,
+            "POST",
+            "/v1/admin/destination/disable",
+            ADMIN,
+            serde_json::Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
     assert!(
         matches!(service.db(|store|store.status()).await,Ok(status) if !status.enabled),
-        "Fixture must not enable event delivery"
+        "Owned destination disabled after event proof"
     );
-    println!("lazysh real ntfy relay: actualServerConfirmed=true oneConfirmation=true backgroundBeforeChallenge=true authenticatedRevocation=true eventDeliveryEnabled=false");
+    println!("lazysh real ntfy relay: actualServerConfirmed=true oneConfirmation=true backgroundBeforeChallenge=true authenticatedRevocation=true boundEventAccepted=true eventReplayPublished=true eventDestinationDisabled=true");
 }

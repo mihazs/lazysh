@@ -247,4 +247,23 @@ class EnrollmentTest {
         assertEquals(listOf("bootstrap","subscribe","confirm"),f.calls)
         assertFalse(f.enrollment.busy())
     }
+    @Test fun displayAuthorityIsConfirmedCurrentAndCannotBeCapturedAcrossRotationOrPause() {
+        val f=Fixture()
+        val instance=f.registered()
+        var admitted=0
+        assertFalse(f.enrollment.withConfirmed(instance) {admitted++})
+        f.endpoint(instance);f.queue.next()
+        f.enrollment.message(instance,f.proof());f.queue.next()
+        var original:DisplayBinding?=null
+        assertTrue(f.enrollment.withConfirmed(instance) {original=it;admitted++})
+        assertFalse(f.enrollment.withConfirmed(f.id()) {admitted++})
+        f.challengeId=f.id()
+        f.enrollment.endpoint(instance,EndpointKeys("https://push.example/up/new","B"+"A".repeat(86),"A".repeat(22)))
+        assertFalse(f.enrollment.withConfirmed(instance) {admitted++})
+        f.queue.next();f.enrollment.message(instance,f.proof());f.queue.next()
+        assertTrue(f.enrollment.withConfirmed(instance) {assertNotEquals(original,it);admitted++})
+        f.pause()
+        assertFalse(f.enrollment.withConfirmed(instance) {admitted++})
+        assertEquals(2,admitted)
+    }
 }
