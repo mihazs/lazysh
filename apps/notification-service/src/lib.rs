@@ -2,6 +2,8 @@ pub use lazysh_notification_client::{
     client, client_with_root, digest, http_client, https, secret, valid_token, BoundEvent,
     BoundReceipt, BoundStatus, Event, Kind, Receipt, Source, Status,
 };
+pub mod push;
+mod push_enrollment;
 mod store;
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
@@ -28,8 +30,14 @@ pub struct Config {
     directory: PathBuf,
     admin_hash: [u8; 32],
     target_hash: [u8; 32],
-    endpoint: reqwest::Url,
-    bearer: Zeroizing<String>,
+    destination: Destination,
+}
+enum Destination {
+    Webhook {
+        endpoint: reqwest::Url,
+        bearer: Zeroizing<String>,
+    },
+    WebPush(Arc<push::PushConfig>),
 }
 impl Config {
     pub fn new(
@@ -55,9 +63,36 @@ impl Config {
                     .map(|b| format!("{b:02x}"))
                     .collect::<String>()
             )),
-            endpoint,
-            bearer: Zeroizing::new(bearer.into()),
+            destination: Destination::Webhook {
+                endpoint,
+                bearer: Zeroizing::new(bearer.into()),
+            },
         })
+    }
+    pub fn web_push(
+        directory: PathBuf,
+        admin: &str,
+        push: push::PushConfig,
+    ) -> Result<Self, String> {
+        if !valid_token(admin) {
+            return Err("Require a 256-bit hexadecimal admin capability".into());
+        }
+        Ok(Self {
+            directory,
+            admin_hash: digest(admin),
+            target_hash: push.identity(),
+            destination: Destination::WebPush(Arc::new(push)),
+        })
+    }
+    fn push(&self) -> Option<Arc<push::PushConfig>> {
+        match &self.destination {
+            Destination::WebPush(push) => Some(push.clone()),
+            _ => None,
+        }
+    }
+    fn reserved(&self, hash: &[u8]) -> bool {
+        hash == self.admin_hash
+            || matches!(&self.destination, Destination::Webhook { bearer, .. } if hash == digest(bearer))
     }
 }
 #[derive(Debug)]
@@ -111,7 +146,11 @@ struct Inner {
 }
 impl Service {
     pub fn open(config: Config) -> Result<Self, String> {
-        Self::open_with(config, http_client()?, false)
+        let client = match config.push() {
+            Some(push) => push.client()?,
+            None => http_client()?,
+        };
+        Self::open_with(config, client, false)
     }
     /// Owned HTTPS fixtures can add their test certificate without changing CLI trust.
     #[cfg(feature = "test-support")]
@@ -169,6 +208,7 @@ impl Service {
             .route("/v1/events", post(ingest))
             .route("/v1/bound-events", get(bound_status).post(bound_ingest))
             .route("/v1/receipts/{id}", get(receipt))
+            .merge(push_enrollment::routes())
             .layer(DefaultBodyLimit::max(4096))
             .with_state(self.clone())
     }
@@ -183,14 +223,22 @@ impl Service {
                 continue;
             };
             let body = serde_json::json!({"schemaVersion":1,"receiptId":job.receipt.receipt_id,"eventId":job.receipt.event_id,"kind":job.receipt.kind,"alias":job.receipt.alias});
-            let request = self
-                .0
-                .client
-                .post(self.0.config.endpoint.clone())
-                .bearer_auth(self.0.config.bearer.as_str())
-                .header("Idempotency-Key", &job.receipt.receipt_id)
-                .json(&body)
-                .send();
+            let request = match &self.0.config.destination {
+                Destination::Webhook { endpoint, bearer } => self
+                    .0
+                    .client
+                    .post(endpoint.clone())
+                    .bearer_auth(bearer.as_str())
+                    .header("Idempotency-Key", &job.receipt.receipt_id)
+                    .json(&body),
+                Destination::WebPush(config) => config
+                    .request(
+                        job.push.as_ref().ok_or_else(ApiError::storage)?,
+                        &self.0.client,
+                    )
+                    .map_err(|_| ApiError::storage())?,
+            }
+            .send();
             tokio::pin!(request);
             let accepted = loop {
                 tokio::select! {biased;
@@ -228,8 +276,7 @@ async fn provision(
     source
         .validate()
         .map_err(|code| ApiError(StatusCode::BAD_REQUEST, code))?;
-    if source.token_hash == s.0.config.admin_hash || source.token_hash == digest(&s.0.config.bearer)
-    {
+    if s.0.config.reserved(&source.token_hash) {
         return Err(ApiError::conflict());
     }
     s.db(move |s| s.source(&source)).await?;
