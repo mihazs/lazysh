@@ -284,8 +284,8 @@ jobs:
         run: LAZYSH_ANDROID_PUSH_VARIANT=google bunx turbo run test:android-push-artifact --filter=@lazysh/client
       - run: ./gradlew :tauri-plugin-lazysh-vault:testDebugUnitTest --no-daemon
         working-directory: apps/client/src-tauri/gen/android
-      - name: Exercise bounded native Android deep-link ingress
-        run: ./gradlew :tauri-plugin-deep-link:testDebugUnitTest :tauri-plugin-lazysh-push:testDebugUnitTest :app:testUniversalDebugUnitTest --no-daemon
+      - name: Exercise native Android ingress and compiled startup log policy
+        run: ./gradlew :tauri-plugin-deep-link:testDebugUnitTest :tauri-plugin-lazysh-push:testDebugUnitTest :app:testUniversalDebugUnitTest :app:testUniversalReleaseUnitTest -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false --no-daemon
         working-directory: apps/client/src-tauri/gen/android
       - uses: actions/upload-artifact@v4
         with:
