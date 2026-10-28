@@ -39,7 +39,7 @@ import androidx.test.espresso.action.Tap
 import androidx.test.espresso.action.EspressoKey
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
-import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.matcher.RootMatchers.isPlatformPopup
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.espresso.web.sugar.Web.onWebView
@@ -1258,7 +1258,7 @@ class NativeWorkspaceTest {
                 assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
                 floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
             }, Press.FINGER))
-            val option = onView(withText("SSH")).inRoot(isDialog())
+            val option = onView(withText("SSH")).inRoot(isPlatformPopup())
             option.check(matches(isDisplayed()))
             println("lazysh SSH UI: native transport chooser ready")
             option.perform(click())
