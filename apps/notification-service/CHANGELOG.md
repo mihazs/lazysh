@@ -1,5 +1,16 @@
 # @lazysh/notification-service
 
+## 0.17.0
+
+### Minor Changes
+
+- e55f3f7: Add an opt-in authenticated encrypted Web Push server foundation with private single-device enrollment and confirmation. Existing webhook defaults remain unchanged; native Android enrollment and actual remote notification delivery remain incomplete.
+
+### Patch Changes
+
+- @lazysh/common@0.17.0
+  - @lazysh/notification-client@0.17.0
+
 ## 0.16.0
 
 ### Patch Changes

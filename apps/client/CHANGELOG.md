@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 0.17.0
+
+### Minor Changes
+
+- 5a1d420: Show a bounded server-reported Next.js hint during explicit preview HTTP discovery without changing its default or waiting for additional headers.
+
+### Patch Changes
+
+- e6c0e65: Catalogue the static Next.js preview hint label without changing discovery or its displayed brand.
+- @lazysh/common@0.17.0
+  - @lazysh/display-idle@0.17.0
+  - @lazysh/et-transport@0.17.0
+  - @lazysh/mosh-transport@0.17.0
+
 ## 0.16.0
 
 ### Minor Changes
