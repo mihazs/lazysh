@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,28 +50,30 @@ test('Herdr exclusions preserve upstream bytes and one native-generated schema',
 
 // Opted in by herdr-native after its checksum-verified Zig and archive provision.
 // Execute the exact Actions admission body with real gzip/Zig, without network.
-for (const variant of ['matching hash', 'wrong hash', 'truncated archive'] as const) {
-  test.skipIf(process.env.LAZYSH_HERDR_UUCODE_FIXTURES !== '1')(`local uucode admission: ${variant}`, async () => {
+for (const [name, sourceManifest] of [
+  ['uucode', 'build.zig.zon'], ['highway', 'pkg/highway/build.zig.zon'], ['pixels', 'pkg/wuffs/build.zig.zon'],
+] as const) for (const variant of ['matching hash', 'wrong hash', 'truncated archive'] as const) {
+  test.skipIf(process.env.LAZYSH_HERDR_ARCHIVE_FIXTURES !== '1')(`local ${name} admission: ${variant}`, async () => {
     const workflow = Bun.YAML.parse(await Bun.file(join(root, '.github/workflows/checks.yml')).text()) as {
       jobs: { 'herdr-native': { steps: { id?: string; run?: string; env?: Record<string, string> }[] } };
     };
-    const admission = workflow.jobs['herdr-native'].steps.find(step => step.id === 'uucode-admission')!;
+    const admission = workflow.jobs['herdr-native'].steps.find(step => step.id === `${name}-admission`)!;
     expect(admission.run).toBeDefined();
-    const expected = admission.env!.HERDR_UUCODE_HASH;
-    const manifest = await Bun.file(join(directory, 'vendor/libghostty-vt/build.zig.zon')).text();
+    const expected = admission.env!.HERDR_PACKAGE_HASH;
+    const manifest = await Bun.file(join(directory, 'vendor/libghostty-vt', sourceManifest)).text();
     expect(manifest).toContain(`.hash = "${expected}"`);
-    const fixture = await mkdtemp(join(tmpdir(), 'lazysh-uucode-admission-'));
+    const fixture = await mkdtemp(join(tmpdir(), `lazysh-${name}-admission-`));
     try {
-      const archive = join(fixture, 'uucode.tar.gz');
+      const archive = join(fixture, `${name}.tar.gz`);
       for (const path of ['build.zig', 'build.zig.zon']) {
         await copyFile(join(directory, 'vendor/libghostty-vt', path), join(fixture, path));
       }
-      const original = Buffer.from(await Bun.file(process.env.HERDR_UUCODE_ARCHIVE!).arrayBuffer());
+      const original = Buffer.from(await Bun.file(join(process.env.HERDR_CI_ROOT!, `${name}.tar.gz`)).arrayBuffer());
       expect(original.length).toBeLessThanOrEqual(33554432);
       await writeFile(archive, variant === 'truncated archive' ? original.subarray(0, 32) : original);
       const child = Bun.spawn(['bash', '-e', '-c', admission.run!], { cwd: fixture,
-        env: { ...process.env, HERDR_UUCODE_ARCHIVE: archive,
-          HERDR_UUCODE_HASH: variant === 'wrong hash' ? expected + '-wrong' : expected,
+        env: { ...process.env, HERDR_CI_ROOT: fixture, HERDR_ARCHIVE_NAME: name,
+          HERDR_PACKAGE_HASH: variant === 'wrong hash' ? expected + '-wrong' : expected,
           ZIG_GLOBAL_CACHE_DIR: join(fixture, 'global'), ZIG_LOCAL_CACHE_DIR: join(fixture, 'local') },
         stdout: 'pipe', stderr: 'pipe' });
       const [exit, stdout, stderr] = await Promise.all([
@@ -80,8 +82,9 @@ for (const variant of ['matching hash', 'wrong hash', 'truncated archive'] as co
       expect(exit).toBe(variant === 'matching hash' ? 0 : 1);
       expect(stdout).toBe('');
       if (variant === 'matching hash') expect(stderr).toBe('');
-      else expect(stderr).toContain(variant === 'wrong hash' ? 'uucode package hash mismatch' : 'unexpected end of file');
-      expect(await Bun.file(join(fixture, 'zig-pkg', expected, 'build.zig.zon')).exists()).toBe(variant !== 'truncated archive');
+      else expect(stderr).toContain(variant === 'wrong hash' ? 'Herdr archive package hash mismatch' : 'unexpected end of file');
+      const admitted = await stat(join(fixture, 'zig-pkg', expected)).then(value => value.isDirectory(), () => false);
+      expect(admitted).toBe(variant !== 'truncated archive');
     } finally {
       await rm(fixture, { recursive: true, force: true });
     }
