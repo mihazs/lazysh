@@ -224,6 +224,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
+      - name: Verify native GUI namespace prerequisites
+        run: |
+          test "$(id -u)" -ne 0
+          bwrap --version
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
+          bwrap --unshare-user --unshare-net --dev-bind / / -- /usr/bin/true
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
