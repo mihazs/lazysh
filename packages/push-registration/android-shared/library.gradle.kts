@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 
 extensions.configure<LibraryExtension> {
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig { minSdk = 24 }
     sourceSets.getByName("main").java.srcDir("../android-shared/src/main/java")
     compileOptions {
