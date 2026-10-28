@@ -51,6 +51,11 @@ contrast for accompanying interface text separately from decorative symbols.
 The wordmark letters are native SVG paths derived from an Inter SemiBold
 outline, so the SVGs do not require installing or distributing font files.
 
+The application's sidebar imports `svg/icon-gradient.svg` directly at its
+existing 35px mark size. It is decorative (`alt=""`, `aria-hidden="true"`)
+beside the visible lazysh name and localized tagline; the SVG's own title does
+not add a second accessible app name. Responsive drawer controls remain separate.
+
 ## Updating platform exports
 
 Use the checked-in artwork with the Tauri icon tooling and platform asset

@@ -1,6 +1,7 @@
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {t, useUi} from './i18n/core';
 import {appVersion} from './version';
+import bedModeMark from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
 import {NativeLocaleNotice} from './i18n/NativeLocaleNotice';
@@ -1518,8 +1519,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         aria-label={t("appHostsAndConnections")}
       >
         <div className="brand">
-          <span className="brand-mark">l<span>_</span>
-          </span>
+          <img className="brand-mark" src={bedModeMark} alt="" aria-hidden="true" width={35} height={35}/>
           <span>
             lazysh<small>{t("appYourAgentsWithinReach")}</small>
           </span>

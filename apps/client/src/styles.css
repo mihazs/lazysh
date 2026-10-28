@@ -149,22 +149,11 @@ button svg {
   letter-spacing: -1px;
 }
 .brand-mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--theme-accent, #c4eb89);
-  color: var(--theme-text, #25321b);
+  display: block;
+  flex: 0 0 35px;
   width: 35px;
   height: 35px;
-  border-radius: 9px;
-  font-family: monospace;
-  font-size: 25px;
-  letter-spacing: -4px;
-  padding-right: 3px;
-}
-.brand-mark span {
-  transform: translateY(-2px);
-  display: inline-block;
+  object-fit: contain;
 }
 .brand small {
   display: block;
