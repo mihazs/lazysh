@@ -113,6 +113,7 @@ Development builds and CI artifacts are not verified production downloads. Read 
 | Coding-agent events and transcript access | [Companion](docs/companion.md) |
 | Remote previews, files, and voice | [Previews](docs/previews.md) · [Attachments](docs/attachments.md) · [Voice](docs/voice.md) |
 | Architecture, security boundaries, and feature limits | [Architecture](docs/architecture.md) · [Implementation evidence](docs/moshi-evidence.md) |
+| Planned work and platform verification | [Roadmap](docs/roadmap.md) |
 | Builds, releases, and updates | [Install and update](docs/install-and-update.md) · [Release artifacts](docs/release-artifacts.md) |
 
 ## Join the project
@@ -181,7 +182,7 @@ The [Bed Mode brand kit](brand/lazysh/README.md) contains SVG logos and app-icon
 
 ## Independent project and license
 
-lazysh is an independent open-source implementation informed by research into Moshi's documented SSH and coding-agent workflows. **Moshi feature parity is a development goal, not a current capability claim.** lazysh does not distribute Moshi source code, branding, or assets.
+lazysh is an independent open-source SSH and coding-agent client. Its current capabilities and verification limits are documented above; planned work is tracked in the [roadmap](docs/roadmap.md).
 
 lazysh is licensed under the [GNU GPL version 3 or later](LICENSE). Distributing modified or binary builds requires compliance with the applicable license, notices, and corresponding-source obligations.
 
