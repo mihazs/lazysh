@@ -10,13 +10,18 @@ import KeepAwakeControl, {boardAwakeKey, parseKeepAwakeStatus} from './KeepAwake
 vi.mock('@tauri-apps/api/core', async original=>({...await (await import('./test/nativeCoreMock')).mockNativeCore(original),isTauri:vi.fn()}));
 vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn()}));
 let nativeLoss:(payload:unknown)=>void;
+let nativeFocus:()=>void=()=>{};
 function authority(locked=false,enabled=true) {
   applyAccessStatus({initialized:true,supported:true,enabled,locked,reason:'fixture',
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),...(locked?{}:{nonce:'b'.repeat(64)})});
 }
 beforeEach(()=>{
-  authority();vi.mocked(isTauri).mockReturnValue(true);
-  vi.mocked(listen).mockImplementation(async(_name,handler)=>{nativeLoss=payload=>handler({payload} as never);return()=>{};});
+  authority();vi.mocked(isTauri).mockReturnValue(true);nativeFocus=()=>{};
+  vi.mocked(listen).mockImplementation(async(name,handler)=>{
+    if(name==='lazysh-board-keep-awake-lost')nativeLoss=payload=>handler({payload} as never);
+    if(name==='tauri://focus')nativeFocus=()=>handler({payload:null} as never);
+    return()=>{};
+  });
   vi.spyOn(document,'hasFocus').mockReturnValue(true);
   vi.spyOn(document,'visibilityState','get').mockReturnValue('visible');
 });
@@ -40,7 +45,7 @@ function backend(available=true) {
     }
     throw new Error(`Unexpected native fixture call: ${command}`);
   });
-  return {status,acquire,active:()=>active,invalidate(){active=undefined;issued=closed=0;epoch='1/22222222-2222-4222-8222-222222222222';}};
+  return {status,acquire,active:()=>active,availability(value:boolean){available=value;},invalidate(){active=undefined;issued=closed=0;epoch='1/22222222-2222-4222-8222-222222222222';}};
 }
 const toggle=()=>screen.getByRole('checkbox',{name:'Keep display awake while this board is open'});
 async function optIn(){await waitFor(()=>expect(toggle()).toHaveProperty('disabled',false));fireEvent.click(toggle());}
@@ -241,7 +246,7 @@ for(const outcome of ['rejected','malformed','inactive'] as const)it(`requires e
   render(<KeepAwakeControl sessionId="a"/>);await optIn();await screen.findByRole('alert');
   const calls=()=>vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_acquire').length;
   expect(calls()).toBe(1);
-  await act(async()=>{fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));});
+  await act(async()=>{fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));nativeFocus();});
   expect(calls()).toBe(1);
   fireEvent.click(toggle());await screen.findByText('Keep awake is off.');await optIn();await screen.findByRole('alert');
   expect(calls()).toBe(2);
@@ -318,4 +323,45 @@ it('keeps a preference failure live across locale changes after releasing the or
     expect(screen.getByRole('alert').textContent).toBe(t('keepAwakeSaveFailed'));
     expect(invoke).toHaveBeenCalledTimes(calls);
   }
+});
+
+it('refreshes unavailable resume metadata on native main-window focus without a second DOM focus event',async()=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');render(<KeepAwakeControl sessionId="a"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');
+  native.invalidate();native.availability(false);
+  await act(async()=>{fireEvent(window,new Event('blur'));fireEvent(window,new Event('focus'));});
+  await screen.findByText('RAW native capability <untouched>');
+  const acquisitions=()=>vi.mocked(invoke).mock.calls.filter(([command])=>command==='board_keep_awake_acquire').length;
+  expect(acquisitions()).toBe(1);
+  native.availability(true);
+  await act(async()=>nativeFocus());
+  await waitFor(()=>expect(native.active()).toBeTruthy());
+  expect(acquisitions()).toBe(2);
+});
+
+it.each(['hidden','unmount','revoked'] as const)('cannot reacquire from a retained native focus callback after %s',async boundary=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="a"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');
+  const originalFocus=nativeFocus;
+  await act(async()=>{
+    if(boundary==='hidden'){vi.spyOn(document,'visibilityState','get').mockReturnValue('hidden');fireEvent(document,new Event('visibilitychange'));}
+    else if(boundary==='unmount')view.unmount();
+    else authority(true);
+  });
+  await waitFor(()=>expect(native.active()).toBeUndefined());
+  const calls=[...vi.mocked(invoke).mock.calls];
+  await act(async()=>originalFocus());
+  expect(vi.mocked(invoke).mock.calls).toEqual(calls);
+});
+it('retires a late native-focus subscription after unmount without refreshing metadata',async()=>{
+  backend();const remove=vi.fn();let finish!:(remove:()=>void)=>void;let focus!:()=>void;
+  vi.mocked(listen).mockImplementationOnce(async(_name,handler)=>{
+    focus=()=>handler({payload:null} as never);
+    return new Promise<()=>void>(resolve=>{finish=resolve;});
+  });
+  const view=render(<KeepAwakeControl sessionId="a"/>);
+  await waitFor(()=>expect(toggle()).toHaveProperty('disabled',false));
+  view.unmount();const calls=[...vi.mocked(invoke).mock.calls];
+  await act(async()=>{finish(remove);focus();});
+  expect(remove).toHaveBeenCalledOnce();expect(vi.mocked(invoke).mock.calls).toEqual(calls);
 });
