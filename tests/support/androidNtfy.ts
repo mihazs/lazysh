@@ -32,6 +32,14 @@ const invalid=()=>new Error('Owned ntfy acceptance admission failed');
 export function ntfyEnvironment(env:NodeJS.ProcessEnv):NodeJS.ProcessEnv {
   return Object.fromEntries(['PATH','HOME','LANG'].flatMap(name=>env[name]===undefined?[]:[[name,env[name]]]));
 }
+export function distributorHasGooglePush(text:string,manifest=false) {
+  // The pinned F-Droid flavor retains two inert declarations for its dummy
+  // android.app.Service. They are not permission/component or dex exemptions.
+  const checked=manifest?text
+    .replace(/<action\s+android:name="com\.google\.firebase\.MESSAGING_EVENT"\s*\/>/g,'')
+    .replace(/<meta-data\s+android:name="com\.google\.firebase\.messaging\.default_notification_icon"\s+android:resource="@ref\/0x[a-f\d]{8}"\s*\/>/g,''):text;
+  return /\bcom\.google\.(?:firebase|android\.(?:gms|c2dm))\b|\borg\.unifiedpush\.android\.(?:foss_)?embedded_fcm_distributor\b/.test(checked);
+}
 export async function inspectAcceptanceTrust(apk:string,ca:string,sdk:string,
   run:(stage:string,program:string,args:string[])=>Promise<string>) {
   const analyzer=join(sdk,'cmdline-tools/latest/bin/apkanalyzer');
@@ -152,12 +160,12 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     let forbidden=false,tail='';
     const inspectGoogle=(data:Buffer)=>{
       const text=tail+String(data);tail=text.slice(-128);
-      forbidden ||= /\bcom\.google\.(?:firebase|android\.(?:gms|c2dm))\b|\borg\.unifiedpush\.android\.(?:foss_)?embedded_fcm_distributor\b/.test(text);
+      forbidden ||= distributorHasGooglePush(text);
     };
     await stream('actual FOSS distributor dex',analyzer,['dex','packages','--defined-only',join(directory,'distributor.apk')],32*1024*1024,inspectGoogle);
-    tail='';
-    await stream('actual FOSS distributor manifest',analyzer,['manifest','print',join(directory,'distributor.apk')],256*1024,inspectGoogle);
-    if(forbidden)throw new Error('Distributor FOSS graph admission failed');
+    const manifest:Buffer[]=[];
+    await stream('actual FOSS distributor manifest',analyzer,['manifest','print',join(directory,'distributor.apk')],256*1024,bytes=>manifest.push(bytes));
+    if(forbidden||distributorHasGooglePush(Buffer.concat(manifest).toString('utf8'),true))throw new Error('Distributor FOSS graph admission failed');
     const apk=join(android,'app/build/outputs/apk/universal/debug/app-universal-debug.apk');
     await normalArtifact();
     const baselineNative=await nativeDigest(apk);

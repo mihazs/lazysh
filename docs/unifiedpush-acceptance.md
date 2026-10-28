@@ -22,6 +22,12 @@ components before installation. The existing app artifact oracle independently
 checks lazysh's native FOSS dependency graph. No upstream Go code is authored or
 modified; the unmodified official server is an external test dependency.
 
+The pinned F-Droid APK retains an inert Firebase action and notification-icon
+metadata for its upstream dummy `android.app.Service` implementation. Only those
+exact manifest tag shapes are admitted; Google push classes, components,
+permissions and altered declarations remain rejected. This is not a namespace
+exemption for executable Firebase code.
+
 The selected distributor uses the connector SDK's supported older Android
 protocol compatibility path. This is not a claim that ntfy1.25.2 implements every
 AND_3.1.0 feature or enforces the application's VAPID key at registration.
