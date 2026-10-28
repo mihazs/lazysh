@@ -1437,6 +1437,90 @@ class NativeWorkspaceTest {
         assertTrue("Expired settings cannot scroll",!NtfySettingsScroll(0).scroll(TimeUnit.SECONDS.toNanos(5),true))
     }
 
+    private fun <T> withOwnedRestoration(label:String, restore:()->Unit, action:()->T):T {
+        var primary:Throwable?=null
+        try {return action()} catch(failure:Throwable) {primary=failure;throw failure}
+        finally {
+            try {restore()} catch (_:Throwable) {
+                val finite=AssertionError(label)
+                val first=primary
+                if(first==null)throw finite else first.addSuppressed(finite)
+            }
+        }
+    }
+
+    @Test fun ownedUnifiedPushEventParserAndKeystoreReplayStateFailClosed() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        org.junit.Assume.assumeTrue("Owned ntfy acceptance only",InstrumentationRegistry.getArguments().getString("lazyshNtfyAcceptance")=="true")
+        val context=instrumentation.targetContext
+        val primary=AssertionError("Owned primary failure")
+        var restorationAttempted=false
+        var observed:Throwable?=null
+        try {
+            withOwnedRestoration("Owned restoration failed",{restorationAttempted=true;error("private restoration details")}) {throw primary}
+        } catch(failure:Throwable) {observed=failure}
+        assertTrue("Restoration preserves primary failure and finite metadata",observed===primary &&
+            primary.suppressed.singleOrNull()?.message=="Owned restoration failed" && primary.suppressed.single().cause==null)
+        assertTrue("Restoration always attempted",restorationAttempted)
+        fun native(name:String)=Class.forName("app.lazysh.unifiedpush.$name",true,context.classLoader)
+        val parser=native("EventDisplayKt").getDeclaredMethod("parseDisplayEvent",ByteArray::class.java,Boolean::class.javaPrimitiveType)
+        val device=java.util.UUID.randomUUID().toString()
+        val receipt=java.util.UUID.randomUUID().toString()
+        val event=java.util.UUID.randomUUID().toString()
+        val valid=org.json.JSONObject().put("schemaVersion",2).put("deviceId",device).put("generation",7)
+            .put("receiptId",receipt).put("eventId",event).put("kind","done").put("alias","public alias")
+            .put("issuedAt",1000).put("expiresAt",1300).toString()
+        fun parse(text:String,decrypted:Boolean=true)=parser.invoke(null,text.toByteArray(Charsets.UTF_8),decrypted)
+        assertTrue("Exact decrypted bounded v2 event accepted",parse(valid)!=null)
+        val nil=java.util.UUID(0,0).toString()
+        assertTrue("Service-valid nil event UUID accepted",parse(valid.replace(event,nil))!=null)
+        assertTrue("Nil device identifier remains rejected",parse(valid.replace(device,nil))==null)
+        assertTrue("Nil receipt identifier remains rejected",parse(valid.replace(receipt,nil))==null)
+        assertTrue("Exact 2KiB envelope accepted",parse(valid+" ".repeat(2048-valid.toByteArray(Charsets.UTF_8).size))!=null)
+        val invalid=listOf(valid.replace("\"schemaVersion\":2","\"schemaVersion\":1"),
+            valid.replace("\"generation\":7","\"generation\":7.0"),valid.replace("\"generation\":7","\"generation\":-1"),
+            valid.replace("\"kind\":\"done\"","\"kind\":\"command\""),valid.replace("1300","1301"),
+            valid.replace("1300","1000"),valid.replace("public alias","invalid\\nmessage"),
+            valid.replace(receipt,"invalid"),valid.dropLast(1)+",\"extra\":true}",
+            valid.dropLast(1)+",\"generation\":7}",valid+" trailing"," ".repeat(2049),
+            valid.replace("public alias","a".repeat(65)),valid+" ".repeat(2049-valid.toByteArray(Charsets.UTF_8).size))
+        for (text in invalid) assertTrue("Invalid bound envelope rejected without content output",parse(text)==null)
+        assertTrue("Undecrypted event is inert",parse(valid,false)==null)
+        assertTrue("Invalid UTF8 event is inert",parser.invoke(null,byteArrayOf(0xc0.toByte(),0xaf.toByte()),true)==null)
+        val local=java.util.UUID.randomUUID().toString()
+        val instance=java.util.UUID.randomUUID().toString()
+        val subscription=java.util.UUID.randomUUID().toString()
+        val stateJson=org.json.JSONObject().put("schemaVersion",1).put("localId",local).put("epoch",1)
+            .put("instance",instance).put("deviceId",device).put("generation",7).put("subscriptionId",subscription)
+            .put("enabled",false).put("highWater",1000).put("receipts",org.json.JSONArray().put(
+                org.json.JSONObject().put("receiptId",receipt).put("expiresAt",1300)))
+        val state=native("EventDisplayStoreKt").getDeclaredMethod("decodeDisplayState",org.json.JSONObject::class.java).invoke(null,stateJson)
+        val storeType=native("PrivateDisplayStore")
+        val preferences=context.getSharedPreferences("lazysh-unifiedpush-display-v1",android.content.Context.MODE_PRIVATE)
+        val prior=preferences.getString("ciphertext",null)
+        withOwnedRestoration("Original owned replay fixture restoration failed",{
+            val edit=preferences.edit()
+            if(prior==null)edit.remove("ciphertext") else edit.putString("ciphertext",prior)
+            check(edit.commit())
+        }) {
+            val store=storeType.getDeclaredConstructor(android.content.Context::class.java).newInstance(context)
+            storeType.getDeclaredMethod("setValue",native("DisplayState")).invoke(store,state)
+            val encoded=checkNotNull(preferences.getString("ciphertext",null))
+            assertTrue("Replay state is ciphertext only",!encoded.contains(receipt) && !encoded.contains(device) && preferences.all.keys==setOf("ciphertext"))
+            val restarted=storeType.getDeclaredConstructor(android.content.Context::class.java).newInstance(context)
+            assertTrue("Keystore replay state survives recreation",storeType.getDeclaredMethod("getValue").invoke(restarted)==state)
+            assertTrue("Owned corruption committed",preferences.edit().putString("ciphertext","invalid-owned-ciphertext").commit())
+            var closed=false
+            try {storeType.getDeclaredMethod("getValue").invoke(restarted)} catch (error:java.lang.reflect.InvocationTargetException) {
+                val failure=error.targetException
+                closed=failure is IllegalStateException && failure.message=="Private notification state unavailable" && failure.cause==null
+            }
+            assertTrue("Unreadable replay state never becomes an empty cache",closed)
+            assertTrue("Unreadable ciphertext retained",preferences.getString("ciphertext",null)=="invalid-owned-ciphertext")
+        }
+        println("lazysh bound event policy: closedParser=true undecryptedInert=true keystoreRoundtrip=true unreadableFailClosed=true privateContentsLogged=false")
+    }
+
     @Test(timeout = 120_000) fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {
         val arguments=InstrumentationRegistry.getArguments()
         org.junit.Assume.assumeTrue("Owned ntfy acceptance only",arguments.getString("lazyshNtfyAcceptance")=="true")
@@ -1559,7 +1643,7 @@ class NativeWorkspaceTest {
         node(By.res("com.android.permissioncontroller","permission_allow_button"),"Explicit notification permission").click()
         awaitDocument(scenario,"Native notification permission","window.__lazyshNtfyPermission==='granted'")
         fun command(name:String) {
-            assertTrue("Fixed native fixture command",name in listOf("push_registration_enroll","push_registration_disable"))
+            assertTrue("Fixed native fixture command",name in listOf("push_registration_enroll","push_registration_disable","push_registration_display"))
             evaluate(scenario,"""(() => {
               window.__lazyshNtfyControl=undefined;
               (async()=>{
@@ -1571,15 +1655,18 @@ class NativeWorkspaceTest {
             })()""")
         }
         command("push_registration_enroll")
-        val dialogClass=native("EnrollmentDialog")
-        val dialogField=dialogClass.getDeclaredField("current").apply {isAccessible=true}
-        val dialogDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
-        var dialog:android.app.AlertDialog?=null
-        while(dialog==null && System.nanoTime()<dialogDeadline) {
-            scenario.onActivity {dialog=dialogField.get(null) as? android.app.AlertDialog}
-            if(dialog==null)Thread.sleep(10)
+        fun ownedDialog(name:String,label:String):android.app.AlertDialog {
+            val field=native(name).getDeclaredField("current").apply {isAccessible=true}
+            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
+            var dialog:android.app.AlertDialog?=null
+            while(dialog==null && System.nanoTime()<deadline) {
+                scenario.onActivity {dialog=field.get(null) as? android.app.AlertDialog}
+                if(dialog==null)Thread.sleep(10)
+            }
+            assertTrue(label,dialog!=null)
+            return checkNotNull(dialog)
         }
-        assertTrue("Actual native credential dialog required",dialog!=null)
+        val dialog=ownedDialog("EnrollmentDialog","Actual native credential dialog required")
         scenario.onActivity {
             val current=checkNotNull(dialog)
             assertTrue("Native credential secure window",checkNotNull(current.window).attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE!=0)
@@ -1599,10 +1686,14 @@ class NativeWorkspaceTest {
         awaitDocument(scenario,"Actual distributor registration","window.__lazyshNtfyControl===true")
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         fun signal(name:String) {
-            assertTrue("Fixed fixture control",name in listOf("background","replay","complete"))
+            assertTrue("Fixed fixture control",name in listOf("background","replay","complete","event","event-replay"))
             val connection=java.net.URL(data.getString("relayOrigin")+"/__fixture/"+name).openConnection(java.net.Proxy.NO_PROXY) as javax.net.ssl.HttpsURLConnection
             try {
-                connection.connectTimeout=2000;connection.readTimeout=2000;connection.instanceFollowRedirects=false
+                connection.connectTimeout=2000
+                // New event stage waits for the existing worker's bounded 8s
+                // receipt; all original challenge/control deadlines remain 2s.
+                connection.readTimeout=if(name=="event")10000 else 2000
+                connection.instanceFollowRedirects=false
                 connection.requestMethod="POST";connection.setRequestProperty("X-Lazysh-Fixture",nonce)
                 assertTrue("Owned fixture control acknowledged",connection.responseCode==204)
             } finally {connection.disconnect()}
@@ -1619,15 +1710,80 @@ class NativeWorkspaceTest {
         assertTrue("Confirmed state survives an owned encrypted replay",phase(state())=="CONFIRMED")
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         awaitUnlockedWorkspace(scenario,"Original native workspace after remote challenge")
+        command("push_registration_display")
+        val displayDialog=ownedDialog("DisplayConsentDialog","Actual native display consent dialog required")
+        scenario.onActivity {
+            assertTrue("Separate display consent secure window",checkNotNull(displayDialog.window).attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE!=0)
+            displayDialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+        }
+        awaitDocument(scenario,"Original lease commits native display consent","window.__lazyshNtfyControl===true")
+        val displayRuntime=native("PushDisplay")
+        val displayObject=displayRuntime.getDeclaredField("INSTANCE").get(null)
+        val display=displayRuntime.getDeclaredMethod("controller",android.content.Context::class.java).invoke(displayObject,context)
+        val displayType=native("EventDisplayController")
+        val storeField=displayType.getDeclaredField("store").apply {isAccessible=true}
+        val originalStore=storeField.get(display)
+        val storeType=native("DisplayStore")
+        val getValue=storeType.getDeclaredMethod("getValue")
+        fun displayState()=checkNotNull(getValue.invoke(originalStore))
+        val beforeEvent=displayState()
+        val displayStateType=native("DisplayState")
+        val binding=displayStateType.getDeclaredMethod("getBinding").invoke(beforeEvent)
+        assertTrue("Separate native display consent persisted",displayStateType.getDeclaredMethod("getEnabled").invoke(beforeEvent)==true)
+        val notifications=context.getSystemService(android.app.NotificationManager::class.java)
+        fun ownedNotification()=notifications.activeNotifications.singleOrNull {it.tag=="lazysh-unifiedpush-event" && it.id==4201}
+        assertTrue("Consent alone cannot post a remote notification",ownedNotification()==null)
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        signal("event")
+        val notificationDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
+        while(ownedNotification()==null && System.nanoTime()<notificationDeadline)Thread.sleep(20)
+        val delivered=checkNotNull(ownedNotification()) {"Actual bound-event notification required"}
+        val notification=delivered.notification
+        assertTrue("Actual private generic notification",notification.visibility==android.app.Notification.VISIBILITY_PRIVATE &&
+            notification.channelId=="lazysh-remote-events-v1" && notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()=="lazysh" &&
+            notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()=="A remote agent event is available. Open lazysh to inspect your sessions.")
+        assertTrue("Actual immutable own-app intent without remote actions",notification.contentIntent?.isImmutable==true &&
+            notification.contentIntent?.creatorPackage==context.packageName && notification.actions.isNullOrEmpty())
+        assertTrue("Event arrived while Activity backgrounded",scenario.state==androidx.lifecycle.Lifecycle.State.CREATED)
+        val admitted=displayState()
+        assertTrue("One durable receipt admitted",(displayStateType.getDeclaredMethod("getReceipts").invoke(admitted) as List<*>).size==1)
+        val callbackRead=java.util.concurrent.CountDownLatch(1)
+        val observer=java.lang.reflect.Proxy.newProxyInstance(context.classLoader,arrayOf(storeType)) { _,method,args ->
+            val result=try {method.invoke(originalStore,*(args?:emptyArray()))}
+                catch(error:java.lang.reflect.InvocationTargetException) {throw error.targetException}
+            if(method.name=="getValue" && Thread.currentThread().stackTrace.any {
+                it.className=="app.lazysh.unifiedpush.EventDisplayController" && it.methodName=="message"
+            })callbackRead.countDown()
+            result
+        }
+        withOwnedRestoration("Original owned store observer restoration failed",{storeField.set(display,originalStore)}) {
+            // Test-only read observer; every operation delegates unchanged to the
+            // original real Keystore store/controller/notification implementation.
+            storeField.set(display,observer)
+            signal("event-replay")
+            assertTrue("Actual replay callback reached bound admission",callbackRead.await(15,TimeUnit.SECONDS))
+            // enabled() takes the same monitor as message(): this is a completion
+            // barrier after arrival, not a sleep that could precede a late post.
+            assertTrue("Replay callback completed with original consent",displayType.getDeclaredMethod("enabled",native("DisplayBinding")).invoke(display,binding)==true)
+            assertTrue("Replay retains exact durable receipt state",displayState()==admitted)
+            assertTrue("Replay cannot replace actual notification",ownedNotification()?.postTime==delivered.postTime)
+        }
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        awaitUnlockedWorkspace(scenario,"Original workspace after actual event display")
         command("push_registration_disable")
         awaitDocument(scenario,"Explicit authenticated native pause","window.__lazyshNtfyControl===true")
         val pauseDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(12)
         while(state()!=null && System.nanoTime()<pauseDeadline)Thread.sleep(20)
         assertTrue("Authenticated relay cleanup must remove private enrollment",state()==null)
+        assertTrue("Explicit pause removes only owned remote notification",ownedNotification()==null)
+        val paused=displayState()
+        assertTrue("Explicit pause durably retires display consent",displayStateType.getDeclaredMethod("getEnabled").invoke(paused)==false)
         signal("replay")
+        signal("event-replay")
         assertTrue("Paused state cannot regain enrollment from the old encrypted message",state()==null)
+        assertTrue("Paused replay cannot immediately restore owned notification",ownedNotification()==null)
         signal("complete")
-        println("lazysh real ntfy native: nativeDialog=true unknownCaRejected=true sdkEncryptedChallengeConfirmed=true exactDeviceGeneration=true activityBackground=true authenticatedPause=true notificationDelivery=false")
+        println("lazysh real ntfy native: nativeDialog=true unknownCaRejected=true sdkEncryptedChallengeConfirmed=true exactDeviceGeneration=true activityBackground=true authenticatedPause=true notificationDelivery=true immutableAppIntent=true replayCallbackObserved=true replayPostUnchanged=true pausedDisplayOff=true")
     }
 
     @Test fun pushRegistrationMatchesPackagedNativeProvider() {

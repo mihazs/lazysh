@@ -10,6 +10,8 @@ type RegistrationStatus = {
   enabled: boolean;
   tokenPresent: boolean;
   busy: boolean;
+  displaySupported?: boolean;
+  displayEnabled?: boolean;
   reason: string;
 };
 
@@ -72,6 +74,9 @@ export default function PushSettingsPanel() {
       </button>}
       {status?.supported && (status.enabled || status.tokenPresent || registering) && <button type="button" onClick={() => void run('push_registration_disable')} disabled={pending && !registering}>
         {apple ? t('pushDisableApns') : status.enabled || registering ? t(unified ? 'pushUnifiedPause' : 'pushPause') : t(unified ? 'pushUnifiedRetry' : 'pushRetryRevocation')}
+      </button>}
+      {unified && status?.displaySupported && <button type="button" onClick={() => void run('push_registration_display')} disabled={busy}>
+        {t('pushReviewDisplay')}
       </button>}
     </div>
     {apple && <p>{t('pushApnsHint')}</p>}

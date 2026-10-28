@@ -1,49 +1,26 @@
 package app.lazysh.unifiedpush
 
 import android.content.Context
-import android.util.Base64
-import com.google.crypto.tink.integration.android.AndroidKeystoreKmsClient
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
 import org.json.JSONObject
 
 /** Direct Keystore AEAD only. No AndroidKeysetManager/plaintext fallback. An
  * unreadable restored ciphertext is retained and never treated as an empty slot. */
 internal class PrivateEnrollmentStore(context: Context) : EnrollmentStore {
-    private val prefs = context.applicationContext.getSharedPreferences("lazysh-unifiedpush-enrollment-v1", Context.MODE_PRIVATE)
-    private val aad = "lazysh/unifiedpush/enrollment/v1".toByteArray(Charsets.UTF_8)
-    private val aead by lazy {
-        AndroidKeystoreKmsClient.getOrGenerateNewAeadKey("android-keystore://lazysh.unifiedpush.enrollment.v1")
-    }
+    private val blob=PrivatePushBlob(context,"enrollment-v1",8192)
     override var value: EnrollmentState?
         @Synchronized get() {
             try {
-                val encoded = prefs.getString("ciphertext", null) ?: return null
-                require(encoded.length in 1..16384)
-                val clear = aead.decrypt(Base64.decode(encoded, Base64.NO_WRAP), aad)
-                try {
-                    require(clear.size in 1..8192)
-                    val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                        .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(clear)).toString()
-                    return decodeState(JSONObject(text))
-                } finally { clear.fill(0) }
+                return blob.read()?.let { decodeState(JSONObject(it)) }
             } catch (_: Exception) { throw IllegalStateException("Private enrollment storage unavailable") }
         }
         @Synchronized set(value) {
             try {
                 if (value == null) {
-                    check(prefs.edit().remove("ciphertext").commit())
+                    blob.write(null)
                     return
                 }
                 validateState(value)
-                val clear = encodeState(value).toString().toByteArray(Charsets.UTF_8)
-                try {
-                    require(clear.size <= 8192)
-                    val encrypted = aead.encrypt(clear, aad)
-                    val encoded = Base64.encodeToString(encrypted, Base64.NO_WRAP)
-                    require(encoded.length <= 16384)
-                    check(prefs.edit().putString("ciphertext", encoded).commit())
-                } finally { clear.fill(0) }
+                blob.write(encodeState(value).toString())
             } catch (_: Exception) { throw IllegalStateException("Private enrollment storage unavailable") }
         }
 }
