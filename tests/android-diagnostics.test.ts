@@ -20,6 +20,8 @@ test.each([
   { mosh: 37, instrumentation: 0, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
   { mosh: 0, instrumentation: 23, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
   { mosh: 0, instrumentation: 23, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: false, overflow: true },
+  { mosh: 37, instrumentation: 23, qr: 0, fdroid: 41, sdk: 0, diagnosticFailure: false, overflow: false },
+  { mosh: 0, instrumentation: 23, qr: 0, fdroid: 41, sdk: 0, diagnosticFailure: true, overflow: false },
   { mosh: 0, instrumentation: 0, qr: 29, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
   { mosh: 0, instrumentation: 0, qr: 0, fdroid: 41, sdk: 0, diagnosticFailure: true, overflow: false },
   { mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 31, diagnosticFailure: true, overflow: false },
@@ -84,15 +86,14 @@ exit "$SDK_EXIT"
   expect(exit).toBe(expectedExit);
   expect(stdout).toBe('');
   if (!overflow) expect(stderr).toBe('');
-  const fdroidExpected = mosh === 0 && instrumentation === 0;
-  const qrExpected = fdroidExpected && fdroid === 0;
+  const qrExpected = mosh === 0 && instrumentation === 0 && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
   if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
   expect((await readFile(invocations, 'utf8')).trim().split('\n')).toEqual([
     'run test:android-mosh',
     ...(mosh === 0 ? ['run test:android-ssh'] : []),
-    ...(fdroidExpected ? ['run test:android-fdroid'] : []),
+    'run test:android-fdroid',
     ...(qrExpected ? ['run test:android-qr'] : []),
     ...(sdkExpected ? ['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture'] : []),
   ]);

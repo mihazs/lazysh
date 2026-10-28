@@ -52,7 +52,7 @@ describe("terminal preferences trust boundary", () => {
   it("applies bounded settings and custom colors to xterm", () => {
     const p = parsePreferences({...defaults, fontSize: 24, scrollback: 20000, optionAsMeta: true, screenReader: true, customTheme: {background: "#ffffff", foreground: "#101010"}});
     expect(terminalOptions(p)).toMatchObject({fontSize: 24, scrollback: 20000, macOptionIsMeta: true, screenReaderMode: true, theme: {background: "#ffffff", foreground: "#101010"}});
-    expect(parsePreferences({...defaults, snippets: Array.from({length: 100}, () => ({label: "a", text: "b"}))}).snippets).toHaveLength(12);
+    expect(parsePreferences({...defaults, snippets: Array.from({length: 100}, () => ({label: "a", text: "b"}))}).snippets).toHaveLength(100);
   });
 });
 

@@ -81,6 +81,11 @@ test('system and English persist, reset safely, and locale changes preserve the 
 });
 test('pseudo expansion preserves host drafts, native diagnostics, keyboard focus and shortcut bytes',async({page})=>{
   await fixture(page);await hosts(page);
+  const brand=page.locator('.brand > img.brand-mark');
+  await expect(brand).toHaveCount(1);
+  const originalBrand=await brand.elementHandle();
+  const originalSource=await brand.getAttribute('src');
+  expect(originalSource).toBeTruthy();
   await page.getByRole('button',{name:'Add host',exact:true}).click();
   const draft='User C-b, <raw> {{untouched}} 中文';
   await page.getByLabel('Name',{exact:true}).fill(draft);
@@ -119,7 +124,10 @@ test('pseudo expansion preserves host drafts, native diagnostics, keyboard focus
   await page.getByRole('button',{name:pseudo.shortcutSaveValue1Chord.replace('{{value1}}',pseudo.gestureDoubleTap),exact:true}).click();
   expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).gestureChords.doubleTap)).toBe('C-b, T');
   expect(await page.locator('[role=dialog]').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
-  await expect(page.locator('img,script[src^="http"]')).toHaveCount(0);
+  await expect(page.locator('img')).toHaveCount(1);
+  expect(await originalBrand!.evaluate((node,source)=>node.isConnected
+    && document.querySelector('img')===node && node.getAttribute('src')===source,originalSource)).toBe(true);
+  await expect(page.locator('script[src^="http"]')).toHaveCount(0);
 });
 
 for(const locale of [

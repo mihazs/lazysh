@@ -108,9 +108,9 @@ export function parsePreferences(value: unknown): Preferences {
     chords: Array.isArray(p.chords) ? p.chords.filter((chord): chord is {label: string; keys: string} => {
       if (!chord || typeof chord !== "object" || typeof chord.label !== "string" || chord.label.length < 1 || chord.label.length > 32 || typeof chord.keys !== "string") return false;
       try { parseChord(chord.keys); return true; } catch { return false; }
-    }).slice(0, 12).map(({label, keys}) => ({label, keys})) : [],
+    }).map(({label, keys}) => ({label, keys})) : [],
     toolbar: Array.isArray(p.toolbar) ? [...new Set(p.toolbar.filter((item): item is ToolbarKey => toolbarKeys.includes(item as ToolbarKey)))].slice(0, toolbarKeys.length) : [...defaults.toolbar],
-    snippets: Array.isArray(p.snippets) ? p.snippets.filter((s): s is {label: string; text: string} => !!s && typeof s === "object" && typeof s.label === "string" && s.label.length > 0 && s.label.length <= 32 && typeof s.text === "string" && s.text.length > 0 && s.text.length <= 2048 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(s.text)).slice(0, 12).map(({label, text}) => ({label, text})) : [],
+    snippets: Array.isArray(p.snippets) ? p.snippets.filter((s): s is {label: string; text: string} => !!s && typeof s === "object" && typeof s.label === "string" && s.label.length > 0 && s.label.length <= 32 && typeof s.text === "string" && s.text.length > 0 && s.text.length <= 2048 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(s.text)).map(({label, text}) => ({label, text})) : [],
   };
 }
 let cached: Preferences | undefined;

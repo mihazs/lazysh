@@ -25,31 +25,31 @@ it.each(['','Inspecting native push configuration…','Native {{reason}} <privat
   await act(async()=>{resolve({...pushStatus,reason});});await translatePush(()=>expect(screen.getByRole('status').textContent).toBe(reason));
   expect(invoke).toHaveBeenCalledExactlyOnceWith('push_registration_status',undefined,{headers:{'X-Lazysh-Access':'f'.repeat(64)}});
 });
-it('retains focused consent and cancels one held registration without reviving its late result',async()=>{
+it.each(['fcm','unifiedpush'])('retains focused %s consent and cancels one held registration without reviving its late result',async provider=>{
   let complete!:(value:unknown)=>void;
-  vi.mocked(invoke).mockImplementation(async command=>command==='push_registration_register'?new Promise(resolve=>{complete=resolve;}):pushStatus);
+  vi.mocked(invoke).mockImplementation(async command=>command==='push_registration_register'?new Promise(resolve=>{complete=resolve;}):{...pushStatus,provider});
   render(<PushSettingsPanel/>);await screen.findByRole('checkbox');const consent=screen.getByRole('checkbox');consent.focus();
   await translatePush(()=>{expect(screen.getByRole('checkbox')).toBe(consent);expect(document.activeElement).toBe(consent);expect(consent).toHaveProperty('checked',false);expect(screen.getByRole('button',{name:t('pushRegister')})).toHaveProperty('disabled',true);});
   fireEvent.click(consent);await translatePush(()=>expect(consent).toHaveProperty('checked',true));
   fireEvent.click(screen.getByRole('button',{name:t('pushRegister')}));await waitFor(()=>expect(complete).toBeTypeOf('function'));
-  await translatePush(()=>{expect(screen.getByRole('button',{name:t('pushPause')})).toHaveProperty('disabled',false);expect(consent).toHaveProperty('disabled',true);});
-  fireEvent.click(screen.getByRole('button',{name:t('pushPause')}));await waitFor(()=>expect(consent).toHaveProperty('disabled',false));
-  await act(async()=>{complete({...pushStatus,enabled:true,tokenPresent:true,reason:'Retired register response'});});
+  await translatePush(()=>{expect(screen.getByRole('button',{name:t(provider==='unifiedpush'?'pushUnifiedPause':'pushPause')})).toHaveProperty('disabled',false);expect(consent).toHaveProperty('disabled',true);});
+  fireEvent.click(screen.getByRole('button',{name:t(provider==='unifiedpush'?'pushUnifiedPause':'pushPause')}));await waitFor(()=>expect(consent).toHaveProperty('disabled',false));
+  await act(async()=>{complete({...pushStatus,provider,enabled:true,tokenPresent:true,reason:'Retired register response'});});
   await translatePush(()=>{expect(screen.getByRole('status').textContent).toBe(pushStatus.reason);expect(consent).toHaveProperty('checked',false);expect(screen.queryByText('Retired register response')).toBeNull();});
   expect(vi.mocked(invoke).mock.calls).toEqual(['push_registration_status','push_registration_register','push_registration_disable'].map(command=>[command,undefined,{headers:{'X-Lazysh-Access':'f'.repeat(64)}}]));
 });
-it.each(['fcm','apns'] as const)('preserves %s failed revocation and its single recovery read without leaking provider errors or claiming success',async provider=>{
+it.each(['fcm','apns','unifiedpush'] as const)('preserves %s failed revocation and its single recovery read without leaking provider errors or claiming success',async provider=>{
   let reject!:(error:unknown)=>void,recover!:(value:unknown)=>void;let reads=0;
   vi.mocked(invoke).mockImplementation(async command=>{
     if(command==='push_registration_disable')return new Promise((_yes,no)=>{reject=no;});
     return ++reads===1?{...pushStatus,provider,enabled:true,tokenPresent:true}:new Promise(resolve=>{recover=resolve;});
   });
-  render(<PushSettingsPanel/>);fireEvent.click(await screen.findByRole('button',{name:t(provider==='apns'?'pushDisableApns':'pushPause')}));
+  render(<PushSettingsPanel/>);fireEvent.click(await screen.findByRole('button',{name:t(provider==='apns'?'pushDisableApns':provider==='unifiedpush'?'pushUnifiedPause':'pushPause')}));
   await translatePush(()=>expect(screen.getByRole('button',{name:t('pushRefresh')})).toHaveProperty('disabled',true));
   await act(async()=>{reject(new Error('PRIVATE_PROVIDER_DETAIL'));});await waitFor(()=>expect(recover).toBeTypeOf('function'));
   await translatePush(()=>{expect(screen.getByRole('alert').textContent).toBe(t('pushPauseFailed'));expect(screen.getByRole('button',{name:t('pushRefresh')})).toHaveProperty('disabled',true);expect(document.body.textContent).not.toContain('PRIVATE_PROVIDER_DETAIL');});
   await act(async()=>{recover({...pushStatus,provider,tokenPresent:true});});
-  await translatePush(()=>{expect(screen.getByRole('button',{name:t(provider==='apns'?'pushDisableApns':'pushRetryRevocation')})).toHaveProperty('disabled',false);expect(screen.getByRole('alert').textContent).toBe(t('pushPauseFailed'));});
+  await translatePush(()=>{expect(screen.getByRole('button',{name:t(provider==='apns'?'pushDisableApns':provider==='unifiedpush'?'pushUnifiedRetry':'pushRetryRevocation')})).toHaveProperty('disabled',false);expect(screen.getByRole('alert').textContent).toBe(t('pushPauseFailed'));});
   expect(reads).toBe(2);expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='push_registration_disable')).toHaveLength(1);
 });
 it('localizes the browser-only explanation without requesting permission or inspecting native registration',async()=>{

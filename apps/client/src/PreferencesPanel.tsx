@@ -109,13 +109,13 @@ export default function PreferencesPanel() {
       <ul>{preferences.snippets.map((snippet, index) => <li key={index}><span>{snippet.label}</span><button aria-label={t("preferencesRemoveSnippetValue1", {value1: snippet.label})} onClick={() => update({snippets: preferences.snippets.filter((_, i) => i !== index)})}>{t("appRemove")}</button></li>)}</ul>
       <label>{t("preferencesSnippetName")}<input maxLength={32} value={label} onChange={e => setLabel(e.target.value)} /></label>
       <label>{t("preferencesSnippetText")}<textarea maxLength={2048} value={text} onChange={e => setText(e.target.value)} /></label>
-      <button disabled={!label.trim() || !text || preferences.snippets.length >= 12} onClick={() => { update({snippets: [...preferences.snippets, {label: label.trim(), text}]}); setLabel(""); setText(""); }}>{t("preferencesAddSnippet")}</button>
+      <button disabled={!label.trim() || !text} onClick={() => { if (update({snippets: [...preferences.snippets, {label: label.trim(), text}]})) { setLabel(""); setText(""); } }}>{t("preferencesAddSnippet")}</button>
     </details>
     <details><summary>{t("preferencesKeyboardChords")}</summary>
       <p>{t("preferencesSendUpTo8StepsCBST")}</p>
       <ul>{preferences.chords.map((chord, index) => <li key={index}><span>{chord.label}: {chord.keys}</span><button aria-label={t("preferencesRemoveChordValue1", {value1: chord.label})} onClick={() => update({chords: preferences.chords.filter((_, i) => i !== index)})}>{t("appRemove")}</button></li>)}</ul>
       <label>{t("preferencesChordName")}<input maxLength={32} value={chordLabel} onChange={e => setChordLabel(e.target.value)} /></label>
-      <ChordBuilder disabled={!chordLabel.trim() || preferences.chords.length >= 12} clearAfterSave onSave={keys => {
+      <ChordBuilder disabled={!chordLabel.trim()} clearAfterSave onSave={keys => {
         if (!update({chords: [...preferences.chords, {label: chordLabel.trim(), keys}]})) return false;
         setChordLabel(''); return true;
       }} />

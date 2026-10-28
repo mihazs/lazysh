@@ -284,8 +284,8 @@ jobs:
         run: LAZYSH_ANDROID_PUSH_VARIANT=google bunx turbo run test:android-push-artifact --filter=@lazysh/client
       - run: ./gradlew :tauri-plugin-lazysh-vault:testDebugUnitTest --no-daemon
         working-directory: apps/client/src-tauri/gen/android
-      - name: Exercise bounded native Android deep-link ingress
-        run: ./gradlew :tauri-plugin-deep-link:testDebugUnitTest :tauri-plugin-lazysh-push:testDebugUnitTest :app:testUniversalDebugUnitTest --no-daemon
+      - name: Exercise native Android ingress and compiled startup log policy
+        run: ./gradlew :tauri-plugin-deep-link:testDebugUnitTest :tauri-plugin-lazysh-push:testDebugUnitTest :app:testUniversalDebugUnitTest :app:testUniversalReleaseUnitTest -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false --no-daemon
         working-directory: apps/client/src-tauri/gen/android
       - uses: actions/upload-artifact@v4
         with:
@@ -390,8 +390,12 @@ jobs:
             > "$diagnostic_dir/system-anr.txt" 2> "$diagnostic_dir/collector-errors.txt" &
             collector_pid=$!;
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
-            bun run test:android-mosh && bun run test:android-ssh &&
-            bun run test:android-fdroid &&
+            bun run test:android-mosh && bun run test:android-ssh;
+            original_result=$?;
+            bun run test:android-fdroid;
+            fdroid_result=$?;
+            if (( original_result != 0 )); then exit "$original_result"; fi;
+            if (( fdroid_result != 0 )); then exit "$fdroid_result"; fi;
             LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr &&
             LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture;
             exit $?;

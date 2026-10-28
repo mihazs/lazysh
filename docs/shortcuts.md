@@ -1,5 +1,12 @@
 # Terminal shortcuts
 
+Custom keyboard chords and text snippets have no purchased slots or fixed entry-count
+cap. Valid entries beyond twelve survive save and reload. Individual name/text/binding
+validation still applies; device storage can refuse a save, which leaves the saved
+collection and draft unchanged. Settings sync retains its 128 KiB preferences-envelope
+limit and can reject a large collection without truncating it. These resource boundaries
+mean this is not a promise of infinite storage or identical capacity on every device.
+
 Open Preferences → Keyboard chords to add a named shortcut to the terminal
 toolbar. Advanced binding remains the default builder. Existing saved shortcuts
 and gesture bindings keep their original strings and behavior; switching builders

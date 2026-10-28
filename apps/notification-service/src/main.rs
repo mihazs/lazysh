@@ -1,6 +1,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use lazysh_notifications::{client, Config, Event, Kind, Service};
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 use uuid::Uuid;
 #[derive(Parser)]
 #[command(
@@ -21,6 +24,46 @@ enum State {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Creates a private VAPID key and an explicit fixed push-service origin/IP policy.
+    PushConfigGenerate {
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        push_origin: String,
+        #[arg(long, required = true)]
+        address: Vec<IpAddr>,
+        #[arg(long)]
+        contact: String,
+    },
+    ServePush {
+        #[arg(long)]
+        data_dir: PathBuf,
+        #[arg(long)]
+        admin_file: PathBuf,
+        #[arg(long)]
+        push_config_file: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:7350")]
+        listen: SocketAddr,
+    },
+    ConfigurePush {
+        #[arg(long)]
+        data_dir: PathBuf,
+        #[arg(long)]
+        admin_file: PathBuf,
+        #[arg(long)]
+        push_config_file: PathBuf,
+    },
+    /// Installs an existing private one-time capability; reset revokes the old device.
+    PushEnrollment {
+        #[arg(long)]
+        origin: String,
+        #[arg(long)]
+        admin_file: PathBuf,
+        #[arg(long)]
+        capability_file: PathBuf,
+        #[arg(long)]
+        reset: bool,
+    },
     Keygen {
         #[arg(long)]
         output: PathBuf,
@@ -115,6 +158,29 @@ fn print(value: impl serde::Serialize) -> Result<(), String> {
     );
     Ok(())
 }
+fn push_config(directory: PathBuf, admin: PathBuf, push: PathBuf) -> Result<Config, String> {
+    let admin = client::read_token(&admin)?;
+    Config::web_push(
+        directory,
+        admin.trim(),
+        lazysh_notifications::push::PushConfig::read(&push)?,
+    )
+}
+async fn serve(config: Config, listen: SocketAddr) -> Result<(), String> {
+    if !listen.ip().is_loopback() {
+        return Err("Require loopback behind an authenticated HTTPS proxy".into());
+    }
+    let service = Service::open(config)?;
+    let listener = tokio::net::TcpListener::bind(listen)
+        .await
+        .map_err(|_| "Cannot bind relay listener")?;
+    print(
+        serde_json::json!({"listening":listener.local_addr().map_err(|_|"Cannot inspect listener")?.to_string()}),
+    )?;
+    lazysh_notifications::serve(listener, service, lazysh_common::server::shutdown_signal())
+        .await
+        .map_err(|_| "Relay stopped with an error".into())
+}
 async fn run() -> Result<(), String> {
     let Cli {
         command,
@@ -123,13 +189,72 @@ async fn run() -> Result<(), String> {
     if relay_ca_file.is_some()
         && matches!(
             &command,
-            Command::Serve { .. } | Command::ConfigureDestination { .. } | Command::Keygen { .. }
+            Command::Serve { .. }
+                | Command::ConfigureDestination { .. }
+                | Command::Keygen { .. }
+                | Command::ServePush { .. }
+                | Command::ConfigurePush { .. }
+                | Command::PushConfigGenerate { .. }
         )
     {
         return Err("Relay CA applies only to source/admin HTTPS client commands".into());
     }
     let transport = client::transport(relay_ca_file.as_deref())?;
     match command {
+        Command::PushConfigGenerate {
+            output,
+            push_origin,
+            address,
+            contact,
+        } => {
+            let config =
+                lazysh_notifications::push::PushConfig::generate(push_origin, address, contact)?;
+            config.write(&output)?;
+            print(serde_json::json!({"created":true,"publicVapidKey":config.public_key()}))
+        }
+        Command::ServePush {
+            data_dir,
+            admin_file,
+            push_config_file,
+            listen,
+        } => serve(push_config(data_dir, admin_file, push_config_file)?, listen).await,
+        Command::ConfigurePush {
+            data_dir,
+            admin_file,
+            push_config_file,
+        } => {
+            Service::reconfigure(push_config(data_dir, admin_file, push_config_file)?)?;
+            print(serde_json::json!({"configured":true,"enabled":false}))
+        }
+        Command::PushEnrollment {
+            origin,
+            admin_file,
+            capability_file,
+            reset,
+        } => {
+            let admin = client::read_token(&admin_file)?;
+            let capability = client::read_token(&capability_file)?;
+            let origin = lazysh_notifications::https(&origin)?;
+            let endpoint = origin
+                .join(if reset {
+                    "/v1/admin/push/reset"
+                } else {
+                    "/v1/admin/push/enrollment"
+                })
+                .map_err(|_| "Invalid relay origin")?;
+            let response = transport
+                .post(endpoint)
+                .bearer_auth(admin.trim())
+                .json(&serde_json::json!({"capability":capability.trim()}))
+                .send()
+                .await
+                .map_err(|_| "Enrollment request failed")?;
+            if !response.status().is_success() {
+                return Err("Enrollment request rejected".into());
+            }
+            // Do not echo an arbitrary server body into terminal output.
+            print(serde_json::json!({"enrollmentReady":true,"enabled":false}))
+        }
         Command::Keygen { output } => {
             client::keygen(&output)?;
             print(serde_json::json!({"created":true}))
@@ -141,24 +266,16 @@ async fn run() -> Result<(), String> {
             destination_token_file,
             listen,
         } => {
-            if !listen.ip().is_loopback() {
-                return Err("Require loopback behind an authenticated HTTPS proxy".into());
-            }
-            let service = Service::open(config(
-                data_dir,
-                admin_file,
-                destination_file,
-                destination_token_file,
-            )?)?;
-            let listener = tokio::net::TcpListener::bind(listen)
-                .await
-                .map_err(|_| "Cannot bind relay listener")?;
-            print(
-                serde_json::json!({"listening":listener.local_addr().map_err(|_|"Cannot inspect listener")?.to_string()}),
-            )?;
-            lazysh_notifications::serve(listener, service, lazysh_common::server::shutdown_signal())
-                .await
-                .map_err(|_| "Relay stopped with an error".into())
+            serve(
+                config(
+                    data_dir,
+                    admin_file,
+                    destination_file,
+                    destination_token_file,
+                )?,
+                listen,
+            )
+            .await
         }
         Command::ConfigureDestination {
             data_dir,

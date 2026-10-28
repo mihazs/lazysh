@@ -2055,6 +2055,9 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         .unwrap()
         .to_owned();
     assert_eq!(saved_name, "same");
+    diagnostics
+        .remember_clients(0, servers.command(saved_server))
+        .await;
     let original_transport = first_state
         .session(&child)
         .await
@@ -2127,6 +2130,9 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         .unwrap();
     assert_eq!(identity(saved_server), selected_identity);
     assert_eq!(identity("other"), other_identity);
+    diagnostics
+        .remember_clients(1, servers.command(saved_server))
+        .await;
     second
         .state::<AppState>()
         .cancel_for_renderer_rebind()

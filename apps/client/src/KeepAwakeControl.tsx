@@ -40,14 +40,21 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
   const cleanupFailure=useRef<UiErrorCause>('');
   const requireOptIn=useRef(false);
   useEffect(()=>{
+    let alive=true;
+    let unlisten:(()=>void)|undefined;
     const changed=()=>setForeground(previous=>({visible:visible(),revision:previous.revision+1}));
     const hidden=()=>setForeground(previous=>({visible:false,revision:previous.revision+1}));
     const stored=(event:StorageEvent)=>{if(event.key===boardAwakeKey || event.key===null)setEnabled(readEnabled());};
     document.addEventListener('visibilitychange',changed);window.addEventListener('focus',changed);
     window.addEventListener('blur',hidden);window.addEventListener('pagehide',hidden);window.addEventListener('pageshow',changed);window.addEventListener('storage',stored);
-    return()=>{document.removeEventListener('visibilitychange',changed);window.removeEventListener('focus',changed);
+    // Native window focus may settle after the DOM's resume/focus observation.
+    // It only refreshes metadata; the original lease, visible board and acquire latch still gate ownership.
+    if(native)void listen('tauri://focus',()=>{
+      if(alive && mounted.current && access.current())changed();
+    },{target:{kind:'Window',label:'main'}}).then(stop=>{if(alive)unlisten=stop;else stop();}).catch(()=>{/* Existing DOM lifecycle observation remains available. */});
+    return()=>{alive=false;unlisten?.();document.removeEventListener('visibilitychange',changed);window.removeEventListener('focus',changed);
       window.removeEventListener('blur',hidden);window.removeEventListener('pagehide',hidden);window.removeEventListener('pageshow',changed);window.removeEventListener('storage',stored);};
-  },[]);
+  },[native,access,mounted]);
   useEffect(()=>{
     let alive=true;
     let request:Ticket|undefined;

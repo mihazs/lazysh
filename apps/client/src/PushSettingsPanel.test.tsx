@@ -8,8 +8,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true })
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 import {pushStatus as off} from './test/pushData';
 
-it('requires explicit external-service consent and never registers during mount', async () => {
-  vi.mocked(invoke).mockResolvedValue(off);
+it.each(['fcm','unifiedpush'])('requires explicit %s consent and never registers during mount', async provider => {
+  vi.mocked(invoke).mockResolvedValue({...off,provider});
   render(<PushSettingsPanel />);
   const button = await screen.findByRole('button', { name: 'Register this device' });
   expect(button).toHaveProperty('disabled', true);
@@ -61,4 +61,14 @@ it('discloses Apple contact and local-only disable semantics for APNs', async ()
   expect(document.body.textContent).toContain('Apple APNs');
   expect(document.body.textContent).not.toContain('Google Firebase');
   expect(document.body.textContent).toContain('does not invalidate a token globally');
+});
+
+it('names UnifiedPush without Google and discloses registration-only cleanup', async () => {
+  vi.mocked(invoke).mockResolvedValue({ ...off, provider: 'unifiedpush', enabled: true, tokenPresent: true });
+  render(<PushSettingsPanel />);
+  await screen.findByRole('button', { name: 'Pause and remove registration' });
+  expect(document.body.textContent).toContain('UnifiedPush');
+  expect(document.body.textContent).not.toContain('Google Firebase');
+  expect(document.body.textContent).toContain('does not connect remote delivery');
+  expect(vi.mocked(invoke).mock.calls).toHaveLength(1);
 });

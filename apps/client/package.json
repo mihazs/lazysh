@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/client",
-  "version": "0.14.0",
+  "version": "0.17.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
     "build:android:fdroid": "CMAKE_ANDROID_NDK=$NDK_HOME WHISPER_DONT_GENERATE_BINDINGS=1 tauri android build --target aarch64 --apk --ci --features fdroid",
     "build:android:fdroid:emulator": "CMAKE_ANDROID_NDK=$NDK_HOME WHISPER_DONT_GENERATE_BINDINGS=1 tauri android build --target x86_64 --debug --apk --ci --features fdroid",
     "test:android-push-artifact": "bun test ../../tests/android-push-artifact.test.ts",
-    "test:android-fdroid": "LAZYSH_ANDROID_PUSH_VARIANT=fdroid bun run test:android-push-artifact && src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshFdroidAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#pushRegistrationMatchesPackagedNativeProvider --no-daemon",
+    "test:android-fdroid": "LAZYSH_ANDROID_PUSH_VARIANT=fdroid bun run test:android-push-artifact && src-tauri/gen/android/gradlew -p src-tauri/gen/android :tauri-plugin-lazysh-push:testDebugUnitTest :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshFdroidAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#pushRegistrationMatchesPackagedNativeProvider --no-daemon",
     "test:android": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -Pandroid.testInstrumentationRunnerArguments.notClass=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview,app.lazysh.client.NativeWorkspaceTest#ownedOpenSshConnectsThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedGuardedHerdrChatThroughRealUi,app.lazysh.client.NativeWorkspaceTest#ownedQrCameraRequiresPermissionAndExplicitPreview",
     "build:ios": "cd src-tauri && tauri ios build --target aarch64-sim --debug --ci",
     "check": "tsc -b",

@@ -2,7 +2,27 @@
 
 ## [Unreleased]
 
+- Refresh agent-board display readiness on native main-window focus as well as browser focus, so an opted-in board can resume after an earlier unavailable observation. Original access/visibility gates and the explicit re-enable requirement after failed acquisition remain unchanged; this does not establish the cause of the separately tracked Android readiness failures.
+
+- Render repository side-by-side diff source and hunk headers with the selected terminal font, including already-loaded imported and CJK fallback families. Changing the font preserves the current review and does not refetch repository data; font size and connection behavior are unchanged.
+
+- Remove the twelve-entry cap on custom keyboard chords and text snippets. Existing valid collections now survive normalization and reload without silent truncation; failed snippet saves retain the draft. Per-entry validation, device storage capacity and the existing settings-sync size limit remain unchanged.
+
+- Catalogue the Next.js preview hint label in all interface locales, preserving the brand and existing discovery behavior while restoring the localization coverage gate.
+
+- Show a server-reported Next.js hint when explicit preview HTTP discovery already has a complete bounded response header available. Probing stays off by default; unknown or incomplete headers preserve ordinary HTTP detection without waiting or issuing another request.
+
+- Use the Bed Mode SVG mark in the existing app sidebar, keeping the visible lazysh name and accessible text singular. Connection behavior and responsive drawer controls are unchanged.
+
+- Add an opt-in authenticated encrypted Web Push server foundation with private single-device enrollment, challenge confirmation and pinned HTTPS delivery. Existing webhook defaults are unchanged; Android enrollment and actual remote notification delivery remain incomplete.
+
+- Replace the default lazysh app, browser, Android and iOS launcher artwork with the original Bed Mode sloth-and-mobile-terminal mark, and add transparent SVG brand variants. The default visual identity changes; app features, connection security and the existing Amber alternate icon are unchanged.
+
+- Update the manual F-Droid source recipe for the UnifiedPush registration foundation. Automatic publishing remains disabled; this does not establish distributor delivery or complete free-software remote push.
+
 - Add explicit opt-in native acceptance for the self-hosted whisper.cpp relay using pinned public engine/model/audio fixtures. This records bounded Linux interoperability, not general accuracy or physical-device acceptance; application defaults are unchanged.
+
+- Catalogue the Cloud speech-engine option prefix in all interface locales while retaining the validated backend label, draft and explicit selection behavior. No defaults change.
 
 - Add an explicit self-hosted whisper.cpp Cloud dictation relay option with a fixed operator-configured loopback endpoint and distinct backend identity. OpenAI remains the default; no provider fallback, model download or hosting is bundled.
 
@@ -10,7 +30,9 @@
 
 - Add an initial manual F-Droid source-build recipe and actual metadata/scanner checks. Automatic updates and publishing remain disabled; official inclusion and reproducibility are separate acceptance gates.
 
-- Add an explicit F-Droid Android build variant without Google remote push dependencies. It reports remote registration unavailable and retains local inbox notifications. Normal Android Firebase and iOS APNs defaults remain unchanged; this variant alone does not establish F-Droid listing or release delivery.
+- Add opt-in UnifiedPush distributor selection and native registration to the F-Droid build, with consent, stale-callback protection and local registration removal. Registration remains off by default; this slice ignores incoming push messages and does not connect remote delivery.
+
+- Add an explicit F-Droid Android build variant without Google remote push dependencies, retaining local inbox notifications. Normal Android Firebase and iOS APNs defaults remain unchanged; this variant alone does not establish F-Droid listing or release delivery.
 
 - Add truthful English Fastlane-compatible Android listing text for future F-Droid preparation. No store publication, screenshots, application behavior or defaults change.
 

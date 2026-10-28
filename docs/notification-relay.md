@@ -2,6 +2,8 @@
 
 `lazysh-notifications` is an optional Rust service for one account and one fixed HTTPS webhook destination. It is **disabled by default**. This foundation does not register mobile devices, send APNs/FCM messages, install agent hooks, or make suspended native apps reachable. Existing local notifications and native registration remain separate.
 
+An explicit alternative [encrypted Web Push server mode](web-push-server.md) adds private device enrollment/challenge primitives for the free-software push path. It does not yet connect Android enrollment or establish native notification delivery; the webhook mode below remains unchanged.
+
 ## Run a private relay
 
 Build with `bunx turbo run build --filter=@lazysh/notification-service`. Run on a supported local Unix filesystem. Keep the state directory and all capability/configuration files owner-only. The listener is loopback HTTP only; place it behind your own HTTPS reverse proxy, preserving Authorization and limiting request bodies. Do not expose its HTTP port publicly. No deployment or external endpoint is configured automatically.

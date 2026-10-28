@@ -1,3 +1,4 @@
+mod push_delivery;
 #[path = "../tests/support/mod.rs"]
 mod support;
 use super::*;

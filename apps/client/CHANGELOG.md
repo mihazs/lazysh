@@ -1,5 +1,57 @@
 # @lazysh/client
 
+## 0.17.1
+
+### Patch Changes
+
+- cf917f9: Remove the twelve-entry shortcut and snippet cap, retain all valid saved entries, and keep snippet drafts when device storage refuses a save.
+- @lazysh/common@0.17.1
+  - @lazysh/display-idle@0.17.1
+  - @lazysh/et-transport@0.17.1
+  - @lazysh/mosh-transport@0.17.1
+
+## 0.17.0
+
+### Minor Changes
+
+- 5a1d420: Show a bounded server-reported Next.js hint during explicit preview HTTP discovery without changing its default or waiting for additional headers.
+
+### Patch Changes
+
+- e6c0e65: Catalogue the static Next.js preview hint label without changing discovery or its displayed brand.
+- @lazysh/common@0.17.0
+  - @lazysh/display-idle@0.17.0
+  - @lazysh/et-transport@0.17.0
+  - @lazysh/mosh-transport@0.17.0
+
+## 0.16.0
+
+### Minor Changes
+
+- 2f1963a: Introduce the original Bed Mode lazysh identity, a full transparent SVG brand kit, and matching web, Android, iOS, and desktop launcher assets.
+
+### Patch Changes
+
+- 07f0eba: Use the approved Bed Mode mark as the decorative sidebar symbol without duplicating the app name for assistive technology.
+- @lazysh/common@0.16.0
+  - @lazysh/display-idle@0.16.0
+  - @lazysh/et-transport@0.16.0
+  - @lazysh/mosh-transport@0.16.0
+
+## 0.15.0
+
+### Minor Changes
+
+- 9c8d067: Add opt-in F-Droid UnifiedPush distributor registration with truthful registration-only status and local revocation. Incoming messages remain ignored until a separate authenticated delivery integration is verified.
+
+### Patch Changes
+
+- e234a24: Use the interface catalog for the Cloud speech-engine option prefix while preserving validated backend identifiers and locale-stable draft/metadata behavior.
+- @lazysh/common@0.15.0
+  - @lazysh/display-idle@0.15.0
+  - @lazysh/et-transport@0.15.0
+  - @lazysh/mosh-transport@0.15.0
+
 ## 0.14.0
 
 ### Minor Changes

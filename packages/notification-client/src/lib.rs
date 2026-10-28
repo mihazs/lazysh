@@ -41,6 +41,12 @@ pub fn http_client() -> Result<reqwest::Client, String> {
     client_with_root(None)
 }
 pub fn client_with_root(root: Option<reqwest::Certificate>) -> Result<reqwest::Client, String> {
+    client_builder(root)
+        .build()
+        .map_err(|_| "Cannot construct HTTPS client".into())
+}
+/// Shared HTTPS policy; callers can add an explicit operator-owned address pin.
+pub fn client_builder(root: Option<reqwest::Certificate>) -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -50,6 +56,4 @@ pub fn client_with_root(root: Option<reqwest::Certificate>) -> Result<reqwest::C
         builder = builder.add_root_certificate(root);
     }
     builder
-        .build()
-        .map_err(|_| "Cannot construct HTTPS client".into())
 }

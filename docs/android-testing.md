@@ -97,3 +97,21 @@ It then disconnects and deletes its unique host. No fake native bridge, direct S
 Cleanup clears only the fixture-labeled clipboard and removes only the allocated reverse/device fixture path. SSH descendant retirement is fenced by the original live daemon PID/start identity and revalidated parent identities before recursion, followed by listener shutdown/reaping. Losing original ownership/liveness fails explicitly rather than adopting a later process tree or claiming full cleanup. Remote shell lifetime is additionally capped by the fixture's timeout; original UI readiness/typing budgets and the runtime job's 30-minute ceiling remain unchanged. Failures retain their original result if cleanup also fails. Native Bun tests cover real key authentication/refusal, prompt/challenge behavior, active-shell retirement, private file modes, bounded process deadlines and output omission. The process helper supports foreground fixture tools only; arbitrary background children outliving a reaped leader are unsupported. A native counterexample fails visibly and owns its separate child cleanup; a generic supervisor would be required before supporting daemonizing commands. The app method runs only when explicitly selected by its host task. Ordinary root CI tests exercise the host utility without requiring an emulator/OpenSSH installation. Linux-/proc-specific helper and real-host cases are explicitly skipped on other hosts; platform-independent output-omission checks still run. Explicit SSH acceptance on an unsupported host fails with its Linux requirement rather than silently skipping.
 
 Local SDK/JDK compilation and host tests are separate from actual API36 execution. At implementation time this development host has no connected emulator or KVM device; no local app SSH runtime pass is claimed. Hosted app/WebView results must establish the UI path; they do not imply physical roaming, successful biometric prompts or every mobile SSH workflow.
+
+## Debug Activity creation phases
+
+Debug builds emit three fixed `LazyshActivityCreate` messages: `onCreate:enter`,
+`onCreate:afterEdgeToEdge` and `onCreate:afterSuper`. They contain no runtime IDs,
+saved state, exception text, stack, DOM or user data. The existing per-case native
+logcat artifact can distinguish which app-owned creation call returned. Lifecycle
+calls, native cover hooks, assertions and deadlines keep their original order.
+Missing messages remain inconclusive; these phases do not identify a native lock,
+crash cause or a completed recreation.
+
+The standard app JUnit test reads the actual compiled `MainActivity.class` without
+loading an Activity. Both debug and release unit-test variants are scheduled in
+the Android build job, with AGP's `android.onlyEnableUnitTestForTheTestedBuildType`
+set to `false` for that test invocation only: debug requires the fixed logging
+operands; release requires their absence. This compiled-class check is separate from the actual API36
+recreation acceptance required by #373. The debug diagnostic does not close that
+runtime issue or establish the later owned SSH/Herdr acceptance.

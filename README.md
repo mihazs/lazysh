@@ -1,6 +1,15 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/lazysh/svg/lockup-horizontal-white.svg" />
+    <img src="brand/lazysh/svg/lockup-horizontal-dark.svg" alt="lazysh — remote SSH and AI-agent workspace" width="480" />
+  </picture>
+</p>
+
 # lazysh — Cross-platform SSH terminal and AI agent workspace
 
 **lazysh** is a cross-platform SSH client and terminal workspace in development for **Android, iOS, macOS, Linux, and Windows**. It is designed for developers who want to connect directly to their own servers, work in remote shells, and manage long-running AI coding agents from desktop or mobile.
+
+The [Bed Mode brand kit](brand/lazysh/README.md) includes editable transparent SVG logos and mobile/desktop app icons.
 
 The project is built with **Rust, Tauri 2, React, and xterm.js**, using **Bun and Turborepo** for the application workspace. Direct SSH works with the user's own hosts; the companion and external services are optional.
 
