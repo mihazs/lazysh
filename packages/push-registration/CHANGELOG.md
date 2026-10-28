@@ -1,5 +1,11 @@
 # @lazysh/push-registration
 
+## 0.15.0
+
+### Minor Changes
+
+- 9c8d067: Add opt-in F-Droid UnifiedPush distributor registration with truthful registration-only status and local revocation. Incoming messages remain ignored until a separate authenticated delivery integration is verified.
+
 ## 0.14.0
 
 No changes in this release.

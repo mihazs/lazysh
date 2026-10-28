@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 0.15.0
+
+### Minor Changes
+
+- 9c8d067: Add opt-in F-Droid UnifiedPush distributor registration with truthful registration-only status and local revocation. Incoming messages remain ignored until a separate authenticated delivery integration is verified.
+
+### Patch Changes
+
+- e234a24: Use the interface catalog for the Cloud speech-engine option prefix while preserving validated backend identifiers and locale-stable draft/metadata behavior.
+- @lazysh/common@0.15.0
+  - @lazysh/display-idle@0.15.0
+  - @lazysh/et-transport@0.15.0
+  - @lazysh/mosh-transport@0.15.0
+
 ## 0.14.0
 
 ### Minor Changes
