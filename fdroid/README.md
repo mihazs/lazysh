@@ -5,6 +5,14 @@ This is an initial, manual-update recipe for the public source revision in
 anything, or submit metadata to F-Droid. Automatic updates stay disabled until
 the separate release/tagging gates under #333 are complete.
 
+The current candidate pins 0.14.0 / 14000 at
+`9c8d067f378b676d37097bf3bf883e9946b516b9`, including the FOSS UnifiedPush
+registration foundation. Removing the unused normal `android` project retains
+the selected `android-unifiedpush` project and its `android-shared` sources.
+Registration groundwork does not establish distributor delivery, retained
+inbox behavior or complete free-software remote push. The original provider-none
+0.12.2 execution is recorded separately below.
+
 The recipe follows the official [metadata reference](https://f-droid.org/docs/Build_Metadata_Reference/).
 Run it with the official `fdroidserver` tools from this directory. Its
 `srclibs/esbuild.yml` and `srclibs/rollup.yml` definitions match the official
@@ -63,8 +71,8 @@ globally or change signing configuration. The metadata commands are:
 ```sh
 fdroid readmeta
 fdroid lint app.lazysh.client
-fdroid scanner --exit-code app.lazysh.client:12002
-fdroid build --test --stop --scan-binary app.lazysh.client:12002
+fdroid scanner --exit-code app.lazysh.client:14000
+fdroid build --test --stop --scan-binary app.lazysh.client:14000
 ```
 
 `--test` retains unsigned outputs in the test directory; it is not a scan
@@ -100,7 +108,7 @@ binary scanner report and unsigned APK identity/ABI/Google-free inspection.
 F-Droid policy review, app assets/licensing, stable tags, a repeat build and
 the actual submission remain separate gates.
 
-## Executed checkpoint
+## Initial provider-none checkpoint (0.12.2)
 
 The initial recipe was executed against app source
 `1f890f6c5e2f11f16f28ac0b5a5bf8a0e3e6f2fa` (0.12.2 / 12002) using
@@ -133,3 +141,35 @@ Cargo archive SHA-256 was
 These receipts describe that executed recipe and source revision. They do
 not establish a later main version, official inclusion, Bun tool approval,
 physical-device acceptance or a reproducible second build.
+
+## UnifiedPush registration checkpoint (0.14.0)
+
+The current recipe was executed against public app source
+`9c8d067f378b676d37097bf3bf883e9946b516b9` (0.14.0 / 14000). It used a new
+isolated container and freshly created application/source-library checkouts,
+with a private local snapshot of the initial official container's provisioned
+SDK, Rust and source-built toolchain. No earlier application binary or app Cargo
+target was reused. The official base image, declared packages and tool versions
+remain those recorded above; this is not a fresh-VM or clean-room claim.
+
+Actual `fdroid scanner --exit-code` and the build's internal source scan passed
+with zero errors and the same retained font-permission warning. The native
+`fdroid build --test --stop --scan-binary` completed with one successful ARM64
+unsigned release; non-free class and extra signing-block scans passed. Its APK
+SHA-256 is
+`44cb8f202079f24deb156f7808dfa571dd08dd4686e9bc1bcc6f91dad4d59daf`.
+
+The current Android artifact fixture passed ten assertions, including its
+complete expected dependency/class/manifest object. It verified
+`app.lazysh.client`, 0.14.0 / 14000, non-debuggable release, the selected native
+push project, UnifiedPush connector 3.3.5, connector classes, registration
+service and Android Tink 1.23.0. Firebase/GMS dependencies/classes/service/
+permission, desktop Tink and embedded FCM were absent. The registration service
+was non-exported and the required connector receiver was present. ZIP/ELF
+inspection again found only ARM64 application and official NDK C++ libraries.
+
+These are build/scanner/package facts, not a test of an installed distributor,
+registration transport, notification delivery, retained inbox behavior, mobile
+execution or complete free-software push. Official VM operation, Bun tool-policy
+approval, full license/asset review, reproducibility and submission remain
+separate gates. Automatic updates, signing, tags and publishing remain disabled.
