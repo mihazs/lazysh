@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 0.16.0
+
+### Minor Changes
+
+- 2f1963a: Introduce the original Bed Mode lazysh identity, a full transparent SVG brand kit, and matching web, Android, iOS, and desktop launcher assets.
+
+### Patch Changes
+
+- 07f0eba: Use the approved Bed Mode mark as the decorative sidebar symbol without duplicating the app name for assistive technology.
+- @lazysh/common@0.16.0
+  - @lazysh/display-idle@0.16.0
+  - @lazysh/et-transport@0.16.0
+  - @lazysh/mosh-transport@0.16.0
+
 ## 0.15.0
 
 ### Minor Changes
