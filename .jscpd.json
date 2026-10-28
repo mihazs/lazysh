@@ -7,6 +7,12 @@
     "console"
   ],
   "ignore": [
+    "fdroid/build/**",
+    "fdroid/logs/**",
+    "fdroid/repo/**",
+    "fdroid/stats/**",
+    "fdroid/tmp/**",
+    "fdroid/unsigned/**",
     "**/node_modules/**",
     "**/target/**",
     "**/dist/**",

@@ -1,0 +1,62 @@
+Categories:
+  - Remote Access
+License: GPL-3.0-or-later
+SourceCode: https://github.com/mihazs/lazysh
+IssueTracker: https://github.com/mihazs/lazysh/issues
+Changelog: https://github.com/mihazs/lazysh/blob/HEAD/CHANGELOG.md
+AutoName: lazysh
+RepoType: git
+Repo: https://github.com/mihazs/lazysh.git
+
+Builds:
+  - versionName: 0.12.2
+    versionCode: 12002
+    commit: 1f890f6c5e2f11f16f28ac0b5a5bf8a0e3e6f2fa
+    sudo:
+      - apt-get update
+      - apt-get install -y rustup nodejs golang-go build-essential cmake ninja-build
+        pkg-config libssl-dev libclang-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+        librsvg2-dev curl unzip perl
+    ndk: 29.0.14206865
+    srclibs:
+      - esbuild@v0.28.2
+      - rollup@v4.65.0
+    rm:
+      # The fdroid feature omits this entire unused normal-distribution project.
+      - packages/push-registration/android
+    prebuild:
+      - rustup default 1.99.0
+      - rustup target add aarch64-linux-android
+      - export PATH="$HOME/.cargo/bin:$HOME/.local/share/lazysh-fdroid/bun-linux-x64-baseline:$PATH"
+      - mkdir -p "$HOME/.local/share/lazysh-fdroid"
+      - curl --fail --location --output "$HOME/.local/share/lazysh-fdroid/bun.zip"
+        https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+      - echo 'a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7  '"$HOME/.local/share/lazysh-fdroid/bun.zip" | sha256sum --check
+      - unzip -o "$HOME/.local/share/lazysh-fdroid/bun.zip" -d "$HOME/.local/share/lazysh-fdroid"
+      - test "$(bun --version)" = 1.3.14
+      - bun install --frozen-lockfile --ignore-scripts --omit=optional
+      # Browser acceptance assets are not an input to the application build.
+      - rm -rf node_modules/playwright-core
+      - cargo fetch --locked --target aarch64-linux-android
+      - cargo fetch --locked --manifest-path $$rollup$$/rust/Cargo.toml
+      # Gradle's native callback must invoke the source-built Cargo CLI too.
+      - sed -i 's/val executable = """bun""";/val executable = """cargo""";/g'
+        apps/client/src-tauri/gen/android/buildSrc/src/main/java/app/lazysh/client/kotlin/BuildTask.kt
+    build:
+      - export PATH="$HOME/.cargo/bin:$HOME/.local/share/lazysh-fdroid/bun-linux-x64-baseline:$PATH"
+      - go build -C $$esbuild$$ ./cmd/esbuild
+      - cargo build --release --offline --locked --manifest-path $$rollup$$/rust/bindings_napi/Cargo.toml
+      - install -m644 $$rollup$$/rust/target/release/libbindings_napi.so node_modules/rollup/dist/rollup.linux-x64-gnu.node
+      - cargo install tauri-cli --version 2.12.4 --locked
+      # fdroidserver removes the upstream wrapper before scanning. Use its launcher.
+      - ln -s "$(command -v gradlew-fdroid)" apps/client/src-tauri/gen/android/gradlew
+      - export NDK_HOME="$$NDK$$" CMAKE_ANDROID_NDK="$$NDK$$" WHISPER_DONT_GENERATE_BINDINGS=1 ESBUILD_BINARY_PATH="$$esbuild$$/esbuild"
+      - cd apps/client
+      - cargo tauri android build --target aarch64 --apk --ci --features fdroid -- --locked
+    output: apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+
+# Initial recipe validation only; tagging and automatic publishing are separate gates.
+AutoUpdateMode: None
+UpdateCheckMode: None
+CurrentVersion: 0.12.2
+CurrentVersionCode: 12002
