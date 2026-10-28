@@ -29,7 +29,7 @@ for(const initial of labels)test(`${initial.locale} keeps in-flight dictation an
   }
   await completeCloud(page,transcript);
   await page.evaluate(async locale=>{const {uiI18n}=await import('/src/i18n/core.ts');await uiI18n.changeLanguage(locale);},initial.locale);
-  await expect(page.getByRole('textbox',{name:initial.draft,exact:true})).toHaveValue(transcript);
+  await expect(page.getByRole('textbox',{name:initial.draft,exact:true})).toHaveValue('edited draft before result\n'+transcript);
   await page.getByLabel(initial.remember,{exact:true}).click();
   await expect(page.getByLabel(initial.remember,{exact:true})).toBeChecked();
   await expect(page.getByLabel(initial.remember,{exact:true})).toBeEnabled();
