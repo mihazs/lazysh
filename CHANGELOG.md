@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Replace the default lazysh app, browser, Android and iOS launcher artwork with the original Bed Mode sloth-and-mobile-terminal mark, and add transparent SVG brand variants. The default visual identity changes; app features, connection security and the existing Amber alternate icon are unchanged.
+
 - Add an explicit self-hosted whisper.cpp Cloud dictation relay option with a fixed operator-configured loopback endpoint and distinct backend identity. OpenAI remains the default; no provider fallback, model download or hosting is bundled.
 
 - Prepare a disabled stable-tag gate for verified main version transitions, requiring current-candidate F-Droid source/binary checks before create-only tags. Automatic tags, signing and publication remain disabled pending free-software push and official submission prerequisites; product defaults are unchanged.
