@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.12.0
+
+### Minor Changes
+
+- fb625df: Add opt-in syntax highlighting to Remote Files text previews while preserving exact plain text, keyboard scrolling and existing SFTP reads. Keep syntax nodes tied to the current source across refreshes.
+
+### Patch Changes
+
+- @lazysh/common@0.12.0
+  - @lazysh/display-idle@0.12.0
+  - @lazysh/et-transport@0.12.0
+  - @lazysh/mosh-transport@0.12.0
+
 ## 0.11.0
 
 ### Minor Changes
