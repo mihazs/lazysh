@@ -27,12 +27,14 @@ enum SourceProof {
 }
 pub(crate) struct Store {
     pub connection: Connection,
+    pub push: Option<std::sync::Arc<crate::push::PushConfig>>,
     _lock: File,
 }
 pub(crate) struct Job {
     pub receipt: Receipt,
     pub generation: i64,
     pub attempts: i64,
+    pub push: Option<crate::push::EncryptedPush>,
 }
 impl Store {
     pub fn open(config: &Config, replace_target: bool) -> Result<Self, String> {
@@ -79,8 +81,11 @@ impl Store {
             CREATE TABLE IF NOT EXISTS events (receipt TEXT PRIMARY KEY, source TEXT NOT NULL, event TEXT NOT NULL, kind TEXT NOT NULL, alias TEXT NOT NULL, generation INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL, next INTEGER NOT NULL, expires INTEGER NOT NULL, may_sent INTEGER NOT NULL, UNIQUE(source,event));").map_err(|_| "Cannot initialize relay schema")?;
         let mut store = Self {
             connection,
+            push: config.push(),
             _lock: lock,
         };
+        crate::push_enrollment::schema(&store.connection)
+            .map_err(|_| "Cannot initialize push schema")?;
         store
             .initialize(config, replace_target)
             .map_err(|_| "Relay identity mismatch or storage failure")?;
@@ -101,6 +106,8 @@ impl Store {
                 return Err(ApiError::conflict());
             }
             if replace_target {
+                transaction.execute("DELETE FROM push_device", [])?;
+                transaction.execute("DELETE FROM event_push", [])?;
                 transaction.execute(
                     "UPDATE account SET target=?1,generation=generation+1,enabled=0",
                     [config.target_hash.to_vec()],
@@ -135,6 +142,14 @@ impl Store {
             })?)
     }
     pub fn source(&mut self, source: &Source) -> Result<(), ApiError> {
+        if self.connection.query_row(
+            "SELECT count(*) FROM push_capabilities WHERE hash=?1",
+            [&source.token_hash],
+            |r| r.get::<_, i64>(0),
+        )? != 0
+        {
+            return Err(ApiError::conflict());
+        }
         if source.account_id != self.status()?.account_id {
             return Err(ApiError::conflict());
         }
@@ -187,6 +202,16 @@ impl Store {
             .ok_or_else(ApiError::unauthorized)
     }
     pub fn policy(&mut self, enabled: bool) -> Result<Status, ApiError> {
+        if enabled
+            && self.push.is_some()
+            && self.connection.query_row(
+                "SELECT count(*) FROM push_device WHERE revoked=0 AND active IS NOT NULL",
+                [],
+                |r| r.get::<_, i64>(0),
+            )? != 1
+        {
+            return Err(ApiError::disabled());
+        }
         let transaction = self.connection.transaction()?;
         transaction.execute(
             "UPDATE account SET enabled=?1,generation=generation+1",
@@ -343,6 +368,49 @@ impl Store {
             transaction.commit()?;
             return Ok(None);
         };
+        let receipt = Self::receipt_on(
+            &transaction,
+            Uuid::parse_str(&source).map_err(|_| ApiError::storage())?,
+            &id,
+        )?;
+        let push = if let Some(config) = &self.push {
+            let snapshot: Option<String> = transaction
+                .query_row(
+                    "SELECT subscription FROM event_push WHERE receipt=?1",
+                    [&id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let snapshot = match snapshot {
+                Some(value) => value,
+                None => {
+                    let active: Option<String> = transaction
+                        .query_row(
+                            "SELECT active FROM push_device WHERE id=1 AND revoked=0",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .optional()?
+                        .flatten();
+                    let Some(active) = active else {
+                        transaction.commit()?;
+                        return Ok(None);
+                    };
+                    transaction
+                        .execute("INSERT INTO event_push VALUES(?1,?2)", params![id, active])?;
+                    active
+                }
+            };
+            let subscription = serde_json::from_str(&snapshot).map_err(|_| ApiError::storage())?;
+            let payload = serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"receiptId":receipt.receipt_id,"eventId":receipt.event_id,"kind":receipt.kind,"alias":receipt.alias})).map_err(|_|ApiError::storage())?;
+            Some(
+                config
+                    .encrypt(&subscription, &payload, 300)
+                    .map_err(|_| ApiError::storage())?,
+            )
+        } else {
+            None
+        };
         // This commit is network admission. A later revoke cannot retract a POST.
         transaction.execute(
             "UPDATE events SET state='sending',attempts=attempts+1,may_sent=1 WHERE receipt=?1",
@@ -350,12 +418,10 @@ impl Store {
         )?;
         transaction.commit()?;
         Ok(Some(Job {
-            receipt: self.receipt(
-                Uuid::parse_str(&source).map_err(|_| ApiError::storage())?,
-                &id,
-            )?,
+            receipt,
             generation,
             attempts: attempts + 1,
+            push,
         }))
     }
     pub fn finish(&mut self, job: &Job, accepted: bool) -> Result<(), ApiError> {

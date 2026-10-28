@@ -6,6 +6,8 @@
 
 - Use the Bed Mode SVG mark in the existing app sidebar, keeping the visible lazysh name and accessible text singular. Connection behavior and responsive drawer controls are unchanged.
 
+- Add an opt-in authenticated encrypted Web Push server foundation with private single-device enrollment, challenge confirmation and pinned HTTPS delivery. Existing webhook defaults are unchanged; Android enrollment and actual remote notification delivery remain incomplete.
+
 - Replace the default lazysh app, browser, Android and iOS launcher artwork with the original Bed Mode sloth-and-mobile-terminal mark, and add transparent SVG brand variants. The default visual identity changes; app features, connection security and the existing Amber alternate icon are unchanged.
 
 - Update the manual F-Droid source recipe for the UnifiedPush registration foundation. Automatic publishing remains disabled; this does not establish distributor delivery or complete free-software remote push.
