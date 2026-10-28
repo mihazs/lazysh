@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 // Bun 1.3.14 leaves version-only workspace lock entries stale on install.
 // New/renamed packages require a reviewed release change, not inferred ownership.
@@ -61,7 +61,7 @@ async function inspect(root: string, allowPreviousVersion: boolean) {
     && config.privatePackages?.version === true && config.privatePackages?.tag === false
     && Array.isArray(config.ignore) && config.ignore.length === 0, 'unexpected release group');
   const paths = Object.keys(ownedWorkspaces);
-  const present = [...new Bun.Glob('{apps,packages}/*/package.json').scanSync({ cwd: root })].map(path => path.slice(0, -13));
+  const present = [...new Bun.Glob('{apps,packages}/*/package.json').scanSync({ cwd: root })].map(path => path.slice(0, -13).split(sep).join('/'));
   requireRelease(present.length === paths.length && present.every(path => paths.includes(path)), 'unexpected workspace paths');
   const lockText = await Bun.file(join(root, 'bun.lock')).text();
   const lock = Bun.JSONC.parse(lockText);
