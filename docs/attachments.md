@@ -14,6 +14,32 @@ offers a shell-quoted path and an editable prompt. Copy and Stage are explicit;
 upload completion never sends a prompt or terminal input. Optional expiring public
 URLs use the independent, opt-in [sharing service](sharing.md).
 
+## Explicit terminal path paste
+
+Standalone Attachments also offers **Paste uploaded path** after a current upload
+completes. It sends only that upload's canonical, quoted path to the original
+selected terminal; it does not send the editable prompt or append Enter. The
+existing xterm public bracketed-paste mode and ignore option determine whether
+the trusted paste delimiters are added. No bytes are sent automatically on
+upload, selection, navigation or retry. The action is separate from adding an
+attachment to the Chat draft.
+
+Direct paste refuses relative/dot-segment paths, control characters, malformed
+Unicode and paths larger than the existing 4096-byte native path bound. Both
+slash-rooted SFTP paths and fully qualified `C:/...` forms remain supported.
+Validation rejects instead of stripping or truncating. Quoting reuses the
+existing POSIX-style path display; it is not a promise that every remote shell
+or agent understands that convention. Review the running program and terminal
+state before pasting. No shell command, Ctrl+V or Enter is synthesized.
+
+Only one paste request is admitted at a time. Native acknowledgement means the
+write was accepted, not that an agent opened the file. Closing, hiding or
+revoking the original view cannot reassign a queued action or its result to a
+new upload/session. Already-dispatched bytes cannot be withdrawn; failures are
+not retried automatically, so inspect the terminal before any explicit retry.
+The editable prompt remains unchanged. Actual remote shell/agent consumption,
+camera permissions and physical device behavior require separate acceptance.
+
 ## Cancellation and limits
 
 Cancel remains available during preparation, reservation and sending. Leaving
