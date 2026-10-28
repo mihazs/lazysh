@@ -1,0 +1,119 @@
+name: Verified stable tag
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verified-stable-tag
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    outputs:
+      enabled: ${{ steps.prepare.outputs.enabled }}
+      version-code: ${{ steps.prepare.outputs.versionCode }}
+    steps:
+      - &checkout-candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - &release-bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Check committed activation policy and exact main version transition
+        id: prepare
+        env:
+          LAZYSH_RELEASE_DIRECTORY: ${{ runner.temp }}/fdroid-release
+        run: |
+          mkdir -p "$LAZYSH_RELEASE_DIRECTORY"
+          cp -R fdroid/. "$LAZYSH_RELEASE_DIRECTORY/"
+          bun .changeset/release-tag.ts prepare
+      - uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.enabled == 'true'
+        with:
+          name: fdroid-candidate
+          path: ${{ runner.temp }}/fdroid-release
+          if-no-files-found: error
+
+  source-build:
+    needs: candidate
+    if: needs.candidate.outputs.enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      BUILD_CONTAINER: lazysh-fdroid-${{ github.run_id }}-${{ github.run_attempt }}
+      VERSION_CODE: ${{ needs.candidate.outputs.version-code }}
+    steps:
+      - *checkout-candidate
+      - *release-bun
+      - uses: actions/download-artifact@v4
+        with:
+          name: fdroid-candidate
+          path: ${{ runner.temp }}/fdroid-release
+      - name: Provision owned official buildserver container
+        run: |
+          docker run --detach --name "$BUILD_CONTAINER" --user vagrant \
+            --env ANDROID_HOME=/opt/android-sdk \
+            --volume "$RUNNER_TEMP/fdroid-release:/workspace:rw" \
+            registry.gitlab.com/fdroid/fdroidserver@sha256:1ea8bef1820bff06c2974e31b4fc4c79c364cd24231b86e71fa4b926797e0dac sleep infinity
+          provisioning=$(bun .changeset/release-tag.ts provision)
+          docker exec --user root "$BUILD_CONTAINER" bash -euo pipefail -c "$provisioning"
+          docker exec --user root "$BUILD_CONTAINER" apt-get install -y python3-venv
+          docker exec --user root "$BUILD_CONTAINER" chown -R vagrant:vagrant /workspace
+          docker exec "$BUILD_CONTAINER" bash -euo pipefail -c '
+            python3 -m venv /home/vagrant/fdroid-tools
+            /home/vagrant/fdroid-tools/bin/pip install fdroidserver==2.4.5
+            sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmdline-tools;latest"
+          '
+      - name: Source scan exact candidate, then build with binary scans
+        run: |
+          docker exec --workdir /workspace "$BUILD_CONTAINER" /home/vagrant/fdroid-tools/bin/fdroid readmeta
+          docker exec --workdir /workspace "$BUILD_CONTAINER" /home/vagrant/fdroid-tools/bin/fdroid lint app.lazysh.client
+          docker exec --workdir /workspace "$BUILD_CONTAINER" /home/vagrant/fdroid-tools/bin/fdroid scanner --exit-code --json "app.lazysh.client:$VERSION_CODE" > "$RUNNER_TEMP/source-scan.json"
+          bun .changeset/release-tag.ts scan "$RUNNER_TEMP/source-scan.json" "$VERSION_CODE"
+          docker exec --workdir /workspace --env CARGO_BUILD_JOBS=4 --env CMAKE_BUILD_PARALLEL_LEVEL=4 "$BUILD_CONTAINER" \
+            /home/vagrant/fdroid-tools/bin/fdroid build --test --stop --scan-binary "app.lazysh.client:$VERSION_CODE"
+      - name: Inspect real unsigned release identity and Google-free payload
+        run: |
+          docker exec --workdir /workspace/build/app.lazysh.client \
+            --env LAZYSH_ANDROID_PUSH_VARIANT=fdroid \
+            --env LAZYSH_ANDROID_PUSH_CONFIGURATION=universalReleaseRuntimeClasspath \
+            --env LAZYSH_ANDROID_PUSH_APK="/workspace/tmp/app.lazysh.client_$VERSION_CODE.apk" \
+            "$BUILD_CONTAINER" /home/vagrant/.local/share/lazysh-fdroid/bun-linux-x64-baseline/bun test tests/android-push-artifact.test.ts
+      - name: Retain bounded source and APK receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-tag-build-receipts
+          path: |
+            ${{ runner.temp }}/source-scan.json
+            ${{ runner.temp }}/fdroid-release/metadata/app.lazysh.client.yml
+            ${{ runner.temp }}/fdroid-release/logs
+            ${{ runner.temp }}/fdroid-release/build/app.lazysh.client/apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/push-artifact/fdroid.json
+      - name: Remove owned container
+        if: always()
+        run: docker rm --force "$BUILD_CONTAINER"
+
+  tag:
+    needs: [candidate, source-build]
+    if: needs.candidate.outputs.enabled == 'true' && needs.source-build.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - *checkout-candidate
+      - *release-bun
+      - name: Recheck candidate and create only its stable ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAZYSH_RELEASE_BUILD_RESULT: ${{ needs.source-build.result }}
+        run: bun .changeset/release-tag.ts tag
