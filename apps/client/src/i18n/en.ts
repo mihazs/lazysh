@@ -1171,6 +1171,7 @@ export const english = {
   voiceParakeetRemoving: "Removing the Parakeet model…",
   voiceParakeetTranscribing: "Transcribing with Parakeet on this device…",
   voiceEngineBusy: "The local speech engine is busy. Wait for current work to finish.",
+  voiceComposeTooLong: "The draft was kept because adding this dictation would exceed 65,536 characters. Shorten it before recording again.",
   voiceDraft: "Dictation draft",
   voiceCopyDraft: "Copy draft",
   voiceStageTerminal: "Stage in terminal composer",

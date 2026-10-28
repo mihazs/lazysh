@@ -98,6 +98,6 @@ it('locale subscriptions do not cancel or replace an active Cloud transcription,
   await waitFor(()=>expect(complete).toBeTypeOf('function'));
   await localized(()=>{expect(screen.getByLabelText(t('voiceDraft'))).toBe(draft);expect(draft).toHaveProperty('value','keep existing draft');expect(screen.getByLabelText(t('voiceSpeechEngine'))).toHaveProperty('value','cloud');expect(microphone.microphone).toHaveBeenCalledOnce();});
   await act(async()=>{complete({requestId:id,text:'verbatim {{text}} <b>not HTML</b>',quota:value.quota,checkedAt:value.checkedAt+1000});});
-  expect(draft).toHaveProperty('value','verbatim {{text}} <b>not HTML</b>');
+  expect(draft).toHaveProperty('value','keep existing draft\nverbatim {{text}} <b>not HTML</b>');
   expect(invoke).toHaveBeenCalledWith('voice_cloud_transcribe',{requestId:id,sessionId:'literal-session',samples:Array(1600).fill(0),language:'auto'},{headers:{'X-Lazysh-Access':'e'.repeat(64)}});
 });

@@ -10,6 +10,28 @@ Open Voice, explicitly download a catalog model or import a trusted Whisper tiny
 
 Models come from the [official whisper.cpp model collection](https://huggingface.co/ggerganov/whisper.cpp/tree/main). English-only `.en` models require English; use multilingual tiny/base for other languages. The app imports at most three models, each at most 160 MiB, through 1 MiB chunks. Imports validate the GGML magic and supported tiny/base architecture dimensions, then publish without replacing an existing model. Remove selected model deletes its local copy. Only import model binaries from a trusted publisher: the native model parser is not a sandbox for hostile files.
 
+## Compose a review draft
+
+In the default review mode, each completed transcription appends to the latest
+editable draft instead of replacing existing typed or dictated text. Nonempty
+parts are separated by one line feed; existing whitespace and new transcription
+text are preserved. Edits made while recording or inference is pending remain
+part of the draft. Empty or whitespace-only results leave it unchanged.
+
+The existing composer limit remains 65,536 UTF-16 code units. An append that would
+exceed it keeps the entire prior draft and reports an error without truncation.
+Recent history remains per transcription, subject to the existing capture/consent
+and retention rules; it does not silently save the combined typed draft. Explicit
+history reuse replaces the editable draft, which becomes the base for subsequent
+review dictation.
+
+Copy and Stage remain explicit. Direct dictation retains its separate clip-only
+behavior: only the newly transcribed result is queued once with the options
+captured for that recording, and the draft mirrors that clip. Accumulated review
+text is never automatically replayed to the terminal. Cancellation, hidden views,
+session changes, original access revocation and unmount still reject stale results.
+No new engine, network request, model or provider behavior is introduced.
+
 ## Downloadable Whisper catalog
 
 Choose **Downloadable model**, review its size and language, then select **Download selected model**. Viewing the catalog reads local metadata and never starts a network request. Downloads contact Hugging Face only after that explicit click; they send no audio, prompts, credentials or account tokens. They do not transcribe or send a draft automatically. Local file import remains available independently.
