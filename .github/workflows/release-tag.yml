@@ -72,7 +72,7 @@ jobs:
           docker exec "$BUILD_CONTAINER" bash -euo pipefail -c '
             python3 -m venv /home/vagrant/fdroid-tools
             /home/vagrant/fdroid-tools/bin/pip install fdroidserver==2.4.5
-            sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865" "cmdline-tools;latest"
+            sdkmanager "platforms;android-36" "platforms;android-37.0" "build-tools;36.0.0" "ndk;29.0.14206865" "cmdline-tools;latest"
           '
       - name: Source scan exact candidate, then build with binary scans
         run: |

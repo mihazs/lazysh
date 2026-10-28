@@ -1,5 +1,17 @@
 # Android instrumentation
 
+## Build SDK
+
+Install `platforms;android-36` and `platforms;android-37.0`. The app and shared push library compile
+against 37; other native libraries retain 36. The build
+keeps targetSdk 36, minSdk 24, Build Tools 36.0.0, NDK 29.0.14206865 and the API 36
+runtime emulator. Compilation against newer APIs does not raise the minimum
+device version or opt into newer target-SDK behavior. Existing AGP 9.3.1 and
+Gradle 9.6.1 satisfy the [official API 37 compatibility requirements](https://developer.android.com/build/releases/agp-9-3-0-release-notes).
+This permits the pending enrollment dependency's [OkHttp 5.5.1 API 37 build requirement](https://github.com/square/okhttp/blob/parent-5.5.1/okhttp/build.gradle.kts)
+without suppressing AAR metadata validation or downgrading its AOSP certificate
+blocklist fix. This prerequisite does not add enrollment or remote delivery.
+
 ## F-Droid push variant
 
 `bun run build:android:fdroid` produces an unsigned ARM64 release APK with the opt-in Rust `fdroid` feature. The feature excludes the Android Google push Gradle project and native registration path. Remote push is reported unavailable; local inbox notifications remain independent. Normal Android builds retain Firebase, and iOS retains APNs. This does not establish F-Droid.org inclusion, release signing or automatic delivery.
@@ -115,3 +127,5 @@ set to `false` for that test invocation only: debug requires the fixed logging
 operands; release requires their absence. This compiled-class check is separate from the actual API36
 recreation acceptance required by #373. The debug diagnostic does not close that
 runtime issue or establish the later owned SSH/Herdr acceptance.
+
+For the dedicated owned SSH/Herdr failure report, the existing one-second continuity probe also samples the selected emulator's single `adbd` PID and `/proc/<pid>/stat` start tick under one shared deadline. Only their combined SHA-256 is retained; denied, malformed, missing or oversized reads remain explicitly unavailable/unrecognized/overflow. A changed sample supports daemon replacement; equal samples cannot exclude identity reuse, a transient connection loss, or unrelated listener removal. No host ADB process or listener discovery is performed. The collector reports its observed close offset and Gradle start/end offsets from the same monotonic origin (integer milliseconds, capped at one hour). These are host observation times, not OS termination timestamps or cause attribution. Existing test/collector deadlines and acceptance assertions are unchanged.

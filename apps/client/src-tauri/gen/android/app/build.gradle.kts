@@ -15,7 +15,7 @@ val tauriProperties = Properties().apply {
 }
 
 android {
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "29.0.14206865"
     namespace = "app.lazysh.client"
     defaultConfig {

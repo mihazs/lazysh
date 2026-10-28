@@ -76,10 +76,10 @@ async function withDiagnosticAdb(body:string,code:number,run:(adb:string,args:st
 printf '%s\\n' "$*" >> "$EXIT_INFO_ARGS"
 case "$3 $4" in
   'get-state ') sed -n '1p' "$EXIT_INFO_FIXTURE" ;;
-  'shell pidof') sed -n '2p' "$EXIT_INFO_FIXTURE" ;;
+  'shell pidof') if [ "$5" = adbd ]; then sed -n '6p' "$EXIT_INFO_FIXTURE"; else sed -n '2p' "$EXIT_INFO_FIXTURE"; fi ;;
   'reverse --list') sed -n '3p' "$EXIT_INFO_FIXTURE" ;;
   'transport-id ') sed -n '4p' "$EXIT_INFO_FIXTURE" ;;
-  'shell cat') sed -n '5p' "$EXIT_INFO_FIXTURE" ;;
+  'shell cat') if [ "$5" = /proc/sys/kernel/random/boot_id ]; then sed -n '5p' "$EXIT_INFO_FIXTURE"; else sed -n '7p' "$EXIT_INFO_FIXTURE"; fi ;;
   *) cat "$EXIT_INFO_FIXTURE" ;;
 esac
 exit "$EXIT_INFO_CODE"
@@ -162,10 +162,10 @@ test.each([
   await withDiagnosticAdb(body,code,async(adb,args)=>{
     const summary=await emulatorContinuity(adb,'emulator-5580','46867',45678);
     const state=code!==0?'unavailable':'unrecognized';
-    expect(summary).toEqual({...expected,transport:state,transportHash:null,boot:state,bootHash:null});
+    expect(summary).toEqual({...expected,transport:state,transportHash:null,boot:state,bootHash:null,adbd:state,adbdHash:null});
     expect((await readFile(args,'utf8')).trim().split('\n').sort()).toEqual([
       '-s emulator-5580 get-state','-s emulator-5580 shell pidof app.lazysh.client','-s emulator-5580 reverse --list',
-      '-s emulator-5580 transport-id','-s emulator-5580 shell cat /proc/sys/kernel/random/boot_id',
+      '-s emulator-5580 transport-id','-s emulator-5580 shell cat /proc/sys/kernel/random/boot_id','-s emulator-5580 shell pidof adbd',
     ].sort());
     expect(JSON.stringify(summary)).not.toContain('private-');
   });
@@ -205,9 +205,42 @@ test.each([
     const before=await emulatorContinuity(adb,'emulator-5580','46867',45678);
     await writeFile(fixture,continuityBody(nextTransport,nextBoot,mapping));
     const after=await emulatorContinuity(adb,'emulator-5580','46867',45678);
-    expect(compareEmulatorContinuity(before,after)).toEqual(expected);
-    expect(compareEmulatorContinuity(undefined,after)).toEqual({transport:'unknown',boot:'unknown',reverseLost:null});
-    expect((await readFile(args,'utf8')).trim().split('\n')).toHaveLength(10);
+    expect(compareEmulatorContinuity(before,after)).toEqual({...expected,adbd:'unknown'});
+    expect(compareEmulatorContinuity(undefined,after)).toEqual({transport:'unknown',boot:'unknown',adbd:'unknown',reverseLost:null});
+    expect((await readFile(args,'utf8')).trim().split('\n')).toHaveLength(12);
+  });
+});
+
+const daemonStat=(pid:string,start:string)=>`${pid} (adbd) S ${Array.from({length:18},()=> '0').join(' ')} ${start} 0 0`;
+
+test.each([
+  {pid:'123',stat:daemonStat('123','456'),state:'available'},
+  {pid:'123 124',stat:daemonStat('123','456'),state:'unrecognized'},
+  {pid:'2147483648',stat:daemonStat('2147483648','456'),state:'unrecognized'},
+  {pid:'123',stat:daemonStat('124','456'),state:'unrecognized'},
+  {pid:'123',stat:daemonStat('123','0'),state:'unrecognized'},
+  {pid:'123',stat:daemonStat('123','18446744073709551616'),state:'unrecognized'},
+  {pid:'123',stat:daemonStat('123','456').replace('(adbd)','(private-secret)'),state:'unrecognized'},
+  {pid:'123',stat:'private-secret'.repeat(500),state:'overflow'},
+])('daemon sample validates identity and discards raw fields: $state',async({pid,stat,state})=>{
+  await withDiagnosticAdb(continuityBody('42',bootA)+`${pid}\n${stat}\n`,0,async(adb,args)=>{
+    const result=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(result.adbd).toBe(state);
+    expect(result.adbdHash).toBe(state==='available'?createHash('sha256').update('123:456').digest('hex'):null);
+    expect(JSON.stringify(result)).not.toContain('private-secret');
+    if(state==='available')expect((await readFile(args,'utf8')).split('\n')).toContain('-s emulator-5580 shell cat /proc/123/stat');
+  });
+});
+
+test('daemon identity compares PID plus start tick without asserting cause',async()=>{
+  const body=(start:string)=>continuityBody('42',bootA)+`123\n${daemonStat('123',start)}\n`;
+  await withDiagnosticAdb(body('456'),0,async(adb,_args,fixture)=>{
+    const before=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(compareEmulatorContinuity(before,before).adbd).toBe('same');
+    await writeFile(fixture,body('457'));
+    const after=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(compareEmulatorContinuity(before,after)).toEqual({transport:'same',boot:'same',adbd:'changed',reverseLost:false});
+    expect(JSON.stringify(after)).not.toContain('123:457');
   });
 });
 
@@ -361,11 +394,16 @@ test.skipIf(process.platform!=='linux')(`owned crash collector records ${mode} p
       const failure=spyOn(OwnedProcess.prototype,'stop').mockImplementation(async function(this:OwnedProcess){await originalStop.call(this);throw new Error('private-stop-error');});
       restoreStop=()=>failure.mockRestore();
     }
+    const beforeStop=collector.elapsedMs();
     const summary=await collector.stop();
+    expect(summary.close.elapsedMs!).toBeLessThanOrEqual(collector.elapsedMs());
+    if(mode==='hold'||mode==='stop-failure')expect(summary.close.elapsedMs!).toBeGreaterThanOrEqual(beforeStop);
     expect(summary.stream).toBe(mode==='hold'?'stopped':mode==='overflow'?'overflow':'unavailable');
     expect(summary.correlated).toBe(true);
     expect(summary.records).toHaveLength(1);
-    expect(summary.close).toEqual({phase:mode==='hold'||mode==='overflow'||mode==='stop-failure'?'during-stop':'before-stop',exitCode:mode==='exit255'?255:mode==='reported-eof'?1:null,signal:mode==='exit255'||mode==='reported-eof'?'none':'SIGTERM',processError:false,stopFailed:mode==='stop-failure'});
+    expect(summary.close.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(summary.close.elapsedMs).toBeLessThanOrEqual(1000);
+    expect(summary.close).toEqual({elapsedMs:summary.close.elapsedMs,phase:mode==='hold'||mode==='overflow'||mode==='stop-failure'?'during-stop':'before-stop',exitCode:mode==='exit255'?255:mode==='reported-eof'?1:null,signal:mode==='exit255'||mode==='reported-eof'?'none':'SIGTERM',processError:false,stopFailed:mode==='stop-failure'});
     expect(summary.stderr.unexpectedEof).toBe(mode==='reported-eof');
     expect(JSON.stringify(summary)).not.toMatch(/private-secret|private-stop-error/);
     expect(JSON.parse(await readFile(args,'utf8'))).toEqual(['-s','emulator-5580','logcat','-b','main','-b','crash','-v','threadtime','-T','1','LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S']);

@@ -252,50 +252,69 @@ export async function packageExitInfo(adb:string,serial:string) {
   } catch {return {state:'unavailable',shape,records:[]};}
 }
 
-// Only observations of the explicitly selected emulator; no raw command output is retained.
+// All commands target the selected emulator; neither raw output nor daemon IDs escape.
+async function continuityOutput(adb:string,serial:string,args:string[],deadline:number) {
+  const remaining=Math.floor(deadline-performance.now());
+  if(remaining<=0)return {state:'unavailable',output:''};
+  const owned=new OwnedProcess(adb,['-s',serial,...args],undefined,process.env,false);
+  let output='',overflow=false;
+  owned.child.stdout!.on('data',(data:Buffer)=>{
+    if(Buffer.byteLength(output)+data.length>4096){overflow=true;output='';return;}
+    if(!overflow)output+=String(data);
+  });
+  try {
+    await owned.finish('owned emulator continuity',remaining);
+    if(performance.now()>=deadline)return {state:'unavailable',output:''};
+    return {state:overflow?'overflow':'available',output:overflow?'':output.trim()};
+  } catch {return {state:'unavailable',output:''};}
+}
+
 export async function emulatorContinuity(adb:string,serial:string,reverse:string|undefined,targetPort:number) {
-  const summary:{connection:string;process:string;mainPids:number[];reverse:string;transport:string;transportHash:string|null;boot:string;bootHash:string|null}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created',transport:'unavailable',transportHash:null,boot:'unavailable',bootHash:null};
-  await Promise.all((['connection','process','reverse','transport','boot'] as const).map(async kind=>{
+  const summary:{connection:string;process:string;mainPids:number[];reverse:string;transport:string;transportHash:string|null;boot:string;bootHash:string|null;adbd:string;adbdHash:string|null}={connection:'unavailable',process:'unavailable',mainPids:[],reverse:reverse?'unavailable':'not-created',transport:'unavailable',transportHash:null,boot:'unavailable',bootHash:null,adbd:'unavailable',adbdHash:null};
+  await Promise.all((['connection','process','reverse','transport','boot','adbd'] as const).map(async kind=>{
     if(kind==='reverse' && !reverse)return;
-    const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:kind==='transport'?['transport-id']:kind==='boot'?['shell','cat','/proc/sys/kernel/random/boot_id']:['reverse','--list'];
-    const owned=new OwnedProcess(adb,['-s',serial,...args],undefined,process.env,false);
-    let output='',overflow=false;
-    owned.child.stdout!.on('data',(data:Buffer)=>{
-      if(Buffer.byteLength(output)+data.length>4096){overflow=true;output='';return;}
-      if(!overflow)output+=String(data);
-    });
-    try {
-      await owned.finish('owned emulator continuity',1000);
-      if(overflow){summary[kind]='overflow';return;}
-      if(kind==='transport' || kind==='boot') {
-        const value=output.trim();
-        const valid=kind==='transport'?/^[1-9][0-9]{0,19}$/.test(value) && BigInt(value)<=18446744073709551615n:/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-        summary[kind]=valid?'available':'unrecognized';
-        if(valid)summary[kind==='boot'?'bootHash':'transportHash']=createHash('sha256').update(value.toLowerCase()).digest('hex');
-      }
-      if(kind==='connection')summary.connection=['device','offline','unknown'].includes(output.trim())?output.trim():'unrecognized';
-      if(kind==='process') {
-        const tokens=output.trim().split(/\s+/);
-        if(tokens.length<=16 && tokens.every(pid=>/^[1-9][0-9]{0,9}$/.test(pid))) {summary.mainPids=tokens.map(Number);summary.process='present';}
-        else summary.process='unrecognized';
-      }
-      // The selected transport scopes this query; Android16 emits host-N/(reverse) display labels.
-      if(kind==='reverse')summary.reverse=output.split(/\r?\n/).some(row=>{
-        const fields=row.trim().split(/\s+/);
-        return fields.length===3 && fields[1]===`tcp:${reverse}` && fields[2]===`tcp:${targetPort}`;
-      })?'present':'missing';
-    } catch {summary[kind]='unavailable';}
+    const deadline=performance.now()+1000;
+    const args=kind==='connection'?['get-state']:kind==='process'?['shell','pidof','app.lazysh.client']:kind==='transport'?['transport-id']:kind==='boot'?['shell','cat','/proc/sys/kernel/random/boot_id']:kind==='adbd'?['shell','pidof','adbd']:['reverse','--list'];
+    const result=await continuityOutput(adb,serial,args,deadline);
+    if(result.state!=='available'){summary[kind]=result.state;return;}
+    const output=result.output;
+    if(kind==='adbd') {
+      // One exact PID, then the same process's start tick within the original 1s budget.
+      if(!/^[1-9][0-9]{0,9}$/.test(output)||Number(output)>2147483647){summary.adbd='unrecognized';return;}
+      const stat=await continuityOutput(adb,serial,['shell','cat',`/proc/${output}/stat`],deadline);
+      if(stat.state!=='available'){summary.adbd=stat.state;return;}
+      const match=/^([1-9][0-9]{0,9}) \(adbd\) ([A-Za-z] .+)$/.exec(stat.output);
+      const start=match?.[2].split(/\s+/)[19];
+      if(match?.[1]!==output || !start || !/^[1-9][0-9]{0,19}$/.test(start)||BigInt(start)>18446744073709551615n){summary.adbd='unrecognized';return;}
+      summary.adbd='available';summary.adbdHash=createHash('sha256').update(`${output}:${start}`).digest('hex');
+    }
+    if(kind==='transport' || kind==='boot') {
+      const valid=kind==='transport'?/^[1-9][0-9]{0,19}$/.test(output) && BigInt(output)<=18446744073709551615n:/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(output);
+      summary[kind]=valid?'available':'unrecognized';
+      if(valid)summary[kind==='boot'?'bootHash':'transportHash']=createHash('sha256').update(output.toLowerCase()).digest('hex');
+    }
+    if(kind==='connection')summary.connection=['device','offline','unknown'].includes(output)?output:'unrecognized';
+    if(kind==='process') {
+      const tokens=output.split(/\s+/);
+      if(tokens.length<=16 && tokens.every(pid=>/^[1-9][0-9]{0,9}$/.test(pid))) {summary.mainPids=tokens.map(Number);summary.process='present';}
+      else summary.process='unrecognized';
+    }
+    // The selected transport scopes this query; Android16 emits host-N/(reverse) display labels.
+    if(kind==='reverse')summary.reverse=output.split(/\r?\n/).some(row=>{
+      const fields=row.trim().split(/\s+/);
+      return fields.length===3 && fields[1]===`tcp:${reverse}` && fields[2]===`tcp:${targetPort}`;
+    })?'present':'missing';
   }));
   return summary;
 }
 
-// Equality brackets two samples only; ADB can reuse transport IDs after a restart.
+// Equality brackets two samples only; identity reuse/transient disconnects remain possible.
 export function compareEmulatorContinuity(before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined,after:Awaited<ReturnType<typeof emulatorContinuity>>) {
-  const compare=(kind:'transport'|'boot')=>{
-    const key=kind==='boot'?'bootHash':'transportHash';
+  const compare=(kind:'transport'|'boot'|'adbd')=>{
+    const key=kind==='boot'?'bootHash':kind==='adbd'?'adbdHash':'transportHash';
     return before?.[kind]==='available' && after[kind]==='available' && before[key] && after[key]?(before[key]===after[key]?'same':'changed'):'unknown';
   };
-  return {transport:compare('transport'),boot:compare('boot'),reverseLost:before && ['present','missing'].includes(before.reverse) && ['present','missing'].includes(after.reverse)?before.reverse==='present' && after.reverse==='missing':null};
+  return {transport:compare('transport'),boot:compare('boot'),adbd:compare('adbd'),reverseLost:before && ['present','missing'].includes(before.reverse) && ['present','missing'].includes(after.reverse)?before.reverse==='present' && after.reverse==='missing':null};
 }
 
 // Presence in the last captured output window is reported text, never a cause verdict.
@@ -322,12 +341,14 @@ export async function androidSshCleanup(primary:boolean,steps:readonly (readonly
 // No raw crash output enters OwnedProcess's retained output windows. This is a
 // best-effort diagnostic child on the explicitly selected owned emulator only.
 export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
+  const started=performance.now();
+  const elapsedMs=()=>Math.min(3_600_000,Math.max(0,Math.floor(performance.now()-started)));
   const parser=new OwnedCaseCrashParser(nonce);
   const child=new OwnedProcess(adb,['-s',serial,'logcat','-b','main','-b','crash','-v','threadtime','-T','1',
     'LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','*:S'],undefined,process.env,false);
   let stream:'running'|'stopped'|'closed'|'unavailable'|'overflow'|'deadline'='running';
   let stopping=false;
-  const close:{phase:'unobserved'|'before-stop'|'during-stop',exitCode:number|null,signal:'none'|'SIGTERM'|'SIGKILL'|'SIGPIPE'|'SIGABRT'|'SIGSEGV'|'other',processError:boolean,stopFailed:boolean}={phase:'unobserved',exitCode:null,signal:'none',processError:false,stopFailed:false};
+  const close:{phase:'unobserved'|'before-stop'|'during-stop',exitCode:number|null,signal:'none'|'SIGTERM'|'SIGKILL'|'SIGPIPE'|'SIGABRT'|'SIGSEGV'|'other',processError:boolean,stopFailed:boolean,elapsedMs:number|null}={phase:'unobserved',exitCode:null,signal:'none',processError:false,stopFailed:false,elapsedMs:null};
   let timer:ReturnType<typeof setTimeout>;
   const snapshot=()=>({...parser.summary(),stream,close:{...close}});
   let finished:Promise<ReturnType<typeof snapshot>>|undefined;
@@ -350,13 +371,14 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   child.child.once('error',()=>{close.processError=true;});
   child.child.once('close',(code,signal)=>{
     close.phase=stopping?'during-stop':'before-stop';
+    close.elapsedMs=elapsedMs();
     close.exitCode=code!==null && Number.isInteger(code) && code>=0 && code<=255?code:null;
     close.signal=signal==null?'none':(['SIGTERM','SIGKILL','SIGPIPE','SIGABRT','SIGSEGV'] as const).find(value=>value===signal)??'other';
     parser.finish();
   });
   void child.done.then(code=>{if(!stopping)stream=code===0?'closed':'unavailable';},()=>{stream='unavailable';});
   timer=setTimeout(()=>{stream='deadline';void stop();},600_000);
-  return {stop,snapshot};
+  return {stop,snapshot,elapsedMs};
 }
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
@@ -370,6 +392,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined;
   let gradle:OwnedProcess|undefined;
   let crashes:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
+  const timing:{gradleStartMs:number|null,gradleEndMs:number|null}={gradleStartMs:null,gradleEndMs:null};
   let primary=false;
   const shell=(args:string[])=>command('owned emulator command',adb,['-s',serial,...args]);
   try {
@@ -385,12 +408,14 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {before=await emulatorContinuity(adb,serial,reverse,fixture.port);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
     try {crashes=captureOwnedCaseCrashes(adb,serial,fixture.nonce);} catch {/* Never change test admission for unavailable diagnostics. */}
     const android=join(root,'apps/client/src-tauri/gen/android');
+    timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
       herdr?'-PlazyshHerdrAcceptance=true':'-PlazyshSshAcceptance=true',
       '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
-    await gradle.finish('actual Android SSH UI instrumentation',600_000);
+    try {await gradle.finish('actual Android SSH UI instrumentation',600_000);}
+    finally {timing.gradleEndMs=crashes?.elapsedMs()??null;}
     await crashes?.stop();
     if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
     console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
@@ -400,7 +425,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
       const crash=await crashes?.stop();
       const [exitInfo,continuity]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port)]);
-      const summary={...exitInfo,crash:crash??{stream:'unavailable'},gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
+      const summary={...exitInfo,timing,crash:crash??{stream:'unavailable'},gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
