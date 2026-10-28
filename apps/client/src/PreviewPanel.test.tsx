@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import PreviewPanel, { parseAllowedPorts, parsePreview, previewNote } from './PreviewPanel';
 import { invoke } from '@tauri-apps/api/core';
+import { uiI18n } from './i18n/core';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => false }));
 const preview = { id: 'forward-one', remotePort: 5173, remoteAddress: '127.0.0.1', localPort: 41234, url: 'http://127.0.0.1:41234/' };
-afterEach(() => { cleanup(); vi.resetAllMocks(); localStorage.clear(); });
+afterEach(async () => { cleanup(); vi.resetAllMocks(); localStorage.clear(); await uiI18n.changeLanguage('en'); });
 it('validates bounded explicit discovery allowlists', () => {
   expect(parseAllowedPorts('all')).toBeNull();
   expect(parseAllowedPorts('none')).toEqual([]);
@@ -82,4 +83,21 @@ it.each(['vite', '<script>raw</script>', 1, {}, ['nextJs']])('rejects non-enumer
 it('rejects a framework hint without a successful HTTP observation', async () => {
   await discoverFramework('nextJs', false);
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Invalid listener list.');
+});
+
+it('keeps the catalogued Next.js brand and original listener across locale changes without discovery or forwarding', async () => {
+  await discoverFramework('nextJs');
+  const button = await screen.findByRole('button', { name: /node.*Next.js/ });
+  const calls = [...vi.mocked(invoke).mock.calls];
+  for (const [locale, title] of [
+    ['pt-BR', 'Indicação de framework informada pelo servidor'],
+    ['es', 'Indicio de framework declarado por el servidor'],
+    ['en', 'Server-reported framework hint'],
+  ]) {
+    await act(async () => { await uiI18n.changeLanguage(locale); });
+    const hint = screen.getByTitle(title);
+    expect(hint.textContent).toBe(' · Next.js');
+    expect(hint.closest('button')).toBe(button);
+    expect(vi.mocked(invoke).mock.calls).toEqual(calls);
+  }
 });

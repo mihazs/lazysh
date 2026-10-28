@@ -1050,6 +1050,7 @@ export const english = {
   previewEnablePicker: "Enable element picker for new previews (optional HTTP proxy)",
   previewUpdating: "Updating preview…",
   previewListeners: "Detected TCP listeners",
+  previewFrameworkNextJs: " · Next.js",
   previewFrameworkHint: "Server-reported framework hint",
   previewNoHttp: " · No HTTP response",
   previewListenerHint: "TCP listeners may include services that do not speak HTTP. Select a port, then open it.",
