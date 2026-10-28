@@ -14,6 +14,12 @@ pub async fn push_registration_register(access: AccessLease, app: AppHandle) -> 
         .await
 }
 #[tauri::command]
+pub async fn push_registration_enroll(access: AccessLease, app: AppHandle) -> Result {
+    access
+        .run(tauri_plugin_lazysh_push::commands::push_registration_enroll(app))
+        .await
+}
+#[tauri::command]
 pub async fn push_registration_disable(access: AccessLease, app: AppHandle) -> Result {
     access
         .run(tauri_plugin_lazysh_push::commands::push_registration_disable(app))

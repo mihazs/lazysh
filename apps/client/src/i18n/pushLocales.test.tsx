@@ -30,7 +30,12 @@ it.each(['fcm','unifiedpush'])('retains focused %s consent and cancels one held 
   vi.mocked(invoke).mockImplementation(async command=>command==='push_registration_register'?new Promise(resolve=>{complete=resolve;}):{...pushStatus,provider});
   render(<PushSettingsPanel/>);await screen.findByRole('checkbox');const consent=screen.getByRole('checkbox');consent.focus();
   await translatePush(()=>{expect(screen.getByRole('checkbox')).toBe(consent);expect(document.activeElement).toBe(consent);expect(consent).toHaveProperty('checked',false);expect(screen.getByRole('button',{name:t('pushRegister')})).toHaveProperty('disabled',true);});
-  fireEvent.click(consent);await translatePush(()=>expect(consent).toHaveProperty('checked',true));
+  fireEvent.click(consent);await translatePush(()=>{
+    expect(consent).toHaveProperty('checked',true);
+    const relay=screen.queryByRole('button',{name:t('pushConnectRelay')});
+    if(provider==='unifiedpush')expect(relay).toHaveProperty('disabled',false);
+    else expect(relay).toBeNull();
+  });
   fireEvent.click(screen.getByRole('button',{name:t('pushRegister')}));await waitFor(()=>expect(complete).toBeTypeOf('function'));
   await translatePush(()=>{expect(screen.getByRole('button',{name:t(provider==='unifiedpush'?'pushUnifiedPause':'pushPause')})).toHaveProperty('disabled',false);expect(consent).toHaveProperty('disabled',true);});
   fireEvent.click(screen.getByRole('button',{name:t(provider==='unifiedpush'?'pushUnifiedPause':'pushPause')}));await waitFor(()=>expect(consent).toHaveProperty('disabled',false));

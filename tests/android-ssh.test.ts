@@ -1,10 +1,11 @@
 import {expect,test,spyOn} from 'bun:test';
-import {chmod,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
+import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses,captureOwnedCaseCrashes} from './support/androidSsh';
+import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses,captureOwnedCaseCrashes,ownedAndroidPackagePresence,androidSshAcceptance} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -170,6 +171,62 @@ test.each([
     expect(JSON.stringify(summary)).not.toContain('private-');
   });
 });
+
+test.each([
+  {body:'package:app.lazysh.client\npackage:app.lazysh.client.test\npackage:app.lazysh.client.other\n',code:0,application:'present',instrumentation:'present'},
+  {body:'package:app.lazysh.client.other\n',code:0,application:'absent',instrumentation:'absent'},
+  {body:'',code:0,application:'absent',instrumentation:'absent'},
+  {body:'private-secret',code:0,application:'unrecognized',instrumentation:'unrecognized'},
+  {body:'private-secret'.repeat(500),code:0,application:'overflow',instrumentation:'overflow'},
+  {body:'package:app.lazysh.client',code:31,application:'unavailable',instrumentation:'unavailable'},
+])('owned package presence retains exact fixed IDs only: $application/$instrumentation',async({body,code,application,instrumentation})=>{
+  await withDiagnosticAdb(body,code,async(adb,args)=>{
+    const result=await ownedAndroidPackagePresence(adb,'emulator-5580');
+    expect(result).toEqual({application,instrumentation});
+    expect(await readFile(args,'utf8')).toBe('-s emulator-5580 shell pm list packages app.lazysh.client\n');
+    expect(JSON.stringify(result)).not.toMatch(/private-secret|app[.]lazysh|package:/);
+  });
+});
+
+test.skipIf(process.platform!=='linux')('dedicated retained packages are probed before cleanup without replacing the original failure',async()=>{
+  await withDiagnosticAdb('45001\n',0,async(adb,args)=>{
+    const directory=dirname(adb),sdk=join(directory,'sdk'),root=join(directory,'checkout');
+    const android=join(root,'apps/client/src-tauri/gen/android');
+    await mkdir(join(sdk,'platform-tools'),{recursive:true});await mkdir(android,{recursive:true});
+    await writeFile(join(sdk,'platform-tools/adb'),(await readFile(adb,'utf8')).replace('case \"$3 $4\" in', 'case \"$3 $4\" in\n  \'uninstall app.lazysh.client.test\'|\'uninstall app.lazysh.client\') exit 31 ;;'));
+    await chmod(join(sdk,'platform-tools/adb'),0o700);
+    const gradleArgs=join(directory,'gradle-args');
+    await writeFile(join(android,'gradlew'),`#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(gradleArgs)},JSON.stringify(process.argv.slice(2)));process.exit(31);\n`);
+    await chmod(join(android,'gradlew'),0o700);
+    const previousHome=process.env.ANDROID_HOME,previousSerial=process.env.ANDROID_SERIAL;
+    const warning=spyOn(console,'error').mockImplementation(()=>{});
+    process.env.ANDROID_HOME=sdk;process.env.ANDROID_SERIAL='emulator-5580';
+    let stopped=false;
+    // Synthetic harness input; this test does not claim actual SSH, APK or WebView execution.
+    const fixture={ssh:{directory,nonce:'a'.repeat(32),port:45678,username:'owned',privateKey:'private-fixture-key',fingerprint:'owned',prompt:'owned',challenge:'owned',expected:'owned'},
+      metadata:()=>({name:'owned'}),stop:async()=>{stopped=true;throw new Error('private-cleanup-error');}} as unknown as HerdrFixture;
+    try {
+      await expect(androidSshAcceptance(root,fixture)).rejects.toThrow('Owned fixture failed: actual Android SSH UI instrumentation; exit=31');
+      const passed=JSON.parse(await readFile(gradleArgs,'utf8')) as string[];
+      expect(passed).toContain('-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true');
+      expect(passed).toContain('-PlazyshHerdrAcceptance=true');
+      const calls=(await readFile(args,'utf8')).trim().split('\n');
+      const probe=calls.indexOf('-s emulator-5580 shell dumpsys activity exit-info app.lazysh.client');
+      const packages=calls.indexOf('-s emulator-5580 shell pm list packages app.lazysh.client');
+      const testCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client.test');
+      const appCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client');
+      expect(probe).toBeGreaterThanOrEqual(0);expect(packages).toBeGreaterThanOrEqual(0);
+      expect(testCleanup).toBeGreaterThan(Math.max(probe,packages));expect(appCleanup).toBeGreaterThan(testCleanup);
+      expect(stopped).toBe(true);
+      for(const stage of ['test-package','app-package','Herdr'])expect(warning.mock.calls).toContainEqual([`Owned Android SSH cleanup stage failed: ${stage}`]);
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('private-cleanup-error');
+    } finally {
+      warning.mockRestore();
+      if(previousHome===undefined)delete process.env.ANDROID_HOME;else process.env.ANDROID_HOME=previousHome;
+      if(previousSerial===undefined)delete process.env.ANDROID_SERIAL;else process.env.ANDROID_SERIAL=previousSerial;
+    }
+  });
+},5000);
 
 const bootA='00000000-0000-4000-8000-000000000001';
 const bootB='00000000-0000-4000-8000-000000000002';

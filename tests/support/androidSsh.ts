@@ -308,6 +308,16 @@ export async function emulatorContinuity(adb:string,serial:string,reverse:string
   return summary;
 }
 
+// Only these two fixed IDs are installed by the dedicated owned-emulator task.
+const ownedAndroidPackages=['app.lazysh.client','app.lazysh.client.test'] as const;
+export async function ownedAndroidPackagePresence(adb:string,serial:string) {
+  const result=await continuityOutput(adb,serial,['shell','pm','list','packages','app.lazysh.client'],performance.now()+1000);
+  if(result.state!=='available')return {application:result.state,instrumentation:result.state};
+  const lines=result.output?result.output.split(/\r?\n/):[];
+  if(!lines.every(line=>/^package:[A-Za-z0-9_.]+$/.test(line)))return {application:'unrecognized',instrumentation:'unrecognized'};
+  return {application:lines.includes(`package:${ownedAndroidPackages[0]}`)?'present':'absent',instrumentation:lines.includes(`package:${ownedAndroidPackages[1]}`)?'present':'absent'};
+}
+
 // Equality brackets two samples only; identity reuse/transient disconnects remain possible.
 export function compareEmulatorContinuity(before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined,after:Awaited<ReturnType<typeof emulatorContinuity>>) {
   const compare=(kind:'transport'|'boot'|'adbd')=>{
@@ -331,7 +341,7 @@ export function gradleFailureClasses(stdout:string,stderr:string) {
   return {scope:'last-output-window-only',...flags,unclassified:!Object.values(flags).some(Boolean)};
 }
 
-type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH';
+type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH'|'app-package'|'test-package';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
   for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
@@ -389,6 +399,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const remote=`/data/local/tmp/lazysh-ui-ssh-${fixture.nonce}`;
   let reverse:string|undefined;
   let remoteCreated=false;
+  let retainedPackages=false;
   let before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined;
   let gradle:OwnedProcess|undefined;
   let crashes:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
@@ -412,8 +423,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
       herdr?'-PlazyshHerdrAcceptance=true':'-PlazyshSshAcceptance=true',
+      ...(herdr?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
       '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
+    retainedPackages=!!herdr;
     try {await gradle.finish('actual Android SSH UI instrumentation',600_000);}
     finally {timing.gradleEndMs=crashes?.elapsedMs()??null;}
     await crashes?.stop();
@@ -424,8 +437,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
       const crash=await crashes?.stop();
-      const [exitInfo,continuity]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port)]);
-      const summary={...exitInfo,timing,crash:crash??{stream:'unavailable'},gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
+      const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
+      const summary={...exitInfo,...(packages?{packages}:{}),timing,crash:crash??{stream:'unavailable'},gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
@@ -435,6 +448,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await androidSshCleanup(primary,[
       ['reverse',()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve()],
       ['fixture-file',()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve()],
+      ...(retainedPackages?[
+        ['test-package',()=>shell(['uninstall',ownedAndroidPackages[1]])] as const,
+        ['app-package',()=>shell(['uninstall',ownedAndroidPackages[0]])] as const,
+      ]:[]),
       [herdr?'Herdr':'SSH',()=>herdr?herdr.stop():fixture.stop()],
     ]);
   }

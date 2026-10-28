@@ -127,3 +127,14 @@ it.each([
   const posts=post.mock.calls.length;
   await languagesPreserve(()=>{expect(screen.getByRole('status').textContent).toBe(t(scenario.key));expect(screen.getByTitle(t('previewFrameTitle',{port:5173}))).toBe(frame);expect(post).toHaveBeenCalledTimes(posts);});
 });
+it('translates the opt-in refresh control and hint without enabling discovery',async()=>{
+  vi.mocked(invoke).mockResolvedValue([]);
+  render(<PreviewPanel sessionId="periodic-locales"/>);
+  await waitFor(()=>expect(screen.getByRole('button',{name:t('previewDiscover')})).toHaveProperty('disabled',false));
+  const calls=vi.mocked(invoke).mock.calls.slice();
+  await languagesPreserve(()=>{
+    expect(screen.getByRole('checkbox',{name:t('previewAutomatic')})).toHaveProperty('checked',false);
+    expect(screen.getByText(t('previewAutomaticHint'))).toBeTruthy();
+    expect(vi.mocked(invoke).mock.calls).toEqual(calls);
+  });
+});
