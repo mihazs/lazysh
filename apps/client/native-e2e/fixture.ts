@@ -1,6 +1,6 @@
 import {createHash,randomBytes,randomInt} from 'node:crypto';
 import {createReadStream} from 'node:fs';
-import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,readlink,rm,stat,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,readlink,realpath,rm,stat,writeFile} from 'node:fs/promises';
 import {createServer,type Socket} from 'node:net';
 import {userInfo} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
@@ -180,9 +180,11 @@ export class NativeGui {
     if(!owned||await readlink(`/proc/${pid}/exe`)!==this.binary||(await identity(pid))?.start!==owned.start)throw new Error('Singleton owner is not the owned GUI binary');
     return {name,pid,start:owned.start};
   }
-  async secondary(args:string[]) {
+  async secondary(args:string[],cwd=this.directory) {
+    const canonical=await realpath(cwd);
+    if(canonical!==this.directory && !canonical.startsWith(this.directory+'/'))throw new Error('Secondary cwd must stay within the owned fixture');
     const original=await this.appOwner();
-    await this.namespaced(this.binary,args).finish('actual secondary CLI handoff',10_000);
+    await this.namespaced('/usr/bin/env',['--chdir',canonical,this.binary,...args]).finish('actual secondary CLI handoff',10_000);
     const current=await this.appOwner();
     if(JSON.stringify(current)!==JSON.stringify(original))throw new Error('Secondary CLI replaced the original GUI owner');
     if((await this.browser!.getWindowHandles()).length!==1)throw new Error('Secondary CLI created another native window');

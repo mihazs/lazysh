@@ -4,6 +4,8 @@
 
 The specification starts the actual application without launch arguments, opens a manual connection dialog and enters a public synthetic password. A separately owned invocation of that same binary sends `--host gui-selected` through the real singleton D-Bus callback. The original private-bus owner, PID/start identity and native window remain; the manual form must survive until explicit Cancel. The selected saved-host dialog then appears with empty credentials. After cancellation, a second explicit invocation with a tmux selector must open another normal dialog. Connect is never pressed, and an owned loopback listener must observe zero SSH connections. These are two explicit test actions, never an automatic retry after uncertain delivery.
 
+A second case starts a fresh original GUI and launches a literal Unicode, shell-looking directory from a separate caller working directory inside the owned fixture. It sends `pwd` through native WebDriver keyboard input and requires the real local terminal to display the canonical target path. The original GUI bus owner/PID/window must remain, and the SSH counter stays zero. The fixture rejects a secondary cwd outside its own canonical directory before launching a child.
+
 ## Isolation and process ownership
 
 The entire Vitest process runs in an outer private user/network namespace with loopback only. The target listener, test worker and GUI drivers therefore share that private network; host processes cannot reach its listener. A controlled case verifies that a nested namespace cannot reach its parent listener while its own loopback still works. This removes ambient host traffic from the test boundary; it does not identify the source of historical failures.
@@ -37,7 +39,7 @@ The suite covers Linux singleton handoff through the real WebView/native IPC,
 original private-bus owner and preserved form state. It does not establish
 Windows/macOS GUI delivery, biometric prompts, physical screens/devices,
 accessibility/compositor effects, remote authentication, exact tmux-server
-attachment or warm directory delivery. Those remain tracked in
+attachment. Those remain tracked in
 [issue #86](https://github.com/mihazs/lazysh/issues/86) and
 [issue #20](https://github.com/mihazs/lazysh/issues/20).
 

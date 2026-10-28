@@ -1,4 +1,6 @@
 import {afterEach,expect,it} from 'vitest';
+import {mkdir,realpath} from 'node:fs/promises';
+import {join} from 'node:path';
 import {NativeGui} from './fixture';
 
 let fixture:NativeGui|undefined;
@@ -31,4 +33,21 @@ it('hands actual secondary argv to the original GUI, preserves a manual password
   const next=await browser.$('[role="dialog"][aria-label="Connect to Selected GUI host"]');await next.waitForDisplayed({timeout:20_000});
   expect(await next.getText()).toContain('Mux launches use SSH for their control connection. The saved host transport is unchanged.');
   expect(await fixture.appOwner()).toEqual(owner);expect(fixture.connections).toBe(0);
+});
+
+it('opens a caller-relative literal directory in the original GUI and observes the real shell cwd',async()=>{
+  fixture=await NativeGui.start();const browser=fixture.browser!;
+  await (await browser.$('button[aria-label="Connect to Primary GUI host"]')).waitForDisplayed({timeout:30_000});
+  const name="workspace 世界 '$(printf NO);";
+  const caller=join(fixture.directory,'caller');
+  const path=join(caller,name);await mkdir(path,{recursive:true});
+  await expect(fixture.secondary(['--dir',name],join(fixture.directory,'..'))).rejects.toThrow('within the owned fixture');
+  const expected=await realpath(path),owner=await fixture.appOwner();
+  fixture.stage='warm relative directory launch';
+  await fixture.secondary(['--dir',name],caller);
+  const terminal=await browser.$('.terminal-canvas .xterm-screen');await terminal.waitForDisplayed({timeout:20_000});
+  expect(await fixture.appOwner()).toEqual(owner);
+  await terminal.click();await browser.keys(['p','w','d','\uE007']);
+  await browser.waitUntil(async()=>(await terminal.getText()).includes(expected),{timeout:20_000,timeoutMsg:'Owned local shell cwd was not observed'});
+  expect(fixture.connections).toBe(0);
 });
