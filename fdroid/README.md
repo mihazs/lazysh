@@ -5,13 +5,14 @@ This is an initial, manual-update recipe for the public source revision in
 anything, or submit metadata to F-Droid. Automatic updates stay disabled until
 the separate release/tagging gates under #333 are complete.
 
-The current candidate pins 0.14.0 / 14000 at
-`9c8d067f378b676d37097bf3bf883e9946b516b9`, including the FOSS UnifiedPush
-registration foundation. Removing the unused normal `android` project retains
-the selected `android-unifiedpush` project and its `android-shared` sources.
-Registration groundwork does not establish distributor delivery, retained
-inbox behavior or complete free-software remote push. The original provider-none
-0.12.2 execution is recorded separately below.
+The current candidate pins 0.22.0 / 22000 at
+`3dc44f47dac1c5fa29a8e3220ee82efd46484f4d`, including the FOSS UnifiedPush
+registration foundation and the separately gated native event-display source.
+Removing the unused normal `android` project retains the selected
+`android-unifiedpush` project and its `android-shared` sources. This metadata
+update does not establish distributor delivery, retained inbox behavior or
+complete free-software remote push. The original provider-none 0.12.2 execution
+is recorded separately below.
 
 The recipe follows the official [metadata reference](https://f-droid.org/docs/Build_Metadata_Reference/).
 Run it with the official `fdroidserver` tools from this directory. Its
