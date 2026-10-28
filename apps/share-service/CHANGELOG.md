@@ -1,5 +1,11 @@
 # @lazysh/share-service
 
+## 0.21.0
+
+### Patch Changes
+
+- @lazysh/common@0.21.0
+
 ## 0.20.0
 
 ### Patch Changes

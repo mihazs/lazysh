@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.21.0
+
+### Minor Changes
+
+- a8c7fba: Add Zellij tab 1–20 quick access through existing typed native actions while preserving drafts and original session/access ownership.
+
+### Patch Changes
+
+- @lazysh/common@0.21.0
+  - @lazysh/display-idle@0.21.0
+  - @lazysh/et-transport@0.21.0
+  - @lazysh/mosh-transport@0.21.0
+
 ## 0.20.0
 
 ### Minor Changes
