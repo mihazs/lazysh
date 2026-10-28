@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.14.0
+
+### Minor Changes
+
+- 59252bd: Add an optional operator-selected self-hosted whisper.cpp relay backend while preserving OpenAI defaults, device consent and bounded transcription admission.
+
+### Patch Changes
+
+- @lazysh/common@0.14.0
+  - @lazysh/display-idle@0.14.0
+  - @lazysh/et-transport@0.14.0
+  - @lazysh/mosh-transport@0.14.0
+
 ## 0.13.0
 
 ### Minor Changes
