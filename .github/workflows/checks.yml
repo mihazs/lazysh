@@ -268,6 +268,8 @@ jobs:
           echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix protobuf)/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
+      - name: Verify release consistency on the native filesystem
+        run: bun run release:check
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
       - name: Package and validate native macOS permission localizations

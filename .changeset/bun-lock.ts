@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 // Bun 1.3.14 leaves version-only workspace lock entries stale on install.
 // New/renamed packages require a reviewed release change, not inferred ownership.
@@ -61,7 +61,9 @@ async function inspect(root: string, allowPreviousVersion: boolean) {
     && config.privatePackages?.version === true && config.privatePackages?.tag === false
     && Array.isArray(config.ignore) && config.ignore.length === 0, 'unexpected release group');
   const paths = Object.keys(ownedWorkspaces);
-  const present = [...new Bun.Glob('{apps,packages}/*/package.json').scanSync({ cwd: root })].map(path => path.slice(0, -13));
+  const scan = (pattern: string) => [...new Bun.Glob(pattern).scanSync({ cwd: root })]
+    .map(path => path.split(sep).join('/'));
+  const present = scan('{apps,packages}/*/package.json').map(path => path.slice(0, -13));
   requireRelease(present.length === paths.length && present.every(path => paths.includes(path)), 'unexpected workspace paths');
   const lockText = await Bun.file(join(root, 'bun.lock')).text();
   const lock = Bun.JSONC.parse(lockText);
@@ -93,7 +95,7 @@ async function inspect(root: string, allowPreviousVersion: boolean) {
   const baseConfig = await json(tauriBase);
   requireRelease(baseConfig.version === '../package.json', 'Tauri version must use the client manifest path');
   verifyAndroidConfig(baseConfig);
-  for (const path of new Bun.Glob('apps/client/src-tauri/tauri*.conf.json').scanSync({ cwd: root })) {
+  for (const path of scan('apps/client/src-tauri/tauri*.conf.json')) {
     if (path !== tauriBase) {
       const config = await json(path);
       requireRelease(!('version' in config), 'platform Tauri version overrides are not allowed');
