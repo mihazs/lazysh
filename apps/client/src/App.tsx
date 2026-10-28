@@ -61,6 +61,7 @@ import {
   type AutoOptions,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
+import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import type { AppleUsageReport } from "./UsagePanel";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
@@ -1109,6 +1110,15 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       return Promise.reject(new LocalUiError("appDirectDictationCancelledBecauseThisSessionIsNoLonger"));
     return api.write(live.id,data);
   }
+  function pasteAttachmentPath(request:AttachmentPathPaste):Promise<void>{
+    const live=sessionsRef.current.find(session=>session.id===request.sessionId&&session.connected&&!session.disposed);
+    if(!mounted.current||!lease.current()||!live||live!==active||currentView.current.activeId!==request.sessionId
+      ||currentView.current.view!=='attachments'||document.visibilityState!=='visible'||closingSessions.current.has(request.sessionId))
+      return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
+    const data=attachmentTerminalInput(request.path,live.terminal.modes.bracketedPasteMode,live.terminal.options.ignoreBracketedPasteMode);
+    if(!request.claim())return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
+    return api.write(live.id,data);
+  }
   const active = sessions.find((session) => session.id === activeId);
   useEffect(() => { setJumpSession(null); }, [activeId]);
   function tmuxJumped(sessionId: string, snapshot: import('./bridge').TmuxJumpSnapshot) {
@@ -1845,7 +1855,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   <PreviewPanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && !active.local && view === "attachments" && (
-                  <AttachmentPanel key={active.id} sessionId={active.id} />
+                  <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} />
                 )}
                 {active.connected && view === "voice" && (
                   <VoicePanel key={active.id} sessionId={active.id} onDirectDictation={deliverDictation} />

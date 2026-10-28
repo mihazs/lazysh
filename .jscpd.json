@@ -7,6 +7,7 @@
     "console"
   ],
   "ignore": [
+    "apps/client/src/font-licenses/NotoSansMonoCJK-OFL.txt",
     "fdroid/build/**",
     "fdroid/logs/**",
     "fdroid/repo/**",
