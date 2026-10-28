@@ -60,7 +60,7 @@ jobs:
         run: bun .changeset/release-artifacts.ts identity "${{ runner.temp }}/release-identity"
       - name: Build native installation packages without debug flags
         run: bun run --cwd apps/client tauri build --bundles ${{ matrix.bundles }} -- --locked
-      - name: Validate native packages and record exact bytes
+      - name: Validate native packages, accept Windows install and repair, and record exact bytes
         run: bun .changeset/release-platform.ts ${{ matrix.target }} "${{ runner.temp }}/installation-files"
       - uses: actions/upload-artifact@v4
         with:

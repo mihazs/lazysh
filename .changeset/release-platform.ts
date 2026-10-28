@@ -2,12 +2,12 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { artifactTargets, buildIdentity, stagePackages, type ArtifactTarget } from './release-artifacts';
+import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
-export async function native(command: string, args: string[], env = process.env) {
+export async function native(command: string, args: string[], env = process.env, timeout = 180_000) {
   try {
-    const result = await execute(command, args, { env, timeout: 180_000, maxBuffer: 2_097_152 });
+    const result = await execute(command, args, { env, timeout, maxBuffer: 2_097_152 });
     return result.stdout.trim();
   } catch {
     // Native tools may print signing material or provisioning contents on failure.
@@ -29,6 +29,133 @@ async function appleApp(path: string, version: string, id: string) {
     && await plist(info, 'CFBundleShortVersionString') === version, 'Apple identity/version mismatch');
   await native('/usr/bin/codesign', ['--verify', '--deep', '--strict', path]);
 }
+export async function windowsInstallation(installer: string, binary: string, version: string) {
+  requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
+    && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
+  'Windows installation requires an owned GitHub-hosted Windows job');
+  const expected = await digestFile(binary);
+  await digestFile(installer);
+  return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`
+$ErrorActionPreference = 'Stop'
+function Require($condition, $message) { if (!$condition) { throw $message } }
+function OptionalItem($path) {
+  try { Get-Item -Force -LiteralPath $path -ErrorAction Stop }
+  catch [System.Management.Automation.ItemNotFoundException] { }
+}
+function Plain($path) {
+  for ($current = $path; $current; $current = Split-Path -Parent $current) {
+    $item = OptionalItem $current
+    if ($item) { Require (!($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) 'Reparse point' }
+  }
+}
+function RunInstaller($file, $arguments) {
+  Plain $file
+  $process = Start-Process -FilePath $file -ArgumentList $arguments -PassThru
+  try {
+    if (!$process.WaitForExit(120000)) { throw 'Installer timeout' }
+    Require ($process.ExitCode -eq 0) 'Installer exit code'
+  } finally {
+    if (!$process.HasExited) { $process.Kill($true); Require ($process.WaitForExit(10000)) 'Installer tree did not exit' }
+    $process.Dispose()
+  }
+}
+function Installed {
+  Plain $installed
+  Require (Test-Path -LiteralPath $installed -PathType Leaf) 'Missing installed binary'
+  Require ((Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash -eq $env:LAZYSH_BINARY_SHA256) 'Installed bytes mismatch'
+  Require ((Get-Item -LiteralPath $installed).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'Installed version mismatch'
+}
+Require ([Environment]::Is64BitProcess) '64-bit PowerShell required'
+$roaming = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'app.lazysh.client'
+$local = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'app.lazysh.client'
+$manufacturer = 'HKCU:\Software\lazysh\lazysh'
+$uninstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\lazysh'
+$protocol = 'HKCU:\Software\Classes\lazysh'
+$paths = @($roaming, $local,
+  (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'lazysh'),
+  (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'lazysh.lnk'),
+  (Join-Path ([Environment]::GetFolderPath('Programs')) 'lazysh.lnk'))
+foreach ($path in $paths) { Plain $path; Require (!(OptionalItem $path)) 'Existing application path' }
+foreach ($key in @($manufacturer, $uninstall, $protocol, 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\lazysh')) {
+  Require (!(Test-Path -LiteralPath $key)) 'Existing application registry state'
+}
+$autostart = OptionalItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+Require (!$autostart -or 'lazysh' -notin $autostart.GetValueNames()) 'Existing autostart'
+$wix = foreach ($table in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall')) {
+  if (Test-Path -LiteralPath $table) {
+    Get-ItemProperty -Path ($table + '\*') | Where-Object { $_.DisplayName -eq 'lazysh' }
+  }
+}
+Require (!$wix) 'Existing MSI installation'
+$webview = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+$runtime = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\', 'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\') |
+  ForEach-Object { $key = OptionalItem ($_ + $webview); if ($key) { $key.GetValue('pv') } } |
+  Where-Object { $_ } | Select-Object -First 1
+$runtimeVersion = $null
+Require ($runtime -match '^\d+\.\d+\.\d+\.\d+$' -and [Version]::TryParse([string]$runtime, [ref]$runtimeVersion) -and $runtimeVersion -gt [Version]'0.0.0.0') 'Installed WebView2 required'
+foreach ($path in @($env:RUNNER_TEMP, $env:LAZYSH_INSTALLER, $env:LAZYSH_BINARY)) { Plain $path }
+foreach ($file in @($env:LAZYSH_BINARY, $env:LAZYSH_INSTALLER)) {
+  Require ((Get-Item -LiteralPath $file).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'Built version mismatch'
+}
+$directory = Join-Path $env:RUNNER_TEMP ('lazysh-nsis-' + [Guid]::NewGuid().ToString('N'))
+$installed = Join-Path $directory 'lazysh.exe'
+$uninstaller = Join-Path $directory 'uninstall.exe'
+$marker = Join-Path $roaming ('installer-acceptance-' + [Guid]::NewGuid().ToString('N'))
+$content = [Guid]::NewGuid().ToString('N')
+$directoryOwned = $false
+$dataOwned = $false
+try {
+  $null = New-Item -ItemType Directory -Path $directory
+  $directoryOwned = $true
+  RunInstaller $env:LAZYSH_INSTALLER ('/S /NS /D=' + $directory)
+  Installed
+  Plain $roaming
+  Require (!(OptionalItem $roaming)) 'Unexpected application data'
+  $null = New-Item -ItemType Directory -Path $roaming
+  $dataOwned = $true
+  $null = New-Item -ItemType File -Path $marker -Value $content
+  Remove-Item -LiteralPath $installed
+  RunInstaller $env:LAZYSH_INSTALLER ('/S /NS /D=' + $directory)
+  Installed
+  Plain $marker
+  Require ((Get-Content -Raw -LiteralPath $marker) -ceq $content) 'Repair changed marker'
+} finally {
+  if ($directoryOwned) {
+    Plain $directory
+    Require (Test-Path -LiteralPath $uninstaller -PathType Leaf) 'Missing owned uninstaller'
+    Require ((Get-Item -LiteralPath $manufacturer).GetValue('') -eq $directory) 'Changed install ownership'
+    $registration = Get-ItemProperty -LiteralPath $uninstall
+    Require ($registration.InstallLocation -eq ('"' + $directory + '"') -and $registration.UninstallString -eq ('"' + $uninstaller + '"')) 'Changed uninstall ownership'
+    RunInstaller $uninstaller ('/S _?=' + $directory)
+    Require (!(Test-Path -LiteralPath $installed)) 'Uninstall left binary'
+    foreach ($key in @($uninstall, $protocol)) { Require (!(Test-Path -LiteralPath $key)) 'Uninstall left registration' }
+    if (Test-Path -LiteralPath $manufacturer) {
+      $installKey = Get-Item -LiteralPath $manufacturer
+      Require ($installKey.GetValue('') -eq $directory) 'Changed install ownership'
+      Require (@($installKey.GetValueNames() | Where-Object { $_ -notin @('', 'Installer Language') }).Count -eq 0) 'Unexpected install registry values'
+      Require (@(Get-ChildItem -LiteralPath $manufacturer).Count -eq 0) 'Unexpected install registry children'
+      Remove-Item -LiteralPath $manufacturer
+    }
+    if ($dataOwned) {
+      Plain $marker
+      Require ((Get-Content -Raw -LiteralPath $marker) -ceq $content) 'Uninstall changed marker'
+      Require (@(Get-ChildItem -Force -LiteralPath $roaming).Count -eq 1) 'Unexpected application data contents'
+      Remove-Item -LiteralPath $marker
+      [IO.Directory]::Delete($roaming)
+    }
+    Require (!(Test-Path -LiteralPath $local)) 'Unexpected local application data'
+    foreach ($file in @(Get-ChildItem -Force -LiteralPath $directory)) {
+      Require (!$file.PSIsContainer -and $file.Name -eq 'uninstall.exe') 'Unexpected installation contents'
+      Plain $file.FullName
+      Remove-Item -LiteralPath $file.FullName
+    }
+    [IO.Directory]::Delete($directory)
+  }
+}
+'Windows NSIS install, same-version repair, marker preservation and uninstall passed'
+`], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
+    LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256 }, 450_000);
+}
 async function desktop(target: ArtifactTarget, root: string, output: string) {
   const identity = await buildIdentity(root);
   requirePlatform(['linux-x64', 'windows-x64', 'macos-arm64', 'macos-x64'].includes(target), 'unsupported desktop target');
@@ -46,6 +173,7 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
       '(Get-Item -LiteralPath $env:LAZYSH_INSTALLER).VersionInfo.ProductVersion'],
     { ...process.env, LAZYSH_INSTALLER: installer });
     requirePlatform([identity.version, `${identity.version}.0`].includes(version), 'Windows installer version mismatch');
+    console.info(await windowsInstallation(installer, join(root, 'target/release/lazysh.exe'), identity.version));
     sources.push(installer);
   } else {
     const app = await exactlyOne('macos/*.app', bundle);

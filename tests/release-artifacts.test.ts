@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
@@ -7,6 +7,7 @@ import { aggregatePackages, artifactName, artifactTargets, releaseTargets, diges
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
+import { exactlyOne, windowsInstallation } from '../.changeset/release-platform';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -161,3 +162,32 @@ test('disabled policy rejects all publication APIs', () => fixture(async root =>
   await expect(result).rejects.toThrow('disabled');
   expect(calls).toEqual([]);
 }));
+
+const nativeWindows = process.env.LAZYSH_TEST_WINDOWS_INSTALLER === '1';
+test.skipIf(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
+  && process.env.RUNNER_ENVIRONMENT === 'github-hosted')('installer acceptance refuses ambient local execution before reading installer files', async () => {
+  await expect(windowsInstallation('missing-installer', 'missing-binary', '0.0.0'))
+    .rejects.toThrow('owned GitHub-hosted Windows job');
+});
+test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and preserves colliding data and junctions, then installs, repairs and uninstalls', async () => {
+  const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
+  const binary = join(import.meta.dir, '../target/release/lazysh.exe');
+  const { version } = await Bun.file(join(import.meta.dir, '../apps/client/package.json')).json();
+  await expect(windowsInstallation(installer, binary, '0.0.0')).rejects.toThrow('Release validation failed');
+  const data = join(process.env.APPDATA!, 'app.lazysh.client');
+  for (const linked of [false, true]) await fixture(async root => {
+    if (linked) await symlink(root, data, 'junction');
+    else await mkdir(data);
+    const marker = join(data, 'existing-data');
+    try {
+      await Bun.write(marker, 'preexisting application data must survive rejection');
+      await expect(windowsInstallation(installer, binary, version)).rejects.toThrow('Release validation failed');
+      expect(await Bun.file(marker).text()).toBe('preexisting application data must survive rejection');
+    } finally {
+      await rm(marker);
+      if (linked) await unlink(data);
+      else await rmdir(data);
+    }
+  });
+  console.info(await windowsInstallation(installer, binary, version));
+}, 500_000);
