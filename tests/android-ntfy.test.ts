@@ -1,8 +1,9 @@
 import {expect,test,spyOn} from 'bun:test';
-import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth} from './support/androidNtfy';
+import {PassThrough,Writable} from 'node:stream';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
@@ -16,6 +17,63 @@ test('owned ntfy cannot inherit operator server, proxy or provider credentials',
   expect(ntfyEnvironment({PATH:'/tools',HOME:'/original-home',LANG:'C.UTF-8',NTFY_BASE_URL:'https://personal.invalid',
     NTFY_AUTH_FILE:'/personal/store',NTFY_FIREBASE_KEY_FILE:'/personal/key',HTTP_PROXY:'https://proxy.invalid',
     TOKEN:'private-provider-token'})).toEqual({PATH:'/tools',HOME:'/original-home',LANG:'C.UTF-8'});
+});
+
+test('private transfer creates an absent owned directory, rejects symlinks and cannot replace a receipt',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'.lazysh-private-transfer-'));
+  const nonce='a'.repeat(32),input=Buffer.from('synthetic-private-fixture');
+  const target=join(directory,`files/.lazysh-ntfy-${nonce}.json`);
+  const transfer=async()=>{
+    const child=new OwnedProcess('sh',['-c',privateInputCommand(nonce)],directory);
+    await writePrivateInput(Buffer.from(input),child.child.stdin!,()=>child.finish('owned private transfer',5000));
+  };
+  try{
+    await transfer();expect(await readFile(target)).toEqual(input);
+    expect((await stat(join(directory,'files'))).mode&0o777).toBe(0o700);
+    expect((await stat(target)).mode&0o777).toBe(0o600);
+    await expect(transfer()).rejects.toThrow('Owned fixture failed');
+    expect(await readFile(target)).toEqual(input);
+    await rm(join(directory,'files'),{recursive:true});
+    const outside=join(directory,'outside');await mkdir(outside);await symlink(outside,join(directory,'files'));
+    await expect(transfer()).rejects.toThrow('Owned fixture failed');
+    expect(await readFile(join(outside,`.lazysh-ntfy-${nonce}.json`)).catch(error=>error.code)).toBe('ENOENT');
+    expect(()=>privateInputCommand("invalid'; payload")).toThrow('admission failed');
+  }finally{input.fill(0);await rm(directory,{recursive:true,force:true});}
+});
+
+test('private stdin bytes survive pending transmission and are erased after success or failure settles',async()=>{
+  for(const fail of [false,true]){
+    const input=Buffer.from('synthetic-asynchronous-input'),sink=new PassThrough();
+    let settle!:(value?:unknown)=>void;
+    const finished=new Promise<void>((resolve,reject)=>{settle=fail?reject:()=>resolve();});
+    const pending=writePrivateInput(input,sink,()=>finished);
+    const result=pending.then(()=>({ok:true,message:null}),error=>({ok:false,message:error.message}));
+    try{
+      expect(input.toString()).toBe('synthetic-asynchronous-input');
+      expect(sink.read()).toEqual(Buffer.from('synthetic-asynchronous-input'));
+      settle(fail?new Error('synthetic failure'):undefined);
+      expect(await result).toEqual({ok:!fail,message:fail?'synthetic failure':null});
+      expect(input.every(byte=>byte===0)).toBe(true);
+    }finally{settle(fail?new Error('synthetic failure'):undefined);await result;sink.destroy();}
+  }
+});
+
+test('asynchronous stdin EPIPE waits for teardown, preserves the primary failure and redacts stream errors',async()=>{
+  for(const primaryFailure of [false,true]){
+    const input=Buffer.from('synthetic-pending-input');
+    let release!:()=>void;
+    const teardown=new Promise<void>(resolve=>{release=resolve;});
+    let wrote!:()=>void;
+    const errored=new Promise<void>(resolve=>{wrote=resolve;});
+    const sink=new Writable({write(_chunk,_encoding,callback){queueMicrotask(()=>{callback(Object.assign(new Error('private-pipe-error'),{code:'EPIPE'}));wrote();});}});
+    const pending=writePrivateInput(input,sink,async()=>{await teardown;if(primaryFailure)throw new Error('original transfer failure');});
+    const result=pending.then(()=>'',error=>error.message);
+    try{
+      await errored;expect(input.toString()).toBe('synthetic-pending-input');
+      release();expect(await result).toBe(primaryFailure?'original transfer failure':'Private fixture input could not be transmitted');
+      expect(input.every(byte=>byte===0)).toBe(true);
+    }finally{release();await result;sink.destroy();}
+  }
 });
 
 test('ready relay input cannot outlive a held ownership check or completed child',async()=>{

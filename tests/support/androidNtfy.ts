@@ -3,6 +3,8 @@ import {chmod,mkdtemp,mkdir,open,readFile,rm,writeFile,readdir} from 'node:fs/pr
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
+import type {Writable} from 'node:stream';
+import {finished} from 'node:stream/promises';
 import {OwnedProcess} from './androidSsh';
 import {attestQrCamera} from './androidQrOwnership';
 
@@ -29,6 +31,21 @@ export class OwnedNtfyPackages {
 }
 const fixtureCase='ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback';
 const invalid=()=>new Error('Owned ntfy acceptance admission failed');
+export function privateInputCommand(nonce:string) {
+  if(!/^[a-f\d]{32}$/.test(nonce))throw invalid();
+  return `umask 077 && [ ! -L files ] && if [ ! -e files ]; then mkdir -m 700 files; fi && [ -d files ] && [ "$(stat -c %u files)" = "$(id -u)" ] && chmod 700 files && [ "$(stat -c %a files)" = 700 ] && set -C && cat > files/.lazysh-ntfy-${nonce}.json`;
+}
+export async function writePrivateInput(input:Buffer,stdin:Writable,finish:()=>Promise<unknown>) {
+  let rejected=false;
+  const onError=()=>{rejected=true;};stdin.on('error',onError);
+  const settled=finished(stdin,{readable:false,cleanup:true}).catch(()=>{rejected=true;});
+  try{
+    try{stdin.end(input);}catch{rejected=true;stdin.destroy();}
+    await finish();
+    stdin.destroy();await settled;
+    if(rejected)throw new Error('Private fixture input could not be transmitted');
+  }finally{stdin.destroy();await settled;stdin.off('error',onError);input.fill(0);}
+}
 export function ntfyEnvironment(env:NodeJS.ProcessEnv):NodeJS.ProcessEnv {
   return Object.fromEntries(['PATH','HOME','LANG'].flatMap(name=>env[name]===undefined?[]:[[name,env[name]]]));
 }
@@ -268,11 +285,11 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     await inspectAcceptanceTrust(apk,join(directory,'ca.pem'),sdk,run);
     await installed.install('io.heckel.ntfy',join(directory,'distributor.apk'));
     await installed.install('app.lazysh.client',apk);
-    const privateInput=`files/.lazysh-ntfy-${nonce}.json`;
-    const transfer=new OwnedProcess(adb,['-s',serial,'shell','run-as','app.lazysh.client','sh','-c',`'umask 077; cat > ${privateInput}'`],root);
+    await owned.check();
+    const transfer=new OwnedProcess(adb,['-s',serial,'shell','run-as','app.lazysh.client','sh','-c',`'${privateInputCommand(nonce)}'`],root);
+    children.push(transfer);
     phase='private native fixture transfer';
-    transfer.child.stdin!.end(input);input.fill(0);
-    await transfer.finish('private native fixture transfer',5000);
+    await writePrivateInput(input,transfer.child.stdin!,()=>transfer.finish('private native fixture transfer',5000));
     installed.admit('app.lazysh.client.test');
     await run('actual native ntfy instrumentation',join(android,'gradlew'),[':app:connectedUniversalDebugAndroidTest',...gradleArgs,
       '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',

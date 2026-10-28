@@ -48,6 +48,10 @@ credentials never become command-line arguments or WebView inputs. Android reads
 it without following a final symlink, checks its owner/type/size/mode and removes
 it. Native credential values enter the actual secure dialog's fields; this is
 programmatic native-field entry, not a physical keyboard accuracy test.
+The transfer creates or secures only the run-as app's same-UID private files
+directory, rejects a directory symlink, and cannot overwrite an existing nonce
+receipt. Input bytes are erased after both process teardown and writable-stream
+settlement, including asynchronous pipe failure; only finite errors are reported.
 
 The native Gradle property `lazyshUnifiedPushAcceptanceCa` is accepted only for
 an explicit small debug-task allowlist with the exact F-Droid provider project.
