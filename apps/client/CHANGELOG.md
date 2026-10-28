@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 0.19.0
+
+### Minor Changes
+
+- 1b5a350: Add explicit editable comments to numbered before/after diff lines, preserving observed staged/unstaged and rename context until the user stages a prompt draft.
+- 65a81e4: Add an explicit action to paste a completed uploaded path into its original terminal without Enter, preserving terminal bracketed-paste mode and the editable prompt.
+
+### Patch Changes
+
+- @lazysh/common@0.19.0
+  - @lazysh/display-idle@0.19.0
+  - @lazysh/et-transport@0.19.0
+  - @lazysh/mosh-transport@0.19.0
+
 ## 0.18.0
 
 ### Minor Changes

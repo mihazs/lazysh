@@ -1,5 +1,11 @@
 # @lazysh/parakeet-runtime
 
+## 0.19.0
+
+### Patch Changes
+
+- @lazysh/common@0.19.0
+
 ## 0.18.0
 
 ### Patch Changes
