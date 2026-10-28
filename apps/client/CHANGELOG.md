@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 0.18.0
+
+### Minor Changes
+
+- 75b5460: Add opt-in five-second listener refresh scoped to the visible Preview panel, preserving explicit HTTP checks and preview opening.
+
+### Patch Changes
+
+- @lazysh/common@0.18.0
+  - @lazysh/display-idle@0.18.0
+  - @lazysh/et-transport@0.18.0
+  - @lazysh/mosh-transport@0.18.0
+
 ## 0.17.2
 
 ### Patch Changes
