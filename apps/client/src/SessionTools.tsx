@@ -3,6 +3,7 @@ import {t, useUi, formatNumber} from './i18n/core';
 import { useProtectedApi } from './access';
 import {uploadDirectory} from './attachment';
 import {useHostUpload} from './useHostUpload';
+import CodePreview from './CodePreview';
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -231,7 +232,7 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           {content ? (
             <>
               <div className="preview-heading">{content.path}</div>
-              <pre tabIndex={0}>{content.text}</pre>
+              <CodePreview key={content.path} path={content.path} text={content.text}/>
             </>
           ) : (
             <div className="panel-empty">
