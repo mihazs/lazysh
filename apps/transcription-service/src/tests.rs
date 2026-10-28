@@ -325,15 +325,20 @@ async fn quotas_are_atomic_global_durable_and_clock_rollback_does_not_reset_them
 
 #[derive(Default)]
 struct Upstream {
+    whisper: bool,
     requests: AtomicUsize,
     mode: AtomicUsize,
     bodies: Mutex<Vec<Vec<u8>>>,
 }
 async fn provider(State(state): State<Arc<Upstream>>, request: Request) -> Response {
-    assert_eq!(
-        request.headers()[header::AUTHORIZATION],
-        "Bearer fixture-provider-key"
-    );
+    if state.whisper {
+        assert!(!request.headers().contains_key(header::AUTHORIZATION));
+    } else {
+        assert_eq!(
+            request.headers()[header::AUTHORIZATION],
+            "Bearer fixture-provider-key"
+        );
+    }
     let body = to_bytes(request.into_body(), MAX_WAV + 4096).await.unwrap();
     state.bodies.lock().unwrap().push(body.to_vec());
     state.requests.fetch_add(1, Ordering::SeqCst);
@@ -358,27 +363,74 @@ async fn provider(State(state): State<Arc<Upstream>>, request: Request) -> Respo
 async fn provider_service(
     directory: &std::path::Path,
 ) -> (Service, Arc<Upstream>, tokio::task::JoinHandle<()>) {
-    let upstream = Arc::new(Upstream::default());
+    provider_service_for(directory, false).await
+}
+async fn provider_service_for(
+    directory: &std::path::Path,
+    whisper: bool,
+) -> (Service, Arc<Upstream>, tokio::task::JoinHandle<()>) {
+    let upstream = Arc::new(Upstream {
+        whisper,
+        ..Upstream::default()
+    });
     let router = Router::new()
         .route("/v1/audio/transcriptions", post(provider))
+        .route("/inference", post(provider))
         .with_state(upstream.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!(
         "http://{}/v1/audio/transcriptions",
         listener.local_addr().unwrap()
     );
+    let port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    let mut service = Service::open(config(directory.join("state"), 100, 200)).unwrap();
-    Arc::get_mut(&mut service.0).unwrap().provider.endpoint = endpoint;
+    let configuration = if whisper {
+        Config::whisper_cpp(
+            directory.join("state"),
+            ADMIN,
+            port.try_into().unwrap(),
+            100,
+            200,
+        )
+        .unwrap()
+    } else {
+        config(directory.join("state"), 100, 200)
+    };
+    let mut service = Service::open(configuration).unwrap();
+    if !whisper {
+        Arc::get_mut(&mut service.0).unwrap().provider.endpoint = endpoint;
+    }
     (service, upstream, task)
 }
 #[tokio::test]
 async fn provider_contract_language_bounds_no_redirect_retry_or_transcript_persistence() {
+    for whisper in [false, true] {
+        check_provider_contract(whisper).await;
+    }
+}
+async fn check_provider_contract(whisper: bool) {
     let directory = tempfile::tempdir().unwrap();
-    let (service, upstream, task) = provider_service(directory.path()).await;
+    let (service, upstream, task) = provider_service_for(directory.path(), whisper).await;
     let (_, token) = enroll_device(&service).await;
+    let capabilities = request(
+        &service,
+        "GET",
+        "/v1/capabilities",
+        &token,
+        "application/json",
+        "",
+    )
+    .await;
+    assert_eq!(
+        capabilities.1["model"],
+        if whisper {
+            "whisper.cpp"
+        } else {
+            "gpt-transcribe"
+        }
+    );
     for mode in 0..=5 {
         upstream.mode.store(mode, Ordering::SeqCst);
         let id = job(&service, &token, if mode == 0 { "pt" } else { "auto" }).await;
@@ -414,13 +466,21 @@ async fn provider_contract_language_bounds_no_redirect_retry_or_transcript_persi
         let first = String::from_utf8_lossy(&bodies[0]);
         for required in [
             "name=\"file\"; filename=\"dictation.wav\"",
-            "name=\"model\"\r\n\r\ngpt-transcribe",
             "name=\"response_format\"\r\n\r\njson",
             "name=\"language\"\r\n\r\npt",
         ] {
             assert!(first.contains(required), "missing {required}");
         }
-        assert!(!String::from_utf8_lossy(&bodies[1]).contains("name=\"language\""));
+        assert_eq!(
+            first.contains("name=\"model\"\r\n\r\ngpt-transcribe"),
+            !whisper
+        );
+        let automatic = String::from_utf8_lossy(&bodies[1]);
+        assert_eq!(automatic.contains("name=\"language\""), whisper);
+        if whisper {
+            assert!(!first.contains("name=\"model\""));
+            assert!(automatic.contains("name=\"language\"\r\n\r\nauto"));
+        }
     }
     let quota = request(&service, "GET", "/v1/quota", &token, "application/json", "")
         .await
@@ -567,10 +627,20 @@ async fn stalled_upstream(
 }
 #[tokio::test]
 async fn cancel_and_revoke_abort_real_upstream_wait_without_refunding_dispatched_audio() {
-    for (revoke_device, response_started) in [(false, false), (true, false), (false, true)] {
+    for (revoke_device, response_started, whisper) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+    ] {
         let directory = tempfile::tempdir().unwrap();
-        let (service, entered, closed, upstream) =
+        let (mut service, entered, closed, upstream) =
             stalled_upstream(directory.path(), response_started).await;
+        if whisper {
+            Arc::get_mut(&mut service.0).unwrap().provider.key = None;
+        }
         let (device, token) = enroll_device(&service).await;
         let id = job(&service, &token, "en").await;
         let copy = service.clone();

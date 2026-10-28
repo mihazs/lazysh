@@ -39,6 +39,14 @@ async function record() {
   fireEvent.click(await screen.findByRole('button',{name:'Stop and transcribe'}));
   await waitFor(()=>expect(invoke).toHaveBeenCalledWith('voice_cloud_transcribe',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } }));
 }
+it('admits only the explicit self-hosted whisper.cpp capability profile',()=>{
+  const value=snapshot();
+  for(const model of ['whisper.cpp','arbitrary-provider']) {
+    const candidate={...value,capabilities:{...value.capabilities,model}} as CloudSnapshot;
+    if(model==='whisper.cpp')expect(validateCloudSnapshot(candidate)).toBe(candidate);
+    else expect(()=>validateCloudSnapshot(candidate)).toThrow();
+  }
+});
 it('keeps default local without Cloud IPC and verifies metadata only when Cloud is selected',async()=>{
   fixture();render(<VoicePanel sessionId="one"/>);
   expect(screen.getByLabelText('Speech engine')).toHaveProperty('value','whisper');
@@ -49,8 +57,10 @@ it('keeps default local without Cloud IPC and verifies metadata only when Cloud 
   expect(screen.getByText(/Service audio quota remaining/).textContent).toContain('device 30.0 seconds; shared 60.0 seconds');
   expect(invoke).not.toHaveBeenCalledWith('voice_cloud_begin',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
-it('sends decoded mono PCM using the reserved ID, independent Cloud language, and review by default',async()=>{
-  const f=fixture(); const direct=vi.fn();render(<VoicePanel sessionId="one" onDirectDictation={direct}/>);await selectCloud();
+it.each(['gpt-transcribe','whisper.cpp'] as const)('sends decoded mono PCM for %s using the reserved ID, independent Cloud language, and review by default',async(model)=>{
+  const value=snapshot();value.capabilities.model=model;
+  const f=fixture({value}); const direct=vi.fn();render(<VoicePanel sessionId="one" onDirectDictation={direct}/>);await selectCloud();
+  expect(screen.getByRole('option',{name:`Cloud · ${model}`})).toBeTruthy();
   fireEvent.change(screen.getByLabelText('Cloud speech language'),{target:{value:'pt'}});
   await record();
   expect(invoke).toHaveBeenCalledWith('voice_cloud_begin',{sessionId:'one'}, { headers: { "X-Lazysh-Access": expect.any(String) } });

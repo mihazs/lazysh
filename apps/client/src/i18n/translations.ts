@@ -1096,7 +1096,7 @@ const translations = {
   cloudSettingsRefresh: ["Atualizar serviço Cloud", "Actualizar servicio Cloud"],
   cloudSettingsForget: ["Esquecer dispositivo Cloud", "Olvidar dispositivo Cloud"],
   cloudSettingsChecking: ["Verificando serviço Cloud…", "Comprobando servicio Cloud…"],
-  cloudSettingsServiceModel: ["Serviço: {{origin}} · Modelo: {{model}}", "Servicio: {{origin}} · Modelo: {{model}}"],
+  cloudSettingsServiceModel: ["Serviço: {{origin}} · Motor: {{model}}", "Servicio: {{origin}} · Motor: {{model}}"],
   cloudSettingsChecked: ["Última verificação: {{time}}", "Última comprobación: {{time}}"],
   cloudSettingsRemaining: ["Cota de áudio restante do serviço: dispositivo {{device}} segundos; compartilhada {{shared}} segundos.", "Cuota de audio restante del servicio: dispositivo {{device}} segundos; compartida {{shared}} segundos."],
   cloudSettingsTotals: ["Cota total de áudio do serviço: dispositivo {{device}} segundos; compartilhada {{shared}} segundos.", "Cuota total de audio del servicio: dispositivo {{device}} segundos; compartida {{shared}} segundos."],

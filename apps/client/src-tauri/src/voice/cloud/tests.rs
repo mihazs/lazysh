@@ -25,6 +25,19 @@ fn capabilities() -> Capabilities {
         max_samples: 480000,
     }
 }
+#[test]
+fn capability_backend_profiles_remain_a_closed_allowlist() {
+    let mut caps = capabilities();
+    for (model, supported) in [
+        ("gpt-transcribe", true),
+        ("whisper.cpp", true),
+        ("whisper", false),
+        ("https://other.example", false),
+    ] {
+        caps.model = model.into();
+        assert_eq!(caps.validate().is_ok(), supported);
+    }
+}
 fn quota() -> Quota {
     Quota {
         window_start: 8640000,
@@ -400,6 +413,11 @@ async fn caps(ServerState(state): ServerState<Arc<Backend>>) -> Json<serde_json:
     if state.mode.load(Ordering::SeqCst) == 1 {
         value["sampleRate"] = 44100.into();
     }
+    match state.mode.load(Ordering::SeqCst) {
+        9 => value["model"] = "whisper.cpp".into(),
+        10 => value["model"] = "unverified-profile".into(),
+        _ => {}
+    }
     Json(value)
 }
 async fn limits() -> Json<serde_json::Value> {
@@ -551,6 +569,17 @@ async fn real_https_capabilities_and_quota_are_required_before_cloud_availabilit
     assert_eq!(snapshot.origin, fixture.origin);
     assert_eq!(snapshot.capabilities.languages[2], "pt");
     assert_eq!(snapshot.quota.global_remaining_samples, 0);
+    fixture.state.mode.store(9, Ordering::SeqCst);
+    assert_eq!(
+        verify(&fixture.enrollment, &fixture.client)
+            .await
+            .unwrap()
+            .capabilities
+            .model,
+        "whisper.cpp"
+    );
+    fixture.state.mode.store(10, Ordering::SeqCst);
+    assert!(verify(&fixture.enrollment, &fixture.client).await.is_err());
     fixture.state.mode.store(1, Ordering::SeqCst);
     assert!(verify(&fixture.enrollment, &fixture.client).await.is_err());
     assert_eq!(fixture.state.posts.load(Ordering::SeqCst), 0);
