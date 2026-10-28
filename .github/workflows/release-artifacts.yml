@@ -32,8 +32,6 @@ jobs:
         include:
           - {os: ubuntu-24.04, target: linux-x64, bundles: 'deb,appimage'}
           - {os: windows-2025, target: windows-x64, bundles: nsis}
-          - {os: macos-15, target: macos-arm64, bundles: 'app,dmg'}
-          - {os: macos-15-intel, target: macos-x64, bundles: 'app,dmg'}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -128,7 +126,7 @@ jobs:
         run: bun .changeset/release-android.ts cleanup
 
   ios:
-    if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'ios')
+    if: github.ref == 'refs/heads/main' && inputs.platform == 'ios'
     runs-on: macos-15
     timeout-minutes: 120
     env:
@@ -163,7 +161,7 @@ jobs:
         run: bun .changeset/release-apple.ts cleanup
 
   aggregate:
-    needs: [desktop, android, ios]
+    needs: [desktop, android]
     if: inputs.platform == '' || inputs.platform == 'all'
     runs-on: ubuntu-24.04
     timeout-minutes: 15

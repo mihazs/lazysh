@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prepare Android, Linux and Windows release artifacts without requiring Apple packages. Apple releases remain deferred; publication remains gated on verified build and distribution prerequisites.
+
 - Reorganize the README around mobile SSH, persistent sessions, and optional AI-agent workflows, with a source-preview quickstart, clearer release caveats, and contributor calls to action. Documentation only; application behavior and defaults are unchanged.
 
 - Prepare a verified cross-platform release installation pipeline with checksums, changelog and install/update guides. Publication and stable tags remain disabled pending signing credentials and reviewed F-Droid/free-push prerequisites; debug APKs and simulator apps are not advertised as production installers. Existing application defaults are unchanged.

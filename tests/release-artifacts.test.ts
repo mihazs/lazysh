@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { aggregatePackages, artifactName, artifactTargets, digestFile, stagePackages,
+import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
   validateReceipt, type ArtifactTarget } from '../.changeset/release-artifacts';
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
@@ -26,30 +26,30 @@ async function platform(root: string, target: ArtifactTarget) {
   sources, join(root, 'incoming', `release-${target}`));
 }
 test('aggregation requires every platform and preserves exact bytes with checksums', () => fixture(async root => {
-  for (const target of Object.keys(artifactTargets) as ArtifactTarget[]) await platform(root, target);
+  for (const target of releaseTargets) await platform(root, target);
   const output = join(root, 'complete');
   await aggregatePackages(identity, join(root, 'incoming'), output);
   const manifest = await Bun.file(join(output, 'release.json')).json();
   expect(manifest.sha).toBe(identity.sha);
-  expect(manifest.platforms).toHaveLength(7);
+  expect(manifest.platforms).toHaveLength(4);
   for (const receipt of manifest.platforms) for (const file of receipt.files) {
     expect(await Bun.file(join(output, file.name)).text()).toBe(
       await Bun.file(join(root, 'incoming', `release-${receipt.target}`, file.name)).text());
   }
   const lines = (await Bun.file(join(output, 'SHA256SUMS')).text()).trim().split('\n');
-  expect(lines).toHaveLength(11);
+  expect(lines).toHaveLength(6);
   for (const line of lines) {
     const [hash, name] = line.split('  ');
     expect((await digestFile(join(output, name))).sha256).toBe(hash);
   }
 }));
 test('download tampering and missing platforms cannot become a release', () => fixture(async root => {
-  for (const target of Object.keys(artifactTargets) as ArtifactTarget[]) await platform(root, target);
+  for (const target of releaseTargets) await platform(root, target);
   const source = join(root, 'incoming');
-  const file = join(source, 'release-ios-arm64', artifactName(identity, 'ios-arm64', 'ipa'));
+  const file = join(source, 'release-android-foss-arm64', artifactName(identity, 'android-foss-arm64', 'apk'));
   await Bun.write(file, 'tampered');
   await expect(aggregatePackages(identity, source, join(root, 'bad'))).rejects.toThrow('digest mismatch');
-  await rm(join(source, 'release-ios-arm64'), { recursive: true });
+  await rm(join(source, 'release-android-foss-arm64'), { recursive: true });
   await expect(aggregatePackages(identity, source, join(root, 'missing'))).rejects.toThrow('missing or unexpected');
 }));
 test('source substitutions, unsigned mobile, duplicate packages and path traversal fail closed', () => fixture(async root => {
@@ -64,13 +64,18 @@ test('source substitutions, unsigned mobile, duplicate packages and path travers
   expect(() => artifactName({ ...identity, version: '0.22.0\n' }, 'ios-arm64', 'ipa')).toThrow();
 }));
 test('extra files and substituted receipt targets are rejected', () => fixture(async root => {
-  for (const target of Object.keys(artifactTargets) as ArtifactTarget[]) await platform(root, target);
+  for (const target of releaseTargets) await platform(root, target);
   const directory = join(root, 'incoming', 'release-linux-x64');
   await Bun.write(join(directory, 'private-key'), 'not a release asset');
   await expect(aggregatePackages(identity, join(root, 'incoming'), join(root, 'extra'))).rejects.toThrow('unexpected package');
   await rm(join(directory, 'private-key'));
   await Bun.write(join(directory, 'receipt.json'), JSON.stringify(await platform(root, 'windows-x64')));
   await expect(aggregatePackages(identity, join(root, 'incoming'), join(root, 'substituted'))).rejects.toThrow('substitution');
+}));
+test('deferred Apple artifacts cannot enter the automatic release set', () => fixture(async root => {
+  for (const target of releaseTargets) await platform(root, target);
+  await platform(root, 'ios-arm64');
+  await expect(aggregatePackages(identity, join(root, 'incoming'), join(root, 'output'))).rejects.toThrow('unexpected platform');
 }));
 test('linked, empty and missing native outputs cannot be staged', () => fixture(async root => {
   const source = join(root, 'source');
@@ -101,7 +106,7 @@ test('Apple export requires exactly four bounded canonical profile encodings', (
 const policy: ReleasePolicy = await Bun.file(new URL('../.changeset/release-policy.json', import.meta.url)).json();
 const next = { ...identity, tag: `v${identity.version}`, versionCode: 22_000 };
 async function installationSet(root: string) {
-  for (const target of Object.keys(artifactTargets) as ArtifactTarget[]) await platform(root, target);
+  for (const target of releaseTargets) await platform(root, target);
   const destination = join(root, 'installation-set');
   await mkdir(destination);
   for (const name of ['release-notes.md', 'INSTALL-AND-UPDATE.md']) await Bun.write(join(destination, name), `owned ${name}`);
@@ -140,7 +145,7 @@ test('publication uploads a complete digest-acknowledged draft before making it 
   const { calls, result } = await publication(root);
   await result;
   const uploads = calls.filter(call => call.method === 'UPLOAD');
-  expect(uploads).toHaveLength(14);
+  expect(uploads).toHaveLength(9);
   expect(calls.find(call => call.path === 'releases')?.body).toMatchObject({ draft: true, target_commitish: identity.sha });
   expect(calls.at(-1)).toEqual({ path: 'releases/8', method: 'PATCH', body: { draft: false } });
 }));
