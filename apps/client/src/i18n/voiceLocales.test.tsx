@@ -20,6 +20,26 @@ async function languagesKeep(check:()=>void){
   const calls=[...vi.mocked(invoke).mock.calls];
   for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});check();expect(vi.mocked(invoke).mock.calls).toEqual(calls);}
 }
+it.each(['gpt-transcribe','whisper.cpp'] as const)('keeps the validated Cloud backend %s and draft while switching the option locale',async model=>{
+  const label=()=>uiI18n.language==='pt-BR'?'Nuvem':uiI18n.language==='es'?'Nube':'Cloud';
+  const value=cloudSnapshot();value.capabilities.model=model;
+  vi.mocked(invoke).mockImplementation(async command=>configuredCloudReply(command,value));
+  render(<VoicePanel sessionId="cloud-option-session"/>);
+  const option=screen.getByRole('option',{name:'Cloud'});
+  await languagesKeep(()=>expect(option.textContent).toBe(label()));
+  expect(vi.mocked(invoke).mock.calls.some(([command])=>command.startsWith('voice_cloud_'))).toBe(false);
+  fireEvent.change(screen.getByLabelText(t('voiceSpeechEngine')),{target:{value:'cloud'}});
+  await waitFor(()=>expect(option.textContent).toBe(`${label()} · ${model}`));
+  const draft=screen.getByLabelText(t('voiceDraft'));
+  fireEvent.change(draft,{target:{value:'retained draft 世界 {{raw}}'}});
+  await languagesKeep(()=>{
+    expect(screen.getByRole('option',{name:`${label()} · ${model}`})).toBe(option);
+    expect(screen.getByLabelText(t('voiceSpeechEngine'))).toHaveProperty('value','cloud');
+    expect(screen.getByLabelText(t('voiceDraft'))).toBe(draft);
+    expect(draft).toHaveProperty('value','retained draft 世界 {{raw}}');
+  });
+  expect(vi.mocked(invoke).mock.calls.some(([command])=>['voice_cloud_begin','voice_cloud_transcribe','write_stdin'].includes(command))).toBe(false);
+});
 it.each(['valid','invalid'] as const)('preserves recording, model/language, request lease and claimed Enter delivery for a %s result across locales',async outcome=>{
   let finish!:(text:string)=>void;
   vi.mocked(invoke).mockImplementation(async command=>{

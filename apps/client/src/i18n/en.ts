@@ -1124,6 +1124,7 @@ export const english = {
   voiceSpeechEngine: "Speech engine",
   voiceEngineUnavailable: "{{engine}} — unavailable",
   voiceParakeetOption: "Parakeet · local",
+  voiceCloudOption: "Cloud",
   voiceEngineReason: "{{engine}}: {{reason}}",
   voiceParakeetInitial: "Parakeet requires a supported Linux x86_64 desktop.",
   voiceAppleInitial: "Apple SpeechAnalyzer requires a supported iOS device.",

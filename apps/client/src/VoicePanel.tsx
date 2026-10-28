@@ -602,7 +602,7 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
         >
           <option value="whisper">Whisper</option>
           <option value="parakeet" disabled={!parakeet.available}>{parakeet.available?t('voiceParakeetOption'):t('voiceEngineUnavailable',{engine:t('voiceParakeetOption')})}</option>
-          <option value="cloud">Cloud{cloudSnapshot ? ` · ${cloudSnapshot.capabilities.model}` : ''}</option>
+          <option value="cloud">{t('voiceCloudOption')}{cloudSnapshot ? ` · ${cloudSnapshot.capabilities.model}` : ''}</option>
           <option value="apple" disabled={!apple.available}>
             {apple.available?'Apple SpeechAnalyzer':t('voiceEngineUnavailable',{engine:'Apple SpeechAnalyzer'})}
           </option>
