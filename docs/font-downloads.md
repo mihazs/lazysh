@@ -79,6 +79,6 @@ behavior, CORS, memory pressure and glyph/grid fidelity on actual Android/iOS
 WebViews and physical devices remain acceptance work under #16. Native builds
 alone are not runtime font proof.
 
-This is one documented [Moshi on-demand CJK workflow](https://getmoshi.app/docs/personalization#cjk-fonts),
+This is one documented reference client on-demand CJK workflow (source URL omitted),
 not complete font parity. Iosevka, Ioskeley, DejaVu and other Noto JP/TC/KR download
 entries remain incomplete. Existing manual imports remain available.

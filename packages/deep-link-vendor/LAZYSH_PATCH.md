@@ -2,7 +2,7 @@
 
 Based on the crates.io `tauri-plugin-deep-link` **2.6.2** release from
 <https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/deep-link>.
-Original MIT/Apache-2.0 licenses and notices are retained. This is not Moshi code.
+Original MIT/Apache-2.0 licenses and notices are retained.
 Published source revision: `44293a5722efcaf27060504e63b17aeba721b40f`.
 Crates.io archive SHA-256:
 `1b3c64e24ebcbc63aaa2d88a9c51e2507084b46620baf39ecb0baa0738a08bb4`.

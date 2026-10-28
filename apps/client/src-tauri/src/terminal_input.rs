@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::time::Instant;
 
-// Moshi documents a small inter-step delay without specifying its duration.
+// The reference behavior specifies a small inter-step delay without a duration.
 pub(crate) const STEP_DELAY: Duration = Duration::from_millis(50);
 
 pub(crate) struct InputSequence {

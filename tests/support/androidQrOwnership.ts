@@ -3,7 +3,7 @@ import {open,readlink,realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {isAbsolute,join} from 'node:path';
 
-const REVIEWED_QR_SHA256='16df0b90fe352b80ae22dbdd68b7e0289d2c150df279a70231ce016cc940d9ae';
+const REVIEWED_QR_SHA256='d3488beef1c4d76d5910c17ff6a67165d3392079533480d4927648d63780f681';
 export type QrOwnership={check:()=>Promise<void>};
 export type QrOwnershipFiles={read:(path:string,limit:number)=>Promise<Buffer>;uid:(path:string)=>Promise<number>;real:(path:string)=>Promise<string>;link:(path:string)=>Promise<string>};
 export async function readQrMetadata(path:string,limit:number){

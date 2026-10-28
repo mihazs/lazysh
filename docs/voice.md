@@ -98,7 +98,7 @@ audio quota have been verified. The panel shows device/shared remaining and tota
 audio seconds, the UTC quota window, and last check time. A shared limit can be
 lower than a device limit; lowering an operator limit below prior usage correctly
 shows zero remaining. These are operator-configured relay limits, not OpenAI or
-Moshi allowances. Other devices can consume quota after a check, so the server
+reference client allowances. Other devices can consume quota after a check, so the server
 remains authoritative at dispatch. Choose a language hint advertised by the
 service; `auto` omits the hint. Hints do not guarantee an output language.
 

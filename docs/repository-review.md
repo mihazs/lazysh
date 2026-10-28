@@ -8,7 +8,7 @@ unavailable faces fall through to the same configured fallback stack. Changing a
 font updates the displayed diff without fetching it again, replacing the selected
 file or changing annotation drafts. The diff keeps its existing text size; file
 source previews and the legacy raw patch view are outside this font-matching slice.
-This implements the documented [Moshi diff font behavior](https://getmoshi.app/docs/diff-viewer#font)
+This implements the documented reference client diff font behavior (source URL omitted)
 without a subscription gate. Desktop/phone Chromium acceptance checks actual
 loaded font styles; physical native WebView rendering is not established by them.
 
@@ -52,8 +52,8 @@ changes discard that panel's notes, and an old mount/access lease cannot stage
 or copy after revocation. The existing shared limit remains twenty notes, two
 thousand characters per note, and 65,536 characters for staged prompt text.
 
-This implements the documented [Moshi diff/file annotation behavior](https://getmoshi.app/desktop#annotate)
-within the [diff-review feature group](https://getmoshi.app/docs/subscription).
+This implements the documented reference client diff/file annotation behavior (source URL omitted)
+within the diff-review feature group (source URL omitted).
 The desktop product itself is free; this does not claim annotation is a separate
 paid entitlement. Browser/native IPC fixtures do not establish remote-device or
 full repository-review parity.

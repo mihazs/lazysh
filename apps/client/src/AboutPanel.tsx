@@ -9,7 +9,7 @@ import protobufLicense from "../../../packages/mosh-transport/vendor-android/pro
 import utf8License from "../../../packages/mosh-transport/vendor-android/protobuf/third_party/utf8_range/LICENSE?raw";
 import abseilLicense from "../../../packages/mosh-transport/vendor-android/abseil/LICENSE?raw";
 import etLicense from "../../../packages/et-transport/LICENSE-MIT?raw";
-import moshIos from "../../../packages/mosh-transport/vendor/COPYING.iOS?raw";
+import moshAppleLicense from "../../../packages/mosh-transport/vendor/COPYING.iOS?raw";
 import quircsLicense from "../src-tauri/licenses/quircs-LICENSE?raw";
 import { api as nativeApi, native } from "./bridge";
 import { errorMessage } from "./SessionTools";
@@ -59,7 +59,7 @@ export default function AboutPanel() {
           {t('aboutMoshExplanation')}
         </p>
         <button onClick={() => open(source)}>{t('aboutMoshSource')}</button>
-        <pre tabIndex={0} style={{ whiteSpace: "pre-wrap" }}>{moshIos}</pre>
+        <pre tabIndex={0} style={{ whiteSpace: "pre-wrap" }}>{moshAppleLicense}</pre>
       </details>
       {[
         ["Protocol Buffers", protobufLicense],

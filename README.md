@@ -112,7 +112,7 @@ Development builds and CI artifacts are not verified production downloads. Read 
 | Remote sessions and multiplexers | [Durable workspaces](docs/multiplexers.md) |
 | Coding-agent events and transcript access | [Companion](docs/companion.md) |
 | Remote previews, files, and voice | [Previews](docs/previews.md) · [Attachments](docs/attachments.md) · [Voice](docs/voice.md) |
-| Architecture, security boundaries, and feature limits | [Architecture](docs/architecture.md) · [Implementation evidence](docs/moshi-evidence.md) |
+| Architecture, security boundaries, and feature limits | [Architecture](docs/architecture.md) · [Implementation evidence](docs/reference-evidence.md) |
 | Planned work and platform verification | [Roadmap](docs/roadmap.md) |
 | Builds, releases, and updates | [Install and update](docs/install-and-update.md) · [Release artifacts](docs/release-artifacts.md) |
 
