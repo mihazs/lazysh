@@ -31,24 +31,28 @@ The latest artifact is a Go application, so assuming that current Desktop is Ele
 
 ### Bounded desktop help execution
 
-On 2026-10-25, REA `capture_process_scenario` observed the selected executable's
+On 2026-10-28, REA `capture_process_scenario` observed the 0.5.29 sample's
 `--help` invocation exiting with code 0 and emitting three launch options:
 
 | Option | Meaning reported by the executable |
 | --- | --- |
 | `-dir` | Workspace directory, defaulting to the caller's current directory. |
-| `-host` | SSH host selection for the requested multiplexer. |
+| `-host` | With `-mux`, the SSH host whose multiplexer to attach. |
 | `-mux` | A gateway-backed multiplexer target: `herdr`, `tmux` or `tmux:<server>`, instead of local shells. |
 
-Evidence ID: `ev_70fe5a8cde7fcc52e4f9402ff65ae568ee7780a6480927f388f52280f533486e`;
-provider `rea-process` v3 / REA 6.7.0. The output retained all 317 raw terminal
-bytes without truncation. A separate SHA-256 measurement of the selected target
-matches the executable identity above. The captured outer executable was
+Evidence ID: `ev_717cc0d2de429a21fbfb786765b6cad77db88df7fe99483b86b4c97d25ca90fd`;
+provider `rea-process` v3 / REA 6.7.0. The output retained all 314 raw terminal
+bytes without truncation. The scenario mounted the separately inspected 0.5.29
+sample at a private path; REA records a prelaunch digest and non-atomic path
+binding, so that association is supporting context rather than proof of the
+executed image. The captured outer executable was
 `bwrap`, SHA-256 `a7adb079800910ff28fc05c7e1dd2441ff87fb09b369dbb7e82bcededdab079b`.
 Its declared invocation mounted the artifact and system libraries read-only,
 cleared the target environment, and used private home/tmp plus isolated network
 and PID namespaces. No host account, credential store or developer SSH host was
-passed to the target.
+passed to the target. The older 0.5.28 help capture
+`ev_70fe5a8cde7fcc52e4f9402ff65ae568ee7780a6480927f388f52280f533486e` also
+exposed these option names; this is not a formal behavioral equivalence claim.
 
 **Observed:** help output and successful exit. **Unknown:** actual directory
 launch, gateway protocol, named-server attachment, graphical behavior and mobile
