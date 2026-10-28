@@ -69,8 +69,22 @@ it('names UnifiedPush without Google and discloses registration-only cleanup', a
   await screen.findByRole('button', { name: 'Pause and remove registration' });
   expect(document.body.textContent).toContain('UnifiedPush');
   expect(document.body.textContent).not.toContain('Google Firebase');
-  expect(document.body.textContent).toContain('does not connect remote delivery');
+  expect(document.body.textContent).toContain('Registration alone does not connect remote delivery');
   expect(vi.mocked(invoke).mock.calls).toHaveLength(1);
+});
+
+it('requires a separate explicit native display review and never sends renderer credentials',async()=>{
+  const ready={...off,provider:'unifiedpush',enabled:true,displaySupported:true,displayEnabled:false};
+  vi.mocked(invoke).mockResolvedValueOnce(ready).mockResolvedValue({...ready,displayEnabled:true,reason:'Native display enabled'});
+  const before=localStorage.length;
+  render(<PushSettingsPanel/>);
+  const review=await screen.findByRole('button',{name:'Review remote notification display'});
+  expect(vi.mocked(invoke).mock.calls).toHaveLength(1);
+  fireEvent.click(review);
+  await screen.findByText('Native display enabled');
+  expect(invoke).toHaveBeenLastCalledWith('push_registration_display',undefined,{headers:{'X-Lazysh-Access':expect.any(String)}});
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(localStorage.length).toBe(before);
 });
 
 it('opens private enrollment only after consent with no credential arguments or renderer storage',async()=>{

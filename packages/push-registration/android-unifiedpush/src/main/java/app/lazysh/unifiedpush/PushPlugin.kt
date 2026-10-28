@@ -45,8 +45,8 @@ internal object PushRegistration {
     }
 }
 
-/** The SDK owns keys/protocol identity. Only authenticated enrollment challenges
- * are admitted; events, display and all undecrypted content remain inert. */
+/** The SDK owns keys/protocol identity. Only decrypted challenges and strictly
+ * bound events enter their separate native consent gates. */
 class RegistrationService : PushService() {
     private fun controller() = PushRegistration.controller(applicationContext)
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
@@ -59,13 +59,18 @@ class RegistrationService : PushService() {
         } catch (_:Exception) { /* Fail closed without echoing callback/private storage values. */ }
     }
     override fun onMessage(message: PushMessage, instance: String) {
-        val proof=parseChallenge(message.content,message.decrypted) ?: return
-        try { PushEnrollment.controller(applicationContext).message(instance,proof) }
-        catch (_:Exception) { /* No display, storage fallback, or unbound confirmation. */ }
+        try {
+            val proof=parseChallenge(message.content,message.decrypted)
+            if (proof!=null) PushEnrollment.controller(applicationContext).message(instance,proof)
+            else parseDisplayEvent(message.content,message.decrypted)?.let { PushDisplay.message(applicationContext,instance,it) }
+        } catch (_:Exception) { /* No storage fallback, unbound confirmation or display retry. */ }
     }
     override fun onRegistrationFailed(reason: FailedReason, instance: String) { controller().failed(instance) }
     override fun onUnregistered(instance: String) {
         controller().unregistered(instance)
+        // Instance-aware cleanup cannot let a late old callback pause a newer
+        // enrollment's display consent.
+        try { PushDisplay.controller(applicationContext).disableInstance(instance) } catch (_:Exception) { /* Local binding is retired. */ }
         try { PushEnrollment.controller(applicationContext).pause(instance) } catch (_:Exception) { /* Remain locally off. */ }
     }
     override fun onTempUnavailable(instance: String) { controller().unavailable(instance) }
@@ -90,10 +95,23 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
                 registration.phase == Phase.FAILED -> "Distributor registration failed. Refresh or pause registration; no delivery service is connected."
                 registration.enabled -> "Registration requested; waiting for the distributor. No delivery service is connected."
                 else -> "Registration is off. Enabling lets you choose a distributor; no delivery service is connected."
-            })
+            }).apply {
+                put("displaySupported",privateState?.phase==EnrollmentPhase.CONFIRMED)
+                put("displayEnabled",try { PushDisplay.enabled(activity) } catch (_:Exception) { false })
+            }
     }
     @Command fun status(invoke: Invoke) {
         try { invoke.resolve(statusValue()) } catch (_: Exception) { invoke.reject("Cannot inspect UnifiedPush registration") }
+    }
+    @Command fun display(invoke:Invoke) {
+        val permit=try { invoke.parseArgs(DisplayControl::class.java).permit }
+            catch (_:Exception) { invoke.reject("Cannot start native notification consent"); return }
+        DisplayConsentDialog.show(activity,permit) { success ->
+            try {
+                if (success) invoke.resolve(statusValue())
+                else invoke.reject("Notification display was cancelled or unavailable; inspect permission and enrollment")
+            } catch (_:Exception) { invoke.reject("Cannot inspect notification display") }
+        }
     }
     @Command fun register(invoke: Invoke) {
         try {
@@ -156,6 +174,10 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
                 admitted=true
                 enrollment.cancel()
                 EnrollmentDialog.cancel(activity)
+                DisplayConsentDialog.cancel(activity)
+                // A display-storage error must not prevent the original durable
+                // registration revocation; its failed controller remains closed.
+                try { PushDisplay.controller(activity).disable() } catch (_:Exception) {}
             }
             if (admitted) enrollment.pause()
             if (local) invoke.resolve(statusValue())

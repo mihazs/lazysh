@@ -128,6 +128,7 @@ pub fn run() {
                 push::push_registration_register,
                 push::push_registration_enroll,
                 push::push_registration_disable,
+                push::push_registration_display,
                 apple_speech::apple_speech_capability,
                 apple_speech::apple_speech_install,
                 apple_speech::apple_speech_remove,

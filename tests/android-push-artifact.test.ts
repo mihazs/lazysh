@@ -66,6 +66,8 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     androidCrypto:graph.includes('com.google.crypto.tink:tink-android:1.23.0'),
     serverCrypto:graph.includes('com.google.crypto.tink:tink:'),
     embeddedFcm:/\borg\.unifiedpush\.android\.(?:foss_)?embedded_fcm_distributor\b/.test(dex),
+    nativeConsent:/\bapp\.lazysh\.unifiedpush\.NativeDisplayAuthority\b/.test(dex),
+    fixedConsentCommit:/\bapp\.lazysh\.unifiedpush\.DisplayConsentCommit\b/.test(dex),
   };
   const enrollment=google?null:{
     pinnedHttp:graph.includes('com.squareup.okhttp3:okhttp:5.5.1'),
@@ -82,7 +84,7 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     nativeProject:true,firebaseDependency:google,playDependency:google,firebaseClasses:google,
     playClasses:google,pushService:google,firebaseManifest:google,googleMessagingPermission:google,
     unifiedDependency:!google,unifiedClasses:!google,unifiedService:!google,androidCrypto:!google,
-    serverCrypto:false,embeddedFcm:false,
+    serverCrypto:false,embeddedFcm:false,nativeConsent:!google,fixedConsentCommit:!google,
   });
   if(!google){
     expect(enrollment?.pinnedHttp).toBe(true);

@@ -61,6 +61,13 @@ it('localizes the browser-only explanation without requesting permission or insp
   vi.mocked(isTauri).mockReturnValue(false);render(<PushSettingsPanel/>);
   await translatePush(()=>{expect(screen.getByRole('status').textContent).toBe(t('pushNativeRequired'));expect(screen.getByRole('button',{name:t('pushRefresh')})).toHaveProperty('disabled',true);});expect(invoke).not.toHaveBeenCalled();
 });
+it('keeps confirmed native display review localized without admitting a command during locale changes',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...pushStatus,provider:'unifiedpush',enabled:true,displaySupported:true,displayEnabled:false});
+  render(<PushSettingsPanel/>);
+  await screen.findByRole('button',{name:t('pushReviewDisplay')});
+  await translatePush(()=>expect(screen.getByRole('button',{name:t('pushReviewDisplay')})).toHaveProperty('disabled',false));
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
 it('explains a provider-free build in every UI language without Google consent or registration claims',async()=>{
   vi.mocked(invoke).mockResolvedValue({...pushStatus,provider:'none',supported:false,configured:false,reason:'Native distribution detail'});
   render(<PushSettingsPanel/>);await waitFor(()=>expect(screen.getByRole('status').textContent).toBe(t('pushUnavailable')));

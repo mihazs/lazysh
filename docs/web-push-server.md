@@ -1,6 +1,6 @@
 # Free-software Web Push server foundation
 
-The optional Rust notification service can use one encrypted Web Push destination instead of its existing webhook. This is a server-side foundation for #344. It does **not** enroll the Android application, display notifications, or complete remote push. The current F-Droid connector still ignores received messages. There is no lazysh subscription, paid account requirement, bundled hosting, or feature gate. You operate the relay and a compatible push service/distributor; infrastructure costs, availability and network access remain yours.
+The optional Rust notification service can use one encrypted Web Push destination instead of its existing webhook. The F-Droid Android build supports explicit native enrollment and separately opted-in local event display. The server alone does not enable either. There is no lazysh subscription, paid account requirement, bundled hosting, or feature gate. You operate the relay and a compatible push service/distributor; infrastructure costs, availability and network access remain yours. Actual distributor event/display acceptance is still pending under #422; the existing real ntfy acceptance establishes enrollment only.
 
 ## Configure an explicit destination policy
 
@@ -54,8 +54,45 @@ Only the existing public alias and finite kind accompany opaque event/receipt ID
 no endpoint, key, prompt, transcript or host path enters the event. Legacy event,
 webhook and encrypted enrollment-challenge formats are unchanged. Transport
 acceptance does not establish native receipt or display. The current Android
-enrollment receiver does not display these events; explicit native consent,
-bounded durable deduplication and actual notification acceptance are separate work.
+receiver requires separate native display consent and bounded durable replay
+admission. Actual distributor event/display acceptance remains pending.
+
+### Local Android notification consent
+
+After private relay confirmation, **Review remote notification display** opens a
+separate native confirmation dialog. Enrollment alone leaves display off. The
+operator must configure `bound-v2` and explicitly enable server event delivery;
+the app cannot enable the operator's destination. Google/APNs registration and
+device-local inbox notifications are unaffected.
+
+Only SDK-decrypted, closed schema-v2 messages up to 2 KiB are considered. The
+current confirmed enrollment/connector/device generation must match, with a
+canonical receipt/event identity, finite event kind and public ASCII alias.
+Issuance cannot be in the future; expiry must be later than issuance, at most
+300 seconds later, and still ahead of the receiving wall clock. No event body or
+alias enters notification text or durable local replay state.
+
+Consent is bound to the current subscription too. Endpoint rotation requires
+renewed consent; unexpired receipt identities survive that consent renewal
+for the same local enrollment/device generation. Direct Android Keystore AEAD
+protects consent, a durable wall-clock high-water mark and up to 128 live receipt
+records. Event IDs are validated but not globally deduplicated: different sources
+may use the same event UUID, including the service-valid nil UUID. Receipt and
+device identifiers still require canonical non-nil UUIDs. Only expired records
+are pruned. Full storage, key/ciphertext failure or
+an observed clock below the durable high-water mark fails closed. This detects
+rollback relative to persisted observations, not every possible wall-clock change.
+Changing clock back to a valid time does not clear replay history.
+
+Durable admission happens before the notification call: process death can lose an
+event between those steps. There is no exactly-once or automatic retry guarantee.
+OS notification permission and the dedicated channel must permit posting. The
+generic private notification uses one app-owned tag/ID; its immutable explicit
+intent only launches lazysh. It cannot select a host/session or execute a command.
+Turning display off cancels only that owned notification, retains replay history
+and leaves relay enrollment intact. Registration pause also retires local display
+consent. An already-posted or previously admitted side effect cannot be recalled
+from other devices or infrastructure.
 
 ### Provision the private enrollment
 
@@ -91,7 +128,7 @@ The existing finite outbox, three-attempt ceiling, retry delay, 24-hour event ex
 
 Reset/revoke cancels pending work and removes stored active/pending subscription snapshots; SQLite deletion is not secure erasure against the owning OS account or backups. The private database/configuration contains endpoint capabilities and keys needed for delivery. Protect it as carefully as the admin capability. Public status/receipts and fixed errors do not expose these values. There is no message-content logging or history endpoint.
 
-An enrollment challenge POST admitted before reset/revoke may still reach the old endpoint, but its confirmation is then rejected. Likewise an event admitted before cancellation may already have reached the push service. No cancellation recalls remote effects. HTTP 2xx means only that the configured push service accepted the encrypted request. Android distributor routing, authenticated native enrollment, decryption, deduplication, notification permission, process death/reboot, and actual notification presentation remain unimplemented/unverified by this server slice. No APNs/FCM delivery is added.
+An enrollment challenge POST admitted before reset/revoke may still reach the old endpoint, but its confirmation is then rejected. Likewise an event admitted before cancellation may already have reached the push service. No cancellation recalls remote effects. HTTP 2xx means only that the configured push service accepted the encrypted request. The separate real ntfy fixture establishes authenticated native enrollment and encrypted challenge routing; it has not yet established event display. Actual event notification, process death/reboot, Doze and physical-device/vendor background behavior remain unverified. No APNs/FCM delivery is added.
 
 ## Protocol and implementation provenance
 
