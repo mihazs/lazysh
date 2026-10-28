@@ -3,6 +3,7 @@ use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use tauri::AppHandle;
 use tauri_plugin_lazysh_push::RegistrationStatus;
 type Result = std::result::Result<Guarded<RegistrationStatus>, GuardedError<String>>;
+mod consent;
 #[tauri::command]
 pub fn push_registration_status(access: AccessLease, app: AppHandle) -> Result {
     access.run_sync(|| tauri_plugin_lazysh_push::commands::push_registration_status(app))
@@ -23,5 +24,17 @@ pub async fn push_registration_enroll(access: AccessLease, app: AppHandle) -> Re
 pub async fn push_registration_disable(access: AccessLease, app: AppHandle) -> Result {
     access
         .run(tauri_plugin_lazysh_push::commands::push_registration_disable(app))
+        .await
+}
+#[tauri::command]
+pub async fn push_registration_display(access: AccessLease, app: AppHandle) -> Result {
+    let permit = consent::register(access.clone()).map_err(|error| access.error(error))?;
+    access
+        .run(
+            tauri_plugin_lazysh_push::commands::push_registration_display(
+                app,
+                permit.token.clone(),
+            ),
+        )
         .await
 }

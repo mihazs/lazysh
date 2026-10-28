@@ -34,7 +34,9 @@ internal object PushEnrollment {
                 EnrollmentPhase.BOOTSTRAP -> "Private enrollment is pending. Connect delivery service to resume. Notifications remain disconnected."
                 EnrollmentPhase.REGISTER -> "Relay enrollment prepared. Complete distributor registration; notifications remain disconnected."
                 EnrollmentPhase.SUBSCRIBE, EnrollmentPhase.VERIFY -> "Waiting for an encrypted relay challenge. Notifications remain disconnected."
-                EnrollmentPhase.CONFIRMED -> "Relay endpoint verified. Host event delivery and notification display remain disconnected."
+                EnrollmentPhase.CONFIRMED -> if (PushDisplay.enabled(context))
+                    "Relay endpoint verified. Local notification display is on; your operator must enable bound-v2 event delivery."
+                    else "Relay endpoint verified. Local notification display is off; review display consent to enable it."
                 EnrollmentPhase.REVOKE_PENDING -> "Registration is paused. Private relay removal needs retry; prior remote effects remain uncertain."
                 EnrollmentPhase.FAILED -> "Private relay enrollment failed. Refresh registration or pause it; notifications remain disconnected."
             }
@@ -77,15 +79,6 @@ internal object EnrollmentDialog {
             val dialog=AlertDialog.Builder(activity).setTitle(if (previous==null) "Connect delivery service" else "Resume private enrollment")
                 .setView(form).setNegativeButton("Cancel") { _,_ -> }.setPositiveButton("Connect",null).create()
             checkNotNull(dialog.window).addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-            val lifecycle=object:Application.ActivityLifecycleCallbacks {
-                override fun onActivityPaused(value:Activity) { if (value===activity) dialog.cancel() }
-                override fun onActivityDestroyed(value:Activity) { if (value===activity) dialog.cancel() }
-                override fun onActivityCreated(value:Activity,state:Bundle?) {}
-                override fun onActivityStarted(value:Activity) {}
-                override fun onActivityResumed(value:Activity) {}
-                override fun onActivityStopped(value:Activity) {}
-                override fun onActivitySaveInstanceState(value:Activity,state:Bundle) {}
-            }
             dialog.setOnDismissListener {
                 cleanup?.invoke(); cleanup=null
                 origin?.text?.clear(); capability?.text?.clear()
@@ -107,8 +100,7 @@ internal object EnrollmentDialog {
                 }
             }
             current=dialog
-            activity.application.registerActivityLifecycleCallbacks(lifecycle)
-            cleanup={activity.application.unregisterActivityLifecycleCallbacks(lifecycle)}
+            cleanup=cancelDialogWhenBackgrounded(activity,dialog)
             dialog.show()
             } catch (_:Exception) {
                 current?.dismiss()
@@ -118,4 +110,18 @@ internal object EnrollmentDialog {
         }
     }
     private fun validInput(origin:String,code:String)=try { relayOrigin(origin); capability(code) } catch (_:Exception) { false }
+}
+
+internal fun cancelDialogWhenBackgrounded(activity:Activity,dialog:AlertDialog):()->Unit {
+    val lifecycle=object:Application.ActivityLifecycleCallbacks {
+        override fun onActivityPaused(value:Activity) { if (value===activity) dialog.cancel() }
+        override fun onActivityDestroyed(value:Activity) { if (value===activity) dialog.cancel() }
+        override fun onActivityCreated(value:Activity,state:Bundle?) {}
+        override fun onActivityStarted(value:Activity) {}
+        override fun onActivityResumed(value:Activity) {}
+        override fun onActivityStopped(value:Activity) {}
+        override fun onActivitySaveInstanceState(value:Activity,state:Bundle) {}
+    }
+    activity.application.registerActivityLifecycleCallbacks(lifecycle)
+    return {activity.application.unregisterActivityLifecycleCallbacks(lifecycle)}
 }
