@@ -1,7 +1,8 @@
-import {expect,test} from 'bun:test';
-import {readFile} from 'node:fs/promises';
-import {resolve} from 'node:path';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge} from './support/androidNtfy';
+import {expect,test,spyOn} from 'bun:test';
+import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
@@ -15,6 +16,39 @@ test('owned ntfy cannot inherit operator server, proxy or provider credentials',
   expect(ntfyEnvironment({PATH:'/tools',HOME:'/original-home',LANG:'C.UTF-8',NTFY_BASE_URL:'https://personal.invalid',
     NTFY_AUTH_FILE:'/personal/store',NTFY_FIREBASE_KEY_FILE:'/personal/key',HTTP_PROXY:'https://proxy.invalid',
     TOKEN:'private-provider-token'})).toEqual({PATH:'/tools',HOME:'/original-home',LANG:'C.UTF-8'});
+});
+
+test('ready relay input cannot outlive a held ownership check or completed child',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'.lazysh-relay-deadline-'));
+  const child=new OwnedProcess('cat',[]);
+  const clock=spyOn(performance,'now').mockReturnValue(0);
+  try{
+    await writeFile(join(directory,'input.json'),'{}');
+    expect(await child.liveIdentity()).toBeTruthy();
+    let release!:()=>void;
+    const held=new Promise<void>(resolve=>{release=resolve;});
+    const pending=relayInput(child,directory,()=>held);
+    clock.mockReturnValue(120_001);release();
+    await expect(pending).rejects.toThrow('Owned native relay readiness deadline');
+    clock.mockReturnValue(0);
+    child.child.stdin!.end();await child.done;
+    await expect(relayInput(child,directory,async()=>{})).rejects.toThrow('Owned native relay readiness deadline');
+  }finally{clock.mockRestore();await child.stop();await rm(directory,{recursive:true,force:true});}
+});
+
+test('signalled ntfy is classified as stopped without a live or private-error receipt',async()=>{
+  const child=new OwnedProcess('cat',[]);
+  const messages:string[]=[];
+  const logger=spyOn(console,'error').mockImplementation(value=>{messages.push(String(value));});
+  const clock=spyOn(performance,'now').mockReturnValue(0);
+  try{
+    await child.stop();
+    expect(child.child.signalCode).toBe('SIGTERM');
+    await expect(ntfyHealth(child,'https://localhost:1','/owned/private',async()=>{clock.mockReturnValue(10_001);throw new Error('private-payload');})).rejects.toThrow('Owned ntfy startup was signalled');
+    expect(messages).toHaveLength(1);
+    expect(JSON.parse(messages[0])).toEqual({ntfyStartupExit:null,ntfyStartupSignal:'terminated',cliRejected:false,
+      configurationRejected:false,tlsRejected:false,listenerRejected:false,storageRejected:false});
+  }finally{clock.mockRestore();logger.mockRestore();await child.stop();}
 });
 
 test('only the pinned distributor inert action and icon tags are exempt from manifest namespace rejection',()=>{
@@ -76,3 +110,7 @@ test('real ntfy pins identify the official FOSS distributor and immutable server
 test.skipIf(process.env.LAZYSH_ANDROID_NTFY!=='1')('actual official ntfy encrypted native challenge and authenticated pause',async()=>{
   await realNtfyChallenge();
 },900_000);
+
+test.skipIf(!process.env.LAZYSH_NTFY_SERVER_ARCHIVE)('official owned ntfy starts HTTPS with the actual native relay configuration',async()=>{
+  await realNtfyStartup(process.env.LAZYSH_NTFY_SERVER_ARCHIVE!);
+},150_000);

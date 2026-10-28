@@ -23,6 +23,8 @@ fn signal(nonce: String, gate: Arc<Semaphore>) -> axum::routing::MethodRouter {
 
 fn chain() -> (support::Identity, String, String, String) {
     let mut ca = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.distinguished_name
+        .push(rcgen::DnType::CommonName, "lazysh owned fixture CA");
     ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     ca.key_usages = vec![
         rcgen::KeyUsagePurpose::KeyCertSign,

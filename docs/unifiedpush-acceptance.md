@@ -57,6 +57,12 @@ an IPC/preference/environment HTTP override. Enrollment uses its unchanged
 production HTTP constructor with certificate and hostname validation enabled.
 The unknown-CA case must preserve the fixed redacted production failure; the
 owned peer independently observes a rejected TLS handshake and zero HTTP calls.
+The generated CA has a distinct subject from its localhost leaf, so both
+OpenSSL/curl and the native client can build the intended signed chain. An
+optional native Bun preflight, selected with `LAZYSH_NTFY_SERVER_ARCHIVE`, verifies
+the pinned official archive and starts its HTTPS server using the actual Rust
+fixture configuration without an emulator. Startup failures expose only finite
+exit/TLS categories; this preflight does not establish distributor enrollment.
 Ntfy trusts its exact owned server certificate through its supported certificate
 review UI, after matching the full SHA256 fingerprint. System trust is untouched.
 

@@ -60,6 +60,89 @@ async function boundedFile(path:string,limit:number) {
     return bytes.subarray(0,count);
   } finally {await file.close();}
 }
+async function extractNtfy(directory:string,archive:string,root:string,
+  command=(stage:string,program:string,args:string[])=>new OwnedProcess(program,args,root).finish(stage,10_000)) {
+  const pins=JSON.parse(await readFile(join(root,'apps/client/src-tauri/fixtures/ntfy-provenance.json'),'utf8'));
+  if(createHash('sha256').update(await boundedFile(archive,128*1024*1024)).digest('hex')!==pins.server.sha256)throw new Error('Official ntfy artifact digest mismatch');
+  const run=(args:string[])=>command('official ntfy archive member','tar',args);
+  const listed=await run(['--list','--verbose','--gzip','--file',archive,pins.server.member]);
+  if(!listed.startsWith('-')||listed.trim().split('\n').length!==1)throw invalid();
+  await run(['--extract','--gzip','--file',archive,'--directory',directory,'--no-same-owner','--no-same-permissions','--strip-components=1',pins.server.member]);
+  const binary=join(directory,'ntfy');await chmod(binary,0o700);return binary;
+}
+function nativeRelay(root:string,directory:string,nonce:string) {
+  return new OwnedProcess('cargo',['test','-p','lazysh-notifications','--locked','--lib',
+    'tests::ntfy_android::real_ntfy_android_encrypted_challenge','--','--ignored','--exact','--nocapture'],root,
+    {...process.env,LAZYSH_ANDROID_NTFY:'1',LAZYSH_NTFY_FIXTURE_DIRECTORY:directory,LAZYSH_NTFY_FIXTURE_NONCE:nonce});
+}
+export async function relayInput(relay:OwnedProcess,directory:string,check:()=>Promise<unknown>) {
+  const deadline=performance.now()+120_000;
+  while(true){
+    await check();
+    let input:Buffer|undefined;
+    try{input=await boundedFile(join(directory,'input.json'),4096);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    if(relay.child.exitCode!==null||relay.child.signalCode!==null||performance.now()>deadline)throw new Error('Owned native relay readiness deadline');
+    if(input)return input;
+    await Bun.sleep(50);
+  }
+}
+export async function ntfyHealth(ntfy:OwnedProcess,origin:string,directory:string,
+  run:(stage:string,program:string,args:string[],milliseconds:number)=>Promise<string>) {
+  const deadline=performance.now()+10_000;
+  while(true){
+    try{await run('owned ntfy HTTPS health','curl',['--fail','--silent','--show-error','--cacert',join(directory,'ca.pem'),'--max-time','1',origin+'/v1/health'],2000);return;}
+    catch(error){
+      if(ntfy.child.exitCode!==null||ntfy.child.signalCode!==null){
+        const text=ntfy.stderr+'\n'+ntfy.stdout;
+        console.error(JSON.stringify({ntfyStartupExit:ntfy.child.exitCode,
+          ntfyStartupSignal:ntfy.child.signalCode===null?'none':ntfy.child.signalCode==='SIGTERM'?'terminated':ntfy.child.signalCode==='SIGKILL'?'killed':'other',
+          cliRejected:/Incorrect Usage|flag provided but not defined/i.test(text),
+          configurationRejected:/config|yaml|unmarshal/i.test(text),
+          tlsRejected:/certificate|private key|tls:/i.test(text),
+          listenerRejected:/listen|bind|address already in use/i.test(text),
+          storageRejected:/cache|database|sqlite/i.test(text)}));
+        if(ntfy.child.signalCode!==null)throw new Error('Owned ntfy startup was signalled');
+        throw new Error(`Owned ntfy startup exited; exit=${ntfy.child.exitCode}`);
+      }
+      if(performance.now()>deadline){
+        const exit=error instanceof Error?/; exit=(\d{1,3})$/.exec(error.message):null;
+        console.error(JSON.stringify({ntfyAlive:true,healthExit:exit?Number(exit[1]):null}));
+        throw new Error('Owned ntfy HTTPS readiness deadline');
+      }
+      await Bun.sleep(50);
+    }
+  }
+}
+export async function realNtfyStartup(archive:string,root=resolve(import.meta.dir,'../..')) {
+  const directory=await mkdtemp(join(tmpdir(),'.lazysh-ntfy-startup-'));await chmod(directory,0o700);
+  const children:OwnedProcess[]=[];let primary=false;
+  try{
+    const binary=await extractNtfy(directory,archive,root);
+    const relay=nativeRelay(root,directory,randomUUID().replaceAll('-',''));children.push(relay);
+    const data=JSON.parse((await relayInput(relay,directory,async()=>{})).toString('utf8'));
+    if(!/^https:\/\/localhost:[1-9]\d{0,4}$/.test(data.ntfyOrigin))throw invalid();
+    const ntfy=new OwnedProcess(binary,['serve','--config',join(directory,'ntfy.yml')],directory,ntfyEnvironment(process.env));children.push(ntfy);
+    let reported=false;
+    await ntfyHealth(ntfy,data.ntfyOrigin,directory,async(stage,program,args,milliseconds)=>{
+      const child=new OwnedProcess(program,args,root);
+      try{return await child.finish(stage,milliseconds);}catch(error){
+        if(!reported&&error instanceof Error&&/; exit=60$/.test(error.message)){reported=true;console.error(JSON.stringify({
+          tlsSelfSigned:/self.signed/i.test(child.stderr),tlsIssuer:/issuer|unable to get local/i.test(child.stderr),
+          tlsName:/subject name|hostname/i.test(child.stderr),tlsPurpose:/purpose/i.test(child.stderr),tlsDate:/expired|not yet valid/i.test(child.stderr)}));}
+        throw error;
+      }
+    });
+  }catch(error){
+    primary=true;
+    if(error instanceof Error&&/^Owned ntfy (?:startup exited; exit=\d{1,3}|startup was signalled|HTTPS readiness deadline)$/.test(error.message))throw error;
+    throw new Error('Owned ntfy startup preflight failed');
+  }
+  finally{
+    let failed=false;for(const child of children.reverse())try{await child.stop();}catch{failed=true;}
+    try{await rm(directory,{recursive:true,force:true});}catch{failed=true;}
+    if(failed){if(primary)console.error('Owned startup cleanup failed after original failure');else throw new Error('Owned startup cleanup failed');}
+  }
+}
 async function receipt(directory:string) {
   const entries=await readdir(directory,{recursive:true});
   const xml=entries.filter(name=>name.startsWith('android-results/')&&name.endsWith('.xml'));
@@ -144,12 +227,8 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
       const bytes=await boundedFile(path,128*1024*1024);
       if(createHash('sha256').update(bytes).digest('hex')!==pin.sha256)throw new Error('Official ntfy artifact digest mismatch');
     }
-    const listed=await run('official ntfy archive member','tar',['--list','--verbose','--gzip','--file',join(directory,'server.tar.gz'),pins.server.member]);
-    if(!listed.startsWith('-')||listed.trim().split('\n').length!==1)throw invalid();
-    await run('official ntfy extraction','tar',['--extract','--gzip','--file',join(directory,'server.tar.gz'),'--directory',directory,
-      '--no-same-owner','--no-same-permissions','--strip-components=1',pins.server.member]);
-    const binary=join(directory,'ntfy');
-    await chmod(binary,0o700);
+    await owned.check();
+    const binary=await extractNtfy(directory,join(directory,'server.tar.gz'),root,run);
     const signer=await run('official distributor signature',join(sdk,'build-tools/36.0.0/apksigner'),['verify','--print-certs',join(directory,'distributor.apk')]);
     const fingerprints=[...signer.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([a-f\d]{64})$/gm)].map(match=>match[1]);
     if(fingerprints.length!==1||fingerprints[0]!==pins.android.signerSha256)throw new Error('Official distributor signing identity mismatch');
@@ -170,27 +249,14 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
     await normalArtifact();
     const baselineNative=await nativeDigest(apk);
     phase='owned native relay readiness';
-    const relay=new OwnedProcess('cargo',['test','-p','lazysh-notifications','--locked','--lib',
-      'tests::ntfy_android::real_ntfy_android_encrypted_challenge','--','--ignored','--exact','--nocapture'],root,
-      {...process.env,LAZYSH_ANDROID_NTFY:'1',LAZYSH_NTFY_FIXTURE_DIRECTORY:directory,LAZYSH_NTFY_FIXTURE_NONCE:nonce});
+    const relay=nativeRelay(root,directory,nonce);
     children.push(relay);
-    const ready=join(directory,'input.json'),deadline=performance.now()+120_000;
-    let input:Buffer|undefined;
-    while(!input){
-      await owned.check();
-      try {input=await boundedFile(ready,4096);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
-      if(relay.child.exitCode!==null||performance.now()>deadline)throw new Error('Owned native relay readiness deadline');
-      if(!input)await Bun.sleep(50);
-    }
+    const input=await relayInput(relay,directory,()=>owned.check());
     const data=JSON.parse(input.toString('utf8'));
     const origins=[data.relayOrigin,data.ntfyOrigin,data.untrustedOrigin];
     if(data.nonce!==nonce||!origins.every(value=>typeof value==='string'&&/^https:\/\/localhost:[1-9]\d{0,4}$/.test(value)&&Number(new URL(value).port)<=65535))throw invalid();
     const ntfy=new OwnedProcess(binary,['serve','--config',join(directory,'ntfy.yml')],directory,ntfyEnvironment(process.env));children.push(ntfy);
-    const healthDeadline=performance.now()+10_000;
-    while(true){
-      try {await run('owned ntfy HTTPS health','curl',['--fail','--silent','--cacert',join(directory,'ca.pem'),'--max-time','1',data.ntfyOrigin+'/v1/health'],2000);break;}
-      catch{if(ntfy.child.exitCode!==null||performance.now()>healthDeadline)throw new Error('Owned ntfy HTTPS readiness deadline');await Bun.sleep(50);}
-    }
+    await ntfyHealth(ntfy,data.ntfyOrigin,directory,run);
     for(const origin of origins){
       const port=new URL(origin).port;
       await shell('owned TLS reverse',['reverse','--no-rebind',`tcp:${port}`,`tcp:${port}`]);reverses.push(port);
