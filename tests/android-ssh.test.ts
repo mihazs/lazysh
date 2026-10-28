@@ -3,7 +3,7 @@ import {chmod,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity} from './support/androidSsh';
+import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -219,4 +219,28 @@ test.each(['host-35','(reverse)'])('reverse metadata is discarded on the explici
     expect(JSON.stringify(summary)).not.toContain(metadata);
     expect((await readFile(args,'utf8')).split('\n')).toContain('-s emulator-5580 reverse --list');
   });
+});
+
+test.each([
+  {label:'crash text',stdout:"Instrumentation run failed due to 'Process crashed.'",stderr:'',expected:['processCrash']},
+  {label:'disconnect class',stdout:'',stderr:'com.android.ddmlib.DeviceDisconnectedException: private-secret',expected:['deviceUnavailable']},
+  {label:'offline message',stdout:'adb: device offline',stderr:'',expected:['deviceUnavailable']},
+  {label:'rejected command',stdout:'',stderr:'com.android.ddmlib.AdbCommandRejectedException: private-secret',expected:['adbRejected']},
+  {label:'reset message',stdout:'',stderr:'java.net.SocketException: Connection reset by peer',expected:['connectionReset']},
+  {label:'timeout class',stdout:'com.android.ddmlib.TimeoutException',stderr:'',expected:['deadlineReported']},
+  {label:'unresponsive command',stdout:'',stderr:'com.android.ddmlib.ShellCommandUnresponsiveException',expected:['deadlineReported']},
+  {label:'incomplete result',stdout:'Test run failed to complete. Expected 1 tests, received 0',stderr:'',expected:['incompleteRun']},
+  {label:'instrumentation result',stdout:'INSTRUMENTATION_FAILED',stderr:'',expected:['incompleteRun']},
+  {label:'multiple messages',stdout:'Process crashed\nINSTRUMENTATION_FAILED',stderr:'',expected:['processCrash','incompleteRun']},
+  {label:'unknown private message',stdout:'private-secret',stderr:'another-private-secret',expected:[]},
+  {label:'empty buffer',stdout:'',stderr:'',expected:[]},
+  {label:'expired output window',stdout:'Process crashed'+'x'.repeat(16384),stderr:'',expected:[]},
+])('Gradle diagnostics retain only known flags, not content or a cause: $label',({stdout,stderr,expected})=>{
+  const flags=gradleFailureClasses(stdout,stderr);
+  expect(flags.scope).toBe('last-output-window-only');
+  expect(Object.keys(flags).sort()).toEqual(['scope','processCrash','deviceUnavailable','adbRejected','connectionReset','deadlineReported','incompleteRun','unclassified'].sort());
+  const selected=Object.entries(flags).filter(([key,value])=>key!=='unclassified' && value===true).map(([key])=>key);
+  expect(selected).toEqual(expected);
+  expect(flags.unclassified).toBe(expected.length===0);
+  expect(JSON.stringify(flags)).not.toContain('private-secret');
 });

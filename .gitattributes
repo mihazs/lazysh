@@ -1,2 +1,8 @@
 # Preserve upstream notice bytes, including its trailing blank line.
 apps/client/src-tauri/licenses/quircs-LICENSE -text whitespace=-blank-at-eof
+
+# Keep machine-readable Android release metadata stable on every checkout.
+apps/client/android-version.properties text eol=lf
+
+# Preserve upstream listing text format on Windows checkouts too.
+fastlane/metadata/android/**/*.txt text eol=lf

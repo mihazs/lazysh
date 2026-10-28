@@ -297,6 +297,20 @@ export function compareEmulatorContinuity(before:Awaited<ReturnType<typeof emula
   return {transport:compare('transport'),boot:compare('boot'),reverseLost:before && ['present','missing'].includes(before.reverse) && ['present','missing'].includes(after.reverse)?before.reverse==='present' && after.reverse==='missing':null};
 }
 
+// Presence in the last captured output window is reported text, never a cause verdict.
+export function gradleFailureClasses(stdout:string,stderr:string) {
+  const output=stdout.slice(-OUTPUT_LIMIT)+'\n'+stderr.slice(-OUTPUT_LIMIT);
+  const flags={
+    processCrash:/\bProcess crashed\b/i.test(output),
+    deviceUnavailable:/\b(?:DeviceDisconnectedException|DeviceOfflineException)\b|\bdevice (?:is )?(?:offline|disconnected)\b/i.test(output),
+    adbRejected:/\bAdbCommandRejectedException\b/.test(output),
+    connectionReset:/\bConnection reset(?: by peer)?\b/i.test(output),
+    deadlineReported:/\b(?:TimeoutException|AdbTimeoutException|ShellCommandUnresponsiveException)\b/.test(output),
+    incompleteRun:/\bTest run failed to complete\b|\bINSTRUMENTATION_FAILED\b/.test(output),
+  };
+  return {scope:'last-output-window-only',...flags,unclassified:!Object.values(flags).some(Boolean)};
+}
+
 type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
@@ -313,6 +327,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let reverse:string|undefined;
   let remoteCreated=false;
   let before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined;
+  let gradle:OwnedProcess|undefined;
   let primary=false;
   const shell=(args:string[])=>command('owned emulator command',adb,['-s',serial,...args]);
   try {
@@ -327,7 +342,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
     try {before=await emulatorContinuity(adb,serial,reverse,fixture.port);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
     const android=join(root,'apps/client/src-tauri/gen/android');
-    const gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
+    gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
       herdr?'-PlazyshHerdrAcceptance=true':'-PlazyshSshAcceptance=true',
       '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
@@ -340,7 +355,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
       const [exitInfo,continuity]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port)]);
-      const summary={...exitInfo,continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
+      const summary={...exitInfo,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { synchronizeWorkspaceVersions } from '../.changeset/bun-lock';
+import { synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
 
 const source = new URL('../', import.meta.url).pathname;
 const tauriCli = join(source, 'node_modules/@tauri-apps/cli/tauri.js');
@@ -81,6 +81,7 @@ async function fixture(fragment?: string, sourceVersion?: string) {
     await copyFile(join(source, path), join(directory, path));
   }
   if (fragment !== undefined) await writeFile(join(directory, '.changeset', 'owned-test.md'), fragment);
+  await writeFile(join(directory, 'apps/client/android-version.properties'), 'versionName=0.1.0\nversionCode=1000\n');
   await writeFile(join(directory, 'apps/client/src-tauri/tauri.conf.json'), JSON.stringify({
     version: (await json(source, 'apps/client/src-tauri/tauri.conf.json')).version,
     productName: 'lazysh', identifier: 'app.lazysh.client', bundle: { active: true, targets: ['deb'], icon: ['icon.png'] },
@@ -164,6 +165,8 @@ test.skipIf(!androidSdkReady)('actual Android generator resolves client JSON ver
   const manifest = await json(directory, 'apps/client/package.json');
   manifest.version = '9.4.2'; // Deliberately differs from Cargo: prove this reader uses the client JSON.
   await writeFile(join(directory, 'apps/client/package.json'), JSON.stringify(manifest));
+  const android = 'versionName=9.4.2\nversionCode=9004002\n';
+  await writeFile(join(directory, 'apps/client/android-version.properties'), android);
   const path = 'apps/client/src-tauri/tauri.conf.json';
   const config = await json(directory, path);
   config.build = { beforeBuildCommand: 'false' };
@@ -180,7 +183,20 @@ test.skipIf(!androidSdkReady)('actual Android generator resolves client JSON ver
   const properties = await readFile(propertiesPath, 'utf8');
   expect(properties).toContain('tauri.android.versionName=9.4.2');
   expect(properties).toContain('tauri.android.versionCode=9004002');
+  expect(properties.split('\n').filter(line => line.startsWith('tauri.android.version')).map(line => line.replace('tauri.android.', '')).join('\n') + '\n').toBe(android);
 }, 60_000);
+
+test.each([['title.txt',50],['short_description.txt',80],['full_description.txt',4000]] as const)(
+  'English Fastlane listing %s has valid bounded plain text',async(file,limit)=>{
+    const bytes=await Bun.file(join(source,'fastlane/metadata/android/en-US',file)).arrayBuffer();
+    const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+    expect(text.trim().length).toBeGreaterThan(0);
+    expect(Array.from(text.trim()).length).toBeLessThanOrEqual(limit);
+    expect(text).toBe(text.trimEnd()+'\n');
+    expect(text).not.toMatch(/[\r\x00-\x08\x0b\x0c\x0e-\x1f<>]/);
+    if(file==='title.txt')expect(text.trim()).toBe((await json(source,'apps/client/src-tauri/tauri.conf.json')).productName);
+  },
+);
 
 test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source tooling version %s', async sourceVersion => {
   const directory = await fixture(fragment('patch'), sourceVersion);
@@ -190,8 +206,8 @@ test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source to
   expect((await json(directory, 'package.json')).version).toBe('0.1.1');
 }, 60_000);
 
-test.each([['patch', '0.1.1'], ['minor', '0.2.0'], ['major', '1.0.0']])(
-  'real Changesets + Bun + cargo-edit synchronize a %s release', async (impact, expected) => {
+test.each([['patch', '0.1.1', '1001'], ['minor', '0.2.0', '2000'], ['major', '1.0.0', '1000000']])(
+  'real Changesets + Bun + cargo-edit synchronize a %s release', async (impact, expected, expectedCode) => {
     const directory = await fixture(fragment(impact));
     const history = await readFile(join(directory, 'CHANGELOG.md'));
     const previousLock = await Bun.file(join(directory, 'bun.lock')).text();
@@ -204,6 +220,10 @@ test.each([['patch', '0.1.1'], ['minor', '0.2.0'], ['major', '1.0.0']])(
     await synchronizeWorkspaceVersions(directory);
     expect(await Bun.file(join(directory, 'bun.lock')).text()).toBe(updatedLock);
     expect((await json(directory, 'package.json')).version).toBe(expected);
+    const android = await readFile(join(directory, 'apps/client/android-version.properties'), 'utf8');
+    expect(android).toBe(`versionName=${expected}\nversionCode=${expectedCode}\n`);
+    await synchronizeWorkspaceVersions(directory);
+    expect(await readFile(join(directory, 'apps/client/android-version.properties'), 'utf8')).toBe(android);
     expect(await readFile(join(directory, 'CHANGELOG.md'))).toEqual(history);
     expect(await Promise.all(platformSources.map(path => readFile(join(directory, path))))).toEqual(platformBefore);
     expect((await json(directory, 'apps/client/src-tauri/tauri.conf.json')).identifier).toBe('app.lazysh.client');
@@ -345,4 +365,54 @@ test('canonical Apple and Android sources inherit product versions without chang
   expect(gradle).toContain('versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()');
   expect(gradle).toContain('applicationId = "app.lazysh.client"');
   expect(await Bun.file(join(source, platformSources[3])).text()).not.toMatch(/android:version(?:Name|Code)=/);
+});
+
+
+test('release consistency refuses missing or mismatched Android metadata without changing either lock', async () => {
+  const directory = await fixture();
+  const file = join(directory, 'apps/client/android-version.properties');
+  const locks = await Promise.all(['bun.lock', 'Cargo.lock'].map(path => readFile(join(directory, path))));
+  for (const text of [undefined, 'versionName=0.1.0\nversionCode=1001\n', 'versionName=0.2.0\nversionCode=2000\n', 'versionName=0.1.0\nversionCode=1000\nextra=true\n']) {
+    if (text === undefined) await rm(file);
+    else await writeFile(file, text);
+    await expect(verifyRelease(directory)).rejects.toThrow();
+    await expect(synchronizeWorkspaceVersions(directory)).rejects.toThrow();
+    expect(await Promise.all(['bun.lock', 'Cargo.lock'].map(path => readFile(join(directory, path))))).toEqual(locks);
+  }
+});
+
+
+test.each([
+  ['0.0.1', 1], ['0.11.0', 11000], ['9.4.2', 9004002],
+  ['0.999.999', 999999], ['1.0.0', 1000000],
+  ['2099.999.999', 2099999999], ['2100.0.0', 2100000000],
+] as const)('retains the Tauri Android code for stable version %s', async (version, code) => {
+  const { androidVersionCode } = await import('../.changeset/bun-lock');
+  expect(androidVersionCode(version)).toBe(code);
+});
+test.each([
+  '0.0.0', '0.1.1000', '0.1000.0', '2100.0.1', '2100.1.0', '2101.0.0',
+  '9007199254740992.0.0', '1.2.3-alpha', '1.2.3+metadata', '01.2.3', '', null,
+])('rejects ambiguous, zero, nonstable or overflowing Android version %j', async version => {
+  const { androidVersionCode } = await import('../.changeset/bun-lock');
+  expect(() => androidVersionCode(version)).toThrow();
+});
+
+test('release metadata cannot disagree with committed Tauri Android version-code controls', async () => {
+  const directory = await fixture();
+  const base = 'apps/client/src-tauri/tauri.conf.json';
+  const original = await json(directory, base);
+  const lock = await readFile(join(directory, 'bun.lock'));
+  for (const path of [base, 'apps/client/src-tauri/tauri.android.conf.json']) {
+    for (const android of [{versionCode:1000}, {'version-code':1000}, {autoIncrementVersionCode:true}, {'auto-increment-version-code':true}, [], null]) {
+      await writeFile(join(directory, path), JSON.stringify(path === base ? {...original,bundle:{...original.bundle,android}} : {bundle:{android}}));
+      await expect(synchronizeWorkspaceVersions(directory)).rejects.toThrow();
+      expect(await readFile(join(directory, 'bun.lock'))).toEqual(lock);
+    }
+    if (path === base) await writeFile(join(directory, path), JSON.stringify(original));
+    else await rm(join(directory, path));
+  }
+  // Explicitly retaining Tauri's non-incrementing default does not change codes.
+  await writeFile(join(directory, base), JSON.stringify({...original,bundle:{...original.bundle,android:{autoIncrementVersionCode:false}}}));
+  await verifyRelease(directory);
 });

@@ -58,6 +58,42 @@ XcodeGen template already uses Tauri's `apple.bundle-version-short` and
 bundles. Those expressions and application identifiers are preserved. Build
 numbers and store-specific release requirements are not configured here.
 
+### Committed Android update metadata
+
+`apps/client/android-version.properties` exposes the synchronized client
+`versionName` and decimal `versionCode` to source-based update tooling. It is
+generated metadata, verified by `release:check` and updated by the existing
+release synchronization helper. The file uses LF line endings on every checkout.
+It does not introduce a second manually maintained version authority.
+
+The code preserves the locked Tauri mapping:
+`major * 1_000_000 + minor * 1_000 + patch`. Minor and patch must each be at most
+999; the result must be between 1 and 2,100,000,000. For example, `0.11.0` maps
+to `11000`, while `9.4.2` maps to `9004002`. Restricting the components prevents
+`0.1.1000` and `0.2.0` from sharing a code. Prereleases, zero and overflow fail
+before synchronization writes. Committed Android `versionCode` overrides and
+enabled auto-increment options, including Tauri's supported hyphenated aliases,
+are rejected because they can disagree with the published metadata. Explicit
+`autoIncrementVersionCode: false` retains Tauri's normal deterministic behavior.
+
+[F-Droid's official metadata reference](https://f-droid.org/docs/Build_Metadata_Reference/#UpdateCheckData)
+allows a source file to supply both values. A future, separately reviewed
+fdroiddata recipe can use the following after a first valid build recipe and
+stable tags exist:
+
+```yaml
+AutoUpdateMode: Version
+UpdateCheckMode: 'Tags ^v[0-9]+\.[0-9]+\.[0-9]+$'
+UpdateCheckData: 'apps/client/android-version.properties|(?m)^versionCode=([0-9]+)$|.|(?m)^versionName=([0-9]+\.[0-9]+\.[0-9]+)$'
+```
+
+These are documentation examples, not an enabled F-Droid submission or publisher.
+The current workflow still prepares version PRs only. Tagging, unsigned FOSS
+release builds, dependency scanning, signing and initial F-Droid acceptance remain
+separate work under #333. The SDK-gated generator fixture compares the real
+Tauri-generated properties with this committed format; it deliberately stops
+before compilation and does not establish successful release APK acceptance.
+
 Install the native editor explicitly before a local version operation:
 
 ```sh

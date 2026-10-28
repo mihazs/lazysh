@@ -28,6 +28,27 @@ const stable = (value: unknown): value is string => typeof value === 'string'
   && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)
   && Bun.semver.satisfies(value, '*');
 
+export function androidVersionCode(version: unknown): number {
+  requireRelease(stable(version), 'invalid stable Android version');
+  const [major, minor, patch] = version.split('.').map(BigInt);
+  const code = major * 1_000_000n + minor * 1_000n + patch;
+  requireRelease(minor <= 999n && patch <= 999n && code >= 1n && code <= 2_100_000_000n,
+    'Android version must have minor/patch <= 999 and versionCode between 1 and 2100000000');
+  return Number(code);
+}
+
+const androidMetadataPath = 'apps/client/android-version.properties';
+const androidMetadata = (version: string) => `versionName=${version}\nversionCode=${androidVersionCode(version)}\n`;
+
+function verifyAndroidConfig(config: any) {
+  const android = config.bundle?.android;
+  if (android === undefined) return;
+  requireRelease(android !== null && typeof android === 'object' && !Array.isArray(android)
+    && ['versionCode', 'version-code'].every(key => !Object.hasOwn(android, key))
+    && ['autoIncrementVersionCode', 'auto-increment-version-code'].every(key => !Object.hasOwn(android, key) || android[key] === false),
+  'Android version-code overrides and auto-increment are not allowed');
+}
+
 async function inspect(root: string, allowPreviousVersion: boolean) {
   const json = (path: string) => Bun.file(join(root, path)).json();
   const toml = async (path: string) => Bun.TOML.parse(await Bun.file(join(root, path)).text()) as any;
@@ -69,11 +90,21 @@ async function inspect(root: string, allowPreviousVersion: boolean) {
   }
   requireRelease(nativeMembers.size === 0 && oldVersions.size === 1, 'inconsistent release membership or previous versions');
   const tauriBase = 'apps/client/src-tauri/tauri.conf.json';
-  requireRelease((await json(tauriBase)).version === '../package.json', 'Tauri version must use the client manifest path');
+  const baseConfig = await json(tauriBase);
+  requireRelease(baseConfig.version === '../package.json', 'Tauri version must use the client manifest path');
+  verifyAndroidConfig(baseConfig);
   for (const path of new Bun.Glob('apps/client/src-tauri/tauri*.conf.json').scanSync({ cwd: root })) {
-    if (path !== tauriBase) requireRelease(!('version' in await json(path)), 'platform Tauri version overrides are not allowed');
+    if (path !== tauriBase) {
+      const config = await json(path);
+      requireRelease(!('version' in config), 'platform Tauri version overrides are not allowed');
+      verifyAndroidConfig(config);
+    }
   }
-  return { lock, lockText, version };
+  const expectedAndroid = androidMetadata(version);
+  const previousAndroid = await Bun.file(join(root, androidMetadataPath)).text();
+  const permitted = allowPreviousVersion ? [version, ...oldVersions] : [version];
+  requireRelease(permitted.some(value => previousAndroid === androidMetadata(value)), 'invalid or mismatched Android version metadata');
+  return { lock, lockText, version, expectedAndroid, previousAndroid };
 }
 
 export async function verifyRelease(root = process.cwd()) {
@@ -81,7 +112,7 @@ export async function verifyRelease(root = process.cwd()) {
 }
 
 export async function synchronizeWorkspaceVersions(root = process.cwd()) {
-  const { lock, lockText, version } = await inspect(root, true);
+  const { lock, lockText, version, expectedAndroid, previousAndroid } = await inspect(root, true);
   // JSONC validates the file; these strict matches locate existing metadata only.
   // Reject unfamiliar layouts rather than reprinting resolved dependency data.
   const section = /^  "workspaces": \{\r?\n([\s\S]*?)^  \},?\r?$/m.exec(lockText);
@@ -107,6 +138,7 @@ export async function synchronizeWorkspaceVersions(root = process.cwd()) {
   const next = lockText.slice(0, offset) + body + lockText.slice(offset + section[1].length);
   requireRelease(JSON.stringify(Bun.JSONC.parse(next)) === JSON.stringify(lock), 'unexpected lock mutation');
   if (next !== lockText) await Bun.write(join(root, 'bun.lock'), next);
+  if (expectedAndroid !== previousAndroid) await Bun.write(join(root, androidMetadataPath), expectedAndroid);
 }
 
 if (import.meta.main) await synchronizeWorkspaceVersions();
