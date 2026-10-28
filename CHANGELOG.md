@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit **Paste uploaded path** in standalone Attachments: send only the current upload's validated, quoted host path to its original selected terminal without Enter, honoring public terminal bracketed-paste mode. No automatic write, retry or provider integration is added; copy, editable prompt staging and Chat attachment behavior remain unchanged.
+
 - Add explicit line comments on both sides of staged and unstaged repository diffs. Notes preserve the observed selected path, side, line, diff selection and rename context, remain editable across review changes, and enter the existing prompt draft only when requested. A snapshot warning explains that host files may have changed; no note is sent automatically.
 
 - Add opt-in listener refresh in the visible Preview panel, five seconds after each scan settles. It defaults off per panel/session, preserves preview pages and drafts, and shares the existing explicit port filter and optional HTTP checks. Hiding, closing or disabling the panel stops scheduling and suppresses late results; already-issued native scans may finish under existing bounds.
