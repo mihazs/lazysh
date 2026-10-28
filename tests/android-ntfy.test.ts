@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport,nativeFailureStage} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport,nativeFailureStage,settingsObservation} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
@@ -24,6 +24,13 @@ test('first-launch failures retain only enumerated package state and finite flag
   expect(firstLaunchObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:'permission',allow:true,deny:true,toolbar:false,ownedPrompt:true,attempted:false});
   expect(firstLaunchObservation(diagnostic.replace('foreground=permission','foreground=private.application'))).toBeUndefined();
   expect(firstLaunchObservation(diagnostic.replace('allow=true','allow=private-data'))).toBeUndefined();
+});
+
+test('settings observation admits only finite flags and the two-scroll limit',()=>{
+  const diagnostic='Owned default server; settingsForeground=true settingsToolbar=true preferenceList=true preferenceTarget=false scrollAttempts=2';
+  expect(settingsObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:true,toolbar:true,list:true,target:false,scrollAttempts:2});
+  expect(settingsObservation(diagnostic.replace('scrollAttempts=2','scrollAttempts=3'))).toBeUndefined();
+  expect(settingsObservation(diagnostic.replace('settingsToolbar=true','settingsToolbar=private-data'))).toBeUndefined();
 });
 
 test('every fixed native selector label retains a finite failure stage without private text',async()=>{

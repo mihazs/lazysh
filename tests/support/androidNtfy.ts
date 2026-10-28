@@ -191,6 +191,11 @@ export function nativeFailureStage(failure:string) {
     ['Authenticated relay cleanup must remove private enrollment','authenticated_cleanup']];
   return stages.find(([label])=>failure.includes(label))?.[1]??'other_native_failure';
 }
+export function settingsObservation(text:string) {
+  const match=/Owned default server; settingsForeground=(true|false) settingsToolbar=(true|false) preferenceList=(true|false) preferenceTarget=(true|false) scrollAttempts=([012])(?:\b|$)/.exec(text);
+  if(!match)return;
+  return {foreground:match[1]==='true',toolbar:match[2]==='true',list:match[3]==='true',target:match[4]==='true',scrollAttempts:Number(match[5])};
+}
 async function nativeFailure(directory:string) {
   try {
     const files=(await readdir(directory,{recursive:true})).filter(name=>name.startsWith('android-results/')&&name.endsWith('.xml'));
@@ -199,7 +204,8 @@ async function nativeFailure(directory:string) {
     const failure=/<failure\b[\s\S]*?<\/failure>/.exec(text)?.[0]??'';
     const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
     const firstLaunch=firstLaunchObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{})};
+    const settings=settingsObservation(failure);
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(settings?{settings}:{})};
   }catch{return {};}
 }
 

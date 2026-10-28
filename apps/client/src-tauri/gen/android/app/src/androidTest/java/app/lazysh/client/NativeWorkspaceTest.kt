@@ -75,6 +75,17 @@ private class NtfyFirstLaunch(started: Long) {
         return true
     }
 }
+private class NtfySettingsScroll(started: Long) {
+    val deadline = started + TimeUnit.SECONDS.toNanos(5)
+    var attempts = 0
+        private set
+    fun active(now: Long) = now < deadline
+    fun scroll(now: Long, ownedSettings: Boolean): Boolean {
+        if (!active(now) || !ownedSettings || attempts >= 2) return false
+        attempts++
+        return true
+    }
+}
 
 @RunWith(AndroidJUnit4::class)
 class NativeWorkspaceTest {
@@ -1419,6 +1430,11 @@ class NativeWorkspaceTest {
         assertTrue("Permission action is consumed before dispatch",!policy.allow(TimeUnit.SECONDS.toNanos(5),true))
         assertTrue("Menu must settle before original total deadline",!policy.active(TimeUnit.SECONDS.toNanos(6)))
         assertTrue("Expired policy cannot dispatch",!NtfyFirstLaunch(0).allow(TimeUnit.SECONDS.toNanos(6),true))
+        val settings=NtfySettingsScroll(0)
+        assertTrue("Unowned settings cannot scroll",!settings.scroll(0,false))
+        repeat(2) { assertTrue("Only two owned preference scrolls allowed",settings.scroll(TimeUnit.SECONDS.toNanos(4),true)) }
+        assertTrue("Scroll allowance cannot be reused",!settings.scroll(TimeUnit.SECONDS.toNanos(4),true))
+        assertTrue("Expired settings cannot scroll",!NtfySettingsScroll(0).scroll(TimeUnit.SECONDS.toNanos(5),true))
     }
 
     @Test(timeout = 120_000) fun ownedNtfyEncryptedChallengeUsesNativeDialogAndBackgroundCallback() {
@@ -1480,7 +1496,24 @@ class NativeWorkspaceTest {
             foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime()))
         checkNotNull(menu).click()
         node(By.pkg("io.heckel.ntfy").text("Settings"),"Distributor settings").click()
-        node(By.pkg("io.heckel.ntfy").text("Default server"),"Owned default server").click()
+        val settings=NtfySettingsScroll(System.nanoTime())
+        var preference:androidx.test.uiautomator.UiObject2?=null
+        var settingsForeground=false;var settingsToolbar=false;var preferenceList=false
+        while(settings.active(System.nanoTime())) {
+            settingsForeground=device.currentPackageName=="io.heckel.ntfy"
+            settingsToolbar=device.hasObject(ntfyResource("toolbar").hasDescendant(By.text("Settings")))
+            val lists=device.findObjects(By.pkg("io.heckel.ntfy").clazz("androidx.recyclerview.widget.RecyclerView"))
+            preferenceList=lists.size==1
+            val ownedSettings=settingsForeground && settingsToolbar && preferenceList
+            preference=device.findObject(By.pkg("io.heckel.ntfy").text("Default server"))
+            if(ownedSettings && preference!=null && settings.active(System.nanoTime()))break
+            if(settings.scroll(System.nanoTime(),ownedSettings))lists.single().scroll(androidx.test.uiautomator.Direction.DOWN,0.75f)
+            val remaining=settings.deadline-System.nanoTime()
+            if(remaining>0)Thread.sleep(TimeUnit.NANOSECONDS.toMillis(remaining).coerceIn(1,20))
+        }
+        assertTrue("Owned default server; settingsForeground=$settingsForeground settingsToolbar=$settingsToolbar preferenceList=$preferenceList preferenceTarget=${preference!=null} scrollAttempts=${settings.attempts}",
+            settingsForeground && settingsToolbar && preferenceList && preference!=null && settings.active(System.nanoTime()))
+        checkNotNull(preference).click()
         node(ntfyResource("default_server_dialog_url"),"Default server field").text=data.getString("ntfyOrigin")
         node(ntfyResource("default_server_dialog_action_save"),"Save owned default server").click()
         device.pressBack()

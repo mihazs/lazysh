@@ -100,6 +100,11 @@ Every subsequent fixed native selector label maps to a finite receipt stage;
 a source-coverage regression rejects missing mappings. Unknown failure text is
 never copied into the receipt. This diagnostic does not scroll, retry a click or
 increase any selector deadline.
+The Default server preference lookup retains its five-second budget and permits
+at most two downward scrolls only on ntfy's verified foreground Settings toolbar
+and single preference RecyclerView. It performs no coordinate fallback or click
+retry. Its failure receipt retains only surface/list/target flags and scroll count;
+the named native policy case checks ownership, deadline and exhausted allowance.
 
 The original encrypted wire is replayed through real ntfy while confirmed and
 after pause. The bounded observation requires only one server confirmation and
