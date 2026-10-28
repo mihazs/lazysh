@@ -135,7 +135,7 @@ async function publication(root: string, failure?: string, enabled = true) {
     throw new Error('Unexpected fixture API call');
   };
   const result = publishInstallationSet(next, enabled ? { ...policy, enabled: true, fossPushAccepted: true,
-    officialSubmissionPrerequisitesAccepted: true } : policy, directory, request, async sha => {
+    officialSubmissionPrerequisitesAccepted: true } : { ...policy, enabled: false }, directory, request, async sha => {
     expect(sha).toBe(identity.sha);
     if (failure === 'main') throw new Error('superseded');
   });
@@ -156,7 +156,7 @@ test.each(['tag', 'changed-tag', 'existing', 'upload', 'digest', 'main'])(
     expect(calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(calls.every(call => !['DELETE', 'PUT'].includes(call.method))).toBe(true);
   }));
-test('checked-in disabled policy rejects all publication APIs', () => fixture(async root => {
+test('disabled policy rejects all publication APIs', () => fixture(async root => {
   const { calls, result } = await publication(root, undefined, false);
   await expect(result).rejects.toThrow('disabled');
   expect(calls).toEqual([]);

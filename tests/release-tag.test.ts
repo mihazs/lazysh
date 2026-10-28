@@ -26,22 +26,25 @@ function requests(replies: Response[]) {
 }
 const main = () => response({ object: { sha } });
 
-test('checked-in policy cannot activate tags or expensive builds', async () => {
-  expect(releaseEnabled(policy)).toBe(false);
-  for (const field of ['enabled', 'fossPushAccepted', 'officialSubmissionPrerequisitesAccepted'] as const) {
-    expect(releaseEnabled({ ...active, [field]: false })).toBe(false);
-  }
+test('GitHub publication is enabled independently of pending official F-Droid acceptance', async () => {
+  expect(releaseEnabled(policy)).toBe(true);
+  expect(policy.fossPushAccepted).toBe(false);
+  expect(policy.officialSubmissionPrerequisitesAccepted).toBe(false);
+  const disabled = { ...policy, enabled: false };
+  expect(releaseEnabled(disabled)).toBe(false);
   const api = requests([]);
-  await expect(createStableTag(next, policy, 'success', api.request)).rejects.toThrow('disabled');
+  await expect(createStableTag(next, disabled, 'success', api.request)).rejects.toThrow('disabled');
   expect(api.calls).toEqual([]);
 });
 
 test('real disabled CLI only reports blocked admission and rejects the tag command', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-tag-disabled-'));
   try {
+    await mkdir(join(directory, '.changeset'));
+    await Bun.write(join(directory, '.changeset/release-policy.json'), JSON.stringify({ ...policy, enabled: false }));
     const output = join(directory, 'output');
-    const run = (mode: string) => Bun.spawnSync(['bun', '.changeset/release-tag.ts', mode], {
-      cwd: new URL('../', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe',
+    const run = (mode: string) => Bun.spawnSync(['bun', new URL('../.changeset/release-tag.ts', import.meta.url).pathname, mode], {
+      cwd: directory, stdout: 'pipe', stderr: 'pipe',
       env: { ...process.env, GITHUB_OUTPUT: output, LAZYSH_RELEASE_DIRECTORY: join(directory, 'candidate') },
     });
     expect(run('prepare').exitCode).toBe(0);
@@ -150,6 +153,16 @@ test('current-main admission accepts same-version first-parent progress, rejects
     await Bun.write(join(root, 'ordinary-change'), 'same version');
     git('add', '.'); git('commit', '-m', 'test: advance without changing version');
     const advanced = git('rev-parse', 'HEAD');
+    await Bun.write(join(root, '.changeset/release-policy.json'), JSON.stringify(policy));
+    const output = join(root, 'release-output');
+    const prepare = Bun.spawnSync(['bun', join(source, '.changeset/release-tag.ts'), 'prepare'], {
+      cwd: root, stdout: 'pipe', stderr: 'pipe', env: { ...process.env,
+        GITHUB_SHA: advanced, GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'push', GITHUB_OUTPUT: output },
+    });
+    expect(prepare.exitCode, prepare.stderr.toString()).toBe(0);
+    expect(await Bun.file(output).text()).toBe('enabled=false\n');
+    await rm(output);
+    await rm(join(root, '.changeset/release-policy.json'));
     await requireCurrentRelease(root, bound, advanced);
     const api = requests([response({ object: { sha: advanced } }), response({}, 404),
       response({ ref: `refs/tags/${bound.tag}`, object: { sha: bound.sha, type: 'commit' } }, 201)]);

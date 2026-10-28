@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Enable GitHub release publication by default for verified Android, Linux and Windows installers after Changesets version merges. Apple releases and official F-Droid inclusion remain deferred.
+
 - Prepare Android, Linux and Windows release artifacts without requiring Apple packages. Apple releases remain deferred; publication remains gated on verified build and distribution prerequisites.
 
 - Reorganize the README around mobile SSH, persistent sessions, and optional AI-agent workflows, with a source-preview quickstart, clearer release caveats, and contributor calls to action. Documentation only; application behavior and defaults are unchanged.

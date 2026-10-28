@@ -1,9 +1,10 @@
 # Automated application release preparation
 
 Tracked in #423, with official F-Droid delivery separately in #424/#333. This
-work does not authorize publication during implementation. The existing
-`.changeset/release-policy.json` remains disabled, including its #344 and official
-submission prerequisites. Missing signing credentials must block installable
+GitHub publication is enabled by `.changeset/release-policy.json` for Android,
+Linux and Windows. Apple releases are deferred. The #344 acceptance and official
+F-Droid submission prerequisites remain pending and do not imply store inclusion.
+Missing signing credentials must block installable
 mobile artifacts and final publication, with finite diagnostics listing missing
 configuration names only. Never substitute a debug APK, ephemeral signing key or
 unsigned/simulator IPA.

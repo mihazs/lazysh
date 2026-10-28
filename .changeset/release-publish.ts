@@ -9,7 +9,7 @@ export async function publishInstallationSet(next: Candidate, policy: ReleasePol
   const check = (condition: unknown, message: string) => {
     if (!condition) throw new Error(`Release publication: ${message}`);
   };
-  check(releaseEnabled(policy), 'disabled until all release prerequisites are accepted');
+  check(releaseEnabled(policy), 'disabled by GitHub release policy');
   await verifyAggregate(next, directory);
   const main = await request('git/ref/heads/main', 'GET');
   check(main.ok, 'cannot observe main');
@@ -55,6 +55,7 @@ if (import.meta.main) {
   }
   const root = process.cwd();
   const next = await currentCandidate(root);
+  if (!next) throw new Error('Release version transition required');
   const policy = await Bun.file(join(root, '.changeset/release-policy.json')).json();
   const request: Request = (path, method, body) => fetch(
     `https://${method === 'UPLOAD' ? 'uploads' : 'api'}.github.com/repos/mihazs/lazysh/${path}`, {

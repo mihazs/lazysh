@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "fossPushAccepted": false,
   "officialSubmissionPrerequisitesAccepted": false,
   "recipeSha256": "87fa027a9c013dc08148f0638f01ecd301995a1ee8c8e56665beb4e543b2ff38"
