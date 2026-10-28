@@ -368,7 +368,7 @@ jobs:
         with:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
+        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment

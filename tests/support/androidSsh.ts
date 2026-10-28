@@ -1,5 +1,5 @@
 import {spawn, type ChildProcess} from 'node:child_process';
-import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
+import {chmod, copyFile, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir, userInfo} from 'node:os';
 import {isAbsolute, join, resolve} from 'node:path';
 import {createServer, connect} from 'node:net';
@@ -254,9 +254,12 @@ export async function packageExitInfo(adb:string,serial:string) {
 
 // All commands target the selected emulator; neither raw output nor daemon IDs escape.
 async function continuityOutput(adb:string,serial:string,args:string[],deadline:number) {
+  return diagnosticOutput(adb,['-s',serial,...args],deadline);
+}
+async function diagnosticOutput(program:string,args:string[],deadline:number) {
   const remaining=Math.floor(deadline-performance.now());
   if(remaining<=0)return {state:'unavailable',output:''};
-  const owned=new OwnedProcess(adb,['-s',serial,...args],undefined,process.env,false);
+  const owned=new OwnedProcess(program,args,undefined,process.env,false);
   let output='',overflow=false;
   owned.child.stdout!.on('data',(data:Buffer)=>{
     if(Buffer.byteLength(output)+data.length>4096){overflow=true;output='';return;}
@@ -267,6 +270,38 @@ async function continuityOutput(adb:string,serial:string,args:string[],deadline:
     if(performance.now()>=deadline)return {state:'unavailable',output:''};
     return {state:overflow?'overflow':'available',output:overflow?'':output.trim()};
   } catch {return {state:'unavailable',output:''};}
+}
+
+export type HostAdbServerSample={state:'available'|'inconclusive',hash:string|null,reason?:'unsupported-endpoint'|'probe-unavailable'|'missing-listener'|'unrecognized-listener'|'overflow'|'ownership-unverified'};
+export async function hostAdbServerIdentity(adb:string):Promise<HostAdbServerSample> {
+  const inconclusive=(reason:HostAdbServerSample['reason']):HostAdbServerSample=>({state:'inconclusive',hash:null,reason});
+  const port=process.env.ANDROID_ADB_SERVER_PORT??'5037';
+  if(process.platform!=='linux' || process.env.ADB_SERVER_SOCKET!==undefined ||
+    ![undefined,'localhost','127.0.0.1'].includes(process.env.ANDROID_ADB_SERVER_ADDRESS) ||
+    !/^[1-9][0-9]{0,4}$/.test(port) || Number(port)>65535)return inconclusive('unsupported-endpoint');
+  const deadline=performance.now()+1000;
+  // Only the selected loopback listener; ss never starts or repairs an ADB server.
+  const result=await diagnosticOutput('/usr/bin/ss',['-H','-ltnpe',`src 127.0.0.1 and sport = :${port}`],deadline);
+  if(result.state!=='available')return inconclusive(result.state==='overflow'?'overflow':'probe-unavailable');
+  if(!result.output)return inconclusive('missing-listener');
+  const owner=/^LISTEN\s+[0-9]+\s+[0-9]+\s+127[.]0[.]0[.]1:[0-9]+\s+\S+\s+users:\(\("[^"\r\n]{1,64}",pid=([1-9][0-9]{0,9}),fd=([0-9]{1,10})\)\)(?: uid:[0-9]+)? ino:([1-9][0-9]{0,19})\b/.exec(result.output);
+  const inode=owner?.[3];
+  const columns=result.output.split(/\s+/);
+  if(result.output.includes('\n') || columns[0]!=='LISTEN' || columns[3]!==`127.0.0.1:${port}` ||
+    !owner || !inode || Number(owner[1])>2147483647 || Number(owner[2])>2147483647)return inconclusive('unrecognized-listener');
+  try {
+    const pid=Number(owner[1]),fd=`/proc/${pid}/fd/${owner[2]}`;
+    const before=await identity(pid);
+    const [executable,expected,processStat,socket]=await Promise.all([realpath(`/proc/${pid}/exe`),realpath(adb),stat(`/proc/${pid}`),readlink(fd)]);
+    const after=await identity(pid);
+    if(!before || !after || !/^[1-9][0-9]{0,19}$/.test(before.start) || before.start!==after.start ||
+      ['Z','X'].includes(after.state) || processStat.uid!==process.getuid?.() || executable!==expected ||
+      socket!==`socket:[${inode}]` || await readlink(fd)!==socket || performance.now()>=deadline)return inconclusive('ownership-unverified');
+    return {state:'available',hash:createHash('sha256').update(`${pid}:${before.start}`).digest('hex')};
+  } catch {return inconclusive('ownership-unverified');}
+}
+export function compareHostAdbServer(before:HostAdbServerSample|undefined,after:HostAdbServerSample) {
+  return before?.state==='available' && after.state==='available' && before.hash && after.hash?(before.hash===after.hash?'same':'changed'):'unknown';
 }
 
 export async function emulatorContinuity(adb:string,serial:string,reverse:string|undefined,targetPort:number) {
@@ -417,6 +452,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let remoteCreated=false;
   let retainedPackages=false;
   let before:Awaited<ReturnType<typeof emulatorContinuity>>|undefined;
+  let hostServerBefore:HostAdbServerSample|undefined;
   let gradle:OwnedProcess|undefined;
   let crashes:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
   const timing:{gradleStartMs:number|null,gradleEndMs:number|null}={gradleStartMs:null,gradleEndMs:null};
@@ -432,7 +468,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{})}),{mode:0o600});
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
-    try {before=await emulatorContinuity(adb,serial,reverse,fixture.port);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
+    try {[before,hostServerBefore]=await Promise.all([emulatorContinuity(adb,serial,reverse,fixture.port),hostAdbServerIdentity(adb)]);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
     try {crashes=captureOwnedCaseCrashes(adb,serial,fixture.nonce);} catch {/* Never change test admission for unavailable diagnostics. */}
     const android=join(root,'apps/client/src-tauri/gen/android');
     timing.gradleStartMs=crashes?.elapsedMs()??null;
@@ -453,9 +489,11 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
       const crash=await crashes?.stop();
+      // Sample before an inspection adb command could implicitly restart its server.
+      const hostServerAfter=await hostAdbServerIdentity(adb);
       const persistedCrash={scope:'persisted-crash-buffer-sample',...await crashes?.recover()??{state:'ineligible',exceptions:[]}};
       const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
-      const summary={...exitInfo,...(packages?{packages}:{}),timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)}};
+      const summary={...exitInfo,...(packages?{packages}:{}),timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}

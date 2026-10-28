@@ -3,9 +3,10 @@ import {chmod,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
+import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance} from './support/androidSsh';
+import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -198,9 +199,10 @@ test.skipIf(process.platform!=='linux')('dedicated retained packages are probed 
     const gradleArgs=join(directory,'gradle-args');
     await writeFile(join(android,'gradlew'),`#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(gradleArgs)},JSON.stringify(process.argv.slice(2)));process.exit(31);\n`);
     await chmod(join(android,'gradlew'),0o700);
-    const previousHome=process.env.ANDROID_HOME,previousSerial=process.env.ANDROID_SERIAL;
+    const previousHome=process.env.ANDROID_HOME,previousSerial=process.env.ANDROID_SERIAL,previousSocket=process.env.ADB_SERVER_SOCKET;
     const warning=spyOn(console,'error').mockImplementation(()=>{});
     process.env.ANDROID_HOME=sdk;process.env.ANDROID_SERIAL='emulator-5580';
+    process.env.ADB_SERVER_SOCKET='unsupported-owned-test-endpoint';
     let stopped=false;
     // Synthetic harness input; this test does not claim actual SSH, APK or WebView execution.
     const fixture={ssh:{directory,nonce:'a'.repeat(32),port:45678,username:'owned',privateKey:'private-fixture-key',fingerprint:'owned',prompt:'owned',challenge:'owned',expected:'owned'},
@@ -217,6 +219,7 @@ test.skipIf(process.platform!=='linux')('dedicated retained packages are probed 
       const appCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client');
       const diagnostics=JSON.parse(await readFile(join(android,'app/build/outputs/androidTest-results/herdr-ui/package-exit.json'),'utf8'));
       expect(diagnostics.persistedCrash).toEqual({scope:'persisted-crash-buffer-sample',state:'ineligible',exceptions:[]});
+      expect(diagnostics.hostAdbServer).toEqual({before:{state:'inconclusive',hash:null,reason:'unsupported-endpoint'},after:{state:'inconclusive',hash:null,reason:'unsupported-endpoint'},comparison:'unknown'});
       expect(calls.some(call=>call.includes('logcat -b crash -d'))).toBe(false);
       expect(probe).toBeGreaterThanOrEqual(0);expect(packages).toBeGreaterThanOrEqual(0);
       expect(testCleanup).toBeGreaterThan(Math.max(probe,packages));expect(appCleanup).toBeGreaterThan(testCleanup);
@@ -227,9 +230,97 @@ test.skipIf(process.platform!=='linux')('dedicated retained packages are probed 
       warning.mockRestore();
       if(previousHome===undefined)delete process.env.ANDROID_HOME;else process.env.ANDROID_HOME=previousHome;
       if(previousSerial===undefined)delete process.env.ANDROID_SERIAL;else process.env.ANDROID_SERIAL=previousSerial;
+      if(previousSocket===undefined)delete process.env.ADB_SERVER_SOCKET;else process.env.ADB_SERVER_SOCKET=previousSocket;
     }
   });
 },5000);
+
+async function withHostAdbEndpoint(port:string,run:()=>Promise<void>,address?:string,socket?:string) {
+  const values={ANDROID_ADB_SERVER_PORT:port,ANDROID_ADB_SERVER_ADDRESS:address,ADB_SERVER_SOCKET:socket};
+  const previous=Object.fromEntries(Object.keys(values).map(key=>[key,process.env[key]]));
+  try {
+    for(const [key,value] of Object.entries(values))if(value===undefined)delete process.env[key];else process.env[key]=value;
+    await run();
+  } finally {
+    for(const [key,value] of Object.entries(previous))if(value===undefined)delete process.env[key];else process.env[key]=value;
+  }
+}
+
+test.each([
+  {port:'5037',address:'remote-private-host'}, {port:'0'}, {port:'65536'}, {port:'05037'},
+  {port:'5037; private-command'}, {port:'5037',socket:'tcp:private-socket'},
+])('host ADB continuity rejects unsupported endpoint configuration: $port',async({port,address,socket})=>{
+  await withHostAdbEndpoint(port,async()=>{
+    expect(await hostAdbServerIdentity('/nonexistent-adb')).toEqual({state:'inconclusive',hash:null,reason:'unsupported-endpoint'});
+  },address,socket);
+});
+
+test.skipIf(process.platform!=='linux')('host ADB continuity verifies only its owned listener and detects a replacement server',async()=>{
+  const start=async(port=0)=>{
+    const owned=new OwnedProcess(process.execPath,['-e',`require('node:net').createServer().listen(${port},'127.0.0.1',function(){process.stdout.write(String(this.address().port))})`]);
+    try {
+      const deadline=performance.now()+1000;
+      while(!owned.stdout){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+      return {owned,port:Number(owned.stdout)};
+    } catch(error){await owned.stop();throw error;}
+  };
+  const first=await start();let second:Awaited<ReturnType<typeof start>>|undefined;
+  try {
+    await withHostAdbEndpoint(String(first.port),async()=>{
+      // This owned runtime listener tests OS ownership, not the ADB wire protocol.
+      const before=await hostAdbServerIdentity(process.execPath);
+      expect(before.state).toBe('available');expect(before.hash).toMatch(/^[a-f0-9]{64}$/);
+      const original=await first.owned.liveIdentity();
+      expect(before.hash).toBe(createHash('sha256').update(`${original!.pid}:${original!.start}`).digest('hex'));
+      expect(compareHostAdbServer(before,await hostAdbServerIdentity(process.execPath))).toBe('same');
+      expect(await hostAdbServerIdentity('/bin/sh')).toEqual({state:'inconclusive',hash:null,reason:'ownership-unverified'});
+      expect(JSON.stringify(before)).not.toContain(String(first.owned.child.pid));
+      await first.owned.stop();
+      second=await start(first.port);
+      const after=await hostAdbServerIdentity(process.execPath);
+      expect(after.state).toBe('available');expect(compareHostAdbServer(before,after)).toBe('changed');
+      await second.owned.stop();
+      const missing=await hostAdbServerIdentity(process.execPath);
+      expect(missing).toEqual({state:'inconclusive',hash:null,reason:'missing-listener'});
+      expect(compareHostAdbServer(after,missing)).toBe('unknown');
+      expect(compareHostAdbServer(missing,after)).toBe('unknown');
+    });
+  } finally {await first.owned.stop();await second?.owned.stop();}
+},5000);
+
+test.each([
+  {body:'',code:0,reason:'missing-listener'},
+  {body:'private-output',code:31,reason:'probe-unavailable'},
+  {body:'',code:0,reason:'probe-unavailable',missing:true},
+  {body:'private-output',code:0,reason:'unrecognized-listener'},
+  {body:'LISTEN 0 1 127.0.0.1:45001 0.0.0.0:* cgroup:private/users:(("adb",pid=123,fd=1)) ino:1',code:0,reason:'unrecognized-listener'},
+  {body:'LISTEN 0 1 127.0.0.1:45001 0.0.0.0:* users:(("adb",pid=2147483648,fd=1)) ino:1',code:0,reason:'unrecognized-listener'},
+  {body:'x'.repeat(4097),code:0,reason:'overflow'},
+  {body:'private-output',code:0,reason:'probe-unavailable',hang:true},
+]).skipIf(process.platform!=='linux')('bounded host listener query reports $reason without raw data',async({body,code,reason,hang,missing})=>{
+  const spawn=childProcess.spawn;
+  let pid=0;
+  const intercepted=spyOn(childProcess,'spawn').mockImplementation((program,args,options)=>{
+    expect(program).toBe('/usr/bin/ss');
+    expect(args).toEqual(['-H','-ltnpe','src 127.0.0.1 and sport = :45001']);
+    if(missing)return spawn('/nonexistent-owned-ss',[],options);
+    const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(body)});${hang?'setInterval(()=>{},1000)':`process.exit(${code})`}`],options);
+    pid=child.pid!;return child;
+  });
+  try {
+    await withHostAdbEndpoint('45001',async()=>{
+      expect(await hostAdbServerIdentity(process.execPath)).toEqual({state:'inconclusive',hash:null,reason});
+      if(!missing)expect(()=>process.kill(pid,0)).toThrow();
+    });
+  } finally {intercepted.mockRestore();}
+},5000);
+
+test('host ADB comparison includes process start time and cannot bridge an inconclusive sample',()=>{
+  const sample=(start:string)=>({state:'available' as const,hash:createHash('sha256').update(`123:${start}`).digest('hex')});
+  expect(compareHostAdbServer(sample('10'),sample('11'))).toBe('changed');
+  expect(compareHostAdbServer(undefined,sample('11'))).toBe('unknown');
+  expect(compareHostAdbServer({state:'inconclusive',hash:null,reason:'probe-unavailable'},sample('11'))).toBe('unknown');
+});
 
 const bootA='00000000-0000-4000-8000-000000000001';
 const bootB='00000000-0000-4000-8000-000000000002';
