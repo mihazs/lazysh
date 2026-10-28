@@ -223,7 +223,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux dbus-daemon xdg-desktop-portal
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
@@ -231,7 +231,23 @@ jobs:
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Check combined native voice startup and clean shutdown without models
         run: bunx turbo run test:voice-interop:smoke --filter=@lazysh/client
-      - run: bun run build:native
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned native GUI protocol driver
+        run: cargo install --locked --version 2.1.0 tauri-driver --root "$RUNNER_TEMP/lazysh-native-driver"
+      - name: Exercise owned Linux native singleton GUI delivery
+        id: native-gui
+        env:
+          LAZYSH_NATIVE_GUI_DRIVER: ${{ runner.temp }}/lazysh-native-driver/bin/tauri-driver
+        run: bun run test:native-gui
+      - name: Retain only the owned synthetic native GUI image
+        if: ${{ !cancelled() && (steps.native-gui.outcome == 'success' || steps.native-gui.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-native-singleton-gui
+          path: apps/client/test-results/native-gui
+          if-no-files-found: warn
       - run: bun run test:mosh
       - name: Exercise retained tmux display navigation and hostile control streams
         run: bunx turbo run test:tmux --filter=@lazysh/client
