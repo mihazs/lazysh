@@ -12,9 +12,9 @@ const eyeL=[];polyQuad(eyeL,[77,139],[84,147],[94,138]);group(6.3,eyeL);
 const eyeR=[];polyQuad(eyeR,[111,139],[119,147],[129,138]);group(6.3,eyeR);
 function clamp(x){return Math.max(0,Math.min(1,x));}
 function roundRectSDF(x,y){const dx=Math.abs(x-128)-67,dy=Math.abs(y-128)-67;return Math.hypot(Math.max(dx,0),Math.max(dy,0))+Math.min(Math.max(dx,dy),0)-53;}
-function markCoverage(x,y,step,scaleW=1){if(x<27||x>238||y<48||y>204)return 0;let best=-1;for(const s of paths){const ox=x-s.x,oy=y-s.y,t=clamp((ox*s.dx+oy*s.dy)*s.inv),xx=ox-t*s.dx,yy=oy-t*s.dy,d=s.r*scaleW-Math.sqrt(xx*xx+yy*yy);if(d>best)best=d; if(d>step*.52)break;}
+function markCoverage(x,y,step,scaleW=1){if(x<27||x>238||y<48||y>204)return 0;let best=-1e9;for(const s of paths){const ox=x-s.x,oy=y-s.y,t=clamp((ox*s.dx+oy*s.dy)*s.inv),xx=ox-t*s.dx,yy=oy-t*s.dy,d=s.r*scaleW-Math.sqrt(xx*xx+yy*yy);if(d>best)best=d; if(d>step*.52)break;}
  const nx=(x-103.5)/5,ny=(y-153.5)/2.9;
- const nose= (nx*nx+ny*ny<=1)?Math.min(5*(1-Math.abs(nx)),2.9*(1-Math.abs(ny))): -1;
+ const nose= (nx*nx+ny*ny<=1)?Math.min(5*(1-Math.abs(nx)),2.9*(1-Math.abs(ny))): -1e9;
  return clamp(.5+Math.max(best,nose)/step);
 }
 function mix(a,b,t){return a.map((v,i)=>Math.round(v*(1-t)+b[i]*t));}
