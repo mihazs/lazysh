@@ -58,3 +58,5 @@ Primary API references: [Android screen-on flag](https://developer.android.com/d
 [portal Request lifecycle](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html),
 and the removed [GTK inhibition](https://docs.gtk.org/gtk3/method.Application.inhibit.html)/
 [query limits](https://docs.gtk.org/gtk3/method.Application.is_inhibited.html) approach.
+
+The board observes the existing native main-window focus event in addition to DOM focus and visibility. If an earlier resume observation found native readiness unavailable, a later native focus event can refresh metadata under the original mounted access lease. This does not poll or retry an issued acquisition failure; hidden, unmounted or revoked views cannot acquire. Controlled frontend fixtures exercise this event ordering. The recurring Android #321 failure remains unproven as to cause: its late missing-board sample follows a 120-second foreground wait, exceeding the fixture's 90-second shell lifetime, and cannot establish the original foreground state.
