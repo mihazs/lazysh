@@ -136,6 +136,67 @@ mod linux {
         discarded: u64,
         original: Sample,
     }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct ClientIdentity {
+        pid: i32,
+        start: u64,
+    }
+    impl ClientIdentity {
+        fn of(client: &Client) -> Option<Self> {
+            match client.original {
+                Sample::Observed { start, .. } => Some(Self {
+                    pid: client.pid,
+                    start,
+                }),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Default)]
+    struct Lifetimes([Option<ClientIdentity>; 2]);
+    impl Lifetimes {
+        fn remember(&mut self, ordinal: usize, clients: &Clients) {
+            let Some(slots) = self.0.get_mut(ordinal..) else {
+                return;
+            };
+            slots.fill(None);
+            let Ok(rows) = &clients.0 else {
+                return;
+            };
+            let previous = match ordinal {
+                0 => None,
+                1 if self.0[0].is_some() => self.0[0],
+                _ => return,
+            };
+            let mut candidates = rows
+                .iter()
+                .filter(|row| row.control)
+                .map(ClientIdentity::of);
+            let mut selected = None;
+            for candidate in &mut candidates {
+                let Some(candidate) = candidate else {
+                    return;
+                };
+                if Some(candidate) == previous {
+                    continue;
+                }
+                if selected.replace(candidate).is_some() {
+                    return;
+                }
+            }
+            self.0[ordinal] = selected;
+        }
+        fn ordinal(&self, client: &Client, current: Sample) -> Option<usize> {
+            if !client.control {
+                return None;
+            }
+            let identity = ClientIdentity::of(client)?;
+            if !matches!(current, Sample::Observed { start, .. } if start == identity.start) {
+                return None;
+            }
+            self.0.iter().position(|entry| *entry == Some(identity))
+        }
+    }
     struct Clients(Result<Vec<Client>, &'static str>);
     struct Observer(Option<std::process::Child>);
     impl Drop for Observer {
@@ -204,26 +265,30 @@ mod linux {
         Ok(clients)
     }
     impl Clients {
-        fn failure(&self, server: &(i32, Sample, Sample)) -> String {
+        fn failure(&self, server: &(i32, Sample, Sample), lifetimes: &Lifetimes) -> String {
             let clients = match &self.0 {
                 Ok(rows) => format!(
                     "{:?}",
                     rows.iter()
                         .enumerate()
-                        .map(|(index, row)| (
-                            index,
-                            row.control,
-                            row.written,
-                            row.discarded,
-                            phase(row.original, read(row.pid))
-                        ))
+                        .map(|(index, row)| {
+                            let current = read(row.pid);
+                            (
+                                index,
+                                row.control,
+                                row.written,
+                                row.discarded,
+                                phase(row.original, current),
+                                lifetimes.ordinal(row, current),
+                            )
+                        })
                         .collect::<Vec<_>>()
                 ),
                 Err(kind) => (*kind).into(),
             };
             // These counters are cumulative, not pending control-buffer sizes.
             format!(
-                "clients(index,control,written,discarded,state)={clients}; children={}",
+                "clients(index,control,written,discarded,state,lifetime)={clients}; children={}",
                 children(server)
             )
         }
@@ -297,8 +362,18 @@ mod linux {
             Err(kind) => kind.into(),
         }
     }
-    pub(super) struct Processes(Vec<(i32, Sample, Sample)>, Option<Clients>);
+    pub(super) struct Processes(Vec<(i32, Sample, Sample)>, Option<Clients>, Lifetimes);
     impl Processes {
+        pub(super) async fn remember_clients(
+            &mut self,
+            ordinal: usize,
+            command: std::process::Command,
+        ) {
+            self.clients(command).await;
+            if let Some(clients) = self.1.take() {
+                self.2.remember(ordinal, &clients);
+            }
+        }
         pub(super) async fn clients(&mut self, mut command: std::process::Command) {
             use std::os::fd::AsRawFd;
             let (server, original, _) = self.0[0];
@@ -394,6 +469,7 @@ mod linux {
                     })
                     .collect(),
                 None,
+                Lifetimes::default(),
             )
         }
         pub(super) fn before_stop(&mut self) {
@@ -429,11 +505,97 @@ mod linux {
                     .collect::<Vec<_>>(),
                 self.1
                     .as_ref()
-                    .map(|clients| clients.failure(&self.0[0]))
+                    .map(|clients| clients.failure(&self.0[0], &self.2))
                     .unwrap_or_else(|| "NotObserved".into())
             )
         }
     }
+    #[test]
+    fn lifetime_ordinals_require_unique_verified_control_identities() {
+        let row = |pid, start, control| Client {
+            pid,
+            control,
+            written: 0,
+            discarded: 0,
+            original: Sample::Observed {
+                start,
+                state: 'S',
+                parent: 1,
+            },
+        };
+        let mut lifetimes = Lifetimes::default();
+        lifetimes.remember(
+            0,
+            &Clients(Ok(vec![row(100, 20, true), row(200, 30, false)])),
+        );
+        lifetimes.remember(
+            1,
+            &Clients(Ok(vec![row(100, 20, true), row(300, 40, true)])),
+        );
+        let observed = |start| Sample::Observed {
+            start,
+            state: 'S',
+            parent: 1,
+        };
+        for (pid, start, expected) in [(100, 20, Some(0)), (300, 40, Some(1)), (400, 50, None)] {
+            assert_eq!(
+                lifetimes.ordinal(&row(pid, start, true), observed(start)),
+                expected
+            );
+        }
+        assert_eq!(lifetimes.ordinal(&row(100, 21, true), observed(21)), None);
+        assert_eq!(lifetimes.ordinal(&row(100, 20, true), observed(21)), None);
+        assert_eq!(lifetimes.ordinal(&row(100, 20, false), observed(20)), None);
+        assert_eq!(
+            lifetimes.ordinal(&row(100, 20, true), Sample::Missing),
+            None
+        );
+        let private = Client {
+            original: Sample::Unowned,
+            ..row(100, 20, true)
+        };
+        assert_eq!(lifetimes.ordinal(&private, observed(20)), None);
+        let receipt = Clients(Ok(vec![private]))
+            .failure(&(i32::MAX, Sample::Missing, Sample::Missing), &lifetimes);
+        assert!(receipt.contains("None"));
+        assert!(!receipt.contains("100"));
+    }
+
+    #[test]
+    fn lifetime_ambiguity_and_failed_samples_never_guess_or_keep_old_labels() {
+        let row = |pid, sample| Client {
+            pid,
+            control: true,
+            written: 0,
+            discarded: 0,
+            original: sample,
+        };
+        let observed = Sample::Observed {
+            start: 20,
+            state: 'S',
+            parent: 1,
+        };
+        let unique = || Clients(Ok(vec![row(100, observed)]));
+        let mut lifetimes = Lifetimes::default();
+        lifetimes.remember(1, &unique());
+        assert!(lifetimes.0.iter().all(Option::is_none));
+        for sample in [
+            Clients(Err("Deadline")),
+            Clients(Ok(vec![])),
+            Clients(Ok(vec![row(100, observed), row(200, observed)])),
+            Clients(Ok(vec![row(100, observed), row(200, Sample::Unowned)])),
+        ] {
+            lifetimes.remember(0, &unique());
+            lifetimes.remember(0, &sample);
+            assert!(lifetimes.0[0].is_none());
+        }
+        lifetimes.remember(0, &unique());
+        lifetimes.remember(1, &unique());
+        assert!(lifetimes.0[1].is_none());
+        lifetimes.remember(2, &unique());
+        assert!(lifetimes.0[1].is_none());
+    }
+
     #[test]
     fn remaining_client_rows_are_bounded_numeric_and_exclude_the_observer() {
         let rows = client_rows(b"123\n999:0:0:0\n456:1:27:3\n", 123, 999).unwrap();
@@ -463,10 +625,46 @@ mod linux {
             (1..=17).map(|p| format!("{p}:1:0:0\n")).collect::<String>()
         );
         assert!(client_rows(overflow.as_bytes(), 123, 999).is_err());
-        let receipt =
-            Clients(Err("Invalid")).failure(&(i32::MAX, Sample::Missing, Sample::Missing));
-        assert_eq!(receipt, "clients(index,control,written,discarded,state)=Invalid; children=ServerIdentityUnavailable");
+        let receipt = Clients(Err("Invalid")).failure(
+            &(i32::MAX, Sample::Missing, Sample::Missing),
+            &Lifetimes::default(),
+        );
+        assert_eq!(receipt, "clients(index,control,written,discarded,state,lifetime)=Invalid; children=ServerIdentityUnavailable");
     }
+    #[tokio::test]
+    async fn lifetime_snapshots_correlate_real_owned_processes_without_pid_output() {
+        let server = std::process::id() as i32;
+        let mut child = Observer(Some(
+            std::process::Command::new("/bin/sleep")
+                .arg("10")
+                .spawn()
+                .unwrap(),
+        ));
+        let fresh = child.0.as_ref().unwrap().id() as i32;
+        let command = |include_fresh| {
+            let mut command = std::process::Command::new("/bin/sh");
+            let mut rows = format!("{server}\n{server}:1:0:0\n");
+            if include_fresh {
+                rows.push_str(&format!("{fresh}:1:0:0\n"));
+            }
+            command
+                .args(["-c", "printf '%s' \"$1\"", "owned-observer"])
+                .arg(rows);
+            command
+        };
+        let mut observations = Processes::capture(&[server]);
+        observations.remember_clients(0, command(false)).await;
+        observations.remember_clients(1, command(true)).await;
+        observations.clients(command(true)).await;
+        let receipt = observations.failure();
+        assert!(receipt.contains("Some(0)"));
+        assert!(receipt.contains("Some(1)"));
+        assert!(!receipt.contains(&server.to_string()));
+        assert!(!receipt.contains(&fresh.to_string()));
+        child.0.as_mut().unwrap().kill().unwrap();
+        child.0.take().unwrap().wait().unwrap();
+    }
+
     #[tokio::test]
     async fn observer_deadline_overflow_and_error_reap_owned_children_without_raw_output() {
         for (program, expected) in [
@@ -588,6 +786,16 @@ pub(super) struct Processes {
     inner: linux::Processes,
 }
 impl Processes {
+    pub(super) async fn remember_clients(
+        &mut self,
+        ordinal: usize,
+        command: std::process::Command,
+    ) {
+        #[cfg(target_os = "linux")]
+        self.inner.remember_clients(ordinal, command).await;
+        #[cfg(not(target_os = "linux"))]
+        let _ = (ordinal, command);
+    }
     pub(super) async fn clients(&mut self, command: std::process::Command) {
         #[cfg(target_os = "linux")]
         self.inner.clients(command).await;

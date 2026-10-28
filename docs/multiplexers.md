@@ -206,3 +206,15 @@ cleaned up.
 This is transport retirement and fresh authentication within one Rust test
 process. It does not establish application-process death, GUI startup, OS-vault
 prompts, physical mobile lifecycle, or network roaming behavior.
+
+For #248 teardown diagnosis, Linux takes a bounded client snapshot while each
+SSH lifetime is still active, using the same existing observer and its limits.
+Only a unique verified control-client identity is retained; the fresh snapshot
+excludes the identified initial client. Failed or ambiguous samples remain
+unknown. The existing failure-only receipt appends `lifetime=Some(0)` for the
+initial control client, `Some(1)` for fresh, or `None` for unknown. PID/start
+identities stay internal; reused or missing processes are not attributed.
+The snapshots add two observations, not an exit assertion, retry or cleanup
+action, and leave the existing three-second retirement/teardown budgets intact.
+This identifies which observed control lifetime remains when possible; it does
+not establish remote command exit, pending-buffer sizes or the failure cause.
