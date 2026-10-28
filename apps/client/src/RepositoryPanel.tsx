@@ -8,6 +8,8 @@ import { api as nativeApi } from './bridge';
 import {fileErrorText, type FileErrorState} from './SessionTools';
 import {captureUiError, LocalUiError} from './i18n/localError';
 import CodePreview from './CodePreview';
+import {usePreferences} from './preferences';
+import {fontFamilyFor,useDeviceFonts} from './fonts';
 
 type Change = { path: string; originalPath: string | null; index: string; worktree: string };
 type Commit = { oid: string; subject: string };
@@ -82,6 +84,8 @@ export function diffLines(patch: string): Line[] {
 
 export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
   useUi();
+  const preferences=usePreferences();
+  const fonts=useDeviceFonts();
   const api = useProtectedApi(nativeApi);
   const invoke = useProtectedInvoke();
   const [path, setPath] = useState('.');
@@ -218,7 +222,7 @@ export default function RepositoryPanel({ sessionId }: { sessionId: string }) {
         <div className="tool-bar"><label>{t('repoCommentLine')}<input type="number" min={1} max={lineCount} value={commentLine} onChange={event => setCommentLine(Number(event.target.value))} /></label><button disabled={!Number.isSafeInteger(commentLine) || commentLine < 1 || commentLine > lineCount || annotations.length >= 20} onClick={() => annotate(commentLine)}>{t('repoAddComment')}</button></div>
         {markdown ? <Markdown components={{ img: () => <span>{t('repoRemoteImage')}</span>, a: ({ children }) => <span>{children}</span> }}>{content.text || ''}</Markdown> : <CodePreview path={selected} text={content.text || ''} />}
       </>)}
-      {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffLines(diff.patch).map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{line.before}</td><td><pre>{line.left}</pre></td><td>{line.after}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
+      {diff && (diff.binary ? <p>{t('repoBinaryDiff')}</p> : diff.patch ? <div className="repository-diff-scroll"><table className="repository-diff" style={{fontFamily:fontFamilyFor(preferences,fonts)}} aria-label={t('repoSideBySide')}><thead><tr><th colSpan={2}>{t('repoBefore')}</th><th colSpan={2}>{t('repoAfter')}</th></tr></thead><tbody>{diffLines(diff.patch).map((line, i) => line.kind === 'hunk' ? <tr key={i}><th className="diff-hunk" colSpan={4}>{line.left}</th></tr> : <tr key={i} className={line.kind}><td>{line.before}</td><td><pre>{line.left}</pre></td><td>{line.after}</td><td><pre>{line.right}</pre></td></tr>)}</tbody></table></div> : <p>{t('repoNoSelectionChanges')}</p>)}
     </div></div>
     {annotations.length > 0 && <section className="repository-comments" aria-label={t('repoComments')}><h4>{t('repoNextPrompt')}</h4>{annotations.map((note, index) => <label key={`${note.repository}:${note.file}:${note.revision}:${note.line}`}>{note.repository}/{note.file}:{note.line}<textarea maxLength={2000} value={note.text} onChange={event => setAnnotations(current => current.map((row, i) => i === index ? { ...row, text: event.target.value } : row))} /><button onClick={() => setAnnotations(current => current.filter((_, i) => i !== index))}>{t('repoRemoveComment')}</button></label>)}{annotationText.length > 65536 && <p>{t('repoShorten')}</p>}<button disabled={!annotationText || annotationText.length > 65536} onClick={() => { window.dispatchEvent(new CustomEvent('lazysh-prompt-draft', { detail: { sessionId, text: annotationText } })); setDraftStatus('repoCommentsStaged'); }}>{t('repoUsePrompt')}</button><button disabled={!annotationText} onClick={() => void navigator.clipboard.writeText(annotationText).then(() => setDraftStatus('repoCommentsCopied')).catch(e => setError(captureUiError(e)))}>{t('repoCopyComments')}</button>{draftStatus && <p role="status">{t(draftStatus)}</p>}</section>}
   </section>;
