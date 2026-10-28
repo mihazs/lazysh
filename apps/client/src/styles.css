@@ -1671,3 +1671,5 @@ button svg {
 .theme-qr-panel { margin-block: 12px; padding: 10px; border: 1px solid var(--theme-border, #343d31); border-radius: 7px; }
 .theme-qr-panel video { display: block; width: 100%; max-width: 500px; max-height: 320px; object-fit: contain; background: #000; }
 .theme-qr-panel video[hidden] { display: none; }
+
+.font-license { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
