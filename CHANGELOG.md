@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Expose checked Android version metadata for source-based update discovery. Release validation now rejects colliding or out-of-range Android versions and version-code overrides; current valid APK codes remain unchanged. Tag publication and F-Droid submission are not enabled.
+
 - Offer opt-in syntax highlighting in Remote Files text previews using the existing safe code renderer. Plain text remains the default, keyboard scrolling stays available, and SFTP paths, read limits and upload consent are unchanged. Keep highlighted previews tied to the current source when file contents refresh.
 
 - Compose completed review dictation with the latest editable draft instead of replacing typed text or prior clips. Empty results preserve the draft; overflow keeps it intact without truncation. Review remains default, while direct delivery still queues only the newly recorded clip and history remains per clip.
