@@ -13,7 +13,7 @@ unsigned/simulator IPA.
 Reuse the stable-tag gate's exact main-event SHA, stable first-parent version/code
 increase, synchronized manifests/locks and absence of pending Changesets. Build
 platform assets into Actions artifacts before the tag job. Only the existing
-gate creates `vVERSION`; require all platform receipts before that job. Publish
+gate creates `vVERSION`; require Android, Linux and Windows receipts before that job. Publish
 the GitHub Release in a dependent job in the same workflow, because a tag created
 with `GITHUB_TOKEN` does not trigger an ordinary tag-push workflow. Never overwrite
 a different existing tag or upload replacement bytes to an existing release.
@@ -88,6 +88,10 @@ per file. Android ARM64 is the existing production target; emulator x86_64 debug
 artifacts remain separate. Real device installation/update and Apple distribution
 acceptance stay unverified until executed. Installation guidance is in
 [install-and-update.md](install-and-update.md).
+
+Automatic publication currently excludes macOS, iOS and watchOS packages. The
+explicit private iOS build remains available for later signing verification; it
+does not enter the release set. Official F-Droid inclusion remains separate.
 
 ## Official references
 

@@ -4,6 +4,8 @@ Use the signing status and availability recorded for the particular release.
 Actions debug APKs and simulator apps are development artifacts, not production
 installation downloads. Pipeline activation and outstanding distribution
 requirements are tracked separately in #423 and #424.
+The automatic release set currently targets Android, Linux and Windows. macOS,
+iOS and watchOS release packages are deferred and are not included.
 
 When a verified release is available, use the assets on the repository's
 [Releases page](https://github.com/mihazs/lazysh/releases). Check the version,

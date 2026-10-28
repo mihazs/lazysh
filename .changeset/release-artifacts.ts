@@ -14,6 +14,7 @@ export const artifactTargets = {
   'ios-arm64': ['ipa'],
 } as const;
 export type ArtifactTarget = keyof typeof artifactTargets;
+export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64'];
 type Identity = { sha: string; version: string };
 type Signing = 'unsigned' | 'ad-hoc' | 'signed';
 type ArtifactFile = { name: string; bytes: number; sha256: string };
@@ -85,7 +86,7 @@ export async function stagePackages(identity: Identity, target: ArtifactTarget, 
   return receipt;
 }
 export async function aggregatePackages(identity: Identity, source: string, destination: string) {
-  const targets = Object.keys(artifactTargets) as ArtifactTarget[];
+  const targets = releaseTargets;
   requireArtifact((await readdir(source)).sort().join(',') === targets.map(t => `release-${t}`).sort().join(','),
     'missing or unexpected platform artifacts');
   await mkdir(destination, { recursive: true });
@@ -120,13 +121,13 @@ export async function verifyAggregate(identity: Identity, directory: string) {
   requireArtifact(manifestFile.size > 0 && manifestFile.size < 65_536, 'invalid aggregate manifest');
   const manifest = await manifestFile.json();
   requireArtifact(manifest.schema === 1 && manifest.sha === identity.sha && manifest.version === identity.version
-    && Array.isArray(manifest.platforms) && manifest.platforms.length === Object.keys(artifactTargets).length,
+    && Array.isArray(manifest.platforms) && manifest.platforms.length === releaseTargets.length,
   'invalid aggregate identity');
   const seen = new Set<string>();
   const packages: string[] = [];
   for (const value of manifest.platforms) {
     const receipt = validateReceipt(value, identity);
-    requireArtifact(!seen.has(receipt.target), 'duplicate platform');
+    requireArtifact(releaseTargets.includes(receipt.target) && !seen.has(receipt.target), 'unexpected or duplicate platform');
     seen.add(receipt.target);
     for (const file of receipt.files) {
       const actual = await digestFile(join(directory, file.name));
