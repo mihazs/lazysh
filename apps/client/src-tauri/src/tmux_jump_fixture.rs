@@ -927,6 +927,17 @@ async fn product_actor_probe() {
     cancel.send_replace(true);
     assert!(binding.call(&fresh, &mut cancellation, None).await.is_err());
     timeout(BOUND, binding.retired()).await.unwrap();
+    timeout(BOUND, async {
+        while f
+            .local(&["list-clients", "-F", "#{client_control_mode}"])
+            .lines()
+            .any(|line| line == "1")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("retired actor must close its remote control client while SSH stays connected");
 
     let retained = crate::tmux_jump::prepare_command(
         f.handle(),
