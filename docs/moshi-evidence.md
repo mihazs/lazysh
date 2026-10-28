@@ -1,25 +1,29 @@
 # Moshi reconstruction evidence
 
-Research date: 2026-10-24. Target: the publicly shipped Moshi SSH/agent client at [getmoshi.app](https://getmoshi.app/), including mobile and desktop surfaces. This is a behavior catalog for an independent lazysh implementation. It contains no recovered proprietary implementation or copied application assets.
+Research date: 2026-10-28. Target: the publicly shipped Moshi SSH/agent client at [getmoshi.app](https://getmoshi.app/), including mobile and desktop surfaces. This is a behavior catalog for an independent lazysh implementation. It contains no recovered proprietary implementation or copied application assets.
 
 **Evidence levels:** `documented` means the vendor describes the behavior; `artifact-observed` means bytes or metadata were inspected; `runtime-observed` means a bounded declared invocation was captured; `inferred` means an implementation implication; `unknown` means no adequate observation. Documented capability is not proof that an installed build behaves that way. This catalog does not certify lazysh parity.
 
 ## Shipped artifact inspection
 
-The [desktop download page](https://getmoshi.app/desktop) linked Moshi Go Alpha **0.5.28** and an older desktop **0.4.23** during this investigation. Selected official download: [Linux amd64 Debian package](https://cdn.getmoshi.app/desktop-go/moshi-go_0.5.28_amd64.deb).
+The [desktop download page](https://getmoshi.app/desktop) linked Moshi Go Alpha **0.5.29** during this investigation. Selected official download: [Linux amd64 Debian package](https://cdn.getmoshi.app/desktop-go/moshi-go_0.5.29_amd64.deb). [Issue #430](https://github.com/mihazs/lazysh/issues/430) tracks this refresh.
 
 | Item | Observed identity |
 | --- | --- |
-| Downloaded package | `moshi-go_0.5.28_amd64.deb` |
-| Package SHA-256 | `5b21940597985c07767dee60f34de287d3de8f374303035e09c1a017c7b3d42d` |
+| Downloaded package | `moshi-go_0.5.29_amd64.deb` |
+| Package SHA-256 | `f64f8fb9c4321312bcac85357a9afb15a79e40aed103a19531550dda7bf46120` |
 | Extracted executable | `opt/moshi-go/moshi-go` |
-| Executable SHA-256 | `c3043607369f45f8e57fc0aed7ab20e9570b9b6175a4e1291dceebc47a3601b0` |
-| Executable size | 37,929,223 bytes |
+| Executable SHA-256 | `85fe3365669152e09f8f40d6bd01e91a190fbc86d6490ee3f007428ec778b8d2` |
+| Executable size | 38,711,559 bytes |
 | REA operation | `inspect_go_binary` |
-| REA Evidence ID | `ev_fb7235a5115581739876b36af1ae284abd6ef51247b011a2b3830d63ee5c8e0d` |
+| REA Evidence ID | `ev_2d78788e4d53ab04abeb8736f6c24a6698cfc06679d46b0177d448bc6425a9c6` |
 | Provider | REA Go build-information reader v1, rea-agents 6.7.0 |
 
-**Artifact-observed:** ELF amd64/little-endian, embedded `go1.27.1` version, module `moshi-go`, revision `e5f6f7f755e50d54c7d8d623b21e596052b8b6f5`, build timestamp `2026-10-24T03:58:53Z`. Recorded metadata includes `github.com/egoist/mygo` replaced by `github.com/rjyo/mygo`, `github.com/rjyo/moshi/app-hook` replaced by a local development path, Chroma, Goldmark, WebSocket, PTY, and text-layout dependencies. Package inventory additionally contains `libghostty-vt.so`, `libmygo-sqlite3.so`, launcher metadata, and icons.
+**Artifact-observed:** ELF amd64/little-endian, embedded `go1.27.3` version, module `moshi-go`, revision `bf2639b67586efc992656a9c63f6f010312e347a`, build timestamp `2026-10-26T10:02:19Z`, and `CGO_ENABLED=0`. Recorded metadata includes `github.com/egoist/mygo` replaced by `github.com/rjyo/mygo`, `github.com/rjyo/moshi/app-hook` replaced by a local development path, Chroma, Goldmark, WebSocket, PTY, and text-layout dependencies.
+
+### Previous observed artifact (0.5.28)
+
+The 2026-10-24 sample was `moshi-go_0.5.28_amd64.deb` (package SHA-256 `5b21940597985c07767dee60f34de287d3de8f374303035e09c1a017c7b3d42d`), with executable SHA-256 `c3043607369f45f8e57fc0aed7ab20e9570b9b6175a4e1291dceebc47a3601b0` and size 37,929,223 bytes. REA evidence `ev_fb7235a5115581739876b36af1ae284abd6ef51247b011a2b3830d63ee5c8e0d` recorded `go1.27.1`, revision `e5f6f7f755e50d54c7d8d623b21e596052b8b6f5`, and timestamp `2026-10-24T03:58:53Z`. The two observations establish changed package/executable identity and embedded build metadata only; they do **not** establish a UI, behavior, protocol, or feature change.
 
 **Limitations:** embedded metadata can be forged; it does not prove dependency authenticity, the compiler actually used, invocation of a dependency, rendering performance, or runtime behavior. The initial metadata pass decompiled no native functions and launched no target executable. REA's Go inspector is target-free; no native analysis session was opened. Research downloads remain outside the repository in `/tmp/lazysh-research`.
 
