@@ -2,7 +2,7 @@ use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
 use crate::ssh::{AppState, Result, SshError};
 use serde::Serialize;
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, task::Poll, time::Duration};
 use tauri::State;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -301,7 +301,20 @@ pub struct Listener {
     process: Option<String>,
     pid: Option<u32>,
     http: Option<bool>,
+    framework: Option<Framework>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum Framework {
+    NextJs,
+}
+
+#[derive(Serialize)]
+struct HttpProbe {
+    http: bool,
+    framework: Option<Framework>,
+}
+
 fn parse_listeners(text: &str) -> Vec<Listener> {
     let mut listeners = Vec::new();
     let mut process = None;
@@ -358,6 +371,7 @@ fn parse_listeners(text: &str) -> Vec<Listener> {
                 process: if lsof { process.clone() } else { ss_process },
                 pid: if lsof { pid } else { ss_pid },
                 http: None,
+                framework: None,
             });
         }
         if listeners.len() == 256 {
@@ -426,13 +440,15 @@ pub async fn discover_preview_ports(
                 let stream = remote_stream(&session.handle, &worker_access, address, port, tokio::time::Instant::now() + Duration::from_millis(1500)).await?;
                 read_http_status(stream, address, port).await
             };
-            listener.http = Some(if *cancel.borrow() { false } else {
+            let observed = if *cancel.borrow() { None } else {
                 tokio::select! {
-                    _ = cancel.changed() => false,
-                    _ = worker_access.cancelled() => false,
-                    result = timeout(Duration::from_millis(1500), probe) => matches!(result, Ok(Ok(true))),
+                    _ = cancel.changed() => None,
+                    _ = worker_access.cancelled() => None,
+                    result = timeout(Duration::from_millis(1500), probe) => result.ok().and_then(std::result::Result::ok),
                 }
-            });
+            };
+            listener.http = Some(observed.as_ref().is_some_and(|probe| probe.http));
+            listener.framework = observed.and_then(|probe| probe.framework);
             listener
         });
     }
@@ -452,7 +468,7 @@ async fn read_http_status<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     address: &str,
     port: u16,
-) -> Result<bool> {
+) -> Result<HttpProbe> {
     let address = if address.contains(':') {
         format!("[{address}]")
     } else {
@@ -467,7 +483,60 @@ async fn read_http_status<S: AsyncRead + AsyncWrite + Unpin>(
     let mut status = [0; 12];
     stream.read_exact(&mut status).await?;
     let http = status.starts_with(b"HTTP/1.0 ") || status.starts_with(b"HTTP/1.1 ");
-    Ok(http && status[9..].iter().all(u8::is_ascii_digit))
+    let http = http && status[9..].iter().all(u8::is_ascii_digit);
+    let framework = if http {
+        available_framework(&mut stream, &status).await
+    } else {
+        None
+    };
+    Ok(HttpProbe { http, framework })
+}
+
+// Optional metadata must never wait beyond the already-successful status probe.
+// Read one byte at a time to stop exactly at the header boundary, before any body.
+async fn available_framework<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    status: &[u8],
+) -> Option<Framework> {
+    let mut headers = Vec::from(status);
+    let mut byte = [0];
+    while headers.len() < 8192 {
+        let available = {
+            let mut read = std::pin::pin!(stream.read(&mut byte));
+            std::future::poll_fn(|cx| Poll::Ready(read.as_mut().poll(cx))).await
+        };
+        match available {
+            Poll::Ready(Ok(1)) => headers.push(byte[0]),
+            _ => return None,
+        }
+        if headers.ends_with(b"\r\n\r\n") {
+            let text = std::str::from_utf8(&headers).ok()?;
+            let mut powered_by = None;
+            for (index, field) in text
+                .split("\r\n")
+                .skip(1)
+                .filter(|line| !line.is_empty())
+                .enumerate()
+            {
+                if index >= 64 {
+                    return None;
+                }
+                let (name, value) = field.split_once(':')?;
+                let name = hyper::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
+                hyper::header::HeaderValue::from_bytes(value.as_bytes()).ok()?;
+                if name == "x-powered-by" {
+                    if powered_by.is_some() {
+                        return None;
+                    }
+                    powered_by = Some(value.trim_matches([' ', '\t']));
+                }
+            }
+            return powered_by
+                .filter(|value| value.eq_ignore_ascii_case("Next.js"))
+                .map(|_| Framework::NextJs);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -522,10 +591,76 @@ mod tests {
                 server.write_all(response).await.unwrap();
             });
             assert_eq!(
-                read_http_status(client, "::1", 3000).await.unwrap(),
+                read_http_status(client, "::1", 3000).await.unwrap().http,
                 expected
             );
             peer.await.unwrap();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn probe_reports_only_a_bounded_explicit_nextjs_header() {
+        let oversized = format!(
+            "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\nX-Padding: {}\r\n\r\n",
+            "a".repeat(8192)
+        );
+        let fields = format!(
+            "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\n{}\r\n",
+            "X-Extra: value\r\n".repeat(64)
+        );
+        for (response, expected) in [
+            (
+                "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\n\r\n",
+                Some(Framework::NextJs),
+            ),
+            (
+                "HTTP/1.1 404 Missing\r\nx-POWERED-by:\tNext.js \t\r\n\r\n",
+                Some(Framework::NextJs),
+            ),
+            ("HTTP/1.1 200 OK\r\nX-Powered-By: Express\r\n\r\n", None),
+            (
+                "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\nX-Powered-By: Express\r\n\r\n",
+                None,
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\nX-Powered-By: Next.js\r\n\r\n",
+                None,
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\n bad: folding\r\n\r\n",
+                None,
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\nBad-Header: bad\0value\r\n\r\n",
+                None,
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 30\r\n\r\nX-Powered-By: Next.js\r\n\r\n",
+                None,
+            ),
+            // Keep the peer alive: neither partial headers nor a status-only peer may add a wait.
+            ("HTTP/1.1 200 OK\r\nX-Powered-By: Next.js\r\n", None),
+            ("HTTP/1.1 200 ", None),
+            (oversized.as_str(), None),
+            (fields.as_str(), None),
+        ] {
+            let (client, mut server) = tokio::io::duplex(response.len() + 512);
+            server.write_all(response.as_bytes()).await.unwrap();
+            let before = tokio::time::Instant::now();
+            let probe = timeout(
+                Duration::from_millis(1),
+                read_http_status(client, "127.0.0.1", 3000),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(probe.http);
+            assert_eq!(
+                tokio::time::Instant::now(),
+                before,
+                "header hints must never wait"
+            );
+            assert_eq!(probe.framework, expected);
         }
     }
 

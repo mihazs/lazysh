@@ -58,3 +58,28 @@ it('shows actual listener process metadata and applies only the explicit allowli
   expect(invoke).toHaveBeenCalledWith('discover_preview_ports', { sessionId: 'ssh-one', allowPorts: [3000, 8000, 8001], probeHttp: true }, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(invoke).not.toHaveBeenCalledWith('start_preview', expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
 });
+
+async function discoverFramework(framework: unknown, http = true) {
+  vi.mocked(invoke).mockImplementation(async command => command === 'list_previews' ? [] : [{ port: 3000, address: '127.0.0.1', process: 'node', pid: 123, http, framework }]);
+  render(<PreviewPanel sessionId="ssh-one" />);
+  const discover = screen.getByRole('button', { name: 'Discover listeners' });
+  await waitFor(() => expect((discover as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('checkbox', { name: /Check for HTTP/ }));
+  fireEvent.click(discover);
+}
+it('shows the finite Next.js server hint without automatically opening it', async () => {
+  await discoverFramework('nextJs');
+  expect(await screen.findByRole('button', { name: /node.*Next.js/ })).toBeTruthy();
+  expect(screen.getByTitle('Server-reported framework hint')).toBeTruthy();
+  expect(invoke).toHaveBeenCalledWith('discover_preview_ports', { sessionId: 'ssh-one', allowPorts: null, probeHttp: true }, { headers: { 'X-Lazysh-Access': expect.any(String) } });
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'start_preview')).toBe(false);
+});
+it.each(['vite', '<script>raw</script>', 1, {}, ['nextJs']])('rejects non-enumerated framework metadata %j', async framework => {
+  await discoverFramework(framework);
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Invalid listener list.');
+  expect(screen.queryByRole('button', { name: /127.0.0.1:3000/ })).toBeNull();
+});
+it('rejects a framework hint without a successful HTTP observation', async () => {
+  await discoverFramework('nextJs', false);
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Invalid listener list.');
+});
