@@ -130,9 +130,11 @@ to inspect the relay. There is no automatic provider fallback or upload replay.
 Native owned HTTP fixtures verify this profile's multipart/auto-language contract,
 absence of provider credentials, response bounds/redaction, no retries/redirects,
 quota retention and cancellation/revocation of the connection. These are fake
-upstream fixtures. Actual whisper.cpp execution, model output/accuracy and
-engine-side cancellation have **not** been verified by this slice and remain
-acceptance work under [#345](https://github.com/mihazs/lazysh/issues/345).
+upstream fixtures; by themselves they do not establish real engine execution,
+accuracy or engine-side cancellation. Broader acceptance remains under
+[#345](https://github.com/mihazs/lazysh/issues/345).
+The subsequent [owned Linux engine acceptance](whisper-relay-acceptance.md)
+records a real pinned-engine/base-model run, its exact proof and remaining limits.
 
 ## Quota and cancellation semantics
 
