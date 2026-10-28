@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import VoicePanel from './VoicePanel';
+import {t,uiI18n} from './i18n/core';
 import { accessSnapshot, applyAccessStatus } from './access';
 
 vi.mock('@tauri-apps/api/core', async original => ({ ...await (await import("./test/nativeCoreMock")).mockNativeCore(original), Channel:class {onmessage:((event:unknown)=>void)|undefined;} }));
@@ -151,7 +152,7 @@ it('preserves current-view dictation and cannot refill cleared history from late
   await waitFor(()=>expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='voice_transcribe')).toHaveLength(2));
   fireEvent.click(screen.getByRole('button',{name:'Clear history'}));
   await act(async()=>{complete('result after clear');});
-  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','result after clear');
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','first private prompt\nresult after clear');
   await waitFor(()=>expect(screen.queryByRole('button',{name:'Reuse dictation 1'})).toBeNull());
   expect(screen.queryByRole('button',{name:'Reuse dictation 1'})).toBeNull();
   expect(stage).not.toHaveBeenCalled();
@@ -364,11 +365,12 @@ it('recovers finishing native work on remount and blocks all engine controls unt
 it('transcribes the installed cold Parakeet model to an editable draft with no forced language or automatic delivery',async()=>{
   const fixture=parakeetFixture({installed:true});parakeetMicrophone();const deliver=vi.fn();
   render(<VoicePanel sessionId="ssh1" onDirectDictation={deliver}/>);await chooseParakeet();
+  fireEvent.change(screen.getByLabelText('Dictation draft'),{target:{value:'Retained Parakeet prompt'}});
   const request=await recordParakeet();
   expect(Object.keys(request).sort()).toEqual(['requestId','samples']);expect(request.samples).toHaveLength(1600);
   Object.assign(fixture.status,{busy:false,stage:'idle',requestId:null,ready:true});
   await act(async()=>fixture.complete(request.requestId,'local review draft'));
-  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','local review draft');
+  expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','Retained Parakeet prompt\nlocal review draft');
   expect(deliver).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText('Dictation draft'),{target:{value:'edited local draft'}});
   expect(screen.getByLabelText('Dictation draft')).toHaveProperty('value','edited local draft');
@@ -470,4 +472,82 @@ it.each(['success','failure'])('does not let an older cancel status %s overwrite
   expect(screen.getByRole('button',{name:'Download Parakeet model'})).toHaveProperty('disabled',false);
   expect(screen.queryByText(/Native work is still finishing/)).toBeNull();
   expect(screen.queryAllByRole('alert').filter(alert=>!alert.closest('[aria-label="Dictation history"]'))).toEqual([]);
+});
+
+function reviewFixture(){
+  const speech=speechFixture(),deliver=vi.fn();
+  const view=render(<VoicePanel sessionId="review-session" onDirectDictation={deliver}/>);
+  return {...speech,deliver,view,draft:screen.getByLabelText('Dictation draft')};
+}
+it('composes repeated review dictation with the latest typed draft instead of replacing it',async()=>{
+  const speech=reviewFixture(),{draft,deliver}=speech;
+  fireEvent.change(draft,{target:{value:'  Typed 世界  '}});
+  await speech.record();await act(async()=>speech.complete('first sentence'));
+  expect(draft).toHaveProperty('value','  Typed 世界  \nfirst sentence');
+  await speech.record();await act(async()=>speech.complete('follow-up'));
+  expect(draft).toHaveProperty('value','  Typed 世界  \nfirst sentence\nfollow-up');
+  expect(deliver).not.toHaveBeenCalled();
+});
+it('preserves edits made while review inference is pending',async()=>{
+  const speech=reviewFixture(),{draft}=speech;fireEvent.change(draft,{target:{value:'Before recording'}});
+  await speech.record();fireEvent.change(draft,{target:{value:'Latest corrected text <literal>'}});
+  await act(async()=>speech.complete('new dictation'));
+  expect(draft).toHaveProperty('value','Latest corrected text <literal>\nnew dictation');
+});
+it.each(['',' \n\t '])('keeps the current review draft for an empty transcription %j',async text=>{
+  const speech=reviewFixture();fireEvent.change(speech.draft,{target:{value:'Retain this exact text  '}});
+  await speech.record();await act(async()=>speech.complete(text));
+  expect(speech.draft).toHaveProperty('value','Retain this exact text  ');expect(speech.deliver).not.toHaveBeenCalled();
+});
+it.each([65534,65535,65536])('never truncates a review draft of %i code units when appending',async length=>{
+  const speech=reviewFixture(),prefix='a'.repeat(length);fireEvent.change(speech.draft,{target:{value:prefix}});
+  await speech.record();await act(async()=>speech.complete('Z'));
+  expect(speech.draft).toHaveProperty('value',length===65534?prefix+'\nZ':prefix);
+  if(length!==65534)expect(screen.getByText(t('voiceComposeTooLong'))).toBeTruthy();
+  expect(speech.deliver).not.toHaveBeenCalled();
+});
+it('keeps per-clip history and explicitly reused history as the next review base',async()=>{
+  const speech=reviewFixture();fireEvent.change(speech.draft,{target:{value:'Typed preface'}});
+  await speech.record();await act(async()=>speech.complete('Recorded clip'));
+  fireEvent.click(await screen.findByRole('button',{name:'Reuse dictation 1'}));
+  expect(speech.draft).toHaveProperty('value','Recorded clip');
+  await speech.record();await act(async()=>speech.complete('Second clip'));
+  expect(speech.draft).toHaveProperty('value','Recorded clip\nSecond clip');
+  fireEvent.click(await screen.findByRole('button',{name:'Reuse dictation 1'}));
+  expect(speech.draft).toHaveProperty('value','Second clip');expect(speech.deliver).not.toHaveBeenCalled();
+});
+it('uses the latest cleared draft and preserves exact Unicode/line boundaries',async()=>{
+  const speech=reviewFixture();fireEvent.change(speech.draft,{target:{value:'Old text'}});
+  await speech.record();fireEvent.change(speech.draft,{target:{value:''}});
+  await act(async()=>speech.complete('  世界 😀\n\tcode  '));
+  expect(speech.draft).toHaveProperty('value','  世界 😀\n\tcode  ');
+});
+it.each(['cancel','session','background','pagehide','lease','unmount'] as const)('does not append stale review text after %s',async transition=>{
+  const speech=reviewFixture();fireEvent.change(speech.draft,{target:{value:'Current draft'}});await speech.record();
+  if(transition==='cancel')fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+  else if(transition==='session')speech.view.rerender(<VoicePanel sessionId="replacement" onDirectDictation={speech.deliver}/>);
+  else if(transition==='background'){Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});fireEvent(document,new Event('visibilitychange'));}
+  else if(transition==='pagehide')fireEvent(window,new Event('pagehide'));
+  else if(transition==='lease')await act(async()=>{changeVoiceAccess(true);changeVoiceAccess(false);});
+  else speech.view.unmount();
+  await act(async()=>speech.complete('Obsolete result'));
+  expect(speech.draft).toHaveProperty('value','Current draft');expect(speech.deliver).not.toHaveBeenCalled();
+  expect(screen.queryByText('Obsolete result')).toBeNull();
+});
+it('keeps direct delivery clip-only even when the retained review draft is full',async()=>{
+  const speech=reviewFixture();fireEvent.change(speech.draft,{target:{value:'x'.repeat(65536)}});
+  fireEvent.click(screen.getByLabelText('Type final result directly into terminal'));
+  fireEvent.click(screen.getByLabelText('Auto-send: press Enter'));
+  await speech.record();await act(async()=>speech.complete('new clip only'));
+  expect(speech.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({sessionId:'review-session',text:'new clip only',autoSend:true}));
+  expect(speech.draft).toHaveProperty('value','new clip only');
+});
+it('retranslates retained overflow without repeating inference or discarding the draft',async()=>{
+  const speech=reviewFixture(),prefix='x'.repeat(65536);fireEvent.change(speech.draft,{target:{value:prefix}});
+  await speech.record();await act(async()=>speech.complete('Overflow clip'));
+  const error=screen.getByText(t('voiceComposeTooLong')),calls=vi.mocked(invoke).mock.calls.length;
+  try {for(const locale of ['pt-BR','es','en']){
+    await act(async()=>{await uiI18n.changeLanguage(locale);});expect(screen.getByText(t('voiceComposeTooLong'))).toBe(error);
+    expect(speech.draft).toHaveProperty('value',prefix);expect(invoke).toHaveBeenCalledTimes(calls);
+  }}finally{await act(async()=>{await uiI18n.changeLanguage('en');});}
 });

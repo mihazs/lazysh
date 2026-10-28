@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Compose completed review dictation with the latest editable draft instead of replacing typed text or prior clips. Empty results preserve the draft; overflow keeps it intact without truncation. Review remains default, while direct delivery still queues only the newly recorded clip and history remains per clip.
+
 - Preserve Pi Records' explicit tool-error booleans and label recorded failures while retaining original output and tool IDs. Other adapters, defaults and live terminal behavior are unchanged.
 
 - Add an explicit attachment editor within Chat. Uploads preserve the existing draft; Add uploaded path appends only the canonical host path without sending, staging or copying automatically. Existing upload/access/cancellation guards and defaults remain unchanged.
