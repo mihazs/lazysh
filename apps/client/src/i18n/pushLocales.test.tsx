@@ -56,3 +56,14 @@ it('localizes the browser-only explanation without requesting permission or insp
   vi.mocked(isTauri).mockReturnValue(false);render(<PushSettingsPanel/>);
   await translatePush(()=>{expect(screen.getByRole('status').textContent).toBe(t('pushNativeRequired'));expect(screen.getByRole('button',{name:t('pushRefresh')})).toHaveProperty('disabled',true);});expect(invoke).not.toHaveBeenCalled();
 });
+it('explains a provider-free build in every UI language without Google consent or registration claims',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...pushStatus,provider:'none',supported:false,configured:false,reason:'Native distribution detail'});
+  render(<PushSettingsPanel/>);await waitFor(()=>expect(screen.getByRole('status').textContent).toBe(t('pushUnavailable')));
+  await translatePush(()=>{
+    expect(screen.getByRole('status').textContent).toBe(t('pushUnavailable'));
+    expect(document.body.textContent).not.toContain('Google Firebase');
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+  });
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('push_registration_status',undefined,{headers:{'X-Lazysh-Access':'f'.repeat(64)}});
+});

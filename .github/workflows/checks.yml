@@ -280,15 +280,19 @@ jobs:
           env-vars: LAZYSH_ANDROID_TOOLCHAIN
       - run: bun install --frozen-lockfile
       - run: bun run build:android
+      - name: Inspect normal Android Google push graph and packaged classes
+        run: LAZYSH_ANDROID_PUSH_VARIANT=google bunx turbo run test:android-push-artifact --filter=@lazysh/client
       - run: ./gradlew :tauri-plugin-lazysh-vault:testDebugUnitTest --no-daemon
         working-directory: apps/client/src-tauri/gen/android
       - name: Exercise bounded native Android deep-link ingress
-        run: ./gradlew :tauri-plugin-deep-link:testDebugUnitTest :app:testUniversalDebugUnitTest --no-daemon
+        run: ./gradlew :tauri-plugin-deep-link:testDebugUnitTest :tauri-plugin-lazysh-push:testDebugUnitTest :app:testUniversalDebugUnitTest --no-daemon
         working-directory: apps/client/src-tauri/gen/android
       - uses: actions/upload-artifact@v4
         with:
           name: lazysh-android-debug-arm64
-          path: apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          path: |
+            apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+            apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/push-artifact/google.json
 
   native-android-runtime:
     runs-on: ubuntu-24.04
@@ -371,6 +375,7 @@ jobs:
             collector_pid=$!;
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
             bun run test:android-mosh && bun run test:android-ssh &&
+            bun run test:android-fdroid &&
             LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr &&
             LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture;
             exit $?;

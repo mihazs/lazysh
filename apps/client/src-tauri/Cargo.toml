@@ -10,6 +10,7 @@ name = "lazysh_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
+fdroid = ["tauri-plugin-lazysh-push/fdroid"]
 # Optional interop test harness; independent of Linux x86_64 product availability.
 parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 

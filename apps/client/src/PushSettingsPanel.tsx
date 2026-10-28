@@ -53,9 +53,9 @@ export default function PushSettingsPanel() {
   const provider = apple ? 'Apple APNs' : 'Google Firebase';
   return <section className="tool-panel" aria-label={t('pushTitle')}>
     <h3>{t('pushTitle')}</h3>
-    <p>{t('pushScope',{provider})}</p>
-    <p role="status">{!isTauri() ? t('pushNativeRequired') : status?.reason ?? t('pushInspecting')}</p>
-    <p>{t('pushPrivacy',{provider})}</p>
+    {status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}
+    <p role="status">{!isTauri() ? t('pushNativeRequired') : status?.provider === 'none' ? t('pushUnavailable') : status?.reason ?? t('pushInspecting')}</p>
+    {status && status.provider !== 'none' && <p>{t('pushPrivacy',{provider})}</p>}
     {status?.supported && status.configured && !status.enabled && <label>
       <input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} disabled={busy} />
       {t('pushConsent',{provider})}
