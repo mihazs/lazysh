@@ -354,7 +354,8 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   const started=performance.now();
   const elapsedMs=()=>Math.min(3_600_000,Math.max(0,Math.floor(performance.now()-started)));
   const parser=new OwnedCaseCrashParser(nonce);
-  const child=new OwnedProcess(adb,['-s',serial,'logcat','-b','main','-b','crash','-v','threadtime','-T','1',
+  // ActivityManager uses Slog's system buffer for force-stop provenance.
+  const child=new OwnedProcess(adb,['-s',serial,'logcat','-b','main','-b','crash','-b','system','-v','threadtime','-T','1',
     'LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','ActivityManager:I','*:S'],undefined,process.env,false);
   let stream:'running'|'stopped'|'closed'|'unavailable'|'overflow'|'deadline'='running';
   let stopping=false;

@@ -495,7 +495,7 @@ test.skipIf(process.platform!=='linux')(`owned crash collector records ${mode} p
     expect(summary.close).toEqual({elapsedMs:summary.close.elapsedMs,phase:mode==='hold'||mode==='overflow'||mode==='stop-failure'?'during-stop':'before-stop',exitCode:mode==='exit255'?255:mode==='reported-eof'?1:null,signal:mode==='exit255'||mode==='reported-eof'?'none':'SIGTERM',processError:false,stopFailed:mode==='stop-failure'});
     expect(summary.stderr.unexpectedEof).toBe(mode==='reported-eof');
     expect(JSON.stringify(summary)).not.toMatch(/private-secret|private-stop-error/);
-    expect(JSON.parse(await readFile(args,'utf8'))).toEqual(['-s','emulator-5580','logcat','-b','main','-b','crash','-v','threadtime','-T','1','LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','ActivityManager:I','*:S']);
+    expect(JSON.parse(await readFile(args,'utf8'))).toEqual(['-s','emulator-5580','logcat','-b','main','-b','crash','-b','system','-v','threadtime','-T','1','LazyshOwnedCase:I','AndroidRuntime:E','DEBUG:F','ActivityManager:I','*:S']);
     const pid=Number(await readFile(pidFile,'utf8'));
     expect(()=>process.kill(pid,0)).toThrow();
     expect(await collector.stop()).toEqual(summary);
