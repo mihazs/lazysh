@@ -34,6 +34,9 @@ enum Command {
         address: Vec<IpAddr>,
         #[arg(long)]
         contact: String,
+        /// Opt into device-bound expiring events; legacy remains the default.
+        #[arg(long, value_enum, default_value = "legacy")]
+        event_format: lazysh_notifications::push::EventFormat,
     },
     ServePush {
         #[arg(long)]
@@ -206,9 +209,14 @@ async fn run() -> Result<(), String> {
             push_origin,
             address,
             contact,
+            event_format,
         } => {
-            let config =
-                lazysh_notifications::push::PushConfig::generate(push_origin, address, contact)?;
+            let config = lazysh_notifications::push::PushConfig::generate_with_event_format(
+                push_origin,
+                address,
+                contact,
+                event_format,
+            )?;
             config.write(&output)?;
             print(serde_json::json!({"created":true,"publicVapidKey":config.public_key()}))
         }

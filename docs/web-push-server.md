@@ -26,6 +26,39 @@ To change mode, VAPID/slot identity, origin or pins, stop the service and use `c
 
 ## Enrollment and confirmation contract
 
+### Opt-in bound event format
+
+`push-config-generate --event-format bound-v2` creates a private target for the new
+event format. The default remains `legacy`; existing private configurations omit
+this optional field and retain their original serialization and identity. Unknown
+format names reject. The format participates in target identity: changing it uses
+the deliberate `configure-push` lifecycle above, cancels prior pending work and
+requires fresh enrollment before the operator enables delivery. No old snapshot is
+silently converted or sent to a new target.
+
+The encrypted version-2 event contains exactly `schemaVersion:2`, `deviceId`,
+`generation`, `receiptId`, `eventId`, `kind`, `alias`, `issuedAt` and `expiresAt`.
+The device generation is the confirmed enrollment generation, not the relay's
+separate account target generation. Timestamps are Unix seconds. The first network
+admission freezes the original subscription/device binding and timestamps in the
+existing private snapshot row; retries and restarts reuse them. Expiry is at most
+300 seconds after that admission, further limited by the queued event's expiry.
+Each transport TTL is limited to the remaining window at claim time. An expired snapshot admits
+no new request; its terminal status retains the existing uncertain-delivery flag.
+A clock preceding the captured issuance fails closed instead of refreshing it.
+An already-admitted POST can complete later and cannot be retracted; a native
+consumer must still enforce the absolute payload expiry when it receives it.
+
+The clear/wire limits remain 2 KiB/4 KiB, with the original three-attempt ceiling.
+Only the existing public alias and finite kind accompany opaque event/receipt IDs;
+no endpoint, key, prompt, transcript or host path enters the event. Legacy event,
+webhook and encrypted enrollment-challenge formats are unchanged. Transport
+acceptance does not establish native receipt or display. The current Android
+enrollment receiver does not display these events; explicit native consent,
+bounded durable deduplication and actual notification acceptance are separate work.
+
+### Provision the private enrollment
+
 Provision a new private enrollment capability, then install its hash through the authenticated admin client:
 
 ```sh
