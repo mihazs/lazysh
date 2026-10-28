@@ -1,5 +1,6 @@
 import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 test.beforeEach(async ({ page }) => {
   await installNativeBridge(page);
@@ -13,6 +14,35 @@ test.beforeEach(async ({ page }) => {
         throw new Error(`Unexpected native command: ${command}`);
     };
   });
+});
+
+test('sidebar displays the canonical decorative Bed Mode mark without duplicate name text',async({page},testInfo)=>{
+  await page.goto('/');
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).tap();
+  const brand=page.getByRole('complementary',{name:'Hosts and connections'}).locator('.brand');
+  const mark=brand.locator('img.brand-mark');
+  await expect(brand).toBeVisible();
+  await expect(mark).toBeVisible();
+  await expect(mark).toHaveAttribute('alt','');
+  await expect(mark).toHaveAttribute('aria-hidden','true');
+  await expect(brand.getByRole('img',{name:/lazysh|Bed Mode/})).toHaveCount(0);
+  expect((await brand.innerText()).match(/lazysh/g)).toHaveLength(1);
+  expect(await brand.innerText()).not.toContain('l_');
+  await expect.poll(()=>mark.evaluate(image=>(image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth)).toBe(256);
+  const canonical=await readFile(new URL('../../../brand/lazysh/svg/icon-gradient.svg',import.meta.url),'utf8');
+  const svg=await mark.evaluate(async(image,original)=>{
+    const normalize=(text:string)=>new DOMParser().parseFromString(text,'image/svg+xml').documentElement.outerHTML;
+    return [normalize(await(await fetch((image as HTMLImageElement).src)).text()),normalize(original)];
+  },canonical);
+  expect(svg[0]).toBe(svg[1]);
+  // Match existing host geometry checks: wait for the drawer to settle.
+  await mark.scrollIntoViewIfNeeded();
+  const dimensions=await mark.boundingBox();
+  expect(dimensions?.width).toBe(35);expect(dimensions?.height).toBe(35);
+  expect(dimensions!.x).toBeGreaterThanOrEqual(0);
+  expect(dimensions!.x+dimensions!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await expect(page.getByRole('button',{name:'Connect to Touch workstation',exact:true})).toBeVisible();
+  await brand.screenshot({path:testInfo.outputPath('sidebar-brand.png')});
 });
 
 test('host actions remain reachable by touch and keyboard without connecting', async ({ page }, testInfo) => {

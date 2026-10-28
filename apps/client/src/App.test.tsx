@@ -6,6 +6,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import type { Host, TransportMode } from "./bridge";
 import type {DesktopMux} from './useDesktopLaunch';
+import canonicalBedMode from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {aboutLocales} from './test/aboutData';
 import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
 import {tmuxChatReply,tmuxChatReaderSource,tmuxChatReaderPage} from './test/tmuxChat';
@@ -120,6 +121,20 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it('uses the canonical Bed Mode mark decoratively beside one app name',async()=>{
+  const {container}=render(<App/>);
+  await screen.findByRole('button',{name:'Connect to Home'});
+  const brand=container.querySelector('.brand')!;
+  const mark=brand.querySelector('img')!;
+  expect(mark).not.toBeNull();
+  expect(mark.getAttribute('src')).toBe(canonicalBedMode);
+  expect(mark.getAttribute('alt')).toBe('');
+  expect(mark.getAttribute('aria-hidden')).toBe('true');
+  expect(within(brand as HTMLElement).queryAllByRole('img',{name:/lazysh|Bed Mode/})).toHaveLength(0);
+  expect(brand.textContent?.match(/lazysh/g)).toHaveLength(1);
+  expect(brand.textContent).not.toContain('l_');
 });
 
 it.each((Object.keys(transcriptAgents) as TranscriptAgentId[]).flatMap(agent=>(['plain','tmux'] as const).map(kind=>({agent,kind}))))('offers explicit $agent terminal input only on an actual $kind Chat session and targets the exact display',async({agent,kind})=>{
