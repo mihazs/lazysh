@@ -487,11 +487,11 @@ impl LaunchState {
         .map_err(launch_error)
     }
     #[cfg(desktop)]
-    fn receive_secondary(&self, args: &[String]) -> bool {
+    fn receive_secondary(&self, args: &[String], cwd: &str) -> bool {
         if !args.iter().skip(1).any(|arg| owned_flag(arg)) {
             return false;
         }
-        // The singleton transport is lossy. Never resolve its directory/cwd.
+        // U+FFFD cannot distinguish literal Unicode from replaced OS bytes.
         let target = match parse_arguments(args.iter().map(|arg| OsString::from(arg.as_str()))) {
             Ok(Some(LaunchTarget::Host { .. }))
                 if args.iter().skip(1).any(|arg| arg.contains('\u{fffd}')) =>
@@ -499,7 +499,23 @@ impl LaunchState {
                 Err(NoticeKind::Invalid)
             }
             Ok(Some(target @ LaunchTarget::Host { .. })) => Ok(target),
-            Ok(Some(LaunchTarget::Directory(_))) => Err(NoticeKind::Unsupported),
+            Ok(Some(LaunchTarget::Directory(path))) => {
+                let lossy = args.iter().skip(1).any(|arg| arg.contains('\u{fffd}'))
+                    || (path.is_relative() && cwd.contains('\u{fffd}'));
+                if lossy {
+                    Err(NoticeKind::Unsupported)
+                } else {
+                    parse(args.iter().map(OsString::from), || {
+                        let path = PathBuf::from(cwd);
+                        if !path.is_absolute() || cwd.len() > 4096 || cwd.contains('\0') {
+                            return Err(std::io::ErrorKind::InvalidInput.into());
+                        }
+                        Ok(path)
+                    })
+                    .map_err(|_| NoticeKind::Invalid)
+                    .and_then(|target| target.ok_or(NoticeKind::Invalid))
+                }
+            }
             _ => Err(NoticeKind::Invalid),
         };
         if let Ok(mut pending) = self.0.lock() {
@@ -604,8 +620,8 @@ pub(crate) fn desktop_launch_cancel(
 }
 
 #[cfg(desktop)]
-pub(crate) fn secondary(app: &tauri::AppHandle, args: Vec<String>) {
-    if app.state::<LaunchState>().receive_secondary(&args) {
+pub(crate) fn secondary(app: &tauri::AppHandle, args: Vec<String>, cwd: String) {
+    if app.state::<LaunchState>().receive_secondary(&args, &cwd) {
         let _ = app.emit("lazysh-desktop-launch", ());
     }
 }
@@ -661,9 +677,49 @@ mod tests {
     }
     fn assert_warm_refused(values: &[&str], kind: NoticeKind) {
         let launch = LaunchState::default();
-        assert!(launch.receive_secondary(&forwarded(values)));
+        assert!(launch.receive_secondary(&forwarded(values), ""));
         assert!(launch.queued_receipt().is_none());
         assert_eq!(launch.0.lock().unwrap().notice.as_ref().unwrap().kind, kind);
+    }
+    #[test]
+    fn warm_directory_resolves_caller_cwd_and_claims_each_literal_target_once() {
+        let base = tempfile::tempdir().unwrap();
+        let name = "project 世界 '$(printf NO);";
+        let path = base.path().join(name);
+        std::fs::create_dir(&path).unwrap();
+        let canonical = path.canonicalize().unwrap();
+        let authority = crate::ssh::test_support::unlocked_access();
+        let lease = crate::ssh::test_support::ready_lease(&authority);
+        for (value, cwd) in [
+            (name, base.path().to_str().unwrap()),
+            (path.to_str().unwrap(), "unavailable-�"),
+        ] {
+            let launch = LaunchState::default();
+            assert!(launch.receive_secondary(&forwarded(&["--dir", value]), cwd));
+            let receipt = launch.read(&lease).unwrap().directory_receipt.unwrap();
+            assert!(launch.read(&lease).unwrap().directory_receipt.is_none());
+            assert!(launch.receive_secondary(&forwarded(&["--dir", value]), cwd));
+            assert_eq!(
+                launch.read(&lease).unwrap().notice.unwrap().kind,
+                NoticeKind::Busy
+            );
+            assert_eq!(launch.claim(&receipt, &lease).unwrap(), canonical);
+            assert!(launch.claim(&receipt, &lease).is_err());
+        }
+    }
+    #[test]
+    fn warm_relative_directory_never_falls_back_to_primary_cwd() {
+        for cwd in ["", ".", "relative", "/nul\0", "/lossy-�"] {
+            let launch = LaunchState::default();
+            assert!(launch.receive_secondary(&forwarded(&["--dir", "."]), cwd));
+            assert!(launch.queued_receipt().is_none());
+        }
+        let base = tempfile::tempdir().unwrap();
+        let file = base.path().join("file");
+        std::fs::write(&file, "data").unwrap();
+        for path in [file, base.path().join("missing")] {
+            assert_warm_refused(&["--dir", path.to_str().unwrap()], NoticeKind::Invalid);
+        }
     }
     #[test]
     fn warm_host_selectors_keep_literal_ids_and_mux_context() {
@@ -682,7 +738,7 @@ mod tests {
                     .unwrap()
                     .unwrap();
                 let launch = LaunchState::default();
-                assert!(launch.receive_secondary(&forwarded(&values)));
+                assert!(launch.receive_secondary(&forwarded(&values), ""));
                 assert_eq!(
                     launch.0.lock().unwrap().intent.as_ref().unwrap().target,
                     expected
@@ -706,13 +762,13 @@ mod tests {
         let launch = LaunchState::default();
         let original = forwarded(&["--host", "first"]);
         let replacement = forwarded(&["--host", "second", "--mux", "herdr"]);
-        launch.receive_secondary(&original);
+        launch.receive_secondary(&original, "");
         let receipt = launch.queued_receipt().unwrap();
         let authority = crate::ssh::test_support::unlocked_access();
         let lease = crate::ssh::test_support::ready_lease(&authority);
         let (_dir, hosts) = saved_hosts(&["first", "second"]);
         for stage in 0..3 {
-            assert!(launch.receive_secondary(&replacement));
+            assert!(launch.receive_secondary(&replacement, ""));
             assert_eq!(launch.queued_receipt().as_deref(), Some(receipt.as_str()));
             let notice = launch.read(&lease).unwrap().notice.unwrap();
             assert_eq!(notice.kind, NoticeKind::Busy);
@@ -721,7 +777,7 @@ mod tests {
             }
             if stage == 1 {
                 let attempt = launch.begin_host(&receipt, &lease, "first").unwrap();
-                assert!(launch.receive_secondary(&replacement));
+                assert!(launch.receive_secondary(&replacement, ""));
                 assert!(attempt
                     .check_host(&hosts.launch_hosts("first").unwrap()[0])
                     .is_ok());
@@ -729,7 +785,7 @@ mod tests {
             }
         }
         launch.cancel(&receipt, &lease).unwrap();
-        assert!(launch.receive_secondary(&replacement));
+        assert!(launch.receive_secondary(&replacement, ""));
         let second = launch.read(&lease).unwrap();
         assert_ne!(second.host_receipt.as_deref(), Some(receipt.as_str()));
         assert!(second.notice.is_none());
@@ -741,7 +797,7 @@ mod tests {
         let authority = crate::ssh::test_support::unlocked_access();
         let old = crate::ssh::test_support::ready_lease(&authority);
         authority.lock().unwrap();
-        launch.receive_secondary(&args);
+        launch.receive_secondary(&args, "");
         assert!(launch.read(&old).is_err());
         authority
             .authorize(authority.generation().unwrap())
@@ -756,7 +812,7 @@ mod tests {
         let fresh = crate::ssh::test_support::ready_lease(&authority);
         assert!(launch.read(&fresh).unwrap().host_receipt.is_none());
         assert!(launch.cancel(&receipt, &original).is_err());
-        launch.receive_secondary(&args);
+        launch.receive_secondary(&args, "");
         assert_ne!(
             launch.read(&fresh).unwrap().host_receipt.as_deref(),
             Some(receipt.as_str())
@@ -778,7 +834,7 @@ mod tests {
         }
         let launch = LaunchState::default();
         assert_warm_refused(&["--dir", "lossy-�"], NoticeKind::Unsupported);
-        assert!(!launch.receive_secondary(&forwarded(&["lazysh://theme?data=YWJj"])));
+        assert!(!launch.receive_secondary(&forwarded(&["lazysh://theme?data=YWJj"]), ""));
     }
     #[test]
     fn replacement_characters_cannot_alias_forwarded_saved_ids_or_mux_names() {
@@ -1275,7 +1331,7 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn cold_receipt_is_one_shot_and_warm_arguments_never_choose_or_overwrite_a_path() {
+    fn cold_receipt_is_one_shot_and_invalid_warm_arguments_never_overwrite_it() {
         use crate::ssh::test_support::{ready_lease, unlocked_access};
         let base = tempfile::tempdir().unwrap();
         let state = LaunchState::new(Some(LaunchTarget::Directory(base.path().to_owned())));
@@ -1286,16 +1342,15 @@ mod tests {
             vec!["lazysh", "--dir", "lossy-�"],
             vec!["lazysh", "--dir=/another/path"],
         ] {
-            assert!(
-                state.receive_secondary(&args.into_iter().map(String::from).collect::<Vec<_>>())
-            );
+            assert!(state
+                .receive_secondary(&args.into_iter().map(String::from).collect::<Vec<_>>(), ""));
             assert_eq!(state.queued_receipt().as_deref(), Some(receipt.as_str()));
             assert!(state.read(&access).unwrap().directory_receipt.is_none());
         }
         let notice = state.read(&access).unwrap().notice.unwrap().receipt;
-        assert!(state.receive_secondary(&["lazysh".into(), "-dir=third".into()]));
+        assert!(state.receive_secondary(&["lazysh".into(), "-dir=third".into()], ""));
         assert_eq!(state.read(&access).unwrap().notice.unwrap().receipt, notice);
-        assert!(!state.receive_secondary(&["lazysh".into(), "lazysh://theme?data=YWJj".into()]));
+        assert!(!state.receive_secondary(&["lazysh".into(), "lazysh://theme?data=YWJj".into()], ""));
         assert_eq!(state.claim(&receipt, &access).unwrap(), base.path());
         assert!(state.claim(&receipt, &access).is_err());
         assert!(state.read(&access).unwrap().directory_receipt.is_none());

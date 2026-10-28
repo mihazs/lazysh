@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Support desktop `--dir` launches while lazysh is running, resolving relative paths against the caller’s working directory and preserving the original access guards. Ambiguous Unicode conversions are refused; no-argument startup is unchanged.
+
 - Fix Windows release packaging validation of workspace path separators without changing application defaults.
 
 - Clarify the project agent workflow so continuation requests proceed from recovered history into implementation and keep working across the requested roadmap scope without requiring Codex `/goal`. Application defaults are unchanged.
