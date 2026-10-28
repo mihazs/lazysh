@@ -51,6 +51,15 @@ contrast for accompanying interface text separately from decorative symbols.
 The wordmark letters are native SVG paths derived from an Inter SemiBold
 outline, so the SVGs do not require installing or distributing font files.
 
+## Regenerating platform exports
+
+Run `node brand/lazysh/generate-platform-assets.mjs` from the repository root
+with Node.js 22 or later. The script deterministically rewrites every
+versioned Android, iOS and desktop PNG/ICO/ICNS icon from the shared Bed Mode
+geometry, keeping the iOS originals opaque and the Android adaptive foreground
+transparent. It does not rewrite the independent Amber alternate icon or the
+SVG masters. Commit any generated changes alongside artwork updates.
+
 ## Verification
 
 The icons are versioned alongside the application so installers do not depend
