@@ -36,6 +36,23 @@ function Workspace({registry}:{registry:SessionRegistry}) {
     <button onClick={()=>{registry.activeId='retained-session';}}>Retain session</button>
     <button onClick={()=>void invoke('read_file').then(value=>setDraft(String(value))).catch(()=>{})}>Read</button></>;
 }
+it('keeps the unlocked workspace absent until native initialization actually completes',async()=>{
+  let complete!:(value:unknown)=>void;
+  const pending={...unlocked(),initialized:false,locked:true,nonce:undefined};
+  applyAccessStatus(pending);
+  mocks.invoke.mockImplementation((command:string)=>command==='app_lock_status'?new Promise(resolve=>{complete=resolve;}):Promise.resolve(undefined));
+  const workspace=vi.fn(()=> <button aria-label="Add host"/>);
+  render(<AccessShell native>{workspace}</AccessShell>);
+  expect(screen.queryByRole('button',{name:'Add host'})).toBeNull();
+  expect(workspace).not.toHaveBeenCalled();
+  await waitFor(()=>expect(complete).toBeTypeOf('function'));
+  await act(async()=>complete(pending));
+  expect(screen.queryByRole('button',{name:'Add host'})).toBeNull();
+  expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('app_lock_status');
+  await act(async()=>mocks.listener!({payload:unlocked('c')}));
+  expect(await screen.findByRole('button',{name:'Add host'})).toBeTruthy();
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('app_lock_ready',{generation:unlocked('c').generation}));
+});
 it('clears transient drafts before ready and retains the session registry across lock/unlock',async()=>{
   render(<AccessShell native>{registry=><Workspace registry={registry}/>}</AccessShell>);
   const input=await screen.findByLabelText('Private draft');

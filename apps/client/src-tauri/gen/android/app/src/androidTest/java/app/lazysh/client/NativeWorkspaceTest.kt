@@ -95,6 +95,9 @@ class NativeWorkspaceTest {
     private fun evaluate(scenario: ActivityScenario<MainActivity>, expression: String, timeoutMillis: Long = 30_000): String =
         requireNotNull(evaluateIfPresent(scenario, expression, timeoutMillis))
 
+    private fun awaitUnlockedWorkspace(scenario: ActivityScenario<MainActivity>, stage: String) =
+        awaitDocument(scenario, stage, """Boolean(window.__TAURI_INTERNALS__?.invoke) && Boolean(document.querySelector("button[aria-label='Add host']"))""")
+
     private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String,
         observe: ((Long) -> String)? = null) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
@@ -1397,9 +1400,42 @@ class NativeWorkspaceTest {
         }
     }
 
+    @Test fun pushRegistrationMatchesPackagedNativeProvider() {
+        val scenario = NativeActivityFixture.scenario
+        val google = try {
+            Class.forName("app.lazysh.push.PushPlugin", false, InstrumentationRegistry.getInstrumentation().targetContext.classLoader)
+            true
+        } catch (_: ClassNotFoundException) { false }
+        awaitUnlockedWorkspace(scenario, "Push unlocked workspace")
+        evaluate(scenario, """(() => {
+          window.__lazyshPushProbe=undefined;
+          (async()=>{
+            const access=await window.__TAURI_INTERNALS__.invoke('app_lock_status',{});
+            if(access.initialized!==true || access.locked!==false)throw new Error('Native access changed before push probe');
+            const invoke=command=>window.__TAURI_INTERNALS__.invoke(command,{},
+              {headers:access.nonce?{'X-Lazysh-Access':access.nonce}:{}});
+            const status=await invoke('push_registration_status');
+            let rejected=0;
+            if(status.provider==='none')for(const command of ['push_registration_register','push_registration_disable']) {
+              try {await invoke(command);} catch {rejected++;}
+            }
+            window.__lazyshPushProbe={ok:true,status,rejected};
+          })().catch(()=>{window.__lazyshPushProbe={ok:false};});
+          return true;
+        })()""")
+        awaitDocument(scenario, "Push IPC result", "window.__lazyshPushProbe!==undefined")
+        assertEquals("Packaged native push status must match its actual plugin", "true", evaluate(scenario, """(() => {
+          const result=window.__lazyshPushProbe, status=result.status;
+          return result.ok===true && status?.provider===${JSONObject.quote(if (google) "fcm" else "none")} &&
+            status.supported===${google} && (${google} || (status.configured===false && status.enabled===false &&
+              status.tokenPresent===false && status.busy===false && result.rejected===2 && status.reason.includes('F-Droid')));
+        })()"""))
+        println("lazysh native push: googlePlugin=$google protectedStatusVerified=true unsupportedControlsRejected=${!google}")
+    }
+
     @Test fun cloudCommandsReachNativeValidationThroughTheBundledWebView() {
         val scenario = NativeActivityFixture.scenario
-        awaitDocument(scenario, "Cloud IPC bridge", """Boolean(window.__TAURI_INTERNALS__?.invoke) && Boolean(document.querySelector("button[aria-label='Add host']"))""")
+        awaitUnlockedWorkspace(scenario, "Cloud IPC bridge")
         // The runtime CI job installs this app on a fresh isolated emulator.
         // Do not clear the vault or enroll a device to establish the fixture.
         assertEquals("true", evaluate(scenario, """(() => {

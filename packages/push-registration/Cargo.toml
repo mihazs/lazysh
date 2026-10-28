@@ -5,6 +5,9 @@ version.workspace = true
 edition = "2021"
 links = "tauri-plugin-lazysh-push"
 
+[features]
+fdroid = []
+
 [dependencies]
 tauri = { version = "2", default-features = false }
 serde = { version = "1", features = ["derive"] }

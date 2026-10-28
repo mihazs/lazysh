@@ -79,6 +79,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/qr-camera"
         }
     }
+    if (providers.gradleProperty("lazyshFdroidAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/fdroid-push"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/fdroid-push"
+        }
+    }
     buildFeatures {
         buildConfig = true
     }

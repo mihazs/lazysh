@@ -14,22 +14,22 @@ pub struct RegistrationStatus {
 }
 
 struct Push<R: Runtime> {
-    #[cfg(mobile)]
+    #[cfg(all(mobile, not(all(target_os = "android", feature = "fdroid"))))]
     handle: tauri::plugin::PluginHandle<R>,
-    #[cfg(desktop)]
+    #[cfg(any(desktop, all(target_os = "android", feature = "fdroid")))]
     _runtime: std::marker::PhantomData<fn() -> R>,
 }
 
 struct ControlSequence(std::sync::atomic::AtomicU64);
 
-#[cfg(mobile)]
+#[cfg(all(mobile, not(all(target_os = "android", feature = "fdroid"))))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Control {
     operation_epoch: u64,
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, all(target_os = "android", feature = "fdroid")))]
 fn unsupported() -> RegistrationStatus {
     RegistrationStatus {
         provider: "none".into(),
@@ -38,7 +38,11 @@ fn unsupported() -> RegistrationStatus {
         enabled: false,
         token_present: false,
         busy: false,
-        reason: "Remote push registration requires a configured Android or iOS build. Local inbox notifications remain available.".into(),
+        reason: if cfg!(all(target_os = "android", feature = "fdroid")) {
+            "This F-Droid build does not include Google push registration. Local inbox notifications remain available."
+        } else {
+            "Remote push registration requires a configured Android or iOS build. Local inbox notifications remain available."
+        }.into(),
     }
 }
 
@@ -47,7 +51,7 @@ fn call<R: Runtime>(
     command: &str,
     epoch: u64,
 ) -> Result<RegistrationStatus, String> {
-    #[cfg(mobile)]
+    #[cfg(all(mobile, not(all(target_os = "android", feature = "fdroid"))))]
     {
         app.state::<Push<R>>()
             .handle
@@ -61,7 +65,7 @@ fn call<R: Runtime>(
                 "Cannot complete native push registration; check configuration and retry".into()
             })
     }
-    #[cfg(desktop)]
+    #[cfg(any(desktop, all(target_os = "android", feature = "fdroid")))]
     {
         let _ = (app.state::<Push<R>>(), epoch);
         if command == "status" {
@@ -117,7 +121,7 @@ tauri::ios_plugin_binding!(init_plugin_lazysh_push);
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("lazysh-push")
         .setup(|app, api| {
-            #[cfg(target_os = "android")]
+            #[cfg(all(target_os = "android", not(feature = "fdroid")))]
             let push = Push {
                 handle: api.register_android_plugin("app.lazysh.push", "PushPlugin")?,
             };
@@ -125,7 +129,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let push = Push {
                 handle: api.register_ios_plugin(init_plugin_lazysh_push)?,
             };
-            #[cfg(desktop)]
+            #[cfg(any(desktop, all(target_os = "android", feature = "fdroid")))]
             let push = {
                 let _ = api;
                 Push::<R> {
@@ -152,10 +156,15 @@ mod tests {
         let status = call(app.handle(), "status", 0).unwrap();
         assert_eq!(status.provider, "none");
         assert!(
-            !status.supported && !status.configured && !status.enabled && !status.token_present
+            !status.supported
+                && !status.configured
+                && !status.enabled
+                && !status.token_present
+                && !status.busy
         );
         assert!(call(app.handle(), "register", 1).is_err());
         assert!(call(app.handle(), "disable", 2).is_err());
+        assert_eq!(call(app.handle(), "status", 0).unwrap().provider, "none");
     }
 
     #[test]
