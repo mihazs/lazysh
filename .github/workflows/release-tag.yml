@@ -103,17 +103,47 @@ jobs:
         if: always()
         run: docker rm --force "$BUILD_CONTAINER"
 
+  artifacts:
+    needs: candidate
+    if: needs.candidate.outputs.enabled == 'true'
+    uses: ./.github/workflows/release-artifacts.yml
+    secrets: inherit
+
   tag:
-    needs: [candidate, source-build]
-    if: needs.candidate.outputs.enabled == 'true' && needs.source-build.result == 'success'
+    needs: [candidate, source-build, artifacts]
+    if: needs.candidate.outputs.enabled == 'true' && needs.source-build.result == 'success' && needs.artifacts.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - *checkout-candidate
       - *release-bun
+      - &download-installations
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-release-set
+          path: ${{ runner.temp }}/verified-release
+      - name: Recheck installation bytes before creating a public tag
+        run: bun .changeset/release-artifacts.ts verify "$RUNNER_TEMP/verified-release"
       - name: Recheck candidate and create only its stable ref
         env:
           GH_TOKEN: ${{ github.token }}
           LAZYSH_RELEASE_BUILD_RESULT: ${{ needs.source-build.result }}
         run: bun .changeset/release-tag.ts tag
+
+  publish:
+    needs: [candidate, tag]
+    if: needs.candidate.outputs.enabled == 'true' && needs.tag.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - *checkout-candidate
+      - *release-bun
+      - *download-installations
+      - name: Publish only the complete verified installation set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAZYSH_RELEASE_BUILD_RESULT: success
+        run: bun .changeset/release-publish.ts "$RUNNER_TEMP/verified-release"

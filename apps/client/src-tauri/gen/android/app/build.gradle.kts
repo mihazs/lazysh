@@ -57,6 +57,17 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Optional CI-owned production identity. Ordinary debug and unsigned F-Droid
+// source builds retain their existing behavior when this variable is absent.
+val releaseSigning = System.getenv("LAZYSH_ANDROID_SIGNING_PROPERTIES")?.let { path ->
+    Properties().apply {
+        File(path).inputStream().use { load(it) }
+        listOf("storeFile", "storePassword", "keyAlias", "keyPassword").forEach { key ->
+            require(!getProperty(key).isNullOrEmpty()) { "Missing release signing property: $key" }
+        }
+    }
+}
+
 // Only the owned ntfy acceptance invocation may add a private test CA. Ordinary
 // debug/release builds never include this resource directory or change trust.
 val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAcceptanceCa").orNull?.let { path ->
@@ -117,6 +128,16 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    signingConfigs {
+        releaseSigning?.let { properties ->
+            create("production") {
+                storeFile = File(properties.getProperty("storeFile"))
+                storePassword = properties.getProperty("storePassword")
+                keyAlias = properties.getProperty("keyAlias")
+                keyPassword = properties.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -131,6 +152,7 @@ android {
             }
         }
         getByName("release") {
+            if (releaseSigning != null) signingConfig = signingConfigs.getByName("production")
             optimization {
                enable = true
             }

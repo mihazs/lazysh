@@ -1,0 +1,99 @@
+# Automated application release preparation
+
+Tracked in #423, with official F-Droid delivery separately in #424/#333. This
+work does not authorize publication during implementation. The existing
+`.changeset/release-policy.json` remains disabled, including its #344 and official
+submission prerequisites. Missing signing credentials must block installable
+mobile artifacts and final publication, with finite diagnostics listing missing
+configuration names only. Never substitute a debug APK, ephemeral signing key or
+unsigned/simulator IPA.
+
+## One source and one tag authority
+
+Reuse the stable-tag gate's exact main-event SHA, stable first-parent version/code
+increase, synchronized manifests/locks and absence of pending Changesets. Build
+platform assets into Actions artifacts before the tag job. Only the existing
+gate creates `vVERSION`; require all platform receipts before that job. Publish
+the GitHub Release in a dependent job in the same workflow, because a tag created
+with `GITHUB_TOKEN` does not trigger an ordinary tag-push workflow. Never overwrite
+a different existing tag or upload replacement bytes to an existing release.
+
+An explicit build-only workflow dispatch may prepare private installation assets
+for verification without creating tags/releases or changing policy. It must use
+the exact trusted main checkout, not an arbitrary caller-provided ref. All platform
+jobs use contents-read permissions; only the final tag/publication jobs may write.
+Failed/incomplete builds retain diagnostic receipts and cannot publish.
+
+Immediately before creating a tag, the verified candidate must remain within
+the bounded first-parent ancestry of observed main (at most 4097 commits) and
+main's synchronized release version must still match. A newer version supersedes
+the candidate; same-version source changes do not substitute their unbuilt bytes
+or invalidate already verified candidate packages. Inspect newer metadata with
+candidate-owned validation code, never by executing newer checkout scripts.
+The reference read/check and create operation remain separate requests: another
+main change can race that check, but the tag always targets the verified immutable
+candidate. No stronger transaction across GitHub refs is claimed.
+
+## Required configuration
+
+Names below describe configuration to provision securely; do not place values in
+issues, source, logs or chat. No Actions secrets/variables were configured at the
+initial names-only inspection of main51c18d4.
+
+* Android: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEY_ALIAS`,
+  `ANDROID_STORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_SIGNER_SHA256`:
+  durable keystore, alias, store/key passwords and reviewed SHA256
+  certificate fingerprint. Preserve and back up this identity outside CI. A
+  release must pass `apksigner verify`, exact fingerprint, app ID/version/code and
+  non-debuggable checks. Keep normal unsigned F-Droid source builds usable.
+* iOS: `APPLE_DEVELOPMENT_TEAM`, `IOS_CERTIFICATE_BASE64`,
+  `IOS_CERTIFICATE_PASSWORD`, `IOS_PROFILES_BASE64_JSON`: Apple team and
+  distribution signing certificate/private key plus four
+  valid release-testing profiles for `app.lazysh.client`, `.liveactivity`,
+  `.watchkitapp` and `.watchkitapp.widgets`. Profiles must match the team,
+  application groups, entitlements and intended devices. Export and verify the
+  actual signed app/extensions; never omit embedded targets to bypass signing.
+  The profile secret is a JSON object whose exact four keys are the bundle IDs
+  above, with canonical base64 mobileprovision values. Use registered-device
+  release-testing profiles, not development or App Store-only profiles. The
+  pinned CLI 2.12.4 supports an unsigned archive without export; Xcode then exports
+  using all four profiles, followed by signature/identity/profile checks. Source:
+  [Tauri CLI 2.12.4](https://github.com/tauri-apps/tauri/blob/993038c49185307dfc895ab7657d77ca0d5ed7c7/crates/tauri-cli/src/mobile/ios/build.rs).
+* macOS: ad-hoc signing is a possible explicitly labelled first channel. Developer
+  ID signing/notarization needs an owner-provisioned certificate and Apple
+  notarization credentials. It cannot be inferred from a successful ad-hoc build.
+* Windows: installer signing is optional for a clearly labelled unsigned initial
+  channel; a trusted publisher identity requires separate signing credentials.
+* Unattended Changesets PR checks: `RELEASE_APP_ID` repository variable and
+  `RELEASE_APP_PRIVATE_KEY` secret for a repository-scoped GitHub App installation
+  token (or suitable owner-managed token). Default `GITHUB_TOKEN` PRs create
+  approval-required runs. Do not introduce an untrusted PR auto-approval runner.
+  Grant/install the App only for this repository with contents/pull-requests write.
+  The workflow requests those permissions explicitly and uses the installation
+  token only for version PR creation/template updates. Missing App configuration
+  retains the existing approval-required path and prints that limitation.
+
+## Native build acceptance
+
+First validate release admission and artifact identity/tampering in the existing
+Bun release suite. Then execute real Tauri desktop bundling and Android release
+packaging against current owned source/isolated targets. Verify package metadata,
+APK certificate and every embedded Apple signature/profile. Generate an explicit
+artifact manifest and SHA256 list only after these checks. Recheck every digest
+after downloading same-run artifacts in the final aggregation/publication job.
+No synthetic metadata test establishes native installer or device acceptance.
+
+Linux/Windows/macOS architecture coverage and signing status must be listed
+per file. Android ARM64 is the existing production target; emulator x86_64 debug
+artifacts remain separate. Real device installation/update and Apple distribution
+acceptance stay unverified until executed. Installation guidance is in
+[install-and-update.md](install-and-update.md).
+
+## Official references
+
+* [Tauri GitHub distribution](https://v2.tauri.app/distribute/pipelines/github/)
+* [Android signing](https://v2.tauri.app/distribute/sign/android/)
+* [iOS signing](https://v2.tauri.app/distribute/sign/ios/)
+* [GitHub workflow token event behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
+* [F-Droid first inclusion](https://f-droid.org/docs/Submitting_to_F-Droid_Quick_Start_Guide/)
+* [F-Droid update metadata](https://f-droid.org/docs/Build_Metadata_Reference/)

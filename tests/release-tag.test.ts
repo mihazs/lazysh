@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { candidate, candidateRecipe, createStableTag, releaseEnabled, requireCleanSourceScan,
-  type ReleasePolicy } from '../.changeset/release-tag';
+  requireCurrentRelease, type ReleasePolicy } from '../.changeset/release-tag';
+import { androidVersionCode, ownedWorkspaces, synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
 
 const sha = 'a'.repeat(40);
 const policy: ReleasePolicy = await Bun.file(new URL('../.changeset/release-policy.json', import.meta.url)).json();
@@ -118,11 +120,77 @@ test('advanced main, inaccessible refs and failed writes cannot be treated as su
   }
 });
 
+test('current-main admission accepts same-version first-parent progress, rejects side ancestry and supersession', async () => {
+  const parent = join(homedir(), 'dev/.worktrees');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, 'lazysh-release-admission-'));
+  const source = fileURLToPath(new URL('../', import.meta.url));
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe',
+      env: { ...process.env, GIT_CONFIG_GLOBAL: join(root, 'absent-config'), GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' } });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    return result.stdout.toString().trim();
+  };
+  try {
+    const paths = ['package.json', 'Cargo.toml', 'Cargo.lock', 'bun.lock', '.changeset/config.json',
+      'apps/client/android-version.properties', ...Object.keys(ownedWorkspaces).flatMap(path =>
+        [`${path}/package.json`, `${path === 'apps/client' ? `${path}/src-tauri` : path}/Cargo.toml`]),
+      ...new Bun.Glob('apps/client/src-tauri/tauri*.conf.json').scanSync({ cwd: source })];
+    for (const path of paths) {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await copyFile(join(source, path), join(root, path));
+    }
+    git('init', '-b', 'main');
+    git('config', 'user.name', 'Owned Release Fixture');
+    git('config', 'user.email', 'release-fixture@example.invalid');
+    git('remote', 'add', 'origin', root);
+    git('add', '.'); git('commit', '-m', 'test: create synchronized version candidate');
+    const version = (await Bun.file(join(root, 'package.json')).json()).version;
+    const bound = { sha: git('rev-parse', 'HEAD'), version, versionCode: androidVersionCode(version), tag: `v${version}` };
+    await Bun.write(join(root, 'ordinary-change'), 'same version');
+    git('add', '.'); git('commit', '-m', 'test: advance without changing version');
+    const advanced = git('rev-parse', 'HEAD');
+    await requireCurrentRelease(root, bound, advanced);
+    const api = requests([response({ object: { sha: advanced } }), response({}, 404),
+      response({ ref: `refs/tags/${bound.tag}`, object: { sha: bound.sha, type: 'commit' } }, 201)]);
+    expect(await createStableTag(bound, active, 'success', api.request,
+      current => requireCurrentRelease(root, bound, current))).toBe('created');
+    expect(api.calls.at(-1)?.body).toEqual({ ref: `refs/tags/${bound.tag}`, sha: bound.sha });
+    git('switch', '-c', 'test/side');
+    await Bun.write(join(root, 'side'), 'second-parent-only candidate');
+    git('add', '.'); git('commit', '-m', 'test: create side candidate');
+    const side = git('rev-parse', 'HEAD');
+    git('switch', 'main');
+    await Bun.write(join(root, 'main-change'), 'first parent stays on main');
+    git('add', '.'); git('commit', '-m', 'test: retain main first parent');
+    git('merge', '--no-ff', 'test/side', '-m', 'test: merge second-parent candidate');
+    await expect(requireCurrentRelease(root, { ...bound, sha: side }, git('rev-parse', 'HEAD'))).rejects.toThrow('first-parent');
+    // A synchronized newer version, not merely malformed metadata, supersedes.
+    const later = `${version.split('.').slice(0, 2).join('.')}.${Number(version.split('.')[2]) + 1}`;
+    const names: string[] = [];
+    for (const path of ['.', ...Object.keys(ownedWorkspaces)]) {
+      const file = join(root, path, 'package.json');
+      const pkg = await Bun.file(file).json();
+      pkg.version = later;
+      await Bun.write(file, JSON.stringify(pkg));
+      if (path !== '.') names.push((Bun.TOML.parse(await Bun.file(join(root,
+        path === 'apps/client' ? `${path}/src-tauri/Cargo.toml` : `${path}/Cargo.toml`)).text()) as any).package.name);
+    }
+    const cargo = join(root, 'Cargo.toml');
+    await Bun.write(cargo, (await Bun.file(cargo).text()).replace(`version = "${version}"`, `version = "${later}"`));
+    await Bun.write(join(root, 'Cargo.lock'), names.map(name => `[[package]]\nname = "${name}"\nversion = "${later}"\n`).join('\n'));
+    await synchronizeWorkspaceVersions(root);
+    await verifyRelease(root);
+    git('add', '.'); git('commit', '-m', 'test: advance synchronized release version');
+    await expect(requireCurrentRelease(root, bound, git('rev-parse', 'HEAD'))).rejects.toThrow('superseded');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('workflow isolates write token after successful source and binary acceptance', async () => {
   const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-tag.yml', import.meta.url)).text()) as any;
   expect(workflow.permissions).toEqual({ contents: 'read' });
   expect(workflow.jobs['source-build'].if).toBe("needs.candidate.outputs.enabled == 'true'");
-  expect(workflow.jobs.tag.needs).toEqual(['candidate', 'source-build']);
+  expect(workflow.jobs.tag.needs).toEqual(['candidate', 'source-build', 'artifacts']);
   expect(workflow.jobs.tag.if).toContain("needs.source-build.result == 'success'");
   expect(workflow.jobs.tag.permissions).toEqual({ contents: 'write' });
   const build = workflow.jobs['source-build'].steps.filter((step: any) => step.run).map((step: any) => step.run).join('\n');

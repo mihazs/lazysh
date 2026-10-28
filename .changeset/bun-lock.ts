@@ -111,7 +111,40 @@ export async function verifyRelease(root = process.cwd()) {
   await inspect(root, false);
 }
 
+async function synchronizeNativeWorkspaceVersion(root: string) {
+  const tooling = await Bun.file(join(root, 'package.json')).json();
+  const client = await Bun.file(join(root, 'apps/client/package.json')).json();
+  requireRelease(stable(tooling.version) && tooling.version === client.version, 'invalid or mismatched product version');
+  const version = tooling.version;
+  const cargoPath = join(root, 'Cargo.toml');
+  const cargoText = await Bun.file(cargoPath).text();
+  const rootVersions = [...cargoText.matchAll(/^(version = ")([^"]+)(")\r?$/gm)];
+  requireRelease(rootVersions.length === 1 && stable(rootVersions[0][2]), 'unsupported root Cargo version text');
+  const nextCargo = cargoText.replace(rootVersions[0][0], `${rootVersions[0][1]}${version}${rootVersions[0][3]}`);
+
+  const lockPath = join(root, 'Cargo.lock');
+  const lockText = await Bun.file(lockPath).text();
+  const lock = Bun.TOML.parse(lockText) as any;
+  requireRelease(Array.isArray(lock.package), 'unsupported Cargo lock schema');
+  let nextLock = lockText;
+  for (const path of Object.keys(ownedWorkspaces)) {
+    const manifest = path === 'apps/client' ? `${path}/src-tauri` : path;
+    const native = Bun.TOML.parse(await Bun.file(join(root, manifest, 'Cargo.toml')).text()) as any;
+    const matches = lock.package.filter((entry: any) => entry.name === native.package?.name);
+    requireRelease(matches.length === 1 && stable(matches[0].version), 'invalid native lock membership');
+    const section = new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${native.package.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}"\\r?\\nversion = ")${matches[0].version.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}("\\r?$)`, 'm');
+    requireRelease(section.test(nextLock), 'unsupported native lock text');
+    nextLock = nextLock.replace(section, `$1${version}$2`);
+  }
+  requireRelease(JSON.stringify(Bun.TOML.parse(nextLock)) !== JSON.stringify(lock) || nextLock === lockText,
+    'unexpected native lock mutation');
+  // Validate both bounded edits before mutating either native release record.
+  if (nextCargo !== cargoText) await Bun.write(cargoPath, nextCargo);
+  if (nextLock !== lockText) await Bun.write(lockPath, nextLock);
+}
+
 export async function synchronizeWorkspaceVersions(root = process.cwd()) {
+  await synchronizeNativeWorkspaceVersion(root);
   const { lock, lockText, version, expectedAndroid, previousAndroid } = await inspect(root, true);
   // JSONC validates the file; these strict matches locate existing metadata only.
   // Reject unfamiliar layouts rather than reprinting resolved dependency data.

@@ -207,7 +207,7 @@ test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source to
 }, 60_000);
 
 test.each([['patch', '0.1.1', '1001'], ['minor', '0.2.0', '2000'], ['major', '1.0.0', '1000000']])(
-  'real Changesets + Bun + cargo-edit synchronize a %s release', async (impact, expected, expectedCode) => {
+  'real Changesets + Bun synchronize a %s release', async (impact, expected, expectedCode) => {
     const directory = await fixture(fragment(impact));
     const history = await readFile(join(directory, 'CHANGELOG.md'));
     const previousLock = await Bun.file(join(directory, 'bun.lock')).text();
@@ -277,7 +277,13 @@ test('version automation is main-only, version-only, pinned, and retains review 
   expect(step.uses).toBe('changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51');
   expect(step.with.script).toBe('bun run release:prepare');
   expect((await json(source, 'package.json')).scripts['release:prepare']).toBe('bun run release:version && bun run duplicates:check');
-  expect(step.with['github-token']).toBe('${{ github.token }}');
+  expect(step.with['github-token']).toBe('${{ steps.app-token.outputs.token || github.token }}');
+  const token = job.steps.find((entry: any) => entry.id === 'app-token');
+  expect(token.uses).toBe('actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349');
+  expect(token.if).toBe("steps.pending.outputs.count != '0' && vars.RELEASE_APP_ID != ''");
+  expect(token.with).toEqual({ 'app-id': '${{ vars.RELEASE_APP_ID }}',
+    'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}', 'permission-contents': 'write',
+    'permission-pull-requests': 'write' });
   expect(step.with['pr-base-branch']).toBe('main');
   const body = await Bun.file(join(source, '.github/release_pull_request_template.md')).text();
   const template = await Bun.file(join(source, '.github/pull_request_template.md')).text();
