@@ -245,10 +245,11 @@ impl RealFrontend {
             .0;
         assert!(activatable.iter().any(|name| name == BUS));
         assert!(activatable.iter().all(|name| name == BUS || name == DBUS.0));
+        // Portal 1.14 selects the backend through UseIn, before portals.conf existed.
         fs::write(
             sandbox.0.join("portals/lazysh-test.portal"),
             format!(
-                "[portal]\nDBusName={BACKEND}\nInterfaces=org.freedesktop.impl.portal.Inhibit;\n"
+                "[portal]\nDBusName={BACKEND}\nInterfaces=org.freedesktop.impl.portal.Inhibit;\nUseIn=lazysh-test;\n"
             ),
         )
         .unwrap();
