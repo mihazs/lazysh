@@ -63,9 +63,26 @@ internal class RegistrationController(
         }
     }
 
-    @Synchronized fun disable(expected: Long): Boolean {
+    @Synchronized fun reserveEnrollment(expected: Long): Boolean {
+        if (expected < epoch || selecting || store.value != Registration()) return false
+        epoch = expected
+        return true
+    }
+    @Synchronized fun withReserved(expected: Long, action: () -> Unit): Boolean {
+        if (epoch != expected || selecting || store.value != Registration()) return false
+        action()
+        return true
+    }
+    @Synchronized fun withCurrent(instance: String, action: () -> Unit): Boolean {
+        val current = store.value
+        if (!current.enabled || current.instance != instance || current.phase != Phase.READY) return false
+        action()
+        return true
+    }
+    @Synchronized fun disable(expected: Long, beforeRevoke: () -> Unit = {}): Boolean {
         if (expected < epoch) return false
         epoch = expected
+        beforeRevoke()
         return revoke()
     }
 

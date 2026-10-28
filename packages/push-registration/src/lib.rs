@@ -103,6 +103,16 @@ pub mod commands {
     }
 
     #[tauri::command]
+    pub async fn push_registration_enroll<R: Runtime>(
+        app: AppHandle<R>,
+    ) -> Result<RegistrationStatus, String> {
+        if !cfg!(all(target_os = "android", feature = "fdroid")) {
+            return Err("Private relay enrollment requires the F-Droid Android build".into());
+        }
+        change(app, "enroll", "Native private enrollment interrupted").await
+    }
+
+    #[tauri::command]
     pub async fn push_registration_disable<R: Runtime>(
         app: AppHandle<R>,
     ) -> Result<RegistrationStatus, String> {
@@ -167,6 +177,9 @@ mod tests {
         );
         assert!(call(app.handle(), "register", 1).is_err());
         assert!(call(app.handle(), "disable", 2).is_err());
+        assert!(
+            tauri::async_runtime::block_on(push_registration_enroll(app.handle().clone())).is_err()
+        );
         assert_eq!(call(app.handle(), "status", 0).unwrap().provider, "none");
     }
 

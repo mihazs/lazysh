@@ -139,6 +139,7 @@
     "allow-apple-status-publish",
     "allow-push-registration-status",
     "allow-push-registration-register",
+    "allow-push-registration-enroll",
     "allow-push-registration-disable"
   ]
 }

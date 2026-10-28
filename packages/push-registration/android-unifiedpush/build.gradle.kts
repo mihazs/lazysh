@@ -11,4 +11,5 @@ dependencies {
         exclude(group = "com.google.crypto.tink", module = "tink")
     }
     implementation("com.google.crypto.tink:tink-android:1.23.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
 }

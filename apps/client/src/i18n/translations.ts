@@ -1446,6 +1446,7 @@ const translations = {
   pushRefresh: ["Atualizar status do registro", "Actualizar estado del registro"],
   pushRefreshDevice: ["Atualizar registro do dispositivo", "Actualizar registro del dispositivo"],
   pushRegister: ["Registrar este dispositivo", "Registrar este dispositivo"],
+  pushConnectRelay: ["Conectar ou retomar serviço de entrega", "Conectar o reanudar servicio de entrega"],
   pushDisableApns: ["Desativar registro APNs", "Desactivar registro de APNs"],
   pushPause: ["Pausar e revogar token", "Pausar y revocar el token"],
   pushRetryRevocation: ["Tentar revogar o token novamente", "Reintentar revocación del token"],

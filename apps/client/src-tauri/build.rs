@@ -37,6 +37,7 @@ fn main() {
         "apple_status_publish",
         "push_registration_status",
         "push_registration_register",
+        "push_registration_enroll",
         "push_registration_disable",
         "apple_speech_capability",
         "apple_speech_install",
