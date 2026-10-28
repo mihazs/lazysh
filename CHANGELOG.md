@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix Windows release packaging validation of workspace path separators without changing application defaults.
+
 - Clarify the project agent workflow so continuation requests proceed from recovered history into implementation and keep working across the requested roadmap scope without requiring Codex `/goal`. Application defaults are unchanged.
 
 - Add a localized Named key shortcut builder for toolbar and gesture bindings, including F1–F12 and optional modifiers. Drafts remain separate between builder modes; Advanced stays the default, and saving never sends terminal input.
