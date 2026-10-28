@@ -53,7 +53,12 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     serverCrypto:graph.includes('com.google.crypto.tink:tink:'),
     embeddedFcm:/\borg\.unifiedpush\.android\.(?:foss_)?embedded_fcm_distributor\b/.test(dex),
   };
-  const receipt={variant,configuration,applicationId,versionName,versionCode,debuggable,
+  const enrollment=google?null:{
+    pinnedHttp:graph.includes('com.squareup.okhttp3:okhttp:5.5.1'),
+    nativeHttp:release?null:/\bapp\.lazysh\.unifiedpush\.EnrollmentHttp\b/.test(dex),
+    privateStorage:release?null:/\bapp\.lazysh\.unifiedpush\.PrivateEnrollmentStore\b/.test(dex),
+  };
+  const receipt={variant,configuration,applicationId,versionName,versionCode,debuggable,enrollment,
     sha256:createHash('sha256').update(await readFile(apk)).digest('hex'),observed};
   const directory=join(android,'app/build/outputs/androidTest-results/push-artifact');
   await mkdir(directory,{recursive:true});
@@ -65,6 +70,8 @@ test.skipIf(!variant)('actual Android push dependencies, manifest and dex match 
     serverCrypto:false,embeddedFcm:false,
   });
   if(!google){
+    expect(enrollment?.pinnedHttp).toBe(true);
+    if(!release){ expect(enrollment?.nativeHttp).toBe(true); expect(enrollment?.privateStorage).toBe(true); }
     const service=manifest.match(/<service\b[^>]*>/g)?.find(tag=>tag.includes('"app.lazysh.unifiedpush.RegistrationService"'));
     expect(service).toMatch(/android:exported="false"/);
     expect(manifest).toContain('org.unifiedpush.android.connector.internal.MessagingReceiverImpl');

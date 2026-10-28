@@ -52,6 +52,7 @@ export default function PushSettingsPanel() {
   const apple = status?.provider === 'apns';
   const unified = status?.provider === 'unifiedpush';
   const provider = apple ? 'Apple APNs' : unified ? 'UnifiedPush' : 'Google Firebase';
+  const registering = ['push_registration_register','push_registration_enroll'].includes(activeCommand);
   return <section className="tool-panel" aria-label={t('pushTitle')}>
     <h3>{t('pushTitle')}</h3>
     {status && status.provider !== 'none' && <p>{t('pushScope',{provider})}</p>}
@@ -66,8 +67,11 @@ export default function PushSettingsPanel() {
       {status?.supported && status.configured && <button type="button" onClick={() => void run('push_registration_register')} disabled={busy || (!status.enabled && !consent)}>
         {status.enabled ? t('pushRefreshDevice') : t('pushRegister')}
       </button>}
-      {status?.supported && (status.enabled || status.tokenPresent || activeCommand === 'push_registration_register') && <button type="button" onClick={() => void run('push_registration_disable')} disabled={pending && activeCommand !== 'push_registration_register'}>
-        {apple ? t('pushDisableApns') : status.enabled || activeCommand === 'push_registration_register' ? t(unified ? 'pushUnifiedPause' : 'pushPause') : t(unified ? 'pushUnifiedRetry' : 'pushRetryRevocation')}
+      {unified && status?.supported && status.configured && !status.enabled && <button type="button" onClick={() => void run('push_registration_enroll')} disabled={busy || !consent}>
+        {t('pushConnectRelay')}
+      </button>}
+      {status?.supported && (status.enabled || status.tokenPresent || registering) && <button type="button" onClick={() => void run('push_registration_disable')} disabled={pending && !registering}>
+        {apple ? t('pushDisableApns') : status.enabled || registering ? t(unified ? 'pushUnifiedPause' : 'pushPause') : t(unified ? 'pushUnifiedRetry' : 'pushRetryRevocation')}
       </button>}
     </div>
     {apple && <p>{t('pushApnsHint')}</p>}

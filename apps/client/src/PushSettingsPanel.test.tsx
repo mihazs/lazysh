@@ -72,3 +72,31 @@ it('names UnifiedPush without Google and discloses registration-only cleanup', a
   expect(document.body.textContent).toContain('does not connect remote delivery');
   expect(vi.mocked(invoke).mock.calls).toHaveLength(1);
 });
+
+it('opens private enrollment only after consent with no credential arguments or renderer storage',async()=>{
+  vi.mocked(invoke).mockResolvedValue({...off,provider:'unifiedpush'});
+  const before=localStorage.length;
+  render(<PushSettingsPanel/>);
+  const connect=await screen.findByRole('button',{name:'Connect or resume delivery service'});
+  expect(connect).toHaveProperty('disabled',true);
+  expect(vi.mocked(invoke).mock.calls).toHaveLength(1);
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(connect);
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('push_registration_enroll',undefined,{headers:{'X-Lazysh-Access':expect.any(String)}}));
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(localStorage.length).toBe(before);
+});
+
+it('can pause pending native enrollment and discards its late success',async()=>{
+  const unified={...off,provider:'unifiedpush'};
+  let finish!:(value:unknown)=>void;
+  vi.mocked(invoke).mockResolvedValueOnce(unified)
+    .mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;})).mockResolvedValue(unified);
+  render(<PushSettingsPanel/>);
+  const connect=await screen.findByRole('button',{name:'Connect or resume delivery service'});
+  fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(connect);
+  fireEvent.click(await screen.findByRole('button',{name:'Pause and remove registration'}));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('push_registration_disable',undefined,{headers:{'X-Lazysh-Access':expect.any(String)}}));
+  finish({...unified,enabled:true,reason:'Stale private confirmation'});
+  await waitFor(()=>expect(screen.queryByText('Stale private confirmation')).toBeNull());
+});

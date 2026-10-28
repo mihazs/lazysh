@@ -1438,6 +1438,7 @@ export const english = {
   pushRefresh: "Refresh registration status",
   pushRefreshDevice: "Refresh device registration",
   pushRegister: "Register this device",
+  pushConnectRelay: "Connect or resume delivery service",
   pushDisableApns: "Disable APNs registration",
   pushPause: "Pause and revoke token",
   pushRetryRevocation: "Retry token revocation",

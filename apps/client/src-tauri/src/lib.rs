@@ -126,6 +126,7 @@ pub fn run() {
                 apple_status::apple_status_publish,
                 push::push_registration_status,
                 push::push_registration_register,
+                push::push_registration_enroll,
                 push::push_registration_disable,
                 apple_speech::apple_speech_capability,
                 apple_speech::apple_speech_install,

@@ -7,6 +7,7 @@ import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.UnifiedPush
@@ -33,22 +34,40 @@ internal object PushRegistration {
                 }
         }
         val driver = object : DistributorDriver {
-            override fun register(instance: String) { UnifiedPush.register(app, instance = instance, messageForDistributor = "lazysh registration only") }
+            override fun register(instance: String) {
+                val vapid=PushEnrollment.controller(app).bind(instance)
+                UnifiedPush.register(app, instance=instance, vapid=vapid,
+                    messageForDistributor=if (vapid==null) "lazysh registration only" else "lazysh relay verification")
+            }
             override fun unregister(instance: String) { UnifiedPush.unregister(app, instance) }
         }
         return RegistrationController(store, driver) { UUID.randomUUID().toString() }.also { instance = it }
     }
 }
 
-/** The SDK owns keys/protocol identity. This slice deliberately admits no message content. */
+/** The SDK owns keys/protocol identity. Only authenticated enrollment challenges
+ * are admitted; events, display and all undecrypted content remain inert. */
 class RegistrationService : PushService() {
     private fun controller() = PushRegistration.controller(applicationContext)
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
-        controller().endpoint(instance, usableEndpoint(endpoint.url, endpoint.pubKeySet != null), endpoint.temporary)
+        try {
+            val usable=usableEndpoint(endpoint.url,endpoint.pubKeySet!=null)
+            controller().endpoint(instance,usable,endpoint.temporary)
+            val keys=endpoint.pubKeySet
+            if (usable && !endpoint.temporary && keys!=null)
+                PushEnrollment.controller(applicationContext).endpoint(instance,EndpointKeys(endpoint.url,keys.pubKey,keys.auth))
+        } catch (_:Exception) { /* Fail closed without echoing callback/private storage values. */ }
     }
-    override fun onMessage(message: PushMessage, instance: String) { /* No storage, display or delivery authority. */ }
+    override fun onMessage(message: PushMessage, instance: String) {
+        val proof=parseChallenge(message.content,message.decrypted) ?: return
+        try { PushEnrollment.controller(applicationContext).message(instance,proof) }
+        catch (_:Exception) { /* No display, storage fallback, or unbound confirmation. */ }
+    }
     override fun onRegistrationFailed(reason: FailedReason, instance: String) { controller().failed(instance) }
-    override fun onUnregistered(instance: String) { controller().unregistered(instance) }
+    override fun onUnregistered(instance: String) {
+        controller().unregistered(instance)
+        try { PushEnrollment.controller(applicationContext).pause(instance) } catch (_:Exception) { /* Remain locally off. */ }
+    }
     override fun onTempUnavailable(instance: String) { controller().unavailable(instance) }
 }
 
@@ -58,9 +77,11 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
     private fun statusValue() = run {
         val controller = controller()
         val registration = controller.registration
+        val enrollment=PushEnrollment.controller(activity)
+        val privateState=try { enrollment.state() } catch (_:Exception) { null }
         val available = UnifiedPush.resolveDefaultDistributor(activity) !is ResolvedDistributor.NoneAvailable
-        registrationStatus("unifiedpush", available, registration.enabled, registration.instance != null,
-            controller.busy, when {
+        registrationStatus("unifiedpush", available, registration.enabled, registration.instance != null || privateState!=null || enrollment.unavailable(),
+            controller.busy || enrollment.busy(), PushEnrollment.reason(activity) ?: when {
                 !available -> "Install and configure a free-software UnifiedPush distributor. No delivery service is connected."
                 controller.busy -> "Waiting for your distributor selection. You can pause registration."
                 registration.phase == Phase.REVOKE_PENDING -> "Registration is paused; local connector cleanup needs retry."
@@ -77,7 +98,17 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
     @Command fun register(invoke: Invoke) {
         try {
             if (!notificationPermission()) { invoke.reject("Enable system notification permission from the inbox first"); return }
-            controller().register(operationEpoch(invoke), { complete ->
+            val state=PushEnrollment.controller(activity).state()
+            if (state!=null && (state.phase==EnrollmentPhase.REVOKE_PENDING || state.deviceId==null)) {
+                invoke.reject("Complete or pause the private relay enrollment first"); return
+            }
+            startRegistration(operationEpoch(invoke)) { success ->
+                if (success) invoke.resolve(statusValue()) else invoke.reject("Registration was cancelled, failed or paused; inspect status")
+            }
+        } catch (_: Exception) { invoke.reject("Cannot register with UnifiedPush") }
+    }
+    private fun startRegistration(epoch:Long, done:(Boolean)->Unit) {
+            controller().register(epoch, { complete ->
                 activity.runOnUiThread {
                     try {
                         if (activity.isFinishing || activity.isDestroyed) complete(false)
@@ -86,14 +117,48 @@ class PushPlugin(private val activity: Activity) : RegistrationPlugin(activity) 
                         }
                     } catch (_: Exception) { complete(false) }
                 }
-            }) { success ->
-                if (success) invoke.resolve(statusValue()) else invoke.reject("Registration was cancelled, failed or paused; inspect status")
+            },done)
+    }
+    @Command fun enroll(invoke:Invoke) {
+        val completed=AtomicBoolean(false)
+        fun finish(success:Boolean) {
+            if (!completed.compareAndSet(false,true)) return
+            try { if (success) invoke.resolve(statusValue()) else invoke.reject("Private enrollment was cancelled or failed; inspect status") }
+            catch (_:Exception) { invoke.reject("Cannot complete private enrollment") }
+        }
+        try {
+            if (!notificationPermission() || UnifiedPush.resolveDefaultDistributor(activity) is ResolvedDistributor.NoneAvailable) {
+                invoke.reject("Enable notification permission and install a UnifiedPush distributor first"); return
             }
-        } catch (_: Exception) { invoke.reject("Cannot register with UnifiedPush") }
+            val epoch=operationEpoch(invoke)
+            val enrollment=PushEnrollment.controller(activity)
+            val state=enrollment.state()
+            if (state?.phase==EnrollmentPhase.REVOKE_PENDING || !controller().reserveEnrollment(epoch)) {
+                invoke.reject("Pause existing registration or finish private relay removal first"); return
+            }
+            EnrollmentDialog.show(activity,state,{ origin,code ->
+                val ready:(Boolean)->Unit={ success ->
+                    if (!success || activity.isFinishing || activity.isDestroyed) finish(false)
+                    else try { startRegistration(epoch,::finish) } catch (_:Exception) { finish(false) }
+                }
+                try {
+                    if (state==null) enrollment.begin(epoch,checkNotNull(origin),checkNotNull(code),ready)
+                    else enrollment.resume(epoch,ready)
+                } catch (_:Exception) { finish(false) }
+            },{ finish(false) })
+        } catch (_:Exception) { finish(false) }
     }
     @Command fun disable(invoke: Invoke) {
         try {
-            if (controller().disable(operationEpoch(invoke))) invoke.resolve(statusValue())
+            val enrollment=PushEnrollment.controller(activity)
+            var admitted=false
+            val local=controller().disable(operationEpoch(invoke)) {
+                admitted=true
+                enrollment.cancel()
+                EnrollmentDialog.cancel(activity)
+            }
+            if (admitted) enrollment.pause()
+            if (local) invoke.resolve(statusValue())
             else invoke.reject("Registration is paused; connector cleanup needs retry")
         } catch (_: Exception) { invoke.reject("Cannot pause UnifiedPush registration; inspect status") }
     }

@@ -10,6 +10,8 @@
 
 - Catalogue the Next.js preview hint label in all interface locales, preserving the brand and existing discovery behavior while restoring the localization coverage gate.
 
+- Add explicit private F-Droid Android relay enrollment and encrypted challenge confirmation with Keystore-protected state. Registration defaults remain unchanged; event messages and remote notification display remain disconnected.
+
 - Show a server-reported Next.js hint when explicit preview HTTP discovery already has a complete bounded response header available. Probing stays off by default; unknown or incomplete headers preserve ordinary HTTP detection without waiting or issuing another request.
 
 - Use the Bed Mode SVG mark in the existing app sidebar, keeping the visible lazysh name and accessible text singular. Connection behavior and responsive drawer controls are unchanged.
