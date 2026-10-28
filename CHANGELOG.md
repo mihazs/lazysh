@@ -4,6 +4,8 @@
 
 - Refresh agent-board display readiness on native main-window focus as well as browser focus, so an opted-in board can resume after an earlier unavailable observation. Original access/visibility gates and the explicit re-enable requirement after failed acquisition remain unchanged; this does not establish the cause of the separately tracked Android readiness failures.
 
+- Render repository side-by-side diff source and hunk headers with the selected terminal font, including already-loaded imported and CJK fallback families. Changing the font preserves the current review and does not refetch repository data; font size and connection behavior are unchanged.
+
 - Remove the twelve-entry cap on custom keyboard chords and text snippets. Existing valid collections now survive normalization and reload without silent truncation; failed snippet saves retain the draft. Per-entry validation, device storage capacity and the existing settings-sync size limit remain unchanged.
 
 - Catalogue the Next.js preview hint label in all interface locales, preserving the brand and existing discovery behavior while restoring the localization coverage gate.
