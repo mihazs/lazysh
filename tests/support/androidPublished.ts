@@ -28,7 +28,7 @@ export function publishedInstrumentation(output:string,phase:'create'|'verify'){
     && lines.filter(line=>line.startsWith('INSTRUMENTATION_STATUS: numtests=')).every(line=>line==='INSTRUMENTATION_STATUS: numtests=1')
     && !lines.some(line=>/^INSTRUMENTATION_STATUS_CODE: -|^INSTRUMENTATION_FAILED|^INSTRUMENTATION_RESULT: shortMsg=/.test(line));
 }
-const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
+const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
 export function publishedDriverStage(output:string):typeof driverStages[number]|'unavailable'{
   if(output.length>65536||output.includes('\0'))return 'unavailable';
   const reported=[...output.matchAll(/^INSTRUMENTATION_STATUS: stack=java\.lang\.AssertionError: Published APK UI: ([A-Z_]+)\r?$/gm)].map(match=>match[1]);
@@ -38,7 +38,8 @@ export function publishedDriverStage(output:string):typeof driverStages[number]|
 const inputOperations=['NONE','LOOKUP','CLICK','SET','READBACK'] as const;
 const inputFields=['NONE','NAME','HOSTNAME','USERNAME'] as const;
 const hintShapes=['empty','other','unavailable','name-label','name-placeholder','name-label-placeholder','hostname-label','hostname-placeholder','hostname-label-placeholder','username-label','username-placeholder','username-label-placeholder'] as const;
-type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][]};
+const captionMatches=['zero','one','multiple','unavailable'] as const;
+type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][];addHostMatches:typeof captionMatches[number];openHostsMatches:typeof captionMatches[number];webView:boolean|null};
 export function publishedDriverObservation(output:string):DriverObservation{
   const unavailable=():DriverObservation=>({state:'unavailable'});
   if(output.length>65536||output.includes('\0'))return unavailable();
@@ -47,10 +48,11 @@ export function publishedDriverObservation(output:string):DriverObservation{
   if(reported.length!==1||reported[0].length>2048)return unavailable();
   try{
     const data=JSON.parse(reported[0]),flag=(value:unknown)=>value===null||typeof value==='boolean';
-    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).sort().join(',')!=='editableCount,editableOverflow,foreground,hintShapes,inputField,inputOperation,keyguardLocked,readbackMatched,screenOn'
+    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).sort().join(',')!=='addHostMatches,editableCount,editableOverflow,foreground,hintShapes,inputField,inputOperation,keyguardLocked,openHostsMatches,readbackMatched,screenOn,webView'
       ||!inputOperations.includes(data.inputOperation)||!inputFields.includes(data.inputField)
       ||!['target','driver','other','unavailable'].includes(data.foreground)
-      ||![data.readbackMatched,data.screenOn,data.keyguardLocked].every(flag)
+      ||![data.readbackMatched,data.screenOn,data.keyguardLocked,data.webView].every(flag)
+      ||![data.addHostMatches,data.openHostsMatches].every(value=>captionMatches.includes(value))
       ||!Array.isArray(data.hintShapes)||data.hintShapes.length>8||data.hintShapes.some((value:unknown)=>!hintShapes.includes(value as typeof hintShapes[number])))return unavailable();
     const absent=data.editableCount===null&&data.editableOverflow===null&&data.hintShapes.length===0;
     const present=Number.isInteger(data.editableCount)&&data.editableCount>=0&&data.editableCount<=8&&typeof data.editableOverflow==='boolean'
@@ -59,7 +61,8 @@ export function publishedDriverObservation(output:string):DriverObservation{
       ||(data.inputOperation==='NONE')!==(data.inputField==='NONE'))return unavailable();
     return {state:'available',inputOperation:data.inputOperation,inputField:data.inputField,readbackMatched:data.readbackMatched,
       foreground:data.foreground,screenOn:data.screenOn,keyguardLocked:data.keyguardLocked,
-      editableCount:data.editableCount,editableOverflow:data.editableOverflow,hintShapes:[...data.hintShapes]};
+      editableCount:data.editableCount,editableOverflow:data.editableOverflow,hintShapes:[...data.hintShapes],
+      addHostMatches:data.addHostMatches,openHostsMatches:data.openHostsMatches,webView:data.webView};
   }catch{return unavailable();}
 }
 export function translatedGuest(values:string[]){

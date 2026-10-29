@@ -92,18 +92,18 @@ test('private state permits only finite nominated fields and the exact owned ass
 
 test('driver exception classification retains only one exact closed stage and never arbitrary error data',()=>{
   const line=(stage:string)=>`INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: ${stage}`;
-  for(const stage of ['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'])expect(publishedDriverStage(line(stage))).toBe(stage);
+  for(const stage of ['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'])expect(publishedDriverStage(line(stage))).toBe(stage);
   expect(publishedDriverStage(line('WORKSPACE')+'\n'+line('WORKSPACE'))).toBe('WORKSPACE');
   for(const value of ['',line('PRIVATE_SECRET'),line('NAME')+' private-path',line('NAME')+'\n'+line('LAUNCH'),'private-error',line('NAME')+'\0','x'.repeat(65537)])expect(publishedDriverStage(value)).toBe('unavailable');
 });
 test('parent UI phase and closed driver stage survive independently without raw failure output',()=>fixture(async asset=>{
   const f=fake(args=>args.includes('instrument')?'INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: HOSTNAME\nINSTRUMENTATION_STATUS_CODE: -2\nprivate-output':undefined);
   const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
-  expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'HOSTNAME',cleanup:'passed'});
+  expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'HOSTNAME',driverObservation:{state:'unavailable'},cleanup:'passed'});
   expect(result.passed).toBe(false);expect(JSON.stringify(result)).not.toContain('private-output');
 }));
 
-const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label']};
+const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label'],addHostMatches:'zero',openHostsMatches:'one',webView:true};
 const observationLine=(value:unknown)=>`INSTRUMENTATION_STATUS: lazyshPublishedObservation=${JSON.stringify(value)}`;
 test('driver operation observation projects exact closed fields and explicit unavailable samples',()=>{
   expect(publishedDriverObservation(observationLine(observedInput))).toEqual({state:'available',...observedInput});
@@ -113,10 +113,26 @@ test('driver operation observation projects exact closed fields and explicit una
   expect(publishedDriverObservation(observationLine({...observedInput,editableCount:null,editableOverflow:null,hintShapes:[]}))).toMatchObject({state:'available',editableCount:null});
   expect(publishedDriverObservation(observationLine({...observedInput,editableCount:8,editableOverflow:true,hintShapes:Array(8).fill('other')}))).toMatchObject({state:'available',editableOverflow:true});
 });
+test('workspace observations distinguish absent, unique and ambiguous exact captions without retaining AX data',()=>{
+  for(const count of ['zero','one','multiple','unavailable']){
+    const sample={...observedInput,inputOperation:'NONE',inputField:'NONE',addHostMatches:count,openHostsMatches:count,webView:null};
+    expect(publishedDriverObservation(observationLine(sample))).toEqual({state:'available',...sample});
+  }
+  for(const patch of [{addHostMatches:null},{openHostsMatches:2},{webView:{}},{caption:'private-accessibility-label'}]){
+    expect(publishedDriverObservation(observationLine({...observedInput,...patch}))).toEqual({state:'unavailable'});
+  }
+});
+test.each(['WORKSPACE_READINESS','WORKSPACE_ADD_HOST'])('workspace %s failure survives independently of failure-only sampled counts',stage=>fixture(async asset=>{
+  const observation={...observedInput,inputOperation:'NONE',inputField:'NONE',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false};
+  const f=fake(args=>args.includes('instrument')?observationLine(observation)+`\nINSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: ${stage}\nINSTRUMENTATION_STATUS_CODE: -2`:undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:stage,driverObservation:{state:'available',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false},cleanup:'passed'});
+  expect(f.calls.filter(args=>args.includes('instrument'))).toHaveLength(1);
+}));
 test('malformed, private or oversized operation data is never partially retained',()=>{
   const malformed=[{message:'private-exception'},{inputOperation:'private-command'},{inputField:'private-host'},{foreground:'private.package'},
     {screenOn:'private-value'},{readbackMatched:true},{editableCount:9},{editableCount:-1},{editableOverflow:true},
-    {hintShapes:['private-hint']},{hintShapes:Array(9).fill('other')},{editableCount:null},{inputOperation:'NONE'},{path:'/private/path'}];
+    {hintShapes:['private-hint']},{hintShapes:Array(9).fill('other')},{editableCount:null},{inputOperation:'NONE'},{path:'/private/path'},{addHostMatches:3},{openHostsMatches:'private-caption'},{webView:'private-class'}];
   for(const patch of malformed){const result=publishedDriverObservation(observationLine({...observedInput,...patch}));expect(result).toEqual({state:'unavailable'});expect(JSON.stringify(result)).not.toContain('private');}
   for(const raw of ['',observationLine(observedInput)+'\n'+observationLine(observedInput),observationLine(observedInput)+'\0','INSTRUMENTATION_STATUS: lazyshPublishedObservation={broken',observationLine({private:'x'.repeat(2049)}),'x'.repeat(65537)])expect(publishedDriverObservation(raw)).toEqual({state:'unavailable'});
 });

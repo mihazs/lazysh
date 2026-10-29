@@ -19,7 +19,8 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PublishedApkTest {
     private enum class Stage {
-        ARGUMENTS, DEVICE_ADMISSION, LAUNCH, WORKSPACE, DRAWER, ADD_HOST, NAME, HOSTNAME, USERNAME,
+        ARGUMENTS, DEVICE_ADMISSION, LAUNCH, WORKSPACE, WORKSPACE_READINESS, WORKSPACE_ADD_HOST,
+        DRAWER, ADD_HOST, NAME, HOSTNAME, USERNAME,
         KEYBOARD, SAVE_HOST, SAVED_HOST, EDIT_HOST, READBACK, COMPLETE,
     }
     private enum class InputOperation { NONE, LOOKUP, CLICK, SET, READBACK }
@@ -110,6 +111,14 @@ class PublishedApkTest {
     }
 
     private fun failureObservation(): String {
+        fun captionMatches(caption: String): String {
+            if (System.nanoTime() >= deadline) return "unavailable"
+            return runCatching { when (captions(caption).size) {
+                0 -> "zero"
+                1 -> "one"
+                else -> "multiple"
+            } }.getOrDefault("unavailable")
+        }
         val foreground = runCatching { when (device.currentPackageName) {
             target -> "target"
             instrumentation.context.packageName -> "driver"
@@ -120,12 +129,19 @@ class PublishedApkTest {
         }.getOrNull() else null
         val shapes = JSONArray()
         fields?.take(8)?.forEach { field -> shapes.put(runCatching { hintShape(field.hint) }.getOrDefault("unavailable")) }
+        val addHostMatches = captionMatches("Add host")
+        val openHostsMatches = captionMatches("Open hosts")
+        val webView = if (System.nanoTime() < deadline) runCatching {
+            device.hasObject(By.pkg(target).clazz("android.webkit.WebView"))
+        }.getOrNull() else null
         return JSONObject().put("inputOperation", inputOperation.name).put("inputField", inputField.name)
             .put("readbackMatched", readbackMatched ?: JSONObject.NULL).put("foreground", foreground)
             .put("screenOn", runCatching { device.isScreenOn }.getOrNull() ?: JSONObject.NULL)
             .put("keyguardLocked", runCatching { instrumentation.context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked }.getOrNull() ?: JSONObject.NULL)
             .put("editableCount", fields?.size?.coerceAtMost(8) ?: JSONObject.NULL)
             .put("editableOverflow", fields?.let { it.size > 8 } ?: JSONObject.NULL).put("hintShapes", shapes)
+            .put("addHostMatches", addHostMatches).put("openHostsMatches", openHostsMatches)
+            .put("webView", webView ?: JSONObject.NULL)
             .toString().also { check(it.length <= 2048) }
     }
 
@@ -138,11 +154,13 @@ class PublishedApkTest {
     }
 
     private fun workspace() = stage(Stage.WORKSPACE) {
-        check(device.wait(Condition<UiDevice, Boolean> {
-            captions("Add host", it).isNotEmpty() || captions("Open hosts", it).isNotEmpty()
-        }, waitMillis()))
+        stage(Stage.WORKSPACE_READINESS) {
+            check(device.wait(Condition<UiDevice, Boolean> {
+                captions("Add host", it).isNotEmpty() || captions("Open hosts", it).isNotEmpty()
+            }, waitMillis()))
+        }
         if (captions("Add host").isEmpty()) stage(Stage.DRAWER) { named("Open hosts", Stage.DRAWER).click() }
-        named("Add host", Stage.WORKSPACE)
+        named("Add host", Stage.WORKSPACE_ADD_HOST)
     }
 
     @Test(timeout = 60_000)

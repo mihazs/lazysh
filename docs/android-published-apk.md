@@ -97,3 +97,15 @@ The public 0.23.0 APK predates the later branding and viewport repairs. A genuin
 old-public startup or clipping defect may legitimately fail this gate until a
 corrected version is published; the driver must not bypass normal UI to obtain
 a passing receipt.
+
+At driver head `9d966d2`, both flavors failed `WORKSPACE` before input, with the
+target foreground, screen on/unlocked and zero sampled editable fields. That
+stage did not distinguish its initial readiness wait from the final unique
+Add-host lookup. Those unchanged operations now report `WORKSPACE_READINESS`
+and `WORKSPACE_ADD_HOST` separately. A failure-only sample additionally projects
+exact Add-host/Open-host accessibility matches as zero, one, multiple or
+unavailable, and target WebView accessibility presence as a nullable boolean.
+The sample checks the original remaining driver deadline before each query;
+expired or failed queries remain unavailable. It does not retain labels or
+hierarchies and does not prove what was present throughout an earlier wait.
+The 0.23.0 nomination, selectors, actions, waits and success protocol are unchanged.
