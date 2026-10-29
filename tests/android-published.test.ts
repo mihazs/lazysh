@@ -3,7 +3,8 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,publishedDriverStage,publishedDriverObservation,translatedGuest,type PublishedCommand} from './support/androidPublished';
+import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,publishedDriverStage,publishedDriverObservation,publishedCommandFailure,publishedCliFailure,translatedGuest,type PublishedCommand} from './support/androidPublished';
+import {preparePublishedApk} from './support/androidPublishedAssets';
 
 const nonce='a'.repeat(32),component='app.lazysh.acceptance/androidx.test.runner.AndroidJUnitRunner';
 const output=(phase:string)=>`INSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS: lazyshPublishedPhase=${phase}\nINSTRUMENTATION_STATUS: lazyshPublishedPassed=true\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_CODE: -1`;
@@ -36,6 +37,7 @@ test('one complete phase result is required; skips, crashes, wrong phase and pri
 test('identical nominated bytes survive normal UI create, process relaunch and install-r before owned cleanup',()=>fixture(async asset=>{
   const f=fake(),result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
   expect(result.passed).toBe(true);expect(result.receipt).toMatchObject({created:true,relaunched:true,reinstalled:true,preserved:true,cleanup:'passed',scope:'translated-arm64'});
+  expect(result.receipt.driverCommand.outcome).toBe('completed');
   expect(f.calls.filter(args=>args.includes('install'))).toEqual([
     ['-s','emulator-5580','install',asset.apk],['-s','emulator-5580','install','-t','/owned/driver.apk'],['-s','emulator-5580','install','-r',asset.apk],
   ]);
@@ -47,6 +49,7 @@ test.each(['app.lazysh.client','app.lazysh.acceptance'])('preexisting %s is neit
   const f=fake(args=>args.includes('packages')&&args.at(-1)===name?`package:${name}`:undefined);
   const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
   expect(result.receipt.failureStage).toBe('package-absence');expect(result.passed).toBe(false);
+  expect(result.receipt.driverCommand).toEqual({outcome:'unavailable',elapsedMs:null});
   expect(f.calls.some(args=>args.includes('install')||args.includes('uninstall'))).toBe(false);
 }));
 test('driver-install failure releases only confirmed owned application and marks uncertain driver cleanup',()=>fixture(async asset=>{
@@ -78,11 +81,45 @@ test('foreign device and failed process attestation never invoke adb',()=>fixtur
 }));
 test.skipIf(process.platform!=='linux')('real owned output rejects overflow/error/timeout without retaining private child output',async()=>{
   expect(await publishedOutput(process.execPath,['-e',"process.stdout.write('complete')"],1000)).toBe('complete');
-  for(const script of ["process.stdout.write('x'.repeat(65537))","process.stderr.write('private-child');process.exit(9)","setTimeout(()=>{},10000)"]){
+  for(const [script,category] of [["process.stdout.write('x'.repeat(65537))",'output-bound'],["process.stderr.write('private-child');process.exit(9)",'nonzero'],["setTimeout(()=>{},10000)",'deadline']]){
     const error=await publishedOutput(process.execPath,['-e',script],100).catch(error=>error as Error);
     expect(error).toBeInstanceOf(Error);expect(String(error)).not.toContain('private-child');
+    expect(publishedCommandFailure(error)).toBe(category);
   }
+  expect(publishedCommandFailure(await publishedOutput('/owned/not-installed-published-tool',[],100).catch(error=>error))).toBe('start');
 });
+test('closed host failure projection rejects private, partial, forged and unknown labels',async()=>{
+  expect(publishedCommandFailure(new Error('Owned fixture process teardown deadline'))).toBe('teardown');
+  expect(publishedCommandFailure(new Error('Owned fixture failed: published APK command; exit=255'))).toBe('nonzero');
+  const poison=new Error();Object.defineProperty(poison,'message',{get(){throw new Error('private-getter');}});
+  for(const error of [null,{message:'Owned fixture process could not start'},poison,new Error('private-path'),
+    new Error('Owned fixture deadline: published APK command private'),new Error('Owned fixture failed: published APK command; exit=0'),
+    new Error('Owned fixture failed: published APK command; exit=256'),new Error('Owned fixture failed: published APK command; exit=01'),
+    new Error('Owned fixture failed: published APK command; exit=9\nprivate-stderr')]){
+    expect(publishedCommandFailure(error)).toBe('unavailable');expect(publishedCliFailure(error)).toBe('unavailable');
+  }
+  expect(publishedCliFailure(new Error('Published APK requires an absent fresh AVD'))).toBe('avd-present');
+  expect(publishedCliFailure(new Error('Published APK environment required'))).toBe('environment');
+  expect(publishedCliFailure(new Error('Published APK environment required /private/path'))).toBe('unavailable');
+  const assetError=await preparePublishedApk('not-a-tag','foss','/owned/unused','c'.repeat(64)).catch(error=>error);
+  assetError.message='private-response';expect(publishedCliFailure(assetError)).toBe('asset:invocation');
+});
+test.each(['deadline','nonzero','start','teardown','output-bound'] as const)('driver command %s remains separate from original phase and cleanup failure',category=>fixture(async asset=>{
+  const labels={deadline:'Owned fixture deadline: published APK command',nonzero:'Owned fixture failed: published APK command; exit=7',
+    start:'Owned fixture process could not start',teardown:'Owned fixture process teardown deadline','output-bound':'Published APK output exceeded bound'};
+  const f=fake(args=>{if(args.includes('instrument'))throw new Error(labels[category]);if(args.includes('uninstall'))throw new Error('private-cleanup');return undefined;});
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'unavailable',cleanup:'failed',driverCommand:{outcome:category}});
+  expect(Number.isInteger(result.receipt.driverCommand.elapsedMs)).toBe(true);
+  expect(result.receipt.driverCommand.elapsedMs).toBeGreaterThanOrEqual(0);expect(result.receipt.driverCommand.elapsedMs).toBeLessThanOrEqual(60000);
+  expect(JSON.stringify(result)).not.toContain('private-cleanup');
+}));
+test('completed command with unclassified instrumentation is not guessed to be a crash or timeout',()=>fixture(async asset=>{
+  const f=fake(args=>args.includes('instrument')?'private-unclassified-output':undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'unavailable',driverObservation:{state:'unavailable'},driverCommand:{outcome:'completed'},cleanup:'passed'});
+  expect(result.passed).toBe(false);expect(JSON.stringify(result)).not.toContain('private-unclassified-output');
+}));
 
 test('private state permits only finite nominated fields and the exact owned asset path',()=>{
   const base='/owned',state={apk:'/owned/assets/lazysh-0.23.0-android-foss-arm64.apk',bytes:12,certificateSha256:'c'.repeat(64),flavor:'foss',nonce,sha:'b'.repeat(40),sha256:'d'.repeat(64),tag:'v0.23.0',version:'0.23.0'};

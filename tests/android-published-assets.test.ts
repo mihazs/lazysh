@@ -3,7 +3,7 @@ import {mkdtemp,mkdir,readFile,rm,symlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {preparePublishedApk,publishedApkSignature,publishedNativeLibraries,publishedArm64Elf,publishedAssetCommand,type PublishedAssetIo} from './support/androidPublishedAssets';
+import {preparePublishedApk,publishedApkSignature,publishedNativeLibraries,publishedArm64Elf,publishedAssetCommand,publishedAssetFailure,type PublishedAssetIo} from './support/androidPublishedAssets';
 
 const sha='a'.repeat(40),certificate='b'.repeat(64),tag='v0.23.0',name='lazysh-0.23.0-android-foss-arm64.apk';
 const digest=(data:Uint8Array)=>createHash('sha256').update(data).digest('hex');
@@ -93,6 +93,16 @@ test('download body and API metadata are bounded even without declared size',()=
   f.payloads.set(`${f.api}/releases/tags/${tag}`,Buffer.alloc(128*1024+1));
   await expect(f.run()).rejects.toThrow('API metadata');
 }));
+test('asset failure projection uses only trusted closed stages, never arbitrary error messages or mutated stage values',async()=>{
+  const error=await preparePublishedApk('invalid','foss','/owned/unused',certificate).catch(error=>error);
+  error.message='PRIVATE_FIXTURE_SENTINEL';expect(publishedAssetFailure(error)).toBe('invocation');
+  let reads=0;Object.defineProperty(error,'stage',{configurable:true,get(){return ++reads===1?'invocation':'PRIVATE_FIXTURE_SENTINEL';}});
+  expect(publishedAssetFailure(error)).toBe('invocation');expect(reads).toBe(1);
+  expect(publishedAssetFailure(error)).toBe('unavailable');
+  Object.defineProperty(error,'stage',{get(){throw new Error('PRIVATE_FIXTURE_SENTINEL');}});
+  for(const value of [error,new Error('Published Android asset rejected: invocation'),{stage:'invocation'},null])
+    expect(publishedAssetFailure(value)).toBe('unavailable');
+});
 
 test('closed signature/ZIP/ELF parsers reject ambiguity, mixed ABIs, malformed headers and duplicates',()=>{
   expect(publishedApkSignature(`Signer #1 certificate SHA-256 digest: ${certificate}\n`,certificate)).toBe(certificate);

@@ -197,3 +197,19 @@ ORIGINAL IME-absence wait. No actual UI-state assertion, flow deadline, input,
 launch count or persistence requirement changes. These are source-contract
 repairs; the historical KEYBOARD/FORM_SCROLL causes remain unproven until runtime
 evidence, and full both-flavor qualification is still required.
+
+The event-contract revision then had a pre-guest Google preparation failure and
+a FOSS create failure without a classified driver result. The existing receipt
+now separately records the latest driver-command invocation's closed outcome
+(completed, deadline, nonzero, start, teardown, output-bound or unavailable) and
+elapsed milliseconds capped at60,000. Timing includes its original ownership/
+budget preflight; the cap means at least60,000ms. Cleanup cannot overwrite this
+primary invocation sample. Completed plus unavailable driver data means only
+that the command returned unclassified instrumentation, not a guessed crash or
+timeout. Original success requirements remain unchanged.
+
+The CLI failure line now emits only existing allowlisted asset stage codes or
+static environment/AVD/state/admission/acceptance labels. Asset codes come from
+the module's typed error, not arbitrary error text. Unknown, malformed, private
+or nonmatching errors produce unavailable. No raw message, command argument,
+path, stdout or stderr is retained. Driver actions and all budgets are unchanged.

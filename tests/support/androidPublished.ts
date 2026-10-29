@@ -4,11 +4,33 @@ import {createHash,randomBytes} from 'node:crypto';
 import {OwnedProcess} from './ownedProcess';
 import {attestQrCamera,type QrOwnership} from './androidQrOwnership';
 import {digestFile} from '../../.changeset/release-artifacts';
-import {preparePublishedApk} from './androidPublishedAssets';
+import {preparePublishedApk,publishedAssetFailure} from './androidPublishedAssets';
 
 export type PublishedCommand=(program:string,args:string[],milliseconds:number)=>Promise<string>;
 export const publishedPackage='app.lazysh.client',driverPackage='app.lazysh.acceptance';
 const component=`${driverPackage}/androidx.test.runner.AndroidJUnitRunner`;
+export function publishedCommandFailure(error:unknown):'deadline'|'nonzero'|'start'|'teardown'|'output-bound'|'unavailable'{
+  try{
+    const message=error instanceof Error?error.message:'';
+    if(typeof message!=='string'||message.length>256)return 'unavailable';
+    if(message==='Owned fixture deadline: published APK command')return 'deadline';
+    if(message==='Owned fixture process could not start')return 'start';
+    if(message==='Owned fixture process teardown deadline')return 'teardown';
+    if(message==='Published APK output exceeded bound')return 'output-bound';
+    const exit=/^Owned fixture failed: published APK command; exit=([1-9]\d{0,2})$/.exec(message);
+    if(exit&&Number(exit[1])<=255)return 'nonzero';
+  }catch{}
+  return 'unavailable';
+}
+export function publishedCliFailure(error:unknown){
+  const asset=publishedAssetFailure(error);
+  if(asset!=='unavailable')return `asset:${asset}`;
+  const labels=[['Published APK environment required','environment'],['Published APK requires an absent fresh AVD','avd-present'],
+    ['Published APK private state rejected','private-state'],['Published APK private path rejected','private-path'],
+    ['Published APK image revision rejected','image-revision'],['Published APK owned emulator admission failed','emulator-admission'],
+    ['Published APK acceptance failed','acceptance']] as const;
+  try{const message=error instanceof Error?error.message:'';return typeof message==='string'&&message.length<=256?labels.find(([label])=>label===message)?.[1]??'unavailable':'unavailable';}catch{return 'unavailable';}
+}
 export async function publishedOutput(program:string,args:string[],milliseconds:number):Promise<string>{
   if(!Number.isInteger(milliseconds)||milliseconds<1||milliseconds>60000)throw new Error('Published APK command deadline rejected');
   const process=new OwnedProcess(program,args,undefined,undefined,false);
@@ -104,10 +126,15 @@ export async function publishedAcceptance(asset:Asset,driver:string,nonce:string
     return run(adb,['-s',serial!,...args],limit);
   };
   const owned:string[]=[],cleanup:string[]=[];let stage='guest-admission',failure=false;
-  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null,driverStage:null as ReturnType<typeof publishedDriverStage>|null,driverObservation:null as DriverObservation|null};
+  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null,driverStage:null as ReturnType<typeof publishedDriverStage>|null,driverObservation:null as DriverObservation|null,driverCommand:{outcome:'unavailable' as ReturnType<typeof publishedCommandFailure>|'completed',elapsedMs:null as number|null}};
   const instrument=async(phase:'create'|'verify')=>{
     receipt.driverStage='unavailable';receipt.driverObservation={state:'unavailable'};
-    const output=await command(['shell','am','instrument','-w','-r','-e','class','app.lazysh.acceptance.PublishedApkTest#publishedHost','-e','phase',phase,'-e','nonce',nonce,component],45000);
+    receipt.driverCommand={outcome:'unavailable',elapsedMs:null};const started=performance.now();let output:string;
+    try{
+      output=await command(['shell','am','instrument','-w','-r','-e','class','app.lazysh.acceptance.PublishedApkTest#publishedHost','-e','phase',phase,'-e','nonce',nonce,component],45000);
+      receipt.driverCommand.outcome='completed';
+    }catch(error){receipt.driverCommand.outcome=publishedCommandFailure(error);throw error;}
+    finally{receipt.driverCommand.elapsedMs=Math.floor(Math.max(0,Math.min(60000,performance.now()-started)));}
     if(!publishedInstrumentation(output,phase)){
       receipt.driverStage=publishedDriverStage(output);receipt.driverObservation=publishedDriverObservation(output);
       throw new Error('Published APK UI phase incomplete');
@@ -184,4 +211,4 @@ export async function publishedMain(phase:string,env=process.env){
     if(!result.passed)throw new Error('Published APK acceptance failed');
   }
 }
-if(import.meta.main)publishedMain(process.argv[2]??'').catch(()=>{console.error('Published APK gate failed; inspect finite receipt if available');process.exitCode=1;});
+if(import.meta.main)publishedMain(process.argv[2]??'').catch(error=>{console.error(`Published APK gate failed: ${publishedCliFailure(error)}; inspect finite receipt if available`);process.exitCode=1;});

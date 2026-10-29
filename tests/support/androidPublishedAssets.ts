@@ -11,10 +11,18 @@ type Flavor='google'|'foss';
 export type PublishedApk={apk:string;sha:string;version:string;tag:string;flavor:Flavor;sha256:string;bytes:number;certificateSha256:string};
 type Asset={name:string;size:number;digest:string;browser_download_url:string};
 export type PublishedAssetIo={fetch:typeof fetch;command:(program:string,args:string[],limit:number,env:NodeJS.ProcessEnv)=>Promise<Buffer>};
+const assetStages=['command bound','tool unavailable','tool output bound','download response','download declared size','download bound','empty download','download','API metadata',
+  'asset inventory','asset nomination','asset identity','independent download digest','signing certificate','ZIP listing','ZIP entries','ARM64 native libraries','ARM64 ELF',
+  'invocation','version code','public release','tag source','release manifest','source-bound release manifest','nominated platform','nominated receipt','receipt/API agreement',
+  'owned directory','stored APK digest','Android SDK','APK manifest identity','unavailable'] as const;
 class PublishedAssetError extends Error {
-  constructor(stage:string){super(`Published Android asset rejected: ${stage}`);}
+  constructor(readonly stage:typeof assetStages[number]){super(`Published Android asset rejected: ${stage}`);}
 }
-function requirePublished(condition:unknown,stage:string):asserts condition {
+export function publishedAssetFailure(error:unknown):typeof assetStages[number]{
+  try{if(error instanceof PublishedAssetError){const stage=error.stage;if(assetStages.includes(stage))return stage;}}catch{}
+  return 'unavailable';
+}
+function requirePublished(condition:unknown,stage:typeof assetStages[number]):asserts condition {
   if(!condition)throw new PublishedAssetError(stage);
 }
 const hash=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
