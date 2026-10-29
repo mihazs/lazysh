@@ -1,6 +1,6 @@
 # Linux native singleton acceptance
 
-`bun run test:native-gui` builds the real bundled native application, checks the native-test types, and runs one serial Vitest/WebdriverIO specification. It drives official `tauri-driver` and `WebKitWebDriver`; it does not use the Vite server, mock `invoke`, replace the singleton transport, or enable a backend mocking plugin. The existing Tauri runtime's `TAURI_WEBVIEW_AUTOMATION=true` opt-in is set only on owned fixture children.
+`bun run test:native-gui` builds the real bundled native application, checks the native-test types, and runs the serial Vitest/WebdriverIO suite. It drives official `tauri-driver` and `WebKitWebDriver`; it does not use the Vite server, mock `invoke`, replace the singleton transport, or enable a backend mocking plugin. The existing Tauri runtime's `TAURI_WEBVIEW_AUTOMATION=true` opt-in is set only on owned fixture children.
 
 The specification starts the actual application without launch arguments, opens a manual connection dialog and enters a public synthetic password. A separately owned invocation of that same binary sends `--host gui-selected` through the real singleton D-Bus callback. The original private-bus owner, PID/start identity and native window remain; the manual form must survive until explicit Cancel. The selected saved-host dialog then appears with empty credentials. After cancellation, a second explicit invocation with a tmux selector must open another normal dialog. Connect is never pressed, and an owned loopback listener must observe zero SSH connections. These are two explicit test actions, never an automatic retry after uncertain delivery.
 
@@ -97,3 +97,21 @@ Pinned official tauri-driver 2.1.0 launches the exact installed image through Mi
 After session creation fails, two bounded read-only `/status` probes record only finite health categories, after rechecking the original driver identities and listener roles before and after. Responses, capabilities and messages are discarded; READY does not establish session or GUI success. The original failure and cleanup gates remain authoritative.
 
 This is a foundation gate; its first actual Windows execution remains required before merge. It does not establish warm singleton argv, ConPTY terminal behavior or authenticated SSH, which remain under #457. Published 0.23.0 assets are untouched; CI evidence belongs to its exact candidate source/binary.
+
+## Owned SSH connection
+
+The Linux suite also creates a fresh loopback OpenSSH server using the same `SshFixture` as Android acceptance. Its portable process/SSH owner lives in `tests/support/sshFixture.ts`; Android keeps its existing re-exports. The test adds a host through the bundled UI, chooses SSH explicitly, enters only the ephemeral private key without saving it, reviews the exact generated host fingerprint and confirms trust. Ordinary terminal keyboard input must produce the fixture's non-echoable challenge output while the original GUI owner remains unchanged. The singleton cases retain their separate zero-connection target.
+
+This case explicitly gives only its SSH daemon a private read-only `/etc/group`
+view with `tty` mapped to the fixture user's primary group. The outer user
+namespace cannot map the host's separate `tty` group: the unmodified fixture
+fails its real OpenSSH challenge there with a PTY `chown` invalid-argument error,
+while the private mapping passes. The host group file, GUI isolation and ordinary
+Android fixture mode remain unchanged. Before GUI acceptance, CI exercises the
+existing SSH host owner inside the same outer user/network namespace, including
+unchanged host groups, complete listener cleanup and rejection of a supervisor
+lost before teardown. The GUI case also requires a real OpenSSH challenge against
+its own still-live server before starting the app; that preflight cannot replace
+the separate native GUI SSH challenge.
+
+The GUI stops before its SSH server. Cleanup verifies the exact owned server/descendants and listener retire. Before the connected terminal is visible, this case suppresses screenshots so the temporary private-key field cannot enter artifacts. It never injects host trust, calls native terminal writes, mocks the bridge or uses an operator credential. A source implementation or passing host-fixture check does not establish the new GUI case; require the corresponding actual Linux native CI result before claiming acceptance.

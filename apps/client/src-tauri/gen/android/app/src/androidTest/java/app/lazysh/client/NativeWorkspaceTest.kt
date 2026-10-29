@@ -3,6 +3,7 @@ package app.lazysh.client
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Configuration
 import android.view.KeyEvent
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -26,6 +27,9 @@ import androidx.test.runner.lifecycle.Stage
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
@@ -569,6 +573,36 @@ class NativeWorkspaceTest {
             // Metadata must never replace the original assertion/type/cause.
             runCatching { failure.addSuppressed(AssertionError("Native typing timing: ${timing.report(System.nanoTime())}")) }
             throw failure
+        }
+    }
+
+    @Test fun edgeToEdgeInsetsReserveBarsCutoutAndKeyboardWithoutAccumulatingPadding() {
+        val scenario = NativeActivityFixture.scenario
+        scenario.onActivity { activity ->
+            val content = activity.findViewById<View>(android.R.id.content)
+            val bars = WindowInsetsCompat.Type.systemBars()
+            val cutout = WindowInsetsCompat.Type.displayCutout()
+            val ime = WindowInsetsCompat.Type.ime()
+            val original = ViewCompat.getRootWindowInsets(content)
+            try {
+                for (keyboard in listOf(320, 0, 240, 0)) {
+                    val input = WindowInsetsCompat.Builder()
+                        .setInsets(bars, Insets.of(0, 24, 0, 28))
+                        .setInsets(cutout, Insets.of(36, 0, 0, 0))
+                        .setInsets(ime, Insets.of(0, 0, 0, keyboard))
+                        .setVisible(ime, keyboard > 0).build()
+                    val forwarded = ViewCompat.dispatchApplyWindowInsets(content, input)
+                    assertEquals("Landscape cutout must constrain WebView width", 36, content.paddingLeft)
+                    assertEquals("Status bar must constrain WebView height", 24, content.paddingTop)
+                    assertEquals(0, content.paddingRight)
+                    assertEquals("Keyboard and navigation bar overlap, rather than add", maxOf(28, keyboard), content.paddingBottom)
+                    assertEquals("WebView must receive hide updates without double insets", Insets.NONE,
+                        forwarded.getInsets(bars or cutout or ime))
+                }
+            } finally {
+                if (original != null) ViewCompat.dispatchApplyWindowInsets(content, original)
+                ViewCompat.requestApplyInsets(content)
+            }
         }
     }
 
@@ -1337,7 +1371,9 @@ class NativeWorkspaceTest {
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun selectSsh() {
             closeSoftKeyboard()
-            val selector = "[role=dialog] select"
+            val selector = "[role=dialog] select:has(option[value='ssh'])"
+            assertEquals("Exactly one transport control must offer SSH", "1", evaluate(scenario,
+                "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
             // A DOM click atom does not activate Chromium's native select popup.
             // Read only this control's viewport geometry, then inject one native tap.
@@ -1350,22 +1386,65 @@ class NativeWorkspaceTest {
             assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
                 values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
                 values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
-                val origin = IntArray(2)
-                view.getLocationOnScreen(origin)
-                val scale = view.width.toDouble() / values[2]
-                val x = values[0] * scale
-                val y = values[1] * scale
-                assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
-                floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
-            }, Press.FINGER))
-            val option = onView(withText("SSH")).inRoot(isDialog())
-            option.check(matches(isDisplayed()))
-            println("lazysh SSH UI: native transport chooser ready")
-            option.perform(click())
-            assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
-                "document.querySelector('[role=dialog] select')?.value==='ssh'"))
-            println("lazysh SSH UI: native transport selected")
+            val tapScript = instrumentation.context.assets.open("owned-native-tap.js")
+                .use { it.readNBytes(4097) }.also { require(it.size <= 4096) { "Native tap script bound" } }.toString(Charsets.UTF_8)
+            val tapKey = JSONObject.quote("__lazyshOwnedTransportTap_$nonce")
+            val tapToken = JSONObject.quote(java.util.UUID.randomUUID().toString())
+            val nativeTap = AtomicReference(JSONObject())
+            var tapFailure: Throwable? = null
+            try {
+                assertEquals("Only a fresh case-owned passive tap observer may be installed", "true", evaluate(scenario, """
+                    (()=>{
+                      if(Object.prototype.hasOwnProperty.call(window,$tapKey)) return false;
+                      $tapScript
+                      const tracker=ownedNativeTapObservation(document.querySelector(${JSONObject.quote(selector)}));
+                      try {Object.defineProperty(window,$tapKey,{value:{token:$tapToken,tracker},configurable:true});}
+                      catch(_){tracker.close();return false;}
+                      return true;
+                    })()
+                """))
+                onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                    val origin = IntArray(2)
+                    view.getLocationOnScreen(origin)
+                    nativeTap.set(JSONObject().put("origin", JSONArray(origin.map { it.coerceIn(-65535, 65535) }))
+                        .put("width", view.width.coerceIn(0, 65535)).put("height", view.height.coerceIn(0, 65535))
+                        .put("density", view.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
+                        .put("layoutRequested", view.isLayoutRequested).put("windowFocused", view.hasWindowFocus())
+                        .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
+                        .put("imeVisible", ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime()) ?: JSONObject.NULL))
+                    val scale = view.width.toDouble() / values[2]
+                    val x = values[0] * scale
+                    val y = values[1] * scale
+                    assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
+                    floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+                }, Press.FINGER))
+                val option = onView(withText("SSH")).inRoot(isDialog())
+                option.check(matches(isDisplayed()))
+                println("lazysh SSH UI: native transport chooser ready")
+                option.perform(click())
+                assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
+                    "document.querySelector(${JSONObject.quote(selector)})?.value==='ssh'"))
+                println("lazysh SSH UI: native transport selected")
+            } catch (failure: Throwable) {
+                tapFailure = failure
+                val observation = runCatching {
+                    val events = JSONObject(evaluate(scenario,
+                        "(()=>{const owned=window[$tapKey];return owned?.token===$tapToken?owned.tracker.read():null;})()", 1000))
+                    JSONObject().put("geometry", geometry).put("native", nativeTap.get()).put("events", events)
+                        .toString().also { require(it.length <= 4096) { "Native tap observation bound" } }
+                }.getOrDefault("unavailable")
+                failure.addSuppressed(AssertionError("Owned native transport tap: $observation"))
+                throw failure
+            } finally {
+                val removed = runCatching { evaluate(scenario, """
+                    (()=>{const owned=window[$tapKey];if(!owned)return true;if(owned.token!==$tapToken)return false;
+                      owned.tracker.close();delete window[$tapKey];return !Object.prototype.hasOwnProperty.call(window,$tapKey);})()
+                """, 1000) == "true" }.getOrDefault(false)
+                if (!removed) {
+                    val cleanupFailure = AssertionError("Owned native tap observer cleanup unavailable")
+                    if (tapFailure != null) tapFailure!!.addSuppressed(cleanupFailure) else throw cleanupFailure
+                }
+            }
         }
         var primaryFailure: Throwable? = null
         android.util.Log.i("LazyshOwnedCase", "start:$nonce:pid:${android.os.Process.myPid()}")
@@ -1403,11 +1482,118 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             clickButton("Compose")
             typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
+            val keyboardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            var keyboardGeometry = JSONObject()
+            while (true) {
+                var fitsAboveKeyboard = false
+                scenario.onActivity { activity ->
+                    val decor = activity.window.decorView
+                    val insets = requireNotNull(ViewCompat.getRootWindowInsets(decor))
+                    val keyboardHeight = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                    val web = requireNotNull(webView(decor))
+                    val position = IntArray(2)
+                    web.getLocationInWindow(position)
+                    val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+                    fitsAboveKeyboard = imeVisible && keyboardHeight > 0 &&
+                        position[1] + web.height <= decor.height - keyboardHeight
+                    // Closed, bounded geometry only: never DOM content, paths,
+                    // input values, view descriptions or exception messages.
+                    keyboardGeometry = JSONObject().put("rootImeVisible", imeVisible)
+                        .put("rootImeBottom", keyboardHeight.coerceIn(0, 65535))
+                        .put("decorHeight", decor.height.coerceIn(0, 65535))
+                        .put("webWindowY", position[1].coerceIn(-65535, 65535))
+                        .put("webHeight", web.height.coerceIn(0, 65535))
+                        .put("keyboard", when (activity.resources.configuration.keyboard) {
+                            Configuration.KEYBOARD_NOKEYS -> "none"
+                            Configuration.KEYBOARD_QWERTY -> "qwerty"
+                            Configuration.KEYBOARD_12KEY -> "12key"
+                            Configuration.KEYBOARD_UNDEFINED -> "undefined"
+                            else -> "other"
+                        })
+                        .put("hardKeyboardHidden", when (activity.resources.configuration.hardKeyboardHidden) {
+                            Configuration.HARDKEYBOARDHIDDEN_YES -> "hidden"
+                            Configuration.HARDKEYBOARDHIDDEN_NO -> "visible"
+                            Configuration.HARDKEYBOARDHIDDEN_UNDEFINED -> "undefined"
+                            else -> "other"
+                        })
+                    runCatching {
+                        val content = activity.findViewById<View>(android.R.id.content)
+                        keyboardGeometry.put("contentHeight", content.height.coerceIn(0, 65535))
+                            .put("contentPaddingBottom", content.paddingBottom.coerceIn(0, 65535))
+                        web.getLocationOnScreen(position)
+                        keyboardGeometry.put("webScreenY", position[1].coerceIn(-65535, 65535))
+                        if (Build.VERSION.SDK_INT >= 30) {
+                            val metrics = activity.windowManager.currentWindowMetrics
+                            keyboardGeometry.put("metricsTop", metrics.bounds.top.coerceIn(-65535, 65535))
+                                .put("metricsBottom", metrics.bounds.bottom.coerceIn(-65535, 65535))
+                                .put("metricsImeBottom", metrics.windowInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom.coerceIn(0, 65535))
+                                .put("metricsImeVisible", metrics.windowInsets.isVisible(android.view.WindowInsets.Type.ime()))
+                        }
+                    }.onFailure { keyboardGeometry.put("supplementalUnavailable", true) }
+                }
+                if (fitsAboveKeyboard) break
+                assertTrue("Real docked IME must resize the native WebView; geometry=$keyboardGeometry", System.nanoTime() < keyboardDeadline)
+                Thread.sleep(50)
+            }
+            val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
+                .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
+                .also { require(it.size <= 2048) { "Keyboard viewport oracle bound" } }.toString(Charsets.UTF_8)
+            val canvasHeight = "document.querySelector('.terminal-canvas').getBoundingClientRect().height"
+            awaitDocument(scenario, "terminal and special keys inside the keyboard-resized WebView", """
+                (()=>{
+                  const canvas=document.querySelector('.terminal-canvas'), keys=document.querySelector('.terminal-keys');
+                  if(!canvas || !keys || canvas.getBoundingClientRect().height<=0) return false;
+                  const special=Array.from(keys.querySelectorAll('button')).filter(x=>['esc','tab'].includes(x.textContent));
+                  $viewportOracle
+                  return special.length===2 && ownedKeyboardViewportContains(window.visualViewport,
+                    [canvas,keys,...special].map(x=>x.getBoundingClientRect()));
+                })()
+            """, { remaining ->
+                val native = JSONObject()
+                scenario.onActivity { activity ->
+                    val decor = activity.window.decorView
+                    val web = requireNotNull(webView(decor))
+                    native.put("webHeight", web.height.coerceIn(0, 65535))
+                        .put("webWidth", web.width.coerceIn(0, 65535))
+                        .put("density", activity.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
+                        .put("imeBottom", ViewCompat.getRootWindowInsets(decor)?.getInsets(WindowInsetsCompat.Type.ime())?.bottom?.coerceIn(0, 65535) ?: JSONObject.NULL)
+                }
+                val dom = JSONObject(evaluate(scenario, """
+                    (()=>{
+                      const n=x=>Number.isFinite(x)&&Math.abs(x)<=65535?x:null;
+                      const rect=e=>e?['left','top','right','bottom','width','height'].map(k=>n(e.getBoundingClientRect()[k])):null;
+                      const canvas=document.querySelector('.terminal-canvas'),keys=document.querySelector('.terminal-keys');
+                      const composer=document.querySelector('.terminal-compose'),toggle=document.querySelector('.terminal-toolbar-toggle');
+                      const buttons=keys?Array.from(keys.querySelectorAll('button')):[];
+                      return {viewport:[n(innerWidth),n(innerHeight),n(document.documentElement.clientHeight),n(devicePixelRatio)],
+                        visualViewport:[n(window.visualViewport?.width),n(window.visualViewport?.height),
+                          n(window.visualViewport?.offsetLeft),n(window.visualViewport?.offsetTop),n(window.visualViewport?.scale)],
+                        canvas:rect(canvas),screenHeight:n(canvas?.querySelector('.xterm-screen')?.getBoundingClientRect().height),
+                        keys:rect(keys),esc:rect(buttons.find(x=>x.textContent==='esc')),tab:rect(buttons.find(x=>x.textContent==='tab')),
+                        composer:rect(composer),toggle:rect(toggle),header:rect(document.querySelector('.workspace-header')),
+                        sessions:rect(document.querySelector('.session-tabs')),navigation:rect(document.querySelector('.view-tabs')),
+                        footer:rect(document.querySelector('.workspace-footer')),
+                        canvasCount:n(document.querySelectorAll('.terminal-canvas').length),
+                        rowFloor:n(parseFloat(canvas?.style.minHeight)),
+                        composerFlexible:Boolean(composer&&getComputedStyle(composer).flexGrow==='1'&&getComputedStyle(composer).overflowY==='auto'),
+                        toggleFixed:Boolean(toggle&&getComputedStyle(toggle).flexShrink==='0')};
+                    })()
+                """, remaining))
+                JSONObject().put("native", native).put("dom", dom).toString().also {
+                    require(it.length <= 4096) { "Keyboard geometry observation bound" }
+                }
+            })
+            val withKeyboard = evaluate(scenario, canvasHeight).toDouble()
             closeSoftKeyboard()
+            awaitDocument(scenario, "terminal expands after native keyboard dismissal", "$canvasHeight > $withKeyboard")
             clickButton("Paste draft")
-            assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario,
-                "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"))
-            // Paste draft focuses xterm; normal native Enter submits the real shell input.
+            val terminalFocused = "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"
+            assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario, terminalFocused))
+            // Refocusing xterm can reopen the docked IME and reduce the visible screen to one row.
+            // Dismiss it ordinarily so the unchanged output-plus-later-prompt oracle can see both rows.
+            closeSoftKeyboard()
+            assertEquals("Keyboard dismissal must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+            // Normal native Enter submits the real shell input.
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                 screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")

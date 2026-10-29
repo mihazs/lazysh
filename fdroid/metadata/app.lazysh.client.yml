@@ -35,8 +35,8 @@ Builds:
       - unzip -o "$HOME/.local/share/lazysh-fdroid/bun.zip" -d "$HOME/.local/share/lazysh-fdroid"
       - test "$(bun --version)" = 1.3.14
       - bun install --frozen-lockfile --ignore-scripts --omit=optional
-      # Browser acceptance assets are not an input to the application build.
-      - rm -rf node_modules/playwright-core
+      # Desktop browser acceptance assets are not an application build input.
+      - rm -rf node_modules/playwright-core node_modules/@zip.js/zip.js
       - cargo fetch --locked --target aarch64-linux-android
       - cargo fetch --locked --manifest-path $$rollup$$/rust/Cargo.toml
       # Gradle's native callback must invoke the source-built Cargo CLI too.

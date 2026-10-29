@@ -105,24 +105,32 @@ installation or physical-device acceptance is claimed before it is executed.
 
 ## Current native acceptance status
 
-This intermediate release does not establish full Android/desktop parity.
-Android first-Activity focus and runtime acceptance (#352), SystemUI startup
-health (#379), guarded Chat/SSH acceptance (#306), and notification acceptance
-(#344/#459) remain outstanding. Actual ARM64 device installation and update
-acceptance remains pending; package identity/signature checks do not establish it.
-Desktop GUI and SSH acceptance remains tracked in #457/#458. Windows installer
-acceptance covers installation, same-version repair and uninstall; it does not
-establish a version upgrade or data migration. Apple distribution is deferred.
-These gaps remain explicit even when source builds, signatures and installer
-checks pass. Consult the linked issues for current acceptance evidence.
+This release does not establish full Android/desktop parity. Owned packaged Android
+SSH and guarded Herdr Chat passed on the API36 x86_64 emulator, including native
+keep-awake hide/reveal acknowledgement ([runtime evidence](https://github.com/mihazs/lazysh/actions/runs/40894669216/job/123524957621)).
+That is scoped emulator evidence, not proof of installing this release's published
+ARM64 APK or testing the physical Samsung Galaxy S23+. First-Activity focus/runtime
+reliability (#352), SystemUI/ANR startup health (#379), and free-software notification
+acceptance (#344/#459) retain their separate outstanding gates.
+
+Linux native GUI acceptance passed all nine owned cases, including authenticated
+SSH, exact binary identity and singleton/network isolation ([GUI evidence](https://github.com/mihazs/lazysh/actions/runs/40884642182/job/123489192812)).
+The later tmux suite in that job failed two cases; supported binary provenance and
+full multiplexer acceptance remain separate work in #7. Windows installer checks
+cover installation, same-version repair and uninstall; installed GUI acceptance
+(#457), version upgrade and data migration remain pending. Rex compatibility
+requires authorized beta access that is not available. Apple distribution is
+deferred. These limits remain explicit even when source builds, signatures and
+installer checks pass. Consult the linked issues for current acceptance evidence.
 
 ## What updates automatically
 
-The release pipeline publishes the current 0.23.0 version through an explicit,
-source-bound initial dispatch, then each future individually merged Changesets
+The release pipeline publishes 1.0.0 through its reviewed allowlist and an explicit,
+source-bound dispatch after the source-recipe correction, then each future individually merged Changesets
 version through verified source builds and installation artifacts. It does not
 backfill historical versions or silently replace a running desktop/mobile app.
-Pending Changesets remain for the next version during initial publication.
+Every gate rebuilds the exact acknowledged source. The published 0.23.0 remains
+immutable; pending Changesets remain for the next version during allowlisted publication.
 Use the platform installer or your chosen distribution channel to apply updates.
 All lazysh features remain free and open-source; external Apple signing/account
 requirements are platform constraints, not a lazysh subscription or feature gate.
