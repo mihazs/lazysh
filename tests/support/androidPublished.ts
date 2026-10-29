@@ -28,7 +28,7 @@ export function publishedInstrumentation(output:string,phase:'create'|'verify'){
     && lines.filter(line=>line.startsWith('INSTRUMENTATION_STATUS: numtests=')).every(line=>line==='INSTRUMENTATION_STATUS: numtests=1')
     && !lines.some(line=>/^INSTRUMENTATION_STATUS_CODE: -|^INSTRUMENTATION_FAILED|^INSTRUMENTATION_RESULT: shortMsg=/.test(line));
 }
-const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
+const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','LAUNCH_WINDOW','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SCROLL_OWNER','FORM_SCROLL','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
 export function publishedDriverStage(output:string):typeof driverStages[number]|'unavailable'{
   if(output.length>65536||output.includes('\0'))return 'unavailable';
   const reported=[...output.matchAll(/^INSTRUMENTATION_STATUS: stack=java\.lang\.AssertionError: Published APK UI: ([A-Z_]+)\r?$/gm)].map(match=>match[1]);

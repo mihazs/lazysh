@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Condition
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import org.json.JSONArray
@@ -19,9 +20,9 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PublishedApkTest {
     private enum class Stage {
-        ARGUMENTS, DEVICE_ADMISSION, LAUNCH, WORKSPACE, WORKSPACE_READINESS, WORKSPACE_ADD_HOST,
+        ARGUMENTS, DEVICE_ADMISSION, LAUNCH, LAUNCH_WINDOW, WORKSPACE, WORKSPACE_READINESS, WORKSPACE_ADD_HOST,
         DRAWER, ADD_HOST, NAME, HOSTNAME, USERNAME,
-        KEYBOARD, SAVE_HOST, SAVED_HOST, EDIT_HOST, READBACK, COMPLETE,
+        KEYBOARD, SCROLL_OWNER, FORM_SCROLL, SAVE_HOST, SAVED_HOST, EDIT_HOST, READBACK, COMPLETE,
     }
     private enum class InputOperation { NONE, LOOKUP, CLICK, SET, READBACK }
     private enum class InputField { NONE, NAME, HOSTNAME, USERNAME }
@@ -200,6 +201,45 @@ class PublishedApkTest {
         named("Add host", Stage.WORKSPACE_ADD_HOST)
     }
 
+    private fun revealSave(name: String) = stage(Stage.FORM_SCROLL) {
+        check(device.currentPackageName == target)
+        fun visible(): Boolean {
+            val matches = captions("Save host")
+            check(matches.size <= 1)
+            return matches.size == 1
+        }
+        if (visible()) return@stage
+        val owner = stage(Stage.SCROLL_OWNER) {
+            val anchor = input(nameHint, Stage.SCROLL_OWNER)
+            check(anchor.text == name)
+            var cursor = anchor
+            var reachedWebView = false
+            val candidates = mutableListOf<UiObject2>()
+            for (depth in 1..16) {
+                val parent = checkNotNull(cursor.parent)
+                check(parent.applicationPackage == target)
+                if (parent.className == "android.webkit.WebView") {
+                    reachedWebView = true
+                    break
+                }
+                if (parent.isScrollable) candidates.add(parent)
+                cursor = parent
+            }
+            check(reachedWebView && candidates.size == 1)
+            candidates.single()
+        }
+        repeat(4) {
+            check(System.nanoTime() < deadline)
+            check(device.currentPackageName == target && owner.applicationPackage == target && owner.isScrollable)
+            check(!owner.visibleBounds.isEmpty)
+            check(System.nanoTime() < deadline)
+            val more = owner.scroll(Direction.DOWN, 0.8f)
+            if (visible()) return@stage
+            check(more)
+        }
+        error("Save host was not revealed by the bounded owned form scroll")
+    }
+
     @Test(timeout = 60_000)
     fun publishedHost() {
         try { runPublishedHost() } catch (failure: Throwable) {
@@ -231,6 +271,13 @@ class PublishedApkTest {
             check(intent?.component?.packageName == target)
             instrumentation.context.startActivity(checkNotNull(intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
+        stage(Stage.LAUNCH_WINDOW) {
+            val remaining = (deadline - System.nanoTime()) / 1_000_000L
+            check(remaining > 0)
+            check(device.wait(Condition<UiDevice, Boolean> { current ->
+                current.currentPackageName == target && current.hasObject(By.pkg(target).depth(0))
+            }, remaining))
+        }
         workspace()
         if (phase == "create") {
             stage(Stage.ADD_HOST) {
@@ -241,6 +288,7 @@ class PublishedApkTest {
             setInput(hostnameHint, "$name.invalid", Stage.HOSTNAME)
             setInput(usernameHint, "owned", Stage.USERNAME)
             hideKeyboard()
+            revealSave(name)
             stage(Stage.SAVE_HOST) {
                 saveOperation = "lookup"
                 val button = named("Save host", Stage.SAVE_HOST)

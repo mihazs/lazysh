@@ -92,7 +92,7 @@ test('private state permits only finite nominated fields and the exact owned ass
 
 test('driver exception classification retains only one exact closed stage and never arbitrary error data',()=>{
   const line=(stage:string)=>`INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: ${stage}`;
-  for(const stage of ['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'])expect(publishedDriverStage(line(stage))).toBe(stage);
+  for(const stage of ['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','LAUNCH_WINDOW','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SCROLL_OWNER','FORM_SCROLL','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'])expect(publishedDriverStage(line(stage))).toBe(stage);
   expect(publishedDriverStage(line('WORKSPACE')+'\n'+line('WORKSPACE'))).toBe('WORKSPACE');
   for(const value of ['',line('PRIVATE_SECRET'),line('NAME')+' private-path',line('NAME')+'\n'+line('LAUNCH'),'private-error',line('NAME')+'\0','x'.repeat(65537)])expect(publishedDriverStage(value)).toBe('unavailable');
 });
@@ -101,6 +101,15 @@ test('parent UI phase and closed driver stage survive independently without raw 
   const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
   expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'HOSTNAME',driverObservation:{state:'unavailable'},cleanup:'passed'});
   expect(result.passed).toBe(false);expect(JSON.stringify(result)).not.toContain('private-output');
+}));
+test.each(['LAUNCH_WINDOW','SCROLL_OWNER','FORM_SCROLL'])('failed %s admission never grants create, retry, relaunch or reinstall success',stage=>fixture(async asset=>{
+  const f=fake(args=>args.includes('instrument')?`INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: ${stage}\nINSTRUMENTATION_STATUS_CODE: -2\nprivate-node-or-package`:undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:stage,created:false,relaunched:false,reinstalled:false,preserved:false,cleanup:'passed'});
+  expect(f.calls.filter(args=>args.includes('instrument'))).toHaveLength(1);
+  expect(f.calls.some(args=>args.includes('-r')&&args.includes('install'))).toBe(false);
+  expect(f.calls.slice(-2).map(args=>args.at(-1))).toEqual(['app.lazysh.acceptance','app.lazysh.client']);
+  expect(JSON.stringify(result)).not.toContain('private-node-or-package');
 }));
 
 const noReadiness={outcome:'unavailable',elapsedMs:null,polls:0,overflow:false,lastAdd:'unavailable',lastOpen:'unavailable'};

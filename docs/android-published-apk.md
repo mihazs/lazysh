@@ -154,3 +154,30 @@ The host accepts only the exact three closed fields with consistent count
 categories; raw labels, coordinates, exceptions and arbitrary fields are rejected.
 The scrollable form footer remains a hypothesis until actual match evidence
 distinguishes absence, ambiguity, empty visible bounds and click failure.
+
+At the Save-trace revision, FOSS still failed lookup with zero query matches;
+Google instead returned false from readiness while another package was foreground.
+UI Automator's `ByMatcher` discards invisible subtrees before matching, so even
+the original raw query collection cannot rule out an offscreen form footer.
+
+Current fixture preparation now follows the [Android UI Automator launch
+contract](https://developer.android.com/training/testing/other-components/ui-automator-legacy):
+after the single original launch, require a visible target-package root and
+target foreground before starting the unchanged functional-caption wait. This
+uses only the remaining original45-second flow budget; it adds no numeric budget
+or launch retry. A missing first owned window fails `LAUNCH_WINDOW`.
+[`startActivitySync`](https://developer.android.com/reference/android/app/Instrumentation#startActivitySync(android.content.Intent))
+cannot replace this external-process precondition because it cannot start a
+different process. This does not establish Google's earlier startup cause.
+
+If Save host is not already uniquely visible, form navigation anchors on the
+exact owned Name field and its synthetic value, traverses at most16 same-package
+parents up to the WebView, and requires exactly one scrollable ancestor below
+that WebView. It never chooses a global first scrollable view. With target and
+container ownership rechecked, at most four normal native DOWN gestures of0.8
+container lengths may reveal the footer. End-of-scroll, ambiguity, foreign/stale
+ownership or an exhausted original deadline fails closed. The exact visible,
+unique Save-host lookup and single click still follow, with every durable-save,
+relaunch and same-byte reinstall assertion intact. No random tap, input retry,
+sleep, fallback or deadline extension is introduced. Runtime verification of
+these fixture actions remains required; no product footer repair is claimed.
