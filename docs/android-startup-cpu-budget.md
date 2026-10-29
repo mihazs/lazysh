@@ -91,7 +91,16 @@ snapshots; a later cleanup failure preserves the original observation.
 RAM `3072M` versus integer `3072` remains an unverified runtime distinction.
 The [hardware definition](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/avd/src/android/avd/hardware-properties.ini)
 declares integer megabytes. This probe leaves the configured RAM and allowed RAM
-value unchanged pending actual flags. Directory/index/config inode comparisons,
-UID, link and canonical path checks remain strict; an atomic replacement is
-observed but still rejected. A source-supported config-inode repair requires
-reviewing the owned post-boot evidence first.
+value unchanged pending actual flags. UID, link, canonical path, RAM/core/device/image and directory/index inode checks
+remain strict. After camera attestation and all those checks pass, post-boot
+admission may replace the sealed config inode once with its freshly proved
+config inode. Retirement compares all three inodes exactly against that admitted
+baseline; a later config replacement still prevents deletion.
+
+Branch probe 40827477335 artifact 12877695809, SHA-256
+`56546a7d29d52233d9587e33fbfbd9724e59352d9838d1f6b1e2172f444d64b4`,
+retained valid core/RAM/device/image/index fields, unchanged directory/index
+inodes, spaced assignments, and a changed config inode. RAM remained `3072M`.
+It stopped at the original inode comparison. This observed replacement matches
+the documented SDK atomic writer. The one-time admission handoff addresses that
+setup contract; it does not establish an ANR cause or CPU-budget outcome.

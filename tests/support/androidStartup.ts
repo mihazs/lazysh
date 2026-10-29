@@ -198,7 +198,11 @@ export async function runStartup(phase:string,env=process.env,attest=attestQrCam
       checkpoint='camera-attestation';const ownership=await attest(env,root);await ownership.check();
       checkpoint='avd-sealed';if(!row().sealed)throw new Error('Unsealed AVD');
       checkpoint='avd-proof';const proof=await avdProof();
-      checkpoint='avd-seal-match';if(JSON.stringify(proof)!==JSON.stringify(state.avd))throw new Error('Unsealed AVD');
+      checkpoint='avd-seal-match';
+      if(row().postBootConfigAdmitted||!state.avd||proof.directory!==state.avd.directory||proof.index!==state.avd.index)throw new Error('Unsealed AVD');
+      // The SDK atomically rewrites config.ini at first boot. Record it only here,
+      // after attestation and complete field/ownership proof; retirement stays exact.
+      state.avd=proof;row().postBootConfigAdmitted=true;
       checkpoint='pid-nomination';state.pid=Number((await read(env.LAZYSH_ANDROID_QR_EMULATOR_PID_FILE!,32)).trim());
       checkpoint='process-identity';const identity=await processIdentity(state.pid);state.start=identity&&!identity.retired?identity.start:undefined;
       checkpoint='process-record';await save();
