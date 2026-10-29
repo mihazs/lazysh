@@ -213,3 +213,29 @@ static environment/AVD/state/admission/acceptance labels. Asset codes come from
 the module's typed error, not arbitrary error text. Unknown, malformed, private
 or nonmatching errors produce unavailable. No raw message, command argument,
 path, stdout or stderr is retained. Driver actions and all budgets are unchanged.
+
+## Verified qualification: public v1.0.0
+
+Both Google and FOSS completed the actual gate at driver head
+`ee79d4a12e76f992c31bd5802752a71350998a30` in
+[run40929887367](https://github.com/mihazs/lazysh/actions/runs/40929887367).
+The public signed APKs bind to source
+`55a52e01bcf37c600d1a9877b190e85eb3141ff9` and the reviewed certificate pin.
+
+| Variant / job | Artifact | Verified archive SHA256 |
+| --- | --- | --- |
+| [Google123645191141](https://github.com/mihazs/lazysh/actions/runs/40929887367/job/123645191141) | 12922497226 | `176f1818bc5d29bcb33dca2cd40cf32057b76ce63ee24c09c70337ec425a7616` |
+| [FOSS123645191392](https://github.com/mihazs/lazysh/actions/runs/40929887367/job/123645191392) | 12922013862 | `f4587d315239041055ace93ba9127794d93571143d1ce1b53f2623c1eb14a1b4` |
+
+Both receipts report guest admission, UI host creation/readback, process relaunch,
+identical-byte reinstall and preserved fields as true, with cleanup passed and
+all failure/driver observation fields null. Both final verification commands
+completed; their 14,295ms and 14,753ms timings cover only that last invocation.
+Owned uninstall commands completed without reported error; package absence was
+not independently queried afterward.
+
+This qualifies these public v1.0.0 APKs on admitted Google API35 revision9
+x86_64 guests using ARM64 translation. Physical Galaxy/Samsung behavior,
+cross-version migration, later releases and full feature parity remain separate.
+The successful result does not establish the causes of the historical failures
+or which conditional scroll/keyboard branches executed.
