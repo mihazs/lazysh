@@ -23,7 +23,7 @@ export function parseKeepAwakeStatus(value: unknown): NativeStatus {
 function message(error:unknown) {
   return error instanceof LocalUiError ? error : error instanceof Error ? error.message : typeof error==='string' ? error : new LocalUiError('keepAwakeRequestFailed');
 }
-export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
+export default function KeepAwakeControl({sessionId,visible:boardVisible=true}:{sessionId:string;visible?:boolean}) {
   useUi();
   const invoke=useProtectedInvoke();
   const {access,mounted}=useMountedAccess();
@@ -36,31 +36,38 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
   const [error,setError]=useState<UiErrorCause>('');
   const [preferenceError,setPreferenceError]=useState<UiErrorCause>('');
   const desired=useRef(enabled);desired.current=enabled;
+  const shown=useRef(boardVisible);shown.current=boardVisible;
   const current=useRef<Ticket|undefined>(undefined);
   const cleanupFailure=useRef<UiErrorCause>('');
   const requireOptIn=useRef(false);
   useEffect(()=>{
+    const stored=(event:StorageEvent)=>{if(event.key===boardAwakeKey || event.key===null)setEnabled(readEnabled());};
+    window.addEventListener('storage',stored);
+    return()=>window.removeEventListener('storage',stored);
+  },[]);
+  useEffect(()=>{
+    if(!boardVisible)return;
+    setForeground(previous=>previous.visible===visible()?previous:{visible:visible(),revision:previous.revision+1});
     let alive=true;
     let unlisten:(()=>void)|undefined;
     const changed=()=>setForeground(previous=>({visible:visible(),revision:previous.revision+1}));
     const hidden=()=>setForeground(previous=>({visible:false,revision:previous.revision+1}));
-    const stored=(event:StorageEvent)=>{if(event.key===boardAwakeKey || event.key===null)setEnabled(readEnabled());};
     document.addEventListener('visibilitychange',changed);window.addEventListener('focus',changed);
-    window.addEventListener('blur',hidden);window.addEventListener('pagehide',hidden);window.addEventListener('pageshow',changed);window.addEventListener('storage',stored);
+    window.addEventListener('blur',hidden);window.addEventListener('pagehide',hidden);window.addEventListener('pageshow',changed);
     // Native window focus may settle after the DOM's resume/focus observation.
     // It only refreshes metadata; the original lease, visible board and acquire latch still gate ownership.
     if(native)void listen('tauri://focus',()=>{
       if(alive && mounted.current && access.current())changed();
     },{target:{kind:'Window',label:'main'}}).then(stop=>{if(alive)unlisten=stop;else stop();}).catch(()=>{/* Existing DOM lifecycle observation remains available. */});
     return()=>{alive=false;unlisten?.();document.removeEventListener('visibilitychange',changed);window.removeEventListener('focus',changed);
-      window.removeEventListener('blur',hidden);window.removeEventListener('pagehide',hidden);window.removeEventListener('pageshow',changed);window.removeEventListener('storage',stored);};
-  },[native,access,mounted]);
+      window.removeEventListener('blur',hidden);window.removeEventListener('pagehide',hidden);window.removeEventListener('pageshow',changed);};
+  },[native,access,mounted,boardVisible]);
   useEffect(()=>{
     let alive=true;
     let request:Ticket|undefined;
     let lost=false;
     let unlisten:(()=>void)|undefined;
-    const fresh=()=>alive && mounted.current && access.current();
+    const fresh=()=>alive && mounted.current && access.current() && shown.current;
     const release=(owner:Ticket)=>{
       void cleanupInvoke('board_keep_awake_release',{request:owner}).then(value=>{
         if(mounted.current && access.current() && (!current.current || current.current===owner)) {
@@ -79,7 +86,7 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
     if (!native) return;
     if (!access.current()) {cleanupFailure.current='';setPhase('paused');setStatus(undefined);setError('');return;}
     if (requireOptIn.current && enabled) {setPhase('error');return;}
-    if (!foreground.visible) {setPhase(cleanupFailure.current?'error':'paused');return;}
+    if (!boardVisible || !foreground.visible || !visible()) {setPhase(cleanupFailure.current?'error':'paused');return;}
     setError(cleanupFailure.current);setPhase(cleanupFailure.current?'error':'checking');
     void (async()=>{
       try {
@@ -118,15 +125,16 @@ export default function KeepAwakeControl({sessionId}:{sessionId:string}) {
       if(current.current===request)current.current=undefined;
       if(request)release(request);
     };
-  },[sessionId,enabled,foreground,epoch,native,invoke,access,mounted]);
+  },[sessionId,enabled,foreground,epoch,native,invoke,access,mounted,boardVisible]);
   function toggle(checked:boolean) {
+    if(!shown.current || !access.current())return;
     requireOptIn.current=false;
     desired.current=checked;setEnabled(checked);setError(cleanupFailure.current);
     try {localStorage.setItem(boardAwakeKey,String(checked));setPreferenceError('');}
     catch {setPreferenceError(new LocalUiError('keepAwakeSaveFailed'));}
   }
-  return <section className="keep-awake-control" aria-label={t('keepAwakeRegion')}>
-    <label><input type="checkbox" checked={enabled} disabled={!native || !access.current() || (!enabled && !status?.available)}
+  return <section hidden={!boardVisible} style={boardVisible?undefined:{display:'none'}} className="keep-awake-control" aria-label={t('keepAwakeRegion')}>
+    <label><input type="checkbox" checked={enabled} disabled={!boardVisible || !native || !access.current() || (!enabled && !status?.available)}
       onChange={event=>toggle(event.target.checked)}/>{t('keepAwakeLabel')}</label>
     <p role="status">{!native?t('keepAwakeNative'):phase==='active'?t('keepAwakeActive'):
       phase==='held'?(enabled?t('keepAwakeHeldOn'):t('keepAwakeHeldOff')):

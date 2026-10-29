@@ -1,5 +1,16 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  navigationAgents: "Agents navigation",
+  navigationTitle: "Workspace navigation",
+  navigationConnections: "Connections",
+  navigationWorkspaces: "Workspaces",
+  navigationLiveSessions: "Live app sessions",
+  navigationNoSessions: "Connect to a host or open a local terminal to see your app sessions.",
+  navigationManageSessions: "Open session manager",
+  navigationManagerHint: "Use the existing session manager to discover and manage tmux, Herdr or Zellij. Live pane navigation here requires an attached tmux display.",
+  navigationManagerOpen: "The session manager is open in the workspace.",
+  agentsReportTechnicalDetails: "Report details",
+
   agentsSearch: "Search reported agents",
   agentsSearchHint: "Agent, project or summary",
   agentsFilterStatus: "Reported status",
@@ -13,7 +24,7 @@ export const english = {
   agentsReportSession: "Reported session ID",
   agentsReportEvents: "Reported events",
   agentsReportPane: "Reported pane ID",
-  agentsReportContext: "This is host-reported context. A pane ID does not establish a live target or permission to act.",
+  agentsReportContext: "Latest report from this host. Check the terminal for its current state.",
   agentsNoMatches: "No matching reported agents",
   agentsNoMatchesHint: "Change the search or reported-status filter to see other reports.",
   agentsClearFilters: "Clear filters",

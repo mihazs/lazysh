@@ -9,6 +9,7 @@ import type {DesktopMux} from './useDesktopLaunch';
 import canonicalBedMode from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {aboutLocales} from './test/aboutData';
 import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
+import {tmuxJumpSnapshot as navigationSnapshot} from './test/tmuxJumpData';
 import {tmuxChatReply,tmuxChatReaderSource,tmuxChatReaderPage} from './test/tmuxChat';
 vi.mock('../package.json',()=>({default:{version:'2.3.4'}}));
 
@@ -237,12 +238,12 @@ it('routes a selected actual Claude row to the exact SSH Chat prefill with read/
   mark('wait-retired-path');expect(await screen.findByLabelText('Transcript path')).toHaveProperty('value','');
   mark('assert-retired-notice');expect(screen.queryByText(t('agentsHistoryNotice'))).toBeNull();
 });
-it.each(['success','failure'] as const)('prevents a pending actual Agent lookup %s from reopening Chat after leaving its view',async outcome=>{
+it.each(['success','failure'] as const)('prevents a pending actual Agent lookup %s from reopening Chat after hiding its navigation',async outcome=>{
   let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
   reportedHistoryApp(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));mocks.api.connect.mockResolvedValue({sessionId:'ssh-reported-app'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
   await user.click(screen.getByRole('button',{name:'Agents'}));await user.click(await screen.findByRole('button',{name:'Use reported history'}));
-  await user.click(screen.getByRole('button',{name:'Terminal'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Connections'}));await screen.findByText('Live SSH terminal');
   await act(async()=>{if(outcome==='success')finish(reportedAppMetadata);else fail('old reported route error');});
   expect(screen.queryByLabelText('Transcript path')).toBeNull();expect(screen.queryByText('old reported route error')).toBeNull();
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(1);
@@ -1600,4 +1601,59 @@ it('retires a late default child after its connection dialog closes',async()=>{
   await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'late-mux-child'}));
   expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'late-bootstrap'});
   expect(mocks.api.adoptSession).not.toHaveBeenCalled();
+});
+it('keeps one agent owner beside the owned terminal and suspends it through navigation without losing drafts',async()=>{
+  reportedHistoryApp(reportedAppMetadata);mocks.api.connect.mockResolvedValue({sessionId:'nav-agents'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
+  await user.click(screen.getByRole('button',{name:'Agents'}));
+  const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
+  const settings=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});await user.click(settings);
+  expect(screen.getByText('Live SSH terminal')).toBeTruthy();
+  expect(screen.getAllByRole('region',{name:'Agent activity'})).toHaveLength(1);
+  await user.click(screen.getByRole('button',{name:'Connections'}));
+  expect(screen.queryByRole('region',{name:'Agent activity'})).toBeNull();
+  const reads=mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
+  await user.click(screen.getByRole('button',{name:'Agents navigation'}));
+  await screen.findByRole('searchbox');expect(screen.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','/project');
+  expect(settings).toHaveProperty('checked',false);
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(reads+1);
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.connect).toHaveBeenCalledOnce();
+});
+it('keeps late picker cleanup scoped while a new source is busy, then admits queued CLI intent once the wide picker is idle',async()=>{
+  enableHostLaunch({...host,defaultMultiplexer:{kind:'tmux',name:'work'}});mocks.hostLaunchReceipt=null;
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,...args)=>command==='multiplexer_tree'?Promise.resolve({tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,sessions:[{id:'$1',name:'other',windows:[]}]}):original(command,...args));
+  mocks.api.connect.mockResolvedValue({sessionId:'nav-control'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'nav-display-a'});
+  mocks.api.attachTmux.mockResolvedValue({sessionId:'nav-display-b'});
+  const pending=new Map<string,(value:typeof navigationSnapshot)=>void>();
+  mocks.api.tmuxJumpSnapshot.mockImplementation(id=>new Promise(resolve=>pending.set(id,resolve)));
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Jump To'}));await waitFor(()=>expect(pending.has('nav-display-a')).toBe(true));
+  // The bootstrap is retired by direct entry. Open a second owned display through the existing manager.
+  await user.click(screen.getByRole('button',{name:'Open session manager'}));
+  await user.click(await screen.findByRole('button',{name:'Attach other'}));
+  await user.click(await screen.findByRole('button',{name:'Jump To'}));await waitFor(()=>expect(pending.has('nav-display-b')).toBe(true));
+  mocks.hostLaunchReceipt=hostLaunchReceipt;await act(async()=>{mocks.launchEvent!({payload:null});});
+  expect(screen.queryByRole('dialog',{name:'Connect to Home'})).toBeNull();
+  await act(async()=>{pending.get('nav-display-a')!(navigationSnapshot);});
+  expect(screen.queryByRole('dialog',{name:'Connect to Home'})).toBeNull();
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='desktop_launch_prepare_host')).toHaveLength(0);
+  await act(async()=>{pending.get('nav-display-b')!(navigationSnapshot);});
+  await screen.findByRole('dialog',{name:'Connect to Home'});
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='desktop_launch_prepare_host')).toHaveLength(1);
+  expect(mocks.api.attachTmux).toHaveBeenCalledWith('nav-display-a','other',expect.any(Function),undefined);
+});
+it('keeps a requested desktop mux manager and its lease while workspace navigation is unavailable',async()=>{
+  enableMuxLaunch({kind:'tmux',tmuxServer:'default'});
+  const user=userEvent.setup();render(<App/>);await user.type(await screen.findByLabelText('Password'),'entry');await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByRole('button',{name:'Attach chosen'});
+  expect(screen.getByRole('button',{name:'Workspaces'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Agents navigation'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Agents'})).toHaveProperty('disabled',true);
+  expect(mocks.api.tmuxJumpSnapshot).not.toHaveBeenCalled();
+  expect(mocks.api.attachTmux).not.toHaveBeenCalled();
+  expect(mocks.api.connect).toHaveBeenCalledWith(host.id,{password:'entry'},expect.any(Function),{launchReceipt:hostLaunchReceipt});
 });
