@@ -52,8 +52,13 @@ struct Work {
     staging: Option<transfer::Staging>,
     possible_commit: Option<(String, String)>,
     checking_installed: bool,
+    phase: Option<Stage>,
 }
 impl Operation {
+    fn work_stage(&self, phase: &mut Option<Stage>, stage: Stage) {
+        *phase = Some(stage);
+        self.stage(stage);
+    }
     fn stage(&self, stage: Stage) {
         if self.lease.check().is_ok() && !*self.session.cancel.borrow() {
             let _ = self.progress.send(Progress { stage });
@@ -83,7 +88,7 @@ impl Operation {
         .await
     }
     async fn perform(&self, work: &mut Work, publisher: &release::Publisher) -> Result<Installed> {
-        self.stage(Stage::Detecting);
+        self.work_stage(&mut work.phase, Stage::Detecting);
         let unix = resolve::detect(&self.session, &self.lease)
             .await?
             .ok_or_else(|| {
@@ -92,10 +97,11 @@ impl Operation {
                     "Installation requires a positively identified Linux or macOS SSH shell",
                 )
             })?;
-        self.stage(Stage::CheckingRelease);
+        self.work_stage(&mut work.phase, Stage::CheckingRelease);
         let selection = publisher.select(&unix.target()).await?;
-        self.stage(Stage::Downloading);
+        self.work_stage(&mut work.phase, Stage::Downloading);
         let bytes = publisher.download(&selection).await?;
+        self.work_stage(&mut work.phase, Stage::Uploading);
         let raw = ssh::installer_sftp(
             &self.session,
             &self.lease,
@@ -105,9 +111,8 @@ impl Operation {
         .await?;
         work.staging = Some(transfer::Staging::new(raw, &unix, &selection));
         let staging = work.staging.as_mut().unwrap();
-        self.stage(Stage::Uploading);
         staging.upload(&unix.home, &bytes).await?;
-        self.stage(Stage::Verifying);
+        self.work_stage(&mut work.phase, Stage::Verifying);
         staging.verify(&staging.path, 0o600).await?;
         staging.executable().await?;
         let plan: Plan = serde_json::from_str(
@@ -128,7 +133,7 @@ impl Operation {
         };
         reject_newer(&existing, &selection.version)?;
         publisher.recheck(&selection).await?;
-        self.stage(Stage::Installing);
+        self.work_stage(&mut work.phase, Stage::Installing);
         // Dispatch may reach the peer even if request acknowledgement/reply is lost.
         work.possible_commit = Some((selection.version.clone(), plan.destination.clone()));
         let output = self
@@ -161,7 +166,7 @@ impl Operation {
             ));
         }
         work.checking_installed = true;
-        self.stage(Stage::CheckingInstalled);
+        self.work_stage(&mut work.phase, Stage::CheckingInstalled);
         staging.verify(&plan.destination, 0o700).await?;
         let version = self
             .command(format!("{} --version", ssh::quote(&plan.destination)))
@@ -240,7 +245,7 @@ pub(super) async fn run(
     session: Arc<Session>,
     lease: &AccessLease,
     progress: Channel<Progress>,
-) -> Result<Installed> {
+) -> std::result::Result<Installed, InstallFailure> {
     run_with(session, lease, progress, release::Publisher::new()?).await
 }
 pub(super) async fn run_with(
@@ -248,7 +253,7 @@ pub(super) async fn run_with(
     lease: &AccessLease,
     progress: Channel<Progress>,
     publisher: release::Publisher,
-) -> Result<Installed> {
+) -> std::result::Result<Installed, InstallFailure> {
     let permit = session
         .companion_install
         .clone()
@@ -269,7 +274,13 @@ pub(super) async fn run_with(
         deadline: tokio::time::Instant::now() + Duration::from_secs(240),
     };
     let mut work = Work::default();
-    let outcome = op.active(op.perform(&mut work, &publisher)).await;
+    let outcome = op
+        .active(op.perform(&mut work, &publisher))
+        .await
+        .map_err(|error| InstallFailure {
+            error,
+            phase: work.phase,
+        });
     op.stage(Stage::CleaningUp);
     let cleaned = if let Some(staging) = &mut work.staging {
         if op.lease.check().is_ok() && !*op.session.cancel.borrow() {
@@ -282,7 +293,7 @@ pub(super) async fn run_with(
     } else {
         true
     };
-    op.lease.check()?;
+    op.lease.check().map_err(SshError::from)?;
     match outcome {
         Ok(mut installed) => {
             installed.cleanup = if cleaned { "complete" } else { "residue" };
@@ -310,6 +321,11 @@ pub(super) async fn run_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn probe_access() -> (crate::app_lock::AccessState, AccessLease) {
+        let access = ssh::test_support::unlocked_access();
+        let lease = ssh::test_support::ready_lease(&access);
+        (access, lease)
+    }
     #[test]
     fn downgrade_guard_only_rejects_parseably_newer_companions() {
         assert!(reject_newer("lazysh-agent 2.0.0", "1.99.0").is_err());
@@ -324,10 +340,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_perform_phase_survives_cleanup_and_a_retired_progress_observer() {
+        let (_access, lease) = probe_access();
+        let fixture = ssh::guard_admission_fixture(lease.clone()).await;
+        fixture.hold();
+        let session = fixture.session.clone();
+        let pending = tokio::spawn(async move {
+            run_with(
+                session,
+                &lease,
+                Channel::new(|_| Err(std::io::Error::other("retired observer").into())),
+                release::Publisher::owned(vec![1], "1.0.0".into()),
+            )
+            .await
+        });
+        fixture.opened().await;
+        fixture.session.cancel.send_replace(true);
+        let failure = pending.await.unwrap().unwrap_err();
+        let serialized = serde_json::to_value(&failure).unwrap();
+        assert_eq!(serialized["phase"], "detecting");
+        assert_eq!(serialized["kind"], "disconnected");
+        assert_eq!(serialized["message"], "Session closed");
+        let preflight = serde_json::to_value(InstallFailure::from(error(
+            "companion_install_busy",
+            "Already running",
+        )))
+        .unwrap();
+        assert!(preflight["phase"].is_null());
+        assert_eq!(preflight["kind"], "companion_install_busy");
+        fixture.release().await;
+        fixture.closed().await;
+    }
+
+    #[tokio::test]
     async fn original_lease_retires_probe_and_holds_install_permit_for_late_confirmation() {
         for (retained, disconnected) in [(true, false), (false, false), (false, true)] {
-            let access = ssh::test_support::unlocked_access();
-            let lease = ssh::test_support::ready_lease(&access);
+            let (access, lease) = probe_access();
             let fixture = ssh::guard_admission_fixture(lease.clone()).await;
             fixture.hold();
             let owner = retained.then(|| {

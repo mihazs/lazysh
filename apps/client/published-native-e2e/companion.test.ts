@@ -7,14 +7,9 @@ import {NativeGui} from '../native-e2e/fixture';
 import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui} from '../native-e2e/sshUi';
 import {SshFixture} from '../../../tests/support/sshFixture';
 import {publishedCompanion,type PublishedCompanion} from './release';
-import {english} from '../src/i18n/en';
+import {companionInstallFailure,companionInstallStage} from '../src/CompanionInstallPanel';
 
 const fixture=ownedSshGui();
-const progressLabels={detecting:english.companionInstallDetecting,checkingRelease:english.companionInstallRelease,downloading:english.companionInstallDownloading,uploading:english.companionInstallUploading,verifying:english.companionInstallVerifying,installing:english.companionInstallInstalling,checkingInstalled:english.companionInstallChecking,cleaningUp:english.companionInstallFinishing} as const;
-const alertLabels={busy:english.companionInstallAlreadyRunning,unsupported:english.companionInstallUnsupported,unavailable:english.companionInstallUnavailable,newer:english.companionInstallNewer,invalid:english.companionInstallInvalid,uncertain:english.companionInstallUncertain,timeout:'Companion installation timed out'} as const;
-function finiteLabel(labels:Record<string,string>,text:string) {
-  return Object.entries(labels).find(([,literal])=>text===literal)?.[0]??'other';
-}
 
 async function installed(fixture:SshFixture,evidence:PublishedCompanion) {
   const path=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
@@ -70,22 +65,30 @@ it('installs the published verified companion through the actual native GUI and 
     await browser.waitUntil(async()=>(await button.getText())===(index===0?'Install companion':'Update companion'),{timeout:20_000,timeoutMsg:'Published companion action was not ready'});
     expect(await button.getText()).toBe(index===0?'Install companion':'Update companion');
     await button.click();
-    let lastStage='unavailable',alertClass='unavailable';
+    let lastStage='unavailable',alertClass='unavailable',outcome='unavailable',reason='unavailable';
     try {
       await browser.waitUntil(async()=>{
-        const alert=await panel.$('[role="alert"]');
-        if(await alert.isDisplayed()) {
-          try {alertClass=finiteLabel(alertLabels,(await alert.getText()).trim());}catch {alertClass='unavailable';}
-          throw new Error('Published companion GUI operation reported failure or uncertainty');
-        }
+        // Observe only closed values; messages, host paths and stderr stay private.
+        // A completed failure exits polling before the assertion below reports it.
+        try {
+          const {phase,failure,state,detail}=await browser.execute(()=>{
+            const element=document.querySelector('details.companion-install');
+            return {phase:element?.getAttribute('data-install-phase'),failure:element?.getAttribute('data-install-failure'),state:element?.getAttribute('data-install-outcome'),detail:element?.getAttribute('data-install-reason')};
+          });
+          lastStage=phase==='preflight'?'preflight':companionInstallStage({stage:phase})??'unavailable';
+          alertClass=failure==='none'?'none':companionInstallFailure({kind:failure}).failure;
+          outcome=state && ['idle','pending','failed','uncertain','installed','reused'].includes(state)?state:'unavailable';
+          reason=detail && ['committedDurabilityUnknown','commitResponseLost','verificationUnavailable','none'].includes(detail)?detail:'unavailable';
+        }catch { /* A retired diagnostic observer must not replace the assertion. */ }
+        if(outcome==='failed' || outcome==='uncertain')return true;
         const result=await panel.$('[role="status"]');
         if(!await result.isDisplayed())return false;
         const text=await result.getText();
-        lastStage=finiteLabel(progressLabels,text.trim());
         return text.includes(index===0?`${verb} ${evidence.version}.`:`${verb} ${evidence.version} is already installed.`);
       },{timeout:245_000,timeoutMsg:'Published companion GUI result was not observed'});
+      expect(outcome,'Published companion GUI operation must be verified, not failed or uncertain').toBe(index===0?'installed':'reused');
     }catch(error) {
-      console.error(`Published companion UI observation stage=${lastStage} alert=${alertClass}`);
+      console.error(`Published companion UI observation stage=${lastStage} error=${alertClass} outcome=${outcome} reason=${reason}`);
       throw error;
     }
     expect(await (await panel.$('code')).getText()).toBe(destination);

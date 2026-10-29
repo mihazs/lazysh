@@ -3,7 +3,7 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 const install=vi.hoisted(()=>vi.fn());
 vi.mock('./bridge',()=>({api:{installCompanion:install}}));
-import CompanionInstallPanel,{companionInstallStage,parseCompanionInstall} from './CompanionInstallPanel';
+import CompanionInstallPanel,{companionInstallStage,companionInstallFailure,parseCompanionInstall} from './CompanionInstallPanel';
 import {applyAccessStatus} from './access';
 import {uiI18n} from './i18n/core';
 const result={schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh-agent',cleanup:'complete'};
@@ -22,8 +22,8 @@ it('accepts only finite progress and complete installation results',()=>{
 });
 
 function pendingInstall() {
-  const requests:{progress:(value:unknown)=>void;finish:(value:unknown)=>void}[]=[];
-  install.mockImplementation((_source:string,progress:(value:unknown)=>void)=>new Promise(finish=>requests.push({progress,finish})));
+  const requests:{progress:(value:unknown)=>void;finish:(value:unknown)=>void;fail:(error:unknown)=>void}[]=[];
+  install.mockImplementation((_source:string,progress:(value:unknown)=>void)=>new Promise((finish,fail)=>requests.push({progress,finish,fail})));
   return requests;
 }
 it('requires an explicit action, coalesces clicks, reports progress and refreshes only after verified completion',async()=>{
@@ -91,4 +91,48 @@ it.each([
   render(<CompanionInstallPanel sessionId="rejected" onInstalled={installed}/>);
   fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
   expect(screen.getByRole('alert').textContent).toBe(message);expect(installed).not.toHaveBeenCalled();
+});
+
+it('retains the native failed phase across cleanup and synchronous settlement before a GUI poll',async()=>{
+  install.mockImplementation((_source:string,progress:(value:unknown)=>void)=>{
+    progress({stage:'uploading'});progress({stage:'cleaningUp'});
+    return Promise.reject({kind:'ssh_error',phase:'uploading',message:'Existing user-visible error'});
+  });
+  render(<CompanionInstallPanel sessionId="fast-failure" onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  const panel=screen.getByText('Host companion installation').closest('details')!;
+  expect(panel.dataset).toMatchObject({installPhase:'uploading',installFailure:'ssh_error',installOutcome:'failed',installReason:'none'});
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.getByRole('alert').textContent).toBe('Existing user-visible error');
+  install.mockRejectedValue({kind:'companion_install_busy',phase:null,message:'busy'});
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  expect(panel.dataset).toMatchObject({installPhase:'preflight',installFailure:'companion_install_busy',installOutcome:'failed'});
+});
+
+it('projects unknown error payloads to finite values without adding private diagnostic attributes',async()=>{
+  const marker='/private/host/error-secret';
+  expect(companionInstallFailure({kind:marker,phase:marker,message:marker})).toEqual({failure:'other',phase:undefined});
+  expect(companionInstallFailure({kind:'constructor',phase:'cleaningUp'})).toEqual({failure:'other',phase:undefined});
+  install.mockRejectedValue({kind:marker,phase:marker,message:'Existing message'});
+  render(<CompanionInstallPanel sessionId="unknown-failure" onInstalled={vi.fn()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));await act(async()=>{});
+  const panel=screen.getByText('Host companion installation').closest('details')!;
+  expect(panel.dataset).toMatchObject({installPhase:'unavailable',installFailure:'other',installOutcome:'failed'});
+  expect(Array.from(panel.attributes).filter(attribute=>attribute.name.startsWith('data-install-')).map(attribute=>attribute.value).join(' ')).not.toContain(marker);
+});
+
+it('retires pending failure observations with their source and ignores late cleanup events',async()=>{
+  const requests=pendingInstall(),installed=vi.fn();
+  const view=render(<CompanionInstallPanel sessionId="before" onInstalled={installed}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));
+  act(()=>requests[0].progress({stage:'verifying'}));
+  view.rerender(<CompanionInstallPanel sessionId="after" onInstalled={installed}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Install companion'}));
+  await act(async()=>{requests[0].fail({kind:'ssh_error',phase:'verifying',message:'Retired error'});requests[0].progress({stage:'cleaningUp'});});
+  const panel=screen.getByText('Host companion installation').closest('details')!;
+  expect(panel.dataset).toMatchObject({installPhase:'unavailable',installFailure:'none',installOutcome:'pending'});
+  expect(screen.queryByRole('alert')).toBeNull();
+  await act(async()=>requests[1].finish({...result,status:'uncertain',reason:'verificationUnavailable'}));
+  expect(panel.dataset).toMatchObject({installPhase:'checkingInstalled',installFailure:'none',installOutcome:'uncertain',installReason:'verificationUnavailable'});
+  expect(installed).not.toHaveBeenCalled();
 });

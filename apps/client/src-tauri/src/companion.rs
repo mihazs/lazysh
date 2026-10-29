@@ -30,7 +30,7 @@ pub(crate) async fn exec(
 ) -> Result<String> {
     ssh::exec_for_access(session, command(session, original, lease).await?, lease).await
 }
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Stage {
     Detecting,
@@ -57,16 +57,30 @@ pub struct Installed {
     reason: Option<&'static str>,
     cleanup: &'static str,
 }
+#[derive(Debug, Serialize)]
+pub struct InstallFailure {
+    #[serde(flatten)]
+    error: SshError,
+    phase: Option<Stage>,
+}
+impl From<SshError> for InstallFailure {
+    fn from(error: SshError) -> Self {
+        Self { error, phase: None }
+    }
+}
 #[tauri::command]
 pub async fn install_companion(
     state: State<'_, AppState>,
     session_id: String,
     progress: Channel<Progress>,
     access: AccessLease,
-) -> std::result::Result<Guarded<Installed>, GuardedError<SshError>> {
+) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
+            let session = state
+                .session(&session_id)
+                .await
+                .map_err(InstallFailure::from)?;
             install::run(session, &access, progress).await
         })
         .await
@@ -86,4 +100,5 @@ pub(crate) async fn owned_install(
         release::Publisher::owned(bytes, env!("CARGO_PKG_VERSION").into()),
     )
     .await
+    .map_err(|failure| failure.error)
 }
