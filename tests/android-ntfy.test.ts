@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport,nativeFailureStage,settingsObservation} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
@@ -31,6 +31,44 @@ test('settings observation admits only finite flags and the two-scroll limit',()
   expect(settingsObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:true,toolbar:true,list:true,target:false,scrollAttempts:2});
   expect(settingsObservation(diagnostic.replace('scrollAttempts=2','scrollAttempts=3'))).toBeUndefined();
   expect(settingsObservation(diagnostic.replace('settingsToolbar=true','settingsToolbar=private-data'))).toBeUndefined();
+});
+
+const eventDiagnostic='Actual bound-event notification required; eventObservation[entered=true readReturned=false initialReceipts=zero finalReceipts=one appNotifications=true postPermission=false channelEnabled=unavailable ownedNotification=false]';
+test('missing event retains only closed admission, receipt and OS observations',()=>{
+  const parsed=eventObservation('<failure>private-key /private/path '+eventDiagnostic+'\nat NativeWorkspaceTest.kt:1740</failure>');
+  expect(parsed).toEqual({entered:true,readReturned:false,initialReceipts:'zero',finalReceipts:'one',
+    appNotifications:true,postPermission:false,channelEnabled:null,ownedNotification:false});
+  expect(nativeFailureStage(eventDiagnostic)).toBe('event_notification');
+  expect(JSON.stringify(parsed)).not.toMatch(/private|1740|NativeWorkspaceTest|eventObservation/);
+  expect(eventObservation(eventDiagnostic.replace('finalReceipts=one','finalReceipts=unavailable'))?.finalReceipts).toBe('unavailable');
+  expect(eventObservation(eventDiagnostic.replace('initialReceipts=zero','initialReceipts=many'))?.initialReceipts).toBe('many');
+  expect(eventObservation(eventDiagnostic.replace('readReturned=false','readReturned=true'))?.readReturned).toBe(true);
+  expect(eventObservation(eventDiagnostic.replace('entered=true','entered=false'))?.entered).toBe(false);
+  for(const key of ['appNotifications','postPermission','channelEnabled','ownedNotification']) {
+    for(const value of ['true','false','unavailable']) {
+      const text=eventDiagnostic.replace(new RegExp(key+'=(true|false|unavailable)'),key+'='+value);
+      expect(eventObservation(text)?.[key as keyof NonNullable<ReturnType<typeof eventObservation>>]).toBe(value==='unavailable'?null:value==='true');
+    }
+  }
+});
+
+test.each([
+  eventDiagnostic.replace('entered=true','entered=private'),
+  eventDiagnostic.replace('entered=true','entered=false').replace('readReturned=false','readReturned=true'),
+  eventDiagnostic.replace('initialReceipts=zero','initialReceipts=-1'),
+  eventDiagnostic.replace('finalReceipts=one','finalReceipts=129'),
+  eventDiagnostic.replace('appNotifications=true','appNotifications=1'),
+  eventDiagnostic.replace('postPermission=false','postPermission=private-key'),
+  eventDiagnostic.replace(' channelEnabled=unavailable',''),
+  eventDiagnostic.replace(' ownedNotification=false',' ownedNotification=false unknown=private-path'),
+  eventDiagnostic.replace('readReturned=false','readReturned=false readReturned=true'),
+  eventDiagnostic.replace('required; eventObservation','required eventObservation'),
+  eventDiagnostic.replace('ownedNotification=false]','ownedNotification=false-private]'),
+  eventDiagnostic+eventDiagnostic,
+  'eventObservation[private-data]'+eventDiagnostic,
+  eventDiagnostic+'x'.repeat(256*1024),
+])('malformed or ambiguous event observations retain no private text: %#',text=>{
+  expect(eventObservation(text)).toBeUndefined();
 });
 
 test('every fixed native selector label retains a finite failure stage without private text',async()=>{
