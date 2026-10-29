@@ -43,7 +43,9 @@ fails the phase; there is no fallback input path or retry.
 
 Only finite receipts are uploaded: nominated public identity/digests/certificate,
 hashed guest identities, sampled admission and completed phase booleans, and
-closed failure/cleanup stages. Raw hierarchy, screenshots, APK bytes, local paths,
+closed failure/cleanup stages. The parent UI phase and the whitelisted existing
+driver assertion stage are separate; missing, conflicting or unrecognized driver
+results remain unavailable. Original child output is discarded. Raw hierarchy, screenshots, APK bytes, local paths,
 input values and child output are not uploaded. Only successfully installed owned
 packages are uninstalled. A lost install acknowledgement is an unconfirmed
 cleanup outcome, never permission to adopt or remove an unknown installation.

@@ -28,6 +28,13 @@ export function publishedInstrumentation(output:string,phase:'create'|'verify'){
     && lines.filter(line=>line.startsWith('INSTRUMENTATION_STATUS: numtests=')).every(line=>line==='INSTRUMENTATION_STATUS: numtests=1')
     && !lines.some(line=>/^INSTRUMENTATION_STATUS_CODE: -|^INSTRUMENTATION_FAILED|^INSTRUMENTATION_RESULT: shortMsg=/.test(line));
 }
+const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
+export function publishedDriverStage(output:string):typeof driverStages[number]|'unavailable'{
+  if(output.length>65536||output.includes('\0'))return 'unavailable';
+  const reported=[...output.matchAll(/^INSTRUMENTATION_STATUS: stack=java\.lang\.AssertionError: Published APK UI: ([A-Z_]+)\r?$/gm)].map(match=>match[1]);
+  const distinct=[...new Set(reported)];
+  return distinct.length===1?driverStages.find(stage=>stage===distinct[0])??'unavailable':'unavailable';
+}
 export function translatedGuest(values:string[]){
   const [api,abis,bridge,mapping]=values;
   return values.length===4&&api==='35'&&abis==='x86_64,arm64-v8a'&&bridge==='libndk_translation.so'&&mapping==='x86_64';
@@ -44,10 +51,14 @@ export async function publishedAcceptance(asset:Asset,driver:string,nonce:string
     return run(adb,['-s',serial!,...args],limit);
   };
   const owned:string[]=[],cleanup:string[]=[];let stage='guest-admission',failure=false;
-  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null};
+  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null,driverStage:null as ReturnType<typeof publishedDriverStage>|null};
   const instrument=async(phase:'create'|'verify')=>{
+    receipt.driverStage='unavailable';
     const output=await command(['shell','am','instrument','-w','-r','-e','class','app.lazysh.acceptance.PublishedApkTest#publishedHost','-e','phase',phase,'-e','nonce',nonce,component],45000);
-    if(!publishedInstrumentation(output,phase))throw new Error('Published APK UI phase incomplete');
+    if(!publishedInstrumentation(output,phase)){
+      receipt.driverStage=publishedDriverStage(output);throw new Error('Published APK UI phase incomplete');
+    }
+    receipt.driverStage=null;
   };
   try{
     const values=[];

@@ -3,7 +3,7 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,translatedGuest,type PublishedCommand} from './support/androidPublished';
+import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,publishedDriverStage,translatedGuest,type PublishedCommand} from './support/androidPublished';
 
 const nonce='a'.repeat(32),component='app.lazysh.acceptance/androidx.test.runner.AndroidJUnitRunner';
 const output=(phase:string)=>`INSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS: lazyshPublishedPhase=${phase}\nINSTRUMENTATION_STATUS: lazyshPublishedPassed=true\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_CODE: -1`;
@@ -89,3 +89,16 @@ test('private state permits only finite nominated fields and the exact owned ass
   expect(publishedState(state,base)).toBe(true);
   for(const patch of [{flavor:'../private'},{apk:'/private/foreign.apk'},{message:'private-error'},{nonce:'x'.repeat(33)},{bytes:Infinity},{tag:'v0.24.0'},{sha:null}])expect(publishedState({...state,...patch},base)).toBe(false);
 });
+
+test('driver exception classification retains only one exact closed stage and never arbitrary error data',()=>{
+  const line=(stage:string)=>`INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: ${stage}`;
+  for(const stage of ['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','WORKSPACE','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'])expect(publishedDriverStage(line(stage))).toBe(stage);
+  expect(publishedDriverStage(line('WORKSPACE')+'\n'+line('WORKSPACE'))).toBe('WORKSPACE');
+  for(const value of ['',line('PRIVATE_SECRET'),line('NAME')+' private-path',line('NAME')+'\n'+line('LAUNCH'),'private-error',line('NAME')+'\0','x'.repeat(65537)])expect(publishedDriverStage(value)).toBe('unavailable');
+});
+test('parent UI phase and closed driver stage survive independently without raw failure output',()=>fixture(async asset=>{
+  const f=fake(args=>args.includes('instrument')?'INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: HOSTNAME\nINSTRUMENTATION_STATUS_CODE: -2\nprivate-output':undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'HOSTNAME',cleanup:'passed'});
+  expect(result.passed).toBe(false);expect(JSON.stringify(result)).not.toContain('private-output');
+}));
