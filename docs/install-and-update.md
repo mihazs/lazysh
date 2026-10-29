@@ -128,6 +128,14 @@ ARM64 guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/4094
 This does not qualify this later release's APKs, cross-version migration or
 physical Samsung hardware automatically.
 
+Both public v1.1.0 APKs installed on admitted translated ARM64 guests, but their
+host-creation driver commands reached the existing 45-second deadline
+([failed qualification](https://github.com/mihazs/lazysh/actions/runs/40955241164)).
+Host creation, relaunch, reinstall and persistence were not verified; owned cleanup
+passed. The cause remains unproven. The external driver now preserves only bounded
+stage entry/exit observations on failure, without changing APKs, actions, deadlines
+or success requirements. A progress boundary does not establish a failure cause.
+
 This release does not establish full Android/desktop parity. Owned packaged Android
 SSH and guarded Herdr Chat passed on the API36 x86_64 emulator, including native
 keep-awake hide/reveal acknowledgement ([runtime evidence](https://github.com/mihazs/lazysh/actions/runs/40894669216/job/123524957621)).
