@@ -11,7 +11,7 @@ export function windowsGuiRoleSubset(phase:string,mask:unknown) {
   if(phase==='MULTIPLE_ROLE_MISMATCHES'?reasons.length<2:reasons.length!==1||reasons[0]!==phase)return;
   return reasons;
 }
-type WindowsGuiMetadata={available:false}|{available:true;overflow:boolean;windows:{className:string;style:number;exstyle:number;width:number;height:number;ownerless:boolean}[]};
+type WindowsGuiMetadata={available:false}|{available:true;overflow:boolean;windows:{className:string;style:number;exstyle:number;width:number;height:number;clientWidth:number;clientHeight:number;ownerless:boolean}[]};
 export function parseWindowsGuiMetadata(value:unknown):WindowsGuiMetadata {
   const fail=()=>{throw new Error('Invalid owned Windows GUI framework metadata');};
   if(!value||typeof value!=='object')return fail();
@@ -19,12 +19,12 @@ export function parseWindowsGuiMetadata(value:unknown):WindowsGuiMetadata {
   if(root.available===false&&Object.keys(root).join(',')==='available')return {available:false};
   if(Object.keys(root).sort().join(',')!=='available,overflow,windows'||root.available!==true||typeof root.overflow!=='boolean'||!Array.isArray(root.windows)||root.windows.length>8||root.overflow&&root.windows.length!==8)return fail();
   const windows=root.windows.map(row=>{
-    if(!row||typeof row!=='object'||Object.keys(row).sort().join(',')!=='className,exstyle,height,ownerless,style,width')return fail();
-    const {className,style,exstyle,width,height,ownerless}=row;
+    if(!row||typeof row!=='object'||Object.keys(row).sort().join(',')!=='className,clientHeight,clientWidth,exstyle,height,ownerless,style,width')return fail();
+    const {className,style,exstyle,width,height,clientWidth,clientHeight,ownerless}=row;
     if(typeof className!=='string'||className.length<1||className.length>128||/[^\x20-\x7e]/.test(className)||/[\/\\]/.test(className)||typeof ownerless!=='boolean')return fail();
     for(const bits of [style,exstyle])if(typeof bits!=='number'||!Number.isInteger(bits)||bits<0||bits>4294967295)return fail();
-    for(const extent of [width,height])if(typeof extent!=='number'||!Number.isInteger(extent)||Math.abs(extent)>100000)return fail();
-    return {className,style,exstyle,width,height,ownerless};
+    for(const extent of [width,height,clientWidth,clientHeight])if(typeof extent!=='number'||!Number.isInteger(extent)||Math.abs(extent)>100000)return fail();
+    return {className,style,exstyle,width,height,clientWidth,clientHeight,ownerless};
   });
   return {available:true,overflow:root.overflow,windows};
 }
@@ -140,25 +140,25 @@ function Plain($path) {
 }
 `;
 
-// Exact roles from pinned runtime-wry 2.12.3 and Tao 0.37.2; never choose the first HWND.
+// Exact roles from runtime-wry 2.12.3, Tao 0.37.2 and single-instance 2.5.4; never choose the first HWND.
 export const windowsGuiWindowRoleScript = String.raw`
-function GuiWindowRole($className, $style, $extended, $ownerless, $width, $height) {
-  if ($className -isnot [string] -or $style -isnot [long] -or $extended -isnot [long] -or $ownerless -isnot [bool] -or $width -isnot [long] -or $height -isnot [long]) { return 'ROLE_DATA_UNVERIFIED' }
+function GuiWindowRole($className, $style, $extended, $ownerless, $width, $height, $clientWidth, $clientHeight) {
+  if ($className -isnot [string] -or $style -isnot [long] -or $extended -isnot [long] -or $ownerless -isnot [bool] -or $width -isnot [long] -or $height -isnot [long] -or $clientWidth -isnot [long] -or $clientHeight -isnot [long]) { return 'ROLE_DATA_UNVERIFIED' }
   $bits = $style -band 4294967295L
   $extra = $extended -band 4294967295L
   if ($className -ceq 'Tauri Window') {
     if (!$ownerless) { return 'MAIN_OWNER_MISMATCH' }
-    if ($width -le 0 -or $height -le 0) { return 'MAIN_GEOMETRY_MISMATCH' }
+    if ($width -le 0 -or $height -le 0 -or $clientWidth -le 0 -or $clientHeight -le 0) { return 'MAIN_GEOMETRY_MISMATCH' }
     if (($bits -band 268435456L) -eq 0 -or ($bits -band 3221225472L) -ne 0 -or ($bits -band 13107200L) -ne 13107200L) { return 'MAIN_STYLE_MISMATCH' }
     if (($extra -band 262144L) -eq 0 -or ($extra -band 128L) -ne 0) { return 'MAIN_EXSTYLE_MISMATCH' }
     return 'MAIN'
   }
-  if ($className -ceq 'Tao Thread Event Target') {
+  # GetWindowRect may include invisible borders; helper intent is zero client area.
+  if ($className -ceq 'Tao Thread Event Target' -or $className -ceq 'app.lazysh.client-sic') {
     if (!$ownerless) { return 'TAO_OWNER_MISMATCH' }
-    if ($width -ne 0 -or $height -ne 0) { return 'TAO_GEOMETRY_MISMATCH' }
+    if ($width -lt 0 -or $height -lt 0 -or $clientWidth -ne 0 -or $clientHeight -ne 0) { return 'TAO_GEOMETRY_MISMATCH' }
     if ($extra -ne 134742176L) { return 'TAO_EXSTYLE_MISMATCH' }
-    if ($bits -eq 2483027968L) { return 'TAO_STYLE_CLIPSIBLINGS_ONLY' }
-    if ($bits -ne 2415919104L) { return 'TAO_STYLE_MISMATCH' }
+    if ($bits -notin @(2415919104L,2483027968L)) { return 'TAO_STYLE_MISMATCH' }
     return 'TAO_EVENT_HELPER'
   }
   return 'UNKNOWN_CLASS'
@@ -220,6 +220,7 @@ public static class OwnedGuiWindow {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr window, StringBuilder value, int length);
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window, uint command);
   [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtrW(IntPtr window, int index);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window, out Rect rectangle);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
   public delegate bool Callback(IntPtr window, IntPtr state);
   [DllImport("user32.dll")] public static extern bool EnumWindows(Callback callback, IntPtr state);
@@ -267,20 +268,23 @@ public static class OwnedGuiWindow {
       if ([OwnedGuiWindow]::IsWindowVisible($window)) {
         $name = [Text.StringBuilder]::new(256)
         $rectangle = [OwnedGuiWindow+Rect]::new()
+        $clientRectangle = [OwnedGuiWindow+Rect]::new()
         $role = 'UNVERIFIED'
-        if ([OwnedGuiWindow]::GetClassNameW($window, $name, 256) -gt 0 -and [OwnedGuiWindow]::GetWindowRect($window, [ref]$rectangle)) {
+        if ([OwnedGuiWindow]::GetClassNameW($window, $name, 256) -gt 0 -and [OwnedGuiWindow]::GetWindowRect($window, [ref]$rectangle) -and [OwnedGuiWindow]::GetClientRect($window, [ref]$clientRectangle) -and $clientRectangle.Left -eq 0 -and $clientRectangle.Top -eq 0) {
           $className=$name.ToString()
           $style=[OwnedGuiWindow]::GetWindowLongPtrW($window, -16).ToInt64()
           $extended=[OwnedGuiWindow]::GetWindowLongPtrW($window, -20).ToInt64()
           $ownerless=([OwnedGuiWindow]::GetWindow($window, 4) -eq [IntPtr]::Zero)
           [long]$width=[long]$rectangle.Right - $rectangle.Left
           [long]$height=[long]$rectangle.Bottom - $rectangle.Top
-          $role = GuiWindowRole $className $style $extended $ownerless $width $height
+          [long]$clientWidth=$clientRectangle.Right
+          [long]$clientHeight=$clientRectangle.Bottom
+          $role = GuiWindowRole $className $style $extended $ownerless $width $height $clientWidth $clientHeight
           [uint32]$retainedOwner=0
           $retainedThread=[OwnedGuiWindow]::GetWindowThreadProcessId($window,[ref]$retainedOwner)
           if ($retainedThread -eq 0 -or $retainedOwner -ne $app.Id -or ![OwnedGuiWindow]::IsWindowVisible($window)) { $script:metadataReadable=$false }
-          if ($className -cnotmatch '\A[\x20-\x7e]{1,128}\z' -or $className -match '[/\\]' -or [Math]::Abs($width) -gt 100000 -or [Math]::Abs($height) -gt 100000) { $script:metadataReadable=$false }
-          elseif ($script:metadataWindows.Count -lt 8) { $script:metadataWindows += @{className=$className;style=($style -band 4294967295L);exstyle=($extended -band 4294967295L);width=$width;height=$height;ownerless=$ownerless} }
+          if ($className -cnotmatch '\A[\x20-\x7e]{1,128}\z' -or $className -match '[/\\]' -or [Math]::Abs($width) -gt 100000 -or [Math]::Abs($height) -gt 100000 -or [Math]::Abs($clientWidth) -gt 100000 -or [Math]::Abs($clientHeight) -gt 100000) { $script:metadataReadable=$false }
+          elseif ($script:metadataWindows.Count -lt 8) { $script:metadataWindows += @{className=$className;style=($style -band 4294967295L);exstyle=($extended -band 4294967295L);width=$width;height=$height;clientWidth=$clientWidth;clientHeight=$clientHeight;ownerless=$ownerless} }
           else { $script:metadataOverflow=$true }
         } else { $script:metadataReadable=$false }
         $script:windows += [PSCustomObject]@{Handle=$window.ToInt64().ToString();Role=$role}

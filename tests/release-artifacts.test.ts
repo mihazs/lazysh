@@ -304,7 +304,7 @@ if ((GuiMetadataSnapshot).available) { throw 'incomplete enumeration admitted' }
 'owned GUI endpoint shapes passed'
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI endpoint shapes passed');
-  const metadata={available:true,overflow:false,windows:[{className:'Synthetic framework',style:0,exstyle:0,width:0,height:0,ownerless:true}]};
+  const metadata={available:true,overflow:false,windows:[{className:'Synthetic framework',style:0,exstyle:0,width:0,height:0,clientWidth:0,clientHeight:0,ownerless:true}]};
   const failure='gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:UNKNOWN_CLASS:ROLES_UNKNOWN_CLASS:HEALTH_READY_NATIVE_READY; gui:GUI_CLEANUP; cleanup:UNEXPECTED';
   const rejection=String.raw`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:UNKNOWN_CLASS:ROLES_1024:HEALTH_READY_NATIVE_READY');[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_CLEANUP');[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:'+$env:LAZYSH_METADATA_UNIT);[Console]::Error.WriteLine('private native error');exit 1`;
   for(const value of [metadata,{...metadata,title:'private'}]){
@@ -315,27 +315,44 @@ if ((GuiMetadataSnapshot).available) { throw 'incomplete enumeration admitted' }
   await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',nonSession],{...process.env,LAZYSH_METADATA_UNIT:JSON.stringify(metadata)},30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe (gui:GUI_OWNER)'});
 
 });
-test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI window roles require one main and only the pinned zero-area helper', async () => {
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI window roles require one main and only the pinned zero-client framework helpers', async () => {
   const script = windowsGuiWindowRoleScript + String.raw`
 $ErrorActionPreference = 'Stop'
-$mainRole = GuiWindowRole 'Tauri Window' 281542656L 262144L $true 1200L 800L
-$helperRole = GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 0L 0L
+$mainRole = GuiWindowRole 'Tauri Window' 281542656L 262144L $true 1200L 800L 1200L 800L
+$helperRole = GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 0L 0L 0L 0L
 if ($mainRole -cne 'MAIN' -or $helperRole -cne 'TAO_EVENT_HELPER') { throw 'valid pinned roles rejected' }
 $main = [PSCustomObject]@{Handle='123';Role=$mainRole}
 $helper = [PSCustomObject]@{Handle='456';Role=$helperRole}
 if ((GuiMainWindow @($main,$helper)) -cne '123') { throw 'wrong main selection' }
+foreach ($className in @('Tao Thread Event Target','app.lazysh.client-sic')) {
+  foreach ($style in @(2415919104L,2483027968L)) {
+    foreach ($outer in @(0L,16L,32L)) {
+      if ((GuiWindowRole $className $style 134742176L $true $outer $outer 0L 0L) -cne 'TAO_EVENT_HELPER') { throw 'zero-client helper rejected' }
+    }
+  }
+}
+$singleton=[PSCustomObject]@{Handle='789';Role=(GuiWindowRole 'app.lazysh.client-sic' 2483027968L 134742176L $true 16L 16L 0L 0L)}
+if ((GuiMainWindow @($helper,$singleton,$main)) -cne '123') { throw 'wrong main among framework helpers' }
+
 $cases = @(
-  @{Role=(GuiWindowRole 'unknown class' 281542656L 262144L $true 1200L 800L);Code='UNKNOWN_CLASS'},
-  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 262144L $false 1200L 800L);Code='MAIN_OWNER_MISMATCH'},
-  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 262144L $true 0L 800L);Code='MAIN_GEOMETRY_MISMATCH'},
-  @{Role=(GuiWindowRole 'Tauri Window' 2415919104L 262144L $true 1200L 800L);Code='MAIN_STYLE_MISMATCH'},
-  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 128L $true 1200L 800L);Code='MAIN_EXSTYLE_MISMATCH'},
-  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 1L 0L);Code='TAO_GEOMETRY_MISMATCH'},
-  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 128L $true 0L 0L);Code='TAO_EXSTYLE_MISMATCH'},
-  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $false 0L 0L);Code='TAO_OWNER_MISMATCH'},
-  @{Role=(GuiWindowRole 'Tao Thread Event Target' '2415919104' 134742176L $true 0L 0L);Code='ROLE_DATA_UNVERIFIED'},
-  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2483027968L 134742176L $true 0L 0L);Code='TAO_STYLE_CLIPSIBLINGS_ONLY'},
-  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919105L 134742176L $true 0L 0L);Code='TAO_STYLE_MISMATCH'}
+  @{Role=(GuiWindowRole 'Tauri Window' 349110272L 262416L $true 1044L 788L 0L 700L);Code='MAIN_GEOMETRY_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tauri Window' 349110272L 262416L $true 1044L 788L 1000L 0L);Code='MAIN_GEOMETRY_MISMATCH'},
+  @{Role=(GuiWindowRole 'app.lazysh.client-sic' 2483027968L 134742176L $true 16L 16L 0L 1L);Code='TAO_GEOMETRY_MISMATCH'},
+  @{Role=(GuiWindowRole 'app.lazysh.client-sic' 2483027968L 134742176L $true 16L 16L $null 0L);Code='ROLE_DATA_UNVERIFIED'},
+  @{Role=(GuiWindowRole 'app.lazysh.client-sic' 2483027968L 134742176L $false 16L 16L 0L 0L);Code='TAO_OWNER_MISMATCH'},
+  @{Role=(GuiWindowRole 'app.lazysh.client-sic' 2483027968L 134742177L $true 16L 16L 0L 0L);Code='TAO_EXSTYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'app.lazysh.client-sic' 2483027969L 134742176L $true 16L 16L 0L 0L);Code='TAO_STYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'another-sic' 2483027968L 134742176L $true 16L 16L 0L 0L);Code='UNKNOWN_CLASS'},
+  @{Role=(GuiWindowRole 'unknown class' 281542656L 262144L $true 1200L 800L 1200L 800L);Code='UNKNOWN_CLASS'},
+  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 262144L $false 1200L 800L 1200L 800L);Code='MAIN_OWNER_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 262144L $true 0L 800L 1200L 800L);Code='MAIN_GEOMETRY_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tauri Window' 2415919104L 262144L $true 1200L 800L 1200L 800L);Code='MAIN_STYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 128L $true 1200L 800L 1200L 800L);Code='MAIN_EXSTYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 16L 16L 1L 0L);Code='TAO_GEOMETRY_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 128L $true 0L 0L 0L 0L);Code='TAO_EXSTYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $false 0L 0L 0L 0L);Code='TAO_OWNER_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' '2415919104' 134742176L $true 0L 0L 0L 0L);Code='ROLE_DATA_UNVERIFIED'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919105L 134742176L $true 0L 0L 0L 0L);Code='TAO_STYLE_MISMATCH'}
 )
 foreach ($case in $cases) {
   if ($case.Role -cne $case.Code) { throw 'wrong role diagnostic' }
@@ -510,7 +527,7 @@ test('Windows session and owned-window diagnostics expose only the finite outcom
   }
 });
 test('owned Windows framework metadata projects exact bounded records and rejects private or malformed fields',()=>{
-  const row={className:'app.lazysh.client-sic',style:4294967295,exstyle:0,width:-100000,height:100000,ownerless:false};
+  const row={className:'app.lazysh.client-sic',style:4294967295,exstyle:0,width:-100000,height:100000,clientWidth:-100000,clientHeight:100000,ownerless:false};
   const value={available:true,overflow:false,windows:[row]};
   expect(parseWindowsGuiMetadata(value)).toEqual(value);
   expect(parseWindowsGuiMetadata({available:false})).toEqual({available:false});
@@ -519,7 +536,7 @@ test('owned Windows framework metadata projects exact bounded records and reject
   const bad:unknown[]=[null,{},[],{available:false,windows:[]},{...value,title:'private'},{...value,overflow:1},{...value,overflow:true},{...value,windows:Array(9).fill(row)}];
   for(const change of [{title:'private'},{pid:1},{window:'123'},{path:'private'}, {className:''},{className:'A'.repeat(129)},
     {className:'private/path'},{className:'private\\path'},{className:'nonasciié'},{className:'name\n'},{className:'name\u0000'},
-    {style:-1},{style:4294967296},{style:0.5},{exstyle:'0'},{exstyle:NaN},{width:-100001},{height:100001},{height:Infinity},{height:0.5},{ownerless:'true'}])bad.push({...value,windows:[{...row,...change}]});
+    {style:-1},{style:4294967296},{style:0.5},{exstyle:'0'},{exstyle:NaN},{width:-100001},{height:100001},{height:Infinity},{height:0.5},{clientWidth:-100001},{clientHeight:100001},{clientWidth:'0'},{clientHeight:0.5},{ownerless:'true'}])bad.push({...value,windows:[{...row,...change}]});
   for(const value of bad)expect(()=>parseWindowsGuiMetadata(value)).toThrow('Invalid owned Windows GUI framework metadata');
   const marker='LAZYSH_WINDOWS_GUI_METADATA:'+JSON.stringify(value);
   expect(windowsGuiMetadataProjection('private raw output\n'+marker)).toBe(JSON.stringify(value));
