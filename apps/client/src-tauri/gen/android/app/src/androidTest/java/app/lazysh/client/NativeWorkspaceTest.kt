@@ -1386,22 +1386,65 @@ class NativeWorkspaceTest {
             assertTrue("Transport control geometry must be finite and visible", values.all { it.isFinite() } &&
                 values[2] > 0 && values[3] > 0 && values[4] > 0 && values[5] > 0 &&
                 values[0] >= 0 && values[0] < values[2] && values[1] >= 0 && values[1] < values[3] && geometry.getBoolean(6))
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
-                val origin = IntArray(2)
-                view.getLocationOnScreen(origin)
-                val scale = view.width.toDouble() / values[2]
-                val x = values[0] * scale
-                val y = values[1] * scale
-                assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
-                floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
-            }, Press.FINGER))
-            val option = onView(withText("SSH")).inRoot(isDialog())
-            option.check(matches(isDisplayed()))
-            println("lazysh SSH UI: native transport chooser ready")
-            option.perform(click())
-            assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
-                "document.querySelector(${JSONObject.quote(selector)})?.value==='ssh'"))
-            println("lazysh SSH UI: native transport selected")
+            val tapScript = instrumentation.context.assets.open("owned-native-tap.js")
+                .use { it.readNBytes(4097) }.also { require(it.size <= 4096) { "Native tap script bound" } }.toString(Charsets.UTF_8)
+            val tapKey = JSONObject.quote("__lazyshOwnedTransportTap_$nonce")
+            val tapToken = JSONObject.quote(java.util.UUID.randomUUID().toString())
+            val nativeTap = AtomicReference(JSONObject())
+            var tapFailure: Throwable? = null
+            try {
+                assertEquals("Only a fresh case-owned passive tap observer may be installed", "true", evaluate(scenario, """
+                    (()=>{
+                      if(Object.prototype.hasOwnProperty.call(window,$tapKey)) return false;
+                      $tapScript
+                      const tracker=ownedNativeTapObservation(document.querySelector(${JSONObject.quote(selector)}));
+                      try {Object.defineProperty(window,$tapKey,{value:{token:$tapToken,tracker},configurable:true});}
+                      catch(_){tracker.close();return false;}
+                      return true;
+                    })()
+                """))
+                onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                    val origin = IntArray(2)
+                    view.getLocationOnScreen(origin)
+                    nativeTap.set(JSONObject().put("origin", JSONArray(origin.map { it.coerceIn(-65535, 65535) }))
+                        .put("width", view.width.coerceIn(0, 65535)).put("height", view.height.coerceIn(0, 65535))
+                        .put("density", view.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
+                        .put("layoutRequested", view.isLayoutRequested).put("windowFocused", view.hasWindowFocus())
+                        .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
+                        .put("imeVisible", ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime()) ?: JSONObject.NULL))
+                    val scale = view.width.toDouble() / values[2]
+                    val x = values[0] * scale
+                    val y = values[1] * scale
+                    assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
+                    floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+                }, Press.FINGER))
+                val option = onView(withText("SSH")).inRoot(isDialog())
+                option.check(matches(isDisplayed()))
+                println("lazysh SSH UI: native transport chooser ready")
+                option.perform(click())
+                assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
+                    "document.querySelector(${JSONObject.quote(selector)})?.value==='ssh'"))
+                println("lazysh SSH UI: native transport selected")
+            } catch (failure: Throwable) {
+                tapFailure = failure
+                val observation = runCatching {
+                    val events = JSONObject(evaluate(scenario,
+                        "(()=>{const owned=window[$tapKey];return owned?.token===$tapToken?owned.tracker.read():null;})()", 1000))
+                    JSONObject().put("geometry", geometry).put("native", nativeTap.get()).put("events", events)
+                        .toString().also { require(it.length <= 4096) { "Native tap observation bound" } }
+                }.getOrDefault("unavailable")
+                failure.addSuppressed(AssertionError("Owned native transport tap: $observation"))
+                throw failure
+            } finally {
+                val removed = runCatching { evaluate(scenario, """
+                    (()=>{const owned=window[$tapKey];if(!owned)return true;if(owned.token!==$tapToken)return false;
+                      owned.tracker.close();delete window[$tapKey];return !Object.prototype.hasOwnProperty.call(window,$tapKey);})()
+                """, 1000) == "true" }.getOrDefault(false)
+                if (!removed) {
+                    val cleanupFailure = AssertionError("Owned native tap observer cleanup unavailable")
+                    if (tapFailure != null) tapFailure!!.addSuppressed(cleanupFailure) else throw cleanupFailure
+                }
+            }
         }
         var primaryFailure: Throwable? = null
         android.util.Log.i("LazyshOwnedCase", "start:$nonce:pid:${android.os.Process.myPid()}")
@@ -1544,9 +1587,13 @@ class NativeWorkspaceTest {
             closeSoftKeyboard()
             awaitDocument(scenario, "terminal expands after native keyboard dismissal", "$canvasHeight > $withKeyboard")
             clickButton("Paste draft")
-            assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario,
-                "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"))
-            // Paste draft focuses xterm; normal native Enter submits the real shell input.
+            val terminalFocused = "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"
+            assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario, terminalFocused))
+            // Refocusing xterm can reopen the docked IME and reduce the visible screen to one row.
+            // Dismiss it ordinarily so the unchanged output-plus-later-prompt oracle can see both rows.
+            closeSoftKeyboard()
+            assertEquals("Keyboard dismissal must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+            // Normal native Enter submits the real shell input.
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                 screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")

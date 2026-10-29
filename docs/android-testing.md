@@ -149,3 +149,23 @@ For the dedicated owned SSH/Herdr failure report, the existing one-second contin
 The dedicated Herdr invocation alone uses AGP's `android.injected.androidTest.leaveApksInstalledAfterRun=true`: its fixed owned application and instrumentation packages remain installed until the existing bounded failure probe finishes. Pinned AGP otherwise uninstalls them in `afterAll`, and Android removes a package's historical exit records on removal. A bounded exact-ID package-presence snapshot distinguishes absent, unavailable and unrecognized output; presence is not proof of a particular installed binary. Finally cleanup attempts both fixed packages on the selected owned emulator, retaining the original acceptance failure if cleanup also fails. The ordinary SSH/default tasks keep their existing installation lifecycle. This preserves diagnostic opportunity, not a claim that uninstall caused the runtime failure.
 
 The owned-case streaming classifier also reads ActivityManager info messages, retaining only an exact `app.lazysh.client` force-stop prefix within the original START/END window. It maps the reason to finished-instrumentation, start-instrumentation, external-request or other, plus timestamp; caller PID/name, app ID, user ID and raw reason are discarded. These package-scoped records share the existing eight-record/64KiB bounds with fatal records and do not identify an affected PID or authenticate a caller. No matching row means unknown. Android may force-stop a target when instrumentation finishes, so a reported reason can be teardown following an earlier failure rather than its cause.
+
+The owned Herdr case at source 78d9ca1 reached the later remote challenge assertion
+after passing the actual docked-IME/native WebView bounds, whole canvas/keys/Esc/Tab
+visual containment and post-dismiss terminal expansion checks. This is owned API 36
+emulator evidence, not Samsung hardware acceptance or a complete case pass.
+Paste draft refocuses xterm and can reopen the keyboard while Compose remains open;
+a separate real-xterm browser fixture demonstrates that correct output plus a later
+prompt remain in the buffer but cannot both be rendered at one visible row.
+The native flow therefore dismisses the refocused keyboard ordinarily, reasserts
+xterm focus and sends the same native Enter before the unchanged non-echoable output
+and later-prompt checks. It never injects terminal bytes through a backend shortcut.
+
+The independent native chooser failure remains observable through the existing
+single tap and phone dialog assertion. A passive, case/token-owned observer retains
+only finite geometry and trusted/target flags for pointer down/up/click; counts
+are capped at 2 with an overflow flag. It records no field values, text or event
+objects, changes no event behavior, and removes only its own listeners. Capture
+and cleanup failures remain separate from the original assertion. Chromium's
+[phone popup contract](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/content/public/android/java/src/org/chromium/content/browser/input/SelectPopup.java#L137)
+does not justify replacing the dialog matcher without an observed cause.

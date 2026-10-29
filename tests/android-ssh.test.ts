@@ -831,3 +831,32 @@ test('native keyboard oracle uses fractional visible bounds and rejects overflow
   expect(contains(viewport,geometry.slice(1))).toBe(false);
   expect(contains(viewport,geometry.map((value,i)=>i===0?{...value,height:0}:value))).toBe(false);
 });
+
+test('passive native tap evidence retains only bounded trusted/target flags and removes its own listeners',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-native-tap.js'),'utf8');
+  const listeners=new Map<string,(event:unknown)=>void>();
+  const target={value:'private-key-material',disabled:false,isConnected:true,getBoundingClientRect:()=>({left:1,top:2,right:101,bottom:42,width:100,height:40})};
+  const window={innerWidth:412,innerHeight:365,devicePixelRatio:2.625,visualViewport:{width:412.19,height:365.33,offsetLeft:0,offsetTop:0,scale:1},
+    addEventListener(type:string,listener:(event:unknown)=>void,options:unknown){expect(options).toEqual({capture:true,passive:true});listeners.set(type,listener);},
+    removeEventListener(type:string,listener:unknown,capture:boolean){expect(capture).toBe(true);if(listeners.get(type)===listener)listeners.delete(type);}};
+  const observe=new Function('window',`${source};return ownedNativeTapObservation;`)(window)(target);
+  listeners.get('pointerdown')!({isTrusted:true,target,clientX:51,clientY:22,message:'private-data',preventDefault(){throw new Error('Must remain passive');}});
+  listeners.get('pointerup')!({isTrusted:false,target:{value:'other-private-value'},clientX:Infinity,clientY:NaN});
+  for(let count=0;count<4;count++)listeners.get('click')!({isTrusted:true,target,clientX:51,clientY:22});
+  const sample=observe.read();
+  expect(sample.before).toMatchObject({enabled:true,connected:true,focused:false});
+  expect(sample.down).toEqual({count:1,overflow:false,trusted:true,target:true,point:[51,22]});
+  expect(sample.up).toEqual({count:1,overflow:false,trusted:false,target:false,point:[null,null]});
+  expect(sample.click.count).toBe(2);expect(sample.click.overflow).toBe(true);
+  expect(JSON.stringify(sample)).not.toContain('private');
+  expect(observe.close()).toBe(true);expect(listeners.size).toBe(0);expect(observe.close()).toBe(true);
+  expect(observe.read().closed).toBe(true);
+});
+test('partial passive tap setup failure attempts listener cleanup without exposing private error text',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-native-tap.js'),'utf8');
+  const attached=new Set<string>();let calls=0;
+  const window={visualViewport:null,addEventListener(type:string){if(++calls===2)throw new Error('private-setup-failure');attached.add(type);},removeEventListener(type:string){attached.delete(type);}};
+  const create=new Function('window',`${source};return ownedNativeTapObservation;`)(window);
+  expect(()=>create({getBoundingClientRect:()=>({})})).toThrow('Owned native tap observation unavailable');
+  expect(attached.size).toBe(0);
+});
