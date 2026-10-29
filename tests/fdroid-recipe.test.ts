@@ -34,7 +34,7 @@ test('recipe versions describe the exact public source commit rather than a movi
   expect(properties).toBe(`versionName=${build.versionName}\nversionCode=${build.versionCode}`);
 });
 
-test('actual source scanner reports a native archive and clears only after source removal', async () => {
+test('actual scanner prunes unused browser tooling while still rejecting unexpected binaries', async () => {
   const parent = join(homedir(), 'dev/.worktrees');
   await mkdir(parent, { recursive: true });
   const root = await mkdtemp(join(parent, 'lazysh-fdroid-fixture-'));
@@ -47,17 +47,36 @@ test('actual source scanner reports a native archive and clears only after sourc
   await writeFile(join(source, 'README.md'), 'Owned source-scanner acceptance fixture.\n');
   await writeFile(join(source, 'gradlew'), '#!/bin/sh\nexit 1\n');
   await writeFile(join(source, 'unbuilt.a'), '!<arch>\n');
+  const archivePath = 'node_modules/@zip.js/zip.js/dist/zip-module.wasm';
+  await mkdir(join(source, 'node_modules/@zip.js/zip.js/dist'), { recursive: true });
+  // A valid empty WebAssembly module is still a prebuilt binary to the real scanner.
+  const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+  await writeFile(join(source, archivePath), wasm);
+  await writeFile(join(source, 'unexpected.wasm'), wasm);
+  const recipe = Bun.YAML.parse(await Bun.file(join(checkout, 'fdroid/metadata/app.lazysh.client.yml')).text()) as any;
+  const pruning = recipe.Builds[0].prebuild.filter((command: string) => command.startsWith('rm -rf node_modules/playwright-core'));
+  expect(pruning).toHaveLength(1);
   invoke(source, ['git', 'init', '--quiet']);
-  const publish = async (message: string) => {
+  const publish = async (message: string, prune = false) => {
     invoke(source, ['git', 'add', '.']);
     invoke(source, ['git', '-c', 'user.name=lazysh fixture', '-c', 'user.email=fixture@localhost', 'commit', '--quiet', '-m', message]);
     const commit = invoke(source, ['git', 'rev-parse', 'HEAD']);
-    await writeFile(join(data, 'metadata/app.lazysh.fixture.yml'), `License: MIT\nRepoType: git\nRepo: file://${source}\nBuilds:\n  - versionName: '1.0'\n    versionCode: 1\n    commit: ${commit}\n    output: nonexistent.apk\n    build: exit 1\nAutoUpdateMode: None\nUpdateCheckMode: None\n`);
+    await writeFile(join(data, 'metadata/app.lazysh.fixture.yml'), `License: MIT\nRepoType: git\nRepo: file://${source}\nBuilds:\n  - versionName: '1.0'\n    versionCode: 1\n    commit: ${commit}\n${prune ? `    prebuild: ${JSON.stringify(pruning)}\n` : ''}    output: nonexistent.apk\n    build: exit 1\nAutoUpdateMode: None\nUpdateCheckMode: None\n`);
   };
   const scan = () => JSON.parse(invoke(data, [cli, 'scanner', '--verbose', '--exit-code', '--json', 'app.lazysh.fixture:1']))['app.lazysh.fixture']['1'];
   await publish('include owned archive');
-  expect(scan().errors).toContainEqual(['static library', 'unbuilt.a']);
+  const before = scan().errors;
+  expect(before).toContainEqual(['static library', 'unbuilt.a']);
+  expect(before).toContainEqual(['WebAssembly binary file', archivePath]);
+  expect(before).toContainEqual(['WebAssembly binary file', 'unexpected.wasm']);
+  await writeFile(join(source, 'README.md'), 'Owned source-scanner fixture with reviewed browser-tool pruning.\n');
+  await publish('apply reviewed browser-tool pruning', true);
+  const after = scan().errors;
+  expect(after).not.toContainEqual(['WebAssembly binary file', archivePath]);
+  expect(after).toContainEqual(['static library', 'unbuilt.a']);
+  expect(after).toContainEqual(['WebAssembly binary file', 'unexpected.wasm']);
   await rm(join(source, 'unbuilt.a'));
-  await publish('remove unused archive');
+  await rm(join(source, 'unexpected.wasm'));
+  await publish('remove unexpected binaries', true);
   expect(scan().errors).toEqual([]);
 }, 60_000);

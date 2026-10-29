@@ -48,7 +48,9 @@
 - [ ] Any changed **default** (flag behaviour, config default, env var,
       response shape) is called out explicitly in "What changed" above.
 - [ ] I added the corresponding Changesets fragment (`bun run changeset`),
-      or an empty fragment for internal/test-only work. Version PRs consume
+      or an empty fragment for non-milestone internal/test-only follow-up work.
+      A completed milestone needs a real version bump and published release,
+      including a patch fragment for an internal/test-only milestone. Version PRs consume
       these fragments; their merges trigger verified application publication. Creating
       a fragment alone does not publish anything.
 
