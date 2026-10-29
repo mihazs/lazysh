@@ -224,6 +224,7 @@ pub fn run() {
                 ssh::delete_host,
                 ssh::trust_host_key,
                 ssh::connect,
+                ssh::file_control::restore_file_transfer,
                 ssh::adopt_session,
                 ssh::write_stdin,
                 ssh::ack_output,

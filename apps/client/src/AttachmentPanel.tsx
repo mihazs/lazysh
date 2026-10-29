@@ -11,7 +11,7 @@ import { ATTACHMENT_LIMIT, checkAttachment, checkDestination, imagePoint, imageS
 type Selected = { file: File; bytes: Uint8Array; size: ImageSize | null };
 type Stroke = { points: Point[]; color: string; width: number };
 
-export default function AttachmentPanel({ sessionId, onAttach, onPastePath }: { sessionId: string; onAttach?: (path:string)=>void; onPastePath?:(request:AttachmentPathPaste)=>Promise<void> }) {
+export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRestoreFileTransfer }: { sessionId: string; onAttach?: (path:string)=>void; onPastePath?:(request:AttachmentPathPaste)=>Promise<void>; onRestoreFileTransfer?:(restored:()=>void)=>void }) {
   useUi();
   const api = useProtectedApi(nativeApi);
   const guard = useProtectedCallback();
@@ -28,16 +28,17 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath }: { 
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [color, setColor] = useState('#ef4444');
   const [error, setError] = useState<UiErrorCause>('');
+  const [recoveryNeeded,setRecoveryNeeded]=useState(false);
 
   const [uploaded, setUploaded] = useState('');
   const [attachable,setAttachable]=useState(false);
   const [prompt, setPrompt] = useState('');
-  const [notice, setNotice] = useState<UiErrorCause | {key:'attachmentUploaded'|'attachmentCopied'|'attachmentStaged'|'attachmentHostCopied'|'attachmentHostCopyCancelled'|'attachmentPasted'}>('');
+  const [notice, setNotice] = useState<UiErrorCause | {key:'attachmentRestored'|'attachmentUploaded'|'attachmentCopied'|'attachmentStaged'|'attachmentHostCopied'|'attachmentHostCopyCancelled'|'attachmentPasted'}>('');
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLImageElement | null>(null);
   const generation = useRef(0);
   const stroke = useRef<Stroke | null>(null);
-  const uploadJob=useHostUpload(api,sessionId,error=>setError(captureUiError(error)));
+  const uploadJob=useHostUpload(api,sessionId,error=>{setRecoveryNeeded(!!error && typeof error==='object' && 'kind' in error && error.kind==='ssh_control_closed');setError(captureUiError(error));});
   const hostClipboard=useHostClipboard(api,sessionId,error=>setError(captureUiError(error)),kind=>setNotice({key:kind==='copied'?'attachmentHostCopied':'attachmentHostCopyCancelled'}));
   const busy=uploadJob.busy||hostClipboard.busy||pasteBusy;
   const renderedPasteTarget=completed.current;
@@ -159,7 +160,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath }: { 
     },(path,uploadId)=>{
       completed.current=Object.freeze({path});
       setAttachable(true);hostClipboard.completed(uploadId);
-      setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
+      setRecoveryNeeded(false);setUploaded(path); setPrompt(t('attachmentPromptTemplate',{path:shellPath(path)})); setNotice({key:'attachmentUploaded'});
     });
   }
 
@@ -175,6 +176,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath }: { 
       <button type="button" disabled={busy} onClick={() => void pasteImage()}>{t('attachmentPaste')}</button>
     </div>
     {uploadJob.cancelled && <p role="status">{t('uploadCancelledWarning')}</p>}
+    {recoveryNeeded && onRestoreFileTransfer && <button type="button" disabled={busy} onClick={guard(()=>onRestoreFileTransfer(()=>{if(currentPasteOwner()){setError('');setRecoveryNeeded(false);setNotice({key:'attachmentRestored'});}}))}>{t('attachmentRestore')}</button>}
     {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}{notice && <p role="status">{typeof notice==='object'&&!(notice instanceof LocalUiError)?t(notice.key):uiErrorText(notice)}</p>}
     {selected && <div className="form-stack"><p>{t('attachmentMetadata',{name:selected.file.name,bytes:formatNumber(selected.file.size)})}</p>
       <label>{t('attachmentDestination')}<input value={destination} disabled={busy} onChange={event => {clearCompletion();setDestination(event.target.value);}} /></label>

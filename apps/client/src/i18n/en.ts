@@ -1,5 +1,9 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  attachmentRestore: "Reconnect uploads",
+  attachmentRestoreTitle: "Reconnect uploads to {{value1}}",
+  attachmentRestored: "Uploads reconnected. Select Upload attachment to retry.",
+  attachmentRestoreInvalid: "Invalid file-transfer recovery response.",
   navigationAgents: "Agents navigation",
   navigationTitle: "Workspace navigation",
   navigationConnections: "Connections",

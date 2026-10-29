@@ -20,8 +20,22 @@ specific failure. Open **Connections**, connect to the same saved host using the
 existing host-key verification and credential/manual-authentication flow, and
 upload from that new connection. Keep the original Mosh tab open if needed.
 An interrupted transfer may leave a partial new file; choose a fresh destination
-or inspect that file before retrying. Uploads never overwrite it. Restoring the
-SSH side channel in place without opening a new connection is not implemented.
+or inspect that file before retrying. Uploads never overwrite it.
+Recovery is explicit and never retries an upload automatically.
+
+For a direct Mosh session, a closed-control upload error also offers **Reconnect
+uploads**. Authenticate with the existing saved-credential/biometric flow or enter
+credentials manually. This action does not save credentials, open a shell or PTY,
+or restart Mosh. It accepts only the original verified host identity and
+credential policy; changed/deleted hosts or changed server keys require a separate
+new verified connection. The attachment selection, edits and destination remain
+in place. After success, select **Upload attachment** yourself to retry.
+
+Recovery replaces only this Mosh session's attachment-upload control. Files,
+agent tools and other SSH features retain their original connection; use the
+new-connection fallback above for those tools. Disconnecting the Mosh tab or
+replacing the renderer closes its recovered upload connection. An older upload
+keeps its original control handle and is never redirected to the replacement.
 
 ## Explicit terminal path paste
 
