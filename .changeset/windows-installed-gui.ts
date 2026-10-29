@@ -1,6 +1,6 @@
 import {win32} from 'node:path';
 
-export const windowsGuiProbePhases = ['PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS'] as const;
+export const windowsGuiProbePhases = ['PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED'] as const;
 export function windowsGuiProbeFailure(stdout:unknown):typeof windowsGuiProbePhases[number] {
   if(typeof stdout!=='string'||stdout.length>1024)return 'PROBE_UNVERIFIED';
   const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)$/.exec(stdout.trim());
@@ -59,15 +59,42 @@ function Plain($path) {
 }
 `;
 
+// Exact roles from pinned runtime-wry 2.12.3 and Tao 0.37.2; never choose the first HWND.
+export const windowsGuiWindowRoleScript = String.raw`
+function GuiWindowRole($className, $style, $extended, $ownerless, $width, $height) {
+  if ($className -isnot [string] -or $style -isnot [long] -or $extended -isnot [long] -or $ownerless -isnot [bool] -or $width -isnot [long] -or $height -isnot [long]) { return 'UNEXPECTED' }
+  $bits = $style -band 4294967295L
+  $extra = $extended -band 4294967295L
+  if ($className -ceq 'Tauri Window' -and $ownerless -and $width -gt 0 -and $height -gt 0 -and ($bits -band 268435456L) -ne 0 -and ($bits -band 3221225472L) -eq 0 -and ($bits -band 13107200L) -eq 13107200L -and ($extra -band 262144L) -ne 0 -and ($extra -band 128L) -eq 0) { return 'MAIN' }
+  if ($className -ceq 'Tao Thread Event Target' -and $ownerless -and $width -eq 0 -and $height -eq 0 -and $bits -eq 2415919104L -and $extra -eq 134742176L) { return 'TAO_EVENT_HELPER' }
+  return 'UNEXPECTED'
+}
+function GuiMainWindow($handles) {
+  if (@($handles | Where-Object { $_.Role -eq 'UNVERIFIED' }).Count -gt 0) { $script:phase = 'WINDOW_ROLE_UNVERIFIED'; throw 'window' }
+  if (@($handles | Where-Object { $_.Role -notin @('MAIN', 'TAO_EVENT_HELPER') -or $_.Handle -isnot [string] -or $_.Handle -notmatch '^[1-9][0-9]{0,19}$' }).Count -gt 0) { $script:phase = 'UNEXPECTED_VISIBLE_ROLE'; throw 'window' }
+  $main = @($handles | Where-Object { $_.Role -eq 'MAIN' })
+  if ($main.Count -eq 0) { $script:phase = 'NO_MAIN_WINDOW_OBSERVED'; throw 'window' }
+  if ($main.Count -ne 1) { $script:phase = 'VISIBLE_HANDLES_AMBIGUOUS'; throw 'window' }
+  return $main[0].Handle
+}
+`;
+
 // Windows-only installed GUI acceptance. Paths are supplied exclusively through the child environment.
 export const windowsGuiOwnerScript = String.raw`
+${windowsGuiWindowRoleScript}
 $ErrorActionPreference = 'Stop'
 $phase = 'PROBE_UNVERIFIED'
 try {
   Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 public static class OwnedGuiWindow {
+  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr window, StringBuilder value, int length);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window, uint command);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtrW(IntPtr window, int index);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
   public delegate bool Callback(IntPtr window, IntPtr state);
   [DllImport("user32.dll")] public static extern bool EnumWindows(Callback callback, IntPtr state);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
@@ -107,15 +134,23 @@ public static class OwnedGuiWindow {
     $null = [OwnedGuiWindow]::GetWindowThreadProcessId($window, [ref]$owner)
     if ($owner -eq $app.Id) {
       $script:ownedHandles += 1
-      if ([OwnedGuiWindow]::IsWindowVisible($window)) { $script:windows += $window.ToInt64().ToString() }
+      if ([OwnedGuiWindow]::IsWindowVisible($window)) {
+        $name = [Text.StringBuilder]::new(256)
+        $rectangle = [OwnedGuiWindow+Rect]::new()
+        $role = 'UNVERIFIED'
+        if ([OwnedGuiWindow]::GetClassNameW($window, $name, 256) -gt 0 -and [OwnedGuiWindow]::GetWindowRect($window, [ref]$rectangle)) {
+          $role = GuiWindowRole $name.ToString() ([OwnedGuiWindow]::GetWindowLongPtrW($window, -16).ToInt64()) ([OwnedGuiWindow]::GetWindowLongPtrW($window, -20).ToInt64()) ([OwnedGuiWindow]::GetWindow($window, 4) -eq [IntPtr]::Zero) ([long]$rectangle.Right - $rectangle.Left) ([long]$rectangle.Bottom - $rectangle.Top)
+        }
+        $script:windows += [PSCustomObject]@{Handle=$window.ToInt64().ToString();Role=$role}
+      }
     }
     return $true
   }
   if (![OwnedGuiWindow]::EnumWindows($callback, [IntPtr]::Zero)) { $phase = 'WINDOW_ENUMERATION_FAILED'; throw 'window' }
   if ($script:ownedHandles -eq 0) { $phase = 'NO_OWNED_HANDLES_OBSERVED'; throw 'window' }
   if ($script:windows.Count -eq 0) { $phase = 'OWNED_HANDLES_INVISIBLE'; throw 'window' }
-  if ($script:windows.Count -ne 1) { $phase = 'VISIBLE_HANDLES_AMBIGUOUS'; throw 'window' }
-  @{pid=$app.Id;start=$app.StartTime.ToUniversalTime().Ticks.ToString();window=$script:windows[0];sha256=$env:LAZYSH_NSIS_BINARY_SHA256} | ConvertTo-Json -Compress
+  $mainHandle = GuiMainWindow $script:windows
+  @{pid=$app.Id;start=$app.StartTime.ToUniversalTime().Ticks.ToString();window=$mainHandle;sha256=$env:LAZYSH_NSIS_BINARY_SHA256} | ConvertTo-Json -Compress
 } catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_PROBE:' + $phase); exit 1 }
 `;
 
@@ -226,7 +261,7 @@ function ExerciseInstalledGui {
           Require ($rejected.session -in @('CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE') -and $rejected.ownedWindow -in @('VERIFIED', 'UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode = 'GUI_SESSION_' + $rejected.session + '_WINDOW_' + $rejected.ownedWindow
           if ($rejected.ownedWindow -eq 'UNVERIFIED') {
-            Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS')) 'GUI_CLIENT'
+            Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED')) 'GUI_CLIENT'
             $sessionCode += ':' + $rejected.probe
           }
           Require $false $sessionCode

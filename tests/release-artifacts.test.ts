@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiProbeFailure } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiProbeFailure, windowsGuiWindowRoleScript } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -259,6 +259,39 @@ if (!$rejected -or $script:failure -ne 'GUI_IPV4_REQUIRED') { throw 'missing IPv
 'owned GUI endpoint shapes passed'
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI endpoint shapes passed');
+});
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI window roles require one main and only the pinned zero-area helper', async () => {
+  const script = windowsGuiWindowRoleScript + String.raw`
+$ErrorActionPreference = 'Stop'
+$mainRole = GuiWindowRole 'Tauri Window' 281542656L 262144L $true 1200L 800L
+$helperRole = GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 0L 0L
+if ($mainRole -cne 'MAIN' -or $helperRole -cne 'TAO_EVENT_HELPER') { throw 'valid pinned roles rejected' }
+$main = [PSCustomObject]@{Handle='123';Role=$mainRole}
+$helper = [PSCustomObject]@{Handle='456';Role=$helperRole}
+if ((GuiMainWindow @($main,$helper)) -cne '123') { throw 'wrong main selection' }
+foreach ($role in @(
+  (GuiWindowRole 'unknown class' 281542656L 262144L $true 1200L 800L),
+  (GuiWindowRole 'Tauri Window' 281542656L 262144L $false 1200L 800L),
+  (GuiWindowRole 'Tauri Window' 281542656L 262144L $true 0L 800L),
+  (GuiWindowRole 'Tauri Window' 2415919104L 262144L $true 1200L 800L),
+  (GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 1L 0L),
+  (GuiWindowRole 'Tao Thread Event Target' 2415919104L 128L $true 0L 0L),
+  (GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $false 0L 0L),
+  (GuiWindowRole 'Tao Thread Event Target' '2415919104' 134742176L $true 0L 0L)
+)) { if ($role -cne 'UNEXPECTED') { throw 'unknown or malformed role admitted' } }
+foreach ($case in @(
+  @{Handles=@($main,$main);Code='VISIBLE_HANDLES_AMBIGUOUS'},
+  @{Handles=@($main,[PSCustomObject]@{Handle='789';Role='UNEXPECTED'});Code='UNEXPECTED_VISIBLE_ROLE'},
+  @{Handles=@($helper);Code='NO_MAIN_WINDOW_OBSERVED'},
+  @{Handles=@([PSCustomObject]@{Handle='123';Role='UNVERIFIED'});Code='WINDOW_ROLE_UNVERIFIED'}
+)) {
+  $script:phase='PROBE_UNVERIFIED';$rejected=$false
+  try { $null=GuiMainWindow $case.Handles } catch { $rejected=$true }
+  if (!$rejected -or $script:phase -cne $case.Code) { throw 'wrong role rejection' }
+}
+'owned GUI window roles passed'
+`;
+  expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI window roles passed');
 });
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
