@@ -38,13 +38,23 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   expect(await (await connect.$('input[type="checkbox"]')).isSelected()).toBe(false);
   try{await (await connect.$('textarea')).setValue(ssh.privateKey);}
   catch{throw new Error('Owned SSH private-key input failed');}
+  expect(await (await connect.$('textarea')).getValue()===ssh.privateKey).toBe(true);
   await (await connect.$('button=Connect')).click();
   gui.stage='owned SSH explicit fingerprint review';
   const trust=await browser.$('[role="dialog"][aria-label="Verify this host"]');await trust.waitForDisplayed({timeout:20_000});
   expect(await trust.getText()).toContain(ssh.fingerprint);
   await (await trust.$('button=Trust key and connect')).click();
   gui.stage='owned SSH terminal prompt';
-  const terminal=await browser.$('.terminal-canvas .xterm-screen');await terminal.waitForDisplayed({timeout:20_000});
+  const terminal=await browser.$('.terminal-canvas .xterm-screen');
+  await browser.waitUntil(async()=>{
+    const alert=await browser.$('[role="dialog"] .inline-error[role="alert"]');
+    if(await alert.isDisplayed()) {
+      const text=await alert.getText();
+      const category=/authenticat/i.test(text)?'authentication':/key|decrypt|decode/i.test(text)?'key':/timed? out|timeout/i.test(text)?'timeout':/channel|pty|shell/i.test(text)?'channel':/disconnect|closed/i.test(text)?'disconnected':'other';
+      throw new Error(`Owned SSH connection failed (${category})`);
+    }
+    return terminal.isDisplayed();
+  },{timeout:20_000,timeoutMsg:'Owned SSH terminal was not displayed'});
   captureSafe=true;
   await browser.waitUntil(async()=>(await terminal.getText()).includes(ssh!.prompt),{timeout:20_000,timeoutMsg:'Owned SSH prompt was not observed'});
   expect(await gui.appOwner()).toEqual(owner);
