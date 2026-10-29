@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep the Android workspace inside system bars and display cutouts, and resize the terminal and special-key row above docked software keyboards. Showing and hiding the keyboard restores the available terminal space; terminal input and toolbar preferences are unchanged.
+
 - Reject unsupported tmux client-loop formats before granting navigation or guarded Chat input, and require exactly one matching client for every action. Ordinary terminals remain available on older servers; tmux 3.2a advanced bindings are unavailable.
 
 - Publish the current 0.23.0 version through an explicit source-bound initial release, then preserve every individually merged future Changesets version through the existing verified installer gates. Pending Changesets and application defaults are unchanged; release notes disclose native runtime gaps.

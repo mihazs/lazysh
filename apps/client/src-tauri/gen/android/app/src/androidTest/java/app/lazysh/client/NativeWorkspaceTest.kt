@@ -26,6 +26,9 @@ import androidx.test.runner.lifecycle.Stage
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
@@ -569,6 +572,36 @@ class NativeWorkspaceTest {
             // Metadata must never replace the original assertion/type/cause.
             runCatching { failure.addSuppressed(AssertionError("Native typing timing: ${timing.report(System.nanoTime())}")) }
             throw failure
+        }
+    }
+
+    @Test fun edgeToEdgeInsetsReserveBarsCutoutAndKeyboardWithoutAccumulatingPadding() {
+        val scenario = NativeActivityFixture.scenario
+        scenario.onActivity { activity ->
+            val content = activity.findViewById<View>(android.R.id.content)
+            val bars = WindowInsetsCompat.Type.systemBars()
+            val cutout = WindowInsetsCompat.Type.displayCutout()
+            val ime = WindowInsetsCompat.Type.ime()
+            val original = ViewCompat.getRootWindowInsets(content)
+            try {
+                for (keyboard in listOf(320, 0, 240, 0)) {
+                    val input = WindowInsetsCompat.Builder()
+                        .setInsets(bars, Insets.of(0, 24, 0, 28))
+                        .setInsets(cutout, Insets.of(36, 0, 0, 0))
+                        .setInsets(ime, Insets.of(0, 0, 0, keyboard))
+                        .setVisible(ime, keyboard > 0).build()
+                    val forwarded = ViewCompat.dispatchApplyWindowInsets(content, input)
+                    assertEquals("Landscape cutout must constrain WebView width", 36, content.paddingLeft)
+                    assertEquals("Status bar must constrain WebView height", 24, content.paddingTop)
+                    assertEquals(0, content.paddingRight)
+                    assertEquals("Keyboard and navigation bar overlap, rather than add", maxOf(28, keyboard), content.paddingBottom)
+                    assertEquals("WebView must receive hide updates without double insets", Insets.NONE,
+                        forwarded.getInsets(bars or cutout or ime))
+                }
+            } finally {
+                if (original != null) ViewCompat.dispatchApplyWindowInsets(content, original)
+                ViewCompat.requestApplyInsets(content)
+            }
         }
     }
 
@@ -1403,7 +1436,36 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             clickButton("Compose")
             typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
+            val keyboardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (true) {
+                var fitsAboveKeyboard = false
+                scenario.onActivity { activity ->
+                    val decor = activity.window.decorView
+                    val insets = requireNotNull(ViewCompat.getRootWindowInsets(decor))
+                    val keyboardHeight = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                    val web = requireNotNull(webView(decor))
+                    val position = IntArray(2)
+                    web.getLocationInWindow(position)
+                    fitsAboveKeyboard = insets.isVisible(WindowInsetsCompat.Type.ime()) && keyboardHeight > 0 &&
+                        position[1] + web.height <= decor.height - keyboardHeight
+                }
+                if (fitsAboveKeyboard) break
+                assertTrue("Real docked IME must resize the native WebView", System.nanoTime() < keyboardDeadline)
+                Thread.sleep(50)
+            }
+            val canvasHeight = "document.querySelector('.terminal-canvas').getBoundingClientRect().height"
+            awaitDocument(scenario, "terminal and special keys inside the keyboard-resized WebView", """
+                (()=>{
+                  const canvas=document.querySelector('.terminal-canvas'), keys=document.querySelector('.terminal-keys');
+                  if(!canvas || !keys || canvas.getBoundingClientRect().height<=0) return false;
+                  const special=Array.from(keys.querySelectorAll('button')).filter(x=>['esc','tab'].includes(x.textContent));
+                  return special.length===2 && [canvas,keys,...special]
+                    .every(x=>{const r=x.getBoundingClientRect();return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight;});
+                })()
+            """)
+            val withKeyboard = evaluate(scenario, canvasHeight).toDouble()
             closeSoftKeyboard()
+            awaitDocument(scenario, "terminal expands after native keyboard dismissal", "$canvasHeight > $withKeyboard")
             clickButton("Paste draft")
             assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario,
                 "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"))
