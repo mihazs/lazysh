@@ -54,3 +54,14 @@ experiment requires equality within its own four samples.
 Local owner: `bun test tests/android-startup.test.ts`. This tests admission,
 classification and real foreground-child failure/overflow/deadline cleanup;
 it does not boot an emulator. Existing acceptance CI remains separate.
+
+Admission failures include an `observationFailure` with a closed checkpoint for
+camera ownership, AVD proof/seal matching, process identity, guest CPU/boot reads
+and validation, freshness, or later observation operations. When the failure
+originates in camera attestation, a second closed `cameraCheck` category identifies
+the rejected check. The existing generic error message and all admission checks
+are unchanged. Capture status/byte counts survive later validation failures;
+checkpoint fields contain no underlying error, PID, path, argv, or raw boot UUID.
+They locate a failed operation, not its root cause. Existing observation evidence
+survives a subsequent cleanup failure. Missing PID fields in the summary do not
+locate failure: PID/start proofs are internal and never uploaded.

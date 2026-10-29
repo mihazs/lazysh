@@ -2,7 +2,7 @@ import {afterEach,expect,test} from 'bun:test';
 import {chmod,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {capture,cpuCount,hostBudget,quota,startupObservation,cpuAllocation,waitForRetirement} from './support/androidStartup';
+import {capture,cpuCount,hostBudget,quota,startupObservation,cpuAllocation,waitForRetirement,startupFailure} from './support/androidStartup';
 const temporary:string[]=[];
 afterEach(async()=>{for(const path of temporary.splice(0))await rm(path,{recursive:true,force:true});});
 
@@ -178,4 +178,43 @@ test.skipIf(process.platform!=='linux')('retirement rejects changed identity and
   await expect(waitForRetirement(process.pid,`${start}1`)).rejects.toThrow('identity changed');
   await expect(waitForRetirement(process.pid,start,30)).rejects.toThrow('retirement deadline');
   expect(process.kill(process.pid,0)).toBe(true);
+});
+
+test('startup failure whitelist retains no arbitrary checkpoint, message, stack or cause',()=>{
+  const owned=new Error('Owned QR imagefile camera attestation failed',{cause:'qemu-tail'});
+  expect(startupFailure('camera-attestation',owned)).toEqual({checkpoint:'camera-attestation',cameraCheck:'qemu-tail'});
+  expect(startupFailure('guest-online',owned)).toEqual({checkpoint:'guest-online',cameraCheck:'qemu-tail'});
+  expect(startupFailure('avd-proof',owned)).toEqual({checkpoint:'avd-proof'});
+  expect(startupFailure('private-pid-path',new Error('private-argv',{cause:'private-key'}))).toEqual({checkpoint:'unavailable'});
+  expect(startupFailure('guest-boot-validation',new Error('private-path',{cause:'port'}))).toEqual({checkpoint:'guest-boot-validation'});
+});
+test.skipIf(process.platform!=='linux')('actual observation failure reports camera admission and survives cleanup failure without private state',async()=>{
+  const {runStartup}=await import('./support/androidStartup');const f=await readyRetirementFixture(process.pid,'private-unused-start');
+  await expect(runStartup('observe',f.env)).rejects.toThrow('inconclusive');
+  const first=JSON.parse(await readFile(join(f.base,'results/summary.json'),'utf8'));
+  expect(first.samples[3].observationFailure).toEqual({checkpoint:'camera-attestation',cameraCheck:'environment'});
+  await expect(runStartup('retire',f.env)).rejects.toThrow('inconclusive');
+  const after=JSON.parse(await readFile(join(f.base,'results/summary.json'),'utf8'));
+  expect(after.samples[3].observationFailure).toEqual(first.samples[3].observationFailure);
+  expect(JSON.stringify(after)).not.toContain(f.directory);expect(JSON.stringify(after)).not.toContain('private');
+});
+for(const scenario of ['avd-proof','avd-seal-match','pid-nomination','process-identity','guest-online-validation','guest-boot-validation','guest-boot-freshness'] as const)test.skipIf(process.platform!=='linux')(`actual observation reports ${scenario} without raw fixture data`,async()=>{
+  const {runStartup}=await import('./support/androidStartup');const {mkdir}=await import('node:fs/promises');const {createHash}=await import('node:crypto');
+  const f=await readyRetirementFixture(process.pid,await recordedStart(process.pid));
+  const statePath=join(f.base,'state.json'),state=JSON.parse(await readFile(statePath,'utf8'));state.rows[3].sealed=true;
+  const boot='00000000-0000-0000-0000-000000000001';
+  if(scenario==='avd-proof')await writeFile(f.config,'private-invalid-config');
+  if(scenario==='avd-seal-match')state.avd.config='wrong-private-inode';
+  if(scenario==='guest-boot-freshness')state.rows[0].boot=createHash('sha256').update(boot).digest('hex');
+  await writeFile(statePath,JSON.stringify(state));
+  const nomination=join(f.directory,'private-pid-file');
+  if(scenario!=='pid-nomination')await writeFile(nomination,scenario==='process-identity'?'not-a-pid':String(process.pid));
+  const tools=join(f.env.ANDROID_HOME!,'platform-tools');await mkdir(tools,{recursive:true});const adb=join(tools,'adb');
+  await writeFile(adb,`#!${process.execPath}\nif(process.argv.includes('/sys/devices/system/cpu/online'))console.log(${JSON.stringify(scenario==='guest-online-validation'?'0-3':'0-1')});else console.log(${JSON.stringify(scenario==='guest-boot-validation'?'private-invalid-boot':boot)});\n`);await chmod(adb,0o700);
+  await expect(runStartup('observe',{...f.env,LAZYSH_ANDROID_QR_EMULATOR_PID_FILE:nomination},async()=>({check:async()=>{}}))).rejects.toThrow('inconclusive');
+  const summary=JSON.parse(await readFile(join(f.base,'results/summary.json'),'utf8'));
+  expect(summary.samples[3].observationFailure).toEqual({checkpoint:scenario});
+  expect(JSON.stringify(summary)).not.toContain(f.directory);expect(JSON.stringify(summary)).not.toContain('private');
+  expect(JSON.stringify(summary)).not.toContain(boot);
+  if(scenario.startsWith('guest-'))expect(summary.samples[3].captures.online).toMatchObject({status:'complete'});
 });

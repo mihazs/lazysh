@@ -3,7 +3,7 @@ import {createReadStream} from 'node:fs';
 import {lstat,mkdir,readdir,realpath,rm,writeFile,appendFile} from 'node:fs/promises';
 import {isAbsolute,join,dirname,relative,resolve} from 'node:path';
 import {OwnedProcess,listening} from './androidSsh';
-import {attestQrCamera,readQrMetadata} from './androidQrOwnership';
+import {attestQrCamera,readQrMetadata,qrOwnershipFailure} from './androidQrOwnership';
 
 const plan=[2,4,4,2] as const;
 const limit=1024*1024,windowMs=60_000,avdName='lazysh-runtime-api36';
@@ -77,6 +77,12 @@ export function startupObservation(events:string,traces:string,complete:boolean)
   const systemUiTrace=traces.split(/^----- pid /m).find(part=>/^Cmd line: com\.android\.systemui$/m.test(part));
   return {anr:systemUi?( /\bam_anr\s*:\s*\[[^\n]*\bcom\.android\.systemui\b[^\n]*failed to complete startup/.test(events)?'startup':'other-systemui'):'not-observed',gpuPriority:systemUiTrace===undefined?null:systemUiTrace.includes('setGpuContextPriority'),bindApplication:systemUiTrace===undefined?null:systemUiTrace.includes('ActivityThread.handleBindApplication')};
 }
+const observationChecks=['observe-entry','camera-attestation','avd-sealed','avd-proof','avd-seal-match','pid-nomination','process-identity','process-record','result-directory','guest-online','guest-boot','guest-online-validation','guest-boot-validation','guest-boot-freshness','observation-window','events','cpu','lastanr','traces','load','host-budget','host-allocation','final-camera-attestation','classification','observation-result'] as const;
+export function startupFailure(checkpoint:unknown,error:unknown){
+  const checked=observationChecks.find(value=>value===checkpoint)??'unavailable';
+  const cameraCheck=['camera-attestation','final-camera-attestation','guest-online','guest-boot','events','cpu','lastanr','traces','load'].includes(checked)?qrOwnershipFailure(error):undefined;
+  return {checkpoint:checked,...(cameraCheck?{cameraCheck}:{})};
+}
 async function fingerprint(path:string,deadline=performance.now()+60_000){
   const hash=createHash('sha256');let files=0,total=0;
   async function visit(file:string,depth:number){
@@ -113,7 +119,7 @@ export async function waitForRetirement(pid:number,start:string,budgetMs=10_000)
     await Bun.sleep(Math.min(50,remaining));
   }
 }
-export async function runStartup(phase:string,env=process.env){
+export async function runStartup(phase:string,env=process.env,attest=attestQrCamera){
   if(process.platform!=='linux'||env.GITHUB_ACTIONS!=='true'||env.RUNNER_ENVIRONMENT!=='github-hosted'||env.RUNNER_OS!=='Linux')throw new Error('Owned hosted Linux VM required');
   const temp=env.RUNNER_TEMP,root=env.GITHUB_WORKSPACE,sdk=env.ANDROID_HOME;
   if(!temp||!root||!sdk||![temp,root,sdk].every(p=>isAbsolute(p)&&!/[\n\r\0]/.test(p)))throw new Error('Owned paths unavailable');
@@ -148,7 +154,7 @@ export async function runStartup(phase:string,env=process.env){
     if(!index.isFile()||index.isSymbolicLink()||index.uid!==process.getuid!()||paths.length!==1||paths[0]!==`path=${avd}`)throw new Error('AVD index ownership unavailable');
     return {directory:String(directory.ino),config:String(config.ino),index:String(index.ino)};
   }
-  let primary=false;
+  let primary=false,checkpoint='observe-entry';
   try{
     if(host!==state.host)throw new Error('Host VM changed');
     if(phase==='prepare')await prepare();
@@ -166,34 +172,43 @@ export async function runStartup(phase:string,env=process.env){
       row().allocation=allocation;row().sealed=true;await save();
     }else if(phase==='observe'){
       row().observeEntered=true;await save();
-      const ownership=await attestQrCamera(env,root);await ownership.check();
-      if(!row().sealed||JSON.stringify(await avdProof())!==JSON.stringify(state.avd))throw new Error('Unsealed AVD');
-      state.pid=Number((await read(env.LAZYSH_ANDROID_QR_EMULATOR_PID_FILE!,32)).trim());
-      const identity=await processIdentity(state.pid);state.start=identity&&!identity.retired?identity.start:undefined;await save();
-      if(!state.start)throw new Error('Owned process unavailable');
-      const directory=join(results,String(state.index));await mkdir(directory,{mode:0o700});
+      checkpoint='camera-attestation';const ownership=await attest(env,root);await ownership.check();
+      checkpoint='avd-sealed';if(!row().sealed)throw new Error('Unsealed AVD');
+      checkpoint='avd-proof';const proof=await avdProof();
+      checkpoint='avd-seal-match';if(JSON.stringify(proof)!==JSON.stringify(state.avd))throw new Error('Unsealed AVD');
+      checkpoint='pid-nomination';state.pid=Number((await read(env.LAZYSH_ANDROID_QR_EMULATOR_PID_FILE!,32)).trim());
+      checkpoint='process-identity';const identity=await processIdentity(state.pid);state.start=identity&&!identity.retired?identity.start:undefined;
+      checkpoint='process-record';await save();
+      checkpoint='process-identity';if(!state.start)throw new Error('Owned process unavailable');
+      checkpoint='result-directory';const directory=join(results,String(state.index));await mkdir(directory,{mode:0o700});
       const adb=join(sdk,'platform-tools/adb'),started=performance.now();
       const get=async(name:string,args:string[],retain=true)=>{
-        await ownership.check();const path=join(retain?directory:base,`${name}.txt`);
-        try{const result=await capture(adb,['-s','emulator-5580',...args],path);return {...result,text:result.status==='complete'?await read(path,limit):''};}
+        checkpoint=name;await ownership.check();const path=join(retain?directory:base,`${name}.txt`);
+        try{
+          const result=await capture(adb,['-s','emulator-5580',...args],path);
+          const key=name==='guest-online'?'online':name==='guest-boot'?'boot':name;
+          const retained=(row().captures??={}) as Record<string,Capture>;retained[key]={status:result.status,bytes:result.bytes};
+          return {...result,text:result.status==='complete'?await read(path,limit):''};
+        }
         finally{if(!retain)await rm(path,{force:true});}
       };
       const online=await get('guest-online',['shell','cat','/sys/devices/system/cpu/online'],false);
       const boot=await get('guest-boot',['shell','cat','/proc/sys/kernel/random/boot_id'],false);
-      if(online.status!=='complete'||cpuCount(online.text)!==plan[state.index]||boot.status!=='complete'||! /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\s*$/.test(boot.text))throw new Error('Guest identity unavailable');
-      const bootHash=digest(boot.text.trim());if(state.rows.some(other=>other.boot===bootHash))throw new Error('Guest boot reused');row().boot=bootHash;row().guestCores=cpuCount(online.text);
-      await Bun.sleep(Math.max(0,windowMs-(performance.now()-started)));
+      checkpoint='guest-online-validation';if(online.status!=='complete'||cpuCount(online.text)!==plan[state.index])throw new Error('Guest identity unavailable');
+      checkpoint='guest-boot-validation';if(boot.status!=='complete'||! /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\s*$/.test(boot.text))throw new Error('Guest identity unavailable');
+      checkpoint='guest-boot-freshness';const bootHash=digest(boot.text.trim());if(state.rows.some(other=>other.boot===bootHash))throw new Error('Guest boot reused');row().boot=bootHash;row().guestCores=cpuCount(online.text);
+      checkpoint='observation-window';await Bun.sleep(Math.max(0,windowMs-(performance.now()-started)));
       const specs:[string,string[]][]=[['events',['logcat','-d','-b','main','-b','system','-b','events','-v','threadtime','ActivityManager:E','am_anr:I','*:S']],['cpu',['shell','dumpsys','cpuinfo']],['lastanr',['shell','dumpsys','activity','lastanr']],['traces',['shell','dumpsys','activity','lastanr-traces']],['load',['shell','date -u; cat /proc/uptime /proc/loadavg']]];
       const captures:Record<string,Awaited<ReturnType<typeof get>>>={online,boot};
       for(const [name,args] of specs)captures[name]=await get(name,args);
       row().captures=Object.fromEntries(Object.entries(captures).map(([name,{status,bytes}])=>[name,{status,bytes}]));
-      row().hostAfter=await hostBudget();if(JSON.stringify(cpuAllocation(row().hostAfter as Awaited<ReturnType<typeof hostBudget>>))!==JSON.stringify(row().allocation))throw new Error('Host budget changed');
-      await ownership.check();
-      const complete=Object.values(captures).every(value=>value.status==='complete');
+      checkpoint='host-budget';row().hostAfter=await hostBudget();checkpoint='host-allocation';if(JSON.stringify(cpuAllocation(row().hostAfter as Awaited<ReturnType<typeof hostBudget>>))!==JSON.stringify(row().allocation))throw new Error('Host budget changed');
+      checkpoint='final-camera-attestation';await ownership.check();
+      checkpoint='classification';const complete=Object.values(captures).every(value=>value.status==='complete');
       const observation=startupObservation(captures.events.text,captures.traces.text,complete);
       Object.assign(row(),observation);
       if(!complete||observation.anr==='unavailable')throw new Error('Capture incomplete');
-      row().reason='awaiting-retirement';await save();
+      checkpoint='observation-result';row().reason='awaiting-retirement';await save();
     }else if(phase==='retire'){
       await variables(false);
       row().actionOutcome=['success','failure','cancelled'].includes(env.STARTUP_ACTION_OUTCOME??'')?env.STARTUP_ACTION_OUTCOME:'unavailable';
@@ -207,7 +222,8 @@ export async function runStartup(phase:string,env=process.env){
       state.index++;delete state.pid;delete state.start;delete state.avd;delete state.fingerprints;
       if(state.index<plan.length)await prepare();
     }else if(phase!=='summarize')throw new Error('Unknown diagnostic phase');
-  }catch{
+  }catch(error){
+    if(phase==='observe')row().observationFailure??=startupFailure(checkpoint,error);
     primary=true;state.failure??=`${phase}-unavailable`;row().status='inconclusive';
     if(phase==='retire'){row().cleanup??='unavailable';if(row().reason==='not-observed')row().reason='boot-or-action-failure';else if(row().reason==='awaiting-retirement')row().reason='retirement-unavailable';}
     else if(row().reason==='not-observed'||row().reason==='awaiting-retirement')row().reason=`${phase}-unavailable`;
