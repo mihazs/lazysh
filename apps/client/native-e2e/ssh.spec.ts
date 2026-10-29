@@ -26,7 +26,7 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   const editor=await browser.$('[role="dialog"][aria-label="Add a host"]');await editor.waitForDisplayed();
   await (await editor.$('input[placeholder="Home workstation"]')).setValue('Owned SSH GUI host');
   await (await editor.$('input[placeholder="workstation.local"]')).setValue('127.0.0.1');
-  await (await editor.$('input[type="number"]')).setValue(String(ssh.port));
+  await (await editor.$('label.port-field input')).setValue(String(ssh.port));
   await (await editor.$('input[placeholder="Your SSH username"]')).setValue(ssh.username);
   await (await (await editor.$('label*=Preferred transport')).$('select')).selectByAttribute('value','ssh');
   await (await editor.$('button=Save host')).click();await editor.waitForDisplayed({reverse:true});
