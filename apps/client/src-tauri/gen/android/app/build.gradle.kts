@@ -182,6 +182,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ui"
         }
     }
+    if (providers.gradleProperty("lazyshHerdrAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/herdr-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/herdr-ui"
+        }
+    }
     if (providers.gradleProperty("lazyshQrCameraAcceptance").orNull == "true") {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/qr-camera"

@@ -364,6 +364,7 @@ jobs:
             apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/push-artifact/google.json
 
   native-android-runtime:
+    needs: herdr-native
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -382,11 +383,26 @@ jobs:
         with:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
+        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment
       - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-guarded-herdr
+      - name: Verify same-run Herdr and build the real companion for packaged Chat
+        env:
+          GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
+        run: |
+          cd "$RUNNER_TEMP/lazysh-guarded-herdr"
+          printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
+          chmod 700 herdr
+          cd "$GITHUB_WORKSPACE"
+          cargo test --locked -p lazysh-agent --example owned_terminal_receiver
+          cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver
+          printf '%s\n' "LAZYSH_TEST_HERDR=$RUNNER_TEMP/lazysh-guarded-herdr/herdr" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/debug/examples/owned_terminal_receiver" "LAZYSH_ANDROID_UI_HERDR=1" >> "$GITHUB_ENV"
       - name: Grant this runner access to KVM
         run: |
           test -c /dev/kvm
