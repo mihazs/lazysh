@@ -5148,6 +5148,27 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn openssh_tool_environment(
+        directory: &std::path::Path,
+        binary: PathBuf,
+        name: &str,
+    ) -> String {
+        assert!(binary.is_absolute() && binary.is_file());
+        let bin = directory.join("bin");
+        fs::create_dir(&bin).unwrap();
+        std::os::unix::fs::symlink(fs::canonicalize(binary).unwrap(), bin.join(name)).unwrap();
+        // A private HOME must not trigger zsh's interactive first-user setup.
+        fs::write(directory.join(".zshrc"), b"").unwrap();
+        assert!(!bin.to_str().unwrap().chars().any(char::is_whitespace));
+        format!(
+            "SetEnv PATH={}:/usr/bin:/bin HOME={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",
+            bin.display(),
+            directory.display(),
+            directory.display()
+        )
+    }
+
+    #[cfg(unix)]
     async fn openssh_interoperability(check: OpenSshCheck) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let mosh = matches!(check, OpenSshCheck::Mosh);
@@ -5171,7 +5192,21 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let environment = if matches!(check, OpenSshCheck::TranscriptImages) {
+        let environment = if mosh {
+            let resolved = std::process::Command::new("sh")
+                .args(["-c", "command -v mosh-server"])
+                .output()
+                .unwrap();
+            assert!(resolved.status.success());
+            let binary =
+                fs::canonicalize(String::from_utf8(resolved.stdout).unwrap().trim()).unwrap();
+            let version = std::process::Command::new(&binary)
+                .arg("--version")
+                .output()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
+            openssh_tool_environment(dir.path(), binary, "mosh-server")
+        } else if matches!(check, OpenSshCheck::TranscriptImages) {
             transcript_image_fixture::companion_path(dir.path())
         } else {
             String::new()
@@ -5298,11 +5333,18 @@ mod tests {
         let _ = et;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if mosh {
-            let version = std::process::Command::new("mosh-server")
-                .arg("--version")
-                .output()
-                .unwrap();
-            assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
+            assert_eq!(
+                exec(
+                    &app.state::<AppState>().session(&id).await.unwrap(),
+                    &access_lease(),
+                    "command -v mosh-server".into(),
+                )
+                .await
+                .unwrap()
+                .trim(),
+                dir.path().join("bin/mosh-server").to_str().unwrap(),
+                "remote bootstrap must resolve the fixture's verified Mosh server"
+            );
             let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
             let udp_port = udp.local_addr().unwrap().port();
             drop(udp);

@@ -13,18 +13,7 @@ pub(super) fn companion_path(directory: &Path) -> String {
     let binary = PathBuf::from(std::env::var_os("LAZYSH_TEST_AGENT_BIN").expect(
         "Build lazysh-agent from this checkout and provide its private target binary explicitly",
     ));
-    assert!(binary.is_absolute() && binary.is_file());
-    let bin = directory.join("bin");
-    fs::create_dir(&bin).unwrap();
-    std::os::unix::fs::symlink(fs::canonicalize(binary).unwrap(), bin.join("lazysh-agent"))
-        .unwrap();
-    assert!(!bin.to_str().unwrap().chars().any(char::is_whitespace));
-    format!(
-        "SetEnv PATH={}:/usr/bin:/bin HOME={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",
-        bin.display(),
-        directory.display(),
-        directory.display()
-    )
+    openssh_tool_environment(directory, binary, "lazysh-agent")
 }
 
 fn encoded(bytes: &[u8]) -> String {
