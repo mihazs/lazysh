@@ -1835,7 +1835,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <code>bun run dev</code>{" "}{t("appToConnect")}</div>
         )}
         {native && previousWorkspace.length > 0 && (
-          <div className="browser-banner">
+          <div className="browser-banner workspace-restore">
             <button
               disabled={restoring || !loaded}
               onClick={() => void restoreWorkspace()}
@@ -2130,10 +2130,18 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       )}
       {preferences && (
         <Dialog title={t("appPreferences")} close={() => setPreferences(false)}>
+          <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
+          {native && <section aria-label={t('defaultMuxLabel')}>
+            <h3>{t('defaultMuxLabel')}</h3>
+            <p>{t('defaultMuxPreferencesHint')}</p>
+            {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
+            {!hosts.length && <button type="button" onClick={()=>{setPreferences(false);setEditor('new');}}>{t('appAddHost')}</button>}
+          </section>}
           <PreferencesPanel />
           <AccessPanel />
           <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
+          </div>
         </Dialog>
       )}
       {pushSettings && <Dialog title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>

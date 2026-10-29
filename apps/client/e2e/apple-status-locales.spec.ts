@@ -1,3 +1,4 @@
+import {expectPanelInsets} from './fixtures/panelLayout';
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {appleStatusLocales,appleStatusNativeReason,appleStatusSession} from '../src/test/appleStatusData';
@@ -38,6 +39,7 @@ for(const initial of appleStatusLocales)test(`${initial.locale} Apple status lab
     const panel=page.getByRole('region',{name:labels.title,exact:true});
     await expect(panel.getByRole('button',{name:labels.stop,exact:true})).toBeVisible();
     expect(await panel.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+    await expectPanelInsets(panel);
     expect(await page.evaluate(()=>window.appleStatusLocale.calls)).toEqual(subscribed);
   }
   await page.clock.fastForward(9999);expect(await publications()).toHaveLength(1);

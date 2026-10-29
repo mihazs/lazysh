@@ -33,6 +33,7 @@ export const english = {
   agentsNoMatchesHint: "Change the search or reported-status filter to see other reports.",
   agentsClearFilters: "Clear filters",
 
+  defaultMuxPreferencesHint: "Choose a default multiplexer for each saved host. Edit a host to select Herdr, tmux or Zellij and the session to attach to or create on connection.",
   defaultMuxLabel: "Default multiplexer",
   defaultMuxNone: "None — normal terminal",
   defaultMuxName: "Default multiplexer session",

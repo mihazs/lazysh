@@ -1,3 +1,4 @@
+import {expectPanelInsets} from './fixtures/panelLayout';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import {expect,test} from '@playwright/test';
 import type {mountRecordedPanels} from './fixtures/RecordedPanelsHarness';
@@ -30,6 +31,7 @@ for(const labels of [
     const panel=root.getByRole('region',{name,exact:true});
     await expect(panel).toBeVisible();
     expect(await panel.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+    await expectPanelInsets(panel);
   }
   await root.getByRole('button',{name:labels.connected,exact:true}).click();
   expect(await page.evaluate(()=>window.recordedPanels.opened)).toEqual([{sessionId:panelSession.id}]);
@@ -41,4 +43,27 @@ for(const labels of [
   expect(before.map(call=>call.command)).toEqual(['agent_transcript','agent_usage']);
   await root.getByRole('button',{name:'Archive',exact:true}).click();await expect(root.locator('.notification-list article')).toHaveCount(0);
   expect(external).toEqual([]);expect(await root.locator('img,script').count()).toBe(0);
+});
+
+
+test('transcript checkbox captions stay beside controls at normal and enlarged display scale',async({page})=>{
+  await openLocalizedApp(page,'en');
+  await page.evaluate(async()=>{const {mountRecordedPanels}=await import('/e2e/fixtures/RecordedPanelsHarness.tsx');window.recordedPanels=mountRecordedPanels();});
+  const root=page.locator('.recorded-panels-fixture');
+  await root.evaluate(element=>{(element as HTMLElement).style.background='var(--theme-bg)';});
+  const checkbox=root.locator('.chat-panel').getByRole('checkbox').first();
+  await expect(checkbox).toBeVisible();
+  for(const width of [393,412,1280]) for(const zoom of [1,1.35]) {
+    await page.setViewportSize({width,height:900});
+    await page.evaluate(scale=>{document.documentElement.style.zoom=String(scale);},zoom);
+    expect(await checkbox.evaluate(input=>{
+      const label=input.closest('label')!, text=Array.from(label.childNodes).find(node=>node.nodeType===Node.TEXT_NODE && node.textContent?.trim())!;
+      const range=document.createRange();range.selectNodeContents(text);
+      const caption=range.getBoundingClientRect(), control=input.getBoundingClientRect();
+      return caption.left>=control.right && Math.abs(caption.top+caption.height/2-control.top-control.height/2)<=2;
+    })).toBe(true);
+    expect(await root.locator('.chat-panel').evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  }
+  await page.setViewportSize({width:393,height:900});
+  await page.screenshot({path:test.info().outputPath('transcript-checkbox-layout.png')});
 });
