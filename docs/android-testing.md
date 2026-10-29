@@ -104,6 +104,22 @@ The explicit host task requires Linux, OpenSSH server/client, GNU timeout, and t
 
 `NativeWorkspaceTest.ownedOpenSshConnectsThroughRealUi` uses actual Add host/Save/Connect controls and selects SSH. It pastes the owned identity through Android's clipboard/native Paste key, compares only a boolean for field equality, checks the exact independently generated server fingerprint, and explicitly trusts it. Remember credentials stays off. The test requires the unique real prompt in xterm, sends a split printf challenge through Compose/Paste draft/native Enter, requires expanded output absent from the echoed input, and waits for the returned prompt. Before disconnecting, the same authenticated session opens the actual Agents board and exercises its keep-awake checkbox through the shipping WebView/Rust/plugin path. It checks default off, explicit opt-in/off against the real Activity Window flag, release while the Activity is stopped, foreground reacquisition, board-unmount release, persisted-choice remount and final off. The test reads `FLAG_KEEP_SCREEN_ON`; it never sets the flag or calls a debug/native IPC replacement. Lifecycle movement uses Android ActivityScenario, and bounded flag observations do not extend existing typing/readiness or job deadlines. Failure cleanup resumes the owned Activity, turns off any checked board control, returns to Terminal and verifies flag release before the original SSH/clipboard cleanup.
 
+The keyboard containment oracle compares all canvas/key/Esc/Tab `DOMRect` edges
+against the actual `VisualViewport` double dimensions plus its layout-viewport
+offsets, with finite positive geometry required and no rounding or tolerance.
+The same small Android-test asset executes in the WebView and the existing Bun
+owner's fractional-fit, overflow and offset-clipping cases. Native physical
+WebView/IME bounds, the positive terminal row, and expansion after dismissal remain
+separate assertions. WebView 133.0.6943.137 ([commit 49ec12c](https://github.com/chromium/chromium/commit/49ec12cc413ffec766028509968b31d7d65fa0b7))
+returns [integer inner dimensions](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/third_party/blink/renderer/core/frame/local_dom_window.cc#L1471)
+but [double visual dimensions and offsets](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/third_party/blink/renderer/core/frame/visual_viewport.cc#L444).
+The distinction matters on the owned 2.625-density guest: a 412.190px full-width
+rectangle exceeds integer innerWidth 412. That comparison alone cannot establish
+physical overflow; the oracle uses the actual visible bounds instead.
+Actual visual dimensions are retained only as bounded numeric failure metadata;
+physical-device behavior remains a separate acceptance requirement.
+
+
 It then disconnects and deletes its unique host. No fake native bridge, direct SSH/write IPC, JS input-value assignment, credential-vault bypass or production test endpoint is used.
 
 Cleanup clears only the fixture-labeled clipboard and removes only the allocated reverse/device fixture path. SSH descendant retirement is fenced by the original live daemon PID/start identity and revalidated parent identities before recursion, followed by listener shutdown/reaping. Losing original ownership/liveness fails explicitly rather than adopting a later process tree or claiming full cleanup. Remote shell lifetime is additionally capped by the fixture's timeout; original UI readiness/typing budgets and the runtime job's 30-minute ceiling remain unchanged. Failures retain their original result if cleanup also fails. Native Bun tests cover real key authentication/refusal, prompt/challenge behavior, active-shell retirement, private file modes, bounded process deadlines and output omission. The process helper supports foreground fixture tools only; arbitrary background children outliving a reaped leader are unsupported. A native counterexample fails visibly and owns its separate child cleanup; a generic supervisor would be required before supporting daemonizing commands. The app method runs only when explicitly selected by its host task. Ordinary root CI tests exercise the host utility without requiring an emulator/OpenSSH installation. Linux-/proc-specific helper and real-host cases are explicitly skipped on other hosts; platform-independent output-omission checks still run. Explicit SSH acceptance on an unsupported host fails with its Linux requirement rather than silently skipping.
@@ -133,3 +149,23 @@ For the dedicated owned SSH/Herdr failure report, the existing one-second contin
 The dedicated Herdr invocation alone uses AGP's `android.injected.androidTest.leaveApksInstalledAfterRun=true`: its fixed owned application and instrumentation packages remain installed until the existing bounded failure probe finishes. Pinned AGP otherwise uninstalls them in `afterAll`, and Android removes a package's historical exit records on removal. A bounded exact-ID package-presence snapshot distinguishes absent, unavailable and unrecognized output; presence is not proof of a particular installed binary. Finally cleanup attempts both fixed packages on the selected owned emulator, retaining the original acceptance failure if cleanup also fails. The ordinary SSH/default tasks keep their existing installation lifecycle. This preserves diagnostic opportunity, not a claim that uninstall caused the runtime failure.
 
 The owned-case streaming classifier also reads ActivityManager info messages, retaining only an exact `app.lazysh.client` force-stop prefix within the original START/END window. It maps the reason to finished-instrumentation, start-instrumentation, external-request or other, plus timestamp; caller PID/name, app ID, user ID and raw reason are discarded. These package-scoped records share the existing eight-record/64KiB bounds with fatal records and do not identify an affected PID or authenticate a caller. No matching row means unknown. Android may force-stop a target when instrumentation finishes, so a reported reason can be teardown following an earlier failure rather than its cause.
+
+The owned Herdr case at source 78d9ca1 reached the later remote challenge assertion
+after passing the actual docked-IME/native WebView bounds, whole canvas/keys/Esc/Tab
+visual containment and post-dismiss terminal expansion checks. This is owned API 36
+emulator evidence, not Samsung hardware acceptance or a complete case pass.
+Paste draft refocuses xterm and can reopen the keyboard while Compose remains open;
+a separate real-xterm browser fixture demonstrates that correct output plus a later
+prompt remain in the buffer but cannot both be rendered at one visible row.
+The native flow therefore dismisses the refocused keyboard ordinarily, reasserts
+xterm focus and sends the same native Enter before the unchanged non-echoable output
+and later-prompt checks. It never injects terminal bytes through a backend shortcut.
+
+The independent native chooser failure remains observable through the existing
+single tap and phone dialog assertion. A passive, case/token-owned observer retains
+only finite geometry and trusted/target flags for pointer down/up/click; counts
+are capped at 2 with an overflow flag. It records no field values, text or event
+objects, changes no event behavior, and removes only its own listeners. Capture
+and cleanup failures remain separate from the original assertion. Chromium's
+[phone popup contract](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/content/public/android/java/src/org/chromium/content/browser/input/SelectPopup.java#L137)
+does not justify replacing the dialog matcher without an observed cause.

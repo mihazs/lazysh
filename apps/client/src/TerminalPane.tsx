@@ -157,10 +157,19 @@ export default function TerminalPane({ session, active, reportError }: {
     const size = terminal.onResize(({ cols, rows }) => {
       if (session.connected) void api.resize(session.id, cols, rows).catch(error => reportError(String(error)));
     });
-    const resize = new ResizeObserver(() => {
+    const screen = element.querySelector<HTMLElement>(".xterm-screen");
+    const fitTerminal = () => {
+      // Keep at least one measured row while the composer yields its remaining room.
+      const rowHeight = screen && terminal.rows > 0 ? Math.ceil(screen.clientHeight / terminal.rows) : 0;
+      if (rowHeight > 0 && Number.isFinite(rowHeight)) {
+        const minimum = `${rowHeight}px`;
+        if (element.style.minHeight !== minimum) element.style.minHeight = minimum;
+      }
       if (activeRef.current && element.clientWidth > 0) addon.fit();
-    });
+    };
+    const resize = new ResizeObserver(fitTerminal);
     resize.observe(element);
+    if (screen) resize.observe(screen);
     addon.fit();
     terminal.focus();
     return () => {
@@ -368,7 +377,7 @@ export default function TerminalPane({ session, active, reportError }: {
     {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
       <button disabled={!session.connected || !draft} onClick={() => {session.terminal.paste(draft); setDraft(""); session.terminal.focus();}}>{t('terminalPasteDraft')}</button><button onClick={() => setComposing(false)}>{t('terminalCloseComposer')}</button>
     </div>}
-    <div className="terminal-toolbar-toggle"><button onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")}</button></div>
+    <div className="terminal-toolbar-toggle"><button onClick={() => setComposing(!composing)}>{t('terminalCompose')}</button><button onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")}</button></div>
     {ctrlLocked && <div className="session-notice" role="status">{t('terminalControlLocked')}</div>}
     {toolbarVisible && dpadOpen && preferences.toolbar.includes("dpad") && <div className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')}>
       {preferences.dpadCorners.left === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadLeftCorner')} title={preferences.gestureChords.cornerLeft ?? t(gestureLabelKeys[preferences.dpadCorners.left])} onClick={() => runGesture(preferences.dpadCorners.left, "cornerLeft")}>{preferences.dpadCorners.left === "interrupt" ? "^C" : preferences.dpadCorners.left === "backspace" ? "⌫" : "1"}</button>}
@@ -388,7 +397,6 @@ export default function TerminalPane({ session, active, reportError }: {
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) session.terminal.focus();}}>{chord.label}</button>)}
       <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => searchInput.current?.focus());}}>{t('terminalFind')}</button>
       <button onClick={() => {const text = session.terminal.getSelection(); if (text) void copy(text); else reportError(new LocalUiError('terminalSelectFirst'));}}>{t('terminalCopy')}</button>
-      <button onClick={() => setComposing(!composing)}>{t('terminalCompose')}</button>
     </div>}
   </div>;
 }
