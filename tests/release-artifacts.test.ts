@@ -8,10 +8,10 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
-const startupFixture=()=>({available:true,overflow:false,signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
+const startupFixture=()=>({available:true,overflow:false,signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:['EPHEMERAL_PORT'],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
 async function fixture(run: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'lazysh-release-artifacts-'));
@@ -371,8 +371,54 @@ try {await pending;throw Error('owned fixture did not fail');}catch(error){if(!e
   expect(partialCore).toBe('PARTIAL_CORE_PRESERVED');
 });
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI window roles require one main and only the pinned zero-client framework helpers', async () => {
-  const script = windowsGuiWindowRoleScript + String.raw`
+  const script = windowsGuiWindowRoleScript + windowsGuiDebugTransportScript + String.raw`
 $ErrorActionPreference = 'Stop'
+$vectors=@(
+  @{Args=@('app','--remote-debugging-pipe');Code='PIPE'},
+  @{Args=@('app','--REMOTE-DEBUGGING-PORT=0');Code='EPHEMERAL_PORT'},
+  @{Args=@('app','/remote-debugging-port=65535');Code='FIXED_PORT'},
+  @{Args=@('app','-remote-debugging-port=1');Code='FIXED_PORT'},
+  @{Args=@('app','--','--remote-debugging-pipe');Code='ABSENT'},
+  @{Args=@('app','--user-data-dir=--remote-debugging-pipe','--mojo-named-platform-channel-pipe=x');Code='ABSENT'},
+  @{Args=@('app','--remote-debugging-port=0','--remote-debugging-pipe');Code='AMBIGUOUS'},
+  @{Args=@('app','--remote-debugging-port=0','--remote-debugging-port=0');Code='AMBIGUOUS'},
+  @{Args=@('app','--remote-debugging-port');Code='UNVERIFIED'},
+  @{Args=@('app','--remote-debugging-port=-1');Code='UNVERIFIED'},
+  @{Args=@('app','--remote-debugging-port=65536');Code='UNVERIFIED'},
+  @{Args=@('app','--remote-debugging-pipe=x');Code='UNVERIFIED'},
+  @{Args=@('app',' --remote-debugging-pipe ');Code='PIPE'},
+  @{Args=@('app',([char]160+'--remote-debugging-pipe'));Code='UNVERIFIED'},
+  @{Args=@('app','--remote-debugging-port=00');Code='UNVERIFIED'},
+  @{Args=@('app',(' --remote-debugging-port=0'+[char]10+'1'));Code='UNVERIFIED'},
+  @{Args=@('app',('--remote-debugging-pipe=x'+[char]10+'y'));Code='UNVERIFIED'},
+  @{Args=@('app',('--single-argument=x'+[char]10+'y'));Code='UNVERIFIED'},
+  @{Args=@('app','--single-argument','--remote-debugging-pipe');Code='UNVERIFIED'}
+)
+foreach ($vector in $vectors) { if ((GuiDebugArguments $vector.Args) -cne $vector.Code) { throw 'debug transport model mismatch' } }
+foreach ($invalid in @($null,'',('a'*32768),('app'+[char]0+' --remote-debugging-pipe'))) {
+  if ((GuiDebugTransport $invalid) -cne 'UNVERIFIED') { throw 'invalid native argument input admitted' }
+}
+if ((GuiDebugArguments (@('app')*513)) -cne 'UNVERIFIED') { throw 'argument bound ignored' }
+if ((GuiDebugTransport 'app.exe') -cne $(if ($IsWindows) {'ABSENT'} else {'UNVERIFIED'})) { throw 'native parser platform contract' }
+if (!('OwnedGuiArguments' -as [type])) { throw 'native parser did not compile' }
+if ($IsWindows) {
+  foreach ($vector in @(
+    @{Line=' "C:\owned space\app.exe" --remote-debugging-port="0" ';Code='EPHEMERAL_PORT'},
+    @{Line='app.exe "--user-data-dir=C:\path --remote-debugging-pipe"';Code='ABSENT'},
+    @{Line='app.exe "--user-data-dir=C:\quoted\\" --remote-debugging-pipe';Code='PIPE'},
+    @{Line='app.exe -- /remote-debugging-port=1';Code='ABSENT'},
+    @{Line='app.exe /REMOTE-DEBUGGING-PIPE';Code='PIPE'},
+    @{Line='app.exe --remote-debugging-port=9222';Code='FIXED_PORT'},
+    @{Line='app.exe --remote-debugging-port=0 --remote-debugging-pipe';Code='AMBIGUOUS'},
+    @{Line='app.exe --remote-debugging-port=65536';Code='UNVERIFIED'},
+    @{Line='app.exe --remote-debugging-port';Code='UNVERIFIED'},
+    @{Line='app.exe --remote-debugging-pipe=x';Code='UNVERIFIED'},
+    @{Line=('app.exe "--remote-debugging-port=0'+[char]10+'1"');Code='UNVERIFIED'},
+    @{Line=('app.exe "--remote-debugging-pipe=x'+[char]10+'y"');Code='UNVERIFIED'},
+    @{Line=('app.exe "--single-argument=x'+[char]10+'y"');Code='UNVERIFIED'},
+    @{Line='app.exe --single-argument --remote-debugging-pipe';Code='UNVERIFIED'}
+  )) { if ((GuiDebugTransport $vector.Line) -cne $vector.Code) { throw 'Win32 debug transport parsing mismatch' } }
+}
 $mainRole = GuiWindowRole 'Tauri Window' 281542656L 262144L $true 1200L 800L 1200L 800L
 $helperRole = GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 0L 0L 0L 0L
 if ($mainRole -cne 'MAIN' -or $helperRole -cne 'TAO_EVENT_HELPER') { throw 'valid pinned roles rejected' }
@@ -608,10 +654,12 @@ test('Windows startup projection admits only bounded signed runtime group eviden
   const value=startupFixture();
   expect(parseWindowsGuiStartup(value)).toEqual(value); // Loaded runtime may differ: retain evidence, do not normalize it.
   expect(parseWindowsGuiStartup({available:false,overflow:true,signature:'UNVERIFIED'})).toEqual({available:false,overflow:true,signature:'UNVERIFIED'});
-  expect(parseWindowsGuiStartup({...value,observedProcesses:0,observedRootGroups:0,rootImageVersions:[],signature:'NONE_OBSERVED'}).available).toBe(true);
-  expect(parseWindowsGuiStartup({...value,observedProcesses:32,observedRootGroups:32,rootImageVersions:Array.from({length:32},(_,i)=>'1.0.0.'+(i+1))}).available).toBe(true);
-  const bad:unknown[]=[null,{},[],{available:false,overflow:false,signature:'UNVERIFIED',pid:1}];
-  for(const change of [{pid:1},{path:'private'},{args:'private'},{profile:'private'},{overflow:true},{observedProcesses:33},{observedProcesses:-1},{observedProcesses:0.5},{observedRootGroups:4},{observedRootGroups:0},{signature:'Valid'},{rootImageVersions:[]},{rootImageVersions:['1.2.3.4','1.2.3.4']},{observerEnvPresence:{...value.observerEnvPresence,userDataFolder:'private'}}])bad.push({...value,...change});
+  expect(parseWindowsGuiStartup({...value,observedProcesses:0,observedRootGroups:0,rootImageVersions:[],rootDebugTransports:[],signature:'NONE_OBSERVED'}).available).toBe(true);
+  expect(parseWindowsGuiStartup({...value,observedProcesses:32,observedRootGroups:32,rootImageVersions:Array.from({length:32},(_,i)=>'1.0.0.'+(i+1)),rootDebugTransports:Array(32).fill('ABSENT')}).available).toBe(true);
+  for(const transport of ['PIPE','EPHEMERAL_PORT','FIXED_PORT','ABSENT','AMBIGUOUS','UNVERIFIED'])expect(parseWindowsGuiStartup({...value,rootDebugTransports:[transport]}).available).toBe(true);
+  expect(parseWindowsGuiStartup({...value,observedRootGroups:3,rootDebugTransports:['UNVERIFIED','PIPE','ABSENT']})).toMatchObject({rootDebugTransports:['ABSENT','PIPE','UNVERIFIED']});
+  const bad:unknown[]=[null,{},[],{...value,rootDebugTransports:null},{...value,rootDebugTransports:[null]},{...value,rootDebugTransports:'PIPE'},{available:false,overflow:false,signature:'UNVERIFIED',pid:1}];
+  for(const change of [{rootDebugTransports:[]},{rootDebugTransports:['9222']},{rootDebugTransports:['PIPE','ABSENT']},{rootDebugTransports:['private/path']},{pid:1},{path:'private'},{args:'private'},{profile:'private'},{overflow:true},{observedProcesses:33},{observedProcesses:-1},{observedProcesses:0.5},{observedRootGroups:4},{observedRootGroups:0},{signature:'Valid'},{rootImageVersions:[]},{rootImageVersions:['1.2.3.4','1.2.3.4']},{observerEnvPresence:{...value.observerEnvPresence,userDataFolder:'private'}}])bad.push({...value,...change});
   for(const version of ['0.0.0.0','01.2.3.4','1.2.3.65536','1.2.3.4 suffix','1.2.3.4\n','1.2.3','private/path']){
     bad.push({...value,registeredRuntimeVersion:version},{...value,edgeDriverVersion:version},{...value,rootImageVersions:[version]});
   }

@@ -36,7 +36,9 @@ export function windowsGuiMetadataProjection(stdout:unknown):string|undefined {
 }
 export const windowsGuiOverrideNames={browserFolder:'WEBVIEW2_BROWSER_EXECUTABLE_FOLDER',userDataFolder:'WEBVIEW2_USER_DATA_FOLDER',browserArguments:'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS',channelSearchKind:'WEBVIEW2_CHANNEL_SEARCH_KIND',releaseChannels:'WEBVIEW2_RELEASE_CHANNELS',waitForScriptDebugger:'WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER',pipeForScriptDebugger:'WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER'} as const;
 const startupUnavailable={available:false,overflow:false,signature:'UNVERIFIED'} as const;
-type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
+export const windowsGuiDebugTransports=['PIPE','EPHEMERAL_PORT','FIXED_PORT','ABSENT','AMBIGUOUS','UNVERIFIED'] as const;
+type GuiDebugTransport=typeof windowsGuiDebugTransports[number];
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiDebugTransport[];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
 function guiNumericVersion(value:unknown):value is string {
   return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
 }
@@ -45,16 +47,17 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!value||typeof value!=='object')return fail();
   const row=value as Record<string,unknown>;
   if(row.available===false&&typeof row.overflow==='boolean'&&row.signature==='UNVERIFIED'&&Object.keys(row).sort().join(',')==='available,overflow,signature')return {available:false,overflow:row.overflow,signature:'UNVERIFIED'};
-  if(Object.keys(row).sort().join(',')!=='available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
+  if(Object.keys(row).sort().join(',')!=='available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
   const {observedProcesses,observedRootGroups}=row;
   if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
   if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
+  if(!Array.isArray(row.rootDebugTransports)||row.rootDebugTransports.length!==observedRootGroups||!row.rootDebugTransports.every(value=>windowsGuiDebugTransports.includes(value)))return fail();
   if(observedProcesses===0 ? observedRootGroups!==0||row.rootImageVersions.length!==0||row.signature!=='NONE_OBSERVED' : observedRootGroups===0||row.rootImageVersions.length===0||row.signature!=='MICROSOFT')return fail();
   const presence=row.observerEnvPresence;
   if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
   const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
   for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
-  return {available:true,overflow:false,signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),observerEnvPresence};
+  return {available:true,overflow:false,signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort(),observerEnvPresence};
 }
 export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
   if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
@@ -231,7 +234,70 @@ function GuiMetadataSnapshot {
 }
 `;
 
+// Chromium dbeca94f3190b496ceb20437995b29aaf20f5370 base/command_line.cc:
+// Windows tokenization, prefixes, ASCII key folding and -- terminator. Presence is not readiness.
+export const windowsGuiDebugTransportScript=String.raw`
+function GuiDebugArguments($arguments) {
+  if ($arguments -isnot [array] -or $arguments.Count -lt 1 -or $arguments.Count -gt 512) { return 'UNVERIFIED' }
+  $transports=@();$invalid=$false
+  foreach ($argument in @($arguments | Select-Object -Skip 1)) {
+    if ($argument -isnot [string] -or $argument.Contains([char]0)) { return 'UNVERIFIED' }
+    # Non-ASCII whitespace has version-dependent trimming rules; do not infer absence from it.
+    if (@($argument.ToCharArray() | Where-Object { [int]$_ -gt 127 -and ([char]::IsWhiteSpace($_) -or [int]$_ -in @(8203,65279)) }).Count) { return 'UNVERIFIED' }
+    $arg=$argument.Trim([char[]]@(9,10,11,12,13,32))
+    if ($arg -ceq '--') { break }
+    if ($arg -cnotmatch '(?s)\A(?:--|-|/)([^=]+)(?:=(.*))?\z') { continue }
+    $key=$Matches[1];$hasValue=$Matches.ContainsKey(2);$value=$Matches[2]
+    if ($key -cmatch '[^\x00-\x7f]') { continue }
+    $key=$key.ToLowerInvariant()
+    if ($key -ceq 'single-argument') { return 'UNVERIFIED' }
+    if ($key -ceq 'remote-debugging-pipe') {
+      $transports += 'PIPE'
+      if ($hasValue) { $invalid=$true }
+    } elseif ($key -ceq 'remote-debugging-port') {
+      $transports += 'FIXED_PORT'
+      [int]$port=0
+      if (!$hasValue -or $value -cnotmatch '\A(?:0|[1-9][0-9]{0,4})\z' -or ![int]::TryParse($value,[ref]$port) -or $port -gt 65535) { $invalid=$true }
+      elseif ($port -eq 0) { $transports[-1]='EPHEMERAL_PORT' }
+    }
+  }
+  if ($transports.Count -gt 1) { return 'AMBIGUOUS' }
+  if ($invalid) { return 'UNVERIFIED' }
+  if ($transports.Count -eq 0) { return 'ABSENT' }
+  return $transports[0]
+}
+function GuiDebugTransport($commandLine) {
+  try {
+    if ($commandLine -isnot [string] -or $commandLine.Length -gt 32767 -or $commandLine.Contains([char]0) -or [string]::IsNullOrWhiteSpace($commandLine)) { return 'UNVERIFIED' }
+    # Lazy: native parser compilation/failure cannot erase the already emitted core proof.
+    if (!('OwnedGuiArguments' -as [type])) {
+      Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class OwnedGuiArguments {
+  [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern IntPtr CommandLineToArgvW(string commandLine, out int count);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr LocalFree(IntPtr memory);
+  public static string[] Parse(string commandLine) {
+    int count; IntPtr memory=CommandLineToArgvW(commandLine,out count);
+    if(memory==IntPtr.Zero) throw new InvalidOperationException();
+    try {
+      if(count<1 || count>512) throw new InvalidOperationException();
+      var result=new string[count];
+      for(int i=0;i<count;i++) result[i]=Marshal.PtrToStringUni(Marshal.ReadIntPtr(memory,i*IntPtr.Size));
+      return result;
+    } finally { if(LocalFree(memory)!=IntPtr.Zero) throw new InvalidOperationException(); }
+  }
+}
+'@ -ErrorAction Stop
+    }
+    return GuiDebugArguments ([OwnedGuiArguments]::Parse($commandLine.Trim([char[]]@(9,10,11,12,13,32))))
+  } catch { return 'UNVERIFIED' }
+}
+`;
+
 export const windowsGuiStartupScript=String.raw`
+${windowsGuiDebugTransportScript}
 function GuiNumericVersion($value) {
   return ($value -is [string] -and $value -cmatch '\A(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}\z' -and $value -cne '0.0.0.0' -and @($value.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -eq 0)
 }
@@ -310,12 +376,13 @@ function GuiStartupSnapshot {
     }
     $roots=@(GuiRuntimeRoots $inventory @($members | ForEach-Object { [int]$_.ProcessId }) ([int]$env:LAZYSH_GUI_DRIVER_PID))
     $versions=@($roots | ForEach-Object { $images[$retained[$_].Image].Version } | Sort-Object -Unique)
+    $transports=@($roots | ForEach-Object { $rootId=$_;$row=@($inventory | Where-Object { [int]$_.ProcessId -eq $rootId });$line=$null;if ($row[0].PSObject.Properties['CommandLine']) { $line=$row[0].CommandLine };GuiDebugTransport $line } | Sort-Object)
     $registered=$env:LAZYSH_GUI_RUNTIME_VERSION
     $edgeVersion=(Get-Item -LiteralPath $env:LAZYSH_GUI_EDGE -ErrorAction Stop).VersionInfo.ProductVersion
     if (!(GuiNumericVersion $registered) -or !(GuiNumericVersion $edgeVersion)) { return $unverified }
     foreach ($fence in $fences) { if (!(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified } }
     # Snapshot groups only: no observed owned runtime does not prove it never started or crashed.
-    return @{available=$true;overflow=$false;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
+    return @{available=$true;overflow=$false;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
   } catch { return $unverified }
 }
 `;
