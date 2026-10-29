@@ -88,10 +88,9 @@ A failed subcheck has a closed `avdFailure.check`; no raw config, path, UID or P
 is retained. The observation phase distinguishes seal, post-boot and retirement
 snapshots; a later cleanup failure preserves the original observation.
 
-RAM `3072M` versus integer `3072` remains an unverified runtime distinction.
 The [hardware definition](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/avd/src/android/avd/hardware-properties.ini)
-declares integer megabytes. This probe leaves the configured RAM and allowed RAM
-value unchanged pending actual flags. UID, link, canonical path, RAM/core/device/image and directory/index inode checks
+declares integer megabytes. The observed config retained `3072M`; the configured
+and allowed RAM value remains unchanged. UID, link, canonical path, RAM/core/device/image and directory/index inode checks
 remain strict. After camera attestation and all those checks pass, post-boot
 admission may replace the sealed config inode once with its freshly proved
 config inode. Retirement compares all three inodes exactly against that admitted
@@ -104,3 +103,18 @@ inodes, spaced assignments, and a changed config inode. RAM remained `3072M`.
 It stopped at the original inode comparison. This observed replacement matches
 the documented SDK atomic writer. The one-time admission handoff addresses that
 setup contract; it does not establish an ANR cause or CPU-budget outcome.
+
+## Completed hosted comparison
+
+Run [40828476933](https://github.com/mihazs/lazysh/actions/runs/40828476933)
+completed all four samples at source `7aa8410d98c245a3d75110be51a3723dd178f671`.
+Artifact 12878475654 has SHA-256
+`f0646c70f9f6533e0733a681873e6e048f8238c8b4900568892017d254dea548`.
+Guest core counts were 2, 4, 4, 2; all captures and owned cleanup completed.
+The four boot identities were distinct, image/emulator/camera fingerprints matched,
+and the host identity stayed unchanged.
+
+No SystemUI ANR was observed in any of the four retained event buffers. This
+sample does not distinguish the CPU settings, establish ANR absence outside
+those buffers, or identify the earlier startup failure's cause. No acceptance
+CPU setting changes follow from it; issue #379 remains open.
