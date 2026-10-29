@@ -117,4 +117,3 @@ export function herdrTools():HerdrTools {
   if(!herdrBinary || !agentBinary || !receiverBinary)throw new Error('Explicit current-source Herdr and companion binaries required');
   return {herdrBinary,agentBinary,receiverBinary};
 }
-

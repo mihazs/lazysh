@@ -1,4 +1,11 @@
 :root {
+  --theme-bg: #0b1728; --theme-panel: #102236; --theme-control: #173047;
+  --theme-hover: #1e3c56; --theme-text: #f8fcff; --theme-muted: #adc4da;
+  --theme-border: #61829f; --theme-accent: #77f3ec; --theme-on-accent: #0b1728;
+  --theme-danger: #ffb2aa; --theme-danger-bg: #442827;
+  --theme-warning: #ead397; --theme-warning-bg: #3a3324;
+  --theme-blue: #59b8fc; --theme-blue-bg: #142d48;
+  --theme-purple: #ad81f9; --theme-purple-bg: #2a2544;
   font-family:
     "DM Sans",
     -apple-system,
@@ -30,12 +37,16 @@ body,
 }
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
 button {
   cursor: pointer;
   color: inherit;
+  background: var(--theme-control);
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 button:disabled {
   opacity: 0.45;
@@ -43,6 +54,7 @@ button:disabled {
 }
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 textarea:focus-visible,
 pre:focus-visible {
   outline: 2px solid var(--accent);
@@ -56,10 +68,12 @@ button {
 }
 button,
 input,
+select,
 textarea {
   -webkit-tap-highlight-color: transparent;
 }
 input,
+select,
 textarea {
   width: 100%;
   background: var(--theme-bg, #111510);
@@ -68,6 +82,16 @@ textarea {
   padding: 11px 12px;
   color: var(--theme-text, #e4e9df);
   min-width: 0;
+}
+select { width: auto; max-width: 100%; }
+fieldset { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  accent-color: var(--accent);
+}
+button:hover:not(:disabled) {
+  background: var(--theme-hover);
 }
 input::placeholder,
 textarea::placeholder {
@@ -196,6 +220,7 @@ button svg {
   font-weight: 600;
 }
 .icon-button {
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -278,6 +303,7 @@ button svg {
   height: 30px;
 }
 @media (hover: none), (pointer: coarse) {
+  button { min-width: 44px; min-height: 44px; }
   .host-actions {
     display: flex;
     top: 50%;
@@ -929,8 +955,7 @@ button svg {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: #050805b8;
-  backdrop-filter: blur(5px);
+  background: #050d1bb8;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1240,15 +1265,6 @@ button svg {
   .welcome-features svg {
     width: 14px;
     height: 14px;
-  }
-  .welcome-terminal {
-    height: 65px;
-    width: 65px;
-    border-radius: 17px;
-    margin-bottom: 24px;
-  }
-  .welcome-terminal > span {
-    font-size: 40px;
   }
   .welcome-bottom {
     font-size: 9px;
@@ -1646,3 +1662,17 @@ button svg {
 .theme-qr-panel video[hidden] { display: none; }
 
 .font-license { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
+
+/* Glass belongs to navigation and sheets; terminal output stays opaque. */
+@supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
+  .sidebar, .workspace-header, .dialog {
+    background: color-mix(in srgb, var(--theme-panel) 94%, transparent);
+    backdrop-filter: blur(16px) saturate(120%);
+  }
+}
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .sidebar, .workspace-header, .dialog { background: var(--theme-panel); backdrop-filter: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  button, .sidebar { transition: none; }
+}

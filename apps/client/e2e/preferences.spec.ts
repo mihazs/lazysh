@@ -1,3 +1,4 @@
+import {controlContrast} from './fixtures/controlContrast';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import { expect, test } from '@playwright/test';
 
@@ -52,27 +53,22 @@ test('font count is bounded and missing selections report fallback explicitly', 
   await expect(page.getByRole('button', {name: 'Delete font LiberationMono-Regular.ttf', exact: true})).toHaveCount(0);
 });
 
-test('whole-app light and dark themes keep dialog text readable and reset', async ({ page }, testInfo) => {
+test('brand, light and dark themes keep controls readable and reset', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.getByRole('button', {name: 'Preferences', exact: true}).click();
-  await page.getByRole('combobox', {name: 'App theme', exact: true}).selectOption('paper');
-  await expect(page.locator('html')).toHaveAttribute('data-app-theme', 'paper');
-  const contrast = await page.getByRole('dialog').evaluate(element => {
-    function luminance(color: string) {
-      const [r, g, b] = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(value => {const n = value / 255; return n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4;});
-      return .2126 * r + .7152 * g + .0722 * b;
-    }
-    const background = luminance(getComputedStyle(element).backgroundColor);
-    return Array.from(element.querySelectorAll('h2, p, label, input:not([type=checkbox]), select, button')).filter(child => child.checkVisibility() && getComputedStyle(child).opacity === '1').map(child => {
-      const foreground = luminance(getComputedStyle(child).color);
-      return {text: child.textContent?.slice(0, 80), tag: child.tagName, color: getComputedStyle(child).color, background: getComputedStyle(element).backgroundColor, ratio: (Math.max(background, foreground) + .05) / (Math.min(background, foreground) + .05)};
-    });
-  });
-  expect(contrast.filter(item => item.ratio < 4.5)).toEqual([]);
-  await page.screenshot({path: testInfo.outputPath('paper-preferences.png')});
-  await page.getByRole('combobox', {name: 'App theme', exact: true}).selectOption('midnight');
-  await expect(page.locator('html')).toHaveAttribute('data-app-theme', 'midnight');
+  const appTheme = page.getByRole('combobox', {name: 'App theme', exact: true});
+  await expect(appTheme.locator('option[value="forest"]')).toHaveText('lazysh');
+  await expect(page.getByRole('combobox', {name: 'Terminal theme', exact: true})).toHaveValue('forest');
+  for (const theme of ['forest', 'paper', 'midnight']) {
+    await appTheme.selectOption(theme);
+    await expect(page.locator('html')).toHaveAttribute('data-app-theme', theme);
+    const contrast = await page.getByRole('dialog').evaluate(controlContrast);
+    expect(contrast.filter(item => item.ratio < 4.5), theme).toEqual([]);
+    await page.screenshot({path: testInfo.outputPath(`${theme}-preferences.png`)});
+  }
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
+  await expect(appTheme).toHaveValue('forest');
+  await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-app-theme', 'forest');
 });
 
