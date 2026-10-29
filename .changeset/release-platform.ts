@@ -39,27 +39,21 @@ const windowsInstallerGuards = new Set([
   'INSTALL_OWNERSHIP', 'UNINSTALL_OWNERSHIP', 'UNINSTALL_BINARY', 'UNINSTALL_REGISTRY',
   'REGISTRY_VALUES', 'REGISTRY_CHILDREN', 'UNINSTALL_MARKER', 'DATA_CONTENTS',
   'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
+  'CAPTURE_COLLISION', 'CAPTURE_IDENTITY', 'CAPTURE_COPY', 'CAPTURE_CONTENTS',
 ]);
 export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (typeof stdout !== 'string' || stdout.length > 2_097_152) return;
   const markers = stdout.split(/\r?\n/).filter(line => line.startsWith('LAZYSH_WINDOWS_INSTALLER:'));
-  if (!markers.length || markers.length > 2) return;
+  if (!markers.length || markers.length > 3) return;
   const labels: string[] = [];
   for (const marker of markers) {
-    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|cleanup):([A-Z_]+)$/.exec(marker);
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|capture|cleanup):([A-Z_]+)$/.exec(marker);
     if (!match || !windowsInstallerGuards.has(match[2])) return;
     labels.push(`${match[1]}:${match[2]}`);
   }
   return labels.join('; ');
 }
-export async function windowsInstallation(installer: string, binary: string, version: string) {
-  requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
-    && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
-  'Windows installation requires an owned GitHub-hosted Windows job');
-  const expected = await digestFile(binary);
-  await digestFile(installer);
-  return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`
-$ErrorActionPreference = 'Stop'
+export const windowsMismatchCapture = String.raw`
 function Require($condition, $code) {
   if (!$condition) { $script:failure = $code; throw 'Owned Windows acceptance rejected' }
 }
@@ -73,6 +67,82 @@ function Plain($path) {
     if ($item) { Require (!($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) 'REPARSE_POINT' }
   }
 }
+function CaptureMismatch($installed, $observed) {
+  if ($env:LAZYSH_TEST_WINDOWS_INSTALLER -ne '1') { return }
+  Require ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted') 'CAPTURE_IDENTITY'
+  Require ($env:GITHUB_SHA -cmatch '\A[a-f0-9]{40}\z' -and $env:LAZYSH_BINARY_SHA256 -cmatch '\A[a-f0-9]{64}\z') 'CAPTURE_IDENTITY'
+  Require ($env:LAZYSH_INSTALLER_SHA256 -cmatch '\A[a-f0-9]{64}\z' -and $env:LAZYSH_BINARY_BYTES -match '\A[0-9]{1,10}\z' -and $env:LAZYSH_INSTALLER_BYTES -match '\A[0-9]{1,10}\z') 'CAPTURE_IDENTITY'
+  Require ($observed.sha256 -cmatch '\A[a-f0-9]{64}\z' -and $observed.bytes -ge 0 -and $observed.bytes -le 2147483648) 'CAPTURE_IDENTITY'
+  Require ([long]$env:LAZYSH_BINARY_BYTES -gt 0 -and [long]$env:LAZYSH_BINARY_BYTES -le 2147483648 -and [long]$env:LAZYSH_INSTALLER_BYTES -gt 0 -and [long]$env:LAZYSH_INSTALLER_BYTES -le 2147483648) 'CAPTURE_IDENTITY'
+  Plain $env:RUNNER_TEMP
+  Plain $env:GITHUB_OUTPUT
+  Require (Test-Path -LiteralPath $env:GITHUB_OUTPUT -PathType Leaf) 'CAPTURE_IDENTITY'
+  $capture = Join-Path $env:RUNNER_TEMP 'lazysh-windows-installer-mismatch'
+  Plain $capture
+  Require (!(OptionalItem $capture)) 'CAPTURE_COLLISION'
+  $null = New-Item -ItemType Directory -Path $capture
+  $files = @{ source = $env:LAZYSH_BINARY; installed = $installed; installer = $env:LAZYSH_INSTALLER }
+  $captured = [ordered]@{}
+  foreach ($name in @('source', 'installed', 'installer')) {
+    $path = $files[$name]
+    Plain $path
+    $before = Get-Item -LiteralPath $path
+    Require (!$before.PSIsContainer -and $before.Length -ge 0 -and $before.Length -le 2147483648) 'CAPTURE_IDENTITY'
+    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($name -eq 'installer') {
+      Require ($hash -ceq $env:LAZYSH_INSTALLER_SHA256 -and $before.Length -eq [long]$env:LAZYSH_INSTALLER_BYTES) 'CAPTURE_IDENTITY'
+    }
+    $copy = Join-Path $capture ($name + '.exe')
+    [IO.File]::Copy($path, $copy, $false)
+    Plain $copy
+    Plain $path
+    $after = Get-Item -LiteralPath $path
+    $retained = Get-Item -LiteralPath $copy
+    $afterHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $copyHash = (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToLowerInvariant()
+    Require ($after.Length -eq $before.Length -and $retained.Length -eq $before.Length -and $afterHash -ceq $hash -and $copyHash -ceq $hash) 'CAPTURE_COPY'
+    $captured[$name] = [ordered]@{
+      before = [ordered]@{ sha256 = $hash; bytes = $before.Length }
+      after = [ordered]@{ sha256 = $afterHash; bytes = $after.Length }
+      copy = [ordered]@{ sha256 = $copyHash; bytes = $retained.Length }
+    }
+  }
+  Plain $capture
+  Require (@(Get-ChildItem -Force -LiteralPath $capture).Count -eq 3) 'CAPTURE_CONTENTS'
+  $receipt = [ordered]@{
+    schema = 1; checkoutSha = $env:GITHUB_SHA
+    sourceBefore = [ordered]@{ sha256 = $env:LAZYSH_BINARY_SHA256; bytes = [long]$env:LAZYSH_BINARY_BYTES }
+    sourceAfter = $captured.source
+    installedObserved = [ordered]@{ sha256 = $observed.sha256; bytes = $observed.bytes }
+    installed = $captured.installed; installer = $captured.installer
+  } | ConvertTo-Json -Depth 4
+  $receiptPath = Join-Path $capture 'receipt.json'
+  $stream = [IO.File]::Open($receiptPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($receipt)
+    $stream.Write($bytes, 0, $bytes.Length)
+  } finally { $stream.Dispose() }
+  Plain $receiptPath
+  Require ((Get-Content -Raw -LiteralPath $receiptPath) -ceq $receipt) 'CAPTURE_CONTENTS'
+  $entries = @(Get-ChildItem -Force -LiteralPath $capture)
+  Require ((($entries.Name | Sort-Object) -join ',') -ceq 'installed.exe,installer.exe,receipt.json,source.exe') 'CAPTURE_CONTENTS'
+  foreach ($entry in $entries) { Plain $entry.FullName; Require (!$entry.PSIsContainer) 'CAPTURE_CONTENTS' }
+  foreach ($name in @('source', 'installed', 'installer')) {
+    Require ((Get-FileHash -LiteralPath (Join-Path $capture ($name + '.exe')) -Algorithm SHA256).Hash -eq $captured[$name].copy.sha256) 'CAPTURE_COPY'
+  }
+  Plain $env:GITHUB_OUTPUT
+  Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'mismatch-ready=true'
+}
+`;
+export async function windowsInstallation(installer: string, binary: string, version: string) {
+  requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
+    && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
+  'Windows installation requires an owned GitHub-hosted Windows job');
+  const expected = await digestFile(binary);
+  const packageBefore = await digestFile(installer);
+  return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`
+$ErrorActionPreference = 'Stop'
+${windowsMismatchCapture}
 function RunInstaller($file, $arguments) {
   Plain $file
   $process = Start-Process -FilePath $file -ArgumentList $arguments -PassThru
@@ -87,7 +157,11 @@ function RunInstaller($file, $arguments) {
 function Installed {
   Plain $installed
   Require (Test-Path -LiteralPath $installed -PathType Leaf) 'MISSING_BINARY'
-  Require ((Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash -eq $env:LAZYSH_BINARY_SHA256) 'BINARY_MISMATCH'
+  $script:installedObserved = [ordered]@{
+    sha256 = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+    bytes = (Get-Item -LiteralPath $installed).Length
+  }
+  Require ($script:installedObserved.sha256 -ceq $env:LAZYSH_BINARY_SHA256) 'BINARY_MISMATCH'
   Require ((Get-Item -LiteralPath $installed).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'VERSION_MISMATCH'
 }
 $stage = 'preflight'
@@ -158,6 +232,12 @@ try {
 } catch {
   [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:' + $stage + ':' + $failure)
   $primaryFailed = $true
+  if ($failure -eq 'BINARY_MISMATCH') {
+    $stage = 'capture'
+    $failure = 'UNEXPECTED'
+    try { CaptureMismatch $installed $installedObserved }
+    catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:' + $stage + ':' + $failure) }
+  }
 } finally {
   $stage = 'cleanup'
   $failure = 'UNEXPECTED'
@@ -200,7 +280,8 @@ if ($primaryFailed) { exit 1 }
 }
 'Windows NSIS install, same-version repair, marker preservation and uninstall passed'
 `], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
-    LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256 }, 450_000);
+    LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256, LAZYSH_BINARY_BYTES: String(expected.bytes),
+    LAZYSH_INSTALLER_SHA256: packageBefore.sha256, LAZYSH_INSTALLER_BYTES: String(packageBefore.bytes) }, 450_000);
 }
 async function desktop(target: ArtifactTarget, root: string, output: string) {
   const identity = await buildIdentity(root);
