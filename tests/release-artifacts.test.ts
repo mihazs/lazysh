@@ -7,7 +7,7 @@ import { aggregatePackages, artifactName, artifactTargets, releaseTargets, diges
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
-import { exactlyOne, windowsInstallation } from '../.changeset/release-platform';
+import { exactlyOne, native, windowsInstallation, windowsInstallerFailure } from '../.changeset/release-platform';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -173,7 +173,9 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
   const binary = join(import.meta.dir, '../target/release/lazysh.exe');
   const { version } = await Bun.file(join(import.meta.dir, '../apps/client/package.json')).json();
-  await expect(windowsInstallation(installer, binary, '0.0.0')).rejects.toThrow('Release validation failed');
+  await expect(windowsInstallation(installer, binary, '0.0.0')).rejects.toMatchObject({
+    message: 'Release validation failed: pwsh.exe (identity:VERSION_MISMATCH)',
+  });
   const data = join(process.env.APPDATA!, 'app.lazysh.client');
   for (const linked of [false, true]) await fixture(async root => {
     if (linked) await symlink(root, data, 'junction');
@@ -181,7 +183,9 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
     const marker = join(data, 'existing-data');
     try {
       await Bun.write(marker, 'preexisting application data must survive rejection');
-      await expect(windowsInstallation(installer, binary, version)).rejects.toThrow('Release validation failed');
+      await expect(windowsInstallation(installer, binary, version)).rejects.toMatchObject({
+        message: `Release validation failed: pwsh.exe (paths:${linked ? 'REPARSE_POINT' : 'EXISTING_PATH'})`,
+      });
       expect(await Bun.file(marker).text()).toBe('preexisting application data must survive rejection');
     } finally {
       await rm(marker);
@@ -191,3 +195,37 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
   });
   console.info(await windowsInstallation(installer, binary, version));
 }, 500_000);
+
+test.each([
+  ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
+  ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
+  ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
+  ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:private-stage:VERSION_MISMATCH', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED private-path', undefined],
+  ['private-prefix LAZYSH_WINDOWS_INSTALLER:install:INSTALLER_EXIT', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:PRIVATE_VALUE', undefined],
+  [null, undefined],
+])('Windows installer diagnostics expose only closed labels: %j', (output, expected) => {
+  expect(windowsInstallerFailure(output)).toBe(expected);
+});
+test('native failures never expose raw output or exception details from other tools', async () => {
+  const failure = await native(process.execPath, ['-e',
+    "console.log('LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED');console.error('private-native-secret');process.exit(1)"])
+    .then(() => 'unexpected success', error => error.message);
+  expect(failure).toBe(`Release validation failed: ${process.execPath.split(/[\\/]/).at(-1)}`);
+});
+
+test.skipIf(process.platform === 'win32')('owned PowerShell failure decoding redacts native output and rejects unknown markers', () => fixture(async root => {
+  const tool = join(root, 'pwsh.exe');
+  await symlink(process.execPath, tool);
+  for (const [marker, label] of [
+    ['LAZYSH_WINDOWS_INSTALLER:preflight:EXISTING_PATH', ' (preflight:EXISTING_PATH)'],
+    ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', ''],
+  ]) {
+    const failure = await native(tool, ['-e',
+      `console.log(${JSON.stringify(marker)});console.log('private-stdout');console.error('private-stderr');process.exit(1)`])
+      .then(() => 'unexpected success', error => error.message);
+    expect(failure).toBe(`Release validation failed: pwsh.exe${label}`);
+  }
+}));
