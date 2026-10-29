@@ -1,5 +1,27 @@
 import {win32} from 'node:path';
 
+export const windowsGuiSessionOutcomes = ['CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE'] as const;
+export const windowsGuiSessionGuards = windowsGuiSessionOutcomes.flatMap(outcome =>
+  ['VERIFIED', 'UNVERIFIED'].map(window => `GUI_SESSION_${outcome}_WINDOW_${window}`));
+export function windowsGuiSessionResponse(response:unknown):typeof windowsGuiSessionOutcomes[number] {
+  const code=(response as {body?:{value?:{error?:unknown}}}|null)?.body?.value?.error;
+  switch(code) {
+    case 'session not created':return 'NOT_CREATED';
+    case 'invalid argument':return 'ARGUMENT';
+    case 'unknown error':return 'REMOTE_ERROR';
+    case 'timeout':return 'SERVER_TIMEOUT';
+    default:return 'RESPONSE';
+  }
+}
+export function windowsGuiSessionNoResponse(error:unknown,port:number):typeof windowsGuiSessionOutcomes[number] {
+  // Pinned webdriver 10.1.0 request/error.ts emits this exact prefix; utils.ts preserves
+  // the message while wrapping the request error. Never retain its raw args suffix.
+  const prefix=`WebDriverError: Request timed out! Consider increasing the "connectionRetryTimeout" option. when running "http://127.0.0.1:${port}/session" with method "POST" and args "`;
+  return Number.isInteger(port) && port>0 && port<=65535 && error instanceof Error
+    && error.message.length<=65_536 && error.message.startsWith(prefix) && error.message.endsWith('"')
+    && !error.message.includes('\n') && !error.message.includes('\r') ? 'CLIENT_TIMEOUT' : 'NO_RESPONSE';
+}
+
 export function windowsGuiToolEnvironment(driver:string,edge:string) {
   if([driver,edge].some(path=>!/^[a-z]:[\\/]/i.test(path) || path.includes('\0')))
     throw new Error('Windows GUI requires absolute tool paths');
@@ -174,7 +196,11 @@ function ExerciseInstalledGui {
       Plain $env:LAZYSH_GUI_RECEIPT
       if ((Test-Path -LiteralPath $env:LAZYSH_GUI_RECEIPT -PathType Leaf) -and (Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le 1024) {
         $rejected = Get-Content -Raw -LiteralPath $env:LAZYSH_GUI_RECEIPT | ConvertFrom-Json
-        if ($rejected.failure -in @('GUI_SESSION', 'GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }
+        if ($rejected.failure -eq 'GUI_SESSION') {
+          Require ($rejected.session -in @('CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE') -and $rejected.ownedWindow -in @('VERIFIED', 'UNVERIFIED')) 'GUI_CLIENT'
+          Require $false ('GUI_SESSION_' + $rejected.session + '_WINDOW_' + $rejected.ownedWindow)
+        }
+        if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }
       }
       Require $false 'GUI_CLIENT'
     }

@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -299,6 +299,37 @@ if (Test-Path -LiteralPath $owned) { throw 'owned root remains' }
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {...process.env, LAZYSH_GUI_FILE_FIXTURE: root}, 30000)).toBe('owned GUI file boundaries passed');
 }));
+test('Windows session diagnostics classify exact W3C codes without retaining or changing raw responses', () => {
+  for (const [error,expected] of [['session not created','NOT_CREATED'],['invalid argument','ARGUMENT'],
+    ['unknown error','REMOTE_ERROR'],['timeout','SERVER_TIMEOUT'],['session not created private-path','RESPONSE']]) {
+    const response=Object.freeze({statusCode:500,body:Object.freeze({value:Object.freeze({error,message:'private raw capabilities/path/token'})})});
+    expect(windowsGuiSessionResponse(response)).toBe(expected);
+    expect(response.body.value.message).toBe('private raw capabilities/path/token');
+  }
+  for (const response of [null,'private raw response',{}, {body:{value:{error:123}}}, {body:{error:'session not created'}}, {body:{value:{error:'SESSION NOT CREATED'}}}]) {
+    expect(windowsGuiSessionResponse(response)).toBe('RESPONSE');
+  }
+});
+test('Windows client timeout classification requires the pinned exact own-session error contract', () => {
+  const message='WebDriverError: Request timed out! Consider increasing the "connectionRetryTimeout" option. when running "http://127.0.0.1:12345/session" with method "POST" and args "{private-capabilities}"';
+  expect(windowsGuiSessionNoResponse(new Error(message),12345)).toBe('CLIENT_TIMEOUT');
+  for (const error of [new Error(message.replace('12345','54321')), new Error(message.replace('POST','GET')),
+    new Error(message.replace('Request timed out!','Request timed out')), new Error('prefix '+message),
+    new Error(message+'\nprivate'), new Error(message.slice(0,-1)), {message}, new Error('ETIMEDOUT')]) {
+    expect(windowsGuiSessionNoResponse(error,12345)).toBe('NO_RESPONSE');
+  }
+  expect(windowsGuiSessionNoResponse(new Error(message),0)).toBe('NO_RESPONSE');
+  expect(windowsGuiSessionNoResponse(new Error(message),12345.5)).toBe('NO_RESPONSE');
+});
+test('Windows session and owned-window diagnostics expose only the finite outcomes', () => {
+  for (const code of windowsGuiSessionGuards) {
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:'+code)).toBe('gui:'+code);
+  }
+  for (const code of ['GUI_SESSION_CLIENT_TIMEOUT_WINDOW_MISSING','GUI_SESSION_PRIVATE_WINDOW_VERIFIED',
+    'GUI_SESSION_NOT_CREATED_WINDOW_VERIFIED private path','GUI_SESSION_NOT_CREATED_WINDOW_VERIFIED:private']) {
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:'+code)).toBeUndefined();
+  }
+});
 test('Windows GUI tool environment normalizes both mixed-slash image identities', () => {
   expect(windowsGuiToolEnvironment(String.raw`D:\a\_temp/tools/bin/tauri-driver.exe`, String.raw`D:\a\_temp/tools/edge/msedgedriver.exe`)).toEqual({
     LAZYSH_GUI_DRIVER: String.raw`D:\a\_temp\tools\bin\tauri-driver.exe`,

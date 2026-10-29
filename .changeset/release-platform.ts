@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment } from './windows-installed-gui';
+import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
@@ -43,6 +43,7 @@ async function appleApp(path: string, version: string, id: string) {
   await native('/usr/bin/codesign', ['--verify', '--deep', '--strict', path]);
 }
 const windowsInstallerGuards = new Set([
+  ...windowsGuiSessionGuards,
   'REPARSE_POINT', 'INSTALLER_TIMEOUT', 'INSTALLER_EXIT', 'PROCESS_TREE',
   'MISSING_BINARY', 'BINARY_MISMATCH', 'VERSION_MISMATCH', 'PROCESS_ARCHITECTURE',
   'EXISTING_PATH', 'EXISTING_REGISTRY', 'EXISTING_AUTOSTART', 'EXISTING_MSI',

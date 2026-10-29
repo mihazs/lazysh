@@ -3,7 +3,7 @@ import {execFile} from 'node:child_process';
 import {writeFile} from 'node:fs/promises';
 import {promisify} from 'node:util';
 import {remote} from 'webdriverio';
-import {parseWindowsGuiOwner,windowsGuiOwnerScript} from '../../../../.changeset/windows-installed-gui';
+import {parseWindowsGuiOwner,windowsGuiOwnerScript,windowsGuiSessionResponse,windowsGuiSessionNoResponse} from '../../../../.changeset/windows-installed-gui';
 import {assertDirectDriverEnvironment} from '../policy';
 
 let browser:Awaited<ReturnType<typeof remote>>|undefined;
@@ -21,9 +21,10 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   };
   const capabilities:WebdriverIO.Capabilities&{'tauri:options':{application:string}}={'tauri:options':{application:process.env.LAZYSH_GUI_BINARY!},'wdio:enforceWebDriverClassic':true};
   let stage='GUI_SESSION';
+  let session:ReturnType<typeof windowsGuiSessionResponse>|undefined;
   try {
   browser=await remote({hostname:'127.0.0.1',port,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:20000,
-    capabilities});
+    capabilities,transformResponse:response=>{if(stage==='GUI_SESSION')session=windowsGuiSessionResponse(response);return response;}});
   stage='GUI_FRONTEND';
   expect(['http://tauri.localhost/','https://tauri.localhost/','tauri://localhost/']).toContain(await browser.getUrl());
   expect(await browser.getWindowHandles()).toHaveLength(1);
@@ -39,8 +40,13 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   expect(await owner()).toEqual(original);
   // These are synthetic test identities only; no DOM/profile/desktop capture is retained.
   await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify({...original,source:sha,version}),{flag:'wx'});
-  } catch {
-    await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify({failure:stage}),{flag:'wx'});
+  } catch(error) {
+    const failure: {failure:string;session?:ReturnType<typeof windowsGuiSessionResponse>;ownedWindow?:'VERIFIED'|'UNVERIFIED'}={failure:stage};
+    if(stage==='GUI_SESSION') {
+      failure.session=session??windowsGuiSessionNoResponse(error,port);
+      failure.ownedWindow=await owner().then(()=> 'VERIFIED' as const,()=> 'UNVERIFIED' as const);
+    }
+    await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify(failure),{flag:'wx'});
     throw new Error(`Installed GUI rejected: ${stage}`);
   }
 },90000);
