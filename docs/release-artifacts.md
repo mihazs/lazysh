@@ -11,13 +11,35 @@ unsigned/simulator IPA.
 
 ## One source and one tag authority
 
-Reuse the stable-tag gate's exact main-event SHA, stable first-parent version/code
-increase, synchronized manifests/locks and absence of pending Changesets. Build
-platform assets into Actions artifacts before the tag job. Only the existing
-gate creates `vVERSION`; require Android, Linux and Windows receipts before that job. Publish
-the GitHub Release in a dependent job in the same workflow, because a tag created
-with `GITHUB_TOKEN` does not trigger an ordinary tag-push workflow. Never overwrite
-a different existing tag or upload replacement bytes to an existing release.
+Publish the current version once, then every future Changesets version merged
+individually to main. There is no historical backfill. Ordinary releases require
+the exact main-event SHA, a stable first-parent version/code increase,
+synchronized manifests/locks and no pending Changesets. The supported workflow is
+one Changesets version merge per main push; arbitrary batch pushes containing
+multiple version transitions are not enumerated.
+
+Initial publication is an explicit main `workflow_dispatch` with `initial: true`
+and `expected-source-sha` equal to the full event/checkout SHA. The committed
+policy allowlists version 0.23.0 and requires its source to follow
+`f5cdacea70f313fa216e8963b76effd098340007` in bounded first-parent history.
+Only this mode admits an unchanged version and retains pending Changesets for the
+next release. It does not consume/discard them or checkout caller-selected source.
+A false/malformed selection, mismatched acknowledgement, other version, branch or
+push event cannot enable initial publication. Prepare, tag and publish repeat the
+same admission. Initial notes include the prepared client version section, root
+Unreleased changes. Every release also includes the exact current native
+acceptance status section from `docs/install-and-update.md`; missing or ambiguous
+status blocks notes generation. Full parity is not claimed.
+
+Both modes build platform assets before the tag job. Only the existing gate
+creates `vVERSION`; Android, Linux and Windows receipts are required. The dependent
+publication job runs in the same workflow because a tag created with
+`GITHUB_TOKEN` does not trigger an ordinary tag-push workflow. Never overwrite a
+different existing tag or upload replacement bytes to an existing release.
+Per-source concurrency keeps later main pushes from canceling pending version
+runs. The final publication request uses `make_latest: legacy`, so latest selection
+uses release creation date and semantic version rather than completion order;
+see the [GitHub release API](https://docs.github.com/en/rest/releases/releases#update-a-release).
 
 An explicit build-only workflow dispatch may prepare private installation assets
 for verification without creating tags/releases or changing policy. It must use
@@ -25,15 +47,14 @@ the exact trusted main checkout, not an arbitrary caller-provided ref. All platf
 jobs use contents-read permissions; only the final tag/publication jobs may write.
 Failed/incomplete builds retain diagnostic receipts and cannot publish.
 
-Immediately before creating a tag, the verified candidate must remain within
-the bounded first-parent ancestry of observed main (at most 4097 commits) and
-main's synchronized release version must still match. A newer version supersedes
-the candidate; same-version source changes do not substitute their unbuilt bytes
-or invalidate already verified candidate packages. Inspect newer metadata with
-candidate-owned validation code, never by executing newer checkout scripts.
-The reference read/check and create operation remain separate requests: another
-main change can race that check, but the tag always targets the verified immutable
-candidate. No stronger transaction across GitHub refs is claimed.
+Immediately before tagging and publishing, the candidate must remain within the
+bounded first-parent ancestry of observed main (at most 4097 commits). Newer main
+versions do not supersede a verified candidate: each version retains its exact
+built source and bytes. Side-branch ancestry and replaced main history fail closed.
+No newer source is executed or substituted. The reference check and creation are
+separate requests, so a later main update can race the check; the tag still targets
+the verified immutable candidate. Failed uploads retain an unpublished draft for
+explicit inspection; existing releases are never automatically replaced or replayed.
 
 ## Required configuration
 

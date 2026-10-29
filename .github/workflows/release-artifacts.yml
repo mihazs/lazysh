@@ -2,6 +2,10 @@ name: Build verified release installation files
 
 on:
   workflow_call:
+    inputs:
+      initial:
+        type: boolean
+        default: false
     secrets:
       ANDROID_KEYSTORE_BASE64: {required: false}
       ANDROID_STORE_PASSWORD: {required: false}
@@ -173,6 +177,8 @@ jobs:
           pattern: release-*
           path: ${{ runner.temp }}/platform-artifacts
       - name: Check every same-run platform package and generate release documents
+        env:
+          LAZYSH_RELEASE_INITIAL: ${{ inputs.initial || false }}
         run: |
           mkdir -p "$RUNNER_TEMP/verified-release"
           bun .changeset/release-artifacts.ts notes "$RUNNER_TEMP/verified-release"

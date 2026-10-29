@@ -42,7 +42,7 @@ export async function publishInstallationSet(next: Candidate, policy: ReleasePol
   const finalTag = await request(`git/ref/tags/${next.tag}`, 'GET');
   const finalTarget = finalTag.ok ? await finalTag.json() as any : null;
   check(finalTarget?.object?.type === 'commit' && finalTarget.object.sha === next.sha, 'tag changed; draft retained');
-  const final = await request(`releases/${release.id}`, 'PATCH', { draft: false });
+  const final = await request(`releases/${release.id}`, 'PATCH', { draft: false, make_latest: 'legacy' });
   check(final.ok, 'publication outcome uncertain; inspect exact release before any further action');
   const published = await final.json() as any;
   check(published.id === release.id && published.draft === false && published.tag_name === next.tag,

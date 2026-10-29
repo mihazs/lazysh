@@ -3,7 +3,7 @@ import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { candidate, candidateRecipe, createStableTag, releaseEnabled, requireCleanSourceScan,
+import { candidate, initialCandidate, candidateRecipe, createStableTag, releaseEnabled, requireCleanSourceScan,
   requireCurrentRelease, type ReleasePolicy } from '../.changeset/release-tag';
 import { androidVersionCode, ownedWorkspaces, synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
 
@@ -62,6 +62,25 @@ test.each([
   { pending: ['pending.md'] }, { version: '0.13.1000' },
 ])('rejects candidate that lacks the exact stable main transition: %j', invalid => {
   expect(() => candidate({ ...input, ...invalid })).toThrow();
+});
+
+test('initial publication alone admits unchanged version and retains pending Changesets', () => {
+  const bootstrap = { ...input, event: 'workflow_dispatch', version: '0.23.0', parentVersion: '0.23.0', pending: ['retained.md'] };
+  const ancestry = [sha, policy.initialPublication.ancestor];
+  expect(initialCandidate(bootstrap, policy, sha, ancestry)).toEqual({ sha, version: '0.23.0', versionCode: 23000, tag: 'v0.23.0' });
+  expect(() => candidate(bootstrap)).toThrow('transition');
+  for (const change of [{ event: 'push' }, { ref: 'refs/heads/topic' }, { version: '0.24.0' }, { sha: 'main' }]) {
+    expect(() => initialCandidate({ ...bootstrap, ...change }, policy, sha, ancestry)).toThrow();
+  }
+  for (const acknowledgement of ['', 'false', 'b'.repeat(40), `${sha}\n`]) {
+    expect(() => initialCandidate(bootstrap, policy, acknowledgement, ancestry)).toThrow('exact source');
+  }
+  for (const ancestors of [[sha], [sha, 'b'.repeat(40)], [policy.initialPublication.ancestor, sha]]) {
+    expect(() => initialCandidate(bootstrap, policy, sha, ancestors)).toThrow('first-parent');
+  }
+  for (const ancestor of ['', 'not-a-sha', sha]) {
+    expect(() => initialCandidate(bootstrap, { ...policy, initialPublication: { version: '0.23.0', ancestor } }, sha, ancestry)).toThrow('first-parent');
+  }
 });
 
 test('candidate-only recipe substitution preserves every build input and scan rule', () => {
@@ -123,7 +142,7 @@ test('advanced main, inaccessible refs and failed writes cannot be treated as su
   }
 });
 
-test('current-main admission accepts same-version first-parent progress, rejects side ancestry and supersession', async () => {
+test('current-main admission accepts same-version first-parent progress, rejects side ancestry and admits later versions', async () => {
   const parent = join(homedir(), 'dev/.worktrees');
   await mkdir(parent, { recursive: true });
   const root = await mkdtemp(join(parent, 'lazysh-release-admission-'));
@@ -136,7 +155,7 @@ test('current-main admission accepts same-version first-parent progress, rejects
   };
   try {
     const paths = ['package.json', 'Cargo.toml', 'Cargo.lock', 'bun.lock', '.changeset/config.json',
-      'apps/client/android-version.properties', ...Object.keys(ownedWorkspaces).flatMap(path =>
+      'apps/client/android-version.properties', 'fdroid/metadata/app.lazysh.client.yml', ...Object.keys(ownedWorkspaces).flatMap(path =>
         [`${path}/package.json`, `${path === 'apps/client' ? `${path}/src-tauri` : path}/Cargo.toml`]),
       ...new Bun.Glob('apps/client/src-tauri/tauri*.conf.json').scanSync({ cwd: source })];
     for (const path of paths) {
@@ -162,6 +181,30 @@ test('current-main admission accepts same-version first-parent progress, rejects
     expect(prepare.exitCode, prepare.stderr.toString()).toBe(0);
     expect(await Bun.file(output).text()).toBe('enabled=false\n');
     await rm(output);
+    await Bun.write(join(root, '.changeset/release-policy.json'), JSON.stringify({ ...policy,
+      initialPublication: { version, ancestor: bound.sha } }));
+    await Bun.write(join(root, '.changeset/retained.md'), '---\n"@lazysh/client": patch\n---\nRetain this pending change.\n');
+    const dispatch = (selection: string, expectedSha = advanced, event = 'workflow_dispatch') => Bun.spawnSync(
+      ['bun', join(source, '.changeset/release-tag.ts'), 'prepare'], { cwd: root, stdout: 'pipe', stderr: 'pipe',
+        env: { ...process.env, GITHUB_SHA: advanced, GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: event,
+          GITHUB_OUTPUT: output, LAZYSH_RELEASE_DIRECTORY: join(root, 'initial-output'),
+          LAZYSH_RELEASE_INITIAL: selection, LAZYSH_RELEASE_EXPECTED_SHA: expectedSha } });
+    for (const [selection, acknowledgement, event] of [['false', advanced, 'workflow_dispatch'],
+      ['yes', advanced, 'workflow_dispatch'], ['true', '', 'workflow_dispatch'], ['true', advanced, 'push']]) {
+      const rejected = dispatch(selection, acknowledgement, event);
+      expect(rejected.exitCode).not.toBe(0);
+      expect(await Bun.file(output).exists()).toBe(false);
+    }
+    const ordinary = dispatch('false', '');
+    expect(ordinary.exitCode, ordinary.stderr.toString()).toBe(0);
+    expect(await Bun.file(output).text()).toBe('enabled=false\n');
+    await rm(output);
+    const initial = dispatch('true');
+    expect(initial.exitCode, initial.stderr.toString()).toBe(0);
+    expect(await Bun.file(output).text()).toBe(`enabled=true\nversionCode=${bound.versionCode}\n`);
+    expect(await Bun.file(join(root, '.changeset/retained.md')).text()).toContain('Retain this pending change.');
+    await rm(output);
+    await rm(join(root, '.changeset/retained.md'));
     await rm(join(root, '.changeset/release-policy.json'));
     await requireCurrentRelease(root, bound, advanced);
     const api = requests([response({ object: { sha: advanced } }), response({}, 404),
@@ -178,7 +221,7 @@ test('current-main admission accepts same-version first-parent progress, rejects
     git('add', '.'); git('commit', '-m', 'test: retain main first parent');
     git('merge', '--no-ff', 'test/side', '-m', 'test: merge second-parent candidate');
     await expect(requireCurrentRelease(root, { ...bound, sha: side }, git('rev-parse', 'HEAD'))).rejects.toThrow('first-parent');
-    // A synchronized newer version, not merely malformed metadata, supersedes.
+    // A synchronized newer version must not discard this verified release.
     const later = `${version.split('.').slice(0, 2).join('.')}.${Number(version.split('.')[2]) + 1}`;
     const names: string[] = [];
     for (const path of ['.', ...Object.keys(ownedWorkspaces)]) {
@@ -195,12 +238,19 @@ test('current-main admission accepts same-version first-parent progress, rejects
     await synchronizeWorkspaceVersions(root);
     await verifyRelease(root);
     git('add', '.'); git('commit', '-m', 'test: advance synchronized release version');
-    await expect(requireCurrentRelease(root, bound, git('rev-parse', 'HEAD'))).rejects.toThrow('superseded');
+    await requireCurrentRelease(root, bound, git('rev-parse', 'HEAD'));
+    git('checkout', '--orphan', 'test/replaced-history');
+    git('commit', '-m', 'test: replace history');
+    await expect(requireCurrentRelease(root, bound, git('rev-parse', 'HEAD'))).rejects.toThrow('first-parent');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('workflow isolates write token after successful source and binary acceptance', async () => {
   const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/release-tag.yml', import.meta.url)).text()) as any;
+  expect(workflow.concurrency.group).toBe('verified-stable-tag-${{ github.sha }}');
+  expect(workflow.env.LAZYSH_RELEASE_INITIAL).toBe('${{ inputs.initial || false }}');
+  expect(workflow.env.LAZYSH_RELEASE_EXPECTED_SHA).toBe("${{ inputs.expected-source-sha || '' }}");
+  expect(workflow.jobs.artifacts.with.initial).toBe('${{ inputs.initial || false }}');
   expect(workflow.permissions).toEqual({ contents: 'read' });
   expect(workflow.jobs['source-build'].if).toBe("needs.candidate.outputs.enabled == 'true'");
   expect(workflow.jobs.tag.needs).toEqual(['candidate', 'source-build', 'artifacts']);
