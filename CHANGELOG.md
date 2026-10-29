@@ -4,6 +4,8 @@
 
 - Keep the Android workspace inside system bars and display cutouts, and resize the terminal and special-key row above docked software keyboards. Showing and hiding the keyboard restores the available terminal space; terminal input and toolbar preferences are unchanged.
 
+- Add reported-agent search, status filters and selected-report context while preserving explicit refresh, history and approval ownership. Reported pane IDs remain context; application defaults are unchanged.
+
 - Add an optional per-host default multiplexer and named session for direct SSH entry. Existing hosts keep normal connection behavior; the saved transport is preserved, and unavailable targets never select another session automatically.
 
 - Refresh the default app appearance with the lazysh logo palette, frosted navigation and dialogs, and consistent buttons and selectors. The default app preset is now labelled lazysh; saved preset identifiers, terminal colors, and custom themes are preserved. Reduced-transparency and reduced-motion preferences are respected.

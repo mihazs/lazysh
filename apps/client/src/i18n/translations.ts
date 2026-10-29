@@ -2,6 +2,24 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  agentsSearch: ["Buscar agentes reportados", "Buscar agentes reportados"],
+  agentsSearchHint: ["Agente, projeto ou resumo", "Agente, proyecto o resumen"],
+  agentsFilterStatus: ["Estado reportado", "Estado reportado"],
+  agentsAll: ["Todos", "Todos"],
+  agentsResultCount: ["Exibindo {{shown}} de {{total}} sessões reportadas", "Mostrando {{shown}} de {{total}} sesiones reportadas"],
+  agentsSelectedReport: ["Relato selecionado", "Informe seleccionado"],
+  agentsClearSelection: ["Limpar seleção", "Borrar selección"],
+  agentsSelectReport: ["Ver relato de {{agent}} em {{project}}", "Ver informe de {{agent}} en {{project}}"],
+  agentsDetails: ["Detalhes reportados", "Detalles reportados"],
+  agentsReportProject: ["Projeto", "Proyecto"],
+  agentsReportSession: ["ID de sessão reportado", "ID de sesión reportado"],
+  agentsReportEvents: ["Eventos reportados", "Eventos reportados"],
+  agentsReportPane: ["ID de painel reportado", "ID de panel reportado"],
+  agentsReportContext: ["Este contexto foi reportado pelo servidor. Um ID de painel não comprova um alvo ativo nem permissão para agir.", "Este contexto fue reportado por el servidor. Un ID de panel no establece un destino activo ni permiso para actuar."],
+  agentsNoMatches: ["Nenhum agente reportado corresponde", "No hay agentes reportados coincidentes"],
+  agentsNoMatchesHint: ["Altere a busca ou o filtro de estado reportado para ver outros relatos.", "Cambia la búsqueda o el filtro de estado reportado para ver otros informes."],
+  agentsClearFilters: ["Limpar filtros", "Borrar filtros"],
+
   defaultMuxLabel: ["Multiplexador padrão", "Multiplexor predeterminado"],
   defaultMuxNone: ["Nenhum — terminal normal", "Ninguno — terminal normal"],
   defaultMuxName: ["Sessão padrão do multiplexador", "Sesión predeterminada del multiplexor"],
