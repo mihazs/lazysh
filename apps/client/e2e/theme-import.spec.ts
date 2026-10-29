@@ -1,3 +1,4 @@
+import {controlContrast} from './fixtures/controlContrast';
 import {expect,test} from '@playwright/test';
 for (const value of [
   {v:1,name:'Light 日光',mode:'light',colors:{background:'#ffffff',foreground:'#ffffff',cursor:'#eeeeee',red:'#ffffff'}},
@@ -18,10 +19,7 @@ for (const value of [
   await expect(page.getByRole('combobox',{name:'Terminal theme',exact:true})).toHaveValue('custom');
   await expect(page.locator('html')).toHaveCSS('--theme-bg',value.colors.background);
   // Actual controls inherit contrast-safe chrome, even though the supplied terminal foreground is white-on-white.
-  const ratios=await page.getByRole('dialog').evaluate(dialog=>{
-    const light=(color:string)=>color.match(/[\d.]+/g)!.slice(0,3).map(Number).map(n=>{n/=255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4;}).reduce((sum,n,i)=>sum+n*[.2126,.7152,.0722][i],0);
-    return Array.from(dialog.querySelectorAll('h2,p,label,input:not([type=checkbox]),select,button')).filter(e=>e.checkVisibility()&&getComputedStyle(e).opacity==='1').map(e=>{const fg=light(getComputedStyle(e).color);let parent:Element|null=e,bg='rgba(0, 0, 0, 0)';while(parent&&bg==='rgba(0, 0, 0, 0)'){bg=getComputedStyle(parent).backgroundColor;parent=parent.parentElement;}const b=light(bg);return {text:e.textContent?.slice(0,30),ratio:(Math.max(fg,b)+.05)/(Math.min(fg,b)+.05)};});
-  });
+  const ratios=await page.getByRole('dialog').evaluate(controlContrast);
   expect(ratios.filter(item=>item.ratio<4.5)).toEqual([]);
   await page.getByRole('button',{name:'Export theme share code',exact:true}).click();
   const code=await page.getByLabel('Exported theme',{exact:true}).inputValue();expect(code).toMatch(/^lazysh-theme:/);
