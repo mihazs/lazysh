@@ -84,6 +84,12 @@ three-second deadlines; each response/notification allowance is at most 1 MiB,
 each line 64 KiB, and each command at most 4096 rows. Labels are delimiter-quoted,
 with control characters displayed as `?`; labels never become commands. Older
 tmux behavior is accepted only when binding and protocol validation succeed.
+Preparation positively checks the exact registered client through both client and
+session loops before publishing navigation or guarded Chat input. Every action
+requires the entire loop result to equal `1`; unknown modifier text is rejected.
+tmux 3.2a lacks client loops and keeps ordinary terminal access without these
+advanced bindings. The client-loop capability was introduced in tmux 3.4; version
+strings alone never grant a binding.
 
 All application SSH session/direct-TCP channel openings retain ownership while awaiting SSH open
 confirmation, even if the caller locks or times out. Late confirmations are

@@ -527,13 +527,11 @@ impl Control {
         assert!(session.starts_with('$') && session[1..].bytes().all(|b| b.is_ascii_digit()));
         assert!(window.starts_with('@') && window[1..].bytes().all(|b| b.is_ascii_digit()));
         let marker = format!("LAZYSH_JUMP_{}", uuid::Uuid::new_v4().simple());
-        let tuple = format!(
-            "#{{&&:#{{==:#{{client_pid}},{}}},#{{==:#{{client_tty}},{}}}}}",
-            client.pid, client.tty
-        );
-        let attached = format!("#{{&&:#{{!=:#{{client_session}},}},{tuple}}}");
-        let normal = format!("#{{&&:#{{==:#{{client_control_mode}},0}},{attached}}}");
-        let guard = format!("#{{L:#{{?{normal},1,}}}}");
+        let guard = crate::tmux_jump::Identity {
+            pid: client.pid,
+            tty: client.tty.clone(),
+        }
+        .guard();
         // -F is a synchronous format test: no shell job/yield between validation
         // and the inserted switch. All data here is validated PID/TTY/$ID/@ID.
         let command=format!("if-shell -F {} {{ switch-client -E -c {} -t {}; display-message -p {} }} {{ display-message -p {} }}",quote(&guard),quote(&client.tty),quote(&format!("{session}:{window}")),quote(&format!("{marker}:ok")),quote(&format!("{marker}:gone")));
@@ -1022,6 +1020,85 @@ async fn product_actor_probe() {
     assert!(partial.call(&fresh, &mut live, None).await.is_err());
     let _ = channel.eof().await;
     let _ = channel.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and tmux 3.2a; unsupported client-loop acceptance"]
+async fn real_tmux_unsupported_client_loops_keep_terminal_without_binding() {
+    timeout(Duration::from_secs(30), async {
+        let f = Fixture::new().await;
+        let session = f.local(&[
+            "new-session",
+            "-d",
+            "-s",
+            "unsupported",
+            "-P",
+            "-F",
+            "#{session_id}",
+        ]);
+        let mut display = f.display(&session).await;
+        let identity = crate::tmux_jump::Identity {
+            pid: display.identity.pid,
+            tty: display.identity.tty.clone(),
+        };
+        // Real 3.2 expands an unknown loop into a truthy literal even when its
+        // predicate is false. Neither that literal nor the real tuple is safe.
+        assert_eq!(f.local(&["display-message", "-p", "#{L:#{?0,1,}}"]), "L:");
+        assert_eq!(f.local(&["display-message", "-p", &identity.guard()]), "0");
+        let lease = AccessState::disabled().lease(None).unwrap();
+        let control = crate::tmux_jump::prepare_command(
+            f.handle(),
+            identity,
+            format!(
+                "{} -C attach-session -f no-output,ignore-size -t {}",
+                f.prefix(),
+                quote(&session)
+            ),
+            &lease,
+        )
+        .await;
+        assert!(
+            control.is_none(),
+            "unsupported loops must not publish navigation or Chat authority"
+        );
+        let mut observed = f.control(&session).await;
+        observed
+            .wait_display(&display.identity, true)
+            .await
+            .unwrap();
+        f.local(&[
+            "send-keys",
+            "-t",
+            &session,
+            "printf '%s%s\\n' OWNED_TERMINAL_ STILL_USABLE",
+            "Enter",
+        ]);
+        timeout(BOUND, async {
+            let mut bytes = Vec::new();
+            loop {
+                match display.channel.wait().await {
+                    Some(ChannelMsg::Data { data }) => {
+                        bytes.extend_from_slice(&data);
+                        assert!(bytes.len() < 64 * 1024);
+                        if bytes
+                            .windows(b"OWNED_TERMINAL_STILL_USABLE".len())
+                            .any(|w| w == b"OWNED_TERMINAL_STILL_USABLE")
+                        {
+                            break;
+                        }
+                    }
+                    Some(ChannelMsg::WindowAdjusted { .. }) => {}
+                    _ => panic!("ordinary terminal retired by unsupported navigation"),
+                }
+            }
+        })
+        .await
+        .expect("ordinary terminal remains usable");
+        observed.close().await;
+        display.close().await;
+    })
+    .await
+    .expect("bounded unsupported-loop fixture");
 }
 
 #[tokio::test]
