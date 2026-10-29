@@ -303,6 +303,7 @@ button svg {
   height: 30px;
 }
 @media (hover: none), (pointer: coarse) {
+  button { min-width: 44px; min-height: 44px; }
   .host-actions {
     display: flex;
     top: 50%;
@@ -1265,15 +1266,6 @@ button svg {
     width: 14px;
     height: 14px;
   }
-  .welcome-terminal {
-    height: 65px;
-    width: 65px;
-    border-radius: 17px;
-    margin-bottom: 24px;
-  }
-  .welcome-terminal > span {
-    font-size: 40px;
-  }
   .welcome-bottom {
     font-size: 9px;
     margin-top: 45px;
@@ -1682,5 +1674,5 @@ button svg {
   .sidebar, .workspace-header, .dialog { background: var(--theme-panel); backdrop-filter: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  button { transition: none; }
+  button, .sidebar { transition: none; }
 }
