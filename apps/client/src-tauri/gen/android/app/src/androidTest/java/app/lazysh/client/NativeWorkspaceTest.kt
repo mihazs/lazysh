@@ -1142,6 +1142,7 @@ class NativeWorkspaceTest {
         val checkbox = ".keep-awake-control input[type=checkbox]"
         val active = "This board owns an acknowledged idle-inhibition request."
         val off = "Keep awake is off."
+        val paused = "Keep awake is paused until this board is visible and focused."
         var observedActivity: MainActivity? = null
         fun flag(): Boolean {
             var enabled = false
@@ -1158,9 +1159,9 @@ class NativeWorkspaceTest {
                 Thread.sleep(25)
             }
         }
-        fun view(name: String) {
+        fun navigation(name: String) {
             onWebView().withElement(findElement(Locator.XPATH,
-                "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='$name']]"))
+                "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$name']"))
                 .perform(webScrollIntoView()).perform(webClick())
         }
         fun toggle() {
@@ -1169,13 +1170,15 @@ class NativeWorkspaceTest {
         }
         fun status(text: String) = "Array.from(document.querySelectorAll('.keep-awake-control [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
         fun awaitActive(stage: String) {
-            awaitDocument(scenario, stage, "document.querySelector('$checkbox')?.checked===true && ${status(active)}")
+            awaitDocument(scenario, stage, "document.querySelector('$checkbox:not(:disabled)')?.checked===true && ${status(active)}")
             awaitFlag(true, stage)
         }
         var primaryFailure: Throwable? = null
         try {
             awaitFlag(false, "connected terminal before opt-in")
-            view("Agents")
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='Agents']]"))
+                .perform(webScrollIntoView()).perform(webClick())
             awaitDocument(scenario, "board keep-awake available and off",
                 "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}")
             assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
@@ -1192,17 +1195,26 @@ class NativeWorkspaceTest {
             awaitFlag(false, "actual Activity background")
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             awaitActive("actual Activity foreground")
-            view("Terminal")
-            awaitDocument(scenario, "board unmounted", "!document.querySelector('.keep-awake-control')")
-            awaitFlag(false, "leaving board")
-            view("Agents")
-            awaitActive("persisted opt-in on new board mount")
+            navigation("Connections")
+            awaitDocument(scenario, "persistent board mounted but hidden",
+                "document.querySelectorAll('.keep-awake-control').length===1 && " +
+                    "document.querySelector('.workspace-navigation-agents')?.hidden===true && " +
+                    "document.querySelector('.keep-awake-control')?.hidden===true && " +
+                    "document.querySelector('$checkbox:disabled')?.checked===true && ${status(paused)}")
+            assertEquals("Hidden board must preserve explicit opt-in", "true", evaluate(scenario,
+                "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='true'"))
+            awaitFlag(false, "persistent board hidden")
+            navigation("Agents")
+            awaitDocument(scenario, "persistent board revealed",
+                "document.querySelector('.workspace-navigation-agents')?.hidden===false && " +
+                    "document.querySelector('.keep-awake-control')?.hidden===false")
+            awaitActive("persisted opt-in on board reveal")
             toggle()
             awaitDocument(scenario, "final explicit board off", status(off))
             awaitFlag(false, "final explicit board off")
             assertEquals("Owned board preference must finish off", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='false'"))
-            println("lazysh board keep-awake: packaged opt-in/off, background/foreground and board unmount/remount verified against actual Window flag")
+            println("lazysh board keep-awake: packaged opt-in/off, background/foreground and persistent board hide/reveal verified against actual Window flag")
         } catch (failure: Throwable) {
             primaryFailure = failure
             runCatching { failure.addSuppressed(AssertionError("Board readiness after failure: ${BoardReadinessObservation.collect(observedActivity, ::webView)}")) }
@@ -1211,8 +1223,12 @@ class NativeWorkspaceTest {
             try {
                 if (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED)
                     scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                if (evaluate(scenario, "document.querySelector('$checkbox')?.checked===true") == "true") toggle()
-                view("Terminal")
+                if (evaluate(scenario, "document.querySelector('$checkbox')?.checked===true") == "true") {
+                    navigation("Agents")
+                    toggle()
+                }
+                navigation("Connections")
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".sidebar-close")).perform(webClick())
                 awaitFlag(false, "owned board cleanup")
             } catch (cleanup: Throwable) {
                 if (primaryFailure != null) primaryFailure.addSuppressed(AssertionError("Owned board keep-awake cleanup also failed"))
