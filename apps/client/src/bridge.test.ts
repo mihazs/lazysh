@@ -22,7 +22,7 @@ it('preserves the existing SSH terminal IO contract',async()=>{
 });
 it('rejects local sessions before invoking SSH-only file or multiplexer tools',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
-  for(const operation of [()=>api.readFile(id,'/a'),()=>api.uploadFile(id,'/a',[],'receipt'),()=>api.listDirectory(id,'/'),()=>api.diff(id,'/a'),()=>api.muxSessions(id),()=>api.tmuxJumpSnapshot(id),()=>api.tmuxJump(id,'generation','$1','@2'),()=>api.attachTmux(id,'work',()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
+  for(const operation of [()=>api.readFile(id,'/a'),()=>api.uploadFile(id,'/a',[],'receipt'),()=>api.listDirectory(id,'/'),()=>api.diff(id,'/a'),()=>api.muxSessions(id),()=>api.tmuxJumpSnapshot(id),()=>api.tmuxJump(id,'generation','$1','@2'),()=>api.attachTmux(id,'work',()=>{}),()=>api.attachDefaultMultiplexer(id,{kind:'tmux',name:'work'},()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
     await expect(operation()).rejects.toThrow('requires an SSH connection');
   }
   expect(invoke).not.toHaveBeenCalled();
@@ -44,4 +44,11 @@ it('retains the same terminal channel and ordered output across lock and acknowl
   expect(output).toEqual([1]);acknowledgeAccessReady(accessSnapshot().epoch);
   expect(output).toEqual([1,2,3,4]);
   expect(invoke.mock.calls.filter(([command])=>command==='connect')).toHaveLength(1);
+});
+
+it('requests only the typed named default entry through the existing native attachment command',async()=>{
+  invoke.mockResolvedValueOnce({sessionId:'named-child'});
+  await api.attachDefaultMultiplexer('verified-parent',{kind:'tmux',name:'exact-work'},()=>{});
+  expect(invoke).toHaveBeenCalledWith('attach_multiplexer',expect.objectContaining({sessionId:'verified-parent',kind:'tmux',name:'exact-work',createIfMissing:true,cols:100,rows:30}),expect.anything());
+  expect(invoke.mock.calls[0][1]).not.toHaveProperty('command');
 });

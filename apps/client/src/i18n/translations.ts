@@ -2,6 +2,14 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  defaultMuxLabel: ["Multiplexador padrão", "Multiplexor predeterminado"],
+  defaultMuxNone: ["Nenhum — terminal normal", "Ninguno — terminal normal"],
+  defaultMuxName: ["Sessão padrão do multiplexador", "Sesión predeterminada del multiplexor"],
+  defaultMuxSsh: ["A entrada direta no multiplexador usa SSH. A preferência de transporte salva não muda.", "La entrada directa al multiplexor usa SSH. La preferencia de transporte guardada no cambia."],
+  defaultMuxCreate: ["Conecte à sessão indicada ou crie-a usando o multiplexador escolhido. Nenhuma outra sessão é selecionada.", "Conéctate a la sesión indicada o créala usando el multiplexor elegido. No se selecciona otra sesión."],
+  defaultMuxConnecting: ["Entre diretamente na sessão {{name}} de {{kind}} após conectar.", "Entra directamente en la sesión {{name}} de {{kind}} al conectar."],
+  defaultMuxInvalid: ["Escolha um multiplexador compatível e um nome de sessão não vazio de até 200 bytes UTF-8, sem caracteres de controle. Nomes Zellij não podem começar com hífen; nomes tmux não podem conter dois-pontos ou pontos. Herdr aceita de 1 a 64 letras ASCII, números, pontos, sublinhados ou hífens, exceto um ponto ou dois pontos consecutivos.", "Elige un multiplexor compatible y un nombre de sesión no vacío de hasta 200 bytes UTF-8, sin caracteres de control. Los nombres Zellij no pueden comenzar con guion; los nombres tmux no pueden contener dos puntos ni puntos. Herdr acepta de 1 a 64 letras ASCII, números, puntos, guiones bajos o guiones, excepto un punto o dos puntos consecutivos."],
+  defaultMuxClosed: ["A conexão do multiplexador padrão fechou antes da entrada. Nenhuma outra sessão foi aberta.", "La conexión del multiplexor predeterminado se cerró antes de entrar. No se abrió otra sesión."],
   fontDownloadRegion: ["Fonte CJK para download", "Fuente CJK para descargar"],
   fontDownloadTitle: ["Fallback Noto CJK opcional", "Fuente de respaldo Noto CJK opcional"],
   fontDownloadHint: ["Baixe {{size}} MiB da fonte oficial Noto no GitHub. Nada é baixado automaticamente. Depois escolha em Fallback CJK importado; a seleção atual não muda. Os limites de armazenamento existentes se aplicam.", "Descarga {{size}} MiB desde la fuente oficial de Noto en GitHub. Nada se descarga automáticamente. Después elige en Fuente CJK de respaldo importada; tu selección actual no cambia. Se aplican los límites de almacenamiento existentes."],

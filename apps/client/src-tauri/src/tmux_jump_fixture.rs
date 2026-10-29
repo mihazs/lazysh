@@ -42,6 +42,19 @@ impl Drop for Process {
         let _ = self.0.wait();
     }
 }
+// Observe only caller-established owned PIDs; never discover or signal host processes.
+async fn retired_process(pid: i32) -> std::result::Result<(), tokio::time::error::Elapsed> {
+    timeout(BOUND, async {
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    })
+    .await
+}
 struct Fixture {
     dir: tempfile::TempDir,
     daemon: Process,
@@ -84,6 +97,9 @@ impl Fixture {
                 ("XDG_CACHE_HOME", "cache-home"),
                 ("XDG_STATE_HOME", "state-home"),
                 ("XDG_RUNTIME_DIR", "runtime"),
+                ("XDG_DATA_HOME", "data-home"),
+                ("TMPDIR", "tmp"),
+                ("ZELLIJ_SOCKET_DIR", "zellij-sockets"),
             ] {
                 let path = dir.path().join(child);
                 fs::create_dir(&path).unwrap();
@@ -163,6 +179,7 @@ impl Fixture {
         .await
         .unwrap();
         let host = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -1188,6 +1205,221 @@ impl Drop for NamedServers<'_> {
         let _ = self.stop();
     }
 }
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and supported tmux; saved default first-entry acceptance"]
+async fn real_tmux_jump_default_entry_creates_exact_target_and_keeps_child_after_bootstrap() {
+    let f = Fixture::new().await;
+    // Suppress zsh first-user setup only in this owned empty HOME.
+    fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+    let servers = NamedServers {
+        fixture: &f,
+        names: vec!["default".into()],
+    };
+    let (app, state) = herdr_native_app(&f);
+    let (_authority, lease) = unlocked_authority();
+    let (source, _source_events) = herdr_echo_source(&f, &state, &lease).await;
+    let parent = state.session(&source.session_id).await.unwrap();
+    let name = "named '$(printf NO);";
+    for _ in 0..2 {
+        // First call creates; the second must preserve the same explicit session.
+        crate::multiplexer::prepare_default_entry(
+            &parent,
+            &lease,
+            crate::multiplexer::MultiplexerKind::Tmux,
+            name,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            servers.direct("default", &["list-sessions", "-F", "#{session_name}"]),
+            name
+        );
+    }
+    let (child, mut receiver) = multiplexer_child(
+        &app,
+        &lease,
+        &source,
+        name,
+        crate::multiplexer::MultiplexerKind::Tmux,
+        true,
+    )
+    .await;
+    let native = state.session(&child.session_id).await.unwrap();
+    assert!(Arc::ptr_eq(&parent.handle, &native.handle));
+    assert_eq!(native.creation.generation(), parent.creation.generation());
+    disconnect_inner(&state, source.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &source.session_id, &parent, true).await;
+    let bound =
+        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+    let bound = serde_json::to_value(bound).unwrap();
+    assert_eq!(bound["sessions"][0]["name"], name);
+    assert!(!bound["generation"].as_str().unwrap().is_empty());
+    write_stdin(
+        lease.clone(),
+        app.state(),
+        child.session_id.clone(),
+        "printf 'DEFAULT-%s\\n' 'CHILD-ALIVE'\r".into(),
+        None,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    owned_terminal_output(
+        &app,
+        &child.session_id,
+        &mut receiver,
+        b"DEFAULT-CHILD-ALIVE",
+    )
+    .await;
+    assert!(!*native.finished.borrow());
+    disconnect_inner(&state, child.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &child.session_id, &native, true).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and installed Zellij; saved default first-entry acceptance"]
+async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap() {
+    let f = Fixture::with_herdr(Some(std::path::Path::new("/usr/bin/zellij"))).await;
+    // Zellij creates HOME/.config before choosing its writable config path.
+    // Pre-create it in this owned HOME so its first-run wizard cannot intercept input.
+    let config = f.dir.path().join(".config/zellij");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(config.join("config.kdl"),"show_release_notes false\nshow_startup_tips false\nsession_serialization false\ndefault_shell \"/bin/sh\"\ndefault_layout \"owned\"\n").unwrap();
+    fs::create_dir(config.join("layouts")).unwrap();
+    fs::write(config.join("layouts/owned.kdl"), r#"layout { pane command="/bin/sh" { args "-c" "echo ZELLIJ-PANE-READY; exec /bin/sh"; }; }"#).unwrap();
+    let name = "direct-zellij-literal";
+    struct OwnedZellij<'a>(&'a Fixture, &'a str);
+    impl Drop for OwnedZellij<'_> {
+        fn drop(&mut self) {
+            // Exact name in fresh private socket/storage roots, including on panic.
+            let command = Command::new("/usr/bin/zellij")
+                .args(["kill-session", "--", self.1])
+                .env_clear()
+                .envs(self.0.environment.iter().map(|(key, value)| (*key, value)))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            let Ok(child) = command else { return };
+            let mut process = Process(child);
+            let until = std::time::Instant::now() + BOUND;
+            while matches!(process.0.try_wait(), Ok(None)) && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    let owned = OwnedZellij(&f, name);
+    let (app, state) = herdr_native_app(&f);
+    let (_authority, lease) = unlocked_authority();
+    let (mut source, _) = herdr_echo_source(&f, &state, &lease).await;
+    let parent = state.session(&source.session_id).await.unwrap();
+    let kind = crate::multiplexer::MultiplexerKind::Zellij;
+    let mut server_pid = None;
+    let mut shell_pid = None;
+    let shell_identity = f.dir.path().join("zellij-shell-pid");
+    for attempt in 0..2 {
+        let (child, mut events) = multiplexer_child(&app, &lease, &source, name, kind, true).await;
+        let native = state.session(&child.session_id).await.unwrap();
+        let bootstrap = state.session(&source.session_id).await.unwrap();
+        disconnect_inner(&state, source.session_id.clone())
+            .await
+            .unwrap();
+        herdr_retired(&state, &source.session_id, &bootstrap, true).await;
+        owned_terminal_output(&app, &child.session_id, &mut events, b"ZELLIJ-PANE-READY").await;
+        let marker = format!("ZELLIJ-DEFAULT-{attempt}-ALIVE");
+        write_stdin(
+            lease.clone(),
+            app.state(),
+            child.session_id.clone(),
+            format!(
+                "printf '%s' \"$$\" > {}; printf 'ZELLIJ-DEFAULT-%s-ALIVE\\n' '{attempt}'\r",
+                quote(shell_identity.to_str().unwrap())
+            ),
+            None,
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+        owned_terminal_output(&app, &child.session_id, &mut events, marker.as_bytes()).await;
+        let pane_pid = fs::read_to_string(&shell_identity)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        assert!(pane_pid > 1);
+        if let Some(original) = shell_pid {
+            assert_eq!(
+                pane_pid, original,
+                "re-entry must preserve the original shell"
+            );
+        } else {
+            shell_pid = Some(pane_pid);
+        }
+        let names = exec_for_access(
+            &native,
+            "zellij list-sessions --short --no-formatting".into(),
+            &lease,
+        )
+        .await
+        .unwrap();
+        assert_eq!(names.trim(), name);
+        let socket = f
+            .dir
+            .path()
+            .join("zellij-sockets/contract_version_1")
+            .join(name);
+        let peer = tokio::net::UnixStream::connect(&socket).await.unwrap();
+        let credentials = peer.peer_cred().unwrap();
+        assert_eq!(credentials.uid(), unsafe { libc::geteuid() });
+        let pid = credentials.pid().unwrap();
+        assert!(pid > 1);
+        if let Some(original) = server_pid {
+            assert_eq!(pid, original, "re-entry must preserve the original server");
+        } else {
+            server_pid = Some(pid);
+        }
+        drop(peer);
+        if attempt == 1 {
+            exec_for_access(
+                &native,
+                format!("zellij kill-session -- {}", quote(name)),
+                &lease,
+            )
+            .await
+            .unwrap();
+        }
+        disconnect_inner(&state, child.session_id.clone())
+            .await
+            .unwrap();
+        herdr_retired(&state, &child.session_id, &native, true).await;
+        if attempt == 0 {
+            // Re-enter through a fresh bootstrap on the exact same SSH transport.
+            let (reopened, _) = herdr_echo_source(&f, &state, &lease).await;
+            assert!(Arc::ptr_eq(
+                &parent.handle,
+                &state.session(&reopened.session_id).await.unwrap().handle
+            ));
+            source = reopened;
+        }
+    }
+    drop(owned);
+    for pid in [server_pid.unwrap(), shell_pid.unwrap()] {
+        retired_process(pid)
+            .await
+            .expect("owned Zellij server/shell did not exit");
+    }
+    assert!(state.sessions.lock().await.is_empty());
+}
+
 #[tokio::test]
 #[ignore = "requires owned local OpenSSH sshd and tmux; two named-server context acceptance"]
 async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
@@ -2238,16 +2470,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     let cleanup = servers.stop();
     drop(servers);
     for pid in owned_pids {
-        timeout(BOUND, async {
-            while unsafe { libc::kill(pid, 0) } == 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            assert_eq!(
-                std::io::Error::last_os_error().raw_os_error(),
-                Some(libc::ESRCH)
-            );
-        })
-        .await
+        retired_process(pid).await
         .unwrap_or_else(|error| panic!("owned tmux server/workload must exit during teardown: {error:?}; cleanup={cleanup:?}; processes(before,after)={}", diagnostics.failure()));
     }
     f.stop_listener().await;
@@ -2541,12 +2764,13 @@ async fn herdr_echo_source(
     .unwrap();
     (source, receiver)
 }
-async fn herdr_child(
+async fn multiplexer_child(
     app: &tauri::App<tauri::test::MockRuntime>,
     lease: &AccessLease,
     source: &Connected,
     selected: &str,
     kind: crate::multiplexer::MultiplexerKind,
+    default_entry: bool,
 ) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
     let (events, receiver) = super::test_support::json_events();
     let child = attach_multiplexer(
@@ -2559,6 +2783,7 @@ async fn herdr_child(
         80,
         24,
         events,
+        Some(default_entry),
     )
     .await
     .unwrap()
@@ -2750,7 +2975,8 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     let process_pid = i32::try_from(workload_pid).unwrap();
     assert!(process_pid > 1);
     eprintln!("owned Herdr stages: requested_host_kind=true explicit_nonfirst_selection=true workload_started=true");
-    let (child, mut child_events) = herdr_child(&app, &lease, &source, &selected, kind).await;
+    let (child, mut child_events) =
+        multiplexer_child(&app, &lease, &source, &selected, kind, false).await;
     owned_terminal_output(&app, &child.session_id, &mut child_events, b"PICKED").await;
     adopt_session(
         lease.clone(),
@@ -2800,7 +3026,8 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
     )
     .await;
     eprintln!("owned Herdr stages: separate_child_display=true source_independent=true durable_after_detach=true");
-    let (pending, mut pending_events) = herdr_child(&app, &lease, &source, &selected, kind).await;
+    let (pending, mut pending_events) =
+        multiplexer_child(&app, &lease, &source, &selected, kind, false).await;
     owned_terminal_output(&app, &pending.session_id, &mut pending_events, b"PICKED").await;
     let pending_native = state.session(&pending.session_id).await.unwrap();
     assert!(!*pending_native.finished.borrow());
@@ -2841,7 +3068,8 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         selected.clone(),
         80,
         24,
-        super::test_support::counting_events(&calls)
+        super::test_support::counting_events(&calls),
+        None,
     )
     .await
     .is_err());

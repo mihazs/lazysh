@@ -1308,6 +1308,7 @@ mod tests {
     }
     fn host(id: &str) -> Host {
         Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -1348,6 +1349,25 @@ mod tests {
             settings_revision: 0,
             credentials_revision: 0,
         }
+    }
+
+    #[test]
+    fn synced_default_multiplexer_retains_explicit_choice_and_rejects_invalid_names() {
+        let mut bundle = settings();
+        bundle.hosts[0].default_multiplexer = Some(crate::ssh::DefaultMultiplexer {
+            kind: crate::multiplexer::MultiplexerKind::Tmux,
+            name: "work".into(),
+        });
+        validate_bundle(&bundle, Scope::Settings).unwrap();
+        let encoded = serde_json::to_vec(&bundle).unwrap();
+        let imported: Bundle = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            imported.hosts[0].default_multiplexer.as_ref().unwrap().name,
+            "work"
+        );
+        bundle.hosts[0].default_multiplexer.as_mut().unwrap().name = "bad\nname".into();
+        assert!(validate_bundle(&bundle, Scope::Settings).is_err());
+        assert!(serde_json::from_slice::<Bundle>(&serde_json::to_vec(&bundle).unwrap()).is_err());
     }
 
     #[test]
