@@ -1,7 +1,7 @@
 # Published Android APK smoke
 
 The **Published Android ARM64 APK smoke** workflow accepts a stable public
-release tag on manual dispatch (initially `v0.23.0`). Narrow same-repository PR
+release tag on manual dispatch (currently `v1.0.0`). Narrow same-repository PR
 changes to this gate also exercise that stable public tag before merging. Each Google/FOSS case receives a separate owned
 hosted VM and fresh Google APIs API35 x86_64 revision9 guest. It downloads the
 nominated public APK; it never rebuilds, resigns or enables debugging in that APK.
@@ -108,4 +108,14 @@ unavailable, and target WebView accessibility presence as a nullable boolean.
 The sample checks the original remaining driver deadline before each query;
 expired or failed queries remain unavailable. It does not retain labels or
 hierarchies and does not prove what was present throughout an earlier wait.
-The 0.23.0 nomination, selectors, actions, waits and success protocol are unchanged.
+That diagnostic revision kept the 0.23.0 nomination, selectors, actions, waits and
+success protocol unchanged.
+
+Both diagnostic cases then passed workspace readiness and exact input/readback
+but failed `KEYBOARD` on public 0.23.0. The receipt does not distinguish Back
+rejection from an IME accessibility window that remained present; the cause is
+unproven. Current qualification nominates actual public `v1.0.0`, released from
+`55a52e01bcf37c600d1a9877b190e85eb3141ff9`, without changing the keyboard action,
+selectors, waits, certificate pin or any integrity/UI/persistence requirement.
+Current-version KEYBOARD and full install/relaunch/repair results remain
+unverified until actual hosted completion for both flavors.

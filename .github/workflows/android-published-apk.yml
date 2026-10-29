@@ -12,7 +12,7 @@ on:
       tag:
         description: Published stable release tag to verify without modifying it
         required: true
-        default: v0.23.0
+        default: v1.0.0
         type: string
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
         flavor: [google, foss]
     env:
       ANDROID_SERIAL: emulator-5580
-      PUBLISHED_RELEASE_TAG: ${{ inputs.tag || 'v0.23.0' }}
+      PUBLISHED_RELEASE_TAG: ${{ inputs.tag || 'v1.0.0' }}
       PUBLISHED_FLAVOR: ${{ matrix.flavor }}
       ANDROID_SIGNER_SHA256: f59e1e1286ea6d9b5793e34239040e1c370fb2aaaada06021bba6e7d160c7d8c
     steps:
