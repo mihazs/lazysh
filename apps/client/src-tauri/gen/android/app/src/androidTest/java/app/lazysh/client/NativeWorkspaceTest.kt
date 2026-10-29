@@ -1501,7 +1501,39 @@ class NativeWorkspaceTest {
                   return special.length===2 && [canvas,keys,...special]
                     .every(x=>{const r=x.getBoundingClientRect();return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight;});
                 })()
-            """)
+            """, { remaining ->
+                val native = JSONObject()
+                scenario.onActivity { activity ->
+                    val decor = activity.window.decorView
+                    val web = requireNotNull(webView(decor))
+                    native.put("webHeight", web.height.coerceIn(0, 65535))
+                        .put("webWidth", web.width.coerceIn(0, 65535))
+                        .put("density", activity.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
+                        .put("imeBottom", ViewCompat.getRootWindowInsets(decor)?.getInsets(WindowInsetsCompat.Type.ime())?.bottom?.coerceIn(0, 65535) ?: JSONObject.NULL)
+                }
+                val dom = JSONObject(evaluate(scenario, """
+                    (()=>{
+                      const n=x=>Number.isFinite(x)&&Math.abs(x)<=65535?Math.round(x*1000)/1000:null;
+                      const rect=e=>e?['left','top','right','bottom','width','height'].map(k=>n(e.getBoundingClientRect()[k])):null;
+                      const canvas=document.querySelector('.terminal-canvas'),keys=document.querySelector('.terminal-keys');
+                      const composer=document.querySelector('.terminal-compose'),toggle=document.querySelector('.terminal-toolbar-toggle');
+                      const buttons=keys?Array.from(keys.querySelectorAll('button')):[];
+                      return {viewport:[n(innerWidth),n(innerHeight),n(document.documentElement.clientHeight),n(devicePixelRatio)],
+                        canvas:rect(canvas),screenHeight:n(canvas?.querySelector('.xterm-screen')?.getBoundingClientRect().height),
+                        keys:rect(keys),esc:rect(buttons.find(x=>x.textContent==='esc')),tab:rect(buttons.find(x=>x.textContent==='tab')),
+                        composer:rect(composer),toggle:rect(toggle),header:rect(document.querySelector('.workspace-header')),
+                        sessions:rect(document.querySelector('.session-tabs')),navigation:rect(document.querySelector('.view-tabs')),
+                        footer:rect(document.querySelector('.workspace-footer')),
+                        canvasCount:n(document.querySelectorAll('.terminal-canvas').length),
+                        rowFloor:n(parseFloat(canvas?.style.minHeight)),
+                        composerFlexible:Boolean(composer&&getComputedStyle(composer).flexGrow==='1'&&getComputedStyle(composer).overflowY==='auto'),
+                        toggleFixed:Boolean(toggle&&getComputedStyle(toggle).flexShrink==='0')};
+                    })()
+                """, remaining))
+                JSONObject().put("native", native).put("dom", dom).toString().also {
+                    require(it.length <= 4096) { "Keyboard geometry observation bound" }
+                }
+            })
             val withKeyboard = evaluate(scenario, canvasHeight).toDouble()
             closeSoftKeyboard()
             awaitDocument(scenario, "terminal expands after native keyboard dismissal", "$canvasHeight > $withKeyboard")

@@ -121,6 +121,7 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
     await page.goto('/');
     await openSessions(page);
     await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', {name: 'Compose', exact: true})).toHaveCount(1);
     await page.getByRole('button', {name: 'Compose', exact: true}).click();
     const composer = page.locator('.terminal-compose:visible');
     const naturalHeight = (await composer.boundingBox())!.height;
@@ -134,6 +135,8 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
       await expectFittedRows();
       for (const element of [canvas, page.locator('.terminal-keys:visible'), page.getByRole('button', {name: 'esc', exact: true}), page.getByRole('button', {name: 'tab', exact: true})]) {
         const bounds = (await element.boundingBox())!;
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
         expect(bounds.y).toBeGreaterThanOrEqual(0);
         expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
       }
