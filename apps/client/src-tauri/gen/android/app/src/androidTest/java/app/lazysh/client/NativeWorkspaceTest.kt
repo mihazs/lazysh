@@ -1216,6 +1216,7 @@ class NativeWorkspaceTest {
         click("Attach herdr $name")
         awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
         click("Transcript")
+        awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
         closeSoftKeyboard()
         click("Open transcript")
