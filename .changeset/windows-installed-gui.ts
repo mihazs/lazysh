@@ -84,6 +84,16 @@ export function parseWindowsGuiOwner(value:string, expectedHash:string) {
 }
 
 export const windowsInstalledGuiScript = String.raw`
+function GuiEndpoints($sockets, $ports, $driverId, $nativeId) {
+  Require ($ports.Count -eq 2 -and $ports[0] -ne $ports[1] -and $sockets.Count -ge 2 -and $sockets.Count -le 4) 'GUI_ENDPOINT'
+  Require (@($sockets | Where-Object { $_.LocalPort -notin $ports -or $_.LocalAddress -notin @('127.0.0.1', '::1') }).Count -eq 0) 'GUI_LISTENER_ADDRESS'
+  Require (@($sockets | Group-Object -Property LocalPort, LocalAddress | Where-Object { $_.Count -ne 1 }).Count -eq 0) 'GUI_ENDPOINT'
+  foreach ($port in $ports) {
+    Require (@($sockets | Where-Object { $_.LocalPort -eq $port -and $_.LocalAddress -eq '127.0.0.1' }).Count -eq 1) 'GUI_IPV4_REQUIRED'
+    $expectedId = if ($port -eq $ports[0]) { $driverId } else { $nativeId }
+    Require (@($sockets | Where-Object { $_.LocalPort -eq $port -and $_.OwningProcess -ne $expectedId }).Count -eq 0) 'GUI_ENDPOINT'
+  }
+}
 function GuiProcess($file, $arguments) {
   Plain $file
   $info = [Diagnostics.ProcessStartInfo]::new($file)
@@ -152,20 +162,12 @@ function ExerciseInstalledGui {
     do {
       Require (!$driver.HasExited) 'GUI_START'
       $sockets = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in $ports })
-      if ($sockets.Count -eq 2) { break }
+      if (@($ports | Where-Object { $port=$_; @($sockets | Where-Object { $_.LocalPort -eq $port -and $_.LocalAddress -eq '127.0.0.1' }).Count -ne 1 }).Count -eq 0) { break }
       Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    if ($sockets.Count -eq 0) { Require $false 'GUI_LISTENER_NONE' }
-    if ($sockets.Count -eq 1) { Require $false 'GUI_LISTENER_ONE' }
-    if ($sockets.Count -gt 2) {
-      if (@($sockets | Where-Object { $_.LocalAddress -notin @('127.0.0.1', '::1') }).Count -gt 0) { Require $false 'GUI_LISTENER_EXTRA_OTHER' }
-      if (@($sockets | Where-Object { $_.LocalAddress -eq '::1' }).Count -gt 0) { Require $false 'GUI_LISTENER_EXTRA_LOOPBACK_V6' }
-      Require $false 'GUI_LISTENER_EXTRA_LOOPBACK_V4'
-    }
-    Require (@($sockets | Where-Object { $_.LocalAddress -ne '127.0.0.1' }).Count -eq 0) 'GUI_LISTENER_ADDRESS'
     $nativeDriver = @(Get-CimInstance Win32_Process -OperationTimeoutSec 5 | Where-Object { $_.ParentProcessId -eq $driver.Id -and $_.ExecutablePath -eq $env:LAZYSH_GUI_EDGE })
     Require ($nativeDriver.Count -eq 1) 'GUI_NATIVE_DRIVER'
-    Require (@($sockets | Where-Object { $_.OwningProcess -notin @($driver.Id, $nativeDriver[0].ProcessId) }).Count -eq 0) 'GUI_ENDPOINT'
+    GuiEndpoints $sockets $ports $driver.Id $nativeDriver[0].ProcessId
     $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts')
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {

@@ -226,6 +226,40 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
   console.info(await windowsInstallation(installer, binary, version));
 }, 500_000);
 
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint roles admit only IPv4 plus owned IPv6 siblings', async () => {
+  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + String.raw`
+$ErrorActionPreference = 'Stop'
+$first = [PSCustomObject]@{LocalPort=12345;LocalAddress='127.0.0.1';OwningProcess=111}
+$second = [PSCustomObject]@{LocalPort=12346;LocalAddress='127.0.0.1';OwningProcess=222}
+$firstV6 = [PSCustomObject]@{LocalPort=12345;LocalAddress='::1';OwningProcess=111}
+$secondV6 = [PSCustomObject]@{LocalPort=12346;LocalAddress='::1';OwningProcess=222}
+$base = @($first, $second)
+GuiEndpoints $base @(12345,12346) 111 222
+GuiEndpoints @($first,$second,$secondV6) @(12345,12346) 111 222
+GuiEndpoints @($first,$second,$firstV6,$secondV6) @(12345,12346) 111 222
+$cases = @(
+  @{Socket=[PSCustomObject]@{LocalPort=12346;LocalAddress='::1';OwningProcess=111};Code='GUI_ENDPOINT'},
+  @{Socket=[PSCustomObject]@{LocalPort=12346;LocalAddress='::1';OwningProcess=333};Code='GUI_ENDPOINT'},
+  @{Socket=[PSCustomObject]@{LocalPort=12346;LocalAddress='0.0.0.0';OwningProcess=222};Code='GUI_LISTENER_ADDRESS'},
+  @{Socket=[PSCustomObject]@{LocalPort=12346;LocalAddress='::';OwningProcess=222};Code='GUI_LISTENER_ADDRESS'},
+  @{Socket=[PSCustomObject]@{LocalPort=12346;LocalAddress='192.0.2.1';OwningProcess=222};Code='GUI_LISTENER_ADDRESS'},
+  @{Socket=[PSCustomObject]@{LocalPort=12347;LocalAddress='127.0.0.1';OwningProcess=222};Code='GUI_LISTENER_ADDRESS'},
+  @{Socket=$first;Code='GUI_ENDPOINT'}
+)
+foreach ($case in $cases) {
+  $script:failure = 'UNEXPECTED'
+  $rejected = $false
+  try { GuiEndpoints ($base + $case.Socket) @(12345,12346) 111 222 } catch { $rejected = $true }
+  if (!$rejected -or $script:failure -ne $case.Code) { throw 'endpoint negative accepted or rejected for wrong reason' }
+}
+$script:failure = 'UNEXPECTED'
+$rejected = $false
+try { GuiEndpoints @($first,$secondV6) @(12345,12346) 111 222 } catch { $rejected = $true }
+if (!$rejected -or $script:failure -ne 'GUI_IPV4_REQUIRED') { throw 'missing IPv4 admitted' }
+'owned GUI endpoint shapes passed'
+`;
+  expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI endpoint shapes passed');
+});
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
   const binary = join(import.meta.dir, '../target/release/lazysh.exe');
@@ -303,12 +337,10 @@ test.each([
   ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
   ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
   ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
-  ['private native output\nLAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA_LOOPBACK_V6', 'gui:GUI_LISTENER_EXTRA_LOOPBACK_V6'],
-  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA_LOOPBACK_V4', 'gui:GUI_LISTENER_EXTRA_LOOPBACK_V4'],
-  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA_OTHER', 'gui:GUI_LISTENER_EXTRA_OTHER'],
-  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA_LOOPBACK_V6 private endpoint', undefined],
-  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA_LOOPBACK_V5', undefined],
-  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA', undefined],
+  ['private native output\nLAZYSH_WINDOWS_INSTALLER:gui:GUI_IPV4_REQUIRED', 'gui:GUI_IPV4_REQUIRED'],
+  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_IPV4_REQUIRED private endpoint', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_IPV5_REQUIRED', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA_LOOPBACK_V6', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_ADDRESS private endpoint', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:identity:SOURCE_HASH_MISMATCH', 'identity:SOURCE_HASH_MISMATCH'],
   [Array(4).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
