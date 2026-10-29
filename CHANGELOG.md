@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Read Android primary clipboard text and PNG/JPEG images through protected foreground native operations when Paste is explicitly requested. Terminal paste stays literal without Enter; images open in attachment preview and still require a separate Upload action. Existing access locks, payload limits and other-platform browser behavior remain in place.
+- Read Android primary clipboard text and PNG/JPEG images through protected foreground native operations when Paste is explicitly requested. Terminal Paste reports busy and temporarily disables repeated requests while its existing owned read settles. Paste stays literal without Enter; images open in attachment preview and still require a separate Upload action. Existing access locks, payload limits and other-platform browser reads remain in place.
 
 - Preserve only bounded, fully framed Android published-APK driver stage entry/exit observations when the original qualification command fails. Progress remains separate from success, failure cause and owned cleanup; application defaults and public APK bytes are unchanged.
 

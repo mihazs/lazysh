@@ -231,11 +231,27 @@ records an IME window at failure and hide-before-read followed by a later IME sh
 in both cases. Exact output-stage row geometry was not retained. The real-xterm
 browser owner holds the native read and demonstrates that early dismissal can be
 undone by delayed refocus; dismissing after completion restores the same visible
-output/prompt oracle. The native fixture therefore performs its same ordinary
-dismissal after literal paste/focus acknowledgement and rechecks focus before its
-unchanged native Enter. This is a test-precondition repair, not a production IME
+output/prompt oracle. The first fixture repair moved its same ordinary
+dismissal after literal paste/focus acknowledgement and rechecked focus before its
+unchanged native Enter. This was a test-precondition repair, not a production IME
 policy change or proof of the precise failed row count. Image preview was not
 reached in that run and remains unverified until the next owning runtime result.
+
+At `3cf57504`, run40963042408/job123765068865 passed native text and the original
+submission/output/prompt oracle in plain SSH, then failed before image reads because
+the helper used `Attachments` while the real navigation caption is `Attach`. The
+caption is corrected from the existing App/i18n/browser contract. Herdr stopped at
+the earlier visible-literal acknowledgement with an IME window present; its data
+does not distinguish clipping from a read failure. Artifact12938407687 SHA256 is
+`20d771b4195ab8957d0cc972376d28d1b8a5c244d7f6dc3b0c9d74e8e3f6342b`.
+
+The real Paste button now exposes its existing single-read ownership as `aria-busy`
+and is disabled while pending. The native owner waits for client settlement and
+focus, dismisses ordinarily, then checks the exact visible literal/no-Enter and
+unchanged native Enter/output/prompt assertions. Idle cannot grant a pass, and no
+payload or test-only completion API is exposed. Image reads remain unverified until
+the case actually reaches them. Existing held-read tests cover current, stale/ABA
+and unmounted completions; the isolated real-xterm clipping owner remains intact.
 
 Source contracts: [Tauri mobile dispatch](https://docs.rs/crate/tauri/2.12.5/source/src/plugin/mobile.rs),
 [Wry Android main pipe](https://docs.rs/crate/wry/0.57.1/source/src/android/main_pipe.rs).

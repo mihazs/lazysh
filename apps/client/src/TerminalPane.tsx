@@ -52,6 +52,7 @@ export default function TerminalPane({ session, active, reportError }: {
   const [clipboard, setClipboard] = useState<string | null>(null);
   const pendingClipboard = useRef(false);
   const pasteRead = useRef<AbortController | null>(null);
+  const [pasteBusy, setPasteBusy] = useState(false);
   const pasteView = useRef({active, connected: session.connected, id: session.id, terminal: session.terminal});
   pasteView.current = {active, connected: session.connected, id: session.id, terminal: session.terminal};
   useEffect(() => () => { pasteRead.current?.abort(); }, [session.id, session.terminal, session.connected, active]);
@@ -222,6 +223,7 @@ export default function TerminalPane({ session, active, reportError }: {
   async function paste() {
     if (!active || !session.connected || !mounted.current || !access.current() || pasteRead.current) return;
     const read = new AbortController(); pasteRead.current = read;
+    setPasteBusy(true);
     const current = () => mounted.current && access.current() && !read.signal.aborted && pasteView.current.active && pasteView.current.connected
       && pasteView.current.id === session.id && pasteView.current.terminal === session.terminal;
     try {
@@ -232,7 +234,12 @@ export default function TerminalPane({ session, active, reportError }: {
       session.terminal.paste(text); session.terminal.focus();
     }
     catch { if (current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
-    finally { if (pasteRead.current === read) pasteRead.current = null; }
+    finally {
+      if (pasteRead.current === read) {
+        pasteRead.current = null;
+        if (mounted.current) setPasteBusy(false);
+      }
+    }
   }
   function search(direction: number) {
     if (!query) return;
@@ -396,7 +403,7 @@ export default function TerminalPane({ session, active, reportError }: {
       <button disabled={!session.connected} aria-label={t('terminalDpadLeft')} onClick={() => sendKey("\x1b[D")}>←</button><button disabled={!session.connected} aria-label={t('terminalDpadDown')} onClick={() => sendKey("\x1b[B")}>↓</button><button disabled={!session.connected} aria-label={t('terminalDpadRight')} onClick={() => sendKey("\x1b[C")}>→</button>
     </div>}
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')}>
-      {preferences.toolbar.map(key => <button key={key} disabled={!session.connected && key !== "dpad"} aria-pressed={key === "ctrl" ? ctrl : key === "meta" ? meta : key === "dpad" ? dpadOpen : undefined} aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined} title={key === "ctrl" ? ctrlLocked ? t("terminalControlRelease") : t("terminalControlLock") : undefined} onDoubleClick={() => {if (key === "ctrl") {setCtrl(true); setCtrlLocked(true);}}} onClick={() => {
+      {preferences.toolbar.map(key => <button key={key} disabled={(!session.connected && key !== "dpad") || (key === "paste" && pasteBusy)} aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={key === "ctrl" ? ctrl : key === "meta" ? meta : key === "dpad" ? dpadOpen : undefined} aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined} title={key === "ctrl" ? ctrlLocked ? t("terminalControlRelease") : t("terminalControlLock") : undefined} onDoubleClick={() => {if (key === "ctrl") {setCtrl(true); setCtrlLocked(true);}}} onClick={() => {
         if (key === "ctrl") {if (ctrlLocked) {setCtrlLocked(false); setCtrl(false);} else setCtrl(!ctrl);}
         else if (key === "meta") setMeta(!meta);
         else if (key === "paste") void paste();

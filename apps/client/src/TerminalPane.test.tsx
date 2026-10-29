@@ -8,8 +8,8 @@ import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
 import {accessSnapshot,applyAccessStatus} from './access';
-const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
-vi.mock("./bridge", () => ({api: {write: mocks.write, writeSequence:mocks.writeSequence, resize: mocks.resize, zellijNavigate:mocks.zellijNavigate, openWebUrl: mocks.openWebUrl}}));
+const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), zellijNavigate: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+vi.mock("./bridge", () => ({api: mocks}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {} dispose() {}}}));
 vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(handler: typeof mocks.link) {mocks.link = handler;} dispose() {}}}));
 let osc: (data: string) => boolean;
@@ -42,6 +42,45 @@ function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
 describe("terminal interactions", () => {
+  it.each(['current', 'current failure', 'inactive then active', 'unmounted'] as const)('exposes owned native paste progress until its %s completion', async outcome => {
+    vi.stubGlobal('isTauri', true);
+    mocks.clipboardIsAndroid.mockResolvedValue(true); mocks.clipboardCancel.mockResolvedValue(undefined);
+    let finish!: (value: unknown) => void;
+    let reject!: (error: string) => void;
+    mocks.clipboardRead.mockImplementation(() => new Promise((resolve, fail) => { finish = resolve; reject = fail; }));
+    const session = {id:'native-paste',name:'Host',connected:true,terminal} as unknown as LiveSession;
+    const reportError = vi.fn();
+    const view = render(<TerminalPane session={session} active reportError={reportError} />);
+    const paste = screen.getByRole('button', {name:'paste'});
+    fireEvent.click(paste);
+    await waitFor(() => expect(mocks.clipboardRead).toHaveBeenCalledOnce());
+    expect(paste).toHaveProperty('disabled', true); expect(paste.getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(paste); expect(mocks.clipboardRead).toHaveBeenCalledOnce();
+    if (outcome === 'inactive then active') {
+      view.rerender(<TerminalPane session={session} active={false} reportError={reportError} />);
+      view.rerender(<TerminalPane session={session} active reportError={reportError} />);
+    } else if (outcome === 'unmounted') view.unmount();
+    terminal.focus.mockClear();
+    await act(async () => {
+      if (outcome === 'current failure') reject('clipboard_unavailable');
+      else finish({kind:'text',text:'literal $native clipboard'});
+    });
+    if (outcome === 'current') {
+      expect(terminal.paste).toHaveBeenCalledExactlyOnceWith('literal $native clipboard');
+      expect(terminal.focus).toHaveBeenCalledOnce(); expect(mocks.clipboardCancel).not.toHaveBeenCalled();
+    } else if (outcome === 'current failure') {
+      expect(terminal.paste).not.toHaveBeenCalled(); expect(terminal.focus).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledOnce();
+    } else {
+      expect(terminal.paste).not.toHaveBeenCalled(); expect(terminal.focus).not.toHaveBeenCalled();
+      expect(mocks.clipboardCancel).toHaveBeenCalledWith(mocks.clipboardRead.mock.calls[0][0].token);
+    }
+    if (outcome !== 'unmounted') {
+      expect(paste).toHaveProperty('disabled',false); expect(paste.getAttribute('aria-busy')).toBe('false');
+    }
+    if (outcome !== 'current failure') expect(reportError).not.toHaveBeenCalled();
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled();
+  });
   it.each(['active tab', 'connection', 'terminal context'] as const)('discards a held paste after %s leaves and returns to the original state', async change => {
     let finish!: (value: string) => void;
     vi.mocked(navigator.clipboard.readText).mockImplementation(() => new Promise(resolve => { finish = resolve; }));

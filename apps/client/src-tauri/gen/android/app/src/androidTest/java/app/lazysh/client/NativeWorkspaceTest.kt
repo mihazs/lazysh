@@ -1362,7 +1362,7 @@ class NativeWorkspaceTest {
             "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='$text']]"))
             .perform(webScrollIntoView()).perform(webClick())
         run {
-            view("Attachments")
+            view("Attach")
             awaitDocument(scenario, "owned clipboard attachment panel", "Boolean(document.querySelector('.attachment-panel'))")
             for (extension in listOf("png", "jpg")) {
                 val uri = Uri.parse("content://app.lazysh.client.test.clipboardfixture/$extension")
@@ -1392,7 +1392,7 @@ class NativeWorkspaceTest {
                 // A fresh normal panel prevents an earlier error from satisfying the next rejection.
                 view("Terminal")
                 awaitDocument(scenario, "clipboard panel retired", "!document.querySelector('.attachment-panel')")
-                view("Attachments")
+                view("Attach")
                 awaitDocument(scenario, "fresh clipboard rejection panel", "Boolean(document.querySelector('.attachment-panel')) && !document.querySelector('.attachment-panel [role=alert]')")
                 instrumentation.runOnMainSync {
                     clipboard.setPrimaryClip(ClipData(label, arrayOf("image/png"), ClipData.Item(Uri.parse(uri))))
@@ -1672,13 +1672,17 @@ class NativeWorkspaceTest {
             val literalClipboard = " # CLIP_${nonce}_\$literal"
             instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
             clickButton("paste")
-            awaitDocument(scenario, "native clipboard text pasted literally without Enter",
-                screenContains(literalClipboard) + " && !(" + screenContains(fixture.getString("expected")) + ")")
+            awaitDocument(scenario, "native clipboard client settled and focused", """
+                (()=>{const paste=document.querySelectorAll('.terminal-keys button[aria-busy]');
+                  return paste.length===1 && paste[0].getAttribute('aria-busy')==='false' && !paste[0].disabled && $terminalFocused;})()
+            """)
             assertEquals("Clipboard paste must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
             // Native clipboard completion refocuses xterm asynchronously; dismiss
             // after that acknowledgement so Enter/output use the expanded viewport.
             closeSoftKeyboard()
             assertEquals("Keyboard dismissal must preserve clipboard paste input focus", "true", evaluate(scenario, terminalFocused))
+            awaitDocument(scenario, "native clipboard text pasted literally without Enter",
+                screenContains(literalClipboard) + " && !(" + screenContains(fixture.getString("expected")) + ")")
             // Normal native Enter submits the real shell input.
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
