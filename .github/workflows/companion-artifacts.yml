@@ -79,16 +79,21 @@ jobs:
         run: |
           spool="$RUNNER_TEMP/owned-initialization-diagnostics.log"
           set +e
-          LAZYSH_STORAGE_DIAGNOSTICS=1 cargo test --locked --package lazysh-agent --test cli simultaneous_initialization_and_ingest_preserve_every_event -- --exact --nocapture 2>&1 | bun -e '
-            const output = Bun.stdout.writer();
+          LAZYSH_STORAGE_DIAGNOSTICS=1 cargo test --locked --package lazysh-agent --test cli simultaneous_initialization_and_ingest_preserve_every_event -- --exact --nocapture 2>&1 | LAZYSH_STORAGE_SPOOL="$spool" bun -e '
+            let output, failed = false;
+            try { output = Bun.file(process.env.LAZYSH_STORAGE_SPOOL).writer(); }
+            catch { failed = true; }
             let remaining = 128 * 1024 + 1;
             for await (const chunk of Bun.stdin.stream()) {
               const retained = chunk.subarray(0, remaining);
-              if (retained.length) output.write(retained);
+              if (!failed && retained.length) {
+                try { output.write(retained); } catch { failed = true; }
+              }
               remaining -= retained.length;
             }
-            await output.end();
-          ' > "$spool"
+            if (output) try { await output.end(); } catch { failed = true; }
+            if (failed) { console.error("initialization-capture:unavailable"); process.exitCode = 1; }
+          '
           statuses=("${PIPESTATUS[@]}")
           set -e
           original=${statuses[0]}
