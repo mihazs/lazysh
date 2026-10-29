@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.0.1
+
+### Patch Changes
+
+- e1b0208: Require a published, verified GitHub version for every completed milestone, including internal milestones, and clarify version preparation versus publication.
+  
+  Remove unused desktop browser archive tooling before Android source scans, and allow an exact-source retry of unpublished 1.0.0 with every build, scan, artifact and tag check preserved.
+- c02f548: Restore the owned tmux shutdown discriminator's receipt assertion so its stopped-client/resume proof runs to completion. Product retirement guards and deadlines remain unchanged; this does not resolve the separate hosted fresh-SSH teardown failure.
+- @lazysh/common@1.0.1
+  - @lazysh/display-idle@1.0.1
+  - @lazysh/et-transport@1.0.1
+  - @lazysh/mosh-transport@1.0.1
+
 ## 1.0.0
 
 ### Major Changes
