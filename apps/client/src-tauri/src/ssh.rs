@@ -5389,15 +5389,41 @@ mod tests {
     fn ipc_allows_only_the_local_main_window() {
         use tauri::Manager;
         let dir = tempfile::tempdir().unwrap();
+        let mut context = tauri::generate_context!(test = true);
+        for command in [
+            "restore_file_transfer",
+            "get_companion_settings",
+            "update_companion_settings",
+        ] {
+            let policy = context.runtime_authority_mut();
+            assert!(policy.resolve_access(command, "main", "main", &tauri::ipc::Origin::Local).is_some(), "the documented command must be admitted by the generated local-main policy: {command}");
+            assert!(policy
+                .resolve_access(command, "other", "other", &tauri::ipc::Origin::Local)
+                .is_none());
+            for remote in ["https://example.com", "http://127.0.0.1:41234"] {
+                assert!(policy
+                    .resolve_access(
+                        command,
+                        "main",
+                        "main",
+                        &tauri::ipc::Origin::Remote {
+                            url: remote.parse().unwrap()
+                        }
+                    )
+                    .is_none());
+            }
+        }
         let app = tauri::test::mock_builder()
             .plugin(tauri_plugin_lazysh_vault::init())
             .invoke_handler(tauri::generate_handler![
                 list_hosts,
                 crate::attachment_upload::upload_cancel,
                 crate::attachment_upload::upload_reserve,
-                crate::host_clipboard::host_clipboard_copy
+                crate::host_clipboard::host_clipboard_copy,
+                crate::companion_settings::get_companion_settings,
+                crate::companion_settings::update_companion_settings
             ])
-            .build(tauri::generate_context!(test = true))
+            .build(context)
             .unwrap();
         app.manage(AppState::new(dir.path().into()).unwrap());
         app.vault()
@@ -5464,7 +5490,22 @@ mod tests {
             error["kind"], "disconnected",
             "the real clipboard handler must be reached, not denied by ACL"
         );
+        let settings = serde_json::json!({"sessionId":"not-connected"});
+        let update = serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":false,"deviceToolsEnabled":false}});
         for (command, body) in [
+            ("get_companion_settings", settings.clone()),
+            ("update_companion_settings", update.clone()),
+        ] {
+            let error = tauri::test::get_ipc_response(&main, request(local_url, command, body))
+                .unwrap_err();
+            assert_eq!(
+                error["kind"], "disconnected",
+                "the real settings handler must be reached before session admission fails"
+            );
+        }
+        for (command, body) in [
+            ("get_companion_settings", settings),
+            ("update_companion_settings", update),
             ("list_hosts", serde_json::json!({})),
             ("upload_cancel", cancel.clone()),
             ("upload_reserve", reserve),

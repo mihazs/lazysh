@@ -133,13 +133,90 @@ fn failure_projection(stderr: &[u8]) -> Option<failure_record::Failure> {
     Some(first)
 }
 
-#[test]
-fn diagnostic_projection_is_finite_single_and_never_exports_raw_stderr() {
-    let record = failure_record::Failure {
+fn initialization_projection(bytes: &[u8]) -> Option<Vec<failure_record::Failure>> {
+    if bytes.len() > EXCERPT_LIMIT {
+        return None;
+    }
+    let mut records = Vec::new();
+    for line in std::str::from_utf8(bytes)
+        .ok()?
+        .lines()
+        .filter(|line| line.starts_with(failure_record::PREFIX))
+    {
+        // The unchanged owner has four rounds of sixteen Store openers.
+        if records.len() == 4 * 16 {
+            return None;
+        }
+        records.push(failure_projection(line.as_bytes())?);
+    }
+    Some(records)
+}
+
+fn journal_mode_busy_record() -> failure_record::Failure {
+    failure_record::Failure {
         phase: failure_record::Phase::JournalMode,
         result: failure_record::ResultClass::StorageError,
         sqlite_code: Some(5),
+    }
+}
+
+#[test]
+fn initialization_projection_exports_only_bounded_closed_records() {
+    let record = journal_mode_busy_record();
+    let line = record.line();
+    let raw = format!("private database path and error\n{line}{line}private tail\n");
+    let projected = initialization_projection(raw.as_bytes()).unwrap();
+    assert_eq!(projected.len(), 2);
+    for value in projected {
+        assert_eq!(value.line(), line);
+        assert!(!value.line().contains("private"));
+    }
+    assert_eq!(
+        initialization_projection(b"private raw output\n"),
+        Some(vec![])
+    );
+    for raw in [
+        line.repeat(65),
+        "x".repeat(EXCERPT_LIMIT + 1),
+        "lazysh-storage-diagnostic {\"phase\":\"private_path\"}".into(),
+        line.replace("journal_mode", "private_path"),
+        line.replace("\"sqliteCode\":5", "\"sqliteCode\":5,\"extra\":\"private\""),
+    ] {
+        assert!(initialization_projection(raw.as_bytes()).is_none());
+    }
+    assert!(initialization_projection(&[255]).is_none());
+}
+
+#[test]
+#[ignore = "explicit owned CI spool projection; never exports raw test output"]
+fn project_owned_initialization_diagnostics() {
+    let observed = || -> io::Result<Vec<failure_record::Failure>> {
+        let path = std::env::var_os("LAZYSH_INITIALIZATION_DIAGNOSTICS")
+            .ok_or_else(|| io::Error::other("Missing owned initialization spool"))?;
+        let (file, metadata) = open_owned_file(Path::new(&path))?;
+        if metadata.len() > EXCERPT_LIMIT as u64 {
+            return Err(io::Error::other("Initialization spool exceeds its bound"));
+        }
+        let mut bytes = Vec::new();
+        file.take(EXCERPT_LIMIT as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        initialization_projection(&bytes)
+            .ok_or_else(|| io::Error::other("Invalid initialization projection"))
     };
+    match observed() {
+        Ok(records) => {
+            eprintln!("initialization-phase-records={}", records.len());
+            for record in records {
+                eprint!("{}", record.line());
+            }
+        }
+        Err(_) => panic!("Owned initialization phase projection unavailable"),
+    }
+}
+
+#[test]
+fn diagnostic_projection_is_finite_single_and_never_exports_raw_stderr() {
+    let record = journal_mode_busy_record();
     let line = record.line();
     let stderr = format!("private-path-and-payload\n{line}private-diagnostic-tail\n");
     assert_eq!(failure_projection(stderr.as_bytes()), Some(record));
@@ -190,15 +267,20 @@ fn validate_metadata(metadata: &fs::Metadata, directory: bool) -> io::Result<()>
     Ok(())
 }
 
-fn copy_excerpt(source: &Path, destination: &Path) -> io::Result<u64> {
+fn open_owned_file(source: &Path) -> io::Result<(fs::File, fs::Metadata)> {
     validate_metadata(&fs::symlink_metadata(source)?, false)?;
     #[cfg(unix)]
     let options = lazysh_common::fs::read_options_with_flags(false, libc::O_CLOEXEC);
     #[cfg(not(unix))]
     let options = lazysh_common::fs::read_options(false);
-    let mut source = options.open(source)?;
+    let source = options.open(source)?;
     let metadata = source.metadata()?;
     validate_metadata(&metadata, false)?;
+    Ok((source, metadata))
+}
+
+fn copy_excerpt(source: &Path, destination: &Path) -> io::Result<u64> {
+    let (mut source, metadata) = open_owned_file(source)?;
     let mut destination = OpenOptions::new()
         .write(true)
         .create_new(true)

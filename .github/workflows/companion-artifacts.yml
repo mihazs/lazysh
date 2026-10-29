@@ -72,6 +72,41 @@ jobs:
           else
             bun .changeset/release-companion.ts candidate ${{ matrix.target }} "$RUNNER_TEMP/companion-installation-files"
           fi
+      - name: Observe the exact Windows concurrent initialization owner with finite phases
+        if: runner.os == 'Windows'
+        env:
+          LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
+        run: |
+          spool="$RUNNER_TEMP/owned-initialization-diagnostics.log"
+          set +e
+          LAZYSH_STORAGE_DIAGNOSTICS=1 cargo test --locked --package lazysh-agent --test cli simultaneous_initialization_and_ingest_preserve_every_event -- --exact --nocapture 2>&1 | LAZYSH_STORAGE_SPOOL="$spool" bun -e '
+            let output, failed = false;
+            try { output = Bun.file(process.env.LAZYSH_STORAGE_SPOOL).writer(); }
+            catch { failed = true; }
+            let remaining = 128 * 1024 + 1;
+            for await (const chunk of Bun.stdin.stream()) {
+              const retained = chunk.subarray(0, remaining);
+              if (!failed && retained.length) {
+                try { output.write(retained); } catch { failed = true; }
+              }
+              remaining -= retained.length;
+            }
+            if (output) try { await output.end(); } catch { failed = true; }
+            if (failed) { console.error("initialization-capture:unavailable"); process.exitCode = 1; }
+          '
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          original=${statuses[0]}
+          capture=${statuses[1]}
+          projection=0
+          LAZYSH_INITIALIZATION_DIAGNOSTICS="$spool" cargo test --locked --package lazysh-agent --test cli storage_trace::project_owned_initialization_diagnostics -- --ignored --exact --nocapture || projection=$?
+          cleanup=0
+          rm -f -- "$spool" 2>/dev/null || cleanup=$?
+          printf 'initialization-owner-exit=%s capture-exit=%s projection-exit=%s cleanup-exit=%s\n' "$original" "$capture" "$projection" "$cleanup"
+          if [ "$original" -ne 0 ]; then exit "$original"; fi
+          if [ "$capture" -ne 0 ]; then exit "$capture"; fi
+          if [ "$projection" -ne 0 ]; then exit "$projection"; fi
+          exit "$cleanup"
       - name: Native host harness runs CLI, WAL and installation owners against the exact prepared executable
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
