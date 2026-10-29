@@ -160,8 +160,11 @@ export default function TerminalPane({ session, active, reportError }: {
     const screen = element.querySelector<HTMLElement>(".xterm-screen");
     const fitTerminal = () => {
       // Keep at least one measured row while the composer yields its remaining room.
-      if (screen && screen.clientHeight > 0 && terminal.rows > 0)
-        element.style.minHeight = `${Math.ceil(screen.clientHeight / terminal.rows)}px`;
+      const rowHeight = screen && terminal.rows > 0 ? Math.ceil(screen.clientHeight / terminal.rows) : 0;
+      if (rowHeight > 0 && Number.isFinite(rowHeight)) {
+        const minimum = `${rowHeight}px`;
+        if (element.style.minHeight !== minimum) element.style.minHeight = minimum;
+      }
       if (activeRef.current && element.clientWidth > 0) addon.fit();
     };
     const resize = new ResizeObserver(fitTerminal);

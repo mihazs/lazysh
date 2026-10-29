@@ -127,10 +127,11 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
     for (const height of [420, 844]) {
       await page.setViewportSize({width, height});
       const canvas = page.locator('.terminal-canvas:visible');
-      await expect.poll(() => canvas.evaluate(element => {
+      const expectFittedRows = () => expect.poll(() => canvas.evaluate(element => {
         const screen = element.querySelector('.xterm-screen')!;
         return screen.clientHeight > 0 && screen.clientHeight <= element.clientHeight;
       })).toBe(true);
+      await expectFittedRows();
       for (const element of [canvas, page.locator('.terminal-keys:visible'), page.getByRole('button', {name: 'esc', exact: true}), page.getByRole('button', {name: 'tab', exact: true})]) {
         const bounds = (await element.boundingBox())!;
         expect(bounds.y).toBeGreaterThanOrEqual(0);
@@ -140,6 +141,10 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
         await expect.poll(() => composer.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
         await page.getByRole('button', {name: 'Close composer', exact: true}).scrollIntoViewIfNeeded();
         await expect(page.getByRole('button', {name: 'Close composer', exact: true})).toBeInViewport();
+        await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+        await page.getByRole('spinbutton', {name: 'Font size', exact: true}).fill(fontSize === 14 ? '32' : '14');
+        await page.keyboard.press('Escape');
+        await expectFittedRows();
       } else expect((await composer.boundingBox())!.height).toBe(naturalHeight);
     }
   });
