@@ -63,7 +63,7 @@ export class SshFixture {
   static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean}={}) {
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
     if(tools && options.companion)throw new Error('Companion installation requires a fixture without preinstalled tools');
-    const directory=await mkdtemp(join(tools?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
+    const directory=await mkdtemp(join(tools||options.companion?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
     try {
       await chmod(directory,0o700);

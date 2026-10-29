@@ -7,8 +7,14 @@ import {NativeGui} from '../native-e2e/fixture';
 import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui} from '../native-e2e/sshUi';
 import {SshFixture} from '../../../tests/support/sshFixture';
 import {publishedCompanion,type PublishedCompanion} from './release';
+import {english} from '../src/i18n/en';
 
 const fixture=ownedSshGui();
+const progressLabels={detecting:english.companionInstallDetecting,checkingRelease:english.companionInstallRelease,downloading:english.companionInstallDownloading,uploading:english.companionInstallUploading,verifying:english.companionInstallVerifying,installing:english.companionInstallInstalling,checkingInstalled:english.companionInstallChecking,cleaningUp:english.companionInstallFinishing} as const;
+const alertLabels={busy:english.companionInstallAlreadyRunning,unsupported:english.companionInstallUnsupported,unavailable:english.companionInstallUnavailable,newer:english.companionInstallNewer,invalid:english.companionInstallInvalid,uncertain:english.companionInstallUncertain,timeout:'Companion installation timed out'} as const;
+function finiteLabel(labels:Record<string,string>,text:string) {
+  return Object.entries(labels).find(([,literal])=>text===literal)?.[0]??'other';
+}
 
 async function installed(fixture:SshFixture,evidence:PublishedCompanion) {
   const path=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
@@ -41,7 +47,10 @@ it('installs the published verified companion through the actual native GUI and 
   fixture.captureSafe=false;
   const evidence=await publishedCompanion();
   console.info(`Public companion receipt version=${evidence.version} source=${evidence.source} sha256=${evidence.sha256} bytes=${evidence.bytes}`);
-  const ssh=fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true,companion:true});
+  // This network-enabled owner runs outside the baseline's user namespace.
+  // Keep actual host-root ownership: a nested user namespace leaves root
+  // ancestors unmapped, which the managed namespace correctly rejects.
+  const ssh=fixture.ssh=await SshFixture.start(undefined,{companion:true});
   const missing=await ssh.client(true,'if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
   await missing.finish('no preinstalled PATH companion',5000);
   const destination=join(ssh.directory,'data/lazysh/companion/lazysh-agent');
@@ -61,12 +70,24 @@ it('installs the published verified companion through the actual native GUI and 
     await browser.waitUntil(async()=>(await button.getText())===(index===0?'Install companion':'Update companion'),{timeout:20_000,timeoutMsg:'Published companion action was not ready'});
     expect(await button.getText()).toBe(index===0?'Install companion':'Update companion');
     await button.click();
-    await browser.waitUntil(async()=>{
-      const alert=await panel.$('[role="alert"]');
-      if(await alert.isDisplayed())throw new Error('Published companion GUI operation reported failure or uncertainty');
-      const result=await panel.$('div[role="status"]');
-      return await result.isDisplayed() && (await result.getText()).includes(index===0?`${verb} ${evidence.version}.`:`${verb} ${evidence.version} is already installed.`);
-    },{timeout:245_000,timeoutMsg:'Published companion GUI result was not observed'});
+    let lastStage='unavailable',alertClass='unavailable';
+    try {
+      await browser.waitUntil(async()=>{
+        const alert=await panel.$('[role="alert"]');
+        if(await alert.isDisplayed()) {
+          try {alertClass=finiteLabel(alertLabels,(await alert.getText()).trim());}catch {alertClass='unavailable';}
+          throw new Error('Published companion GUI operation reported failure or uncertainty');
+        }
+        const result=await panel.$('[role="status"]');
+        if(!await result.isDisplayed())return false;
+        const text=await result.getText();
+        lastStage=finiteLabel(progressLabels,text.trim());
+        return text.includes(index===0?`${verb} ${evidence.version}.`:`${verb} ${evidence.version} is already installed.`);
+      },{timeout:245_000,timeoutMsg:'Published companion GUI result was not observed'});
+    }catch(error) {
+      console.error(`Published companion UI observation stage=${lastStage} alert=${alertClass}`);
+      throw error;
+    }
     expect(await (await panel.$('code')).getText()).toBe(destination);
     expect(await panel.getText()).not.toContain('Some temporary installation files remain');
     const current=await installed(ssh,evidence);

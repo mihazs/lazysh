@@ -22,8 +22,8 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
   expect(await listening(port)).toBe(false);
 },15_000);
 
-test.skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools',async()=>{
-  const fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+test.each([false,true]).skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools: private tty group=%s',async privateTtyGroup=>{
+  const fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup});
   try {
     const command=await fixture.client(true,'printf "%s\\n" "$HOME" "$XDG_DATA_HOME" "$LAZYSH_STATE_DIR"; if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
     expect((await command.finish('owned companion exec environment',5000)).trim().split('\n')).toEqual([fixture.directory,join(fixture.directory,'data'),join(fixture.directory,'state')]);
