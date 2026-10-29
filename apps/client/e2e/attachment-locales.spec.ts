@@ -9,6 +9,15 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the rea
   const root=page.locator('.attachment-fixture');
   const fileControls=root.locator('input[type=file]');
   await expect(fileControls).toHaveCount(2);
+  const panel=root.locator('.attachment-panel');
+  const panelBounds=(await panel.boundingBox())!;
+  const headingBounds=(await panel.getByRole('heading').boundingBox())!;
+  expect(headingBounds.x-panelBounds.x).toBeGreaterThanOrEqual(16);
+  for(const picker of await fileControls.all()){
+    const bounds=(await picker.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(panelBounds.x+16);
+    expect(bounds.x+bounds.width).toBeLessThanOrEqual(panelBounds.x+panelBounds.width-16);
+  }
   expect(await fileControls.evaluateAll(inputs=>inputs.every(input=>{
     const picker=getComputedStyle(input,'::file-selector-button');
     const button=getComputedStyle(input.closest('.button-row')!.querySelector('button')!);

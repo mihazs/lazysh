@@ -122,6 +122,15 @@ other SSH tools. Recovery protocol and cancellation tests passed against owned
 Mosh/OpenSSH; physical Samsung/native UI recovery remains unexecuted, and the
 original Galaxy connection-loss cause is unproven. See [attachment recovery](attachments.md).
 
+Versions 1.1.0 and 1.1.1 omitted the native permission grants for upload recovery
+and host companion settings, so their visible recovery action could be rejected
+before reaching its handler. The 1.1.2 patch adds those grants for the local main
+window, preserving unlocked access, host verification, authentication and settings
+revision checks. Generated native policy tests verify local access and deny other
+windows and remote origins; handler tests verify companion settings access and
+lock/reunlock guards. These checks do not qualify the full native upload recovery
+UI or explain why the original SSH upload connection closed.
+
 Exact public v1.1.0 Google and FOSS signed ARM64 APKs passed native UI host save,
 relaunch and identical-byte reinstall with preserved data on admitted translated
 ARM64 guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/40958281779)).
