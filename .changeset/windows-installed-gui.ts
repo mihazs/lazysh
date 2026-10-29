@@ -1,3 +1,11 @@
+import {win32} from 'node:path';
+
+export function windowsGuiToolEnvironment(driver:string,edge:string) {
+  if([driver,edge].some(path=>!/^[a-z]:[\\/]/i.test(path) || path.includes('\0')))
+    throw new Error('Windows GUI requires absolute tool paths');
+  return {LAZYSH_GUI_DRIVER:win32.resolve(driver),LAZYSH_GUI_EDGE:win32.resolve(edge)};
+}
+
 export function isWindowsGuiDriverReceipt(receipt: unknown): boolean {
   const installed = (receipt as {installs?: Record<string, {version_req?: unknown; bins?: unknown}>} | null)
     ?.installs?.['tauri-driver 2.1.0 (registry+https://github.com/rust-lang/crates.io-index)'];
@@ -147,9 +155,13 @@ function ExerciseInstalledGui {
       if ($sockets.Count -eq 2) { break }
       Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    Require ($sockets.Count -eq 2 -and @($sockets | Where-Object { $_.LocalAddress -ne '127.0.0.1' }).Count -eq 0) 'GUI_ENDPOINT'
+    if ($sockets.Count -eq 0) { Require $false 'GUI_LISTENER_NONE' }
+    if ($sockets.Count -eq 1) { Require $false 'GUI_LISTENER_ONE' }
+    Require ($sockets.Count -eq 2) 'GUI_LISTENER_EXTRA'
+    Require (@($sockets | Where-Object { $_.LocalAddress -ne '127.0.0.1' }).Count -eq 0) 'GUI_LISTENER_ADDRESS'
     $nativeDriver = @(Get-CimInstance Win32_Process -OperationTimeoutSec 5 | Where-Object { $_.ParentProcessId -eq $driver.Id -and $_.ExecutablePath -eq $env:LAZYSH_GUI_EDGE })
-    Require ($nativeDriver.Count -eq 1 -and @($sockets | Where-Object { $_.OwningProcess -notin @($driver.Id, $nativeDriver[0].ProcessId) }).Count -eq 0) 'GUI_ENDPOINT'
+    Require ($nativeDriver.Count -eq 1) 'GUI_NATIVE_DRIVER'
+    Require (@($sockets | Where-Object { $_.OwningProcess -notin @($driver.Id, $nativeDriver[0].ProcessId) }).Count -eq 0) 'GUI_ENDPOINT'
     $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts')
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {

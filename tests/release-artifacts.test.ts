@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -265,6 +265,16 @@ if (Test-Path -LiteralPath $owned) { throw 'owned root remains' }
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {...process.env, LAZYSH_GUI_FILE_FIXTURE: root}, 30000)).toBe('owned GUI file boundaries passed');
 }));
+test('Windows GUI tool environment normalizes both mixed-slash image identities', () => {
+  expect(windowsGuiToolEnvironment(String.raw`D:\a\_temp/tools/bin/tauri-driver.exe`, String.raw`D:\a\_temp/tools/edge/msedgedriver.exe`)).toEqual({
+    LAZYSH_GUI_DRIVER: String.raw`D:\a\_temp\tools\bin\tauri-driver.exe`,
+    LAZYSH_GUI_EDGE: String.raw`D:\a\_temp\tools\edge\msedgedriver.exe`,
+  });
+  for (const path of ['relative.exe', '/ambient/tool.exe', 'D:relative.exe', 'D:\\tool\0.exe']) {
+    expect(() => windowsGuiToolEnvironment(path, String.raw`D:\owned\msedgedriver.exe`)).toThrow();
+    expect(() => windowsGuiToolEnvironment(String.raw`D:\owned\tauri-driver.exe`, path)).toThrow();
+  }
+});
 test('pinned Windows driver receipt binds Cargo executable filenames including .exe', () => {
   const key = 'tauri-driver 2.1.0 (registry+https://github.com/rust-lang/crates.io-index)';
   const installed = {version_req: '=2.1.0', bins: ['tauri-driver.exe']};
@@ -293,6 +303,8 @@ test.each([
   ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
   ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
   ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
+  ['private native output\nLAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_EXTRA', 'gui:GUI_LISTENER_EXTRA'],
+  ['LAZYSH_WINDOWS_INSTALLER:gui:GUI_LISTENER_ADDRESS private endpoint', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:identity:SOURCE_HASH_MISMATCH', 'identity:SOURCE_HASH_MISMATCH'],
   [Array(4).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
   ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', undefined],

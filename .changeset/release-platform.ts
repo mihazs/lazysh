@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt } from './windows-installed-gui';
+import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
@@ -51,6 +51,7 @@ const windowsInstallerGuards = new Set([
   'REGISTRY_VALUES', 'REGISTRY_CHILDREN', 'UNINSTALL_MARKER', 'DATA_CONTENTS',
   'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
   'UNSUPPORTED_SIGNING', 'GUI_OWNER', 'GUI_START', 'GUI_INTERACTIVE', 'GUI_TOOLS', 'GUI_RUNTIME',
+  'GUI_LISTENER_NONE', 'GUI_LISTENER_ONE', 'GUI_LISTENER_EXTRA', 'GUI_LISTENER_ADDRESS', 'GUI_NATIVE_DRIVER',
   'GUI_DATA', 'GUI_SESSION', 'GUI_FRONTEND', 'GUI_VERSION', 'GUI_ENDPOINT', 'GUI_TIMEOUT', 'GUI_CLIENT', 'GUI_CLEANUP',
 ]);
 export function windowsInstallerFailure(stdout: unknown): string | undefined {
@@ -113,6 +114,8 @@ export async function windowsInstallation(installer: string, binary: string, ver
     requirePlatform(receipt.size <= 65_536, 'Windows GUI driver receipt exceeds its bound');
     requirePlatform(isWindowsGuiDriverReceipt(await receipt.json()), 'Windows GUI requires pinned tauri-driver 2.1.0');
   }
+  const guiTools = gui ? windowsGuiToolEnvironment(process.env.LAZYSH_GUI_DRIVER ?? '', process.env.LAZYSH_GUI_EDGE ?? '')
+    : { LAZYSH_GUI_DRIVER: '', LAZYSH_GUI_EDGE: '' };
   const root = resolve(import.meta.dir, '..');
   return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`
 $ErrorActionPreference = 'Stop'
@@ -257,7 +260,7 @@ if ($primaryFailed) { exit 1 }
 'Windows NSIS install, same-version repair, marker preservation and uninstall passed'
 `], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
     LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256, LAZYSH_BINARY_BYTES: String(expected.bytes),
-    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256, LAZYSH_TEST_WINDOWS_GUI: gui ? '1' : '',
+    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256, LAZYSH_TEST_WINDOWS_GUI: gui ? '1' : '', ...guiTools,
     LAZYSH_GUI_NODE: gui ? await native('node', ['-p', 'process.execPath']) : '',
     LAZYSH_GUI_VITEST: join(root, 'node_modules/vitest/vitest.mjs'),
     LAZYSH_GUI_CLIENT_ROOT: join(root, 'apps/client'),
