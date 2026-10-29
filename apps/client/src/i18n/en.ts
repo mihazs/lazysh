@@ -1,5 +1,23 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  agentsSearch: "Search reported agents",
+  agentsSearchHint: "Agent, project or summary",
+  agentsFilterStatus: "Reported status",
+  agentsAll: "All",
+  agentsResultCount: "Showing {{shown}} of {{total}} reported sessions",
+  agentsSelectedReport: "Selected report",
+  agentsClearSelection: "Clear selection",
+  agentsSelectReport: "View {{agent}} report for {{project}}",
+  agentsDetails: "Reported details",
+  agentsReportProject: "Project",
+  agentsReportSession: "Reported session ID",
+  agentsReportEvents: "Reported events",
+  agentsReportPane: "Reported pane ID",
+  agentsReportContext: "This is host-reported context. A pane ID does not establish a live target or permission to act.",
+  agentsNoMatches: "No matching reported agents",
+  agentsNoMatchesHint: "Change the search or reported-status filter to see other reports.",
+  agentsClearFilters: "Clear filters",
+
   defaultMuxLabel: "Default multiplexer",
   defaultMuxNone: "None — normal terminal",
   defaultMuxName: "Default multiplexer session",
