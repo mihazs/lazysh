@@ -1371,7 +1371,9 @@ class NativeWorkspaceTest {
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun selectSsh() {
             closeSoftKeyboard()
-            val selector = "[role=dialog] select"
+            val selector = "[role=dialog] select:has(option[value='ssh'])"
+            assertEquals("Exactly one transport control must offer SSH", "1", evaluate(scenario,
+                "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
             // A DOM click atom does not activate Chromium's native select popup.
             // Read only this control's viewport geometry, then inject one native tap.
@@ -1398,7 +1400,7 @@ class NativeWorkspaceTest {
             println("lazysh SSH UI: native transport chooser ready")
             option.perform(click())
             assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
-                "document.querySelector('[role=dialog] select')?.value==='ssh'"))
+                "document.querySelector(${JSONObject.quote(selector)})?.value==='ssh'"))
             println("lazysh SSH UI: native transport selected")
         }
         var primaryFailure: Throwable? = null
