@@ -1,5 +1,13 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  defaultMuxLabel: "Default multiplexer",
+  defaultMuxNone: "None — normal terminal",
+  defaultMuxName: "Default multiplexer session",
+  defaultMuxSsh: "Direct multiplexer entry uses SSH. The saved transport preference is unchanged.",
+  defaultMuxCreate: "Attach to the named session, or create it using the selected multiplexer. No other session is selected.",
+  defaultMuxConnecting: "Enter {{kind}} session {{name}} directly after connecting.",
+  defaultMuxInvalid: "Choose a supported multiplexer and a nonempty session name of at most 200 UTF-8 bytes without control characters. Zellij names cannot begin with a dash; tmux names cannot contain colons or periods. Herdr accepts 1–64 ASCII letters, numbers, periods, underscores or hyphens, excluding a single or double period.",
+  defaultMuxClosed: "The default multiplexer connection closed before entry. No other session was opened.",
   fontDownloadRegion: "Downloadable CJK font",
   fontDownloadTitle: "Optional Noto CJK fallback",
   fontDownloadHint: "Download {{size}} MiB from the official Noto GitHub source. Nothing downloads automatically. Then choose it in Imported CJK fallback; your current font selection stays unchanged. Existing storage limits apply.",

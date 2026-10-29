@@ -98,15 +98,18 @@ test('phone host form stays legible and fits the viewport while focusing fields'
   await page.getByRole('button', {name:'Edit Touch workstation', exact:true}).tap();
   const dialog = page.getByRole('dialog', {name:'Edit host', exact:true});
   await dialog.getByRole('combobox', {name:'Preferred transport', exact:true}).selectOption('auto');
-  for (const placeholder of ['Home workstation', 'workstation.local', 'Your SSH username']) {
-    const field = dialog.getByPlaceholder(placeholder, {exact:true});
-    await field.tap();
-    expect(await field.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
-    const bounds = await field.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  for (const width of [360, 384, 393, 412]) {
+    await page.setViewportSize({width, height: 844});
+    for (const placeholder of ['Home workstation', 'workstation.local', 'Your SSH username']) {
+      const field = dialog.getByPlaceholder(placeholder, {exact:true});
+      await field.tap();
+      expect(await field.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
+      const bounds = await field.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    }
+    await dialog.getByRole('button', {name:'Save host', exact:true}).tap({trial:true});
   }
-  await dialog.getByRole('button', {name:'Save host', exact:true}).tap({trial:true});
 });
