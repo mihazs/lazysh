@@ -634,26 +634,61 @@ test('Windows client timeout classification requires the pinned exact own-sessio
   expect(windowsGuiSessionNoResponse(new Error(message),0)).toBe('NO_RESPONSE');
   expect(windowsGuiSessionNoResponse(new Error(message),12345.5)).toBe('NO_RESPONSE');
 });
-test('pinned Node WebDriver timeout contract is reproduced against an owned nonresponding unit endpoint', async () => {
+test('pinned Node WebDriver serializes production GUI capabilities and preserves its timeout contract', async () => {
   const result = await native('node', ['--input-type=module', '-e', String.raw`
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
-const {windowsGuiSessionNoResponse}=await import(process.env.LAZYSH_GUI_CONTRACT_MODULE);
-const {remote}=createRequire(process.env.LAZYSH_GUI_CONTRACT_MODULE)('webdriverio');
-let requests=0;
-const server=createServer((request)=>{if(request.method==='POST'&&request.url==='/session')requests++;});
+import {dirname,join} from 'node:path';
+const {windowsGuiCapabilities,windowsGuiSessionResponse,windowsGuiSessionNoResponse}=await import(process.env.LAZYSH_GUI_CONTRACT_MODULE);
+const require=createRequire(process.env.LAZYSH_GUI_CONTRACT_MODULE);
+if(require(join(dirname(dirname(require.resolve('webdriver'))),'package.json')).version!=='10.1.0')throw new Error('Unexpected WebDriver contract version');
+const {remote}=require('webdriverio');
+let requests=0,stall=false;const observed=[];
+const server=createServer(async(request,response)=>{
+  if(request.method!=='POST'||request.url!=='/session'){response.writeHead(404);response.end();return;}
+  requests++;
+  if(stall){request.resume();return;}
+  let classification='UNVERIFIED';
+  try {
+    let bytes=0;const chunks=[];
+    for await(const chunk of request){bytes+=chunk.length;if(bytes>65536)throw new Error('Bounded unit request exceeded');chunks.push(chunk);}
+    const body=JSON.parse(Buffer.concat(chunks).toString('utf8')),caps=body.capabilities,always=caps?.alwaysMatch,options=always?.['tauri:options'];
+    if(Object.keys(body).join(',')==='capabilities'&&Object.keys(caps).sort().join(',')==='alwaysMatch,firstMatch'&&
+      JSON.stringify(caps.firstMatch)==='[{}]'&&Object.keys(always).sort().join(',')==='tauri:options,wdio:enforceWebDriverClassic'&&
+      always['wdio:enforceWebDriverClassic']===true&&options?.application==='owned-contract-unit-only'){
+      if(Object.keys(options).join(',')==='application')classification='AUTOMATIC';
+      else if(Object.keys(options).sort().join(',')==='application,webviewOptions'&&Object.keys(options.webviewOptions).join(',')==='additionalBrowserArguments'&&
+        JSON.stringify(options.webviewOptions.additionalBrowserArguments)==='["--remote-debugging-port=0"]')classification='EXPLICIT_PORT_ZERO';
+    }
+  } catch {}
+  observed.push(classification);
+  response.writeHead(400,{'content-type':'application/json'});
+  response.end('{"value":{"error":"invalid argument","message":"owned unit rejection","stacktrace":""}}');
+});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const port=server.address().port;
 try {
-  await remote({hostname:'127.0.0.1',port,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:200,
-    capabilities:{'tauri:options':{application:'owned-contract-unit-only'},'wdio:enforceWebDriverClassic':true}});
-  throw new Error('Unexpected unit endpoint response');
-} catch(error) {
-  if(requests!==1||windowsGuiSessionNoResponse(error,port)!=='CLIENT_TIMEOUT')throw new Error('Pinned timeout contract not observed');
-  console.info('CLIENT_TIMEOUT');
+  for(const treatment of ['0','1']){
+    let responseCode;
+    try {
+      await remote({hostname:'127.0.0.1',port,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:200,
+        capabilities:windowsGuiCapabilities('owned-contract-unit-only',treatment),transformResponse:response=>{responseCode=windowsGuiSessionResponse(response);return response;}});
+    } catch {if(responseCode!=='ARGUMENT')throw new Error('Finite unit rejection not observed');continue;}
+    throw new Error('Unexpected unit session success');
+  }
+  if(observed.join(',')!=='AUTOMATIC,EXPLICIT_PORT_ZERO'||requests!==2)throw new Error('Production capability serialization mismatch');
+  stall=true;
+  try {
+    await remote({hostname:'127.0.0.1',port,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:200,
+      capabilities:windowsGuiCapabilities('owned-contract-unit-only','0')});
+    throw new Error('Unexpected unit endpoint response');
+  } catch(error) {
+    if(requests!==3||windowsGuiSessionNoResponse(error,port)!=='CLIENT_TIMEOUT')throw new Error('Pinned timeout contract not observed');
+  }
+  console.info('AUTOMATIC EXPLICIT_PORT_ZERO CLIENT_TIMEOUT');
 } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 `], {...process.env, LAZYSH_GUI_CONTRACT_MODULE: new URL('../.changeset/windows-installed-gui.ts', import.meta.url).href}, 15000);
-  expect(result).toBe('CLIENT_TIMEOUT');
+  expect(result).toBe('AUTOMATIC EXPLICIT_PORT_ZERO CLIENT_TIMEOUT');
 },20000);
 test('Windows failure health probes are bounded direct read-only requests with ownership retirement', async () => {
   const result=await native('node',['--input-type=module','-e',String.raw`
