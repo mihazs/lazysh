@@ -49,7 +49,8 @@
       response shape) is called out explicitly in "What changed" above.
 - [ ] I added the corresponding Changesets fragment (`bun run changeset`),
       or an empty fragment for internal/test-only work. Version PRs consume
-      these fragments; they do not publish packages or applications.
+      these fragments; their merges trigger verified application publication. Creating
+      a fragment alone does not publish anything.
 
 Reviewers treat a missing entry as blocking, so add it up front if you want
 your PR to merge on the first pass.
