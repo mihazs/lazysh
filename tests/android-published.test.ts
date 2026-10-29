@@ -107,6 +107,8 @@ const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:n
 const observationLine=(value:unknown)=>`INSTRUMENTATION_STATUS: lazyshPublishedObservation=${JSON.stringify(value)}`;
 test('driver operation observation projects exact closed fields and explicit unavailable samples',()=>{
   expect(publishedDriverObservation(observationLine(observedInput))).toEqual({state:'available',...observedInput});
+  const actualGuest={...observedInput,editableCount:4,hintShapes:['name-label','hostname-label','empty','username-label']};
+  expect(publishedDriverObservation(observationLine(actualGuest))).toEqual({state:'available',...actualGuest});
   expect(publishedDriverObservation(observationLine({...observedInput,inputOperation:'READBACK',readbackMatched:false}))).toMatchObject({state:'available',inputOperation:'READBACK',readbackMatched:false});
   expect(publishedDriverObservation(observationLine({...observedInput,editableCount:null,editableOverflow:null,hintShapes:[]}))).toMatchObject({state:'available',editableCount:null});
   expect(publishedDriverObservation(observationLine({...observedInput,editableCount:8,editableOverflow:true,hintShapes:Array(8).fill('other')}))).toMatchObject({state:'available',editableOverflow:true});

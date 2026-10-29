@@ -30,10 +30,10 @@ class PublishedApkTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private val target = "app.lazysh.client"
-    // Chromium's Android hint joins the implicit label and placeholder.
-    private val nameHint = "Name Home workstation"
-    private val hostnameHint = "Hostname or IP workstation.local"
-    private val usernameHint = "Username Your SSH username"
+    // Actual admitted guests expose the implicit labels as exact Android hints.
+    private val nameHint = "Name"
+    private val hostnameHint = "Hostname or IP"
+    private val usernameHint = "Username"
     private val deadline = System.nanoTime() + 45_000_000_000L
 
     private fun <T> stage(name: Stage, action: () -> T): T = try {
@@ -99,13 +99,13 @@ class PublishedApkTest {
         null, "" -> "empty"
         "Name" -> "name-label"
         "Home workstation" -> "name-placeholder"
-        nameHint -> "name-label-placeholder"
+        "Name Home workstation" -> "name-label-placeholder"
         "Hostname or IP" -> "hostname-label"
         "workstation.local" -> "hostname-placeholder"
-        hostnameHint -> "hostname-label-placeholder"
+        "Hostname or IP workstation.local" -> "hostname-label-placeholder"
         "Username" -> "username-label"
         "Your SSH username" -> "username-placeholder"
-        usernameHint -> "username-label-placeholder"
+        "Username Your SSH username" -> "username-label-placeholder"
         else -> "other"
     }
 

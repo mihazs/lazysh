@@ -68,12 +68,15 @@ the AVD ([immutable installer source](https://github.com/mihazs/lazysh-android-e
 
 The first closed driver-stage run admitted translation for both variants, then
 failed FOSS at `NAME` and Google at `WORKSPACE`. These are distinct observations,
-not proof of one JNI or accessibility cause. The strict text-field selectors now
-use the implicit label plus placeholder: Chromium's Android accessibility
+not proof of one JNI or accessibility cause. Chromium's Android accessibility
 [`GetHint`](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/content/browser/accessibility/browser_accessibility_android.cc#L790)
-joins those values for text fields, including fields with an existing value.
-The public source's exact labels/placeholders define the three expected hints;
-there is no substring, positional or JavaScript fallback. Nested owned failures
+can append an AX placeholder when present. The earlier audit incorrectly inferred
+that an HTML placeholder guarantees that AX attribute. Actual admitted Google and
+FOSS samples instead report label-only hints: `Name`, `Hostname or IP`, and
+`Username`. The strict selectors now use those observed exact labels. Observation
+categories retain independent literals for label/placeholder variants, so changing
+a selector cannot silently redefine the evidence. No substring, positional or
+JavaScript fallback is used. Nested owned failures
 keep their nearest closed stage rather than being hidden by an outer workspace
 stage. The workspace wait, overall deadline, actual UI actions and exact saved
 field readback remain unchanged. Successful hosted completion remains required.
