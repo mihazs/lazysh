@@ -35,6 +35,33 @@ export function publishedDriverStage(output:string):typeof driverStages[number]|
   const distinct=[...new Set(reported)];
   return distinct.length===1?driverStages.find(stage=>stage===distinct[0])??'unavailable':'unavailable';
 }
+const inputOperations=['NONE','LOOKUP','CLICK','SET','READBACK'] as const;
+const inputFields=['NONE','NAME','HOSTNAME','USERNAME'] as const;
+const hintShapes=['empty','other','unavailable','name-label','name-placeholder','name-label-placeholder','hostname-label','hostname-placeholder','hostname-label-placeholder','username-label','username-placeholder','username-label-placeholder'] as const;
+type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][]};
+export function publishedDriverObservation(output:string):DriverObservation{
+  const unavailable=():DriverObservation=>({state:'unavailable'});
+  if(output.length>65536||output.includes('\0'))return unavailable();
+  const prefix='INSTRUMENTATION_STATUS: lazyshPublishedObservation=';
+  const reported=output.split(/\r?\n/).filter(line=>line.startsWith(prefix)).map(line=>line.slice(prefix.length));
+  if(reported.length!==1||reported[0].length>2048)return unavailable();
+  try{
+    const data=JSON.parse(reported[0]),flag=(value:unknown)=>value===null||typeof value==='boolean';
+    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).sort().join(',')!=='editableCount,editableOverflow,foreground,hintShapes,inputField,inputOperation,keyguardLocked,readbackMatched,screenOn'
+      ||!inputOperations.includes(data.inputOperation)||!inputFields.includes(data.inputField)
+      ||!['target','driver','other','unavailable'].includes(data.foreground)
+      ||![data.readbackMatched,data.screenOn,data.keyguardLocked].every(flag)
+      ||!Array.isArray(data.hintShapes)||data.hintShapes.length>8||data.hintShapes.some((value:unknown)=>!hintShapes.includes(value as typeof hintShapes[number])))return unavailable();
+    const absent=data.editableCount===null&&data.editableOverflow===null&&data.hintShapes.length===0;
+    const present=Number.isInteger(data.editableCount)&&data.editableCount>=0&&data.editableCount<=8&&typeof data.editableOverflow==='boolean'
+      &&data.hintShapes.length===data.editableCount&&(!data.editableOverflow||data.editableCount===8);
+    if((!absent&&!present)||(data.readbackMatched!==null&&data.inputOperation!=='READBACK')
+      ||(data.inputOperation==='NONE')!==(data.inputField==='NONE'))return unavailable();
+    return {state:'available',inputOperation:data.inputOperation,inputField:data.inputField,readbackMatched:data.readbackMatched,
+      foreground:data.foreground,screenOn:data.screenOn,keyguardLocked:data.keyguardLocked,
+      editableCount:data.editableCount,editableOverflow:data.editableOverflow,hintShapes:[...data.hintShapes]};
+  }catch{return unavailable();}
+}
 export function translatedGuest(values:string[]){
   const [api,abis,bridge,mapping]=values;
   return values.length===4&&api==='35'&&abis==='x86_64,arm64-v8a'&&bridge==='libndk_translation.so'&&mapping==='x86_64';
@@ -51,14 +78,15 @@ export async function publishedAcceptance(asset:Asset,driver:string,nonce:string
     return run(adb,['-s',serial!,...args],limit);
   };
   const owned:string[]=[],cleanup:string[]=[];let stage='guest-admission',failure=false;
-  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null,driverStage:null as ReturnType<typeof publishedDriverStage>|null};
+  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null,driverStage:null as ReturnType<typeof publishedDriverStage>|null,driverObservation:null as DriverObservation|null};
   const instrument=async(phase:'create'|'verify')=>{
-    receipt.driverStage='unavailable';
+    receipt.driverStage='unavailable';receipt.driverObservation={state:'unavailable'};
     const output=await command(['shell','am','instrument','-w','-r','-e','class','app.lazysh.acceptance.PublishedApkTest#publishedHost','-e','phase',phase,'-e','nonce',nonce,component],45000);
     if(!publishedInstrumentation(output,phase)){
-      receipt.driverStage=publishedDriverStage(output);throw new Error('Published APK UI phase incomplete');
+      receipt.driverStage=publishedDriverStage(output);receipt.driverObservation=publishedDriverObservation(output);
+      throw new Error('Published APK UI phase incomplete');
     }
-    receipt.driverStage=null;
+    receipt.driverStage=null;receipt.driverObservation=null;
   };
   try{
     const values=[];

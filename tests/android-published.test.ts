@@ -3,7 +3,7 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,publishedDriverStage,translatedGuest,type PublishedCommand} from './support/androidPublished';
+import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,publishedDriverStage,publishedDriverObservation,translatedGuest,type PublishedCommand} from './support/androidPublished';
 
 const nonce='a'.repeat(32),component='app.lazysh.acceptance/androidx.test.runner.AndroidJUnitRunner';
 const output=(phase:string)=>`INSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS: lazyshPublishedPhase=${phase}\nINSTRUMENTATION_STATUS: lazyshPublishedPassed=true\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_CODE: -1`;
@@ -102,3 +102,32 @@ test('parent UI phase and closed driver stage survive independently without raw 
   expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'HOSTNAME',cleanup:'passed'});
   expect(result.passed).toBe(false);expect(JSON.stringify(result)).not.toContain('private-output');
 }));
+
+const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label']};
+const observationLine=(value:unknown)=>`INSTRUMENTATION_STATUS: lazyshPublishedObservation=${JSON.stringify(value)}`;
+test('driver operation observation projects exact closed fields and explicit unavailable samples',()=>{
+  expect(publishedDriverObservation(observationLine(observedInput))).toEqual({state:'available',...observedInput});
+  expect(publishedDriverObservation(observationLine({...observedInput,inputOperation:'READBACK',readbackMatched:false}))).toMatchObject({state:'available',inputOperation:'READBACK',readbackMatched:false});
+  expect(publishedDriverObservation(observationLine({...observedInput,editableCount:null,editableOverflow:null,hintShapes:[]}))).toMatchObject({state:'available',editableCount:null});
+  expect(publishedDriverObservation(observationLine({...observedInput,editableCount:8,editableOverflow:true,hintShapes:Array(8).fill('other')}))).toMatchObject({state:'available',editableOverflow:true});
+});
+test('malformed, private or oversized operation data is never partially retained',()=>{
+  const malformed=[{message:'private-exception'},{inputOperation:'private-command'},{inputField:'private-host'},{foreground:'private.package'},
+    {screenOn:'private-value'},{readbackMatched:true},{editableCount:9},{editableCount:-1},{editableOverflow:true},
+    {hintShapes:['private-hint']},{hintShapes:Array(9).fill('other')},{editableCount:null},{inputOperation:'NONE'},{path:'/private/path'}];
+  for(const patch of malformed){const result=publishedDriverObservation(observationLine({...observedInput,...patch}));expect(result).toEqual({state:'unavailable'});expect(JSON.stringify(result)).not.toContain('private');}
+  for(const raw of ['',observationLine(observedInput)+'\n'+observationLine(observedInput),observationLine(observedInput)+'\0','INSTRUMENTATION_STATUS: lazyshPublishedObservation={broken',observationLine({private:'x'.repeat(2049)}),'x'.repeat(65537)])expect(publishedDriverObservation(raw)).toEqual({state:'unavailable'});
+});
+test('original UI failure, readback observation and cleanup results remain distinct',()=>fixture(async asset=>{
+  const observation={...observedInput,inputOperation:'READBACK',readbackMatched:false};
+  const f=fake(args=>args.includes('instrument')?observationLine(observation)+'\nINSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: NAME\nINSTRUMENTATION_STATUS_CODE: -2\nprivate-native-message':undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'NAME',driverObservation:{state:'available',inputOperation:'READBACK',readbackMatched:false},cleanup:'passed'});
+  expect(JSON.stringify(result)).not.toContain('private-native-message');
+}));
+test('diagnostic metadata cannot satisfy or relax the original successful UI phase protocol',()=>{
+  const report=observationLine(observedInput);
+  expect(publishedInstrumentation(report,'create')).toBe(false);
+  expect(publishedInstrumentation(output('create')+'\n'+report,'create')).toBe(true);
+  expect(publishedDriverObservation('INSTRUMENTATION_STATUS: lazyshPublishedObservation='+JSON.stringify(observedInput).slice(0,-1))).toEqual({state:'unavailable'});
+});

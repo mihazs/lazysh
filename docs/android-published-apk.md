@@ -77,3 +77,20 @@ there is no substring, positional or JavaScript fallback. Nested owned failures
 keep their nearest closed stage rather than being hidden by an outer workspace
 stage. The workspace wait, overall deadline, actual UI actions and exact saved
 field readback remain unchanged. Successful hosted completion remains required.
+
+The composite-hint revision still failed FOSS at `NAME` and Google at `WORKSPACE`;
+that hypothesis alone did not resolve either run. Failure receipts now separate
+the input field and lookup/click/set/readback operation. The readback flag is the
+result of the original comparison, not an extra read or replacement assertion.
+One failure-only accessibility sample caps editable nodes at 8 with explicit
+overflow and classifies hints only against the known labels/placeholders, empty,
+other or unavailable. It never retains actual hint/value strings. Foreground,
+screen and keyguard flags are sampled observations, not proof of startup cause.
+Missing queries remain null/unavailable; malformed or unexpected host report
+fields are discarded wholesale. Observation failure cannot replace the original
+UI failure, and diagnostic metadata cannot satisfy the success protocol.
+
+The public 0.23.0 APK predates the later branding and viewport repairs. A genuine
+old-public startup or clipping defect may legitimately fail this gate until a
+corrected version is published; the driver must not bypass normal UI to obtain
+a passing receipt.
