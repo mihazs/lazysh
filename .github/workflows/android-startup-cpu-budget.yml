@@ -22,6 +22,7 @@ jobs:
           distribution: temurin
           java-version: '21'
       - run: bun install --frozen-lockfile
+      - run: bun test tests/android-startup.test.ts
       - name: Grant this owned VM access to KVM
         run: |
           test -c /dev/kvm
