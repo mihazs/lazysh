@@ -34,6 +34,37 @@ export function windowsGuiMetadataProjection(stdout:unknown):string|undefined {
   if(lines.length!==1||lines[0].length>4096)return;
   try {return JSON.stringify(parseWindowsGuiMetadata(JSON.parse(lines[0].slice('LAZYSH_WINDOWS_GUI_METADATA:'.length))));}catch{return;}
 }
+export const windowsGuiOverrideNames={browserFolder:'WEBVIEW2_BROWSER_EXECUTABLE_FOLDER',userDataFolder:'WEBVIEW2_USER_DATA_FOLDER',browserArguments:'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS',channelSearchKind:'WEBVIEW2_CHANNEL_SEARCH_KIND',releaseChannels:'WEBVIEW2_RELEASE_CHANNELS',waitForScriptDebugger:'WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER',pipeForScriptDebugger:'WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER'} as const;
+const startupUnavailable={available:false,overflow:false,signature:'UNVERIFIED'} as const;
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
+function guiNumericVersion(value:unknown):value is string {
+  return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
+}
+export function parseWindowsGuiStartup(value:unknown):GuiStartup {
+  const fail=()=>{throw new Error('Invalid owned Windows GUI startup snapshot');};
+  if(!value||typeof value!=='object')return fail();
+  const row=value as Record<string,unknown>;
+  if(row.available===false&&typeof row.overflow==='boolean'&&row.signature==='UNVERIFIED'&&Object.keys(row).sort().join(',')==='available,overflow,signature')return {available:false,overflow:row.overflow,signature:'UNVERIFIED'};
+  if(Object.keys(row).sort().join(',')!=='available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
+  const {observedProcesses,observedRootGroups}=row;
+  if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
+  if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
+  if(observedProcesses===0 ? observedRootGroups!==0||row.rootImageVersions.length!==0||row.signature!=='NONE_OBSERVED' : observedRootGroups===0||row.rootImageVersions.length===0||row.signature!=='MICROSOFT')return fail();
+  const presence=row.observerEnvPresence;
+  if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
+  const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
+  for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
+  return {available:true,overflow:false,signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),observerEnvPresence};
+}
+export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
+  if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
+  const prefix='LAZYSH_WINDOWS_GUI_STARTUP:';
+  const lines=stdout.split(/\r?\n/),markers=lines.filter(line=>line.startsWith(prefix));
+  const core=lines.filter(line=>!line.startsWith(prefix)).join('\n').trim();
+  let startup:GuiStartup|undefined;
+  if(markers.length){startup=startupUnavailable;if(markers.length===1&&markers[0].length<=4096)try{startup=parseWindowsGuiStartup(JSON.parse(markers[0].slice(prefix.length)));}catch{}}
+  return {core:core.length<=8192?core:'',...(startup?{startup}:{})};
+}
 export function windowsGuiProbeDiagnostic(stdout:unknown):{phase:typeof windowsGuiProbePhases[number];roleMask?:number;metadata?:WindowsGuiMetadata} {
   const unverified={phase:'PROBE_UNVERIFIED'} as const;
   if(typeof stdout!=='string'||stdout.length>8192)return unverified;
@@ -187,15 +218,105 @@ function GuiMainWindow($handles) {
 
 // Diagnostic only: retain data only while the originally verified application image stays live.
 export const windowsGuiMetadataScript = String.raw`
-function GuiMetadataImageFence($appId, $start) {
+function GuiImageIdentity($processId, $start, $image, $hash) {
   try {
-    $current=Get-Process -Id $appId -ErrorAction Stop
-    return ($current.StartTime.ToUniversalTime().Ticks.ToString() -ceq $start -and $current.Path -eq $env:LAZYSH_GUI_BINARY -and (Get-FileHash -LiteralPath $current.Path -Algorithm SHA256 -ErrorAction Stop).Hash -eq $env:LAZYSH_NSIS_BINARY_SHA256)
+    $current=Get-Process -Id $processId -ErrorAction Stop
+    return ($current.StartTime.ToUniversalTime().Ticks.ToString() -ceq $start -and $current.Path -eq $image -and (Get-FileHash -LiteralPath $current.Path -Algorithm SHA256 -ErrorAction Stop).Hash -eq $hash)
   } catch { return $false }
 }
+function GuiMetadataImageFence($appId, $start) { return (GuiImageIdentity $appId $start $env:LAZYSH_GUI_BINARY $env:LAZYSH_NSIS_BINARY_SHA256) }
 function GuiMetadataSnapshot {
   if (!$script:metadataEligible -or !$script:metadataComplete -or !(GuiMetadataImageFence $script:metadataAppId $script:metadataStart)) { return @{available=$false} }
   return @{available=$true;overflow=$script:metadataOverflow;windows=@($script:metadataWindows)}
+}
+`;
+
+export const windowsGuiStartupScript=String.raw`
+function GuiNumericVersion($value) {
+  return ($value -is [string] -and $value -cmatch '\A(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}\z' -and $value -cne '0.0.0.0' -and @($value.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -eq 0)
+}
+# CIM_DATETIME/MMI represents microseconds (10 .NET ticks); never use a broader allowance.
+function GuiCreationTicks($row) {
+  if ($row.CreationDate -isnot [DateTime] -or $row.CreationDate.Kind -eq [DateTimeKind]::Unspecified) { throw 'creation' }
+  [long]$created=$row.CreationDate.ToUniversalTime().Ticks
+  if ($created -le 0 -or $created % 10L -ne 0) { throw 'creation' }
+  return $created
+}
+function GuiInventoryLifetime($row, $start) {
+  [long]$ticks=0
+  if ($start -isnot [string] -or $start -cnotmatch '\A[1-9][0-9]{0,18}\z' -or ![long]::TryParse($start,[ref]$ticks) -or $ticks -gt [DateTime]::MaxValue.Ticks) { return $false }
+  try { return ((GuiCreationTicks $row) -eq ($ticks - ($ticks % 10L))) } catch { return $false }
+}
+function GuiRuntimeRoots($inventory, $memberIds, $driverId) {
+  $rows=@{}
+  foreach ($row in $inventory) {
+    $id=[int]$row.ProcessId
+    if ($id -le 0 -or $rows.ContainsKey($id)) { throw 'inventory' }
+    $null=GuiCreationTicks $row
+    $rows[$id]=$row
+  }
+  if (!$rows.ContainsKey([int]$driverId) -or $driverId -in $memberIds -or $memberIds.Count -gt 32 -or @($memberIds | Select-Object -Unique).Count -ne $memberIds.Count) { throw 'members' }
+  $roots=@()
+  foreach ($memberId in $memberIds) {
+    $current=[int]$memberId;$seen=@();$hasRuntimeAncestor=$false
+    for ($depth=0; $depth -le 16; $depth++) {
+      if ($current -eq $driverId) { break }
+      if ($current -in $seen -or !$rows.ContainsKey($current) -or $depth -eq 16) { throw 'ancestry' }
+      $seen += $current
+      $parent=[int]$rows[$current].ParentProcessId
+      if (!$rows.ContainsKey($parent) -or (GuiCreationTicks $rows[$parent]) -gt (GuiCreationTicks $rows[$current])) { throw 'ancestry lifetime' }
+      $current=$parent
+      if ($current -in $memberIds) { $hasRuntimeAncestor=$true }
+    }
+    if (!$hasRuntimeAncestor) { $roots += [int]$memberId }
+  }
+  return $roots
+}
+function GuiStartupSnapshot {
+  $unverified=@{available=$false;overflow=$false;signature='UNVERIFIED'}
+  try {
+    if (!$complete -or !$script:metadataEligible -or !$inventory) { return $unverified }
+    $fences=@(
+      @{Id=[int]$env:LAZYSH_GUI_DRIVER_PID;Start=$env:LAZYSH_GUI_DRIVER_START;Image=$env:LAZYSH_GUI_DRIVER;Hash=$env:LAZYSH_GUI_DRIVER_SHA256},
+      @{Id=[int]$env:LAZYSH_GUI_EDGE_PID;Start=$env:LAZYSH_GUI_EDGE_START;Image=$env:LAZYSH_GUI_EDGE;Hash=$env:LAZYSH_GUI_EDGE_SHA256},
+      @{Id=$script:metadataAppId;Start=$script:metadataStart;Image=$env:LAZYSH_GUI_BINARY;Hash=$env:LAZYSH_NSIS_BINARY_SHA256}
+    )
+    foreach ($fence in $fences) {
+      $original=@($inventory | Where-Object { [int]$_.ProcessId -eq $fence.Id -and $_.ExecutablePath -eq $fence.Image })
+      if ($original.Count -ne 1 -or !(GuiInventoryLifetime $original[0] $fence.Start) -or !(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified }
+    }
+    if (@($inventory | Where-Object { !$_.Name -or !$_.ExecutablePath }).Count -gt 0) { return $unverified }
+    $members=@($inventory | Where-Object { $_.Name -ieq 'msedgewebview2.exe' })
+    if ($members.Count -gt 32) { $unverified.overflow=$true;return $unverified }
+    $images=@{};$retained=@{}
+    foreach ($member in $members) {
+      $process=Get-Process -Id $member.ProcessId -ErrorAction Stop
+      $start=$process.StartTime.ToUniversalTime().Ticks.ToString()
+      if (!(GuiInventoryLifetime $member $start)) { return $unverified }
+      $image=$process.Path
+      if ($image -ne $member.ExecutablePath -or [IO.Path]::GetFileName($image) -ine 'msedgewebview2.exe') { return $unverified }
+      $hash=(Get-FileHash -LiteralPath $image -Algorithm SHA256 -ErrorAction Stop).Hash
+      if (!(GuiImageIdentity $process.Id $start $image $hash)) { return $unverified }
+      if (!$images.ContainsKey($image)) {
+        $signature=Get-AuthenticodeSignature -LiteralPath $image -ErrorAction Stop
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|, )O=Microsoft Corporation(?:,|$)') { return $unverified }
+        $imageVersion=(Get-Item -LiteralPath $image -ErrorAction Stop).VersionInfo.ProductVersion
+        if (!(GuiNumericVersion $imageVersion)) { return $unverified }
+        $images[$image]=@{Hash=$hash;Version=$imageVersion}
+      }
+      if ($images[$image].Hash -ne $hash) { return $unverified }
+      $fence=@{Id=$process.Id;Start=$start;Image=$image;Hash=$hash}
+      $fences += $fence;$retained[[int]$process.Id]=$fence
+    }
+    $roots=@(GuiRuntimeRoots $inventory @($members | ForEach-Object { [int]$_.ProcessId }) ([int]$env:LAZYSH_GUI_DRIVER_PID))
+    $versions=@($roots | ForEach-Object { $images[$retained[$_].Image].Version } | Sort-Object -Unique)
+    $registered=$env:LAZYSH_GUI_RUNTIME_VERSION
+    $edgeVersion=(Get-Item -LiteralPath $env:LAZYSH_GUI_EDGE -ErrorAction Stop).VersionInfo.ProductVersion
+    if (!(GuiNumericVersion $registered) -or !(GuiNumericVersion $edgeVersion)) { return $unverified }
+    foreach ($fence in $fences) { if (!(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified } }
+    # Snapshot groups only: no observed owned runtime does not prove it never started or crashed.
+    return @{available=$true;overflow=$false;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
+  } catch { return $unverified }
 }
 `;
 
@@ -203,6 +324,7 @@ function GuiMetadataSnapshot {
 export const windowsGuiOwnerScript = String.raw`
 ${windowsGuiWindowRoleScript}
 ${windowsGuiMetadataScript}
+${windowsGuiStartupScript}
 $ErrorActionPreference = 'Stop'
 $phase = 'PROBE_UNVERIFIED'
 $script:roleMask = 0
@@ -297,13 +419,15 @@ public static class OwnedGuiWindow {
   if ($script:ownedHandles -eq 0) { $phase = 'NO_OWNED_HANDLES_OBSERVED'; throw 'window' }
   if ($script:windows.Count -eq 0) { $phase = 'OWNED_HANDLES_INVISIBLE'; throw 'window' }
   $mainHandle = GuiMainWindow $script:windows
-  @{pid=$app.Id;start=$app.StartTime.ToUniversalTime().Ticks.ToString();window=$mainHandle;sha256=$env:LAZYSH_NSIS_BINARY_SHA256} | ConvertTo-Json -Compress
+  [Console]::Out.WriteLine((@{pid=$app.Id;start=$app.StartTime.ToUniversalTime().Ticks.ToString();window=$mainHandle;sha256=$env:LAZYSH_NSIS_BINARY_SHA256} | ConvertTo-Json -Compress))
 } catch {
   $label = 'LAZYSH_WINDOWS_GUI_PROBE:' + $phase
   if ($script:roleMask -gt 0) { $label += ':ROLES_' + $script:roleMask }
   [Console]::Out.WriteLine($label)
   [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:' + ((GuiMetadataSnapshot) | ConvertTo-Json -Depth 4 -Compress))
   exit 1
+} finally {
+  if ($env:LAZYSH_GUI_STARTUP_PROBE -eq '1') { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_STARTUP:' + ((GuiStartupSnapshot) | ConvertTo-Json -Depth 4 -Compress)) }
 }
 `;
 
@@ -415,6 +539,7 @@ function ExerciseInstalledGui {
     $env:LAZYSH_GUI_BINARY = $installed
     $env:LAZYSH_GUI_PORT = [string]$ports[0]
     $env:LAZYSH_GUI_NATIVE_PORT = [string]$ports[1]
+    $env:LAZYSH_GUI_RUNTIME_VERSION = [string]$runtime
     $driver = GuiProcess $env:LAZYSH_GUI_DRIVER @('--port', [string]$ports[0], '--native-port', [string]$ports[1], '--native-host', '127.0.0.1', '--native-driver', $env:LAZYSH_GUI_EDGE)
     $env:LAZYSH_GUI_DRIVER_PID = [string]$driver.Id
     $env:LAZYSH_GUI_DRIVER_START = $driver.StartTime.ToUniversalTime().Ticks.ToString()
@@ -438,7 +563,7 @@ function ExerciseInstalledGui {
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {
       Plain $env:LAZYSH_GUI_RECEIPT
-      if ((Test-Path -LiteralPath $env:LAZYSH_GUI_RECEIPT -PathType Leaf) -and (Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le 4096) {
+      if ((Test-Path -LiteralPath $env:LAZYSH_GUI_RECEIPT -PathType Leaf) -and (Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le 8192) {
         $rejected = Get-Content -Raw -LiteralPath $env:LAZYSH_GUI_RECEIPT | ConvertFrom-Json
         if ($rejected.failure -eq 'GUI_SESSION') {
           Require ($rejected.session -in @('CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE') -and $rejected.ownedWindow -in @('VERIFIED', 'UNVERIFIED')) 'GUI_CLIENT'
@@ -454,6 +579,7 @@ function ExerciseInstalledGui {
           Require ($rejected.proxyHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED') -and $rejected.nativeHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode += ':HEALTH_' + $rejected.proxyHealth + '_NATIVE_' + $rejected.nativeHealth
           if ($null -ne $rejected.metadata) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:' + ($rejected.metadata | ConvertTo-Json -Depth 4 -Compress)) }
+          if ($null -ne $rejected.startup) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_STARTUP:' + ($rejected.startup | ConvertTo-Json -Depth 4 -Compress)) }
           Require $false $sessionCode
         }
         if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }

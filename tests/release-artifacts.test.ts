@@ -8,9 +8,10 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
+const startupFixture=()=>({available:true,overflow:false,signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
 async function fixture(run: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'lazysh-release-artifacts-'));
@@ -228,7 +229,7 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
 }, 500_000);
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint roles admit only IPv4 plus owned IPv6 siblings', async () => {
-  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + windowsGuiHealthOwnershipScript + windowsGuiMetadataScript + String.raw`
+  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + windowsGuiHealthOwnershipScript + windowsGuiMetadataScript + windowsGuiStartupScript + String.raw`
 $ErrorActionPreference = 'Stop'
 $first = [PSCustomObject]@{LocalPort=12345;LocalAddress='127.0.0.1';OwningProcess=111}
 $second = [PSCustomObject]@{LocalPort=12346;LocalAddress='127.0.0.1';OwningProcess=222}
@@ -301,6 +302,43 @@ $script:metadataEligible=$false
 if ((GuiMetadataSnapshot).available) { throw 'missing initial fence admitted' }
 $script:metadataEligible=$true;$script:metadataComplete=$false
 if ((GuiMetadataSnapshot).available) { throw 'incomplete enumeration admitted' }
+$epoch=[DateTime]::new(638999999990000000L,[DateTimeKind]::Utc)
+$rows=@(
+  [PSCustomObject]@{ProcessId=1;ParentProcessId=0;CreationDate=$epoch.AddTicks(10L)},
+  [PSCustomObject]@{ProcessId=2;ParentProcessId=1;CreationDate=$epoch.AddTicks(20L)},
+  [PSCustomObject]@{ProcessId=3;ParentProcessId=2;CreationDate=$epoch.AddTicks(30L)},
+  [PSCustomObject]@{ProcessId=4;ParentProcessId=3;CreationDate=$epoch.AddTicks(40L)},
+  [PSCustomObject]@{ProcessId=5;ParentProcessId=4;CreationDate=$epoch.AddTicks(50L)},
+  [PSCustomObject]@{ProcessId=6;ParentProcessId=4;CreationDate=$epoch.AddTicks(60L)}
+)
+if ((@(GuiRuntimeRoots $rows @(4,5,6) 1) -join ',') -cne '4') { throw 'runtime children counted as groups' }
+$second=$rows+@([PSCustomObject]@{ProcessId=7;ParentProcessId=3;CreationDate=$epoch.AddTicks(70L)},[PSCustomObject]@{ProcessId=8;ParentProcessId=7;CreationDate=$epoch.AddTicks(80L)})
+if ((@(GuiRuntimeRoots $second @(4,5,6,7,8) 1) -join ',') -cne '4,7') { throw 'separate runtime group missing' }
+if (@(GuiRuntimeRoots $rows @() 1).Count -ne 0) { throw 'empty observed membership invented a root' }
+foreach ($case in @(
+  @{Rows=@($rows | Where-Object {$_.ProcessId -ne 3});Members=@(4,5,6)},
+  @{Rows=($rows+$rows[3]);Members=@(4,5,6)},
+  @{Rows=@($rows[0],$rows[1],$rows[2],[PSCustomObject]@{ProcessId=4;ParentProcessId=5;CreationDate=$epoch.AddTicks(40L)},[PSCustomObject]@{ProcessId=5;ParentProcessId=4;CreationDate=$epoch.AddTicks(50L)});Members=@(4,5)},
+  @{Rows=@($rows[0],[PSCustomObject]@{ProcessId=2;ParentProcessId=1;CreationDate=$epoch.AddTicks(1000L)},$rows[2],$rows[3],$rows[4],$rows[5]);Members=@(4,5,6)},
+  @{Rows=@($rows[0],[PSCustomObject]@{ProcessId=2;ParentProcessId=1},$rows[2],$rows[3],$rows[4],$rows[5]);Members=@(4,5,6)},
+  @{Rows=$rows;Members=@(1)},@{Rows=$rows;Members=@(4,4)}
+)) {
+  $rejected=$false;try { $null=GuiRuntimeRoots $case.Rows $case.Members 1 } catch { $rejected=$true }
+  if (!$rejected) { throw 'unverified runtime ancestry admitted' }
+}
+$maximum=@($rows[0],$rows[1],$rows[2])+@(4..35 | ForEach-Object {[PSCustomObject]@{ProcessId=$_;ParentProcessId=3;CreationDate=$epoch.AddTicks($_*10L)}})
+if (@(GuiRuntimeRoots $maximum @(4..35) 1).Count -ne 32) { throw 'bounded runtime groups rejected' }
+$rejected=$false;try { $null=GuiRuntimeRoots ($maximum+[PSCustomObject]@{ProcessId=36;ParentProcessId=3;CreationDate=$epoch.AddTicks(360L)}) @(4..36) 1 } catch { $rejected=$true }
+if (!$rejected) { throw 'runtime overflow admitted' }
+foreach ($version in @('1.2.3.4','65535.0.1.2')) { if (!(GuiNumericVersion $version)) { throw 'numeric version rejected' } }
+foreach ($version in @('0.0.0.0','01.2.3.4','1.2.3.65536','1.2.3.4 suffix',('1.2.3.4'+[char]10),'1.2.3')) { if (GuiNumericVersion $version) { throw 'untrusted version admitted' } }
+$original=[PSCustomObject]@{ProcessId=123;CreationDate=$epoch}
+foreach ($tail in 0..9) { if (!(GuiInventoryLifetime $original ($epoch.Ticks+$tail).ToString())) { throw 'CIM microsecond representation rejected' } }
+foreach ($offset in @(-10L,10L,10000L,10000000L)) { if (GuiInventoryLifetime $original ($epoch.Ticks+$offset).ToString()) { throw 'same-PID different creation lifetime admitted' } }
+foreach ($creation in @($null,$epoch.ToString(),[DateTime]::SpecifyKind($epoch,[DateTimeKind]::Unspecified),$epoch.AddTicks(1L))) {
+  if (GuiInventoryLifetime ([PSCustomObject]@{CreationDate=$creation}) $epoch.Ticks.ToString()) { throw 'unsupported creation precision admitted' }
+}
+if (!(GuiInventoryLifetime ([PSCustomObject]@{CreationDate=$epoch.ToLocalTime()}) $epoch.Ticks.ToString())) { throw 'UTC/local lifetime conversion mismatch' }
 'owned GUI endpoint shapes passed'
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI endpoint shapes passed');
@@ -311,9 +349,26 @@ if ((GuiMetadataSnapshot).available) { throw 'incomplete enumeration admitted' }
     const expected='Release validation failed: pwsh.exe ('+failure+')'+('title' in value?'':'\nOwned Windows GUI metadata: '+JSON.stringify(metadata));
     await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',rejection],{...process.env,LAZYSH_METADATA_UNIT:JSON.stringify(value)},30000)).rejects.toMatchObject({message:expected});
   }
-  const nonSession=String.raw`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_OWNER');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:'+$env:LAZYSH_METADATA_UNIT);exit 1`;
-  await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',nonSession],{...process.env,LAZYSH_METADATA_UNIT:JSON.stringify(metadata)},30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe (gui:GUI_OWNER)'});
+  const nonSession=String.raw`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_OWNER');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:'+$env:LAZYSH_METADATA_UNIT);[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_STARTUP:'+$env:LAZYSH_STARTUP_UNIT);exit 1`;
+  await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',nonSession],{...process.env,LAZYSH_METADATA_UNIT:JSON.stringify(metadata),LAZYSH_STARTUP_UNIT:JSON.stringify(startupFixture())},30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe (gui:GUI_OWNER)'});
 
+});
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint startup diagnostics preserve native failures and partial ownership',async()=>{
+  const startup=startupFixture();
+  const failure='gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY; gui:GUI_CLEANUP; cleanup:UNEXPECTED';
+  const startupRejection=String.raw`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY');[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_CLEANUP');[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_STARTUP:'+$env:LAZYSH_STARTUP_UNIT);[Console]::Error.WriteLine('private native error');exit 1`;
+  for(const value of [startup,{...startup,pid:'private'}]){
+    const projected='pid' in value?{available:false,overflow:false,signature:'UNVERIFIED'}:startup;
+    await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',startupRejection],{...process.env,LAZYSH_STARTUP_UNIT:JSON.stringify(value)},30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe ('+failure+')\nOwned Windows GUI startup: '+JSON.stringify(projected)});
+  }
+  const partialCore=await native('node',['--input-type=module','-e',String.raw`
+import {execFile} from 'node:child_process';import {promisify} from 'node:util';
+const {windowsGuiStartupProbe,parseWindowsGuiOwner}=await import(process.env.LAZYSH_GUI_CONTRACT_MODULE);
+const pending=promisify(execFile)('pwsh.exe',['-NoProfile','-NonInteractive','-Command',"[Console]::Out.WriteLine($env:LAZYSH_SYNTHETIC_CORE);$null=[Threading.ManualResetEvent]::new($false).WaitOne()"],{timeout:15000,maxBuffer:16384});
+let observed='';pending.child.stdout.on('data',chunk=>{observed+=chunk.toString();if(observed.includes('\n'))pending.child.kill();});
+try {await pending;throw Error('owned fixture did not fail');}catch(error){if(!error.killed)throw Error('owned fixture not retired');const proof=windowsGuiStartupProbe(error.stdout);if(proof.startup!==undefined||parseWindowsGuiOwner(proof.core,'a'.repeat(64)).window!=='3')throw Error('partial core proof lost');console.info('PARTIAL_CORE_PRESERVED');}
+`],{...process.env,LAZYSH_GUI_CONTRACT_MODULE:new URL('../.changeset/windows-installed-gui.ts',import.meta.url).href,LAZYSH_SYNTHETIC_CORE:JSON.stringify({pid:1,start:'2',window:'3',sha256:'a'.repeat(64)})},30000);
+  expect(partialCore).toBe('PARTIAL_CORE_PRESERVED');
 });
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI window roles require one main and only the pinned zero-client framework helpers', async () => {
   const script = windowsGuiWindowRoleScript + String.raw`
@@ -548,6 +603,34 @@ test('owned Windows framework metadata projects exact bounded records and reject
   const phase='LAZYSH_WINDOWS_GUI_PROBE:UNKNOWN_CLASS:ROLES_1024';
   expect(windowsGuiProbeDiagnostic(phase+'\n'+marker)).toEqual({phase:'UNKNOWN_CLASS',roleMask:1024,metadata:value});
   expect(windowsGuiProbeDiagnostic(phase+'\nLAZYSH_WINDOWS_GUI_METADATA:malformed')).toEqual({phase:'UNKNOWN_CLASS',roleMask:1024,metadata:{available:false}});
+});
+test('Windows startup projection admits only bounded signed runtime group evidence and strict versions',()=>{
+  const value=startupFixture();
+  expect(parseWindowsGuiStartup(value)).toEqual(value); // Loaded runtime may differ: retain evidence, do not normalize it.
+  expect(parseWindowsGuiStartup({available:false,overflow:true,signature:'UNVERIFIED'})).toEqual({available:false,overflow:true,signature:'UNVERIFIED'});
+  expect(parseWindowsGuiStartup({...value,observedProcesses:0,observedRootGroups:0,rootImageVersions:[],signature:'NONE_OBSERVED'}).available).toBe(true);
+  expect(parseWindowsGuiStartup({...value,observedProcesses:32,observedRootGroups:32,rootImageVersions:Array.from({length:32},(_,i)=>'1.0.0.'+(i+1))}).available).toBe(true);
+  const bad:unknown[]=[null,{},[],{available:false,overflow:false,signature:'UNVERIFIED',pid:1}];
+  for(const change of [{pid:1},{path:'private'},{args:'private'},{profile:'private'},{overflow:true},{observedProcesses:33},{observedProcesses:-1},{observedProcesses:0.5},{observedRootGroups:4},{observedRootGroups:0},{signature:'Valid'},{rootImageVersions:[]},{rootImageVersions:['1.2.3.4','1.2.3.4']},{observerEnvPresence:{...value.observerEnvPresence,userDataFolder:'private'}}])bad.push({...value,...change});
+  for(const version of ['0.0.0.0','01.2.3.4','1.2.3.65536','1.2.3.4 suffix','1.2.3.4\n','1.2.3','private/path']){
+    bad.push({...value,registeredRuntimeVersion:version},{...value,edgeDriverVersion:version},{...value,rootImageVersions:[version]});
+  }
+  for(const entry of bad)expect(()=>parseWindowsGuiStartup(entry)).toThrow('Invalid owned Windows GUI startup snapshot');
+});
+test('startup diagnostics cannot replace emitted core ownership or rejection when unavailable or truncated',()=>{
+  const core=JSON.stringify({pid:1,start:'2',window:'3',sha256:'a'.repeat(64)}),snapshot=startupFixture();
+  const marker='LAZYSH_WINDOWS_GUI_STARTUP:'+JSON.stringify(snapshot);
+  const projected=windowsGuiStartupProbe(core+'\n'+marker);
+  expect(parseWindowsGuiOwner(projected.core,'a'.repeat(64)).window).toBe('3');expect(projected.startup).toEqual(snapshot);
+  // A timeout/error after core emission leaves the already completed original proof intact.
+  expect(windowsGuiStartupProbe(core)).toEqual({core});
+  for(const suffix of ['LAZYSH_WINDOWS_GUI_STARTUP:malformed',marker+' '.repeat(4096),marker+'\n'+marker]){
+    expect(windowsGuiStartupProbe(core+'\n'+suffix)).toEqual({core,startup:{available:false,overflow:false,signature:'UNVERIFIED'}});
+  }
+  const rejection='LAZYSH_WINDOWS_GUI_PROBE:UNKNOWN_CLASS:ROLES_1024';
+  const partial=windowsGuiStartupProbe(rejection+'\nLAZYSH_WINDOWS_GUI_STARTUP:malformed');
+  expect(windowsGuiProbeDiagnostic(partial.core)).toEqual({phase:'UNKNOWN_CLASS',roleMask:1024});
+  expect(partial.startup).toEqual({available:false,overflow:false,signature:'UNVERIFIED'});
 });
 test('Windows role masks project only exact finite subsets and preserve session plus cleanup failures',()=>{
   expect(windowsGuiRoleReasons).toEqual(['ROLE_DATA_UNVERIFIED','MAIN_OWNER_MISMATCH','MAIN_GEOMETRY_MISMATCH','MAIN_STYLE_MISMATCH','MAIN_EXSTYLE_MISMATCH','TAO_OWNER_MISMATCH','TAO_GEOMETRY_MISMATCH','TAO_STYLE_CLIPSIBLINGS_ONLY','TAO_STYLE_MISMATCH','TAO_EXSTYLE_MISMATCH','UNKNOWN_CLASS']);
