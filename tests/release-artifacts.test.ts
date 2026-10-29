@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -265,6 +265,18 @@ if (Test-Path -LiteralPath $owned) { throw 'owned root remains' }
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {...process.env, LAZYSH_GUI_FILE_FIXTURE: root}, 30000)).toBe('owned GUI file boundaries passed');
 }));
+test('pinned Windows driver receipt binds Cargo executable filenames including .exe', () => {
+  const key = 'tauri-driver 2.1.0 (registry+https://github.com/rust-lang/crates.io-index)';
+  const installed = {version_req: '=2.1.0', bins: ['tauri-driver.exe']};
+  expect(isWindowsGuiDriverReceipt({installs: {[key]: installed}})).toBe(true);
+  for (const patch of [{bins: ['tauri-driver']}, {bins: 'tauri-driver.exe'}, {bins: []},
+    {bins: ['other.exe']}, {bins: ['tauri-driver.exe', 'other.exe']}, {version_req: '=2.2.0'}]) {
+    expect(isWindowsGuiDriverReceipt({installs: {[key]: {...installed, ...patch}}})).toBe(false);
+  }
+  for (const receipt of [null, {}, {installs: {'tauri-driver 2.2.0 (registry+https://github.com/rust-lang/crates.io-index)': installed}}]) {
+    expect(isWindowsGuiDriverReceipt(receipt)).toBe(false);
+  }
+});
 test('Windows GUI native identity parser admits only a complete exact image identity', () => {
   const owner = {pid: 123, start: '133811111111111111', window: '456', sha256: 'a'.repeat(64)};
   expect(parseWindowsGuiOwner(JSON.stringify(owner), owner.sha256)).toEqual(owner);

@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { windowsInstalledGuiScript, windowsInstallerPathsScript } from './windows-installed-gui';
+import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
@@ -111,8 +111,7 @@ export async function windowsInstallation(installer: string, binary: string, ver
     requirePlatform(driver.startsWith(resolve(process.env.RUNNER_TEMP!) + '\\'), 'Windows GUI tools must be task-owned');
     const receipt = Bun.file(join(driver, '../../.crates2.json'));
     requirePlatform(receipt.size <= 65_536, 'Windows GUI driver receipt exceeds its bound');
-    const installed = (await receipt.json()).installs?.['tauri-driver 2.1.0 (registry+https://github.com/rust-lang/crates.io-index)'];
-    requirePlatform(installed?.version_req === '=2.1.0' && installed.bins?.includes('tauri-driver'), 'Windows GUI requires pinned tauri-driver 2.1.0');
+    requirePlatform(isWindowsGuiDriverReceipt(await receipt.json()), 'Windows GUI requires pinned tauri-driver 2.1.0');
   }
   const root = resolve(import.meta.dir, '..');
   return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`

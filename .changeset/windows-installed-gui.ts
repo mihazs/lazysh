@@ -1,3 +1,11 @@
+export function isWindowsGuiDriverReceipt(receipt: unknown): boolean {
+  const installed = (receipt as {installs?: Record<string, {version_req?: unknown; bins?: unknown}>} | null)
+    ?.installs?.['tauri-driver 2.1.0 (registry+https://github.com/rust-lang/crates.io-index)'];
+  // Cargo tracks installed executable filenames, including the Windows .exe suffix.
+  return installed?.version_req === '=2.1.0' && Array.isArray(installed.bins)
+    && installed.bins.length === 1 && installed.bins[0] === 'tauri-driver.exe';
+}
+
 export const windowsInstallerPathsScript = String.raw`
 function Require($condition, $code) {
   if (!$condition) { $script:failure = $code; throw 'Owned Windows acceptance rejected' }
