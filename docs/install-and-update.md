@@ -105,6 +105,25 @@ installation or physical-device acceptance is claimed before it is executed.
 
 ## Current native acceptance status
 
+The mobile session toolbar now keeps complete buttons in a horizontally scrolling
+row, with 44px minimum touch targets. The complete phone/desktop browser suite
+passed 426 cases with four inapplicable skips; this is browser layout evidence,
+not a physical Samsung/SwiftKey acceptance result.
+
+Attachment uploads use SSH even when the terminal uses Mosh. The real owned
+Mosh/OpenSSH check passed an image-sized relative-path upload, reproduced a closed
+SSH channel while the UDP terminal stayed live, and uploaded successfully through
+a fresh verified connection. The app now explains this condition and the existing
+saved-host connection recovery. Restoring that SSH channel inside the original tab
+and the Galaxy-specific connection loss remain open in #512. See
+[attachment recovery](attachments.md).
+
+Exact public v1.0.0 Google and FOSS signed ARM64 APKs passed native UI host save,
+relaunch and identical-byte reinstall with preserved data on admitted translated
+ARM64 guests ([qualification](android-published-apk.md#verified-qualification-public-v100)).
+This does not qualify later release APKs, cross-version migration or physical
+Samsung hardware automatically.
+
 This release does not establish full Android/desktop parity. Owned packaged Android
 SSH and guarded Herdr Chat passed on the API36 x86_64 emulator, including native
 keep-awake hide/reveal acknowledgement ([runtime evidence](https://github.com/mihazs/lazysh/actions/runs/40894669216/job/123524957621)).
