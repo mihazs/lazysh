@@ -34,6 +34,31 @@ pub(crate) struct Identity {
     pub(crate) pid: u32,
     pub(crate) tty: String,
 }
+impl Identity {
+    fn client_condition(&self) -> String {
+        let tuple = format!(
+            "#{{&&:#{{==:#{{client_pid}},{}}},#{{==:#{{client_tty}},{}}}}}",
+            self.pid, self.tty
+        );
+        let attached = format!("#{{&&:#{{!=:#{{client_session}},}},{tuple}}}");
+        format!("#{{&&:#{{==:#{{client_control_mode}},0}},{attached}}}")
+    }
+    pub(crate) fn guard(&self) -> String {
+        format!("#{{==:#{{L:#{{?{},1,}}}},1}}", self.client_condition())
+    }
+    fn admission(&self) -> String {
+        // Verify both loop operators used by navigation and guarded Chat input.
+        // Unknown modifiers can expand to nonempty literals on older servers.
+        let condition = format!(
+            "#{{&&:{},#{{==:#{{client_session}},#{{session_name}}}}}}",
+            self.client_condition()
+        );
+        format!(
+            "{}\t#{{==:#{{S:#{{L:#{{?{condition},1,}}}}}},1}}",
+            self.guard()
+        )
+    }
+}
 #[derive(Clone)]
 pub(crate) struct Binding {
     requests: mpsc::Sender<Request>,
@@ -278,13 +303,7 @@ impl Control {
         })
     }
     async fn jump(&mut self, session: &str, window: &str, budget: &mut usize) -> Result<()> {
-        let tuple = format!(
-            "#{{&&:#{{==:#{{client_pid}},{}}},#{{==:#{{client_tty}},{}}}}}",
-            self.identity.pid, self.identity.tty
-        );
-        let attached = format!("#{{&&:#{{!=:#{{client_session}},}},{tuple}}}");
-        let normal = format!("#{{&&:#{{==:#{{client_control_mode}},0}},{attached}}}");
-        let guard = format!("#{{L:#{{?{normal},1,}}}}");
+        let guard = self.identity.guard();
         let marker = format!("LAZYSH_JUMP_{}", uuid::Uuid::new_v4().simple());
         let action = format!(
             "switch-client -E -c {} -t {}",
@@ -508,6 +527,16 @@ pub(crate) async fn prepare_command(
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let admission = control.identity.admission();
+        let rows = control
+            .command(
+                &format!("display-message -p {}", ssh::quote(&admission)),
+                &mut budget,
+            )
+            .await?;
+        if rows != ["1\t1"] {
+            return Err(unavailable());
         }
         Ok::<_, SshError>(())
     };

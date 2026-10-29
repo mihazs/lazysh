@@ -322,6 +322,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Verify release consistency on the native filesystem
         run: bun run release:check
+      - name: Verify Windows file hashing against independent known vectors
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        env:
+          LAZYSH_TEST_WINDOWS_HASH: '1'
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
       - name: Package and validate native macOS permission localizations
@@ -329,6 +335,15 @@ jobs:
         run: |
           bun run --cwd apps/client tauri build --bundles app
           plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
+      - name: Package the actual Windows NSIS installer
+        if: runner.os == 'Windows'
+        run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
+      - name: Exercise actual Windows install, same-version repair and uninstall
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        env:
+          LAZYSH_TEST_WINDOWS_INSTALLER: '1'
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows NSIS'
       - name: Reject unverified Windows private-file permissions
         if: runner.os == 'Windows'
         run: cargo test --locked -p lazysh-common --features service --lib service_secrets::tests::public_storage_helpers_reject_unverified_host_permissions -- --exact

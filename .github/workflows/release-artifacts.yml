@@ -2,6 +2,10 @@ name: Build verified release installation files
 
 on:
   workflow_call:
+    inputs:
+      initial:
+        type: boolean
+        default: false
     secrets:
       ANDROID_KEYSTORE_BASE64: {required: false}
       ANDROID_STORE_PASSWORD: {required: false}
@@ -60,7 +64,7 @@ jobs:
         run: bun .changeset/release-artifacts.ts identity "${{ runner.temp }}/release-identity"
       - name: Build native installation packages without debug flags
         run: bun run --cwd apps/client tauri build --bundles ${{ matrix.bundles }} -- --locked
-      - name: Validate native packages and record exact bytes
+      - name: Validate native packages, accept Windows install and repair, and record exact bytes
         run: bun .changeset/release-platform.ts ${{ matrix.target }} "${{ runner.temp }}/installation-files"
       - uses: actions/upload-artifact@v4
         with:
@@ -173,6 +177,8 @@ jobs:
           pattern: release-*
           path: ${{ runner.temp }}/platform-artifacts
       - name: Check every same-run platform package and generate release documents
+        env:
+          LAZYSH_RELEASE_INITIAL: ${{ inputs.initial || false }}
         run: |
           mkdir -p "$RUNNER_TEMP/verified-release"
           bun .changeset/release-artifacts.ts notes "$RUNNER_TEMP/verified-release"

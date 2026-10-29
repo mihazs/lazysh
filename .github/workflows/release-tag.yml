@@ -4,13 +4,26 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      initial:
+        description: Publish the allowlisted current version without consuming pending Changesets
+        type: boolean
+        default: false
+      expected-source-sha:
+        description: Required exact main event SHA for initial publication only
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: verified-stable-tag
+  group: verified-stable-tag-${{ github.sha }}
   cancel-in-progress: false
+
+env:
+  LAZYSH_RELEASE_INITIAL: ${{ inputs.initial || false }}
+  LAZYSH_RELEASE_EXPECTED_SHA: ${{ inputs.expected-source-sha || '' }}
 
 jobs:
   candidate:
@@ -29,7 +42,7 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - name: Check committed activation policy and exact main version transition
+      - name: Check committed policy and exact main publication candidate
         id: prepare
         env:
           LAZYSH_RELEASE_DIRECTORY: ${{ runner.temp }}/fdroid-release
@@ -107,6 +120,8 @@ jobs:
     needs: candidate
     if: needs.candidate.outputs.enabled == 'true'
     uses: ./.github/workflows/release-artifacts.yml
+    with:
+      initial: ${{ inputs.initial || false }}
     secrets: inherit
 
   tag:

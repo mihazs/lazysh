@@ -416,7 +416,8 @@ impl Control {
         // L then matches the original client, including its actual session name
         // against that same live session (names are unique within one server).
         // User labels are format values, never embedded into format syntax.
-        let guard = format!("#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}}");
+        let guard =
+            format!("#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}");
         let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
         input.validate()?;
         let delivered = if let Some(text) = input.paste_text() {
