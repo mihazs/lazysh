@@ -232,6 +232,9 @@ jobs:
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
           bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid --dev-bind / / --proc /proc -- /usr/bin/true
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Native dependency objects must match this runner's glibc baseline.
+          prefix-key: v0-rust-ubuntu-22.04
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
       - name: Check standalone Parakeet runtime and native ownership boundary
