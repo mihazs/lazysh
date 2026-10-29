@@ -1,17 +1,21 @@
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { artifactTargets, buildIdentity, stagePackages, type ArtifactTarget } from './release-artifacts';
+import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
-export async function native(command: string, args: string[], env = process.env) {
+export async function native(command: string, args: string[], env = process.env, timeout = 180_000) {
   try {
-    const result = await execute(command, args, { env, timeout: 180_000, maxBuffer: 2_097_152 });
+    const result = await execute(command, args, { env, timeout, maxBuffer: 2_097_152 });
     return result.stdout.trim();
-  } catch {
+  } catch (error) {
     // Native tools may print signing material or provisioning contents on failure.
-    throw new Error(`Release validation failed: ${command.split(/[\\/]/).at(-1)}`);
+    const tool = command.split(/[\\/]/).at(-1);
+    const label = tool === 'pwsh.exe' ? windowsInstallerFailure((error as {stdout?: unknown}).stdout) : undefined;
+    throw new Error(`Release validation failed: ${tool}${label ? ` (${label})` : ''}`);
   }
 }
 function requirePlatform(condition: unknown, message: string): asserts condition {
@@ -28,6 +32,215 @@ async function appleApp(path: string, version: string, id: string) {
   requirePlatform(await plist(info, 'CFBundleIdentifier') === id
     && await plist(info, 'CFBundleShortVersionString') === version, 'Apple identity/version mismatch');
   await native('/usr/bin/codesign', ['--verify', '--deep', '--strict', path]);
+}
+const windowsInstallerGuards = new Set([
+  'REPARSE_POINT', 'INSTALLER_TIMEOUT', 'INSTALLER_EXIT', 'PROCESS_TREE',
+  'MISSING_BINARY', 'BINARY_MISMATCH', 'VERSION_MISMATCH', 'PROCESS_ARCHITECTURE',
+  'EXISTING_PATH', 'EXISTING_REGISTRY', 'EXISTING_AUTOSTART', 'EXISTING_MSI',
+  'WEBVIEW2_REQUIRED', 'UNEXPECTED_DATA', 'REPAIR_MARKER', 'MISSING_UNINSTALLER',
+  'INSTALL_OWNERSHIP', 'UNINSTALL_OWNERSHIP', 'UNINSTALL_BINARY', 'UNINSTALL_REGISTRY',
+  'REGISTRY_VALUES', 'REGISTRY_CHILDREN', 'UNINSTALL_MARKER', 'DATA_CONTENTS',
+  'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
+  'UNSUPPORTED_SIGNING',
+]);
+export function windowsInstallerFailure(stdout: unknown): string | undefined {
+  if (typeof stdout !== 'string' || stdout.length > 2_097_152) return;
+  const markers = stdout.split(/\r?\n/).filter(line => line.startsWith('LAZYSH_WINDOWS_INSTALLER:'));
+  if (!markers.length || markers.length > 2) return;
+  const labels: string[] = [];
+  for (const marker of markers) {
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|cleanup):([A-Z_]+)$/.exec(marker);
+    if (!match || !windowsInstallerGuards.has(match[2])) return;
+    labels.push(`${match[1]}:${match[2]}`);
+  }
+  return labels.join('; ');
+}
+export async function windowsNsisBinaryDigest(path: string, source: { bytes: number; sha256: string }) {
+  requirePlatform(Number.isSafeInteger(source.bytes) && source.bytes > 0 && source.bytes <= 2_147_483_648
+    && /^[a-f0-9]{64}$/.exec(source.sha256)?.[0] === source.sha256, 'invalid Windows NSIS source identity');
+  // Tauri CLI 2.12.4 patches this one constant before NSIS bundling, then restores the raw binary.
+  const original = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK');
+  const packaged = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_NSS');
+  const raw = createHash('sha256'), predicted = createHash('sha256');
+  let tail = Buffer.alloc(0), bytes = 0, markers = 0;
+  for await (const chunk of createReadStream(path, { highWaterMark: 65_536 })) {
+    bytes += chunk.length;
+    requirePlatform(bytes <= source.bytes, 'Windows NSIS source identity mismatch');
+    raw.update(chunk);
+    const data = Buffer.concat([tail, chunk]);
+    const limit = Math.max(0, data.length - original.length + 1);
+    let offset = 0;
+    for (let index = data.indexOf(original); index >= 0; index = data.indexOf(original, offset)) {
+      requirePlatform(++markers === 1, 'unsupported Windows NSIS bundle marker');
+      predicted.update(data.subarray(offset, index));
+      predicted.update(packaged);
+      offset = index + original.length;
+    }
+    const consumed = Math.max(offset, limit);
+    predicted.update(data.subarray(offset, consumed));
+    tail = Buffer.from(data.subarray(consumed));
+  }
+  requirePlatform(bytes === source.bytes && raw.digest('hex') === source.sha256, 'Windows NSIS source identity mismatch');
+  requirePlatform(markers === 1, 'unsupported Windows NSIS bundle marker');
+  predicted.update(tail);
+  return { bytes, sha256: predicted.digest('hex') };
+}
+export async function windowsInstallation(installer: string, binary: string, version: string) {
+  requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
+    && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
+  'Windows installation requires an owned GitHub-hosted Windows job');
+  const expected = await digestFile(binary);
+  await digestFile(installer);
+  const cli = Bun.resolveSync('@tauri-apps/cli/package.json', resolve(import.meta.dir, '../apps/client'));
+  requirePlatform((await Bun.file(cli).json()).version === '2.12.4',
+    'Windows NSIS image model requires pinned Tauri CLI 2.12.4');
+  const packaged = await windowsNsisBinaryDigest(binary, expected);
+  return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`
+$ErrorActionPreference = 'Stop'
+function Require($condition, $code) {
+  if (!$condition) { $script:failure = $code; throw 'Owned Windows acceptance rejected' }
+}
+function OptionalItem($path) {
+  try { Get-Item -Force -LiteralPath $path -ErrorAction Stop }
+  catch [System.Management.Automation.ItemNotFoundException] { }
+}
+function Plain($path) {
+  for ($current = $path; $current; $current = Split-Path -Parent $current) {
+    $item = OptionalItem $current
+    if ($item) { Require (!($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) 'REPARSE_POINT' }
+  }
+}
+function RunInstaller($file, $arguments) {
+  Plain $file
+  $process = Start-Process -FilePath $file -ArgumentList $arguments -PassThru
+  try {
+    Require ($process.WaitForExit(120000)) 'INSTALLER_TIMEOUT'
+    Require ($process.ExitCode -eq 0) 'INSTALLER_EXIT'
+  } finally {
+    if (!$process.HasExited) { $process.Kill($true); Require ($process.WaitForExit(10000)) 'PROCESS_TREE' }
+    $process.Dispose()
+  }
+}
+function Installed {
+  Plain $installed
+  Require (Test-Path -LiteralPath $installed -PathType Leaf) 'MISSING_BINARY'
+  Require ((Get-Item -LiteralPath $installed).Length -eq [long]$env:LAZYSH_BINARY_BYTES -and (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash -eq $env:LAZYSH_NSIS_BINARY_SHA256) 'BINARY_MISMATCH'
+  Require ((Get-AuthenticodeSignature -LiteralPath $installed).Status -eq 'NotSigned') 'UNSUPPORTED_SIGNING'
+  Require ((Get-Item -LiteralPath $installed).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'VERSION_MISMATCH'
+}
+$stage = 'preflight'
+$failure = 'UNEXPECTED'
+try {
+Require ([Environment]::Is64BitProcess) 'PROCESS_ARCHITECTURE'
+$stage = 'paths'
+$roaming = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'app.lazysh.client'
+$local = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'app.lazysh.client'
+$manufacturer = 'HKCU:\Software\lazysh\lazysh'
+$uninstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\lazysh'
+$protocol = 'HKCU:\Software\Classes\lazysh'
+$paths = @($roaming, $local,
+  (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'lazysh'),
+  (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'lazysh.lnk'),
+  (Join-Path ([Environment]::GetFolderPath('Programs')) 'lazysh.lnk'))
+foreach ($path in $paths) { Plain $path; Require (!(OptionalItem $path)) 'EXISTING_PATH' }
+$stage = 'registry'
+foreach ($key in @($manufacturer, $uninstall, $protocol, 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\lazysh')) {
+  Require (!(Test-Path -LiteralPath $key)) 'EXISTING_REGISTRY'
+}
+$autostart = OptionalItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+Require (!$autostart -or 'lazysh' -notin $autostart.GetValueNames()) 'EXISTING_AUTOSTART'
+$wix = foreach ($table in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall')) {
+  if (Test-Path -LiteralPath $table) {
+    Get-ItemProperty -Path ($table + '\*') | Where-Object { $_.DisplayName -eq 'lazysh' }
+  }
+}
+Require (!$wix) 'EXISTING_MSI'
+$stage = 'webview'
+$webview = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+$runtime = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\', 'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\') |
+  ForEach-Object { $key = OptionalItem ($_ + $webview); if ($key) { $key.GetValue('pv') } } |
+  Where-Object { $_ } | Select-Object -First 1
+$runtimeVersion = $null
+Require ($runtime -match '^\d+\.\d+\.\d+\.\d+$' -and [Version]::TryParse([string]$runtime, [ref]$runtimeVersion) -and $runtimeVersion -gt [Version]'0.0.0.0') 'WEBVIEW2_REQUIRED'
+foreach ($path in @($env:RUNNER_TEMP, $env:LAZYSH_INSTALLER, $env:LAZYSH_BINARY)) { Plain $path }
+$stage = 'identity'
+foreach ($file in @($env:LAZYSH_BINARY, $env:LAZYSH_INSTALLER)) {
+  Require ((Get-Item -LiteralPath $file).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'VERSION_MISMATCH'
+  Require ((Get-AuthenticodeSignature -LiteralPath $file).Status -eq 'NotSigned') 'UNSUPPORTED_SIGNING'
+}
+Require ((Get-FileHash -LiteralPath $env:LAZYSH_BINARY -Algorithm SHA256).Hash -eq $env:LAZYSH_BINARY_SHA256) 'SOURCE_HASH_MISMATCH'
+$directory = Join-Path $env:RUNNER_TEMP ('lazysh-nsis-' + [Guid]::NewGuid().ToString('N'))
+$installed = Join-Path $directory 'lazysh.exe'
+$uninstaller = Join-Path $directory 'uninstall.exe'
+$marker = Join-Path $roaming ('installer-acceptance-' + [Guid]::NewGuid().ToString('N'))
+$content = [Guid]::NewGuid().ToString('N')
+$directoryOwned = $false
+$dataOwned = $false
+$primaryFailed = $false
+try {
+  $stage = 'install'
+  $null = New-Item -ItemType Directory -Path $directory
+  $directoryOwned = $true
+  RunInstaller $env:LAZYSH_INSTALLER ('/S /NS /D=' + $directory)
+  Installed
+  Plain $roaming
+  Require (!(OptionalItem $roaming)) 'UNEXPECTED_DATA'
+  $null = New-Item -ItemType Directory -Path $roaming
+  $dataOwned = $true
+  $null = New-Item -ItemType File -Path $marker -Value $content
+  Remove-Item -LiteralPath $installed
+  $stage = 'repair'
+  RunInstaller $env:LAZYSH_INSTALLER ('/S /NS /D=' + $directory)
+  Installed
+  Plain $marker
+  Require ((Get-Content -Raw -LiteralPath $marker) -ceq $content) 'REPAIR_MARKER'
+} catch {
+  [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:' + $stage + ':' + $failure)
+  $primaryFailed = $true
+} finally {
+  $stage = 'cleanup'
+  $failure = 'UNEXPECTED'
+  if ($directoryOwned) {
+    Plain $directory
+    Require (Test-Path -LiteralPath $uninstaller -PathType Leaf) 'MISSING_UNINSTALLER'
+    Require ((Get-Item -LiteralPath $manufacturer).GetValue('') -eq $directory) 'INSTALL_OWNERSHIP'
+    $registration = Get-ItemProperty -LiteralPath $uninstall
+    Require ($registration.InstallLocation -eq ('"' + $directory + '"') -and $registration.UninstallString -eq ('"' + $uninstaller + '"')) 'UNINSTALL_OWNERSHIP'
+    RunInstaller $uninstaller ('/S _?=' + $directory)
+    Require (!(Test-Path -LiteralPath $installed)) 'UNINSTALL_BINARY'
+    foreach ($key in @($uninstall, $protocol)) { Require (!(Test-Path -LiteralPath $key)) 'UNINSTALL_REGISTRY' }
+    if (Test-Path -LiteralPath $manufacturer) {
+      $installKey = Get-Item -LiteralPath $manufacturer
+      Require ($installKey.GetValue('') -eq $directory) 'INSTALL_OWNERSHIP'
+      Require (@($installKey.GetValueNames() | Where-Object { $_ -notin @('', 'Installer Language') }).Count -eq 0) 'REGISTRY_VALUES'
+      Require (@(Get-ChildItem -LiteralPath $manufacturer).Count -eq 0) 'REGISTRY_CHILDREN'
+      Remove-Item -LiteralPath $manufacturer
+    }
+    if ($dataOwned) {
+      Plain $marker
+      Require ((Get-Content -Raw -LiteralPath $marker) -ceq $content) 'UNINSTALL_MARKER'
+      Require (@(Get-ChildItem -Force -LiteralPath $roaming).Count -eq 1) 'DATA_CONTENTS'
+      Remove-Item -LiteralPath $marker
+      [IO.Directory]::Delete($roaming)
+    }
+    Require (!(Test-Path -LiteralPath $local)) 'LOCAL_DATA'
+    foreach ($file in @(Get-ChildItem -Force -LiteralPath $directory)) {
+      Require (!$file.PSIsContainer -and $file.Name -eq 'uninstall.exe') 'INSTALL_CONTENTS'
+      Plain $file.FullName
+      Remove-Item -LiteralPath $file.FullName
+    }
+    [IO.Directory]::Delete($directory)
+  }
+}
+if ($primaryFailed) { exit 1 }
+} catch {
+  [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:' + $stage + ':' + $failure)
+  exit 1
+}
+'Windows NSIS install, same-version repair, marker preservation and uninstall passed'
+`], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
+    LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256, LAZYSH_BINARY_BYTES: String(expected.bytes),
+    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256 }, 450_000);
 }
 async function desktop(target: ArtifactTarget, root: string, output: string) {
   const identity = await buildIdentity(root);
@@ -46,6 +259,7 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
       '(Get-Item -LiteralPath $env:LAZYSH_INSTALLER).VersionInfo.ProductVersion'],
     { ...process.env, LAZYSH_INSTALLER: installer });
     requirePlatform([identity.version, `${identity.version}.0`].includes(version), 'Windows installer version mismatch');
+    console.info(await windowsInstallation(installer, join(root, 'target/release/lazysh.exe'), identity.version));
     sources.push(installer);
   } else {
     const app = await exactlyOne('macos/*.app', bundle);

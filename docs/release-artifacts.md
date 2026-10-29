@@ -84,6 +84,37 @@ artifact manifest and SHA256 list only after these checks. Recheck every digest
 after downloading same-run artifacts in the final aggregation/publication job.
 No synthetic metadata test establishes native installer or device acceptance.
 
+Windows staging additionally executes the freshly built NSIS installer on its
+owned GitHub-hosted Windows VM: silent per-user installation into a fresh job-temp
+directory, exact installed executable length/hash/version comparison with the expected NSIS image,
+restoration of a deliberately removed executable by same-version reinstallation,
+preservation of a unique marker in a newly created application-data directory,
+and native uninstall. Missing WebView2, existing lazysh paths/registrations,
+reparse points, nonzero exits, timeouts and uncertain cleanup fail closed. Only
+owned files, the empty owned data directory and the exact newly owned install
+registry key are removed; registry parents and existing user data are not adopted.
+The current unsigned Windows channel models exactly the pinned Tauri CLI 2.12.4
+bundle transformation: it replaces the unique `__TAURI_BUNDLE_TYPE_VAR_UNK`
+constant with `__TAURI_BUNDLE_TYPE_VAR_NSS` before packaging, then restores the raw
+Cargo binary. Acceptance streams the raw build to predict that entire packaged
+image, binds the raw source hash/length, and compares every installed byte through
+its full SHA256 and length. Missing or duplicate unpatched markers, already patched
+inputs, a different CLI version and signing transformations fail closed; no PE header or
+other byte is ignored or normalized. Signing requires a separately reviewed image
+model. See the [pinned bundler patch and restore implementation](https://github.com/tauri-apps/tauri/blob/993038c49185307dfc895ab7657d77ca0d5ed7c7/crates/tauri-bundler/src/bundle.rs).
+
+The installer never launches the app. Windows native PR CI packages NSIS and runs
+the same helper through the existing Bun release-artifact test owner with
+`LAZYSH_TEST_WINDOWS_INSTALLER=1`; ordinary release-tool suites explicitly skip
+that native case. This proves same-version repair, not prior-version upgrade,
+application startup, migration or real user-data compatibility. Unsigned-download
+SmartScreen behavior and trusted publisher signing remain separate acceptance.
+Flags and behavior follow the
+[pinned Tauri CLI 2.12.4 NSIS template](https://github.com/tauri-apps/tauri/blob/993038c49185307dfc895ab7657d77ca0d5ed7c7/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi)
+and [NSIS command-line documentation](https://nsis.sourceforge.io/Docs/Chapter3.html).
+`/D=` and `_?=` are final raw arguments, including paths containing spaces;
+acceptance uses no Windows security-policy or CRC override.
+
 Linux/Windows/macOS architecture coverage and signing status must be listed
 per file. Android ARM64 is the existing production target; emulator x86_64 debug
 artifacts remain separate. Real device installation/update and Apple distribution

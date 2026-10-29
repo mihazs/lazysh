@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
@@ -7,6 +7,7 @@ import { aggregatePackages, artifactName, artifactTargets, releaseTargets, diges
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
+import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -160,4 +161,130 @@ test('disabled policy rejects all publication APIs', () => fixture(async root =>
   const { calls, result } = await publication(root, undefined, false);
   await expect(result).rejects.toThrow('disabled');
   expect(calls).toEqual([]);
+}));
+
+const nativeWindows = process.env.LAZYSH_TEST_WINDOWS_INSTALLER === '1';
+test.skipIf(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
+  && process.env.RUNNER_ENVIRONMENT === 'github-hosted')('installer acceptance refuses ambient local execution before reading installer files', async () => {
+  await expect(windowsInstallation('missing-installer', 'missing-binary', '0.0.0'))
+    .rejects.toThrow('owned GitHub-hosted Windows job');
+});
+test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and preserves colliding data and junctions, then installs, repairs and uninstalls', async () => {
+  const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
+  const binary = join(import.meta.dir, '../target/release/lazysh.exe');
+  const { version } = await Bun.file(join(import.meta.dir, '../apps/client/package.json')).json();
+  await expect(windowsInstallation(installer, binary, '0.0.0')).rejects.toMatchObject({
+    message: 'Release validation failed: pwsh.exe (identity:VERSION_MISMATCH)',
+  });
+  const data = join(process.env.APPDATA!, 'app.lazysh.client');
+  for (const linked of [false, true]) await fixture(async root => {
+    if (linked) await symlink(root, data, 'junction');
+    else await mkdir(data);
+    const marker = join(data, 'existing-data');
+    try {
+      await Bun.write(marker, 'preexisting application data must survive rejection');
+      await expect(windowsInstallation(installer, binary, version)).rejects.toMatchObject({
+        message: `Release validation failed: pwsh.exe (paths:${linked ? 'REPARSE_POINT' : 'EXISTING_PATH'})`,
+      });
+      expect(await Bun.file(marker).text()).toBe('preexisting application data must survive rejection');
+    } finally {
+      await rm(marker);
+      if (linked) await unlink(data);
+      else await rmdir(data);
+    }
+  });
+  console.info(await windowsInstallation(installer, binary, version));
+}, 500_000);
+
+test.each([
+  ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
+  ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
+  ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
+  ['LAZYSH_WINDOWS_INSTALLER:identity:SOURCE_HASH_MISMATCH', 'identity:SOURCE_HASH_MISMATCH'],
+  [Array(3).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:private-stage:VERSION_MISMATCH', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED private-path', undefined],
+  ['private-prefix LAZYSH_WINDOWS_INSTALLER:install:INSTALLER_EXIT', undefined],
+  ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:PRIVATE_VALUE', undefined],
+  [null, undefined],
+])('Windows installer diagnostics expose only closed labels: %j', (output, expected) => {
+  expect(windowsInstallerFailure(output)).toBe(expected);
+});
+test('native failures never expose raw output or exception details from other tools', async () => {
+  const failure = await native(process.execPath, ['-e',
+    "console.log('LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED');console.error('private-native-secret');process.exit(1)"])
+    .then(() => 'unexpected success', error => error.message);
+  expect(failure).toBe(`Release validation failed: ${process.execPath.split(/[\\/]/).at(-1)}`);
+});
+
+test.skipIf(process.platform === 'win32')('owned PowerShell failure decoding redacts native output and rejects unknown markers', () => fixture(async root => {
+  const tool = join(root, 'pwsh.exe');
+  await symlink(process.execPath, tool);
+  for (const [marker, label] of [
+    ['LAZYSH_WINDOWS_INSTALLER:preflight:EXISTING_PATH', ' (preflight:EXISTING_PATH)'],
+    ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', ''],
+  ]) {
+    const failure = await native(tool, ['-e',
+      `console.log(${JSON.stringify(marker)});console.log('private-stdout');console.error('private-stderr');process.exit(1)`])
+      .then(() => 'unexpected success', error => error.message);
+    expect(failure).toBe(`Release validation failed: pwsh.exe${label}`);
+  }
+}));
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_HASH !== '1')('actual Windows SHA256 matches independent large-file vectors before installation', () => fixture(async root => {
+  expect(process.platform).toBe('win32');
+  const vectors = [
+    { name: 'million-a', bytes: Buffer.alloc(1_000_000, 0x61),
+      sha256: 'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0' },
+    // Independently checked with Python hashlib and OpenSSL, across nonuniform stream boundaries.
+    { name: 'nonuniform', bytes: Uint8Array.from({ length: 8 * 1024 * 1024 + 17 }, (_, index) => index % 251),
+      sha256: '485a584410e070b9d289cb2a75ee695b20860585e15736e6871364f3680e6526' },
+  ];
+  for (const vector of vectors) {
+    const path = join(root, vector.name);
+    await Bun.write(path, vector.bytes);
+    expect(await digestFile(path)).toEqual({ bytes: vector.bytes.length, sha256: vector.sha256 });
+    const actual = await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "$ErrorActionPreference = 'Stop'; (Get-FileHash -LiteralPath $env:LAZYSH_HASH_FILE -Algorithm SHA256).Hash"],
+    { ...process.env, LAZYSH_HASH_FILE: path }, 30_000);
+    expect(actual.toLowerCase()).toBe(vector.sha256);
+  }
+}), 65_000);
+
+
+const rawBundleMarker = '__TAURI_BUNDLE_TYPE_VAR_UNK';
+const nsisBundleMarker = '__TAURI_BUNDLE_TYPE_VAR_NSS';
+test.each([0, 65_536 - 1, 65_536 - rawBundleMarker.length + 1, 65_536])(
+  'NSIS image prediction changes only the unique marker across stream boundary %i', offset => fixture(async root => {
+    const leading = Buffer.alloc(offset, 0x5a), trailing = Buffer.alloc(73, 0x42);
+    const source = join(root, 'raw.exe');
+    await Bun.write(source, Buffer.concat([leading, Buffer.from(rawBundleMarker), trailing]));
+    const expected = Buffer.concat([leading, Buffer.from(nsisBundleMarker), trailing]);
+    expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: expected.length,
+      sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
+    expect(await Bun.file(source).bytes()).toEqual(Buffer.concat([leading, Buffer.from(rawBundleMarker), trailing]));
+  }));
+test.each(['missing marker', rawBundleMarker + rawBundleMarker, nsisBundleMarker, '__TAURI_BUNDLE_TYPE_VAR_XYZ'])(
+  'NSIS image prediction refuses unsupported layout %s', contents => fixture(async root => {
+    const source = join(root, 'raw.exe');
+    await Bun.write(source, contents);
+    await expect(windowsNsisBinaryDigest(source, await digestFile(source))).rejects.toThrow('unsupported Windows NSIS bundle marker');
+  }));
+test('NSIS image prediction binds the entire source including bytes outside the marker', () => fixture(async root => {
+  const source = join(root, 'raw.exe');
+  await Bun.write(source, `before:${rawBundleMarker}:after`);
+  const baseline = await digestFile(source), expected = await windowsNsisBinaryDigest(source, baseline);
+  await Bun.write(source, `BEFORE:${rawBundleMarker}:after`);
+  await expect(windowsNsisBinaryDigest(source, baseline)).rejects.toThrow('source identity mismatch');
+  expect((await windowsNsisBinaryDigest(source, await digestFile(source))).sha256).not.toBe(expected.sha256);
+}));
+
+test('NSIS image prediction preserves the runtime bundle-comparison constants byte for byte', () => fixture(async root => {
+  const source = join(root, 'raw.exe');
+  const raw = `${['DEB', 'RPM', 'APP', 'MSI', 'NSS', 'XYZ', ''].map(kind => `__TAURI_BUNDLE_TYPE_VAR_${kind}`).join('|')}|${rawBundleMarker}`;
+  await Bun.write(source, raw);
+  const expected = raw.replace(rawBundleMarker, nsisBundleMarker);
+  expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: Buffer.byteLength(expected),
+    sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
 }));
