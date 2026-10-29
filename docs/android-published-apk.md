@@ -119,3 +119,25 @@ unproven. Current qualification nominates actual public `v1.0.0`, released from
 selectors, waits, certificate pin or any integrity/UI/persistence requirement.
 Current-version KEYBOARD and full install/relaunch/repair results remain
 unverified until actual hosted completion for both flavors.
+
+Both first 1.0.0 cases failed initial `WORKSPACE_READINESS`; later samples had an
+Open-host control and WebView but no editable fields. That later sample does not
+reconstruct the earlier wait. A separate six-field readiness trace now records
+the original wait's true/false return, exception or unentered/unavailable state,
+monotonic elapsed milliseconds capped at60,000, poll count capped at64 with
+overflow, and the last Add/Open categories from the exact original predicate
+queries. Each poll resets both categories; short-circuited Open remains
+unavailable. No additional query or ownership guard is introduced. At the elapsed
+cap the value means at least60,000ms, without further latency precision; poll
+overflow means more than64 polls.
+
+The exact [UI Automator2.4.0 sources](https://dl.google.com/dl/android/maven2/androidx/test/uiautomator/uiautomator/2.4.0/uiautomator-2.4.0-sources.jar)
+(SHA256 `be710c5b295357f7e0deb652f1aa192b4fa6f2245af361743b402ce88ab8ec21`)
+show that `WaitMixin` evaluates immediately, polls null/false at its existing
+100ms interval and returns the last result; predicate exceptions propagate.
+Blocking queries can make elapsed time exceed the nominal wait. The driver
+keeps that original wait, cadence, OR short circuit, caption selectors, launch
+admission and assertions. It has no foreground-package query inside the predicate,
+so the trace does not add one or claim an ownership-guard race. Unknown/private,
+inconsistent or out-of-bound trace fields make the failure observation unavailable
+without replacing the original failure. No startup fix is claimed.

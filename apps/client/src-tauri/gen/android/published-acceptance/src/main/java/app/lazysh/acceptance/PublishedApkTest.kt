@@ -28,6 +28,12 @@ class PublishedApkTest {
     private var inputOperation = InputOperation.NONE
     private var inputField = InputField.NONE
     private var readbackMatched: Boolean? = null
+    private var readinessOutcome = "unavailable"
+    private var readinessElapsedMs: Long? = null
+    private var readinessPolls = 0
+    private var readinessOverflow = false
+    private var readinessAdd = "unavailable"
+    private var readinessOpen = "unavailable"
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private val target = "app.lazysh.client"
@@ -52,6 +58,12 @@ class PublishedApkTest {
     private fun captions(caption: String, current: UiDevice = device): List<UiObject2> =
         (current.findObjects(By.pkg(target).text(caption)) + current.findObjects(By.pkg(target).desc(caption)))
             .distinct().filter { !it.visibleBounds.isEmpty }
+
+    private fun matchCount(count: Int) = when (count) {
+        0 -> "zero"
+        1 -> "one"
+        else -> "multiple"
+    }
 
     private fun named(caption: String, at: Stage): UiObject2 = stage(at) {
         checkNotNull(device.wait(Condition<UiDevice, UiObject2?> { current ->
@@ -113,11 +125,7 @@ class PublishedApkTest {
     private fun failureObservation(): String {
         fun captionMatches(caption: String): String {
             if (System.nanoTime() >= deadline) return "unavailable"
-            return runCatching { when (captions(caption).size) {
-                0 -> "zero"
-                1 -> "one"
-                else -> "multiple"
-            } }.getOrDefault("unavailable")
+            return runCatching { matchCount(captions(caption).size) }.getOrDefault("unavailable")
         }
         val foreground = runCatching { when (device.currentPackageName) {
             target -> "target"
@@ -142,6 +150,9 @@ class PublishedApkTest {
             .put("editableOverflow", fields?.let { it.size > 8 } ?: JSONObject.NULL).put("hintShapes", shapes)
             .put("addHostMatches", addHostMatches).put("openHostsMatches", openHostsMatches)
             .put("webView", webView ?: JSONObject.NULL)
+            .put("readiness", JSONObject().put("outcome", readinessOutcome)
+                .put("elapsedMs", readinessElapsedMs ?: JSONObject.NULL).put("polls", readinessPolls)
+                .put("overflow", readinessOverflow).put("lastAdd", readinessAdd).put("lastOpen", readinessOpen))
             .toString().also { check(it.length <= 2048) }
     }
 
@@ -155,9 +166,25 @@ class PublishedApkTest {
 
     private fun workspace() = stage(Stage.WORKSPACE) {
         stage(Stage.WORKSPACE_READINESS) {
-            check(device.wait(Condition<UiDevice, Boolean> {
-                captions("Add host", it).isNotEmpty() || captions("Open hosts", it).isNotEmpty()
-            }, waitMillis()))
+            readinessOutcome = "unavailable"; readinessElapsedMs = null
+            readinessPolls = 0; readinessOverflow = false
+            readinessAdd = "unavailable"; readinessOpen = "unavailable"
+            val started = System.nanoTime()
+            try {
+                val ready = device.wait(Condition<UiDevice, Boolean> { current ->
+                    if (readinessPolls < 64) readinessPolls++ else readinessOverflow = true
+                    readinessAdd = "unavailable"; readinessOpen = "unavailable"
+                    captions("Add host", current).also { readinessAdd = matchCount(it.size) }.isNotEmpty() ||
+                        captions("Open hosts", current).also { readinessOpen = matchCount(it.size) }.isNotEmpty()
+                }, waitMillis())
+                readinessOutcome = if (ready) "true" else "false"
+                check(ready)
+            } catch (failure: Throwable) {
+                if (readinessOutcome == "unavailable") readinessOutcome = "exception"
+                throw failure
+            } finally {
+                readinessElapsedMs = ((System.nanoTime() - started) / 1_000_000L).coerceIn(0, 60_000)
+            }
         }
         if (captions("Add host").isEmpty()) stage(Stage.DRAWER) { named("Open hosts", Stage.DRAWER).click() }
         named("Add host", Stage.WORKSPACE_ADD_HOST)

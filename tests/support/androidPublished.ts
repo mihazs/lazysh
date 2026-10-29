@@ -39,7 +39,9 @@ const inputOperations=['NONE','LOOKUP','CLICK','SET','READBACK'] as const;
 const inputFields=['NONE','NAME','HOSTNAME','USERNAME'] as const;
 const hintShapes=['empty','other','unavailable','name-label','name-placeholder','name-label-placeholder','hostname-label','hostname-placeholder','hostname-label-placeholder','username-label','username-placeholder','username-label-placeholder'] as const;
 const captionMatches=['zero','one','multiple','unavailable'] as const;
-type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][];addHostMatches:typeof captionMatches[number];openHostsMatches:typeof captionMatches[number];webView:boolean|null};
+const readinessOutcomes=['true','false','exception','unavailable'] as const;
+type ReadinessTrace={outcome:typeof readinessOutcomes[number];elapsedMs:number|null;polls:number;overflow:boolean;lastAdd:typeof captionMatches[number];lastOpen:typeof captionMatches[number]};
+type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][];addHostMatches:typeof captionMatches[number];openHostsMatches:typeof captionMatches[number];webView:boolean|null;readiness:ReadinessTrace};
 export function publishedDriverObservation(output:string):DriverObservation{
   const unavailable=():DriverObservation=>({state:'unavailable'});
   if(output.length>65536||output.includes('\0'))return unavailable();
@@ -48,12 +50,22 @@ export function publishedDriverObservation(output:string):DriverObservation{
   if(reported.length!==1||reported[0].length>2048)return unavailable();
   try{
     const data=JSON.parse(reported[0]),flag=(value:unknown)=>value===null||typeof value==='boolean';
-    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).sort().join(',')!=='addHostMatches,editableCount,editableOverflow,foreground,hintShapes,inputField,inputOperation,keyguardLocked,openHostsMatches,readbackMatched,screenOn,webView'
+    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).sort().join(',')!=='addHostMatches,editableCount,editableOverflow,foreground,hintShapes,inputField,inputOperation,keyguardLocked,openHostsMatches,readbackMatched,readiness,screenOn,webView'
       ||!inputOperations.includes(data.inputOperation)||!inputFields.includes(data.inputField)
       ||!['target','driver','other','unavailable'].includes(data.foreground)
       ||![data.readbackMatched,data.screenOn,data.keyguardLocked,data.webView].every(flag)
       ||![data.addHostMatches,data.openHostsMatches].every(value=>captionMatches.includes(value))
       ||!Array.isArray(data.hintShapes)||data.hintShapes.length>8||data.hintShapes.some((value:unknown)=>!hintShapes.includes(value as typeof hintShapes[number])))return unavailable();
+    const trace=data.readiness;
+    if(!trace||typeof trace!=='object'||Array.isArray(trace)||Object.keys(trace).sort().join(',')!=='elapsedMs,lastAdd,lastOpen,outcome,overflow,polls'
+      ||!readinessOutcomes.includes(trace.outcome)||!Number.isInteger(trace.polls)||trace.polls<0||trace.polls>64||typeof trace.overflow!=='boolean'
+      ||(trace.overflow&&trace.polls!==64)||![trace.lastAdd,trace.lastOpen].every(value=>captionMatches.includes(value))
+      ||(trace.lastOpen!=='unavailable'&&trace.lastAdd!=='zero'))return unavailable();
+    if(trace.outcome==='unavailable'){
+      if(trace.elapsedMs!==null||trace.polls!==0||trace.overflow||trace.lastAdd!=='unavailable'||trace.lastOpen!=='unavailable')return unavailable();
+    }else if(!Number.isInteger(trace.elapsedMs)||trace.elapsedMs<0||trace.elapsedMs>60000
+      ||(trace.outcome!=='exception'&&trace.polls===0)
+      ||(trace.polls===0&&(trace.lastAdd!=='unavailable'||trace.lastOpen!=='unavailable')))return unavailable();
     const absent=data.editableCount===null&&data.editableOverflow===null&&data.hintShapes.length===0;
     const present=Number.isInteger(data.editableCount)&&data.editableCount>=0&&data.editableCount<=8&&typeof data.editableOverflow==='boolean'
       &&data.hintShapes.length===data.editableCount&&(!data.editableOverflow||data.editableCount===8);
@@ -62,7 +74,8 @@ export function publishedDriverObservation(output:string):DriverObservation{
     return {state:'available',inputOperation:data.inputOperation,inputField:data.inputField,readbackMatched:data.readbackMatched,
       foreground:data.foreground,screenOn:data.screenOn,keyguardLocked:data.keyguardLocked,
       editableCount:data.editableCount,editableOverflow:data.editableOverflow,hintShapes:[...data.hintShapes],
-      addHostMatches:data.addHostMatches,openHostsMatches:data.openHostsMatches,webView:data.webView};
+      addHostMatches:data.addHostMatches,openHostsMatches:data.openHostsMatches,webView:data.webView,
+      readiness:{outcome:trace.outcome,elapsedMs:trace.elapsedMs,polls:trace.polls,overflow:trace.overflow,lastAdd:trace.lastAdd,lastOpen:trace.lastOpen}};
   }catch{return unavailable();}
 }
 export function translatedGuest(values:string[]){

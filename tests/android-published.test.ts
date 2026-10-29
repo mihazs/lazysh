@@ -103,7 +103,8 @@ test('parent UI phase and closed driver stage survive independently without raw 
   expect(result.passed).toBe(false);expect(JSON.stringify(result)).not.toContain('private-output');
 }));
 
-const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label'],addHostMatches:'zero',openHostsMatches:'one',webView:true};
+const noReadiness={outcome:'unavailable',elapsedMs:null,polls:0,overflow:false,lastAdd:'unavailable',lastOpen:'unavailable'};
+const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label'],addHostMatches:'zero',openHostsMatches:'one',webView:true,readiness:noReadiness};
 const observationLine=(value:unknown)=>`INSTRUMENTATION_STATUS: lazyshPublishedObservation=${JSON.stringify(value)}`;
 test('driver operation observation projects exact closed fields and explicit unavailable samples',()=>{
   expect(publishedDriverObservation(observationLine(observedInput))).toEqual({state:'available',...observedInput});
@@ -122,12 +123,41 @@ test('workspace observations distinguish absent, unique and ambiguous exact capt
     expect(publishedDriverObservation(observationLine({...observedInput,...patch}))).toEqual({state:'unavailable'});
   }
 });
+test('readiness trace distinguishes original return, exception and unentered wait with bounded short-circuit samples',()=>{
+  const ready={outcome:'true',elapsedMs:37,polls:1,overflow:false,lastAdd:'one',lastOpen:'unavailable'};
+  const falseWait={...ready,outcome:'false',elapsedMs:5100,polls:51,lastAdd:'zero',lastOpen:'zero'};
+  for(const readiness of [noReadiness,ready,falseWait,{...ready,outcome:'exception',lastAdd:'zero'},
+    {...ready,outcome:'exception',polls:0,lastAdd:'unavailable'},
+    {...falseWait,elapsedMs:60000,polls:64,overflow:true}]){
+    expect(publishedDriverObservation(observationLine({...observedInput,readiness}))).toMatchObject({state:'available',readiness});
+  }
+});
+test('readiness projection rejects unbounded, inconsistent, missing and private trace data wholesale',()=>{
+  const readiness={outcome:'false',elapsedMs:5001,polls:50,overflow:false,lastAdd:'zero',lastOpen:'zero'};
+  for(const patch of [{outcome:'private-exception'},{elapsedMs:-1},{elapsedMs:60001},{elapsedMs:1.5},{elapsedMs:null},
+    {polls:-1},{polls:65},{polls:0},{polls:1.5},{overflow:true},{overflow:'private'},
+    {lastAdd:'private-caption'},{lastAdd:'one'},{lastAdd:'unavailable'},{lastOpen:'private-caption'},{message:'private-error'}]){
+    const result=publishedDriverObservation(observationLine({...observedInput,readiness:{...readiness,...patch}}));
+    expect(result).toEqual({state:'unavailable'});expect(JSON.stringify(result)).not.toContain('private');
+  }
+  for(const value of [null,[],{},'private-trace',{...noReadiness,elapsedMs:0},{...noReadiness,polls:1}])
+    expect(publishedDriverObservation(observationLine({...observedInput,readiness:value}))).toEqual({state:'unavailable'});
+  const {readiness:missing,...legacy}=observedInput;
+  expect(publishedDriverObservation(observationLine(legacy))).toEqual({state:'unavailable'});
+});
 test.each(['WORKSPACE_READINESS','WORKSPACE_ADD_HOST'])('workspace %s failure survives independently of failure-only sampled counts',stage=>fixture(async asset=>{
-  const observation={...observedInput,inputOperation:'NONE',inputField:'NONE',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false};
+  const readiness={outcome:stage==='WORKSPACE_READINESS'?'exception':'true',elapsedMs:42,polls:1,overflow:false,lastAdd:stage==='WORKSPACE_READINESS'?'unavailable':'one',lastOpen:'unavailable'};
+  const observation={...observedInput,inputOperation:'NONE',inputField:'NONE',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false,readiness};
   const f=fake(args=>args.includes('instrument')?observationLine(observation)+`\nINSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: ${stage}\nINSTRUMENTATION_STATUS_CODE: -2`:undefined);
   const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
-  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:stage,driverObservation:{state:'available',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false},cleanup:'passed'});
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:stage,driverObservation:{state:'available',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false,readiness},cleanup:'passed'});
   expect(f.calls.filter(args=>args.includes('instrument'))).toHaveLength(1);
+}));
+test('malformed readiness trace cannot replace the original readiness failure or owned cleanup',()=>fixture(async asset=>{
+  const f=fake(args=>args.includes('instrument')?observationLine({...observedInput,readiness:{message:'private-query-failure'}})+'\nINSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: WORKSPACE_READINESS\nINSTRUMENTATION_STATUS_CODE: -2':undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'WORKSPACE_READINESS',driverObservation:{state:'unavailable'},cleanup:'passed'});
+  expect(JSON.stringify(result)).not.toContain('private-query-failure');
 }));
 test('malformed, private or oversized operation data is never partially retained',()=>{
   const malformed=[{message:'private-exception'},{inputOperation:'private-command'},{inputField:'private-host'},{foreground:'private.package'},
