@@ -423,39 +423,12 @@ button svg {
   margin: auto 0;
   text-align: center;
 }
-.welcome-terminal {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--theme-border, #3a4930);
-  border-radius: 20px;
-  width: 76px;
-  height: 76px;
-  margin-bottom: 27px;
-  background: var(--theme-panel, #1b2517);
-  box-shadow: 0 0 45px #a2d47106;
-  color: var(--theme-accent, #c4eb89);
-}
-.welcome-terminal > span {
-  font-family: monospace;
-  font-size: 46px;
-  font-weight: 400;
-  letter-spacing: -9px;
-  transform: translateX(-3px);
-}
-.welcome-terminal > span > span {
-  display: inline-block;
-  transform: translateY(-4px);
-}
-.terminal-corner {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--theme-accent, #7b995b);
+.welcome-brand-mark {
+  display: block;
+  width: 112px;
+  height: 112px;
+  object-fit: contain;
+  margin: 0 auto 24px;
 }
 .welcome-kicker {
   color: var(--theme-muted, #a0af94);
