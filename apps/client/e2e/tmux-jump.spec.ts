@@ -4,12 +4,12 @@ declare global { interface Window {
   tmuxJumpFixture: { jumps: Record<string, unknown>[]; attachments: Record<string,unknown>[]; reads: number; defer: boolean; finish?: () => void };
 } }
 
-for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display Jump To preserves server ${server ?? 'default'} and drops a late result after switching terminals`, async ({ page }) => {
+for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display Jump To preserves server ${server ?? 'default'} and drops a late result after switching terminals`, async ({ page },testInfo) => {
   await page.addInitScript(({server}) => {
     localStorage.setItem('lazysh.workspace.v1', JSON.stringify([{hostId:'fixture'},{hostId:'fixture',attached:{kind:'tmux',name:'work',...(server===undefined?{}:{tmuxServer:server})}}]));
     localStorage.setItem('lazysh.multiplexer.layout', 'grid');
     window.tmuxJumpFixture = {jumps:[],attachments:[],reads:0,defer:false};
-    const snapshot = {generation:'retained-actor',current:{sessionId:'$1',windowId:'@1'},sessions:[
+    let snapshot = {generation:'retained-actor',current:{sessionId:'$1',windowId:'@1'},sessions:[
       {id:'$1',name:'work',restoreName:'work',windows:[{id:'@1',index:0,name:'agent'}]},
       {id:'$2',name:'builds',restoreName:'builds',windows:[{id:'@2',index:1,name:'compiler'}]},
     ]};
@@ -27,9 +27,9 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
         if(command==='tmux_jump_snapshot'){window.tmuxJumpFixture.reads++;return snapshot;}
         if(command==='tmux_jump'){
           window.tmuxJumpFixture.jumps.push(args);
-          const result={...snapshot,current:{sessionId:'$2',windowId:'@2'}};
-          if(window.tmuxJumpFixture.defer)return new Promise(resolve=>{window.tmuxJumpFixture.finish=()=>resolve(result);});
-          return result;
+          const result={...snapshot,generation:`returned-${window.tmuxJumpFixture.jumps.length}`,current:{sessionId:String(args.targetSessionId),windowId:String(args.windowId)}};
+          if(window.tmuxJumpFixture.defer)return new Promise(resolve=>{window.tmuxJumpFixture.finish=()=>{snapshot=result;resolve(result);};});
+          snapshot=result;return result;
         }
         if(command==='agent_snapshot')return {schemaVersion:1,sessions:[]};
         if(command==='apple_status_capability')return {available:false,reason:'Browser fixture.'};
@@ -52,7 +52,8 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
   expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   expect(bounds!.height).toBeGreaterThanOrEqual(44);
   await trigger.click();
-  const dialog=page.getByRole('dialog',{name:'Jump To',exact:true});
+  const dialog=page.locator('.workspace-navigation-content').getByRole('region');
+  await expect(page.getByRole('dialog',{name:'Jump To',exact:true})).toHaveCount(0);
   const layout=dialog.getByRole('combobox',{name:'Jump To layout',exact:true});
   await expect(layout).toHaveValue('grid');
   await expect(dialog.getByRole('button',{name:'0: agent · Current',exact:true})).toHaveAttribute('aria-current','location');
@@ -65,7 +66,7 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
       const {nativeLocale}=await import('/src/i18n/nativeLocale.ts');
       await nativeLocale.change(language);
     },language);
-    const localized=page.getByRole('dialog');
+    const localized=dialog;
     const field=localized.getByRole('combobox',{name:caption,exact:true});
     await expect(field).toHaveValue('grid');
     expect(await field.evaluate((element,original)=>element===original,select)).toBe(true);
@@ -78,22 +79,31 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
   for(const value of ['list','accordion']){
     await layout.selectOption(value);
     await dialog.getByRole('button',{name:'0: agent · Current',exact:true}).click();
-    await expect(dialog).toHaveCount(0);
-    await trigger.click();
+    if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await trigger.click();}
+    else await expect(dialog).toBeVisible();
     await expect(layout).toHaveValue(value);
   }
   expect(await page.evaluate(()=>window.tmuxJumpFixture.jumps)).toEqual([]);
   await layout.selectOption('list');
+  await dialog.getByRole('button',{name:'1: compiler',exact:true}).click();
+  if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await trigger.click();}
+  await expect(dialog.getByRole('button',{name:'1: compiler · Current',exact:true})).toHaveAttribute('aria-current','location');
+  await dialog.getByRole('button',{name:'0: agent',exact:true}).click();
+  if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await trigger.click();}
+  await expect(dialog.getByRole('button',{name:'0: agent · Current',exact:true})).toHaveAttribute('aria-current','location');
+  expect((await page.evaluate(()=>window.tmuxJumpFixture.jumps))[1]).toMatchObject({generation:'returned-1',targetSessionId:'$1',windowId:'@1'});
+  await page.screenshot({path:testInfo.outputPath('workspace-navigation.png')});
   await page.evaluate(()=>{window.tmuxJumpFixture.defer=true;});
   await dialog.getByRole('button',{name:'1: compiler',exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>typeof window.tmuxJumpFixture.finish)).toBe('function');
-  await dialog.getByRole('button',{name:'Close Jump To',exact:true}).click();
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+  else await page.getByRole('button',{name:'Connections',exact:true}).click();
   await page.getByRole('tab',{name:'Fixture',exact:true}).click();
   await page.evaluate(()=>window.tmuxJumpFixture.finish!());
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('tab',{name:'Fixture',exact:true})).toHaveAttribute('aria-selected','true');
   await expect(page.getByRole('tab',{name:'Fixture / work',exact:true})).toBeVisible();
-  expect(await page.evaluate(()=>window.tmuxJumpFixture.jumps)).toEqual([{sessionId:'display',generation:'retained-actor',targetSessionId:'$2',windowId:'@2'}]);
+  expect((await page.evaluate(()=>window.tmuxJumpFixture.jumps)).at(-1)).toEqual({sessionId:'display',generation:'returned-2',targetSessionId:'$2',windowId:'@2'});
   const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.workspace.v1')!));
   expect(saved).toEqual([{hostId:'fixture'},{hostId:'fixture',attached:{kind:'tmux',name:'work',...(server===undefined?{}:{tmuxServer:server})}}]);
 });

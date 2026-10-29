@@ -156,6 +156,7 @@ it('keeps selected reported context, search focus and draft through locale updat
   await historyFixture(reported,discoveryRows());render(<AgentPanel sessionId="selection"/>);
   fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
   const selected=screen.getByRole('region',{name:'Selected report'});
+  fireEvent.click(within(selected).getByText('Report details'));
   expect(within(selected).getByText('%1')).toBeTruthy();expect(within(selected).getByText('a')).toBeTruthy();
   expect(within(selected).queryByRole('button',{name:/jump|attach|approve/i})).toBeNull();
   const search=screen.getByRole('searchbox');fireEvent.change(search,{target:{value:'Permission'}});search.focus();
@@ -225,4 +226,28 @@ it('keeps the selected identity and focused search draft when explicit refresh u
   expect(screen.getByRole('region',{name:'Selected report'})).toBe(details);
   expect(within(details).getByText('Done')).toBeTruthy();expect(within(details).getByText('9')).toBeTruthy();
   expect(search).toHaveProperty('value','/work');expect(document.activeElement).toBe(search);
+});
+it('suspends the same board while preserving its query and settings draft, then explicitly resumes its source',async()=>{
+  const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="visible-board"/>);
+  await screen.findByText('Permission requested');
+  const query=screen.getByRole('searchbox');fireEvent.change(query,{target:{value:'/work'}});
+  const usage=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});fireEvent.click(usage);
+  const before=invoke.mock.calls.length;
+  view.rerender(<AgentPanel sessionId="visible-board" visible={false}/>);
+  expect(screen.queryByRole('searchbox')).toBeNull();expect(query).toHaveProperty('value','/work');
+  expect(invoke.mock.calls.length).toBe(before);
+  view.rerender(<AgentPanel sessionId="visible-board"/>);await screen.findByText('Permission requested');
+  expect(screen.getByRole('searchbox')).toBe(query);expect(usage).toHaveProperty('checked',false);
+  expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
+  expect(invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(2);
+});
+it.each(['success','failure'])('retires held history %s when its board becomes hidden',async outcome=>{
+  let finish!:(value:unknown)=>void,fail!:(reason:unknown)=>void;const route=vi.fn();
+  await historyFixture(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));
+  const view=render(<AgentPanel sessionId="hidden-history" onUseReportedHistory={route}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));
+  view.rerender(<AgentPanel sessionId="hidden-history" onUseReportedHistory={route} visible={false}/>);
+  await act(async()=>{if(outcome==='success')finish(reported);else fail('hidden history failure');});
+  view.rerender(<AgentPanel sessionId="hidden-history" onUseReportedHistory={route}/>);await screen.findByText('Permission requested');
+  expect(route).not.toHaveBeenCalled();expect(screen.queryByText('hidden history failure')).toBeNull();
 });

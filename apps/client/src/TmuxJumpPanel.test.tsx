@@ -101,3 +101,25 @@ it('shares the three-layout preference and treats host labels as text', async ()
   fireEvent.change(screen.getByLabelText('Jump To layout'),{target:{value:'accordion'}});
   expect(localStorage.getItem('lazysh.multiplexer.layout')).toBe('accordion');
 });
+it('keeps a persistent picker on the returned generation for the next exact jump',async()=>{
+  access(false);
+  const second={...snapshot,generation:'actor-two',current:{sessionId:'$2',windowId:'@4'}};
+  const third={...snapshot,generation:'actor-three'};
+  vi.mocked(invoke).mockResolvedValueOnce(snapshot).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  const busy=vi.fn();render(<TmuxJumpPanel sessionId="persistent-display" onClose={()=>{}} onJump={vi.fn()} onBusyChange={busy}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'1: build'}));
+  await screen.findByRole('button',{name:'1: build · Current'});
+  fireEvent.click(screen.getByRole('button',{name:'0: agent'}));
+  await screen.findByRole('button',{name:'0: agent · Current'});
+  expect(invoke).toHaveBeenNthCalledWith(3,'tmux_jump',{sessionId:'persistent-display',generation:'actor-two',targetSessionId:'$1',windowId:'@3'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+  expect(busy.mock.calls.map(([value])=>value)).toEqual([true,false,true,false,true,false]);
+});
+it('retries a retired picker only through an explicit fresh snapshot read',async()=>{
+  access(false);
+  vi.mocked(invoke).mockResolvedValueOnce(snapshot).mockRejectedValueOnce('retired binding').mockResolvedValueOnce({...snapshot,generation:'fresh-actor'});
+  render(<TmuxJumpPanel sessionId="retry-display" onClose={()=>{}} onJump={vi.fn()}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'1: build'}));await screen.findByRole('alert');
+  expect(screen.queryByRole('button',{name:'0: agent · Current'})).toBeNull();expect(invoke).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByRole('button',{name:'0: agent · Current'});
+  expect(invoke).toHaveBeenLastCalledWith('tmux_jump_snapshot',{sessionId:'retry-display'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+});

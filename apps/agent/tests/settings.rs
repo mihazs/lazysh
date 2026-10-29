@@ -5,9 +5,11 @@ use std::{
     path::Path,
     process::{Command, Output},
 };
+#[path = "support/binary.rs"]
+mod binary;
 
 fn run(directory: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+    Command::new(binary::path())
         .args(args)
         .env("LAZYSH_STATE_DIR", directory)
         .env("PATH", directory.join("no-sdk"))

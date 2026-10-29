@@ -1676,3 +1676,28 @@ button svg {
 @media (prefers-reduced-motion: reduce) {
   button, .sidebar { transition: none; }
 }
+
+/* Connected navigation uses the existing sidebar and mobile drawer. */
+.workspace-navigation-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 12px 0; }
+.workspace-navigation-modes button { min-height: 44px; min-width: 0; padding: 5px; font-size: 11px; white-space: normal; }
+.workspace-navigation-modes button[aria-current="page"], .workspace-live-sessions button[aria-current="location"] { border-color: var(--accent); }
+.navigation-connections { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.navigation-connections[hidden], .workspace-navigation-agents[hidden] { display: none; }
+.workspace-navigation-content, .workspace-navigation-agents { min-height: 0; min-width: 0; flex: 1; overflow: auto; }
+.workspace-navigation-content h3 { font-size: 13px; }
+.workspace-live-sessions { display: grid; gap: 8px; margin: 12px 0; }
+.workspace-live-sessions button { display: grid; gap: 5px; min-height: 44px; text-align: left; overflow-wrap: anywhere; }
+.workspace-live-sessions small { color: var(--muted); }
+.workspace-navigation-content .multiplexer-panel { margin-top: 14px; }
+.workspace-navigation-content .tool-bar { flex-wrap: wrap; padding: 8px 0; }
+.workspace-navigation-content .mux-row button { min-height: 44px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.workspace-navigation-agents .agent-board { grid-template-columns: 1fr; padding: 12px; }
+.workspace-navigation-agents .agent-discovery { padding: 12px; }
+.workspace-navigation-agents .agent-note { margin-left: 12px; margin-right: 12px; }
+.sidebar[data-navigation="agents"], .sidebar[data-navigation="workspaces"] { width: clamp(300px, 32vw, 420px); }
+@media (max-width: 600px) {
+  .sidebar[data-navigation="agents"], .sidebar[data-navigation="workspaces"] { width: min(360px, calc(100vw - 20px)); }
+}
+
+.workspace-navigation-agents > .agent-panel:not([hidden]) { display: block; overflow: visible; }
+.workspace-navigation-agents .agent-board { overflow: visible; }

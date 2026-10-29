@@ -21,13 +21,19 @@ on:
       platform:
         description: Private build verification only; never creates tags or releases
         type: choice
-        options: [all, desktop, android, ios]
+        options: [all, desktop, android, ios, companion]
         default: all
 
 permissions:
   contents: read
 
 jobs:
+  companion:
+    if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'companion')
+    uses: ./.github/workflows/companion-artifacts.yml
+    with:
+      stage: true
+
   desktop:
     if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'desktop')
     strategy:
@@ -165,7 +171,7 @@ jobs:
         run: bun .changeset/release-apple.ts cleanup
 
   aggregate:
-    needs: [desktop, android]
+    needs: [desktop, android, companion]
     if: inputs.platform == '' || inputs.platform == 'all'
     runs-on: ubuntu-24.04
     timeout-minutes: 15

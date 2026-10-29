@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanupNativeMocks } from "./test/nativeCoreMock";
 import { afterEach, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import ApprovalPanel, { parseApprovals } from "./ApprovalPanel";
 vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
@@ -73,4 +73,28 @@ it("rejects malformed request hashes, ambiguous panes and unbounded payloads", (
     expect(() =>
       parseApprovals({ schemaVersion: 1, requests: [row] }),
     ).toThrow();
+});
+
+it('does not read approvals or keep its interval active while hidden',async()=>{
+  vi.useFakeTimers();
+  try {
+    vi.mocked(invoke).mockResolvedValue({schemaVersion:1,requests:[request]});
+    const view=render(<ApprovalPanel sessionId="visible-owner" visible={false}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(30000);});expect(invoke).not.toHaveBeenCalled();
+    view.rerender(<ApprovalPanel sessionId="visible-owner"/>);await act(async()=>{});expect(invoke).toHaveBeenCalledTimes(1);
+    view.rerender(<ApprovalPanel sessionId="visible-owner" visible={false}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(30000);});expect(invoke).toHaveBeenCalledTimes(1);
+    view.rerender(<ApprovalPanel sessionId="visible-owner"/>);await act(async()=>{});expect(invoke).toHaveBeenCalledTimes(2);
+  } finally {vi.useRealTimers();}
+});
+it.each(['accepted','rejected'])('retires an old hidden decision %s without changing the reopened owner',async outcome=>{
+  let complete!:(value:unknown)=>void,fail!:(error:unknown)=>void;
+  vi.mocked(invoke).mockImplementation(command=>command==='agent_approvals'?Promise.resolve({schemaVersion:1,requests:[request]}):new Promise((yes,no)=>{complete=yes;fail=no;}));
+  const view=render(<ApprovalPanel sessionId="original-ssh"/>);fireEvent.click(await screen.findByRole('button',{name:'Allow this request'}));
+  view.rerender(<ApprovalPanel sessionId="original-ssh" visible={false}/>);view.rerender(<ApprovalPanel sessionId="new-ssh"/>);
+  await screen.findByRole('button',{name:'Allow this request'});
+  await act(async()=>{if(outcome==='accepted')complete({schemaVersion:1,accepted:true});else fail('obsolete hidden decision');});
+  expect(screen.getByRole('button',{name:'Allow this request'})).toHaveProperty('disabled',false);expect(screen.queryByText('obsolete hidden decision')).toBeNull();
+  const decisions=vi.mocked(invoke).mock.calls.filter(([command])=>command==='resolve_agent_approval');
+  expect(decisions).toHaveLength(1);expect(decisions[0][1]).toMatchObject({sessionId:'original-ssh',agentSessionId:request.sessionId,id:request.id,expectedHash:request.expectedHash});
 });

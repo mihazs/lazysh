@@ -1,4 +1,6 @@
 //! Synthetic native stores only; no developer state or external services.
+#[path = "support/binary.rs"]
+mod binary;
 #[path = "../src/storage_schema.rs"]
 mod storage_schema;
 use chrono::Utc;
@@ -54,7 +56,7 @@ fn short_lived_writers_keep_private_sidecar_inodes_and_recover_commits() {
         assert_eq!(inspect(), original);
     }
     // A fresh process must recover the acknowledged rows from retained WAL.
-    let output = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+    let output = Command::new(binary::path())
         .env("LAZYSH_STATE_DIR", directory.path())
         .args(["snapshot", "--limit", "50"])
         .output()

@@ -32,13 +32,13 @@ test('aggregation requires every platform and preserves exact bytes with checksu
   await aggregatePackages(identity, join(root, 'incoming'), output);
   const manifest = await Bun.file(join(output, 'release.json')).json();
   expect(manifest.sha).toBe(identity.sha);
-  expect(manifest.platforms).toHaveLength(4);
+  expect(manifest.platforms).toHaveLength(releaseTargets.length);
   for (const receipt of manifest.platforms) for (const file of receipt.files) {
     expect(await Bun.file(join(output, file.name)).text()).toBe(
       await Bun.file(join(root, 'incoming', `release-${receipt.target}`, file.name)).text());
   }
   const lines = (await Bun.file(join(output, 'SHA256SUMS')).text()).trim().split('\n');
-  expect(lines).toHaveLength(6);
+  expect(lines).toHaveLength(releaseTargets.reduce((count, target) => count + artifactTargets[target].length, 1));
   for (const line of lines) {
     const [hash, name] = line.split('  ');
     expect((await digestFile(join(output, name))).sha256).toBe(hash);
@@ -175,7 +175,7 @@ test('publication uploads a complete digest-acknowledged draft before making it 
   const { calls, result } = await publication(root);
   await result;
   const uploads = calls.filter(call => call.method === 'UPLOAD');
-  expect(uploads).toHaveLength(9);
+  expect(uploads).toHaveLength(releaseTargets.reduce((count, target) => count + artifactTargets[target].length, 4));
   expect(calls.find(call => call.path === 'releases')?.body).toMatchObject({ draft: true, target_commitish: identity.sha });
   expect(calls.at(-1)).toEqual({ path: 'releases/8', method: 'PATCH', body: { draft: false, make_latest: 'legacy' } });
 }));

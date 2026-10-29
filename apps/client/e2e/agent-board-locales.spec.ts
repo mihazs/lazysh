@@ -51,6 +51,7 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} reported discovery keeps
   await expect(filters.getByRole('button',{name:`${labels.all} 3`,exact:true})).toHaveAttribute('aria-pressed','true');
   await root.locator('.agent-card').filter({hasText:agentBoardRecord.summary}).getByRole('button',{name:/./}).first().click();
   const context=root.getByRole('region',{name:labels.selected,exact:true});
+  await context.locator('summary').click();
   await expect(context).toContainText(agentBoardRecord.paneId);
   await expect(context.getByRole('button',{name:/jump|attach/i})).toHaveCount(0);
   const approval=root.locator('.approval-panel article');const original=await approval.elementHandle();
