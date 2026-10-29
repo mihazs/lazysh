@@ -3,7 +3,7 @@ import {execFile} from 'node:child_process';
 import {writeFile} from 'node:fs/promises';
 import {promisify} from 'node:util';
 import {remote} from 'webdriverio';
-import {parseWindowsGuiOwner,windowsGuiOwnerScript,windowsGuiSessionResponse,windowsGuiSessionNoResponse,windowsGuiProbeFailure} from '../../../../.changeset/windows-installed-gui';
+import {parseWindowsGuiOwner,windowsGuiOwnerScript,windowsGuiSessionResponse,windowsGuiSessionNoResponse,windowsGuiProbeFailure,windowsGuiSessionHealth,windowsGuiHealthOwnerScript} from '../../../../.changeset/windows-installed-gui';
 import {assertDirectDriverEnvironment} from '../policy';
 
 let browser:Awaited<ReturnType<typeof remote>>|undefined;
@@ -41,8 +41,13 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   // These are synthetic test identities only; no DOM/profile/desktop capture is retained.
   await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify({...original,source:sha,version}),{flag:'wx'});
   } catch(error) {
-    const failure: {failure:string;session?:ReturnType<typeof windowsGuiSessionResponse>;ownedWindow?:'VERIFIED'|'UNVERIFIED';probe?:ReturnType<typeof windowsGuiProbeFailure>}={failure:stage};
+    const failure: {failure:string;session?:ReturnType<typeof windowsGuiSessionResponse>;ownedWindow?:'VERIFIED'|'UNVERIFIED';probe?:ReturnType<typeof windowsGuiProbeFailure>;proxyHealth?:string;nativeHealth?:string}={failure:stage};
     if(stage==='GUI_SESSION') {
+      const health=await windowsGuiSessionHealth([port,Number(process.env.LAZYSH_GUI_NATIVE_PORT)],async()=>{
+        const verified=await promisify(execFile)('pwsh.exe',['-NoProfile','-NonInteractive','-Command',windowsGuiHealthOwnerScript],{timeout:10000,maxBuffer:1024});
+        if(verified.stdout!=='VERIFIED')throw new Error('Unverified health ownership');
+      });
+      failure.proxyHealth=health.proxy;failure.nativeHealth=health.native;
       failure.session=session??windowsGuiSessionNoResponse(error,port);
       try {await owner();failure.ownedWindow='VERIFIED';}
       catch(probe) {failure.ownedWindow='UNVERIFIED';failure.probe=windowsGuiProbeFailure('LAZYSH_WINDOWS_GUI_PROBE:'+(probe instanceof Error && typeof probe.cause==='string' ? probe.cause : ''));}

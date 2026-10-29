@@ -94,4 +94,6 @@ The transaction owns initially absent actual KnownFolder `app.lazysh.client` roa
 
 Pinned official tauri-driver 2.1.0 launches the exact installed image through Microsoft EdgeDriver matching installed WebView2. Its Windows implementation creates a kill-on-close Job Object before spawning the native driver. The acceptance verifies loopback listener process ownership, native image/hash/PID/start/HWND, bundled frontend, About version and source revision. The parent retains the driver process, bounds the client and descendant retirement, suppresses raw native output, and requires cleanup/uninstall after failure. It captures no desktop screenshots or user application content.
 
+After session creation fails, two bounded read-only `/status` probes record only finite health categories, after rechecking the original driver identities and listener roles before and after. Responses, capabilities and messages are discarded; READY does not establish session or GUI success. The original failure and cleanup gates remain authoritative.
+
 This is a foundation gate; its first actual Windows execution remains required before merge. It does not establish warm singleton argv, ConPTY terminal behavior or authenticated SSH, which remain under #457. Published 0.23.0 assets are untouched; CI evidence belongs to its exact candidate source/binary.

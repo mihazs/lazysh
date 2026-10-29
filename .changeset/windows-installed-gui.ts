@@ -1,3 +1,4 @@
+import {request} from 'node:http';
 import {win32} from 'node:path';
 
 export const windowsGuiRoleRejections = ['ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES'] as const;
@@ -28,6 +29,45 @@ export function windowsGuiSessionNoResponse(error:unknown,port:number):typeof wi
   const expected=`WebDriverError: Request timed out! Consider increasing the "connectionRetryTimeout" option. when running "http://127.0.0.1:${port}/session" with method "POST"`;
   return Number.isInteger(port) && port>0 && port<=65535 && error instanceof Error
     && error.message===expected ? 'CLIENT_TIMEOUT' : 'NO_RESPONSE';
+}
+
+// Standard W3C GET /status reports health only; ready=true does not promise NewSession success.
+export const windowsGuiHealthStates = ['READY', 'NOT_READY', 'NO_RESPONSE', 'UNVERIFIED'] as const;
+type GuiHealth = typeof windowsGuiHealthStates[number];
+export async function windowsGuiStatus(port:number):Promise<GuiHealth> {
+  if(!Number.isInteger(port)||port<1||port>65535)return 'UNVERIFIED';
+  return new Promise(resolve=>{
+    let complete=false;
+    const finish=(state:GuiHealth)=>{if(!complete){complete=true;clearTimeout(deadline);resolve(state);}};
+    const requestStatus=request({hostname:'127.0.0.1',port,path:'/status',method:'GET',agent:false},response=>{
+      let bytes=0;const chunks:Buffer[]=[];
+      if(response.statusCode!==200){finish('UNVERIFIED');response.destroy();return;}
+      response.on('data',(chunk:Buffer)=>{
+        bytes+=chunk.length;
+        if(bytes>2048){finish('UNVERIFIED');response.destroy();return;}
+        chunks.push(chunk);
+      });
+      response.on('error',()=>finish('NO_RESPONSE'));
+      response.on('end',()=>{
+        try {const ready=JSON.parse(Buffer.concat(chunks).toString('utf8'))?.value?.ready;
+          finish(ready===true?'READY':ready===false?'NOT_READY':'UNVERIFIED');
+        } catch {finish('UNVERIFIED');}
+      });
+    });
+    const deadline=setTimeout(()=>{finish('NO_RESPONSE');requestStatus.destroy();},1000);
+    requestStatus.on('error',()=>finish('NO_RESPONSE'));
+    requestStatus.end();
+  });
+}
+export async function windowsGuiSessionHealth(ports:readonly number[], verify:()=>Promise<void>) {
+  const unverified={proxy:'UNVERIFIED',native:'UNVERIFIED'} as const;
+  try {
+    if(ports.length!==2||ports[0]===ports[1])return unverified;
+    await verify();
+    const proxy=await windowsGuiStatus(ports[0]),native=await windowsGuiStatus(ports[1]);
+    await verify();
+    return {proxy,native};
+  } catch {return unverified;}
 }
 
 export function windowsGuiToolEnvironment(driver:string,edge:string) {
@@ -185,7 +225,7 @@ export function parseWindowsGuiOwner(value:string, expectedHash:string) {
   return parsed as {pid:number;start:string;window:string;sha256:string};
 }
 
-export const windowsInstalledGuiScript = String.raw`
+export const windowsGuiEndpointsScript = String.raw`
 function GuiEndpoints($sockets, $ports, $driverId, $nativeId) {
   Require ($ports.Count -eq 2 -and $ports[0] -ne $ports[1] -and $sockets.Count -ge 2 -and $sockets.Count -le 4) 'GUI_ENDPOINT'
   Require (@($sockets | Where-Object { $_.LocalPort -notin $ports -or $_.LocalAddress -notin @('127.0.0.1', '::1') }).Count -eq 0) 'GUI_LISTENER_ADDRESS'
@@ -196,6 +236,29 @@ function GuiEndpoints($sockets, $ports, $driverId, $nativeId) {
     Require (@($sockets | Where-Object { $_.LocalPort -eq $port -and $_.OwningProcess -ne $expectedId }).Count -eq 0) 'GUI_ENDPOINT'
   }
 }
+`;
+export const windowsGuiHealthOwnershipScript = String.raw`
+function GuiHealthOwnership {
+  foreach ($role in @('DRIVER','EDGE')) {
+    $image=[Environment]::GetEnvironmentVariable('LAZYSH_GUI_'+$role)
+    $process=Get-Process -Id ([int][Environment]::GetEnvironmentVariable('LAZYSH_GUI_'+$role+'_PID'))
+    if ($process.Path -ne $image -or $process.StartTime.ToUniversalTime().Ticks.ToString() -ne [Environment]::GetEnvironmentVariable('LAZYSH_GUI_'+$role+'_START') -or (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash -ne [Environment]::GetEnvironmentVariable('LAZYSH_GUI_'+$role+'_SHA256')) { throw 'identity' }
+  }
+  $ports=@([int]$env:LAZYSH_GUI_PORT,[int]$env:LAZYSH_GUI_NATIVE_PORT)
+  $sockets=@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -in $ports })
+  GuiEndpoints $sockets $ports ([int]$env:LAZYSH_GUI_DRIVER_PID) ([int]$env:LAZYSH_GUI_EDGE_PID)
+}
+`;
+export const windowsGuiHealthOwnerScript = String.raw`
+${windowsInstallerPathsScript}
+${windowsGuiEndpointsScript}
+${windowsGuiHealthOwnershipScript}
+$ErrorActionPreference='Stop'
+try { GuiHealthOwnership; [Console]::Out.Write('VERIFIED') } catch { exit 1 }
+`;
+
+export const windowsInstalledGuiScript = String.raw`
+${windowsGuiEndpointsScript}
 function GuiProcess($file, $arguments) {
   Plain $file
   $info = [Diagnostics.ProcessStartInfo]::new($file)
@@ -257,6 +320,7 @@ function ExerciseInstalledGui {
     Require (!(OptionalItem $env:LAZYSH_GUI_RECEIPT)) 'EXISTING_PATH'
     $env:LAZYSH_GUI_BINARY = $installed
     $env:LAZYSH_GUI_PORT = [string]$ports[0]
+    $env:LAZYSH_GUI_NATIVE_PORT = [string]$ports[1]
     $driver = GuiProcess $env:LAZYSH_GUI_DRIVER @('--port', [string]$ports[0], '--native-port', [string]$ports[1], '--native-host', '127.0.0.1', '--native-driver', $env:LAZYSH_GUI_EDGE)
     $env:LAZYSH_GUI_DRIVER_PID = [string]$driver.Id
     $env:LAZYSH_GUI_DRIVER_START = $driver.StartTime.ToUniversalTime().Ticks.ToString()
@@ -270,6 +334,12 @@ function ExerciseInstalledGui {
     $nativeDriver = @(Get-CimInstance Win32_Process -OperationTimeoutSec 5 | Where-Object { $_.ParentProcessId -eq $driver.Id -and $_.ExecutablePath -eq $env:LAZYSH_GUI_EDGE })
     Require ($nativeDriver.Count -eq 1) 'GUI_NATIVE_DRIVER'
     GuiEndpoints $sockets $ports $driver.Id $nativeDriver[0].ProcessId
+    $edgeProcess = Get-Process -Id $nativeDriver[0].ProcessId
+    Require ($edgeProcess.Path -eq $env:LAZYSH_GUI_EDGE) 'GUI_NATIVE_DRIVER'
+    $env:LAZYSH_GUI_EDGE_PID = [string]$edgeProcess.Id
+    $env:LAZYSH_GUI_EDGE_START = $edgeProcess.StartTime.ToUniversalTime().Ticks.ToString()
+    $env:LAZYSH_GUI_EDGE_SHA256 = (Get-FileHash -LiteralPath $env:LAZYSH_GUI_EDGE -Algorithm SHA256).Hash
+    $env:LAZYSH_GUI_DRIVER_SHA256 = (Get-FileHash -LiteralPath $env:LAZYSH_GUI_DRIVER -Algorithm SHA256).Hash
     $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts')
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {
@@ -283,6 +353,8 @@ function ExerciseInstalledGui {
             Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED', 'ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES')) 'GUI_CLIENT'
             $sessionCode += ':' + $rejected.probe
           }
+          Require ($rejected.proxyHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED') -and $rejected.nativeHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED')) 'GUI_CLIENT'
+          $sessionCode += ':HEALTH_' + $rejected.proxyHealth + '_NATIVE_' + $rejected.nativeHealth
           Require $false $sessionCode
         }
         if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }

@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiProbeFailure, windowsGuiWindowRoleScript } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiProbeFailure, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -227,7 +227,7 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
 }, 500_000);
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint roles admit only IPv4 plus owned IPv6 siblings', async () => {
-  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + String.raw`
+  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + windowsGuiHealthOwnershipScript + String.raw`
 $ErrorActionPreference = 'Stop'
 $first = [PSCustomObject]@{LocalPort=12345;LocalAddress='127.0.0.1';OwningProcess=111}
 $second = [PSCustomObject]@{LocalPort=12346;LocalAddress='127.0.0.1';OwningProcess=222}
@@ -256,6 +256,27 @@ $script:failure = 'UNEXPECTED'
 $rejected = $false
 try { GuiEndpoints @($first,$secondV6) @(12345,12346) 111 222 } catch { $rejected = $true }
 if (!$rejected -or $script:failure -ne 'GUI_IPV4_REQUIRED') { throw 'missing IPv4 admitted' }
+$current=Get-Process -Id $PID
+foreach ($role in @('DRIVER','EDGE')) {
+  [Environment]::SetEnvironmentVariable('LAZYSH_GUI_'+$role,$current.Path)
+  [Environment]::SetEnvironmentVariable('LAZYSH_GUI_'+$role+'_PID',[string]$PID)
+  [Environment]::SetEnvironmentVariable('LAZYSH_GUI_'+$role+'_START',$current.StartTime.ToUniversalTime().Ticks.ToString())
+  [Environment]::SetEnvironmentVariable('LAZYSH_GUI_'+$role+'_SHA256',(Get-FileHash -LiteralPath $current.Path -Algorithm SHA256).Hash)
+}
+$env:LAZYSH_GUI_PORT='12345';$env:LAZYSH_GUI_NATIVE_PORT='12346'
+function Get-NetTCPConnection { @([PSCustomObject]@{LocalPort=12345;LocalAddress='127.0.0.1';OwningProcess=$PID},[PSCustomObject]@{LocalPort=12346;LocalAddress='127.0.0.1';OwningProcess=$PID}) }
+GuiHealthOwnership
+foreach ($role in @('DRIVER','EDGE')) {
+  foreach ($field in @('', '_PID', '_START', '_SHA256')) {
+    $key='LAZYSH_GUI_'+$role+$field
+    $original=[Environment]::GetEnvironmentVariable($key)
+    [Environment]::SetEnvironmentVariable($key,'invalid')
+    $rejected=$false
+    try { GuiHealthOwnership } catch { $rejected=$true }
+    [Environment]::SetEnvironmentVariable($key,$original)
+    if (!$rejected) { throw 'health identity change admitted' }
+  }
+}
 'owned GUI endpoint shapes passed'
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI endpoint shapes passed');
@@ -385,6 +406,54 @@ try {
 `], {...process.env, LAZYSH_GUI_CONTRACT_MODULE: new URL('../.changeset/windows-installed-gui.ts', import.meta.url).href}, 15000);
   expect(result).toBe('CLIENT_TIMEOUT');
 },20000);
+test('Windows failure health probes are bounded direct read-only requests with ownership retirement', async () => {
+  const result=await native('node',['--input-type=module','-e',String.raw`
+import {createServer} from 'node:http';
+import assert from 'node:assert/strict';
+const {windowsGuiStatus,windowsGuiSessionHealth}=await import(process.env.LAZYSH_GUI_CONTRACT_MODULE);
+let calls=0,proxyCalls=0;let mode='ready';
+const server=createServer((request,response)=>{
+  calls++;assert.equal(request.method,'GET');assert.equal(request.url,'/status');
+  if(mode==='stall')return;
+  if(mode==='redirect'){response.writeHead(302,{location:'http://127.0.0.1:1/private'});response.end();return;}
+  if(mode==='large'){response.end(' '.repeat(2049));return;}
+  if(mode==='boundary'){response.end(JSON.stringify({value:{ready:true}}).padEnd(2048,' '));return;}
+  response.end(mode==='ready'?'{"value":{"ready":true,"message":"private"}}':mode==='false'?'{"value":{"ready":false}}':'{"value":{"ready":"true"}}');
+});
+const other=createServer((request,response)=>{proxyCalls++;response.end('private');});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+await new Promise(resolve=>other.listen(0,'127.0.0.1',resolve));
+const port=server.address().port,otherPort=other.address().port;
+process.env.HTTP_PROXY=process.env.http_proxy='http://127.0.0.1:'+otherPort;
+try {
+  assert.equal(await windowsGuiStatus(port),'READY');
+  for(const setting of ['shape','large','redirect']){mode=setting;assert.equal(await windowsGuiStatus(port),'UNVERIFIED');}
+  mode='false';assert.equal(await windowsGuiStatus(port),'NOT_READY');
+  mode='boundary';assert.equal(await windowsGuiStatus(port),'READY');
+  mode='stall';assert.equal(await windowsGuiStatus(port),'NO_RESPONSE');
+  assert.equal(await windowsGuiStatus(0),'UNVERIFIED');
+  mode='ready';let checks=0;
+  assert.deepEqual(await windowsGuiSessionHealth([port,otherPort],async()=>{checks++;}),{proxy:'READY',native:'UNVERIFIED'});
+  assert.equal(checks,2);assert.equal(proxyCalls,1);
+  const before=calls;assert.deepEqual(await windowsGuiSessionHealth([port,otherPort],async()=>{throw Error('private');}),{proxy:'UNVERIFIED',native:'UNVERIFIED'});
+  assert.equal(calls,before);
+  checks=0;assert.deepEqual(await windowsGuiSessionHealth([port,otherPort],async()=>{if(++checks===2)throw Error('retired');}),{proxy:'UNVERIFIED',native:'UNVERIFIED'});
+  assert.equal(checks,2);
+  console.info('BOUNDED_HEALTH');
+} finally {for(const endpoint of [server,other]){endpoint.closeAllConnections();await new Promise(resolve=>endpoint.close(resolve));}}
+`],{...process.env,LAZYSH_GUI_CONTRACT_MODULE:new URL('../.changeset/windows-installed-gui.ts',import.meta.url).href},10000);
+  expect(result).toBe('BOUNDED_HEALTH');
+},15000);
+test('Windows health labels retain primary and cleanup errors while rejecting untrusted suffixes',()=>{
+  const base='gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:UNKNOWN_CLASS';
+  for(const proxy of ['READY','NOT_READY','NO_RESPONSE','UNVERIFIED'])for(const native of ['READY','NOT_READY','NO_RESPONSE','UNVERIFIED']){
+    const label=base+':HEALTH_'+proxy+'_NATIVE_'+native;
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+label+'\nLAZYSH_WINDOWS_INSTALLER:gui:GUI_CLEANUP\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED')).toBe(label+'; gui:GUI_CLEANUP; cleanup:UNEXPECTED');
+  }
+  for(const label of [base+':HEALTH_PRIVATE_NATIVE_READY',base+':HEALTH_READY_NATIVE_READY raw','gui:GUI_OWNER:HEALTH_READY_NATIVE_READY','install:BINARY_MISMATCH:HEALTH_READY_NATIVE_READY']){
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+label)).toBeUndefined();
+  }
+});
 test('Windows session and owned-window diagnostics expose only the finite outcomes', () => {
   for (const code of windowsGuiSessionGuards) {
     expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:'+code)).toBe('gui:'+code);

@@ -61,11 +61,12 @@ export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (!markers.length || markers.length > 3) return;
   const labels: string[] = [];
   for (const marker of markers) {
-    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z0-9_]+)(?::([A-Z_]+))?$/.exec(marker);
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z0-9_]+)(?::(?!HEALTH_)([A-Z_]+))?(?::HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED))?$/.exec(marker);
     if (!match || !windowsInstallerGuards.has(match[2])) return;
     if (match[3] && (match[1] !== 'gui' || !windowsGuiSessionGuards.includes(match[2]) || !match[2].endsWith('_WINDOW_UNVERIFIED')
       || !windowsGuiProbePhases.some(phase => phase === match[3]))) return;
-    labels.push(`${match[1]}:${match[2]}${match[3] ? ':' + match[3] : ''}`);
+    if(match[4] && (match[1]!=='gui'||!windowsGuiSessionGuards.includes(match[2])))return;
+    labels.push(`${match[1]}:${match[2]}${match[3] ? ':' + match[3] : ''}${match[4] ? ':HEALTH_'+match[4]+'_NATIVE_'+match[5] : ''}`);
   }
   return labels.join('; ');
 }
