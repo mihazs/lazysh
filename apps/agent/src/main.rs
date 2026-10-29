@@ -13,6 +13,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect or explicitly install this verified binary into its managed user namespace.
+    Installation {
+        #[command(subcommand)]
+        command: lazysh_agent::installation::Command,
+    },
     /// Explicit opt-in relay setup and bounded drain; never installs hooks or schedules.
     Relay {
         #[command(subcommand)]
@@ -148,6 +153,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
     }
     let output = match cli.command {
+        Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
         Command::Relay { command } => Some(lazysh_agent::relay::run(
             command,
             &lazysh_agent::state_directory()?,

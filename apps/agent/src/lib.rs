@@ -1,6 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 pub mod approvals;
 pub mod devices;
+pub mod installation;
 pub mod relay;
 pub mod reported_history;
 pub mod settings;
@@ -66,6 +67,7 @@ const HOOK_EVENTS: [&str; 8] = [
 pub enum Error {
     InvalidEvent,
     InvalidArgument,
+    Installation(&'static str),
     UnsupportedStateFilesystem,
     Device(&'static str),
     Settings(&'static str),
@@ -78,6 +80,7 @@ impl Error {
         match self {
             Self::InvalidEvent => "InvalidEvent",
             Self::InvalidArgument => "InvalidArgument",
+            Self::Installation(kind) => kind,
             Self::UnsupportedStateFilesystem => "UnsupportedStateFilesystem",
             Self::Device(kind) => kind,
             Self::Settings(kind) => kind,

@@ -4,11 +4,15 @@
 
 - Add a manual smoke for public signed ARM64 Android APK installation, native UI startup and same-byte reinstall with preserved synthetic host data on an explicitly admitted ARM translation guest. Physical-device and cross-version acceptance remain separate; application defaults are unchanged.
 
+- Add explicit companion installation inspection and preview-bound local installation for Linux and macOS. The CLI derives one private user-local destination, preserves existing binaries on pre-commit rejection, and distinguishes committed durability uncertainty. Windows installation reports unsupported pending native ownership and SSH verification; existing binary distribution, data, settings, hooks and PATH defaults are unchanged. In-app transfer and installation remain separate work.
+
 - Add persistent Connections, Workspaces and Agents navigation to the existing sidebar/drawer. Connections remains the default; agent drafts persist while hidden owners suspend activity, and Jump To uses one guarded persistent tmux picker.
 
 - Add verified companion executable builds to future complete release sets for Linux x64/ARM64, macOS Intel/ARM64 and Windows x64. Candidate checks create no publication receipts; trusted release builds retain exact source/version/hash and staged-byte CLI/storage gates. Existing companion/data defaults and deferred Apple application packages are unchanged; in-app installation remains separate work.
 
 - Add reported-agent search, status filters and selected-report context while preserving explicit refresh, history and approval ownership. Reported pane IDs remain context; application defaults are unchanged.
+
+- The visible Agents board now refreshes reported activity every five seconds by default while the app is in the foreground. Hidden boards and background windows pause automatic reads; pending snapshots are not duplicated, and manual Refresh remains available. Transcript discovery and other host permissions are unchanged.
 
 - Add an optional per-host default multiplexer and named session for direct SSH entry. Existing hosts keep normal connection behavior; the saved transport is preserved, and unavailable targets never select another session automatically.
 

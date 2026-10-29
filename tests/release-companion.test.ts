@@ -52,6 +52,7 @@ test('native matrix is complete and candidates cannot upload publication receipt
   expect(steps.find((step: any) => step.uses === 'actions/upload-artifact@v4').if).toBe('inputs.stage');
   expect(workflow.on.workflow_call.inputs.stage.default).toBe(false);
   const harness = steps.find((step: any) => step.name?.startsWith('Native host harness'));
+  expect(harness.run).toContain('--test installation');
   expect(harness.env.LAZYSH_TEST_COMPANION_BINARY).toBe('${{ steps.prepare.outputs.binary }}');
   const verify = steps.find((step: any) => step.name?.startsWith('Revalidate exact'));
   expect(verify.env.EXPECTED_COMPANION_SHA).toBe('${{ steps.prepare.outputs.sha256 }}');
