@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an optional per-host default multiplexer and named session for direct SSH entry. Existing hosts keep normal connection behavior; the saved transport is preserved, and unavailable targets never select another session automatically.
+
 - Show the canonical lazysh logo on the welcome screen, replacing the unrelated terminal illustration. Application defaults are unchanged.
 
 - Reject unsupported tmux client-loop formats before granting navigation or guarded Chat input, and require exactly one matching client for every action. Ordinary terminals remain available on older servers; tmux 3.2a advanced bindings are unavailable.

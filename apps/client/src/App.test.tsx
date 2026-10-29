@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     muxSessions: vi.fn(),
     attachTmux: vi.fn(),
     attachMultiplexer: vi.fn(),
+    attachDefaultMultiplexer: vi.fn(),
     tmuxJumpSnapshot: vi.fn(),
     tmuxJump: vi.fn(),
   },
@@ -1525,4 +1526,78 @@ it('retains only class-branded global failures across locales and preserves ever
       for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});expect(screen.getByRole('alert').textContent).toContain(String(detail));expect(screen.getByRole('alert').textContent).not.toContain('Never trust this key');}
     }
   }finally{await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
+
+it.each(['tmux','herdr','zellij'] as const)('enters the saved named %s directly through SSH and retires only its bootstrap',async kind=>{
+  const target={kind,name:kind==='herdr' ? 'named-work' : "work 'literal;"};
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'mosh',defaultMultiplexer:target}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'default-parent'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'default-child'});
+  const user=await openConnection();
+  expect(screen.getByLabelText('Transport')).toHaveProperty('value','ssh');
+  expect(screen.getByLabelText('Transport')).toHaveProperty('disabled',true);
+  expect(screen.getByText(/Direct multiplexer entry uses SSH. The saved transport preference is unchanged./)).toBeTruthy();
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.attachDefaultMultiplexer).toHaveBeenCalledExactlyOnceWith('default-parent',target,expect.any(Function));
+  expect(mocks.api.adoptSession).toHaveBeenCalledWith('default-child');
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='disconnect')).toEqual([['disconnect',{sessionId:'default-parent'}]]);
+  expect(mocks.api.connectMosh).not.toHaveBeenCalled();expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  expect(mocks.api.saveHost).not.toHaveBeenCalled();
+});
+it('shows a selected multiplexer preflight failure and closes its bootstrap without adopting a blank terminal',async()=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'zellij',name:'work'}}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'unavailable-parent'});
+  mocks.api.attachDefaultMultiplexer.mockRejectedValue({kind:'multiplexer_unavailable',message:'Selected multiplexer unavailable'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  expect((await screen.findByRole('alert')).textContent).toContain('Selected multiplexer unavailable');
+  expect(screen.queryByText('Live SSH terminal')).toBeNull();
+  expect(mocks.api.adoptSession).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'unavailable-parent'});
+  expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+});
+it('keeps explicit desktop host launch semantics ahead of the saved default',async()=>{
+  enableHostLaunch({...host,defaultMultiplexer:{kind:'herdr',name:'saved'}});
+  mocks.api.connect.mockResolvedValue({sessionId:'explicit-host'});
+  const user=userEvent.setup();render(<App/>);
+  await user.type(await screen.findByLabelText('Password'),'explicit');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+  expect(mocks.api.connect).toHaveBeenCalledWith(host.id,{password:'explicit'},expect.any(Function),{launchReceipt:hostLaunchReceipt});
+});
+it('persists and removes the host default without changing the saved transport',async()=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'et'}]);
+  mocks.api.saveHost.mockImplementation(async value=>value);
+  const user=userEvent.setup();render(<App/>);
+  await user.click(await screen.findByRole('button',{name:'Edit Home'}));
+  await user.selectOptions(screen.getByLabelText('Default multiplexer'),'tmux');
+  await user.type(screen.getByLabelText('Default multiplexer session'),'new-work');
+  expect(screen.getByText('Attach to the named session, or create it using the selected multiplexer. No other session is selected.')).toBeTruthy();
+  await user.click(screen.getByRole('button',{name:'Save host'}));
+  await waitFor(()=>expect(mocks.api.saveHost).toHaveBeenCalled());
+  const saved=mocks.api.saveHost.mock.calls[0][0];
+  expect(saved).toMatchObject({transport:'et',defaultMultiplexer:{kind:'tmux',name:'new-work'}});
+  await user.click(await screen.findByRole('button',{name:'Edit Home'}));
+  await user.selectOptions(screen.getByLabelText('Default multiplexer'),'');
+  await user.click(screen.getByRole('button',{name:'Save host'}));
+  await waitFor(()=>expect(mocks.api.saveHost).toHaveBeenCalledTimes(2));
+  expect(mocks.api.saveHost.mock.calls[1][0]).toMatchObject({transport:'et',defaultMultiplexer:undefined});
+});
+it.each([{kind:'tmux',name:'bad.name'},{kind:'tmux',name:'bad:name'},{kind:'herdr',name:' '},{kind:'herdr',name:'bad name'},{kind:'herdr',name:'..'},{kind:'herdr',name:'a'.repeat(65)},{kind:'zellij',name:'--option'},{kind:'herdr',name:'é'.repeat(101)},{kind:'other',name:'work'}])('rejects invalid saved default %j before native save',target=>{
+  expect(validateHost({...host,defaultMultiplexer:target as Host['defaultMultiplexer']})).toBeTruthy();
+});
+
+it('retires a late default child after its connection dialog closes',async()=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'late'}}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'late-bootstrap'});
+  let finish!:(value:{sessionId:string})=>void;
+  mocks.api.attachDefaultMultiplexer.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await waitFor(()=>expect(mocks.api.attachDefaultMultiplexer).toHaveBeenCalled());
+  await user.click(screen.getByRole('button',{name:'Close Connect to Home'}));
+  await act(async()=>finish({sessionId:'late-mux-child'}));
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'late-mux-child'}));
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'late-bootstrap'});
+  expect(mocks.api.adoptSession).not.toHaveBeenCalled();
 });

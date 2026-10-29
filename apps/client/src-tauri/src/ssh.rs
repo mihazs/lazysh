@@ -80,7 +80,37 @@ pub enum Transport {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultMultiplexer {
+    pub kind: crate::multiplexer::MultiplexerKind,
+    pub name: String,
+}
+
+impl DefaultMultiplexer {
+    fn validate(&self) -> Result<()> {
+        crate::multiplexer::default_entry_command(self.kind, &self.name).map(|_| ())
+    }
+}
+fn deserialize_default_multiplexer<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<DefaultMultiplexer>, D::Error> {
+    let value = Option::<DefaultMultiplexer>::deserialize(deserializer)?;
+    if let Some(mux) = &value {
+        mux.validate()
+            .map_err(|_| serde::de::Error::custom("Invalid default multiplexer"))?;
+    }
+    Ok(value)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Host {
+    #[serde(
+        default,
+        rename = "defaultMultiplexer",
+        deserialize_with = "deserialize_default_multiplexer",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_multiplexer: Option<DefaultMultiplexer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<Transport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +166,9 @@ impl Host {
         )
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(mux) = &self.default_multiplexer {
+            mux.validate()?;
+        }
         if let Some(options) = &self.mosh {
             options.validate()?;
         }
@@ -2809,9 +2842,16 @@ pub async fn attach_multiplexer(
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
+    create_if_missing: Option<bool>,
 ) -> AccessResult<Connected> {
     lease
         .run(async {
+            if create_if_missing.unwrap_or(false) {
+                check_size(cols, rows)?;
+                if tmux_server.is_some() {return Err(SshError::new("invalid_tmux_server","Default entry uses the default multiplexer server"));}
+                let parent=state.session(&session_id).await?;
+                crate::multiplexer::prepare_default_entry(&parent,&lease,kind,&name).await?;
+            }
             // Both public tmux attachment entry points must establish the same
             // native display binding; frontend routing is not the authority.
             if matches!(kind, crate::multiplexer::MultiplexerKind::Tmux) {
@@ -3024,6 +3064,7 @@ mod tests {
     }
     fn metadata_host(id: &str, name: &str) -> Host {
         Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3063,6 +3104,7 @@ mod tests {
             while stream.read(&mut buffer).await.unwrap() != 0 {}
         });
         let host = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3126,6 +3168,65 @@ mod tests {
         task.await.unwrap();
         assert!(!saved.load(Ordering::SeqCst));
         assert!(forgotten.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn default_multiplexer_is_optional_validated_and_preserved_without_changing_transport_or_credentials(
+    ) {
+        let base = serde_json::to_value(metadata_host("mux-default", "Default")).unwrap();
+        let old: Host = serde_json::from_value(base.clone()).unwrap();
+        assert!(old.default_multiplexer.is_none());
+        assert!(base.get("defaultMultiplexer").is_none());
+        for kind in ["tmux", "herdr", "zellij"] {
+            let mut value = base.clone();
+            value["transport"] = serde_json::json!("mosh");
+            let selected = if kind == "herdr" {
+                "named-workspace"
+            } else {
+                "named 'workspace; literal"
+            };
+            value["defaultMultiplexer"] = serde_json::json!({"kind":kind,"name":selected});
+            let host: Host = serde_json::from_value(value).unwrap();
+            assert_eq!(old.credential_binding(), host.credential_binding());
+            let (dir, state) = fixture_state();
+            save_host_inner(&state, host).unwrap();
+            let reload = AppState::new(dir.path().into()).unwrap();
+            let reloaded = reload.host("mux-default").unwrap();
+            assert_eq!(reloaded.transport, Some(Transport::Mosh));
+            assert_eq!(
+                reloaded.default_multiplexer.as_ref().unwrap().name,
+                selected
+            );
+            assert_eq!(
+                serde_json::to_value(&reloaded).unwrap()["defaultMultiplexer"]["kind"],
+                kind
+            );
+        }
+        for invalid in [
+            serde_json::json!({"kind":"unknown","name":"work"}),
+            serde_json::json!({"kind":"tmux","name":""}),
+            serde_json::json!({"kind":"tmux","name":"   "}),
+            serde_json::json!({"kind":"tmux","name":"bad.name"}),
+            serde_json::json!({"kind":"tmux","name":"bad:name"}),
+            serde_json::json!({"kind":"tmux","name":"line\nnext"}),
+            serde_json::json!({"kind":"tmux","name":"é".repeat(101)}),
+            serde_json::json!({"kind":"zellij","name":"--option"}),
+            serde_json::json!({"kind":"herdr","name":"ok","command":"bad"}),
+            serde_json::json!({"kind":"herdr","name":"bad name"}),
+            serde_json::json!({"kind":"herdr","name":".."}),
+            serde_json::json!({"kind":"herdr","name":"a".repeat(65)}),
+        ] {
+            let mut value = base.clone();
+            value["defaultMultiplexer"] = invalid;
+            assert!(serde_json::from_value::<Host>(value.clone()).is_err());
+            let (dir, _) = fixture_state();
+            fs::write(
+                dir.path().join("hosts.json"),
+                serde_json::to_vec(&vec![value]).unwrap(),
+            )
+            .unwrap();
+            assert!(AppState::new(dir.path().into()).is_err());
+        }
     }
 
     #[test]
@@ -3226,6 +3327,7 @@ mod tests {
     async fn deleting_bastion_rechecks_dependencies_added_while_vault_removal_is_pending() {
         let (_dir, state) = fixture_state();
         let jump = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3241,6 +3343,7 @@ mod tests {
             forward_agent: false,
         };
         let mut target = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -3937,6 +4040,7 @@ mod tests {
             ..Default::default()
         });
         let host = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -4468,6 +4572,7 @@ mod tests {
             80,
             24,
             Channel::new(|_| Ok(())),
+            None,
         )
         .await
         .unwrap()
@@ -4726,6 +4831,7 @@ mod tests {
     fn ui_cannot_inject_clear_or_change_a_pin() {
         let (_dir, state) = fixture_state();
         let mut host = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -5221,6 +5327,7 @@ mod tests {
         .unwrap();
         let state = AppState::new(dir.path().join("config")).unwrap();
         let host = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,

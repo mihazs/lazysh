@@ -27,6 +27,7 @@ export type Host = {
   credentialsStored?: boolean;
   forwardAgent?: boolean;
   biometricUnlock?: boolean;
+  defaultMultiplexer?: {kind: MultiplexerKind; name: string} | null;
   transport?: TransportMode | null;
   mosh?: MoshOptions | null;
   et?: EtOptions | null;
@@ -79,6 +80,8 @@ export const api = {
     return createRemoteSession("connect_mosh", {sessionId, options, cols:100, rows:30},onEvent);
   },
   openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
+  attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
+    createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
   attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30 },onEvent);
   },

@@ -17,7 +17,7 @@ async function disconnectCreatedSession(id: string) {
   await invoke(id.startsWith('local:') ? 'local_disconnect' : 'disconnect', { sessionId: id });
 }
 const creationMethods = new Set(['connect', 'local_connect', 'connect_mosh', 'connect_et', 'attach_tmux',
-  'attach_multiplexer', 'connectLocal', 'connectMosh', 'connectEt', 'attachTmux', 'attachMultiplexer']);
+  'attach_multiplexer', 'attachDefaultMultiplexer', 'connectLocal', 'connectMosh', 'connectEt', 'attachTmux', 'attachMultiplexer']);
 /** A successfully serialized creation result can arrive after its renderer lease was revoked. */
 export async function disposeStaleSessionResult(method: PropertyKey, value: unknown) {
   if (typeof method !== 'string' || !creationMethods.has(method) || !value || typeof value !== 'object') return;

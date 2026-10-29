@@ -163,6 +163,7 @@ impl Fixture {
         .await
         .unwrap();
         let host = Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,
@@ -1188,6 +1189,94 @@ impl Drop for NamedServers<'_> {
         let _ = self.stop();
     }
 }
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and supported tmux; saved default first-entry acceptance"]
+async fn real_tmux_jump_default_entry_creates_exact_target_and_keeps_child_after_bootstrap() {
+    let f = Fixture::new().await;
+    // Suppress zsh first-user setup only in this owned empty HOME.
+    fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+    let servers = NamedServers {
+        fixture: &f,
+        names: vec!["default".into()],
+    };
+    let (app, state) = herdr_native_app(&f);
+    let (_authority, lease) = unlocked_authority();
+    let (source, _source_events) = herdr_echo_source(&f, &state, &lease).await;
+    let parent = state.session(&source.session_id).await.unwrap();
+    let name = "named '$(printf NO);";
+    for _ in 0..2 {
+        // First call creates; the second must preserve the same explicit session.
+        crate::multiplexer::prepare_default_entry(
+            &parent,
+            &lease,
+            crate::multiplexer::MultiplexerKind::Tmux,
+            name,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            servers.direct("default", &["list-sessions", "-F", "#{session_name}"]),
+            name
+        );
+    }
+    let (events, mut receiver) = super::test_support::json_events();
+    let child = attach_multiplexer(
+        lease.clone(),
+        app.state(),
+        source.session_id.clone(),
+        None,
+        crate::multiplexer::MultiplexerKind::Tmux,
+        name.into(),
+        80,
+        24,
+        events,
+        Some(true),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    let native = state.session(&child.session_id).await.unwrap();
+    assert!(Arc::ptr_eq(&parent.handle, &native.handle));
+    assert_eq!(native.creation.generation(), parent.creation.generation());
+    disconnect_inner(&state, source.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &source.session_id, &parent, true).await;
+    let bound =
+        crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+    let bound = serde_json::to_value(bound).unwrap();
+    assert_eq!(bound["sessions"][0]["name"], name);
+    assert!(!bound["generation"].as_str().unwrap().is_empty());
+    write_stdin(
+        lease.clone(),
+        app.state(),
+        child.session_id.clone(),
+        "printf 'DEFAULT-%s\\n' 'CHILD-ALIVE'\r".into(),
+        None,
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    owned_terminal_output(
+        &app,
+        &child.session_id,
+        &mut receiver,
+        b"DEFAULT-CHILD-ALIVE",
+    )
+    .await;
+    assert!(!*native.finished.borrow());
+    disconnect_inner(&state, child.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &child.session_id, &native, true).await;
+}
+
 #[tokio::test]
 #[ignore = "requires owned local OpenSSH sshd and tmux; two named-server context acceptance"]
 async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
@@ -2559,6 +2648,7 @@ async fn herdr_child(
         80,
         24,
         events,
+        None,
     )
     .await
     .unwrap()
@@ -2841,7 +2931,8 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         selected.clone(),
         80,
         24,
-        super::test_support::counting_events(&calls)
+        super::test_support::counting_events(&calls),
+        None,
     )
     .await
     .is_err());

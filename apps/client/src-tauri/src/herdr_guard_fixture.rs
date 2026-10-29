@@ -344,6 +344,21 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
         "ORIGINAL_SOURCE_STILL_LIVE",
     )
     .await;
+    // Closing the bootstrap shell must leave its attached display/lease usable.
+    assert_eq!(
+        source_native.creation.generation(),
+        child_native.creation.generation()
+    );
+    disconnect_inner(&state, source.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &source.session_id, &source_native, true).await;
+    let after_bootstrap = confirm(&app, &fresh, &child, &source_a).await;
+    guard(&app,&fresh,&child,json!({"kind":"input","receipt":after_bootstrap["receipt"],"source":source_a,"operation":1,"input":{"kind":"request_stop"}})).await.unwrap();
+    expected.push(0x1b);
+    captured(&bytes, &expected).await;
+    assert_eq!(herdr_counter(&pid).await, Some(original_pid));
+    assert!(Arc::ptr_eq(&source_native.handle, &child_native.handle));
     servers.assert_running();
     disconnect_inner(&state, child.session_id.clone())
         .await

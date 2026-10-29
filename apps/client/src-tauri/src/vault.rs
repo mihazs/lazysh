@@ -471,6 +471,7 @@ mod tests {
     }
     fn host() -> Host {
         Host {
+            default_multiplexer: None,
             transport: None,
             mosh: None,
             et: None,

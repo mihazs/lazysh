@@ -334,7 +334,7 @@ function Dialog({
 }
 
 export function validateHost(
-  host: Pick<Host, "hostname" | "username" | "port" | "name">,
+  host: Pick<Host, "hostname" | "username" | "port" | "name" | "defaultMultiplexer">,
 ) {
   if (!host.name.trim()) return t("appGiveThisHostAName");
   if (!host.hostname.trim() || /[\s/@\x00-\x1f]/.test(host.hostname))
@@ -343,6 +343,8 @@ export function validateHost(
     return t("appEnterAUsernameWithoutSpaces");
   if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535)
     return t("appPortMustBeBetween1And65535");
+  const mux=host.defaultMultiplexer;
+  if(mux && (!['tmux','herdr','zellij'].includes(mux.kind) || !mux.name.trim() || new TextEncoder().encode(mux.name).length>200 || /[\x00-\x1f\x7f-\x9f]/.test(mux.name) || (mux.kind==='zellij' && mux.name.startsWith('-')) || (mux.kind==='tmux' && /[:.]/.test(mux.name)) || (mux.kind==='herdr' && (!/^[a-zA-Z0-9._-]{1,64}$/.test(mux.name) || /^\.{1,2}$/.test(mux.name)))))return t('defaultMuxInvalid');
   return "";
 }
 
@@ -507,6 +509,13 @@ function HostEditor({
             spellCheck={false}
           />
         </label>
+        <label>{t('defaultMuxLabel')}<select value={host.defaultMultiplexer?.kind ?? ''} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:event.target.value ? {kind:event.target.value as 'tmux'|'herdr'|'zellij',name:host.defaultMultiplexer?.name ?? ''} : undefined})}>
+          <option value="">{t('defaultMuxNone')}</option><option value="tmux">tmux</option><option value="herdr">Herdr</option><option value="zellij">Zellij</option>
+        </select></label>
+        {host.defaultMultiplexer && <>
+          <label>{t('defaultMuxName')}<input required maxLength={200} value={host.defaultMultiplexer.name} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:{...host.defaultMultiplexer!,name:event.target.value}})} autoCapitalize="none" autoCorrect="off" spellCheck={false}/></label>
+          <p className="security-note">{t('defaultMuxSsh')}</p><p className="muted">{t('defaultMuxCreate')}</p>
+        </>}
         <label>{t("appPreferredTransport")}<select value={host.transport ?? 'ssh'} disabled={busy} onChange={event=>setHost({...host, transport:event.target.value as TransportMode})}>
             <option value="auto">{t("appAutoMoshThenETThenSSH")}</option>
             <option value="ssh">SSH</option><option value="mosh">{t("appMoshForced")}</option><option value="et">{t("appEternalTerminalForced")}</option>
@@ -614,7 +623,9 @@ export function ConnectDialog({
   const [savedJump, setSavedJump] = useState(true);
   const [jumpPassword, setJumpPassword] = useState("");
   const [exportedIdentity, setExportedIdentity] = useState("");
-  const [transport, setTransport] = useState<TransportMode>(launch?.mux ? "ssh" : host.transport ?? "ssh");
+  // Explicit launch receipts keep their original directory/multiplexer semantics.
+  const defaultMultiplexer=launch ? undefined : host.defaultMultiplexer;
+  const [transport, setTransport] = useState<TransportMode>(launch?.mux || defaultMultiplexer ? "ssh" : host.transport ?? "ssh");
   const [moshAvailable, setMoshAvailable] = useState(false);
   const [etAvailable, setEtAvailable] = useState(false);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
@@ -682,6 +693,7 @@ export function ConnectDialog({
     setBusy(true);
     setError("");
     let session: LiveSession | undefined;
+    let bootstrap: LiveSession | undefined;
     try {
       if (accept && trust) {
         await (launch ? api.trustHostKey(trustHostId, trust, launch.receipt).catch(error=>{throw ownedLaunchError(error) ?? error;})
@@ -719,7 +731,19 @@ export function ConnectDialog({
         disposeTerminal(session);
         return;
       }
-      const selected = await selectTransport(pending, host, transport, {
+      let selected: Prepared;
+      if(defaultMultiplexer) {
+        bootstrap=pending.session;
+        const child=await prepareSession(host.id,`${host.name} / ${defaultMultiplexer.name}`,pending.session.destination,lease);
+        session=child.session;
+        const result=await api.attachDefaultMultiplexer(pending.session.id,defaultMultiplexer,child.onEvent);
+        child.establish(result.sessionId);connectingSessions.current.add(result.sessionId);
+        if(!alive.current || !lease.current() || !child.session.connected)throw {kind:'disconnected',message:t('defaultMuxClosed')};
+        child.session.attached={...defaultMultiplexer};
+        await connectingSessions.current.close(pending.session.id);
+        disposeTerminal(pending.session);bootstrap=undefined;
+        selected=child;
+      } else selected = await selectTransport(pending, host, transport, {
         mosh: {serverPath: moshServer, portMin: moshPortMin, portMax: moshPortMax},
         et: {serverPath: etServer, port: etPort},
       }, {mosh: moshAvailable, et: etAvailable, reason:capabilityReason}, lease, () => alive.current && lease.current(),
@@ -739,6 +763,7 @@ export function ConnectDialog({
     } catch (e) {
       await connectingSessions.current.closeAll().catch(() => {});
       disposeTerminal(session);
+      disposeTerminal(bootstrap);
       if (!alive.current || !lease.current()) return;
       const detail = e as SshError;
       if (detail?.kind === "unknown_host_key" && detail.fingerprint) {
@@ -815,7 +840,7 @@ export function ConnectDialog({
           </p>
           <label>{t("appTransport")}<select
               value={transport}
-              disabled={busy || !!launch?.mux}
+              disabled={busy || !!launch?.mux || !!defaultMultiplexer}
               onChange={(event) =>
                 setTransport(event.target.value as TransportMode)
               }
@@ -832,6 +857,7 @@ export function ConnectDialog({
             </select>
           </label>
           {launch?.mux && <p className="security-note">{t('desktopLaunchMuxSsh')}</p>}
+          {defaultMultiplexer && <p className="security-note">{t('defaultMuxConnecting',{kind:defaultMultiplexer.kind,name:defaultMultiplexer.name})} {t('defaultMuxSsh')}</p>}
           <TransportOptions mode={transport} busy={busy}
             options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
             change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />

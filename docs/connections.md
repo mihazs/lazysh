@@ -10,6 +10,28 @@ Routing uses an SSH `direct-tcpip` channel to the destination address and port, 
 
 This implementation supports SSH routing. Bastion routes and selected-identity forwarding are SSH-terminal features. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
 
+## Enter a saved default multiplexer
+
+In **Edit host**, choose **Default multiplexer** (tmux, Herdr or Zellij) and enter
+an explicit session name. Connecting to that host opens that named session directly;
+if it is absent, lazysh creates it using the selected multiplexer. It never selects
+the first available session. Choose **None — normal terminal** to restore the usual
+connection flow. Existing hosts default to None.
+
+Direct entry uses a fresh verified SSH connection and keeps the saved transport
+preference unchanged; both dialogs explain this. The remote tool must be installed
+and runnable, or connection reports an error without opening another multiplexer.
+Closing the bootstrap terminal preserves the attached display's original SSH
+connection and access lease. Disconnecting the resulting tab closes that display,
+while the remote persistent session follows the multiplexer's normal lifecycle.
+
+Session names are literal text, at most 200 UTF-8 bytes, with no control characters.
+tmux names cannot contain colons or periods; Zellij names cannot start with a dash.
+Herdr uses 1–64 ASCII letters, numbers, periods, underscores or hyphens, excluding
+`.` and `..`, matching its session-directory validation.
+The setting is included in encrypted host sync. Explicit desktop launch receipts
+and restored workspace targets retain their own selection and transport semantics.
+
 ## SSH identity interface language
 
 The identity generator/import inspector uses English, Brazilian Portuguese and
