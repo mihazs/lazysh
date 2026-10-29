@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lazysh_primary">#77F3EC</color>
+    <color name="lazysh_on_primary">#0B1728</color>
+    <color name="lazysh_surface">#102236</color>
+    <color name="lazysh_on_surface">#F8FCFF</color>
+</resources>

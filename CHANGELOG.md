@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Refresh the default app appearance with the lazysh logo palette, frosted navigation and dialogs, and consistent buttons and selectors. The default app preset is now labelled lazysh; saved preset identifiers, terminal colors, and custom themes are preserved. Reduced-transparency and reduced-motion preferences are respected.
+
 - Show the canonical lazysh logo on the welcome screen, replacing the unrelated terminal illustration. Application defaults are unchanged.
 
 - Reject unsupported tmux client-loop formats before granting navigation or guarded Chat input, and require exactly one matching client for every action. Ordinary terminals remain available on older servers; tmux 3.2a advanced bindings are unavailable.
