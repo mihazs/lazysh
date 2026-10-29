@@ -5,8 +5,27 @@ The terminal works without this optional host component. The companion observes 
 Install on the **remote host**. Future releases with companion executables provide
 verified Linux x64/ARM64, macOS Intel/ARM64 and Windows x64 assets; follow the
 [distribution and verification guide](install-and-update.md#remote-companion-executables).
-Published v0.23.0 has no such assets and is not backfilled. In-app installation is
-separate [issue #476](https://github.com/mihazs/lazysh/issues/476) work.
+Published v0.23.0 has no such assets and is not backfilled. In-app installation
+requires a published release containing the companion installation command.
+
+In the native app, connect to the host and open **Agents → Host companion
+installation → Install companion**. This action stays available when the host
+has no companion. On an existing installation, expand the same section and choose
+**Update companion**. The app downloads and verifies the current stable release,
+transfers it through the existing SSH connection, installs it in the user's
+managed location and checks the installed version and bytes before reporting
+success. No shell command or additional credentials are needed.
+
+The app prefers this managed executable for companion operations. Without a
+managed executable it preserves existing PATH installations, including hosts
+where SSH execution works without SFTP. Installation itself needs SFTP and
+currently supports Linux x64/ARM64 and macOS Intel/ARM64 hosts; native Windows
+installation remains [issue #490](https://github.com/mihazs/lazysh/issues/490).
+It does not modify PATH, agent hooks, settings or event data. Configure agent hooks
+below to report activity, and enable optional host permissions in the existing
+settings panel when needed. An interrupted or unconfirmed installation is not
+reported as a rollback; retry checks it again. Temporary files may remain after
+a lost connection, and cleanup never removes the managed installation.
 
 Alternatively, use Rust stable from a checkout of this repository:
 

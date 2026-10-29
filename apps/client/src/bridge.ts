@@ -1,4 +1,4 @@
-import { protectedInvoke as invoke, sessionOutput } from './access';
+import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
 import { registerSessionOutput } from './pendingSessions';
 
@@ -72,6 +72,11 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   return createSession(command,args,onEvent);
 }
 export const api = {
+  installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => {
+    if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
+    const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
+    return remoteInvoke<unknown>('install_companion',{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
+  },
   connectLocal: (onEvent:(event:SshEvent)=>void, launchReceipt?:string) => createSession('local_connect',{cols:100,rows:30,...(launchReceipt ? {launchReceipt} : {})},onEvent),
   connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession("connect_et", {sessionId, options, cols:100, rows:30},onEvent);

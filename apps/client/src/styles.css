@@ -1701,3 +1701,8 @@ button svg {
 
 .workspace-navigation-agents > .agent-panel:not([hidden]) { display: block; overflow: visible; }
 .workspace-navigation-agents .agent-board { overflow: visible; }
+
+.companion-install .tool-bar { flex-wrap: wrap; }
+.companion-install > summary { cursor: pointer; min-height: 44px; padding: 12px 14px; }
+.companion-install code { overflow-wrap: anywhere; }
+.companion-install[hidden] { display: none; }

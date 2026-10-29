@@ -274,6 +274,14 @@ jobs:
           prefix-key: v0-rust-ubuntu-22.04
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
+      - name: Exercise owned companion transfer and managed execution over SSH
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
+        run: |
+          cargo build --release --locked -p lazysh-agent --bin lazysh-agent
+          case_name=ssh::tests::openssh_companion_install_and_managed_path
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Check combined native voice startup and clean shutdown without models

@@ -5,7 +5,7 @@ import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySou
 import {applyAccessStatus} from './access';
 import {t,uiI18n} from './i18n/core';
 
-vi.mock('@tauri-apps/api/core', async original => ({...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn()}));
+vi.mock('@tauri-apps/api/core', async original => ({...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn(),Channel:class {onmessage?:unknown;}}));
 vi.mock('./ApprovalPanel', () => ({default: () => null}));
 const session = { sessionId: 'a', agent: 'Claude Code', project: '/work', state: 'needs_attention', updatedAt: '2026-10-24T19:30:00Z', summary: 'Permission requested', paneId: '%1', eventCount: 2 };
 let generation=0;
@@ -34,6 +34,7 @@ describe('agent activity', () => {
     render(<AgentPanel sessionId="ssh-one" />);
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('Connect your agents.')).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Install companion'})).toBeTruthy();
     expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   });
@@ -296,4 +297,27 @@ it('coalesces pending snapshots and keeps late old-source completion from unlock
     expect(screen.getByText('Current source report')).toBeTruthy();
     await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(pending).toHaveLength(3);
   } finally {cleanup();vi.useRealTimers();}
+});
+
+it('refreshes a newly installed companion before a held pre-install read can publish its obsolete error',async()=>{
+  const {invoke}=await import('@tauri-apps/api/core');let reads=0;
+  let finishInstall!:(value:unknown)=>void,rejectOld!:(reason:unknown)=>void;
+  vi.mocked(invoke).mockImplementation(command=>{
+    if(command==='agent_snapshot'){
+      reads++;
+      if(reads===1)return Promise.reject({message:'Missing companion'});
+      if(reads===2)return new Promise((_resolve,reject)=>{rejectOld=reject;});
+      return Promise.resolve({schemaVersion:1,sessions:[session]});
+    }
+    if(command==='install_companion')return new Promise(resolve=>{finishInstall=resolve;});
+    return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+  });
+  render(<AgentPanel sessionId="install-race"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Install companion'}));
+  await screen.findByText('Missing companion');
+  fireEvent.click(screen.getByRole('button',{name:'Refresh'}));expect(reads).toBe(2);
+  await act(async()=>{finishInstall({schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/agent',cleanup:'complete'});});
+  expect(await screen.findByText('Permission requested')).toBeTruthy();expect(reads).toBe(3);
+  await act(async()=>{rejectOld({message:'Obsolete companion failure'});});
+  expect(screen.queryByText('Obsolete companion failure')).toBeNull();
 });
