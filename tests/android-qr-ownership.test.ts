@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {attestQrCamera,readQrMetadata,type QrOwnershipFiles} from './support/androidQrOwnership';
+import {attestQrCamera,readQrMetadata,qrOwnershipFailure,type QrOwnershipFiles} from './support/androidQrOwnership';
 import {constants} from 'node:fs';
 import {mkdtemp,open,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -54,7 +54,10 @@ test.each([
   ['original decoder path is not the camera feed',(f:ReturnType<typeof fixture>)=>{f.state.args[8]='imagefile:/owned/apps/client/src-tauri/fixtures/theme-qr.png';}],
 ] as const)('rejects %s with fixed nonsecret error',async(_name,change)=>{
   const f=fixture();change(f);
-  await expect(attestQrCamera(env,'/owned',f.io,1000)).rejects.toThrow('Owned QR imagefile camera attestation failed');
+  const failure=await attestQrCamera(env,'/owned',f.io,1000).catch(error=>error);
+  expect(failure.message).toBe('Owned QR imagefile camera attestation failed');
+  const expected:Record<string,string>={'rear webcam':'camera-back','front webcam':'camera-front','different image':'camera-back','overridden camera':'camera-back','alias override':'option-aliases','port override':'port','other serial':'port','other exe':'executable','other user':'pid-file-owner','dead process':'process-identity','malformed PID':'pid-file','changed image bytes':'camera-digest','original decoder bytes are not the camera feed':'camera-digest','original decoder path is not the camera feed':'camera-back'};
+  expect(qrOwnershipFailure(failure)).toBe(expected[_name]);expect(typeof failure.cause).toBe('string');
 });
 test('reused PID and changed launch cannot inherit an earlier attestation',async()=>{
   const f=fixture(),pin=await attestQrCamera(env,'/owned',f.io,1000);
@@ -95,4 +98,22 @@ test.skipIf(process.platform!=='linux')('native metadata reads enforce EOF bound
       try{await rejected;}finally{await writer.close();}
     }
   }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+test.each([['read','pid-file'],['uid','pid-file-owner'],['real','camera-path'],['link','executable']] as const)('closed %s failure cause discards private underlying errors',async(operation,expected)=>{
+  const f=fixture();f.io[operation]=async()=>{throw new Error('private-key private-path private-argv',{cause:{secret:'private'}});};
+  const failure=await attestQrCamera(env,'/owned',f.io,1000).catch(error=>error);
+  expect(failure.message).toBe('Owned QR imagefile camera attestation failed');expect(failure.cause).toBe(expected);
+  expect(qrOwnershipFailure(failure)).toBe(expected);expect(JSON.stringify({message:failure.message,cause:failure.cause})).not.toContain('private');
+});
+test('closed ownership cause reader rejects unrelated and arbitrary causes',()=>{
+  for(const failure of [new Error('private',{cause:'port'}),new Error('Owned QR imagefile camera attestation failed',{cause:'private-path'}),{message:'Owned QR imagefile camera attestation failed',cause:'port'}])expect(qrOwnershipFailure(failure)).toBeUndefined();
+});
+
+test('cause reader snapshots one value and hostile getters cannot replace failure reporting',()=>{
+  const error=new Error('Owned QR imagefile camera attestation failed');let reads=0;
+  Object.defineProperty(error,'cause',{get:()=>++reads===1?'port':'private-key'});
+  expect(qrOwnershipFailure(error)).toBe('port');expect(reads).toBe(1);
+  const hostile=new Error('Owned QR imagefile camera attestation failed');Object.defineProperty(hostile,'cause',{get:()=>{throw new Error('private');}});
+  expect(qrOwnershipFailure(hostile)).toBeUndefined();
 });

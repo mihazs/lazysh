@@ -27,41 +27,65 @@ const files:QrOwnershipFiles={
   real:realpath,link:readlink,
 };
 
+const ownershipMessage='Owned QR imagefile camera attestation failed';
+const ownershipChecks=['environment','pid-file-owner','pid-file','camera-path','emulator-binaries','process-owner','process-identity','pid-file-stability','process-continuity','executable','argv-framing','port','avd','camera-back','camera-front','pid-argument','option-aliases','qemu-tail','camera-digest'] as const;
+export function qrOwnershipFailure(error:unknown){
+  try{
+    if(!(error instanceof Error)||error.message!==ownershipMessage)return;
+    const cause=error.cause;return typeof cause==='string'&&ownershipChecks.some(check=>check===cause)?cause:undefined;
+  }catch{return undefined;}
+}
+
 /** Read only the explicitly nominated QEMU PID: never search processes or print argv. */
 export async function attestQrCamera(env:NodeJS.ProcessEnv,root:string,io=files,uid=process.getuid?.()):Promise<QrOwnership>{
-  const error=()=>new Error('Owned QR imagefile camera attestation failed');
+  let check:typeof ownershipChecks[number]='environment';
+  const error=()=>new Error(ownershipMessage,{cause:check});
   try{
     const pidFile=env.LAZYSH_ANDROID_QR_EMULATOR_PID_FILE,sdk=env.ANDROID_HOME;
     if(uid===undefined||!pidFile||!sdk||!isAbsolute(pidFile)||!isAbsolute(sdk)||!/^emulator-[0-9]{4,5}$/.test(env.ANDROID_SERIAL??''))throw error();
+    check='pid-file-owner';
     if(await io.uid(pidFile)!==uid)throw error();
+    check='pid-file';
     const raw=(await io.read(pidFile,32)).toString('utf8').trim();
     if(!/^[1-9][0-9]{0,8}$/.test(raw))throw error();
-    const proc=`/proc/${raw}`,asset=await io.real(join(root,'apps/client/src-tauri/fixtures/theme-qr-camera-feed.png'));
+    const proc=`/proc/${raw}`;check='camera-path';
+    const asset=await io.real(join(root,'apps/client/src-tauri/fixtures/theme-qr-camera-feed.png'));
+    check='emulator-binaries';
     const binaries=(await Promise.all(['qemu-system-x86_64','qemu-system-x86_64-headless'].map(name=>io.real(join(sdk,'emulator/qemu/linux-x86_64',name)).catch(()=>undefined)))).filter((value):value is string=>value!==undefined);
     if(!binaries.length)throw error();
     async function identity(){
+      check='process-owner';
       if(await io.uid(`${proc}/stat`)!==uid)throw error();
+      check='process-identity';
       const stat=(await io.read(`${proc}/stat`,4096)).toString('utf8');
       const fields=stat.slice(stat.lastIndexOf(')')+2).split(/\s+/);
       if(stat.slice(0,stat.indexOf(' '))!==raw||['Z','X'].includes(fields[0])||!/^\d+$/.test(fields[19]??''))throw error();
       return fields[19];
     }
     const original=await identity();
-    async function check(){
-      if((await io.read(pidFile,32)).toString('utf8').trim()!==raw||await io.uid(pidFile)!==uid||await identity()!==original)throw error();
+    async function verify(){
+      check='pid-file-stability';
+      if((await io.read(pidFile,32)).toString('utf8').trim()!==raw||await io.uid(pidFile)!==uid)throw error();
+      const current=await identity();check='process-continuity';if(current!==original)throw error();
+      check='executable';
       if(!binaries.includes(await io.link(`${proc}/exe`)))throw error();
+      check='argv-framing';
       const bytes=await io.read(`${proc}/cmdline`,64*1024);
       if(bytes.at(-1)!==0)throw error();
       const args=bytes.toString('utf8').split('\0').slice(0,-1);
       function one(flag:string,value:string){const positions=args.flatMap((arg,index)=>arg===flag?[index]:[]);if(positions.length!==1||args[positions[0]+1]!==value)throw error();}
-      one('-port',env.ANDROID_SERIAL!.slice('emulator-'.length));one('-avd','lazysh-runtime-api36');
-      one('-camera-back',`imagefile:${asset}`);one('-camera-front','none');one('-pidfile',pidFile);
+      check='port';one('-port',env.ANDROID_SERIAL!.slice('emulator-'.length));check='avd';one('-avd','lazysh-runtime-api36');
+      check='camera-back';one('-camera-back',`imagefile:${asset}`);check='camera-front';one('-camera-front','none');check='pid-argument';one('-pidfile',pidFile);
       const admitted=new Set(['-port','-avd','-camera-back','-camera-front']);
+      check='option-aliases';
       if(args.some(arg=>/^--?(?:camera[-_](?:front|back)|ports?|android-ports|avd)(?:=|$)/.test(arg)&&!admitted.has(arg)))throw error();
+      check='qemu-tail';
       if(args.filter(arg=>arg==='-qemu').length!==1||args.at(-3)!=='-qemu'||args.at(-2)!=='-pidfile'||args.at(-1)!==pidFile||!args.includes('-no-window')||!args.includes('-no-snapshot'))throw error();
-      if(createHash('sha256').update(await io.read(asset,192*1024)).digest('hex')!==REVIEWED_QR_SHA256||await identity()!==original)throw error();
+      check='camera-digest';
+      if(createHash('sha256').update(await io.read(asset,192*1024)).digest('hex')!==REVIEWED_QR_SHA256)throw error();
+      const final=await identity();check='process-continuity';if(final!==original)throw error();
     }
-    await check();
-    return {async check(){try{await check();}catch{throw error();}}};
+    await verify();
+    return {async check(){try{await verify();}catch{throw error();}}};
   }catch{throw error();}
 }

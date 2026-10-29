@@ -201,6 +201,16 @@ export function settingsObservation(text:string) {
   if(!match)return;
   return {foreground:match[1]==='true',toolbar:match[2]==='true',list:match[3]==='true',target:match[4]==='true',scrollAttempts:Number(match[5])};
 }
+export function eventObservation(text:string) {
+  if(Buffer.byteLength(text)>256*1024 || text.split('eventObservation[').length!==2)return;
+  const rows=[...text.matchAll(/Actual bound-event notification required; eventObservation\[entered=(true|false) readReturned=(true|false) initialReceipts=(zero|one|many|unavailable) finalReceipts=(zero|one|many|unavailable) appNotifications=(true|false|unavailable) postPermission=(true|false|unavailable) channelEnabled=(true|false|unavailable) ownedNotification=(true|false|unavailable)\]/g)];
+  if(rows.length!==1)return;
+  const match=rows[0];
+  if(match[1]==='false' && match[2]==='true')return;
+  const flag=(value:string)=>value==='unavailable'?null:value==='true';
+  return {entered:match[1]==='true',readReturned:match[2]==='true',initialReceipts:match[3],finalReceipts:match[4],
+    appNotifications:flag(match[5]),postPermission:flag(match[6]),channelEnabled:flag(match[7]),ownedNotification:flag(match[8])};
+}
 async function nativeFailure(directory:string) {
   try {
     const files=(await readdir(directory,{recursive:true})).filter(name=>name.startsWith('android-results/')&&name.endsWith('.xml'));
@@ -210,7 +220,8 @@ async function nativeFailure(directory:string) {
     const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
     const firstLaunch=firstLaunchObservation(failure);
     const settings=settingsObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(settings?{settings}:{})};
+    const event=eventObservation(failure);
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{})};
   }catch{return {};}
 }
 

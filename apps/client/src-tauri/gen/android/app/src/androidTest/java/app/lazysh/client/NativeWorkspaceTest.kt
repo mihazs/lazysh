@@ -1187,6 +1187,102 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String) {
+        val name = herdr.getString("name")
+        val transcript = herdr.getString("transcript")
+        val record = herdr.getString("record")
+        val draft = herdr.getString("draft")
+        require(name == "owned-guard")
+        require(transcript.startsWith("/") && transcript.length <= 4096 && transcript.none { it.isISOControl() })
+        require(draft.toByteArray(Charsets.UTF_8).size in 1..4096 && !draft.contains('\r') && !draft.contains('\u001b'))
+        fun click(text: String) {
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='$text']")).perform(webClick())
+        }
+        fun hasButton(text: String) = "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote(text)}).length===1"
+        val region = "section[aria-label='Terminal input']"
+        val path = "input[placeholder='Absolute host path to session.jsonl']"
+        fun replace(selector: String, value: String) {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+            onView(isAssignableFrom(WebView::class.java)).perform(
+                pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
+                pressKey(KeyEvent.KEYCODE_DEL))
+            typeInto(scenario, selector, value)
+            closeSoftKeyboard()
+        }
+        click("Sessions")
+        awaitDocument(scenario, "owned Herdr available", hasButton("List herdr sessions"))
+        click("List herdr sessions")
+        awaitDocument(scenario, "owned Herdr listed", hasButton("Attach herdr $name"))
+        click("Attach herdr $name")
+        awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
+        click("Transcript")
+        awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
+        typeInto(scenario, path, transcript)
+        closeSoftKeyboard()
+        click("Open transcript")
+        awaitDocument(scenario, "real companion transcript read", "document.querySelector('.chat-messages')?.textContent.includes(${JSONObject.quote(record)}) && Boolean(document.querySelector(${JSONObject.quote(region)}))")
+        assertEquals("No Send before explicit preparation", "false", evaluate(scenario, hasButton("Send to terminal")))
+        pasteOwnedText(scenario, "form.chat-composer textarea", draft, label)
+        closeSoftKeyboard()
+        assertEquals("Native paste must preserve the exact draft", "true", evaluate(scenario,
+            "document.querySelector('form.chat-composer textarea')?.value===${JSONObject.quote(draft)}"))
+        click("Choose terminal destination")
+        awaitDocument(scenario, "owned Herdr confirmation", hasButton("Confirm this destination"))
+        assertEquals("Preparation alone must not enable Send", "false", evaluate(scenario, hasButton("Send to terminal")))
+        click("Confirm this destination")
+        awaitDocument(scenario, "explicit owned Herdr binding", hasButton("Send to terminal"))
+        click("Send to terminal")
+        awaitDocument(scenario, "actual native guarded queue acknowledgement",
+            "Array.from(document.querySelectorAll('[role=status]')).some(x=>x.textContent==='Text and Enter queued for the confirmed terminal.')")
+        assertEquals("Only acknowledged original draft is cleared", "true", evaluate(scenario,
+            "document.querySelector('form.chat-composer textarea')?.value===''"))
+        click("Request stop")
+        awaitDocument(scenario, "actual native guarded Escape acknowledgement",
+            "Array.from(document.querySelectorAll('[role=status]')).some(x=>x.textContent==='Escape queued for the confirmed terminal. The process may still be running.')")
+        replace(path, transcript + ".different")
+        awaitDocument(scenario, "source edit retires guarded controls", "!document.querySelector(${JSONObject.quote(region)})")
+        replace(path, transcript)
+        assertEquals("Returning to the source must not restore a confirmation", "false", evaluate(scenario, hasButton("Send to terminal")))
+        val child = "button[aria-label='Disconnect $parent / $name']"
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, child)).perform(webClick())
+        awaitDocument(scenario, "owned Herdr child disconnected", "document.querySelectorAll('[role=tab]').length===1")
+        println("lazysh guarded Herdr Chat: real packaged UI/companion/native SSH preparation, confirmation, queue acknowledgement and source retirement completed")
+    }
+
+    private fun pasteOwnedText(scenario: ActivityScenario<MainActivity>, selector: String, text: String, label: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).requestFocus() }
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+        val pasteDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        val inputConstraints = typeTextIntoFocusedView("readiness-only").constraints
+        while (true) {
+            var ready = false
+            scenario.onActivity { activity -> ready = inputConstraints.matches(requireNotNull(webView(activity.window.decorView))) }
+            if (ready) break
+            assertTrue("Native key field input connection did not become ready", System.nanoTime() < pasteDeadline)
+            Thread.sleep(25)
+        }
+        assertEquals("Key field must own DOM focus before paste", "true", evaluate(scenario,
+            "document.activeElement===document.querySelector(${JSONObject.quote(selector)})",
+            TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)))
+        instrumentation.runOnMainSync {
+            val clip = ClipData.newPlainText(label, text)
+            clip.description.extras = android.os.PersistableBundle().apply {
+                putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
+            clipboard.setPrimaryClip(clip)
+        }
+        onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_PASTE))
+        // Boolean only: never retain a key value, DOM dump or screenshot in diagnostics.
+        while (true) {
+            assertTrue("Native paste did not reach the controlled key field", System.nanoTime() < pasteDeadline)
+            val remaining = TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)
+            if (evaluate(scenario, "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(text)}", remaining) == "true") break
+            Thread.sleep(50)
+        }
+    }
+
     @Test fun boardReadinessObservationRetainsOnlyClosedBooleanAndStatusFields() {
         val sample = JSONObject().put("board", true).put("checkbox", true).put("checked", true)
             .put("disabled", false).put("alert", false).put("visible", true).put("focused", false).put("status", "NOT_READY")
@@ -1200,7 +1296,10 @@ class NativeWorkspaceTest {
     }
 
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
-    @Test fun ownedOpenSshConnectsThroughRealUi() {
+    @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
+    @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
+
+    private fun ownedSshUi(requireHerdr: Boolean) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
         require(path != null && Regex("/data/local/tmp/lazysh-ui-ssh-[a-f0-9]{32}/fixture[.]json").matches(path)) {
@@ -1221,6 +1320,7 @@ class NativeWorkspaceTest {
         }
         val fixture = try { JSONObject(String(bytes, Charsets.UTF_8)) }
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
+        if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name").isNotEmpty()) { "Owned Herdr fixture required" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
@@ -1236,6 +1336,7 @@ class NativeWorkspaceTest {
         fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun selectSsh() {
+            closeSoftKeyboard()
             val selector = "[role=dialog] select"
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
             // A DOM click atom does not activate Chromium's native select popup.
@@ -1267,6 +1368,7 @@ class NativeWorkspaceTest {
             println("lazysh SSH UI: native transport selected")
         }
         var primaryFailure: Throwable? = null
+        android.util.Log.i("LazyshOwnedCase", "start:$nonce:pid:${android.os.Process.myPid()}")
         try {
             awaitDocument(scenario, "SSH workspace ready", present("button[aria-label='Add host']"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
@@ -1279,7 +1381,6 @@ class NativeWorkspaceTest {
                 pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
                 pressKey(KeyEvent.KEYCODE_DEL))
             typeInto(scenario, ".port-field input", fixture.getInt("port").toString())
-            closeSoftKeyboard()
             selectSsh()
             clickButton("Save host")
             val connect = "button[aria-label='Connect to $name']"
@@ -1289,35 +1390,7 @@ class NativeWorkspaceTest {
             selectSsh()
             clickButton("Private key")
             val keySelector = "[role=dialog] textarea[placeholder='-----BEGIN OPENSSH PRIVATE KEY-----']"
-            scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).requestFocus() }
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, keySelector)).perform(webClick())
-            val pasteDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            val inputConstraints = typeTextIntoFocusedView("readiness-only").constraints
-            while (true) {
-                var ready = false
-                scenario.onActivity { activity -> ready = inputConstraints.matches(requireNotNull(webView(activity.window.decorView))) }
-                if (ready) break
-                assertTrue("Native key field input connection did not become ready", System.nanoTime() < pasteDeadline)
-                Thread.sleep(25)
-            }
-            assertEquals("Key field must own DOM focus before paste", "true", evaluate(scenario,
-                "document.activeElement===document.querySelector(${JSONObject.quote(keySelector)})",
-                TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)))
-            instrumentation.runOnMainSync {
-                val clip = ClipData.newPlainText(label, privateKey)
-                clip.description.extras = android.os.PersistableBundle().apply {
-                    putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
-                }
-                clipboard.setPrimaryClip(clip)
-            }
-            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_PASTE))
-            // Boolean only: never retain a key value, DOM dump or screenshot in diagnostics.
-            while (true) {
-                assertTrue("Native paste did not reach the controlled key field", System.nanoTime() < pasteDeadline)
-                val remaining = TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)
-                if (evaluate(scenario, "document.querySelector(${JSONObject.quote(keySelector)})?.value===${JSONObject.quote(privateKey)}", remaining) == "true") break
-                Thread.sleep(50)
-            }
+            pasteOwnedText(scenario, keySelector, privateKey, label)
             assertEquals("Remember credentials must remain off", "true", evaluate(scenario,
                 "Array.from(document.querySelectorAll('[role=dialog] input[type=checkbox]')).every(x=>!x.checked)"))
             closeSoftKeyboard()
@@ -1339,6 +1412,7 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                 screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
             verifyBoardKeepAwake(scenario)
+            if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Disconnect $name']")).perform(webClick())
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
@@ -1349,6 +1423,7 @@ class NativeWorkspaceTest {
             primaryFailure = failure
             throw failure
         } finally {
+            android.util.Log.i("LazyshOwnedCase", "end:$nonce:pid:${android.os.Process.myPid()}")
             var cleanupFailure: Throwable? = null
             fun retainCleanup(failure: Throwable, message: String) {
                 val first = primaryFailure ?: cleanupFailure
@@ -1356,7 +1431,6 @@ class NativeWorkspaceTest {
                 else cleanupFailure = failure
             }
             try {
-                val disconnect = "button[aria-label='Disconnect $name']"
                 val authentication = "[role=dialog] textarea, [role=dialog] .fingerprint code, [role=dialog] .destination"
                 if (evaluate(scenario, present(authentication)) == "true") {
                     clickButton("Cancel")
@@ -1369,8 +1443,11 @@ class NativeWorkspaceTest {
                         Thread.sleep(50)
                     }
                 }
-                if (evaluate(scenario, present(disconnect)) == "true") {
-                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
+                for (ownedName in ownedNames) {
+                    val disconnect = "button[aria-label='Disconnect $ownedName']"
+                    if (evaluate(scenario, present(disconnect)) == "true")
+                        onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
                 }
                 val delete = "button[aria-label='Delete $name']"
                 if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {
@@ -1435,6 +1512,12 @@ class NativeWorkspaceTest {
         repeat(2) { assertTrue("Only two owned preference scrolls allowed",settings.scroll(TimeUnit.SECONDS.toNanos(4),true)) }
         assertTrue("Scroll allowance cannot be reused",!settings.scroll(TimeUnit.SECONDS.toNanos(4),true))
         assertTrue("Expired settings cannot scroll",!NtfySettingsScroll(0).scroll(TimeUnit.SECONDS.toNanos(5),true))
+    }
+
+    private class NtfyEventRead {
+        val entered=CountDownLatch(1)
+        val returned=CountDownLatch(1)
+        val receipts=AtomicReference("unavailable")
     }
 
     private fun <T> withOwnedRestoration(label:String, restore:()->Unit, action:()->T):T {
@@ -1733,35 +1816,61 @@ class NativeWorkspaceTest {
         val notifications=context.getSystemService(android.app.NotificationManager::class.java)
         fun ownedNotification()=notifications.activeNotifications.singleOrNull {it.tag=="lazysh-unifiedpush-event" && it.id==4201}
         assertTrue("Consent alone cannot post a remote notification",ownedNotification()==null)
-        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-        signal("event")
-        val notificationDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
-        while(ownedNotification()==null && System.nanoTime()<notificationDeadline)Thread.sleep(20)
-        val delivered=checkNotNull(ownedNotification()) {"Actual bound-event notification required"}
-        val notification=delivered.notification
-        assertTrue("Actual private generic notification",notification.visibility==android.app.Notification.VISIBILITY_PRIVATE &&
-            notification.channelId=="lazysh-remote-events-v1" && notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()=="lazysh" &&
-            notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()=="A remote agent event is available. Open lazysh to inspect your sessions.")
-        assertTrue("Actual immutable own-app intent without remote actions",notification.contentIntent?.isImmutable==true &&
-            notification.contentIntent?.creatorPackage==context.packageName && notification.actions.isNullOrEmpty())
-        assertTrue("Event arrived while Activity backgrounded",scenario.state==androidx.lifecycle.Lifecycle.State.CREATED)
-        val admitted=displayState()
-        assertTrue("One durable receipt admitted",(displayStateType.getDeclaredMethod("getReceipts").invoke(admitted) as List<*>).size==1)
-        val callbackRead=java.util.concurrent.CountDownLatch(1)
+        fun receipts(read:()->Any?)=runCatching {
+            when((displayStateType.getDeclaredMethod("getReceipts").invoke(read()) as List<*>).size) {
+                0->"zero";1->"one";else->"many"
+            }
+        }.getOrDefault("unavailable")
+        fun flag(read:()->Boolean)=runCatching {read().toString()}.getOrDefault("unavailable")
+        val initialReceipts=receipts {beforeEvent}
+        val eventRead=NtfyEventRead()
+        val readPhase=AtomicReference(eventRead)
         val observer=java.lang.reflect.Proxy.newProxyInstance(context.classLoader,arrayOf(storeType)) { _,method,args ->
+            val observation=if(Thread.currentThread().stackTrace.any {
+                it.className=="app.lazysh.unifiedpush.EventDisplayController" && it.methodName=="message"
+            })readPhase.get() else null
+            val reading=method.name=="getValue"
+            val writing=method.name=="setValue"
+            if(reading)observation?.entered?.countDown()
+            if(reading || writing)observation?.receipts?.set("unavailable")
             val result=try {method.invoke(originalStore,*(args?:emptyArray()))}
                 catch(error:java.lang.reflect.InvocationTargetException) {throw error.targetException}
-            if(method.name=="getValue" && Thread.currentThread().stackTrace.any {
-                it.className=="app.lazysh.unifiedpush.EventDisplayController" && it.methodName=="message"
-            })callbackRead.countDown()
+            // Categorize completed original operations, never add a diagnostic Keystore read.
+            if(reading || writing)observation?.receipts?.set(receipts {if(reading)result else args?.firstOrNull()})
+            if(reading)observation?.returned?.countDown()
             result
         }
         withOwnedRestoration("Original owned store observer restoration failed",{storeField.set(display,originalStore)}) {
             // Test-only read observer; every operation delegates unchanged to the
             // original real Keystore store/controller/notification implementation.
             storeField.set(display,observer)
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            signal("event")
+            val notificationDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
+            while(ownedNotification()==null && System.nanoTime()<notificationDeadline)Thread.sleep(20)
+            val delivered=checkNotNull(ownedNotification()) {
+                val readReturned=eventRead.returned.count==0L
+                val entered=eventRead.entered.count==0L
+                "Actual bound-event notification required; eventObservation[entered=$entered readReturned=$readReturned"+
+                    " initialReceipts=$initialReceipts finalReceipts=${eventRead.receipts.get()}"+
+                    " appNotifications=${flag {notifications.areNotificationsEnabled()}}"+
+                    " postPermission=${flag {Build.VERSION.SDK_INT<33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED}}"+
+                    " channelEnabled=${flag {Build.VERSION.SDK_INT<26 || (notifications.getNotificationChannel("lazysh-remote-events-v1")?.importance ?: android.app.NotificationManager.IMPORTANCE_NONE)!=android.app.NotificationManager.IMPORTANCE_NONE}}"+
+                    " ownedNotification=${flag {ownedNotification()!=null}}]"
+            }
+            val notification=delivered.notification
+            assertTrue("Actual private generic notification",notification.visibility==android.app.Notification.VISIBILITY_PRIVATE &&
+                notification.channelId=="lazysh-remote-events-v1" && notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()=="lazysh" &&
+                notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()=="A remote agent event is available. Open lazysh to inspect your sessions.")
+            assertTrue("Actual immutable own-app intent without remote actions",notification.contentIntent?.isImmutable==true &&
+                notification.contentIntent?.creatorPackage==context.packageName && notification.actions.isNullOrEmpty())
+            assertTrue("Event arrived while Activity backgrounded",scenario.state==androidx.lifecycle.Lifecycle.State.CREATED)
+            val admitted=displayState()
+            assertTrue("One durable receipt admitted",(displayStateType.getDeclaredMethod("getReceipts").invoke(admitted) as List<*>).size==1)
+            val replayRead=NtfyEventRead()
+            readPhase.set(replayRead)
             signal("event-replay")
-            assertTrue("Actual replay callback reached bound admission",callbackRead.await(15,TimeUnit.SECONDS))
+            assertTrue("Actual replay callback reached bound admission",replayRead.returned.await(15,TimeUnit.SECONDS))
             // enabled() takes the same monitor as message(): this is a completion
             // barrier after arrival, not a sleep that could precede a late post.
             assertTrue("Replay callback completed with original consent",displayType.getDeclaredMethod("enabled",native("DisplayBinding")).invoke(display,binding)==true)

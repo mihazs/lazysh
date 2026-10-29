@@ -1,7 +1,7 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 
-const OUTPUT_LIMIT=16*1024;
+export const OUTPUT_LIMIT=16*1024;
 // shortcut: foreground fixture tools only. A background child can outlive a reaped
 // leader; never signal a recycled PGID or claim that orphan was cleaned. Add a real
 // supervisor/OS ownership facility before using this helper for daemonizing tools.
@@ -10,11 +10,11 @@ export class OwnedProcess {
   readonly done:Promise<number>;
   private readonly original:Promise<OwnedPid|undefined>;
   stdout=''; stderr='';
-  constructor(program:string,args:string[],cwd?:string,env=process.env) {
+  constructor(program:string,args:string[],cwd?:string,env=process.env,captureOutput=true) {
     this.child=spawn(program,args,{cwd,env,detached:true,stdio:['pipe','pipe','pipe']});
     this.original=(this.child.pid?identity(this.child.pid):Promise.resolve(undefined)).catch(()=>undefined);
-    this.child.stdout!.on('data',data=>{this.stdout=(this.stdout+String(data)).slice(-OUTPUT_LIMIT);});
-    this.child.stderr!.on('data',data=>{this.stderr=(this.stderr+String(data)).slice(-OUTPUT_LIMIT);});
+    this.child.stdout!.on('data',data=>{if(captureOutput)this.stdout=(this.stdout+String(data)).slice(-OUTPUT_LIMIT);});
+    this.child.stderr!.on('data',data=>{if(captureOutput)this.stderr=(this.stderr+String(data)).slice(-OUTPUT_LIMIT);});
     this.done=new Promise((resolve,reject)=>{
       this.child.once('error',()=>reject(new Error('Owned fixture process could not start')));
       this.child.once('close',code=>resolve(code??1));
