@@ -38,7 +38,7 @@ const windowsInstallerGuards = new Set([
   'WEBVIEW2_REQUIRED', 'UNEXPECTED_DATA', 'REPAIR_MARKER', 'MISSING_UNINSTALLER',
   'INSTALL_OWNERSHIP', 'UNINSTALL_OWNERSHIP', 'UNINSTALL_BINARY', 'UNINSTALL_REGISTRY',
   'REGISTRY_VALUES', 'REGISTRY_CHILDREN', 'UNINSTALL_MARKER', 'DATA_CONTENTS',
-  'LOCAL_DATA', 'INSTALL_CONTENTS', 'UNEXPECTED',
+  'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
 ]);
 export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (typeof stdout !== 'string' || stdout.length > 2_097_152) return;
@@ -129,6 +129,7 @@ $stage = 'identity'
 foreach ($file in @($env:LAZYSH_BINARY, $env:LAZYSH_INSTALLER)) {
   Require ((Get-Item -LiteralPath $file).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'VERSION_MISMATCH'
 }
+Require ((Get-FileHash -LiteralPath $env:LAZYSH_BINARY -Algorithm SHA256).Hash -eq $env:LAZYSH_BINARY_SHA256) 'SOURCE_HASH_MISMATCH'
 $directory = Join-Path $env:RUNNER_TEMP ('lazysh-nsis-' + [Guid]::NewGuid().ToString('N'))
 $installed = Join-Path $directory 'lazysh.exe'
 $uninstaller = Join-Path $directory 'uninstall.exe'

@@ -200,6 +200,7 @@ test.each([
   ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
   ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
   ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
+  ['LAZYSH_WINDOWS_INSTALLER:identity:SOURCE_HASH_MISMATCH', 'identity:SOURCE_HASH_MISMATCH'],
   ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:private-stage:VERSION_MISMATCH', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED private-path', undefined],
@@ -229,3 +230,23 @@ test.skipIf(process.platform === 'win32')('owned PowerShell failure decoding red
     expect(failure).toBe(`Release validation failed: pwsh.exe${label}`);
   }
 }));
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_HASH !== '1')('actual Windows SHA256 matches independent large-file vectors before installation', () => fixture(async root => {
+  expect(process.platform).toBe('win32');
+  const vectors = [
+    { name: 'million-a', bytes: Buffer.alloc(1_000_000, 0x61),
+      sha256: 'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0' },
+    // Independently checked with Python hashlib and OpenSSL, across nonuniform stream boundaries.
+    { name: 'nonuniform', bytes: Uint8Array.from({ length: 8 * 1024 * 1024 + 17 }, (_, index) => index % 251),
+      sha256: '485a584410e070b9d289cb2a75ee695b20860585e15736e6871364f3680e6526' },
+  ];
+  for (const vector of vectors) {
+    const path = join(root, vector.name);
+    await Bun.write(path, vector.bytes);
+    expect(await digestFile(path)).toEqual({ bytes: vector.bytes.length, sha256: vector.sha256 });
+    const actual = await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "$ErrorActionPreference = 'Stop'; (Get-FileHash -LiteralPath $env:LAZYSH_HASH_FILE -Algorithm SHA256).Hash"],
+    { ...process.env, LAZYSH_HASH_FILE: path }, 30_000);
+    expect(actual.toLowerCase()).toBe(vector.sha256);
+  }
+}), 65_000);
