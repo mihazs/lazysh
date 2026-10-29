@@ -169,3 +169,35 @@ objects, changes no event behavior, and removes only its own listeners. Capture
 and cleanup failures remain separate from the original assertion. Chromium's
 [phone popup contract](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/content/public/android/java/src/org/chromium/content/browser/input/SelectPopup.java#L137)
 does not justify replacing the dialog matcher without an observed cause.
+
+
+## Foreground Android clipboard (#523)
+
+Explicit terminal Paste actions and attachment image Paste use app-private Android
+mobile commands behind the main-window ACL and original native access lease. The
+plugin exposes no renderer invoke handler. It reads only while its current Activity
+is resumed and its current WebView is attached, shown and focused. Pause, focus,
+document/Activity replacement, app locking and exact-owner cancellation invalidate
+the read. No startup reads or clipboard listeners are installed. Other platforms
+retain browser clipboard behavior; Android denial never falls back to browser reads.
+
+One supervised provider worker has no queue and a five-second operation budget.
+Cancellation signals the provider and closes its descriptor; an uncooperative provider
+keeps the slot occupied until it actually exits. This cannot force termination of
+arbitrary provider code. Errors contain closed categories, never clipboard contents,
+URI strings or provider exception messages. Text uses the existing 64 KiB UTF-8
+terminal input budget including bracketed-paste framing, without truncation or Enter.
+Images require content URIs, PNG/JPEG signatures, 10 MiB actual stream bounds, at most
+8192 pixels per dimension and eight megapixels.
+
+`NativeWorkspaceTest` seeds synthetic ClipData and pastes a literal comment suffix
+through the normal toolbar, retaining original native Enter and remote output checks.
+Its plain SSH case uses an instrumentation-only UID-restricted synthetic provider
+for PNG/JPEG preview, no automatic upload, non-content URI and oversize rejection.
+The production APK contains no fixture provider or automation command. Original
+deadlines and owned SSH shell lifetime are unchanged. The TS SSH fixture has no SFTP
+subsystem/dispatch option; the separate Rust OpenSSH owner supports internal SFTP but
+does not share that ForceCommand. This case does not add actual Android upload proof.
+Explicit upload remains covered by existing attachment UI and Rust SFTP owners;
+packaged Android upload and physical Samsung/SwiftKey behavior remain separate under
+#20. Packaged clipboard behavior remains unverified until its owning run completes.

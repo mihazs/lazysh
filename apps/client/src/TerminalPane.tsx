@@ -1,5 +1,6 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {LocalUiError,type UiErrorCause} from './i18n/localError';
+import { checkPasteSize, readClipboardText } from './deviceClipboard';
 import { useMountedAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
@@ -50,6 +51,8 @@ export default function TerminalPane({ session, active, reportError }: {
   const [meta, setMeta] = useState(false);
   const [clipboard, setClipboard] = useState<string | null>(null);
   const pendingClipboard = useRef(false);
+  const pasteRead = useRef<AbortController | null>(null);
+  useEffect(() => () => { pasteRead.current?.abort(); }, [session.id]);
   const [link, setLink] = useState<string | null>(null);
   const [openingLink, setOpeningLink] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -215,14 +218,17 @@ export default function TerminalPane({ session, active, reportError }: {
     finally { setOpeningLink(false); }
   }
   async function paste() {
-    if (!session.connected || !mounted.current || !access.current()) return;
+    if (!session.connected || !mounted.current || !access.current() || pasteRead.current) return;
+    const read = new AbortController(); pasteRead.current = read;
     try {
-      const text = await navigator.clipboard.readText();
+      const text = await readClipboardText(read.signal);
       // The retained terminal may now have a fresh onData handler after unlock.
-      if (!mounted.current || !access.current()) return;
+      if (!mounted.current || !access.current() || read.signal.aborted) return;
+      checkPasteSize(text, session.terminal.modes?.bracketedPasteMode);
       session.terminal.paste(text); session.terminal.focus();
     }
     catch { if (mounted.current && access.current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
+    finally { if (pasteRead.current === read) pasteRead.current = null; }
   }
   function search(direction: number) {
     if (!query) return;

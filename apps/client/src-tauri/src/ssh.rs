@@ -5273,8 +5273,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = tauri::test::mock_builder()
             .plugin(tauri_plugin_lazysh_vault::init())
+            .plugin(crate::clipboard::init())
             .invoke_handler(tauri::generate_handler![
                 list_hosts,
+                crate::clipboard::clipboard_read,
+                crate::clipboard::clipboard_cancel,
                 crate::attachment_upload::upload_cancel,
                 crate::attachment_upload::upload_reserve,
                 crate::host_clipboard::host_clipboard_copy
@@ -5346,8 +5349,29 @@ mod tests {
             error["kind"], "disconnected",
             "the real clipboard handler must be reached, not denied by ACL"
         );
+        let clipboard_read = serde_json::json!({"request":{"token":"00000000-0000-4000-8000-000000000001","kind":"text"}});
+        let clipboard_cancel = serde_json::json!({"token":"00000000-0000-4000-8000-000000000001"});
+        assert!(
+            tauri::test::get_ipc_response(
+                &main,
+                request(
+                    local_url,
+                    "plugin:lazysh-clipboard|read",
+                    clipboard_read.clone()
+                )
+            )
+            .is_err(),
+            "private plugin has no renderer read handler"
+        );
+        assert!(tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "clipboard_cancel", clipboard_cancel.clone())
+        )
+        .is_ok());
         for (command, body) in [
             ("list_hosts", serde_json::json!({})),
+            ("clipboard_read", clipboard_read),
+            ("clipboard_cancel", clipboard_cancel),
             ("upload_cancel", cancel.clone()),
             ("upload_reserve", reserve),
             ("host_clipboard_copy", cancel.clone()),

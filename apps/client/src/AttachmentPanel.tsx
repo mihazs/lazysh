@@ -1,5 +1,6 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
+import { readClipboardImage } from './deviceClipboard';
 import { useMountedAccess, useProtectedApi, useProtectedCallback } from './access';
 import type {AttachmentPathPaste} from './attachmentPaste';
 import {useHostUpload} from './useHostUpload';
@@ -37,6 +38,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLImageElement | null>(null);
   const generation = useRef(0);
+  const clipboardRead = useRef<AbortController | null>(null);
   const stroke = useRef<Stroke | null>(null);
   const uploadJob=useHostUpload(api,sessionId,error=>{setRecoveryNeeded(!!error && typeof error==='object' && 'kind' in error && error.kind==='ssh_control_closed');setError(captureUiError(error));});
   const hostClipboard=useHostClipboard(api,sessionId,error=>setError(captureUiError(error)),kind=>setNotice({key:kind==='copied'?'attachmentHostCopied':'attachmentHostCopyCancelled'}));
@@ -61,10 +63,11 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
     }catch(error){if(current()&&document.visibilityState==='visible')setError(captureUiError(error));}
     finally{if(pasting.current===job){pasting.current=null;if(currentPasteOwner())setPasteBusy(false);}}
   }
-  useEffect(() => () => { generation.current++; source.current = null; }, [sessionId]);
+  useEffect(() => () => { generation.current++; clipboardRead.current?.abort(); source.current = null; }, [sessionId]);
 
   async function choose(file: File) {
     if (uploadJob.active()||hostClipboard.active()||pasting.current) return;
+    clipboardRead.current?.abort();
     clearCompletion();
     const current = ++generation.current;
     setError(''); setNotice(''); setSelected(null); setUploaded(''); setStrokes([]); setEditing(false); source.current = null;
@@ -125,16 +128,16 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
   useEffect(() => { redraw(); }, [strokes, selected, editing, crop]);
 
   async function pasteImage() {
+    if (!currentPasteOwner() || clipboardRead.current) return;
+    const read = new AbortController(); clipboardRead.current = read;
+    const started = generation.current;
+    const current = () => currentPasteOwner() && !read.signal.aborted && generation.current === started;
     setError('');
     try {
-      if (!navigator.clipboard?.read) throw new LocalUiError('attachmentClipboardImagesUnavailable');
-      const items = await navigator.clipboard.read();
-      const item = items.find(value => value.types.includes('image/png') || value.types.includes('image/jpeg'));
-      if (!item) throw new LocalUiError('attachmentClipboardEmpty');
-      const type = item.types.includes('image/png') ? 'image/png' : 'image/jpeg';
-      const blob = await item.getType(type);
-      await choose(new File([blob], `clipboard-${Date.now()}.${type === 'image/png' ? 'png' : 'jpg'}`, { type }));
-    } catch (e) { setError(e instanceof Error ? captureUiError(e) : String(e)); }
+      const file = await readClipboardImage(read.signal);
+      if (current()) await choose(file);
+    } catch (e) { if (current()) setError(e instanceof Error ? captureUiError(e) : String(e)); }
+    finally { if (clipboardRead.current === read) clipboardRead.current = null; }
   }
   async function upload() {
     if (!selected || busy) return;
