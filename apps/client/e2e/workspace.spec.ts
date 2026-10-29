@@ -81,3 +81,59 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
   await connection.getByLabel('Password',{exact:true}).fill('browser-only-draft');
   await page.screenshot({path:testInfo.outputPath('default-multiplexer-connect.png')});
 });
+
+test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
+  await installNativeBridge(page);
+  await page.clock.install();
+  await page.addInitScript(()=>{
+    const calls:string[]=[];const state={updated:false};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    window.nativeFixtureInvoke=async(command)=>{
+      calls.push(command);
+      if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
+      if(command==='local_capability')return {available:false,reason:'Synthetic SSH UI fixture'};
+      if(command==='transport_capabilities')return {mosh:false,et:false};
+      if(command==='has_credentials')return false;
+      if(command==='connect')return {sessionId:'owned-navigation-ssh'};
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
+      if(command==='get_companion_settings')return {schemaVersion:1,revision:4,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+      if(command==='board_keep_awake_status')return {available:false,active:false,reason:'Synthetic keep-awake unavailable',epoch:'0/11111111-1111-4111-8111-111111111111',ticket:1};
+      if(command==='apple_status_capability')return {available:false,reason:'Synthetic status unavailable'};
+      if(['cancel_credential_auth','adopt_session','resize','ack_output','disconnect'].includes(command)||command.startsWith('plugin:event|'))return;
+      throw new Error(`Unexpected navigation fixture request: ${command}`);
+    };
+  });
+  await page.goto('/');
+  const phone=testInfo.project.name==='phone';
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  const modes=page.getByRole('navigation',{name:'Workspace navigation',exact:true});
+  await expect(modes.getByRole('button',{name:'Connections',exact:true})).toHaveAttribute('aria-current','page');
+  await page.getByRole('button',{name:'Connect to Navigation host',exact:true}).click();
+  await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
+  await page.getByRole('button',{name:'Connect',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
+  await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
+  await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
+  const search=board.getByRole('searchbox');await search.fill('/nav');
+  const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
+  const original=await settings.elementHandle();
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{updated:boolean}}).workspaceNavigationState.updated=true;});
+  await page.clock.runFor(5000);
+  await expect(board.getByText('Refreshed work',{exact:true})).toBeVisible();
+  await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
+  if(phone)await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+  else await modes.getByRole('button',{name:'Connections',exact:true}).click();
+  await expect(board).toBeHidden();
+  const commands=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['agent_snapshot','agent_approvals','get_companion_settings','board_keep_awake_status'].includes(command)));
+  const before=await commands();await page.clock.runFor(11000);expect(await commands()).toEqual(before);
+  if(phone){await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();await page.getByRole('button',{name:'Open hosts',exact:true}).click();}
+  await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
+  expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
+  expect((await commands()).filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
+  await search.scrollIntoViewIfNeeded();
+  expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('agent-navigation.png')});
+  if(phone){await search.focus();await page.keyboard.press('Escape');await expect(board).toBeHidden();await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();}
+});

@@ -1,3 +1,5 @@
+#[path = "support/binary.rs"]
+mod binary;
 #[cfg(unix)]
 #[path = "support/permissions.rs"]
 mod permissions;
@@ -24,10 +26,10 @@ fn run_traced(
     payload: &[u8],
     trace: Option<(&storage_trace::StorageTrace, usize)>,
 ) -> Output {
-    let program = Path::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+    let program = binary::path();
     let mut command = trace.map_or_else(
-        || Command::new(program),
-        |(trace, worker)| trace.command(worker, program),
+        || Command::new(&program),
+        |(trace, worker)| trace.command(worker, &program),
     );
     process::run(
         command

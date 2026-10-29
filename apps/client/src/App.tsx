@@ -217,6 +217,7 @@ async function selectTransport(
   return shell;
 }
 
+type NavigationMode = 'connections'|'workspaces'|'agents';
 type View =
   | "terminal"
   | "agents"
@@ -245,6 +246,32 @@ const views = () => [
   { id: "devices" as const, label: t("appDevices"), Icon: Smartphone },
 ];
 
+function focusableWithin(container:HTMLElement|null) {
+  return Array.from(
+        container?.querySelectorAll<HTMLElement>(
+          'button, input, textarea, select, summary, a[href], [tabindex]',
+        ) ?? [],
+      ).filter(control => {
+        if (control.tabIndex < 0 || control.matches(':disabled')
+          || control.closest('[hidden], [inert]')
+          || control.getClientRects().length === 0
+          || getComputedStyle(control).visibility !== 'visible') return false;
+        // Collapsed details may retain cached layout rects after being opened.
+        for (let parent=control.parentElement; parent && parent!==container; parent=parent.parentElement) {
+          if (parent.matches('details:not([open])')
+            && !parent.querySelector(':scope > summary')?.contains(control)) return false;
+        }
+        return true;
+      })
+        .sort((a,b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
+}
+function cycleFocus(event:KeyboardEvent,items:HTMLElement[]) {
+  if(event.key!=='Tab')return;
+  const first=items[0],last=items.at(-1);
+  if(event.shiftKey && document.activeElement===first){event.preventDefault();last?.focus();}
+  else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first?.focus();}
+}
+
 function Dialog({
   title,
   children,
@@ -260,24 +287,7 @@ function Dialog({
   closeRef.current = close;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    const focusable = () =>
-      Array.from(
-        ref.current?.querySelectorAll<HTMLElement>(
-          'button, input, textarea, select, summary, a[href], [tabindex]',
-        ) ?? [],
-      ).filter(control => {
-        if (control.tabIndex < 0 || control.matches(':disabled')
-          || control.closest('[hidden], [inert]')
-          || control.getClientRects().length === 0
-          || getComputedStyle(control).visibility !== 'visible') return false;
-        // Collapsed details may retain cached layout rects after being opened.
-        for (let parent=control.parentElement; parent && parent!==ref.current; parent=parent.parentElement) {
-          if (parent.matches('details:not([open])')
-            && !parent.querySelector(':scope > summary')?.contains(control)) return false;
-        }
-        return true;
-      })
-        .sort((a,b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
+    const focusable = () => focusableWithin(ref.current);
     const controls = focusable();
     (
       controls.find((control) => control.matches("input, textarea")) ??
@@ -288,18 +298,7 @@ function Dialog({
         event.stopPropagation();
         closeRef.current();
       }
-      if (event.key === "Tab") {
-        const items = focusable();
-        const first = items[0];
-        const last = items.at(-1);
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last?.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first?.focus();
-        }
-      }
+      cycleFocus(event,focusable());
     };
     const current = ref.current;
     current?.addEventListener("keydown", keydown);
@@ -1090,7 +1089,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [search, setSearch] = useState("");
   const [palette, setPalette] = useState(false);
   const [switcher, setSwitcher] = useState(false);
-  const [jumpSession, setJumpSession] = useState<string | null>(null);
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
   const [themeLinkTarget,setThemeLinkTarget] = useState<HTMLDivElement|null>(null);
@@ -1105,7 +1103,33 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const mounted = useRef(true);
   const restoringSessions = useRef(new PendingSessions());
   const [sidebar, setSidebar] = useState(false);
+  const [wideSidebar,setWideSidebar]=useState(()=>typeof window.matchMedia==='function'?!window.matchMedia('(max-width: 600px)').matches:true);
+  const [navigation,setNavigation]=useState<Record<string,{mode:NavigationMode;agents:boolean}>>({});
+  const navigationOwner=useRef({sessionId:null as string|null,agents:false});
+  const pickerOwner=useRef({source:'',visible:false,revision:0});
+  const [pickerState,setPickerState]=useState<{owner:object;busy:boolean}>();
+  const navigationRef=useRef<HTMLElement>(null),navigationTrigger=useRef<HTMLButtonElement>(null);
+  useEffect(()=>{
+    if(typeof window.matchMedia!=='function')return;
+    const media=window.matchMedia('(max-width: 600px)');
+    const changed=()=>setWideSidebar(!media.matches);changed();media.addEventListener('change',changed);
+    return()=>media.removeEventListener('change',changed);
+  },[]);
+  useEffect(()=>{
+    if(wideSidebar || !sidebar)return;
+    navigationRef.current?.querySelector<HTMLButtonElement>('.sidebar-close')?.focus();
+    const keydown=(event:KeyboardEvent)=>{
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();setSidebar(false);}
+      else cycleFocus(event,focusableWithin(navigationRef.current));
+    };
+    const node=navigationRef.current;node?.addEventListener('keydown',keydown);
+    return()=>{node?.removeEventListener('keydown',keydown);if(window.matchMedia?.('(max-width: 600px)').matches)navigationTrigger.current?.focus();};
+  },[sidebar,wideSidebar]);
   const [loaded, setLoaded] = useState(!native);
+  useEffect(()=>{
+    const live=new Set(sessions.filter(session=>session.connected).map(session=>session.id));
+    setNavigation(previous=>Object.keys(previous).every(id=>id==='' || live.has(id))?previous:Object.fromEntries(Object.entries(previous).filter(([id])=>id==='' || live.has(id))));
+  },[sessions]);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const [reportedHistory,setReportedHistory]=useState<ReportedHistorySource>();
@@ -1117,9 +1141,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     setReportedHistory(source=>source && (source.sessionId!==activeId || view!=='chat' || !source.lease.current())?undefined:source);
   },[activeId,view]);
   function openReportedHistory(source:ReportedHistorySource) {
-    if(!mounted.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || currentView.current.view!=='agents'
+    if(!mounted.current || !source.lease.current() || currentView.current.activeId!==source.sessionId || !navigationOwner.current.agents
       || !sessionsRef.current.some(session=>session.id===source.sessionId && session.connected && !session.local))return;
-    setReportedHistory(source);setView('chat');
+    setReportedHistory(source);setView('chat');setSidebar(false);
   }
   const directContext = useRef({sessionId:activeId,generation:0});
   if(directContext.current.sessionId!==activeId)
@@ -1146,7 +1170,30 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return api.write(live.id,data);
   }
   const active = sessions.find((session) => session.id === activeId);
-  useEffect(() => { setJumpSession(null); }, [activeId]);
+  const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
+  const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
+  const sidebarShown=wideSidebar || sidebar;
+  const navigationCovered=!!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
+  const remoteActive=!!active?.connected && !active.local;
+  const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
+  navigationOwner.current={sessionId:activeId,agents:agentsVisible};
+  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && view!=='sessions';
+  if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
+    pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
+  const currentPickerOwner=pickerOwner.current;
+  const pickerInFlight=pickerVisible && (pickerState?.owner!==currentPickerOwner || pickerState.busy);
+  function showNavigation(mode:NavigationMode) {
+    if(mode!=='connections' && pendingMuxRequest)return;
+    if(mode==='agents' && !remoteActive)return;
+    const id=activeId??'';
+    setNavigation(previous=>({...previous,[id]:{mode,agents:mode==='agents'||previous[id]?.agents===true}}));
+    if(mode!=='connections')setView('terminal');
+    setSidebar(true);
+  }
+  function chooseLiveSession(id:string) {
+    if(pendingMuxRequest || !sessionsRef.current.some(session=>session.id===id && session.connected))return;
+    setActiveId(id);setView('terminal');setSidebar(false);
+  }
   function tmuxJumped(sessionId: string, snapshot: import('./bridge').TmuxJumpSnapshot) {
     if (!mounted.current || currentView.current.activeId !== sessionId) return;
     const session = sessionsRef.current.find(item => item.id === sessionId && item.connected && item.attached?.kind === 'tmux');
@@ -1176,7 +1223,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return()=>{alive=false;};
   },[]);
   useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
-  const launchBusy=openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || !!jumpSession
+  const launchBusy=openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || pickerInFlight || (!wideSidebar && sidebar)
     || pushSettings || preferences || sync || sharing || mobileTools || about || inbox || restoring
     || (view==='sessions' && muxLaunch?.sessionId===activeId);
   useDesktopLaunch(native,localCapability.available,launchBusy,
@@ -1367,8 +1414,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         )
       )
         return;
-      setActiveId(detail.sessionId);
-      setView("agents");
+      const target=detail.sessionId;
+      setActiveId(target);
+      setNavigation(previous=>({...previous,[target]:{mode:'agents',agents:true}}));
+      setView('terminal');setSidebar(true);
       setInbox(false);
     };
     window.addEventListener("lazysh-inbox-open", openInbox);
@@ -1551,6 +1600,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   return (
     <div className="app-shell">
       <aside
+        ref={navigationRef}
+        data-navigation={navigationEntry.mode}
         className={`sidebar ${sidebar ? "sidebar-open" : ""}`}
         aria-label={t("appHostsAndConnections")}
       >
@@ -1567,6 +1618,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <X size={18} />
           </button>
         </div>
+        <nav className="workspace-navigation-modes" aria-label={t('navigationTitle')}>
+          {(['connections','workspaces','agents'] as const).map(mode=><button key={mode} className="subtle-button" aria-current={navigationEntry.mode===mode?'page':undefined} aria-label={mode==='agents'?t('navigationAgents'):undefined} disabled={(mode!=='connections' && pendingMuxRequest) || (mode==='agents' && !remoteActive)} onClick={()=>showNavigation(mode)}>{t(mode==='connections'?'navigationConnections':mode==='workspaces'?'navigationWorkspaces':'appAgents')}</button>)}
+        </nav>
+        <div className="navigation-connections" hidden={navigationEntry.mode!=='connections'}>
         <button className="search-button" onClick={() => setPalette(true)}>
           <Search size={15} />
           <span>{t("appJumpToAHost")}</span>
@@ -1646,6 +1701,25 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setEditor("new")}
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
+        </div>
+        {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
+          <h3>{t('navigationLiveSessions')}</h3>
+          <div className="workspace-live-sessions" role="group" aria-label={t('navigationLiveSessions')}>
+            {sessions.filter(session=>session.connected).map(session=><button className="subtle-button" key={session.id} aria-current={activeId===session.id?'location':undefined} disabled={pendingMuxRequest} onClick={()=>chooseLiveSession(session.id)}><strong>{session.name}</strong><small>{session.destination}</small></button>)}
+            {!sessions.some(session=>session.connected) && <p>{t('navigationNoSessions')}</p>}
+          </div>
+          {remoteActive && <>
+            <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>{setView('sessions');setSidebar(false);}}>{t('navigationManageSessions')}</button>
+            {active?.attached?.kind!=='tmux' && <p className="muted">{t('navigationManagerHint')}</p>}
+            {view==='sessions' && <p role="status">{t('navigationManagerOpen')}</p>}
+          </>}
+          {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
+            if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
+          }}/></Suspense>}
+        </div>}
+        {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
+          <AgentPanel key={active.id} sessionId={active.id} visible={agentsVisible} onUseReportedHistory={openReportedHistory}/>
+        </div>}
         <div className="sidebar-bottom">
           <div>
             <ShieldCheck size={15} />
@@ -1667,10 +1741,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className="workspace">
+      <main className="workspace" inert={!wideSidebar && sidebar}>
         {native && <ThemeLinkPanel target={themeLinkTarget} />}
         <header className="workspace-header">
           <button
+            ref={navigationTrigger}
             className="icon-button mobile-menu"
             aria-label={t("appOpenHosts")}
             onClick={() => setSidebar(true)}
@@ -1828,15 +1903,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {views().filter(({id})=>!active.local || id==='terminal' || id==='voice').map(({ id, label, Icon }) => (
                   <button
                     key={id}
-                    aria-current={view === id ? "page" : undefined}
-                    onClick={() => setView(id)}
+                    aria-current={(id==='agents'?agentsVisible:view===id) ? "page" : undefined}
+                    disabled={id==='agents' && pendingMuxRequest}
+                    onClick={() => id==='agents'?showNavigation('agents'):setView(id)}
                   >
                     <Icon size={15} />
                     <span>{label}</span>
                   </button>
                 ))}
               </nav>
-              {active.connected && !active.local && active.attached?.kind === 'tmux' && <button className="subtle-button" onClick={() => setJumpSession(active.id)}>{t("appJumpTo")}</button>}
+              {active.connected && !active.local && active.attached?.kind === 'tmux' && <button className="subtle-button" onClick={() => showNavigation('workspaces')}>{t("appJumpTo")}</button>}
               <button
                 className="icon-button disconnect-button"
                 aria-label={t("appEndValue1Connection", {value1: active.name})}
@@ -1862,9 +1938,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     reportError={setError}
                   />
                 ))}
-                {active.connected && !active.local && view === "agents" && (
-                  <AgentPanel key={active.id} sessionId={active.id} onUseReportedHistory={openReportedHistory} />
-                )}
                 {active.connected && !active.local && view === "usage" && (
                   <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />
                 )}
@@ -1895,7 +1968,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {active.connected && !active.local && view === "diff" && (
                   <RepositoryPanel key={active.id} sessionId={active.id} />
                 )}
-                {active.connected && !active.local && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>setView('agents')} /></div>}
+                {active.connected && !active.local && <div hidden={view!=='apple'}><AppleStatusPanel key={active.id} sessionId={active.id} usage={appleUsage[active.id] ?? null} onReview={()=>showNavigation('agents')} /></div>}
                 {active.connected && !active.local && view === "sessions" && (
                   <MuxPanel
                     key={active.id}
@@ -2056,9 +2129,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {pushSettings && <Dialog title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
         <Suspense fallback={<p>{t("appLoadingPushSettings")}</p>}><PushSettingsPanel /></Suspense>
       </Dialog>}
-      {jumpSession && active?.id === jumpSession && active.connected && active.attached?.kind === 'tmux' && <Dialog title={t("appJumpTo")} close={() => setJumpSession(null)}>
-        <Suspense fallback={<p role="status">{t("appReadingTmuxDestinations")}</p>}><TmuxJumpPanel key={jumpSession} sessionId={jumpSession} onClose={() => setJumpSession(null)} onJump={snapshot => tmuxJumped(jumpSession, snapshot)} /></Suspense>
-      </Dialog>}
+
       {switcher && <Dialog title={t("appSwitchTerminalSession")} close={()=>setSwitcher(false)}>
         <div className="session-switcher" data-layout={sessionLayout}>
           {sessions.map(session=><button className="session-choice" key={session.id} type="button" aria-current={session.id === activeId ? "true" : undefined} onClick={()=>{setActiveId(session.id);setSwitcher(false);setView('terminal');}}><span className="session-choice-name">{session.name}</span><span className="session-choice-destination">{session.destination}</span></button>)}

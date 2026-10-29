@@ -4,6 +4,15 @@ import { copyFile, lstat, mkdir, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { verifyRelease } from './bun-lock';
 
+export const companionTargets = {
+  'linux-agent-x64': { triple: 'x86_64-unknown-linux-musl', os: 'linux', arch: 'x64' },
+  'linux-agent-arm64': { triple: 'aarch64-unknown-linux-musl', os: 'linux', arch: 'arm64' },
+  'macos-agent-x64': { triple: 'x86_64-apple-darwin', os: 'darwin', arch: 'x64' },
+  'macos-agent-arm64': { triple: 'aarch64-apple-darwin', os: 'darwin', arch: 'arm64' },
+  'windows-agent-x64': { triple: 'x86_64-pc-windows-msvc', os: 'win32', arch: 'x64' },
+} as const;
+export type CompanionTarget = keyof typeof companionTargets;
+export const companionMaximumBytes = 64 * 1024 * 1024;
 export const artifactTargets = {
   'linux-x64': ['deb', 'AppImage'],
   'windows-x64': ['exe'],
@@ -12,9 +21,15 @@ export const artifactTargets = {
   'android-google-arm64': ['apk'],
   'android-foss-arm64': ['apk'],
   'ios-arm64': ['ipa'],
+  'linux-agent-x64': ['bin'],
+  'linux-agent-arm64': ['bin'],
+  'macos-agent-x64': ['bin'],
+  'macos-agent-arm64': ['bin'],
+  'windows-agent-x64': ['exe'],
 } as const;
 export type ArtifactTarget = keyof typeof artifactTargets;
-export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64'];
+export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64',
+  ...Object.keys(companionTargets) as CompanionTarget[]];
 type Identity = { sha: string; version: string };
 type Signing = 'unsigned' | 'ad-hoc' | 'signed';
 type ArtifactFile = { name: string; bytes: number; sha256: string };
@@ -49,15 +64,18 @@ export function validateReceipt(value: unknown, identity: Identity): ArtifactRec
   for (const [index, extension] of extensions.entries()) {
     const file = data.files[index];
     requireArtifact(file && file.name === artifactName(identity, data.target, extension)
-      && Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= 2_147_483_648
+      && Number.isSafeInteger(file.bytes) && file.bytes > 0
+      && file.bytes <= (Object.hasOwn(companionTargets, data.target) ? companionMaximumBytes : 2_147_483_648)
       && whole(/^[a-f0-9]{64}$/, file.sha256), 'malformed package receipt');
   }
   return data;
 }
-export async function digestFile(path: string): Promise<Omit<ArtifactFile, 'name'>> {
+export async function digestFile(path: string, maximumBytes = 2_147_483_648): Promise<Omit<ArtifactFile, 'name'>> {
+  requireArtifact(Number.isSafeInteger(maximumBytes) && maximumBytes > 0 && maximumBytes <= 2_147_483_648,
+    'invalid package size bound');
   const before = await lstat(path);
   requireArtifact(before.isFile() && !before.isSymbolicLink() && before.size > 0
-    && before.size <= 2_147_483_648, 'missing, linked or oversized package');
+    && before.size <= maximumBytes, 'missing, linked or oversized package');
   const digest = createHash('sha256');
   for await (const chunk of createReadStream(path)) digest.update(chunk);
   const after = await lstat(path);
@@ -74,10 +92,11 @@ export async function stagePackages(identity: Identity, target: ArtifactTarget, 
   const files: ArtifactFile[] = [];
   for (const [index, extension] of extensions.entries()) {
     const name = artifactName(identity, target, extension);
-    const original = await digestFile(sources[index]);
+    const maximum = Object.hasOwn(companionTargets, target) ? companionMaximumBytes : 2_147_483_648;
+    const original = await digestFile(sources[index], maximum);
     const destination = join(directory, name);
     await copyFile(sources[index], destination);
-    const copied = await digestFile(destination);
+    const copied = await digestFile(destination, maximum);
     requireArtifact(original.bytes === copied.bytes && original.sha256 === copied.sha256, 'package copy mismatch');
     files.push({ name, ...copied });
   }
@@ -101,7 +120,7 @@ export async function aggregatePackages(identity: Identity, source: string, dest
       === ['receipt.json', ...receipt.files.map(file => file.name)].sort().join(','), 'unexpected package files');
     for (const file of receipt.files) {
       const path = join(directory, file.name);
-      const actual = await digestFile(path);
+      const actual = await digestFile(path, file.bytes);
       requireArtifact(actual.bytes === file.bytes && actual.sha256 === file.sha256, 'downloaded package digest mismatch');
       await copyFile(path, join(destination, file.name));
       requireArtifact((await digestFile(join(destination, file.name))).sha256 === file.sha256, 'aggregate copy mismatch');
@@ -130,7 +149,7 @@ export async function verifyAggregate(identity: Identity, directory: string) {
     requireArtifact(releaseTargets.includes(receipt.target) && !seen.has(receipt.target), 'unexpected or duplicate platform');
     seen.add(receipt.target);
     for (const file of receipt.files) {
-      const actual = await digestFile(join(directory, file.name));
+      const actual = await digestFile(join(directory, file.name), file.bytes);
       requireArtifact(actual.sha256 === file.sha256 && actual.bytes === file.bytes, 'aggregate package changed');
       packages.push(file.name);
     }

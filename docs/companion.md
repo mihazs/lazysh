@@ -2,7 +2,13 @@
 
 The terminal works without this optional host component. The companion observes lifecycle events and can read explicitly selected Claude Code, Codex, Pi, OMP, Hermes, OpenCode, Copilot CLI, Qoder IDE, Kimi CLI, or jcode transcripts. It does not answer approvals, launch agents, or send data to a cloud service.
 
-Install on the **remote host**, using Rust stable from a checkout of this repository:
+Install on the **remote host**. Future releases with companion executables provide
+verified Linux x64/ARM64, macOS Intel/ARM64 and Windows x64 assets; follow the
+[distribution and verification guide](install-and-update.md#remote-companion-executables).
+Published v0.23.0 has no such assets and is not backfilled. In-app installation is
+separate [issue #476](https://github.com/mihazs/lazysh/issues/476) work.
+
+Alternatively, use Rust stable from a checkout of this repository:
 
 ```sh
 cargo install --path apps/agent --locked
@@ -74,7 +80,7 @@ This shortcut itself still grants no input authority. Claude Chat on an existing
 native tmux attachment offers a separate [confirmed terminal input](chat-terminal-input.md)
 flow; the user must choose and confirm its destination explicitly.
 
-The displayed status is the last reported event, not proof that a process is still running. Refresh explicitly. Respond to prompts in the live terminal until race-safe approvals are implemented.
+The displayed status is the last reported event, not proof that a process is still running. The visible Agents board refreshes every five seconds while the app is in the foreground; hidden boards and background windows do not start automatic reads. A pending snapshot is never duplicated, and Refresh remains available. Automatic refresh does not scan transcripts, load history or reload host settings. Respond to prompts in the live terminal until race-safe approvals are implemented.
 
 ## Other agents and scripts
 
@@ -695,6 +701,16 @@ Compaction references do not replace visible transcript history with a summary. 
 Evidence is official `xai-org/grok-build` commit `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8` (`SOURCE_REV` `559751fdcec02d413e4c57c8832ab275e4f44980`), inspected 2026-10-25: the [disk envelope and fixtures](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L721), [actual JSONL writer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/jsonl/mod.rs#L634), and [xAI extension definitions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/extensions/notification.rs#L517). Its lockfile pins ACP 0.10.4 with schema 0.11.4. [Synthetic fixture provenance](../apps/agent/tests/fixtures/grok-acp/README.md) records checksums and type anchors. These source contracts do not prove equivalence to the previously inspected Grok 1.0.70 artifact or every installed release. No provider CLI, account data or real user transcript was executed/accessed. Full Grok conversation/runtime compatibility remains [issue #5](https://github.com/mihazs/lazysh/issues/5) work.
 
 Run the native Rust unit and CLI integration tests with `cargo test --package lazysh-agent --locked`, or `bunx turbo run test --filter=@lazysh/agent`. Tests spawn the compiled executable with isolated state directories; there is no Python runtime or test script dependency.
+
+Companion distribution checks reuse the existing CLI, settings and WAL owners with
+`LAZYSH_TEST_COMPANION_BINARY` pointing only at an explicitly prepared absolute
+executable. When unset, tests retain their usual Cargo-built executable. The host
+test harness uses its native ABI; on Linux its subprocesses execute the actual
+static musl companion, including reads of WAL retained by the host-side library.
+Prepared bytes are hashed before those owners and revalidated afterward. Candidate
+checks create no publication receipt; trusted-main staging uses the existing
+release manifest and publication gates. This test-only override does not change
+the installed companion's configuration or behavior.
 
 `bun run test:storage` runs the agent library and `storage_wal` integration cases through an uncached Turbo task. The existing macOS/Windows native CI matrix executes this task, including each platform's actual temporary-volume admission, migration and crash/recovery checks. The separate Linux agent job retains the full package gate. Configuration of these jobs does not itself prove a native platform pass; inspect their actual results before merging a storage change.
 

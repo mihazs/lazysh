@@ -4,14 +4,44 @@ Use the signing status and availability recorded for the particular release.
 Actions debug APKs and simulator apps are development artifacts, not production
 installation downloads. Pipeline activation and outstanding distribution
 requirements are tracked separately in #423 and #424.
-The automatic release set currently targets Android, Linux and Windows. macOS,
-iOS and watchOS release packages are deferred and are not included.
+The automatic application release set targets Android, Linux and Windows. macOS,
+iOS and watchOS application packages are deferred and are not included. Future
+complete releases also include the separate companion CLI targets below; that does
+not enable deferred Apple application packages or claim full native parity.
 
 When a verified release is available, use the assets on the repository's
 [Releases page](https://github.com/mihazs/lazysh/releases). Check the version,
 operating system, architecture and signing channel against `release.json`, then
 verify the download using `SHA256SUMS`. Checksums detect corruption; trust the
 repository/release identity as well. Never install a file whose checksum differs.
+
+## Remote companion executables
+
+Releases produced after the companion distribution change include raw executable
+assets identified in `release.json` as `linux-agent-x64`, `linux-agent-arm64`,
+`macos-agent-x64`, `macos-agent-arm64` and `windows-agent-x64`. Linux binaries use
+static musl linkage; this does not change the Linux desktop application's runtime
+requirements. macOS binaries are built with deployment targets 10.15 for Intel
+and 11.0 for ARM64 and checked on matching macOS 15 runners; those build targets
+do not establish execution on every older OS release. Windows uses the x64 MSVC
+target. Other architectures need a source build until explicitly supported.
+
+Use the matching version, target, size and SHA256 from the same source-bound
+release manifest, and check `SHA256SUMS`. Each companion is capped at 64 MiB. On
+Unix, mark the verified file executable before running it; downloads do not
+preserve executable mode. Install it only on the intended remote account and
+ensure `lazysh-agent` is available on its noninteractive SSH PATH. These artifacts
+do not install hooks, enable publishing or change existing companion settings.
+
+Mac companion signatures are ad hoc, not Developer ID signatures or notarization.
+Do not disable host security policies to run one. Source SHA/version, content
+hashes, native executable identity and an owned CLI/database roundtrip are checked
+before release staging. Candidate PR checks run the same byte acceptance but
+produce no publication receipt. No Apple account is used by these CLI builds.
+
+Published v0.23.0 remains unchanged and has no companion binary assets; no earlier
+version is backfilled. In-app SSH installation is tracked separately in
+[issue #476](https://github.com/mihazs/lazysh/issues/476).
 
 ## Android
 

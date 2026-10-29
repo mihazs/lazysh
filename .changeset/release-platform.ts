@@ -7,10 +7,18 @@ import { promisify } from 'node:util';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
-export async function native(command: string, args: string[], env = process.env, timeout = 180_000) {
+export async function native(command: string, args: string[], env = process.env, timeout = 180_000, input?: string) {
   try {
-    const result = await execute(command, args, { env, timeout, maxBuffer: 2_097_152 });
-    return result.stdout.trim();
+    if (input !== undefined && Buffer.byteLength(input) > 65_536) throw new Error('Native fixture input exceeds its bound');
+    const pending = execute(command, args, { env, timeout, maxBuffer: 2_097_152 });
+    const supplied = input === undefined ? Promise.resolve() : new Promise<void>((resolve, reject) => {
+      pending.child.stdin!.once('error', reject);
+      pending.child.stdin!.end(input, resolve);
+    });
+    const [result, written] = await Promise.allSettled([pending, supplied]);
+    if (result.status === 'rejected') throw result.reason;
+    if (written.status === 'rejected') throw written.reason;
+    return result.value.stdout.trim();
   } catch (error) {
     // Native tools may print signing material or provisioning contents on failure.
     const tool = command.split(/[\\/]/).at(-1);

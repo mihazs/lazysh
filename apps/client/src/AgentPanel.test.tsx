@@ -132,3 +132,168 @@ it.each(['en','pt-BR','es'])('keeps reported-history action and fallback localiz
     await screen.findByText(t('agentsHistoryMissing'));expect(screen.getByText(t('agentsHistoryManual'))).toBeTruthy();
   } finally {await uiI18n.changeLanguage('en');}
 });
+
+const discoveryRows=()=>[session,{...session,sessionId:'b',agent:'Codex',project:'/api',state:'working',summary:'Implement parser'},{...session,sessionId:'c',agent:'Gemini',project:'/docs',state:'done',summary:'Published guide'}];
+it('searches agent, project and summary locally with matching status counts and explicit clear filters',async()=>{
+  const invoke=await historyFixture(reported,discoveryRows());render(<AgentPanel sessionId="discovery"/>);
+  await screen.findByText('Implement parser');await act(async()=>{});
+  const before=invoke.mock.calls.length;
+  const search=screen.getByRole('searchbox',{name:'Search reported agents'});
+  const filters=screen.getByRole('group',{name:'Reported status'});
+  expect(within(filters).getByRole('button',{name:'All 3'})).toHaveProperty('ariaPressed','true');
+  for(const [query,summary] of [['PARSER','Implement parser'],['/docs','Published guide'],['claude','Permission requested']]) {
+    fireEvent.change(search,{target:{value:query}});
+    expect(screen.getByText(summary)).toBeTruthy();expect(document.querySelectorAll('.agent-card')).toHaveLength(1);
+    expect(within(filters).getByRole('button',{name:'All 1'})).toBeTruthy();
+  }
+  fireEvent.click(within(filters).getByRole('button',{name:'Working 0'}));
+  expect(screen.getByText('No matching reported agents')).toBeTruthy();expect(document.querySelectorAll('.agent-card')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button',{name:'Clear filters'}));
+  expect(search).toHaveProperty('value','');expect(document.querySelectorAll('.agent-card')).toHaveLength(3);
+  expect(invoke.mock.calls.length).toBe(before);
+});
+it('keeps selected reported context, search focus and draft through locale updates, then retires a filtered row',async()=>{
+  await historyFixture(reported,discoveryRows());render(<AgentPanel sessionId="selection"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
+  const selected=screen.getByRole('region',{name:'Selected report'});
+  fireEvent.click(within(selected).getByText('Report details'));
+  expect(within(selected).getByText('%1')).toBeTruthy();expect(within(selected).getByText('a')).toBeTruthy();
+  expect(within(selected).queryByRole('button',{name:/jump|attach|approve/i})).toBeNull();
+  const search=screen.getByRole('searchbox');fireEvent.change(search,{target:{value:'Permission'}});search.focus();
+  try {
+    await act(async()=>{await uiI18n.changeLanguage('pt-BR');});
+    expect(screen.getByRole('searchbox')).toBe(search);expect(document.activeElement).toBe(search);expect(search).toHaveProperty('value','Permission');
+    expect(screen.getByRole('region',{name:'Relato selecionado'})).toBe(selected);
+    fireEvent.change(search,{target:{value:'Codex'}});expect(screen.queryByRole('region',{name:'Relato selecionado'})).toBeNull();
+    fireEvent.change(search,{target:{value:''}});expect(screen.queryByRole('region',{name:'Relato selecionado'})).toBeNull();
+  } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
+it('retires selection across host changes while preserving the search draft',async()=>{
+  await historyFixture(reported);const view=render(<AgentPanel sessionId="source-a"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
+  const search=screen.getByRole('searchbox');fireEvent.change(search,{target:{value:'Permission'}});search.focus();
+  view.rerender(<AgentPanel sessionId="source-b"/>);
+  await screen.findByText('Permission requested');
+  expect(screen.queryByRole('region',{name:'Selected report'})).toBeNull();
+  expect(screen.getByRole('searchbox')).toBe(search);expect(document.activeElement).toBe(search);expect(search).toHaveProperty('value','Permission');
+});
+it.each(['success','failure'])('retires vanished reports and drops their held history %s without resurrecting selection',async outcome=>{
+  let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
+  const rows=[session];const route=vi.fn();
+  const invoke=await historyFixture(()=>new Promise((yes,no)=>{finish=yes;fail=no;}),rows);
+  render(<AgentPanel sessionId="row-owner" onUseReportedHistory={route}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
+  fireEvent.click(screen.getByRole('button',{name:'Use reported history'}));
+  rows.splice(0);fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
+  await waitFor(()=>expect(document.querySelectorAll('.agent-card')).toHaveLength(0));
+  expect(screen.queryByRole('region',{name:'Selected report'})).toBeNull();
+  await act(async()=>{if(outcome==='success')finish(reported);else fail('retired row error');});
+  expect(route).not.toHaveBeenCalled();expect(screen.queryByText('retired row error')).toBeNull();
+  rows.push(session);fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByText('Permission requested');
+  expect(screen.queryByRole('region',{name:'Selected report'})).toBeNull();
+  expect(invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(1);
+});
+it('hides old reports after refresh failure and preserves the query for explicit retry',async()=>{
+  const invoke=await historyFixture(reported);render(<AgentPanel sessionId="failed-refresh"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
+  fireEvent.change(screen.getByRole('searchbox'),{target:{value:'Permission'}});
+  invoke.mockRejectedValueOnce('snapshot unavailable');fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
+  await screen.findByText('snapshot unavailable');expect(document.querySelectorAll('.agent-card')).toHaveLength(0);
+  expect(screen.queryByRole('region',{name:'Selected report'})).toBeNull();expect(screen.getByRole('searchbox')).toHaveProperty('value','Permission');
+  fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByText('Permission requested');
+  expect(screen.queryByRole('region',{name:'Selected report'})).toBeNull();
+});
+it('refuses ambiguous board selection when reports duplicate the same identity',async()=>{
+  await historyFixture(reported,[session,{...session,summary:'duplicate'}]);render(<AgentPanel sessionId="duplicate-board"/>);
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent','Invalid agent session.');
+  expect(document.querySelectorAll('.agent-card')).toHaveLength(0);
+});
+it('keeps distinct literal report keys separate',async()=>{
+  await historyFixture(reported,[{...session,agent:'a:b',sessionId:'c'},{...session,agent:'a',sessionId:'b:c'}]);render(<AgentPanel sessionId="literal-board"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'View a:b report for /work'}));
+  expect(within(screen.getByRole('region',{name:'Selected report'})).getByText('c')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'View a report for /work'}));
+  expect(within(screen.getByRole('region',{name:'Selected report'})).getByText('b:c')).toBeTruthy();
+});
+it('keeps the selected identity and focused search draft when explicit refresh updates its report',async()=>{
+  const rows=[session];await historyFixture(reported,rows);render(<AgentPanel sessionId="updated-report"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'View Claude Code report for /work'}));
+  const details=screen.getByRole('region',{name:'Selected report'}),search=screen.getByRole('searchbox');
+  fireEvent.change(search,{target:{value:'/work'}});search.focus();
+  rows[0]={...session,state:'done',eventCount:9,summary:'Completed permission review'};
+  fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
+  await within(details).findByText('Completed permission review');
+  expect(screen.getByRole('region',{name:'Selected report'})).toBe(details);
+  expect(within(details).getByText('Done')).toBeTruthy();expect(within(details).getByText('9')).toBeTruthy();
+  expect(search).toHaveProperty('value','/work');expect(document.activeElement).toBe(search);
+});
+it('suspends the same board while preserving its query and settings draft, then explicitly resumes its source',async()=>{
+  const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="visible-board"/>);
+  await screen.findByText('Permission requested');
+  const query=screen.getByRole('searchbox');fireEvent.change(query,{target:{value:'/work'}});
+  const usage=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});fireEvent.click(usage);
+  const before=invoke.mock.calls.length;
+  view.rerender(<AgentPanel sessionId="visible-board" visible={false}/>);
+  expect(screen.queryByRole('searchbox')).toBeNull();expect(query).toHaveProperty('value','/work');
+  expect(invoke.mock.calls.length).toBe(before);
+  view.rerender(<AgentPanel sessionId="visible-board"/>);await screen.findByText('Permission requested');
+  expect(screen.getByRole('searchbox')).toBe(query);expect(usage).toHaveProperty('checked',false);
+  expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
+  expect(invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(2);
+});
+it.each(['success','failure'])('retires held history %s when its board becomes hidden',async outcome=>{
+  let finish!:(value:unknown)=>void,fail!:(reason:unknown)=>void;const route=vi.fn();
+  await historyFixture(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));
+  const view=render(<AgentPanel sessionId="hidden-history" onUseReportedHistory={route}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));
+  view.rerender(<AgentPanel sessionId="hidden-history" onUseReportedHistory={route} visible={false}/>);
+  await act(async()=>{if(outcome==='success')finish(reported);else fail('hidden history failure');});
+  view.rerender(<AgentPanel sessionId="hidden-history" onUseReportedHistory={route}/>);await screen.findByText('Permission requested');
+  expect(route).not.toHaveBeenCalled();expect(screen.queryByText('hidden history failure')).toBeNull();
+});
+
+it('refreshes reported activity only on the foreground visible board without reloading settings',async()=>{
+  vi.useFakeTimers();
+  const foreground=vi.spyOn(document,'hidden','get').mockReturnValue(false);
+  try {
+    const rows=[session];const invoke=await historyFixture(reported,rows);
+    const snapshots=()=>invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
+    const view=render(<AgentPanel sessionId="live-board"/>);
+    await act(async()=>{});expect(snapshots()).toBe(1);
+    rows[0]={...session,state:'working',summary:'New host activity',eventCount:3};
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(screen.getByText('New host activity')).toBeTruthy();expect(snapshots()).toBe(2);
+    foreground.mockReturnValue(true);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});expect(snapshots()).toBe(2);
+    foreground.mockReturnValue(false);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(snapshots()).toBe(3);
+    view.rerender(<AgentPanel sessionId="live-board" visible={false}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(3);
+    view.rerender(<AgentPanel sessionId="live-board"/>);await act(async()=>{});expect(snapshots()).toBe(4);
+    expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
+    expect(invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(0);
+    view.unmount();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(4);
+    foreground.mockReturnValue(true);
+    render(<AgentPanel sessionId="background-board"/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(4);
+  } finally {cleanup();foreground.mockRestore();vi.useRealTimers();}
+});
+
+it('coalesces pending snapshots and keeps late old-source completion from unlocking the new source',async()=>{
+  vi.useFakeTimers();
+  try {
+    const {invoke}=await import('@tauri-apps/api/core');
+    const pending:((value:unknown)=>void)[]=[];
+    vi.mocked(invoke).mockImplementation(command=>command==='agent_snapshot'?new Promise(resolve=>pending.push(resolve)):Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true}));
+    const view=render(<AgentPanel sessionId="old-pending"/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});expect(pending).toHaveLength(1);
+    view.rerender(<AgentPanel sessionId="new-pending"/>);expect(pending).toHaveLength(2);
+    await act(async()=>{pending[0]({schemaVersion:1,sessions:[session]});});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(pending).toHaveLength(2);
+    expect(screen.queryByText('Permission requested')).toBeNull();
+    await act(async()=>{pending[1]({schemaVersion:1,sessions:[{...session,summary:'Current source report'}]});});
+    expect(screen.getByText('Current source report')).toBeTruthy();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(pending).toHaveLength(3);
+  } finally {cleanup();vi.useRealTimers();}
+});
