@@ -141,7 +141,14 @@ $stage = 'preflight'
 $failure = 'UNEXPECTED'
 try {
 Require ([Environment]::Is64BitProcess) 'PROCESS_ARCHITECTURE'
-if ($env:LAZYSH_TEST_WINDOWS_GUI -eq '1') { Require (@(Get-Process -Name lazysh -ErrorAction SilentlyContinue).Count -eq 0) 'EXISTING_PATH' }
+if ($env:LAZYSH_TEST_WINDOWS_GUI -eq '1') {
+  Require (@(Get-Process -Name lazysh -ErrorAction SilentlyContinue).Count -eq 0) 'EXISTING_PATH'
+  # Pinned single-instance 2.5.4 uses this identifier without its optional semver feature.
+  $singleton = $null
+  $existingSingleton = [Threading.Mutex]::TryOpenExisting('app.lazysh.client-sim', [ref]$singleton)
+  if ($singleton) { $singleton.Dispose() }
+  Require (!$existingSingleton) 'EXISTING_PATH'
+}
 $stage = 'paths'
 $roaming = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'app.lazysh.client'
 $local = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'app.lazysh.client'
