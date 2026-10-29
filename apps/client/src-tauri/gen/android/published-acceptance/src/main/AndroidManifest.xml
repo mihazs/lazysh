@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries><package android:name="app.lazysh.client" /></queries>
+    <application android:label="lazysh published APK acceptance" android:allowBackup="false" />
+    <instrumentation
+        android:name="androidx.test.runner.AndroidJUnitRunner"
+        android:targetPackage="app.lazysh.acceptance"
+        android:functionalTest="true" />
+</manifest>
