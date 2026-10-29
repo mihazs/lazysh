@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Reject unsupported tmux client-loop formats before granting navigation or guarded Chat input, and require exactly one matching client for every action. Ordinary terminals remain available on older servers; tmux 3.2a advanced bindings are unavailable.
+
+- Publish the current 0.23.0 version through an explicit source-bound initial release, then preserve every individually merged future Changesets version through the existing verified installer gates. Pending Changesets and application defaults are unchanged; release notes disclose native runtime gaps.
+
 - Require actual Windows NSIS installation, same-version repair with preserved owned data, and uninstall acceptance before staging release bytes. Native Windows PR checks run the same acceptance; application defaults are unchanged.
 
 - Support desktop `--dir` launches while lazysh is running, resolving relative paths against the caller’s working directory and preserving the original access guards. Ambiguous Unicode conversions are refused; no-argument startup is unchanged.

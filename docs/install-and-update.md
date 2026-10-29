@@ -73,10 +73,26 @@ Public iOS distribution requires a separately configured Apple distribution rout
 account and review where applicable. No public iOS installation, automatic OTA
 installation or physical-device acceptance is claimed before it is executed.
 
+## Current native acceptance status
+
+This intermediate release does not establish full Android/desktop parity.
+Android first-Activity focus and runtime acceptance (#352), SystemUI startup
+health (#379), guarded Chat/SSH acceptance (#306), and notification acceptance
+(#344/#459) remain outstanding. Actual ARM64 device installation and update
+acceptance remains pending; package identity/signature checks do not establish it.
+Desktop GUI and SSH acceptance remains tracked in #457/#458. Windows installer
+acceptance covers installation, same-version repair and uninstall; it does not
+establish a version upgrade or data migration. Apple distribution is deferred.
+These gaps remain explicit even when source builds, signatures and installer
+checks pass. Consult the linked issues for current acceptance evidence.
+
 ## What updates automatically
 
-The intended pipeline builds release assets after a reviewed Changesets version
-transition. It does not silently replace a running desktop/mobile application.
+The release pipeline publishes the current 0.23.0 version through an explicit,
+source-bound initial dispatch, then each future individually merged Changesets
+version through verified source builds and installation artifacts. It does not
+backfill historical versions or silently replace a running desktop/mobile app.
+Pending Changesets remain for the next version during initial publication.
 Use the platform installer or your chosen distribution channel to apply updates.
 All lazysh features remain free and open-source; external Apple signing/account
 requirements are platform constraints, not a lazysh subscription or feature gate.
