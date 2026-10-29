@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Expose the current saved host’s default multiplexer settings from Preferences and Workspace tools, including Herdr, tmux and Zellij. Changes apply on the next connection and keep the current terminal open; existing defaults are unchanged.
+
 - Allow the local native app to reach the existing Reconnect uploads action and host companion settings. Keep other windows and remote pages denied, require current unlocked app access, and preserve host verification, authentication and settings revision checks.
 
 - Preserve only bounded, fully framed Android published-APK driver stage entry/exit observations when the original qualification command fails. Progress remains separate from success, failure cause and owned cleanup; application defaults and public APK bytes are unchanged.

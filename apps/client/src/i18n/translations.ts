@@ -31,6 +31,8 @@ const translations = {
   agentsNoMatchesHint: ["Altere a busca ou o filtro de estado reportado para ver outros relatos.", "Cambia la búsqueda o el filtro de estado reportado para ver otros informes."],
   agentsClearFilters: ["Limpar filtros", "Borrar filtros"],
 
+  defaultMuxSettings: ["Multiplexador padrão para {{host}}", "Multiplexor predeterminado para {{host}}"],
+  defaultMuxNextConnection: ["Escolha Herdr, tmux ou Zellij e uma sessão nomeada nas configurações deste host. Ela abre automaticamente na próxima conexão; o terminal atual continua aberto.", "Elige Herdr, tmux o Zellij y una sesión con nombre en la configuración de este host. Se abre automáticamente en la próxima conexión; el terminal actual permanece abierto."],
   defaultMuxLabel: ["Multiplexador padrão", "Multiplexor predeterminado"],
   defaultMuxNone: ["Nenhum — terminal normal", "Ninguno — terminal normal"],
   defaultMuxName: ["Sessão padrão do multiplexador", "Sesión predeterminada del multiplexor"],

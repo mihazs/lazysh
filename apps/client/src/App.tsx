@@ -508,6 +508,7 @@ function HostEditor({
             spellCheck={false}
           />
         </label>
+        <p className="muted">{t('defaultMuxNextConnection')}</p>
         <label>{t('defaultMuxLabel')}<select value={host.defaultMultiplexer?.kind ?? ''} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:event.target.value ? {kind:event.target.value as 'tmux'|'herdr'|'zellij',name:host.defaultMultiplexer?.name ?? ''} : undefined})}>
           <option value="">{t('defaultMuxNone')}</option><option value="tmux">tmux</option><option value="herdr">Herdr</option><option value="zellij">Zellij</option>
         </select></label>
@@ -1184,6 +1185,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
+  const activeHost=active && !active.local ? hosts.find(host=>host.id===active.hostId) : undefined;
+  const multiplexerSettings=activeHost && <button type="button" onClick={()=>{
+    setPreferences(false);setMobileTools(false);setSidebar(false);setEditor(activeHost);
+  }}>{t('defaultMuxSettings',{host:activeHost.name})}</button>;
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
   navigationOwner.current={sessionId:activeId,agents:agentsVisible};
   const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && view!=='sessions';
@@ -2131,6 +2136,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {preferences && (
         <Dialog title={t("appPreferences")} close={() => setPreferences(false)}>
           <div ref={setThemeLinkTarget} />
+          {multiplexerSettings && <div className="form-stack">{multiplexerSettings}<p className="muted">{t('defaultMuxNextConnection')}</p></div>}
           <PreferencesPanel />
           <AccessPanel />
           <button type="button" onClick={()=>{setPreferences(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
@@ -2163,6 +2169,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {mobileTools && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
           <div className="form-stack">
+            {multiplexerSettings}
             <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
             <button
               disabled={!native}

@@ -1694,3 +1694,22 @@ it('uses existing saved credential authorization for upload recovery and suppres
   });
   expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
+
+
+it.each(['Preferences','Workspace tools'])('opens the current saved host from %s to configure Herdr without reconnecting',async entry=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'mux-settings-live'});
+  mocks.api.saveHost.mockImplementation(async saved=>{mocks.api.listHosts.mockResolvedValue([saved]);});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:entry}));
+  await user.click(screen.getByRole('button',{name:'Default multiplexer for Home'}));
+  const dialog=screen.getByRole('dialog',{name:'Edit host'});
+  await user.selectOptions(within(dialog).getByLabelText('Default multiplexer'),'herdr');
+  await user.type(within(dialog).getByLabelText('Default multiplexer session'),'agents');
+  await user.click(within(dialog).getByRole('button',{name:'Save host'}));
+  await waitFor(()=>expect(mocks.api.saveHost).toHaveBeenCalledWith(expect.objectContaining({id:'home',defaultMultiplexer:{kind:'herdr',name:'agents'}})));
+  expect(screen.getByText('Live SSH terminal')).toBeTruthy();
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1);
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
