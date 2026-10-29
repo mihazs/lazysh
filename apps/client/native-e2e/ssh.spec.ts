@@ -4,6 +4,12 @@ import {SshFixture} from '../../../tests/support/sshFixture';
 
 let gui:NativeGui|undefined,ssh:SshFixture|undefined;
 let captureSafe=false;
+async function typeText(browser:NonNullable<NativeGui['browser']>,text:string) {
+  const action=browser.action('key');
+  // keys([...]) holds the entire sequence as a chord; controlled fields need individual presses.
+  for(const value of text){const key=value==='\n'?'\uE007':value;action.down(key).up(key).pause(10);}
+  await action.perform();
+}
 afterEach(async context=>{
   const window=gui,server=ssh;gui=undefined;ssh=undefined;
   if(context.task.result?.state==='fail' && window) {
@@ -39,7 +45,7 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   const keyInput=await connect.$('textarea');
   expect(await keyInput.getValue()==='').toBe(true);
   // Enter key events keep multiline input on the native keyboard path.
-  try{await keyInput.click();await browser.keys([...ssh.privateKey].map(value=>value==='\n'?'\uE007':value));}
+  try{await keyInput.click();await typeText(browser,ssh.privateKey);}
   catch{throw new Error('Owned SSH private-key input failed');}
   const entered=await keyInput.getValue();
   if(entered!==ssh.privateKey)throw new Error(`Owned SSH private-key input mismatch (${entered===''?'empty':entered.replace(/\s/g,'')===ssh.privateKey.replace(/\s/g,'')?'whitespace':'content'})`);
@@ -64,7 +70,7 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   expect(await gui.appOwner()).toEqual(owner);
   expect(ssh.challenge).not.toContain(ssh.expected);
   gui.stage='owned SSH typed challenge';
-  await terminal.click();await browser.keys([...ssh.challenge,'\uE007']);
+  await terminal.click();await typeText(browser,`${ssh.challenge}\n`);
   await browser.waitUntil(async()=>(await terminal.getText()).includes(ssh!.expected),{timeout:20_000,timeoutMsg:'Owned SSH challenge output was not observed'});
   expect(await gui.appOwner()).toEqual(owner);
   expect(gui.connections).toBe(0);
