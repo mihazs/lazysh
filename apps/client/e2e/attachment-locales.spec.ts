@@ -7,6 +7,13 @@ declare global{interface Window{attachment:ReturnType<typeof mountAttachment>;}}
 for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the real crop/drawing, held upload and editable draft across languages`,async({page})=>{
   const external=await openLocalizedApp(page,locale);await page.evaluate(async()=>{const {mountAttachment}=await import('/e2e/fixtures/AttachmentHarness.tsx');window.attachment=mountAttachment();});
   const root=page.locator('.attachment-fixture');
+  await root.evaluate(element=>{(element as HTMLElement).style.background='var(--theme-bg)';});
+  const panel=root.locator('.attachment-panel');
+  for(const introduction of [panel.getByRole('heading'),panel.locator(':scope > p').first()]) {
+    const bounds=(await introduction.boundingBox())!, parent=(await panel.boundingBox())!;
+    expect(bounds.x-parent.x).toBeGreaterThanOrEqual(16);
+    expect(parent.x+parent.width-bounds.x-bounds.width).toBeGreaterThanOrEqual(16);
+  }
   const fileControls=root.locator('input[type=file]');
   await expect(fileControls).toHaveCount(2);
   expect(await fileControls.evaluateAll(inputs=>inputs.every(input=>{
@@ -17,6 +24,13 @@ for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the rea
   await page.screenshot({path:test.info().outputPath('file-controls.png')});
   const png=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=100;canvas.height=80;const context=canvas.getContext('2d')!;context.fillStyle='#fff';context.fillRect(0,0,100,80);return canvas.toDataURL('image/png').split(',')[1];});
   await root.locator('input[type=file]').first().setInputFiles({name:'literal {{name}}.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await root.getByRole('checkbox').check();
+  expect(await root.getByRole('checkbox').evaluate(input=>{
+    const label=input.closest('label')!, text=Array.from(label.childNodes).find(node=>node.nodeType===Node.TEXT_NODE && node.textContent?.trim())!;
+    const range=document.createRange();range.selectNodeContents(text);
+    const caption=range.getBoundingClientRect(), control=input.getBoundingClientRect();
+    return caption.left>=control.right && Math.abs(caption.top+caption.height/2-control.top-control.height/2)<=2;
+  })).toBe(true);
+  await page.screenshot({path:test.info().outputPath('attachment-checkbox-layout.png')});
   const canvas=root.locator('canvas');await expect(canvas).toBeVisible();
   // Wait for the actual bounded image decode before drawing.
   await expect.poll(()=>canvas.evaluate(node=>node.getContext('2d')!.getImageData(5,5,1,1).data[3])).toBe(255);

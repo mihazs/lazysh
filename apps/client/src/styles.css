@@ -431,6 +431,13 @@ button svg {
   font-size: 11px;
   line-height: 1.7;
 }
+.workspace-restore-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+}
+.workspace-restore-banner > span { min-width: 0; }
 .browser-banner code {
   background: var(--theme-panel, #17210f);
   padding: 2px 4px;
@@ -753,6 +760,11 @@ button svg {
   min-width: 0;
   overflow: auto;
 }
+.tool-panel > :is(h2, h3, p), .attachment-panel > .button-row {
+  margin-inline: 18px;
+}
+.attachment-panel > .button-row { flex-wrap: wrap; align-items: end; }
+.attachment-panel > .button-row > label { flex: 1 1 160px; min-width: 0; }
 .tool-bar {
   display: flex;
   align-items: center;
@@ -1302,6 +1314,8 @@ button svg {
     padding: 8px 14px;
     font-size: 10px;
   }
+  .workspace-restore-banner { grid-template-columns: minmax(0, 1fr) auto; }
+  .workspace-restore-banner > span { grid-column: 1 / -1; grid-row: 2; }
   .session-toolbar {
     padding: 0 8px;
     min-height: 46px;
@@ -1724,3 +1738,23 @@ button svg {
 
 .workspace-navigation-agents > .agent-panel:not([hidden]) { display: block; overflow: visible; }
 .workspace-navigation-agents .agent-board { overflow: visible; }
+
+/* Checkbox captions stay beside their controls even inside stacked forms. */
+label:has(> input:is([type="checkbox"], [type="radio"])) {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  white-space: normal;
+}
+label > input:is([type="checkbox"], [type="radio"]) {
+  width: 20px;
+  height: 20px;
+  min-width: 0;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.dialog > .access-panel { padding: 0 24px 24px; }
+.dialog > .access-panel + button { margin: 0 24px 24px; max-width: calc(100% - 48px); }

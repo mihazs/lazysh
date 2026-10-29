@@ -1835,7 +1835,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <code>bun run dev</code>{" "}{t("appToConnect")}</div>
         )}
         {native && previousWorkspace.length > 0 && (
-          <div className="browser-banner">
+          <div className="browser-banner workspace-restore-banner">
             <button
               disabled={restoring || !loaded}
               onClick={() => void restoreWorkspace()}

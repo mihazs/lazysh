@@ -19,7 +19,7 @@ export default function AccessPanel() {
       if (accessSnapshot().epoch === epoch) setError(true);
     } finally { if (accessSnapshot().epoch === epoch) setBusy(false); }
   }
-  return <section aria-label={t("accessAppLockSettings")}><h3>{t("accessAppLock")}</h3>
+  return <section className="access-panel" aria-label={t("accessAppLockSettings")}><h3>{t("accessAppLock")}</h3>
     <p>{t("accessRequireDeviceAuthenticationWhenReturningToLazyshNativeDevice")}</p>
     {status?.supported && <p>{t("accessDisableAppLockBeforeChangingEnrolledBiometricsThisPreview")}</p>}
     <label className="access-lock-toggle"><input type="checkbox" checked={status?.enabled ?? false} disabled={!status?.supported || busy}

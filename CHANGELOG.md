@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep tool-panel introductions and App lock settings away from screen edges, align checkboxes beside wrapping labels, and arrange workspace restore actions without overlapping the explanatory text. Attachment file/camera controls now wrap to fit narrow displays; defaults and upload behavior are unchanged.
+
 - Allow the local native app to reach the existing Reconnect uploads action and host companion settings. Keep other windows and remote pages denied, require current unlocked app access, and preserve host verification, authentication and settings revision checks.
 
 - Preserve only bounded, fully framed Android published-APK driver stage entry/exit observations when the original qualification command fails. Progress remains separate from success, failure cause and owned cleanup; application defaults and public APK bytes are unchanged.

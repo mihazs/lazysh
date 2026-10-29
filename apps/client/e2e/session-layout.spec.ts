@@ -180,3 +180,30 @@ test('visible-screen challenge oracle distinguishes one-row clipping from retain
   });
   expect(observation).toEqual({oneRow: 1, clipped: false, bufferRetained: true, expanded: true});
 });
+
+for (const width of [393, 412, 1280]) for (const zoom of [1, 1.35]) {
+  test(`settings insets and restore actions fit ${width}px at ${zoom} display scale`, async ({page}) => {
+    await page.setViewportSize({width, height: 900});
+    await page.addInitScript(() => localStorage.setItem('lazysh.workspace.v1', JSON.stringify([{hostId: 'layout-fixture'}])));
+    await page.goto('/');
+    await page.evaluate(scale => {document.documentElement.style.zoom = String(scale);}, zoom);
+    const banner = page.locator('.browser-banner').filter({has: page.getByRole('button', {name:'Restore previous workspace', exact:true})});
+    await expect(banner).toBeVisible();
+    expect(await banner.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const description = (await banner.locator('span').boundingBox())!;
+    const dismiss = (await banner.getByRole('button', {name:'Dismiss',exact:true}).boundingBox())!;
+    expect(dismiss.x >= description.x + description.width - 1 || dismiss.y >= description.y + description.height - 1 || description.y >= dismiss.y + dismiss.height - 1).toBe(true);
+    await banner.getByRole('button', {name:'Dismiss',exact:true}).click();
+    await expect(banner).toHaveCount(0);
+    await page.getByRole('button', {name:'Preferences',exact:true}).click();
+    const dialog = page.getByRole('dialog', {name:'Preferences',exact:true});
+    const lock = dialog.getByRole('region', {name:'App lock settings',exact:true});
+    const dialogBounds = (await dialog.boundingBox())!;
+    const lockHeading = (await lock.getByRole('heading').boundingBox())!;
+    expect(lockHeading.x - dialogBounds.x).toBeGreaterThanOrEqual(16);
+    expect(dialogBounds.x + dialogBounds.width - lockHeading.x - lockHeading.width).toBeGreaterThanOrEqual(16);
+    await lock.getByRole('heading').scrollIntoViewIfNeeded();
+    await page.screenshot({path:test.info().outputPath('settings-layout.png')});
+    await page.keyboard.press('Escape');
+  });
+}
