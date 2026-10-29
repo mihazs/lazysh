@@ -72,7 +72,8 @@ jobs:
   # Build outside the checkout: Zig 0.16.0 writes source-local zig-pkg dependencies.
   # Source/build contract: packages/herdr-upstream/PROVENANCE.md and ../herdr-guard/README.md.
   herdr-native:
-    runs-on: ubuntu-24.04
+    # Match the oldest native consumer's glibc floor.
+    runs-on: ubuntu-22.04
     outputs:
       guarded-sha256: ${{ steps.guarded-artifact.outputs.sha256 }}
     timeout-minutes: 30
@@ -304,6 +305,13 @@ jobs:
       - run: bun run test:mosh
       - name: Exercise retained tmux display navigation and hostile control streams
         run: bunx turbo run test:tmux --filter=@lazysh/client
+      - name: Exercise original-display Chat input and retirement on supported tmux
+        shell: bash
+        run: |
+          test "$(tmux -V)" = 'tmux 3.4'
+          case_name=ssh::tmux_jump_fixture::real_tmux_chat_original_display_namespace_bytes_and_retirement
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Reject unsupported apt tmux loops without binding authority
         shell: bash
         env:
@@ -325,6 +333,7 @@ jobs:
           cd "$RUNNER_TEMP/lazysh-guarded-herdr"
           printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
           chmod 700 herdr
+          timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
           cd "$GITHUB_WORKSPACE"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
 

@@ -47,6 +47,12 @@ This is the [official direct-driver route](https://v2.tauri.app/develop/tests/we
 
 [Run 40819338984, job 123269758740](https://github.com/mihazs/lazysh/actions/runs/40819338984/job/123269758740) at source `11501ad98b453cbcd03909d7ff6d0f4abb98ed79` passed all eight GUI cases, Mosh and the modern tmux suite. The legacy owner did not execute: its discovery pipeline failed because `rg` was unavailable, causing the test-list producer to report a broken pipe. Discovery now uses the standard non-quiet `grep -Fx` matcher, preserving exact qualified-case matching and consuming the full listing. The legacy runtime owner and final Herdr step still require the corrected workflow execution; no full-job pass is claimed.
 
+A local check of source `377a1bcb9087c105b68f8f5fd08a37650d11b79d` with the privately source-built official tmux 3.4 passed `ssh::tmux_jump_fixture::real_tmux_chat_original_display_namespace_bytes_and_retirement` (one test, 0.21 seconds). The normal five-case `real_tmux_jump_` filter does not select this existing ignored Chat owner. Its explicit supported-tmux CI step therefore requires exact discovery before exact execution; the unchanged 30-second owner deadline still applies. This local result does not establish execution of that step in CI.
+
+[Run 40823277921, job 123282607710](https://github.com/mihazs/lazysh/actions/runs/40823277921/job/123282607710) at source `377a1bcb9087c105b68f8f5fd08a37650d11b79d` passed the GUI, Mosh, modern tmux and explicit apt 3.2a rejection owners. The final Herdr owner failed before server readiness. Its downloaded artifact 12875613189 (archive SHA256 `79d44ba10393449b3459da024bb76f8f583b79f8e4a69b451a4c248e844a2595`) contained binary SHA256 `e82d75de1390026c550c2e977fbf9bfcb67c2b75b04bbfcb2c133600015f506f`, matching the same-run producer receipt. `readelf` showed a GLIBC_2.39 requirement; isolated execution of those exact bytes on Ubuntu 22.04 (glibc 2.35) failed before main with `GLIBC_2.39 not found`, exit 1. This is an ABI floor mismatch, not a checksum failure or evidence of a guard failure. The producer now uses Ubuntu 22.04, matching the oldest native consumer; the verified consumer binary must execute a bounded `--version` preflight before the unchanged SSH binding owner. Actual producer build and consumer acceptance on the new floor remain pending CI, together with the newly explicit Chat owner.
+
+
+
 
 ## Acceptance limits
 
