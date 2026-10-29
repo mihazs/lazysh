@@ -8,10 +8,10 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
-const startupFixture=()=>({available:true,overflow:false,signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:['EPHEMERAL_PORT'],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
+const startupFixture=()=>({available:true,overflow:false,signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport:'EPHEMERAL_PORT'}],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
 async function fixture(run: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'lazysh-release-artifacts-'));
@@ -229,7 +229,7 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
 }, 500_000);
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint roles admit only IPv4 plus owned IPv6 siblings', async () => {
-  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + windowsGuiHealthOwnershipScript + windowsGuiMetadataScript + windowsGuiStartupScript + String.raw`
+  const script = windowsInstallerPathsScript + windowsGuiEndpointsScript + windowsGuiHealthOwnershipScript + windowsGuiMetadataScript + windowsGuiStartupScript + String.raw`
 $ErrorActionPreference = 'Stop'
 $first = [PSCustomObject]@{LocalPort=12345;LocalAddress='127.0.0.1';OwningProcess=111}
 $second = [PSCustomObject]@{LocalPort=12346;LocalAddress='127.0.0.1';OwningProcess=222}
@@ -394,13 +394,31 @@ $vectors=@(
   @{Args=@('app',('--single-argument=x'+[char]10+'y'));Code='UNVERIFIED'},
   @{Args=@('app','--single-argument','--remote-debugging-pipe');Code='UNVERIFIED'}
 )
-foreach ($vector in $vectors) { if ((GuiDebugArguments $vector.Args) -cne $vector.Code) { throw 'debug transport model mismatch' } }
+foreach ($vector in $vectors) { if ((GuiDebugArguments $vector.Args).transport -cne $vector.Code) { throw 'debug transport model mismatch' } }
 foreach ($invalid in @($null,'',('a'*32768),('app'+[char]0+' --remote-debugging-pipe'))) {
-  if ((GuiDebugTransport $invalid) -cne 'UNVERIFIED') { throw 'invalid native argument input admitted' }
+  if ((GuiDebugTransport $invalid).transport -cne 'UNVERIFIED') { throw 'invalid native argument input admitted' }
 }
-if ((GuiDebugArguments (@('app')*513)) -cne 'UNVERIFIED') { throw 'argument bound ignored' }
-if ((GuiDebugTransport 'app.exe') -cne $(if ($IsWindows) {'ABSENT'} else {'UNVERIFIED'})) { throw 'native parser platform contract' }
+if ((GuiDebugArguments (@('app')*513)).transport -cne 'UNVERIFIED') { throw 'argument bound ignored' }
+if ((GuiDebugTransport 'app.exe').transport -cne $(if ($IsWindows) {'ABSENT'} else {'UNVERIFIED'})) { throw 'native parser platform contract' }
 if (!('OwnedGuiArguments' -as [type])) { throw 'native parser did not compile' }
+$joint=@(
+  @{Args=@('app');Role='BROWSER_CANDIDATE';Transport='ABSENT'},
+  @{Args=@('app','--type');Role='BROWSER_CANDIDATE';Transport='ABSENT'},
+  @{Args=@('app','--type=','--remote-debugging-pipe');Role='BROWSER_CANDIDATE';Transport='PIPE'},
+  @{Args=@('app','--type=renderer');Role='TYPED_CHILD';Transport='ABSENT'},
+  @{Args=@('app','/TYPE=unrecognized-selector','--remote-debugging-port=0');Role='TYPED_CHILD';Transport='EPHEMERAL_PORT'},
+  @{Args=@('app','--type=renderer','--type=renderer','--remote-debugging-pipe');Role='AMBIGUOUS';Transport='PIPE'},
+  @{Args=@('app','--type=','--type=');Role='AMBIGUOUS';Transport='ABSENT'},
+  @{Args=@('app','--','--type=renderer','--remote-debugging-pipe');Role='BROWSER_CANDIDATE';Transport='ABSENT'},
+  @{Args=@('app',('--type=x'+[char]10+'y'));Role='UNVERIFIED';Transport='UNVERIFIED'},
+  @{Args=@('app',('--type=x'+[char]233));Role='UNVERIFIED';Transport='UNVERIFIED'},
+  @{Args=@('app','--single-argument','--type=renderer');Role='UNVERIFIED';Transport='UNVERIFIED'},
+  @{Args=@($null);Role='UNVERIFIED';Transport='UNVERIFIED'}
+)
+foreach ($vector in $joint) {
+  $record=GuiDebugArguments $vector.Args
+  if ($record.role -cne $vector.Role -or $record.transport -cne $vector.Transport) { throw 'joint selector/transport mismatch' }
+}
 if ($IsWindows) {
   foreach ($vector in @(
     @{Line=' "C:\owned space\app.exe" --remote-debugging-port="0" ';Code='EPHEMERAL_PORT'},
@@ -417,7 +435,19 @@ if ($IsWindows) {
     @{Line=('app.exe "--remote-debugging-pipe=x'+[char]10+'y"');Code='UNVERIFIED'},
     @{Line=('app.exe "--single-argument=x'+[char]10+'y"');Code='UNVERIFIED'},
     @{Line='app.exe --single-argument --remote-debugging-pipe';Code='UNVERIFIED'}
-  )) { if ((GuiDebugTransport $vector.Line) -cne $vector.Code) { throw 'Win32 debug transport parsing mismatch' } }
+  )) { if ((GuiDebugTransport $vector.Line).transport -cne $vector.Code) { throw 'Win32 debug transport parsing mismatch' } }
+  foreach ($vector in @(
+    @{Line='"C:\owned space\app.exe" --type= --remote-debugging-pipe';Role='BROWSER_CANDIDATE';Transport='PIPE'},
+    @{Line='app.exe --type=renderer --remote-debugging-port=0';Role='TYPED_CHILD';Transport='EPHEMERAL_PORT'},
+    @{Line='app.exe --type --type=renderer';Role='AMBIGUOUS';Transport='ABSENT'},
+    @{Line='app.exe -- --type=renderer';Role='BROWSER_CANDIDATE';Transport='ABSENT'},
+    @{Line='app.exe /TYPE="unknown child" --remote-debugging-port=9222';Role='TYPED_CHILD';Transport='FIXED_PORT'},
+    @{Line=('app.exe "--type=x'+[char]10+'y"');Role='UNVERIFIED';Transport='UNVERIFIED'},
+    @{Line=('app.exe "--type=x'+[char]233+'"');Role='UNVERIFIED';Transport='UNVERIFIED'}
+  )) {
+    $record=GuiDebugTransport $vector.Line
+    if ($record.role -cne $vector.Role -or $record.transport -cne $vector.Transport) { throw 'Win32 joint selector/transport mismatch' }
+  }
 }
 $mainRole = GuiWindowRole 'Tauri Window' 281542656L 262144L $true 1200L 800L 1200L 800L
 $helperRole = GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 0L 0L 0L 0L
@@ -487,7 +517,7 @@ if ((GuiMainWindow @($main,$helper)) -cne '123' -or $script:roleMask -ne 0) { th
 'owned GUI window roles passed'
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI window roles passed');
-});
+}, 35000);
 test('Windows counterfactual changes only the documented browser argument and preserves baseline projection',()=>{
   const baseline=windowsGuiCapabilities('owned.exe','0'),treatment=windowsGuiCapabilities('owned.exe','1');
   expect(treatment).toEqual({...baseline,'tauri:options':{...baseline['tauri:options'],webviewOptions:{additionalBrowserArguments:['--remote-debugging-port=0']}}});
@@ -710,11 +740,12 @@ test('Windows startup projection admits only bounded signed runtime group eviden
   expect(parseWindowsGuiStartup(value)).toEqual(value); // Loaded runtime may differ: retain evidence, do not normalize it.
   expect(parseWindowsGuiStartup({available:false,overflow:true,signature:'UNVERIFIED'})).toEqual({available:false,overflow:true,signature:'UNVERIFIED'});
   expect(parseWindowsGuiStartup({...value,observedProcesses:0,observedRootGroups:0,rootImageVersions:[],rootDebugTransports:[],signature:'NONE_OBSERVED'}).available).toBe(true);
-  expect(parseWindowsGuiStartup({...value,observedProcesses:32,observedRootGroups:32,rootImageVersions:Array.from({length:32},(_,i)=>'1.0.0.'+(i+1)),rootDebugTransports:Array(32).fill('ABSENT')}).available).toBe(true);
-  for(const transport of ['PIPE','EPHEMERAL_PORT','FIXED_PORT','ABSENT','AMBIGUOUS','UNVERIFIED'])expect(parseWindowsGuiStartup({...value,rootDebugTransports:[transport]}).available).toBe(true);
-  expect(parseWindowsGuiStartup({...value,observedRootGroups:3,rootDebugTransports:['UNVERIFIED','PIPE','ABSENT']})).toMatchObject({rootDebugTransports:['ABSENT','PIPE','UNVERIFIED']});
+  expect(parseWindowsGuiStartup({...value,observedProcesses:32,observedRootGroups:32,rootImageVersions:Array.from({length:32},(_,i)=>'1.0.0.'+(i+1)),rootDebugTransports:Array.from({length:32},()=>({role:'BROWSER_CANDIDATE',transport:'ABSENT'}))}).available).toBe(true);
+  for(const transport of ['PIPE','EPHEMERAL_PORT','FIXED_PORT','ABSENT','AMBIGUOUS','UNVERIFIED'])expect(parseWindowsGuiStartup({...value,rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport}]}).available).toBe(true);
+  expect(parseWindowsGuiStartup({...value,observedRootGroups:3,rootDebugTransports:[{role:'TYPED_CHILD',transport:'ABSENT'},{role:'BROWSER_CANDIDATE',transport:'PIPE'},{role:'AMBIGUOUS',transport:'UNVERIFIED'}]})).toMatchObject({rootDebugTransports:[{role:'AMBIGUOUS',transport:'UNVERIFIED'},{role:'BROWSER_CANDIDATE',transport:'PIPE'},{role:'TYPED_CHILD',transport:'ABSENT'}]});
+  for(const role of ['BROWSER_CANDIDATE','TYPED_CHILD','AMBIGUOUS','UNVERIFIED'])expect(parseWindowsGuiStartup({...value,rootDebugTransports:[{role,transport:'ABSENT'}]}).available).toBe(true);
   const bad:unknown[]=[null,{},[],{...value,rootDebugTransports:null},{...value,rootDebugTransports:[null]},{...value,rootDebugTransports:'PIPE'},{available:false,overflow:false,signature:'UNVERIFIED',pid:1}];
-  for(const change of [{rootDebugTransports:[]},{rootDebugTransports:['9222']},{rootDebugTransports:['PIPE','ABSENT']},{rootDebugTransports:['private/path']},{pid:1},{path:'private'},{args:'private'},{profile:'private'},{overflow:true},{observedProcesses:33},{observedProcesses:-1},{observedProcesses:0.5},{observedRootGroups:4},{observedRootGroups:0},{signature:'Valid'},{rootImageVersions:[]},{rootImageVersions:['1.2.3.4','1.2.3.4']},{observerEnvPresence:{...value.observerEnvPresence,userDataFolder:'private'}}])bad.push({...value,...change});
+  for(const change of [{rootDebugTransports:[{role:'renderer',transport:'ABSENT'}]},{rootDebugTransports:[{role:'TYPED_CHILD',transport:'9222'}]},{rootDebugTransports:[{role:'TYPED_CHILD',transport:'ABSENT',type:'renderer'}]},{rootDebugTransports:[{role:'TYPED_CHILD'}]},{rootDebugTransports:[{transport:'PIPE'}]},{rootDebugTransports:[]},{rootDebugTransports:['9222']},{rootDebugTransports:['PIPE','ABSENT']},{rootDebugTransports:['private/path']},{pid:1},{path:'private'},{args:'private'},{profile:'private'},{overflow:true},{observedProcesses:33},{observedProcesses:-1},{observedProcesses:0.5},{observedRootGroups:4},{observedRootGroups:0},{signature:'Valid'},{rootImageVersions:[]},{rootImageVersions:['1.2.3.4','1.2.3.4']},{observerEnvPresence:{...value.observerEnvPresence,userDataFolder:'private'}}])bad.push({...value,...change});
   for(const version of ['0.0.0.0','01.2.3.4','1.2.3.65536','1.2.3.4 suffix','1.2.3.4\n','1.2.3','private/path']){
     bad.push({...value,registeredRuntimeVersion:version},{...value,edgeDriverVersion:version},{...value,rootImageVersions:[version]});
   }

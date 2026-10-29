@@ -43,7 +43,9 @@ export const windowsGuiOverrideNames={browserFolder:'WEBVIEW2_BROWSER_EXECUTABLE
 const startupUnavailable={available:false,overflow:false,signature:'UNVERIFIED'} as const;
 export const windowsGuiDebugTransports=['PIPE','EPHEMERAL_PORT','FIXED_PORT','ABSENT','AMBIGUOUS','UNVERIFIED'] as const;
 type GuiDebugTransport=typeof windowsGuiDebugTransports[number];
-type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiDebugTransport[];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
+export const windowsGuiRootRoles=['BROWSER_CANDIDATE','TYPED_CHILD','AMBIGUOUS','UNVERIFIED'] as const;
+type GuiRootDebug={role:typeof windowsGuiRootRoles[number];transport:GuiDebugTransport};
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
 function guiNumericVersion(value:unknown):value is string {
   return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
 }
@@ -56,13 +58,13 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   const {observedProcesses,observedRootGroups}=row;
   if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
   if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
-  if(!Array.isArray(row.rootDebugTransports)||row.rootDebugTransports.length!==observedRootGroups||!row.rootDebugTransports.every(value=>windowsGuiDebugTransports.includes(value)))return fail();
+  if(!Array.isArray(row.rootDebugTransports)||row.rootDebugTransports.length!==observedRootGroups||!row.rootDebugTransports.every(value=>value&&typeof value==='object'&&Object.keys(value).sort().join(',')==='role,transport'&&windowsGuiRootRoles.includes(value.role)&&windowsGuiDebugTransports.includes(value.transport)))return fail();
   if(observedProcesses===0 ? observedRootGroups!==0||row.rootImageVersions.length!==0||row.signature!=='NONE_OBSERVED' : observedRootGroups===0||row.rootImageVersions.length===0||row.signature!=='MICROSOFT')return fail();
   const presence=row.observerEnvPresence;
   if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
   const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
   for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
-  return {available:true,overflow:false,signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort(),observerEnvPresence};
+  return {available:true,overflow:false,signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence};
 }
 export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
   if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
@@ -243,20 +245,27 @@ function GuiMetadataSnapshot {
 // Windows tokenization, prefixes, ASCII key folding and -- terminator. Presence is not readiness.
 export const windowsGuiDebugTransportScript=String.raw`
 function GuiDebugArguments($arguments) {
-  if ($arguments -isnot [array] -or $arguments.Count -lt 1 -or $arguments.Count -gt 512) { return 'UNVERIFIED' }
-  $transports=@();$invalid=$false
-  foreach ($argument in @($arguments | Select-Object -Skip 1)) {
-    if ($argument -isnot [string] -or $argument.Contains([char]0)) { return 'UNVERIFIED' }
+  $unverified=@{role='UNVERIFIED';transport='UNVERIFIED'}
+  if ($arguments -isnot [array] -or $arguments.Count -lt 1 -or $arguments.Count -gt 512 -or $arguments[0] -isnot [string]) { return $unverified }
+  $transports=@();$types=@();$invalid=$false
+  for ($index=1; $index -lt $arguments.Count; $index++) {
+    $argument=$arguments[$index]
+    if ($argument -isnot [string] -or $argument.Contains([char]0)) { return $unverified }
     # Non-ASCII whitespace has version-dependent trimming rules; do not infer absence from it.
-    if (@($argument.ToCharArray() | Where-Object { [int]$_ -gt 127 -and ([char]::IsWhiteSpace($_) -or [int]$_ -in @(8203,65279)) }).Count) { return 'UNVERIFIED' }
+    foreach ($character in $argument.ToCharArray()) {
+      if ([int]$character -gt 127 -and ([char]::IsWhiteSpace($character) -or [int]$character -in @(8203,65279))) { return $unverified }
+    }
     $arg=$argument.Trim([char[]]@(9,10,11,12,13,32))
     if ($arg -ceq '--') { break }
     if ($arg -cnotmatch '(?s)\A(?:--|-|/)([^=]+)(?:=(.*))?\z') { continue }
     $key=$Matches[1];$hasValue=$Matches.ContainsKey(2);$value=$Matches[2]
     if ($key -cmatch '[^\x00-\x7f]') { continue }
     $key=$key.ToLowerInvariant()
-    if ($key -ceq 'single-argument') { return 'UNVERIFIED' }
-    if ($key -ceq 'remote-debugging-pipe') {
+    if ($key -ceq 'single-argument') { return $unverified }
+    if ($key -ceq 'type') {
+      if ($value -cmatch '[^\x20-\x7e]') { return $unverified }
+      $types += [string]$value
+    } elseif ($key -ceq 'remote-debugging-pipe') {
       $transports += 'PIPE'
       if ($hasValue) { $invalid=$true }
     } elseif ($key -ceq 'remote-debugging-port') {
@@ -266,14 +275,14 @@ function GuiDebugArguments($arguments) {
       elseif ($port -eq 0) { $transports[-1]='EPHEMERAL_PORT' }
     }
   }
-  if ($transports.Count -gt 1) { return 'AMBIGUOUS' }
-  if ($invalid) { return 'UNVERIFIED' }
-  if ($transports.Count -eq 0) { return 'ABSENT' }
-  return $transports[0]
+  $role=$(if ($types.Count -gt 1) {'AMBIGUOUS'} elseif ($types.Count -eq 1 -and $types[0].Length -gt 0) {'TYPED_CHILD'} else {'BROWSER_CANDIDATE'})
+  $transport=$(if ($transports.Count -gt 1) {'AMBIGUOUS'} elseif ($invalid) {'UNVERIFIED'} elseif ($transports.Count -eq 0) {'ABSENT'} else {$transports[0]})
+  return @{role=$role;transport=$transport}
 }
 function GuiDebugTransport($commandLine) {
+  $unverified=@{role='UNVERIFIED';transport='UNVERIFIED'}
   try {
-    if ($commandLine -isnot [string] -or $commandLine.Length -gt 32767 -or $commandLine.Contains([char]0) -or [string]::IsNullOrWhiteSpace($commandLine)) { return 'UNVERIFIED' }
+    if ($commandLine -isnot [string] -or $commandLine.Length -gt 32767 -or $commandLine.Contains([char]0) -or [string]::IsNullOrWhiteSpace($commandLine)) { return $unverified }
     # Lazy: native parser compilation/failure cannot erase the already emitted core proof.
     if (!('OwnedGuiArguments' -as [type])) {
       Add-Type -TypeDefinition @'
@@ -297,7 +306,7 @@ public static class OwnedGuiArguments {
 '@ -ErrorAction Stop
     }
     return GuiDebugArguments ([OwnedGuiArguments]::Parse($commandLine.Trim([char[]]@(9,10,11,12,13,32))))
-  } catch { return 'UNVERIFIED' }
+  } catch { return $unverified }
 }
 `;
 
@@ -381,7 +390,7 @@ function GuiStartupSnapshot {
     }
     $roots=@(GuiRuntimeRoots $inventory @($members | ForEach-Object { [int]$_.ProcessId }) ([int]$env:LAZYSH_GUI_DRIVER_PID))
     $versions=@($roots | ForEach-Object { $images[$retained[$_].Image].Version } | Sort-Object -Unique)
-    $transports=@($roots | ForEach-Object { $rootId=$_;$row=@($inventory | Where-Object { [int]$_.ProcessId -eq $rootId });$line=$null;if ($row[0].PSObject.Properties['CommandLine']) { $line=$row[0].CommandLine };GuiDebugTransport $line } | Sort-Object)
+    $transports=@($roots | ForEach-Object { $rootId=$_;$row=@($inventory | Where-Object { [int]$_.ProcessId -eq $rootId });$line=$null;if ($row[0].PSObject.Properties['CommandLine']) { $line=$row[0].CommandLine };[PSCustomObject](GuiDebugTransport $line) } | Sort-Object role,transport)
     $registered=$env:LAZYSH_GUI_RUNTIME_VERSION
     $edgeVersion=(Get-Item -LiteralPath $env:LAZYSH_GUI_EDGE -ErrorAction Stop).VersionInfo.ProductVersion
     if (!(GuiNumericVersion $registered) -or !(GuiNumericVersion $edgeVersion)) { return $unverified }
