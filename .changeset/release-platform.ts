@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleSubset } from './windows-installed-gui';
+import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleSubset, windowsGuiMetadataProjection } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
@@ -24,7 +24,9 @@ export async function native(command: string, args: string[], env = process.env,
     // Native tools may print signing material or provisioning contents on failure.
     const tool = command.split(/[\\/]/).at(-1);
     const label = tool === 'pwsh.exe' ? windowsInstallerFailure((error as {stdout?: unknown}).stdout) : undefined;
-    throw new Error(`Release validation failed: ${tool}${label ? ` (${label})` : ''}`);
+    const metadata=label&&windowsGuiSessionGuards.some(code=>code.endsWith('_WINDOW_UNVERIFIED')&&label.startsWith('gui:'+code))
+      ? windowsGuiMetadataProjection((error as {stdout?:unknown}).stdout):undefined;
+    throw new Error(`Release validation failed: ${tool}${label ? ` (${label})` : ''}${metadata ? '\nOwned Windows GUI metadata: '+metadata : ''}`);
   }
 }
 function requirePlatform(condition: unknown, message: string): asserts condition {

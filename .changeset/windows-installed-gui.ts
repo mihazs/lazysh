@@ -11,15 +11,42 @@ export function windowsGuiRoleSubset(phase:string,mask:unknown) {
   if(phase==='MULTIPLE_ROLE_MISMATCHES'?reasons.length<2:reasons.length!==1||reasons[0]!==phase)return;
   return reasons;
 }
-export function windowsGuiProbeDiagnostic(stdout:unknown):{phase:typeof windowsGuiProbePhases[number];roleMask?:number} {
+type WindowsGuiMetadata={available:false}|{available:true;overflow:boolean;windows:{className:string;style:number;exstyle:number;width:number;height:number;ownerless:boolean}[]};
+export function parseWindowsGuiMetadata(value:unknown):WindowsGuiMetadata {
+  const fail=()=>{throw new Error('Invalid owned Windows GUI framework metadata');};
+  if(!value||typeof value!=='object')return fail();
+  const root=value as Record<string,unknown>;
+  if(root.available===false&&Object.keys(root).join(',')==='available')return {available:false};
+  if(Object.keys(root).sort().join(',')!=='available,overflow,windows'||root.available!==true||typeof root.overflow!=='boolean'||!Array.isArray(root.windows)||root.windows.length>8||root.overflow&&root.windows.length!==8)return fail();
+  const windows=root.windows.map(row=>{
+    if(!row||typeof row!=='object'||Object.keys(row).sort().join(',')!=='className,exstyle,height,ownerless,style,width')return fail();
+    const {className,style,exstyle,width,height,ownerless}=row;
+    if(typeof className!=='string'||className.length<1||className.length>128||/[^\x20-\x7e]/.test(className)||/[\/\\]/.test(className)||typeof ownerless!=='boolean')return fail();
+    for(const bits of [style,exstyle])if(typeof bits!=='number'||!Number.isInteger(bits)||bits<0||bits>4294967295)return fail();
+    for(const extent of [width,height])if(typeof extent!=='number'||!Number.isInteger(extent)||Math.abs(extent)>100000)return fail();
+    return {className,style,exstyle,width,height,ownerless};
+  });
+  return {available:true,overflow:root.overflow,windows};
+}
+export function windowsGuiMetadataProjection(stdout:unknown):string|undefined {
+  if(typeof stdout!=='string'||stdout.length>2097152)return;
+  const lines=stdout.split(/\r?\n/).filter(line=>line.startsWith('LAZYSH_WINDOWS_GUI_METADATA:'));
+  if(lines.length!==1||lines[0].length>4096)return;
+  try {return JSON.stringify(parseWindowsGuiMetadata(JSON.parse(lines[0].slice('LAZYSH_WINDOWS_GUI_METADATA:'.length))));}catch{return;}
+}
+export function windowsGuiProbeDiagnostic(stdout:unknown):{phase:typeof windowsGuiProbePhases[number];roleMask?:number;metadata?:WindowsGuiMetadata} {
   const unverified={phase:'PROBE_UNVERIFIED'} as const;
-  if(typeof stdout!=='string'||stdout.length>1024)return unverified;
-  const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)(?::ROLES_([1-9][0-9]{0,3}))?$/.exec(stdout.trim());
+  if(typeof stdout!=='string'||stdout.length>8192)return unverified;
+  const lines=stdout.trim().split(/\r?\n/);
+  if(lines.length>2||lines.length===2&&!lines[1].startsWith('LAZYSH_WINDOWS_GUI_METADATA:'))return unverified;
+  const projected=windowsGuiMetadataProjection(stdout);
+  const metadata=lines.length===2?(projected?parseWindowsGuiMetadata(JSON.parse(projected)):{available:false} as const):undefined;
+  const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)(?::ROLES_([1-9][0-9]{0,3}))?$/.exec(lines[0]);
   const phase=windowsGuiProbePhases.find(phase=>phase===match?.[1]);
   if(!phase)return unverified;
-  if(!match?.[2])return {phase};
+  if(!match?.[2])return metadata?{phase,metadata}:{phase};
   const roleMask=Number(match[2]);
-  return windowsGuiRoleSubset(phase,roleMask)?{phase,roleMask}:unverified;
+  return windowsGuiRoleSubset(phase,roleMask)?{phase,roleMask,...(metadata?{metadata}:{})}:unverified;
 }
 
 export const windowsGuiSessionOutcomes = ['CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE'] as const;
@@ -158,12 +185,31 @@ function GuiMainWindow($handles) {
 }
 `;
 
+// Diagnostic only: retain data only while the originally verified application image stays live.
+export const windowsGuiMetadataScript = String.raw`
+function GuiMetadataImageFence($appId, $start) {
+  try {
+    $current=Get-Process -Id $appId -ErrorAction Stop
+    return ($current.StartTime.ToUniversalTime().Ticks.ToString() -ceq $start -and $current.Path -eq $env:LAZYSH_GUI_BINARY -and (Get-FileHash -LiteralPath $current.Path -Algorithm SHA256 -ErrorAction Stop).Hash -eq $env:LAZYSH_NSIS_BINARY_SHA256)
+  } catch { return $false }
+}
+function GuiMetadataSnapshot {
+  if (!$script:metadataEligible -or !$script:metadataComplete -or !(GuiMetadataImageFence $script:metadataAppId $script:metadataStart)) { return @{available=$false} }
+  return @{available=$true;overflow=$script:metadataOverflow;windows=@($script:metadataWindows)}
+}
+`;
+
 // Windows-only installed GUI acceptance. Paths are supplied exclusively through the child environment.
 export const windowsGuiOwnerScript = String.raw`
 ${windowsGuiWindowRoleScript}
+${windowsGuiMetadataScript}
 $ErrorActionPreference = 'Stop'
 $phase = 'PROBE_UNVERIFIED'
 $script:roleMask = 0
+$script:metadataEligible=$false
+$script:metadataComplete=$false
+$script:metadataOverflow=$false
+$script:metadataWindows=@()
 try {
   Add-Type -TypeDefinition @'
 using System;
@@ -205,6 +251,10 @@ public static class OwnedGuiWindow {
   if ($apps.Count -ne 1) { throw 'application' }
   $app = Get-Process -Id $apps[0].ProcessId
   if ($app.Path -ne $env:LAZYSH_GUI_BINARY -or (Get-FileHash -LiteralPath $app.Path -Algorithm SHA256).Hash -ne $env:LAZYSH_NSIS_BINARY_SHA256) { throw 'image' }
+  $script:metadataAppId=$app.Id
+  $script:metadataStart=$app.StartTime.ToUniversalTime().Ticks.ToString()
+  $script:metadataEligible=GuiMetadataImageFence $script:metadataAppId $script:metadataStart
+  $script:metadataReadable=$true
   $phase = 'WINDOW_UNVERIFIED'
   $script:windows = @()
   $script:ownedHandles = 0
@@ -219,14 +269,27 @@ public static class OwnedGuiWindow {
         $rectangle = [OwnedGuiWindow+Rect]::new()
         $role = 'UNVERIFIED'
         if ([OwnedGuiWindow]::GetClassNameW($window, $name, 256) -gt 0 -and [OwnedGuiWindow]::GetWindowRect($window, [ref]$rectangle)) {
-          $role = GuiWindowRole $name.ToString() ([OwnedGuiWindow]::GetWindowLongPtrW($window, -16).ToInt64()) ([OwnedGuiWindow]::GetWindowLongPtrW($window, -20).ToInt64()) ([OwnedGuiWindow]::GetWindow($window, 4) -eq [IntPtr]::Zero) ([long]$rectangle.Right - $rectangle.Left) ([long]$rectangle.Bottom - $rectangle.Top)
-        }
+          $className=$name.ToString()
+          $style=[OwnedGuiWindow]::GetWindowLongPtrW($window, -16).ToInt64()
+          $extended=[OwnedGuiWindow]::GetWindowLongPtrW($window, -20).ToInt64()
+          $ownerless=([OwnedGuiWindow]::GetWindow($window, 4) -eq [IntPtr]::Zero)
+          [long]$width=[long]$rectangle.Right - $rectangle.Left
+          [long]$height=[long]$rectangle.Bottom - $rectangle.Top
+          $role = GuiWindowRole $className $style $extended $ownerless $width $height
+          [uint32]$retainedOwner=0
+          $retainedThread=[OwnedGuiWindow]::GetWindowThreadProcessId($window,[ref]$retainedOwner)
+          if ($retainedThread -eq 0 -or $retainedOwner -ne $app.Id -or ![OwnedGuiWindow]::IsWindowVisible($window)) { $script:metadataReadable=$false }
+          if ($className -cnotmatch '\A[\x20-\x7e]{1,128}\z' -or $className -match '[/\\]' -or [Math]::Abs($width) -gt 100000 -or [Math]::Abs($height) -gt 100000) { $script:metadataReadable=$false }
+          elseif ($script:metadataWindows.Count -lt 8) { $script:metadataWindows += @{className=$className;style=($style -band 4294967295L);exstyle=($extended -band 4294967295L);width=$width;height=$height;ownerless=$ownerless} }
+          else { $script:metadataOverflow=$true }
+        } else { $script:metadataReadable=$false }
         $script:windows += [PSCustomObject]@{Handle=$window.ToInt64().ToString();Role=$role}
       }
     }
     return $true
   }
   if (![OwnedGuiWindow]::EnumWindows($callback, [IntPtr]::Zero)) { $phase = 'WINDOW_ENUMERATION_FAILED'; throw 'window' }
+  $script:metadataComplete=$script:metadataReadable
   if ($script:ownedHandles -eq 0) { $phase = 'NO_OWNED_HANDLES_OBSERVED'; throw 'window' }
   if ($script:windows.Count -eq 0) { $phase = 'OWNED_HANDLES_INVISIBLE'; throw 'window' }
   $mainHandle = GuiMainWindow $script:windows
@@ -234,7 +297,9 @@ public static class OwnedGuiWindow {
 } catch {
   $label = 'LAZYSH_WINDOWS_GUI_PROBE:' + $phase
   if ($script:roleMask -gt 0) { $label += ':ROLES_' + $script:roleMask }
-  [Console]::Out.WriteLine($label); exit 1
+  [Console]::Out.WriteLine($label)
+  [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:' + ((GuiMetadataSnapshot) | ConvertTo-Json -Depth 4 -Compress))
+  exit 1
 }
 `;
 
@@ -369,7 +434,7 @@ function ExerciseInstalledGui {
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {
       Plain $env:LAZYSH_GUI_RECEIPT
-      if ((Test-Path -LiteralPath $env:LAZYSH_GUI_RECEIPT -PathType Leaf) -and (Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le 1024) {
+      if ((Test-Path -LiteralPath $env:LAZYSH_GUI_RECEIPT -PathType Leaf) -and (Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le 4096) {
         $rejected = Get-Content -Raw -LiteralPath $env:LAZYSH_GUI_RECEIPT | ConvertFrom-Json
         if ($rejected.failure -eq 'GUI_SESSION') {
           Require ($rejected.session -in @('CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE') -and $rejected.ownedWindow -in @('VERIFIED', 'UNVERIFIED')) 'GUI_CLIENT'
@@ -384,6 +449,7 @@ function ExerciseInstalledGui {
           }
           Require ($rejected.proxyHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED') -and $rejected.nativeHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode += ':HEALTH_' + $rejected.proxyHealth + '_NATIVE_' + $rejected.nativeHealth
+          if ($null -ne $rejected.metadata) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:' + ($rejected.metadata | ConvertTo-Json -Depth 4 -Compress)) }
           Require $false $sessionCode
         }
         if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }

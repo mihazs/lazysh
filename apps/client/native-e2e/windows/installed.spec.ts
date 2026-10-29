@@ -41,7 +41,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   // These are synthetic test identities only; no DOM/profile/desktop capture is retained.
   await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify({...original,source:sha,version}),{flag:'wx'});
   } catch(error) {
-    const failure: {failure:string;session?:ReturnType<typeof windowsGuiSessionResponse>;ownedWindow?:'VERIFIED'|'UNVERIFIED';probe?:ReturnType<typeof windowsGuiProbeDiagnostic>['phase'];roleMask?:number;proxyHealth?:string;nativeHealth?:string}={failure:stage};
+    const failure: {failure:string;session?:ReturnType<typeof windowsGuiSessionResponse>;ownedWindow?:'VERIFIED'|'UNVERIFIED';probe?:ReturnType<typeof windowsGuiProbeDiagnostic>['phase'];roleMask?:number;metadata?:ReturnType<typeof windowsGuiProbeDiagnostic>['metadata'];proxyHealth?:string;nativeHealth?:string}={failure:stage};
     if(stage==='GUI_SESSION') {
       const health=await windowsGuiSessionHealth([port,Number(process.env.LAZYSH_GUI_NATIVE_PORT)],async()=>{
         const verified=await promisify(execFile)('pwsh.exe',['-NoProfile','-NonInteractive','-Command',windowsGuiHealthOwnerScript],{timeout:10000,maxBuffer:1024});
@@ -53,7 +53,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
       catch(probe) {
         failure.ownedWindow='UNVERIFIED';
         const diagnostic=probe instanceof Error ? probe.cause as ReturnType<typeof windowsGuiProbeDiagnostic> : undefined;
-        failure.probe=diagnostic?.phase??'PROBE_UNVERIFIED';failure.roleMask=diagnostic?.roleMask;
+        failure.probe=diagnostic?.phase??'PROBE_UNVERIFIED';failure.roleMask=diagnostic?.roleMask;failure.metadata=diagnostic?.metadata;
       }
     }
     await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify(failure),{flag:'wx'});

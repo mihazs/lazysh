@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -228,7 +228,7 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
 }, 500_000);
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint roles admit only IPv4 plus owned IPv6 siblings', async () => {
-  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + windowsGuiHealthOwnershipScript + String.raw`
+  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + windowsGuiHealthOwnershipScript + windowsGuiMetadataScript + String.raw`
 $ErrorActionPreference = 'Stop'
 $first = [PSCustomObject]@{LocalPort=12345;LocalAddress='127.0.0.1';OwningProcess=111}
 $second = [PSCustomObject]@{LocalPort=12346;LocalAddress='127.0.0.1';OwningProcess=222}
@@ -278,9 +278,42 @@ foreach ($role in @('DRIVER','EDGE')) {
     if (!$rejected) { throw 'health identity change admitted' }
   }
 }
+$env:LAZYSH_GUI_BINARY=$current.Path
+$env:LAZYSH_NSIS_BINARY_SHA256=(Get-FileHash -LiteralPath $current.Path -Algorithm SHA256).Hash
+$script:metadataAppId=$PID
+$script:metadataStart=$current.StartTime.ToUniversalTime().Ticks.ToString()
+$script:metadataEligible=GuiMetadataImageFence $script:metadataAppId $script:metadataStart
+$script:metadataComplete=$true;$script:metadataOverflow=$false;$script:metadataWindows=@()
+if (!(GuiMetadataSnapshot).available) { throw 'owned metadata fence rejected' }
+foreach ($field in @('LAZYSH_GUI_BINARY','LAZYSH_NSIS_BINARY_SHA256')) {
+  $original=[Environment]::GetEnvironmentVariable($field)
+  [Environment]::SetEnvironmentVariable($field,'invalid')
+  if ((GuiMetadataSnapshot).available) { throw 'changed metadata image admitted' }
+  [Environment]::SetEnvironmentVariable($field,$original)
+}
+$script:metadataAppId=-1
+if ((GuiMetadataSnapshot).available) { throw 'missing metadata process admitted' }
+$script:metadataAppId=$PID
+$script:metadataStart='0'
+if ((GuiMetadataSnapshot).available) { throw 'changed metadata start admitted' }
+$script:metadataStart=$current.StartTime.ToUniversalTime().Ticks.ToString()
+$script:metadataEligible=$false
+if ((GuiMetadataSnapshot).available) { throw 'missing initial fence admitted' }
+$script:metadataEligible=$true;$script:metadataComplete=$false
+if ((GuiMetadataSnapshot).available) { throw 'incomplete enumeration admitted' }
 'owned GUI endpoint shapes passed'
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI endpoint shapes passed');
+  const metadata={available:true,overflow:false,windows:[{className:'Synthetic framework',style:0,exstyle:0,width:0,height:0,ownerless:true}]};
+  const failure='gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:UNKNOWN_CLASS:ROLES_UNKNOWN_CLASS:HEALTH_READY_NATIVE_READY; gui:GUI_CLEANUP; cleanup:UNEXPECTED';
+  const rejection=String.raw`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:UNKNOWN_CLASS:ROLES_1024:HEALTH_READY_NATIVE_READY');[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_CLEANUP');[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:'+$env:LAZYSH_METADATA_UNIT);[Console]::Error.WriteLine('private native error');exit 1`;
+  for(const value of [metadata,{...metadata,title:'private'}]){
+    const expected='Release validation failed: pwsh.exe ('+failure+')'+('title' in value?'':'\nOwned Windows GUI metadata: '+JSON.stringify(metadata));
+    await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',rejection],{...process.env,LAZYSH_METADATA_UNIT:JSON.stringify(value)},30000)).rejects.toMatchObject({message:expected});
+  }
+  const nonSession=String.raw`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_OWNER');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:'+$env:LAZYSH_METADATA_UNIT);exit 1`;
+  await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',nonSession],{...process.env,LAZYSH_METADATA_UNIT:JSON.stringify(metadata)},30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe (gui:GUI_OWNER)'});
+
 });
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI window roles require one main and only the pinned zero-area helper', async () => {
   const script = windowsGuiWindowRoleScript + String.raw`
@@ -475,6 +508,29 @@ test('Windows session and owned-window diagnostics expose only the finite outcom
     'GUI_SESSION_NOT_CREATED_WINDOW_VERIFIED private path','GUI_SESSION_NOT_CREATED_WINDOW_VERIFIED:private']) {
     expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:'+code)).toBeUndefined();
   }
+});
+test('owned Windows framework metadata projects exact bounded records and rejects private or malformed fields',()=>{
+  const row={className:'app.lazysh.client-sic',style:4294967295,exstyle:0,width:-100000,height:100000,ownerless:false};
+  const value={available:true,overflow:false,windows:[row]};
+  expect(parseWindowsGuiMetadata(value)).toEqual(value);
+  expect(parseWindowsGuiMetadata({available:false})).toEqual({available:false});
+  expect(parseWindowsGuiMetadata({...value,overflow:true,windows:Array(8).fill(row)})).toMatchObject({windows:Array(8).fill(row)});
+  expect(parseWindowsGuiMetadata({...value,windows:[{...row,className:'A'.repeat(128)}]}).available).toBe(true);
+  const bad:unknown[]=[null,{},[],{available:false,windows:[]},{...value,title:'private'},{...value,overflow:1},{...value,overflow:true},{...value,windows:Array(9).fill(row)}];
+  for(const change of [{title:'private'},{pid:1},{window:'123'},{path:'private'}, {className:''},{className:'A'.repeat(129)},
+    {className:'private/path'},{className:'private\\path'},{className:'nonasciié'},{className:'name\n'},{className:'name\u0000'},
+    {style:-1},{style:4294967296},{style:0.5},{exstyle:'0'},{exstyle:NaN},{width:-100001},{height:100001},{height:Infinity},{height:0.5},{ownerless:'true'}])bad.push({...value,windows:[{...row,...change}]});
+  for(const value of bad)expect(()=>parseWindowsGuiMetadata(value)).toThrow('Invalid owned Windows GUI framework metadata');
+  const marker='LAZYSH_WINDOWS_GUI_METADATA:'+JSON.stringify(value);
+  expect(windowsGuiMetadataProjection('private raw output\n'+marker)).toBe(JSON.stringify(value));
+  for(const output of [marker+'\n'+marker,'LAZYSH_WINDOWS_GUI_METADATA:private','LAZYSH_WINDOWS_GUI_METADATA:'+JSON.stringify({...value,private:'secret'}),'LAZYSH_WINDOWS_GUI_METADATA:'+JSON.stringify({...value,windows:[{...row,className:'name\n'}]})]){
+    expect(windowsGuiMetadataProjection(output)).toBeUndefined();
+  }
+  expect(windowsGuiMetadataProjection(marker+' '.repeat(4096))).toBeUndefined();
+  expect(windowsGuiMetadataProjection(' '.repeat(2097153)+marker)).toBeUndefined();
+  const phase='LAZYSH_WINDOWS_GUI_PROBE:UNKNOWN_CLASS:ROLES_1024';
+  expect(windowsGuiProbeDiagnostic(phase+'\n'+marker)).toEqual({phase:'UNKNOWN_CLASS',roleMask:1024,metadata:value});
+  expect(windowsGuiProbeDiagnostic(phase+'\nLAZYSH_WINDOWS_GUI_METADATA:malformed')).toEqual({phase:'UNKNOWN_CLASS',roleMask:1024,metadata:{available:false}});
 });
 test('Windows role masks project only exact finite subsets and preserve session plus cleanup failures',()=>{
   expect(windowsGuiRoleReasons).toEqual(['ROLE_DATA_UNVERIFIED','MAIN_OWNER_MISMATCH','MAIN_GEOMETRY_MISMATCH','MAIN_STYLE_MISMATCH','MAIN_EXSTYLE_MISMATCH','TAO_OWNER_MISMATCH','TAO_GEOMETRY_MISMATCH','TAO_STYLE_CLIPSIBLINGS_ONLY','TAO_STYLE_MISMATCH','TAO_EXSTYLE_MISMATCH','UNKNOWN_CLASS']);
