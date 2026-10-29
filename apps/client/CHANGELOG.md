@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 1.1.3
+
+### Patch Changes
+
+- 6e6c9cd: Fix mobile settings, checkbox and attachment layout and expose existing per-host multiplexer preferences.
+- @lazysh/common@1.1.3
+  - @lazysh/display-idle@1.1.3
+  - @lazysh/et-transport@1.1.3
+  - @lazysh/mosh-transport@1.1.3
+
 ## 1.1.2
 
 ### Patch Changes
