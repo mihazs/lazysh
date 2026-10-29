@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.1.0
+
+### Minor Changes
+
+- 0ad69a5: Add explicit same-tab upload recovery for direct Mosh sessions using the original verified host and existing saved/manual SSH authentication. Preserve attachment drafts, terminal/output identity, access leases, exclusive creation and upload limits; never save credentials, start a new terminal or automatically retry an upload. Other SSH tools retain their original connection.
+
+### Patch Changes
+
+- b63304b: Style native file-picker buttons with the active lazysh theme and minimum 44px touch targets.
+- @lazysh/common@1.1.0
+  - @lazysh/display-idle@1.1.0
+  - @lazysh/et-transport@1.1.0
+  - @lazysh/mosh-transport@1.1.0
+
 ## 1.0.2
 
 ### Patch Changes
