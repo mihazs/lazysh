@@ -382,6 +382,37 @@ jobs:
         env:
           LAZYSH_TEST_WINDOWS_INSTALLER: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows NSIS'
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: 24
+      - name: Prepare owned Windows GUI drivers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'lazysh-installed-gui-tools'
+          if (Test-Path -LiteralPath $tools) { throw 'GUI tools directory already exists' }
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          cargo install --locked --version 2.1.0 tauri-driver --root $tools
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned tauri-driver installation failed' }
+          $runtimeId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $runtime = @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$runtimeId", "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$runtimeId") |
+            ForEach-Object { if (Test-Path -LiteralPath $_) { (Get-Item -LiteralPath $_).GetValue('pv') } } |
+            Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and [Version]$_ -gt [Version]'0.0.0.0' } | Select-Object -First 1
+          if (!$runtime) { throw 'Installed WebView2 runtime is required' }
+          $archive = Join-Path $tools 'edge.zip'
+          Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$runtime/edgedriver_win64.zip" -OutFile $archive -TimeoutSec 60
+          if ((Get-Item -LiteralPath $archive).Length -gt 52428800) { throw 'EdgeDriver archive exceeds its bound' }
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $tools 'edge')
+      - name: Exercise the actual installed Windows GUI and owned uninstall
+        if: runner.os == 'Windows'
+        timeout-minutes: 12
+        env:
+          LAZYSH_TEST_WINDOWS_GUI: '1'
+          LAZYSH_GUI_DRIVER: ${{ runner.temp }}/lazysh-installed-gui-tools/bin/tauri-driver.exe
+          LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows installed GUI'
       - name: Reject unverified Windows private-file permissions
         if: runner.os == 'Windows'
         run: cargo test --locked -p lazysh-common --features service --lib service_secrets::tests::public_storage_helpers_reject_unverified_host_permissions -- --exact

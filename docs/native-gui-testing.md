@@ -85,3 +85,13 @@ ledger, historical failures, source revisions and binary digests. Record the
 exact source commit, application SHA-256, selected case count, cleanup result and
 limitations there for each qualifying run. Compilation, policy unit tests and an
 older binary's success do not establish current-source native GUI acceptance.
+
+## Installed Windows GUI foundation
+
+The native Windows job selects `actual Windows installed GUI` in the existing release-artifact owner after packaging NSIS. It reuses installer identity, collision, repair and uninstall gates, with a fixed GUI-only branch. Ordinary release maintenance does not launch the GUI. Only explicitly selected fresh GitHub-hosted Windows jobs are admitted; existing processes, application data or installation state are refused.
+
+The transaction owns initially absent actual KnownFolder `app.lazysh.client` roaming/local directories with unique sentinels. Windows Tauri paths use KnownFolder APIs, so overriding `APPDATA` would not isolate them. After the GUI closes, cleanup rejects reparse points and removes only those owned application directories before the existing repair marker test and uninstall. No parent registry/data directory is removed.
+
+Pinned official tauri-driver 2.1.0 launches the exact installed image through Microsoft EdgeDriver matching installed WebView2. Its Windows implementation creates a kill-on-close Job Object before spawning the native driver. The acceptance verifies loopback listener process ownership, native image/hash/PID/start/HWND, bundled frontend, About version and source revision. The parent retains the driver process, bounds the client and descendant retirement, suppresses raw native output, and requires cleanup/uninstall after failure. It captures no desktop screenshots or user application content.
+
+This is a foundation gate; its first actual Windows execution remains required before merge. It does not establish warm singleton argv, ConPTY terminal behavior or authenticated SSH, which remain under #457. Published 0.23.0 assets are untouched; CI evidence belongs to its exact candidate source/binary.

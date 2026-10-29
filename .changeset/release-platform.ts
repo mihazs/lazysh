@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { windowsInstalledGuiScript, windowsInstallerPathsScript } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
@@ -49,15 +50,16 @@ const windowsInstallerGuards = new Set([
   'INSTALL_OWNERSHIP', 'UNINSTALL_OWNERSHIP', 'UNINSTALL_BINARY', 'UNINSTALL_REGISTRY',
   'REGISTRY_VALUES', 'REGISTRY_CHILDREN', 'UNINSTALL_MARKER', 'DATA_CONTENTS',
   'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
-  'UNSUPPORTED_SIGNING',
+  'UNSUPPORTED_SIGNING', 'GUI_OWNER', 'GUI_START', 'GUI_INTERACTIVE', 'GUI_TOOLS', 'GUI_RUNTIME',
+  'GUI_DATA', 'GUI_SESSION', 'GUI_FRONTEND', 'GUI_VERSION', 'GUI_ENDPOINT', 'GUI_TIMEOUT', 'GUI_CLIENT', 'GUI_CLEANUP',
 ]);
 export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (typeof stdout !== 'string' || stdout.length > 2_097_152) return;
   const markers = stdout.split(/\r?\n/).filter(line => line.startsWith('LAZYSH_WINDOWS_INSTALLER:'));
-  if (!markers.length || markers.length > 2) return;
+  if (!markers.length || markers.length > 3) return;
   const labels: string[] = [];
   for (const marker of markers) {
-    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|cleanup):([A-Z_]+)$/.exec(marker);
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z_]+)$/.exec(marker);
     if (!match || !windowsInstallerGuards.has(match[2])) return;
     labels.push(`${match[1]}:${match[2]}`);
   }
@@ -93,7 +95,8 @@ export async function windowsNsisBinaryDigest(path: string, source: { bytes: num
   predicted.update(tail);
   return { bytes, sha256: predicted.digest('hex') };
 }
-export async function windowsInstallation(installer: string, binary: string, version: string) {
+export async function windowsInstallation(installer: string, binary: string, version: string, gui = false) {
+  requirePlatform(!gui || process.env.LAZYSH_TEST_WINDOWS_GUI === '1', 'Windows GUI acceptance must be explicitly selected');
   requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
     && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
   'Windows installation requires an owned GitHub-hosted Windows job');
@@ -103,21 +106,18 @@ export async function windowsInstallation(installer: string, binary: string, ver
   requirePlatform((await Bun.file(cli).json()).version === '2.12.4',
     'Windows NSIS image model requires pinned Tauri CLI 2.12.4');
   const packaged = await windowsNsisBinaryDigest(binary, expected);
+  if (gui) {
+    const driver = resolve(process.env.LAZYSH_GUI_DRIVER ?? '');
+    requirePlatform(driver.startsWith(resolve(process.env.RUNNER_TEMP!) + '\\'), 'Windows GUI tools must be task-owned');
+    const receipt = Bun.file(join(driver, '../../.crates2.json'));
+    requirePlatform(receipt.size <= 65_536, 'Windows GUI driver receipt exceeds its bound');
+    const installed = (await receipt.json()).installs?.['tauri-driver 2.1.0 (registry+https://github.com/rust-lang/crates.io-index)'];
+    requirePlatform(installed?.version_req === '=2.1.0' && installed.bins?.includes('tauri-driver'), 'Windows GUI requires pinned tauri-driver 2.1.0');
+  }
+  const root = resolve(import.meta.dir, '..');
   return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`
 $ErrorActionPreference = 'Stop'
-function Require($condition, $code) {
-  if (!$condition) { $script:failure = $code; throw 'Owned Windows acceptance rejected' }
-}
-function OptionalItem($path) {
-  try { Get-Item -Force -LiteralPath $path -ErrorAction Stop }
-  catch [System.Management.Automation.ItemNotFoundException] { }
-}
-function Plain($path) {
-  for ($current = $path; $current; $current = Split-Path -Parent $current) {
-    $item = OptionalItem $current
-    if ($item) { Require (!($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) 'REPARSE_POINT' }
-  }
-}
+${windowsInstallerPathsScript}
 function RunInstaller($file, $arguments) {
   Plain $file
   $process = Start-Process -FilePath $file -ArgumentList $arguments -PassThru
@@ -136,10 +136,12 @@ function Installed {
   Require ((Get-AuthenticodeSignature -LiteralPath $installed).Status -eq 'NotSigned') 'UNSUPPORTED_SIGNING'
   Require ((Get-Item -LiteralPath $installed).VersionInfo.ProductVersion -in @($env:LAZYSH_VERSION, ($env:LAZYSH_VERSION + '.0'))) 'VERSION_MISMATCH'
 }
+${windowsInstalledGuiScript}
 $stage = 'preflight'
 $failure = 'UNEXPECTED'
 try {
 Require ([Environment]::Is64BitProcess) 'PROCESS_ARCHITECTURE'
+if ($env:LAZYSH_TEST_WINDOWS_GUI -eq '1') { Require (@(Get-Process -Name lazysh -ErrorAction SilentlyContinue).Count -eq 0) 'EXISTING_PATH' }
 $stage = 'paths'
 $roaming = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'app.lazysh.client'
 $local = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'app.lazysh.client'
@@ -191,6 +193,7 @@ try {
   $directoryOwned = $true
   RunInstaller $env:LAZYSH_INSTALLER ('/S /NS /D=' + $directory)
   Installed
+  if ($env:LAZYSH_TEST_WINDOWS_GUI -eq '1') { ExerciseInstalledGui }
   Plain $roaming
   Require (!(OptionalItem $roaming)) 'UNEXPECTED_DATA'
   $null = New-Item -ItemType Directory -Path $roaming
@@ -248,7 +251,11 @@ if ($primaryFailed) { exit 1 }
 'Windows NSIS install, same-version repair, marker preservation and uninstall passed'
 `], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
     LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256, LAZYSH_BINARY_BYTES: String(expected.bytes),
-    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256 }, 450_000);
+    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256, LAZYSH_TEST_WINDOWS_GUI: gui ? '1' : '',
+    LAZYSH_GUI_NODE: gui ? await native('node', ['-p', 'process.execPath']) : '',
+    LAZYSH_GUI_VITEST: join(root, 'node_modules/vitest/vitest.mjs'),
+    LAZYSH_GUI_CLIENT_ROOT: join(root, 'apps/client'),
+  }, gui ? 600_000 : 450_000);
 }
 async function desktop(target: ArtifactTarget, root: string, output: string) {
   const identity = await buildIdentity(root);

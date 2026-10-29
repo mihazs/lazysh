@@ -8,6 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -225,12 +226,63 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
   console.info(await windowsInstallation(installer, binary, version));
 }, 500_000);
 
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
+  const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
+  const binary = join(import.meta.dir, '../target/release/lazysh.exe');
+  const { version } = await Bun.file(join(import.meta.dir, '../apps/client/package.json')).json();
+  console.info(await windowsInstallation(installer, binary, version, true));
+}, 650_000);
+test('installed GUI refuses an implicit request before reading any files', async () => {
+  const prior = process.env.LAZYSH_TEST_WINDOWS_GUI;
+  delete process.env.LAZYSH_TEST_WINDOWS_GUI;
+  try { await expect(windowsInstallation('missing', 'missing', '0.0.0', true)).rejects.toThrow('explicitly selected'); }
+  finally { if (prior !== undefined) process.env.LAZYSH_TEST_WINDOWS_GUI = prior; }
+});
+test.skipIf(process.platform !== 'win32')('Windows GUI data cleanup refuses foreign sentinels and reparse descendants', () => fixture(async root => {
+  const script = windowsInstallerPathsScript + windowsInstalledGuiScript + String.raw`
+$ErrorActionPreference = 'Stop'
+$guiSentinel = 'owned-sentinel'
+$content = 'owned-content'
+$script:guiRoots = @()
+$owned = Join-Path $env:LAZYSH_GUI_FILE_FIXTURE 'owned'
+GuiDirectory $owned
+Set-Content -LiteralPath (Join-Path $owned $guiSentinel) -NoNewline -Value 'foreign'
+try { RemoveGuiDirectory $owned; throw 'foreign sentinel accepted' } catch { if ($script:failure -ne 'GUI_DATA') { throw } }
+if (!(Test-Path -LiteralPath $owned)) { throw 'foreign root removed' }
+Set-Content -LiteralPath (Join-Path $owned $guiSentinel) -NoNewline -Value $content
+$external = Join-Path $env:LAZYSH_GUI_FILE_FIXTURE 'external'
+$null = New-Item -ItemType Directory -Path $external
+$externalMarker = Join-Path $external 'preserved'
+Set-Content -LiteralPath $externalMarker -NoNewline -Value 'outside'
+$link = Join-Path $owned 'linked'
+$null = New-Item -ItemType Junction -Path $link -Target $external
+try { RemoveGuiDirectory $owned; throw 'junction accepted' } catch { if ($script:failure -ne 'REPARSE_POINT') { throw } }
+if ((Get-Content -Raw -LiteralPath $externalMarker) -cne 'outside') { throw 'external data changed' }
+[IO.Directory]::Delete($link)
+RemoveGuiDirectory $owned
+if (Test-Path -LiteralPath $owned) { throw 'owned root remains' }
+'owned GUI file boundaries passed'
+`;
+  expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {...process.env, LAZYSH_GUI_FILE_FIXTURE: root}, 30000)).toBe('owned GUI file boundaries passed');
+}));
+test('Windows GUI native identity parser admits only a complete exact image identity', () => {
+  const owner = {pid: 123, start: '133811111111111111', window: '456', sha256: 'a'.repeat(64)};
+  expect(parseWindowsGuiOwner(JSON.stringify(owner), owner.sha256)).toEqual(owner);
+  for (const patch of [{pid:0}, {start:'0'}, {window:'-1'}, {sha256:'b'.repeat(64)}, {path:'private'}, {start:133}]) {
+    expect(() => parseWindowsGuiOwner(JSON.stringify({...owner, ...patch}), owner.sha256)).toThrow();
+  }
+  expect(() => parseWindowsGuiOwner('private raw output',owner.sha256)).toThrow();
+  expect(() => parseWindowsGuiOwner(' '.repeat(1025),owner.sha256)).toThrow();
+  expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:GUI_OWNER\nLAZYSH_WINDOWS_INSTALLER:gui:GUI_CLEANUP\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_BINARY'))
+    .toBe('gui:GUI_OWNER; gui:GUI_CLEANUP; cleanup:UNINSTALL_BINARY');
+});
+
 test.each([
   ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
   ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
   ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
   ['LAZYSH_WINDOWS_INSTALLER:identity:SOURCE_HASH_MISMATCH', 'identity:SOURCE_HASH_MISMATCH'],
-  [Array(3).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
+  [Array(4).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
   ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:private-stage:VERSION_MISMATCH', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED private-path', undefined],
