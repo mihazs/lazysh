@@ -4,6 +4,8 @@
 
 - Add explicit same-tab upload recovery for verified direct Mosh connections. Reuse saved or manually entered SSH authentication without starting another terminal or saving credentials; preserve attachment edits and require a separate Upload action afterward. Other SSH tools keep their existing connection, and existing upload limits, path guards and no-overwrite behavior are unchanged.
 
+- Style native file-picker buttons with the active lazysh theme and 44px touch targets, including attachment file and camera selection. Native pickers and upload behavior are unchanged.
+
 - Explain when an attachment upload loses its separate SSH file-transfer connection while a Mosh terminal remains open. Reconnect to the saved host from Connections and upload from the new connection; existing Mosh tabs, upload limits, exclusive file creation, and path checks are preserved. This does not automatically reauthenticate a disconnected side channel.
 
 - Keep session toolbar icons and labels inside their buttons on narrow screens and with enlarged text. Scroll horizontally to reach additional views without widening the workspace.
