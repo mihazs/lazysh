@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Keep the Android workspace inside system bars and display cutouts, and resize the terminal and special-key row above docked software keyboards. Showing and hiding the keyboard restores the available terminal space; terminal input and toolbar preferences are unchanged.
+- Keep the Android workspace inside system bars and display cutouts, and resize the terminal and special-key row above docked software keyboards. The open composer scrolls within its available space and preserves a complete terminal row, including with larger terminal text. Showing and hiding the keyboard restores the available terminal space; terminal input and toolbar preferences are unchanged.
 
 - Add reported-agent search, status filters and selected-report context while preserving explicit refresh, history and approval ownership. Reported pane IDs remain context; application defaults are unchanged.
 

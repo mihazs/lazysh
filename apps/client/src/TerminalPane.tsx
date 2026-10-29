@@ -157,10 +157,16 @@ export default function TerminalPane({ session, active, reportError }: {
     const size = terminal.onResize(({ cols, rows }) => {
       if (session.connected) void api.resize(session.id, cols, rows).catch(error => reportError(String(error)));
     });
-    const resize = new ResizeObserver(() => {
+    const screen = element.querySelector<HTMLElement>(".xterm-screen");
+    const fitTerminal = () => {
+      // Keep at least one measured row while the composer yields its remaining room.
+      if (screen && screen.clientHeight > 0 && terminal.rows > 0)
+        element.style.minHeight = `${Math.ceil(screen.clientHeight / terminal.rows)}px`;
       if (activeRef.current && element.clientWidth > 0) addon.fit();
-    });
+    };
+    const resize = new ResizeObserver(fitTerminal);
     resize.observe(element);
+    if (screen) resize.observe(screen);
     addon.fit();
     terminal.focus();
     return () => {

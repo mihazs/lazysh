@@ -113,3 +113,34 @@ for (const width of [360, 384, 393, 412]) {
     }
   });
 }
+
+for (const width of [360, 412]) for (const fontSize of [14, 32]) {
+  test(`phone composer and special keys preserve fitted terminal rows at ${width}px width and ${fontSize}px text`, async ({page}) => {
+    await page.addInitScript(size => localStorage.setItem('lazysh.preferences.v1', JSON.stringify({version: 1, fontSize: size})), fontSize);
+    await page.setViewportSize({width, height: 844});
+    await page.goto('/');
+    await openSessions(page);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', {name: 'Compose', exact: true}).click();
+    const composer = page.locator('.terminal-compose:visible');
+    const naturalHeight = (await composer.boundingBox())!.height;
+    for (const height of [420, 844]) {
+      await page.setViewportSize({width, height});
+      const canvas = page.locator('.terminal-canvas:visible');
+      await expect.poll(() => canvas.evaluate(element => {
+        const screen = element.querySelector('.xterm-screen')!;
+        return screen.clientHeight > 0 && screen.clientHeight <= element.clientHeight;
+      })).toBe(true);
+      for (const element of [canvas, page.locator('.terminal-keys:visible'), page.getByRole('button', {name: 'esc', exact: true}), page.getByRole('button', {name: 'tab', exact: true})]) {
+        const bounds = (await element.boundingBox())!;
+        expect(bounds.y).toBeGreaterThanOrEqual(0);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
+      }
+      if (height === 420) {
+        await expect.poll(() => composer.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+        await page.getByRole('button', {name: 'Close composer', exact: true}).scrollIntoViewIfNeeded();
+        await expect(page.getByRole('button', {name: 'Close composer', exact: true})).toBeInViewport();
+      } else expect((await composer.boundingBox())!.height).toBe(naturalHeight);
+    }
+  });
+}
