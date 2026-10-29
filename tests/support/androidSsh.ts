@@ -1,134 +1,13 @@
-import {OwnedProcess, OUTPUT_LIMIT, identity, descendants, type OwnedPid} from './ownedProcess';
+import {OwnedProcess, OUTPUT_LIMIT, identity} from './ownedProcess';
+import {SshFixture, sshCommand} from './sshFixture';
+export {SshFixture, listening, stopOwnedTree, type HerdrTools} from './sshFixture';
 export {OwnedProcess, identity, type OwnedPid} from './ownedProcess';
-import {chmod, copyFile, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, writeFile} from 'node:fs/promises';
-import {tmpdir, userInfo} from 'node:os';
-import {isAbsolute, join, resolve} from 'node:path';
-import {createServer, connect} from 'node:net';
-import {createHash,randomUUID} from 'node:crypto';
+import {mkdir, readlink, realpath, stat, writeFile} from 'node:fs/promises';
+import {join, resolve} from 'node:path';
+import {createHash} from 'node:crypto';
 import type {HerdrFixture} from './androidHerdr';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 
-async function command(stage:string,program:string,args:string[],cwd?:string) {
-  return new OwnedProcess(program,args,cwd).finish(stage,5000);
-}
-async function availablePort() {
-  const listener=createServer();
-  await new Promise<void>((resolve,reject)=>{listener.once('error',reject);listener.listen(0,'127.0.0.1',resolve);});
-  const port=(listener.address() as {port:number}).port;
-  await new Promise<void>((resolve,reject)=>listener.close(error=>error?reject(error):resolve()));
-  return port;
-}
-export async function listening(port:number) {
-  return new Promise<boolean>(resolve=>{
-    const socket=connect({host:'127.0.0.1',port});
-    const finish=(connected:boolean)=>{socket.destroy();resolve(connected);};
-    socket.once('connect',()=>finish(true));socket.once('error',()=>finish(false));
-    socket.setTimeout(500,()=>finish(false));
-  });
-}
-async function retireDescendants(parent:OwnedPid) {
-  const owned=(await descendants(parent)).reverse();
-  const same=async(item:OwnedPid)=>{const current=await identity(item.pid);return current?.start===item.start;};
-  for(const signal of ['SIGTERM','SIGKILL'] as const) {
-    for(const item of owned)if(await same(item)) {
-      try{process.kill(item.pid,signal);}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}
-    }
-    const deadline=performance.now()+1000;
-    while(performance.now()<deadline && (await Promise.all(owned.map(same))).some(Boolean))await Bun.sleep(10);
-  }
-  if((await Promise.all(owned.map(same))).some(Boolean))throw new Error('Owned SSH descendants survived teardown');
-}
-export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH') {
-  let primary:unknown;
-  try {
-    const root=await daemon.liveIdentity();
-    if(!root)throw new Error(`Owned ${label} root identity unavailable`);
-    await retireDescendants(root);
-    if((await daemon.liveIdentity())?.start!==root.start)throw new Error(`Owned ${label} root identity lost`);
-  } catch(error){primary=error;}
-  try{await daemon.stop();}catch(error){primary??=error;}
-  if(primary)throw primary;
-}
-export type HerdrTools={herdrBinary:string;agentBinary:string;receiverBinary:string};
-export class SshFixture {
-  private stopped=false;
-  readonly nonce:string;
-  get prompt(){return `UI_PROMPT_${this.nonce}>`;}
-  get expected(){return `SSH_${this.nonce}_END`;}
-  get challenge(){return `printf 'SSH_%s_END\\n' '${this.nonce}'`;}
-  readonly username=userInfo().username;
-  private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv) {this.nonce=nonce;}
-  static async start(tools?:HerdrTools) {
-    if(process.platform!=='linux')throw new Error('Owned Android SSH host fixture requires Linux');
-    const directory=await mkdtemp(join(tools?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
-    let daemon:OwnedProcess|undefined;
-    try {
-      await chmod(directory,0o700);
-      for(const name of ['host','user'])await command('ephemeral key generation','ssh-keygen',['-q','-t','ed25519','-N','','-f',join(directory,name)]);
-      const privateKey=await readFile(join(directory,'user'),'utf8');
-      await writeFile(join(directory,'authorized_keys'),await readFile(join(directory,'user.pub')),{mode:0o600});
-      const fingerprint=(await command('host fingerprint','ssh-keygen',['-l','-E','sha256','-f',join(directory,'host.pub')])).trim().split(/\s+/)[1];
-      if(!/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint))throw new Error('Invalid owned fingerprint');
-      const username=userInfo().username;
-      if(!/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(username))throw new Error('Unsupported owned SSH username');
-      const port=await availablePort();
-      const sshd=(await command('locate sshd','sh',['-c','command -v sshd'])).trim();
-      if(!sshd.startsWith('/'))throw new Error('Owned sshd unavailable');
-      // No untrusted configuration interpolation; generated private paths are plain tokens.
-      if(/[\s"\\]/.test(directory))throw new Error('Unsupported owned fixture directory');
-      const nonce=randomUUID().replaceAll('-','');
-      const prompt=`UI_PROMPT_${nonce}> `;
-      let environment:NodeJS.ProcessEnv|undefined;
-      if(tools) {
-        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700});
-        for(const [name,binary] of [['herdr',tools.herdrBinary],['lazysh-agent',tools.agentBinary],['owned-terminal-receiver',tools.receiverBinary]]) {
-          if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit current owned fixture binary required');
-          await copyFile(binary,join(bin,name));await chmod(join(bin,name),0o700);
-        }
-        environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:bin+':/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
-        for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_CACHE_HOME','cache'],['XDG_STATE_HOME','state'],['XDG_RUNTIME_DIR','runtime'],['TMUX_TMPDIR','tmux']]) {
-          const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
-        }
-      }
-      const config=join(directory,'sshd_config');
-      await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
-        `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
-        `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no','PasswordAuthentication no','KbdInteractiveAuthentication no','UsePAM no','StrictModes no','LogLevel ERROR',
-        environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
-        environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s 90s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`,
-        `Banner none`,''].join('\n'),{mode:0o600});
-      daemon=new OwnedProcess(sshd,['-D','-e','-f',config]);
-      if(!await daemon.liveIdentity())throw new Error('Owned SSH root identity unavailable');
-      const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment);
-      const deadline=performance.now()+3000;
-      while(!await listening(port)) {
-        if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error('Owned sshd not ready');
-        await Bun.sleep(10);
-      }
-      return fixture;
-    } catch(error) {
-      try{if(daemon)await stopOwnedTree(daemon);}catch{console.error('Owned SSH startup cleanup failed');}
-      try{await rm(directory,{recursive:true,force:true});}catch{console.error('Owned SSH startup directory cleanup failed');}
-      throw error;
-    }
-  }
-  async client(identity=true,remoteCommand?:string) {
-    const known=join(this.directory,'known_hosts');
-    await writeFile(known,`[127.0.0.1]:${this.port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
-    return new OwnedProcess('ssh',['-F','/dev/null',remoteCommand===undefined?'-tt':'-T','-p',String(this.port),'-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
-      '-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${known}`,'-o','GlobalKnownHostsFile=/dev/null',
-      ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none']),`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
-  }
-  async stop() {
-    if(this.stopped)return;
-    let primary:unknown;
-    try {await stopOwnedTree(this.daemon);if(await listening(this.port))throw new Error('Owned SSH listener survived teardown');}
-    catch(error){primary=error;}
-    try{await rm(this.directory,{recursive:true,force:true});}catch(error){primary??=error;}
-    if(primary)throw primary;
-    this.stopped=true;
-  }
-}
 // Android 16 ApplicationExitInfo.dump fields; free-form descriptions/traces never leave memory.
 // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
 export async function packageExitInfo(adb:string,serial:string) {
@@ -291,7 +170,7 @@ export function gradleFailureClasses(stdout:string,stderr:string) {
   return {scope:'last-output-window-only',...flags,unclassified:!Object.values(flags).some(Boolean)};
 }
 
-type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH'|'app-package'|'test-package';
+type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH'|'app-package'|'test-package'|'software-keyboard';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
   for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
@@ -356,6 +235,56 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   timer=setTimeout(()=>{stream='deadline';void stop();},600_000);
   return {stop,snapshot,elapsedMs,recover:()=>recoverOwnedCaseCrash(adb,serial,parser)};
 }
+// LatinIME can acknowledge a visible IME window while hardware input suppresses
+// its keyboard view. Admit real software input only on the owned test emulator,
+// and restore the exact previous preference before package/fixture cleanup.
+export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000) {
+  if(!/^emulator-[0-9]{4,5}$/.test(serial) || !Number.isSafeInteger(budget) || budget<1 || budget>5000)
+    throw new Error('Owned software keyboard requires an explicit emulator and bounded budget');
+  const key='show_ime_with_hard_keyboard';
+  const deadline=performance.now()+budget;
+  const probe=async(args:string[],until:number,stage:string)=>{
+    const result=await continuityOutput(adb,serial,['shell',...args],until);
+    if(result.state!=='available')throw new Error(`Owned software keyboard unavailable: ${stage}`);
+    return result.output;
+  };
+  const latin=(value:string)=>['com.android.inputmethod.latin/.LatinIME','com.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'].includes(value);
+  if(!latin(await probe(['settings','get','secure','default_input_method'],deadline,'default IME')))
+    throw new Error('Owned software keyboard requires the image AOSP LatinIME');
+  const installed=await probe(['ime','list','-s'],deadline,'installed IME');
+  if(!installed.split(/\r?\n/).some(latin))throw new Error('Owned software keyboard image IME is not installed');
+  const get=(until:number)=>probe(['settings','get','secure',key],until,'preference');
+  const previous=await get(deadline);
+  if(!['0','1','null'].includes(previous))throw new Error('Owned software keyboard preference is unrecognized');
+  let changed=false;
+  const restore=async()=>{
+    if(!changed)return;
+    const until=performance.now()+budget;
+    const current=await get(until);
+    if(current===previous){changed=false;return;}
+    if(current!=='1')throw new Error('Owned software keyboard preference changed unexpectedly');
+    let failure:unknown;
+    try {await probe(['settings',previous==='null'?'delete':'put','secure',key,...(previous==='null'?[]:[previous])],until,'restore');}
+    catch(error){failure=error;}
+    if(await get(until)!==previous)throw new Error('Owned software keyboard restoration was not verified');
+    changed=false;
+    if(failure)throw failure;
+  };
+  try {
+    if(previous!=='1') {
+      // Retain restoration ownership before the command: a lost acknowledgement
+      // or deadline can follow an already-applied secure setting.
+      changed=true;
+      await probe(['settings','put','secure',key,'1'],deadline,'enable');
+      if(await get(deadline)!=='1')throw new Error('Owned software keyboard enabling was not verified');
+    }
+  } catch(error) {
+    await androidSshCleanup(true,[['software-keyboard',restore]]);
+    throw error;
+  }
+  return {observation:{ime:'aosp-latin' as const,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
+}
+
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
   const serial=process.env.ANDROID_SERIAL;
@@ -370,13 +299,15 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let hostServerBefore:HostAdbServerSample|undefined;
   let gradle:OwnedProcess|undefined;
   let crashes:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
+  let keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined;
   const timing:{gradleStartMs:number|null,gradleEndMs:number|null}={gradleStartMs:null,gradleEndMs:null};
   let primary=false;
-  const shell=(args:string[])=>command('owned emulator command',adb,['-s',serial,...args]);
+  const shell=(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args]);
   try {
     // The host allowlist key must match the concrete device port removed in cleanup.
     await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
     reverse=String(fixture.port);
+    keyboard=await ownedSoftwareKeyboard(adb,serial);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:Number(reverse),username:fixture.username,
@@ -408,7 +339,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       const hostServerAfter=await hostAdbServerIdentity(adb);
       const persistedCrash={scope:'persisted-crash-buffer-sample',...await crashes?.recover()??{state:'ineligible',exceptions:[]}};
       const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
-      const summary={...exitInfo,...(packages?{packages}:{}),timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
+      const summary={...exitInfo,...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
@@ -416,6 +347,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   } finally {
     await crashes?.stop();
     await androidSshCleanup(primary,[
+      ['software-keyboard',()=>keyboard?.restore()??Promise.resolve()],
       ['reverse',()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve()],
       ['fixture-file',()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve()],
       ...(retainedPackages?[

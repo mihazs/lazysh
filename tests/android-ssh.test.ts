@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance} from './support/androidSsh';
+import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -189,12 +189,13 @@ test.each([
   });
 });
 
-test.each([false,true]).skipIf(process.platform!=='linux')('explicit reverse ownership preserves the original failure: rejected=$0',async rejected=>{
+test.each(['gradle','reverse','keyboard']).skipIf(process.platform!=='linux')('explicit reverse ownership preserves the original failure: %s',async failure=>{
+  const rejected=failure==='reverse';
   await withDiagnosticAdb('45001\n',0,async(adb,args)=>{
     const directory=dirname(adb),sdk=join(directory,'sdk'),root=join(directory,'checkout');
     const android=join(root,'apps/client/src-tauri/gen/android');
     await mkdir(join(sdk,'platform-tools'),{recursive:true});await mkdir(android,{recursive:true});
-    await writeFile(join(sdk,'platform-tools/adb'),(await readFile(adb,'utf8')).replace('case \"$3 $4\" in', 'case \"$3 $4\" in\n'+(rejected?"  'reverse --no-rebind') exit 31 ;;\n":'')+"  'uninstall app.lazysh.client.test'|'uninstall app.lazysh.client') exit 31 ;;"));
+    await writeFile(join(sdk,'platform-tools/adb'),(await readFile(adb,'utf8')).replace('case \"$3 $4\" in', 'case \"$3 $4\" in\n'+(rejected?"  'reverse --no-rebind') exit 31 ;;\n":'')+"  'shell settings') if [ \"$7\" = default_input_method ]; then printf '"+(failure==='keyboard'?'private-keyboard-secret':latinIme)+"\\n'; else printf '1\\n'; fi; exit 0 ;;\n  'shell ime') printf 'com.android.inputmethod.latin/.LatinIME\\n'; exit 0 ;;\n  'uninstall app.lazysh.client.test'|'uninstall app.lazysh.client') exit 31 ;;"));
     await chmod(join(sdk,'platform-tools/adb'),0o700);
     const gradleArgs=join(directory,'gradle-args');
     await writeFile(join(android,'gradlew'),`#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(gradleArgs)},JSON.stringify(process.argv.slice(2)));process.exit(31);\n`);
@@ -208,15 +209,21 @@ test.each([false,true]).skipIf(process.platform!=='linux')('explicit reverse own
     const fixture={ssh:{directory,nonce:'a'.repeat(32),port:45678,username:'owned',privateKey:'private-fixture-key',fingerprint:'owned',prompt:'owned',challenge:'owned',expected:'owned'},
       metadata:()=>({name:'owned'}),stop:async()=>{stopped=true;throw new Error('private-cleanup-error');}} as unknown as HerdrFixture;
     try {
-      await expect(androidSshAcceptance(root,fixture)).rejects.toThrow(`Owned fixture failed: ${rejected?'owned emulator command':'actual Android SSH UI instrumentation'}; exit=31`);
+      await expect(androidSshAcceptance(root,fixture)).rejects.toThrow(failure==='keyboard'?'Owned software keyboard requires the image AOSP LatinIME':`Owned fixture failed: ${rejected?'owned emulator command':'actual Android SSH UI instrumentation'}; exit=31`);
       const calls=(await readFile(args,'utf8')).trim().split('\n');
       expect(calls[0]).toBe('-s emulator-5580 reverse --no-rebind tcp:45678 tcp:45678');
       expect(calls.some(call=>call.includes('tcp:0'))).toBe(false);
       expect(stopped).toBe(true);
-      if(rejected) {
-        expect(calls.some(call=>call.includes('reverse --remove')||call.includes('shell mkdir')||call.includes(' push '))).toBe(false);
+      if(rejected || failure==='keyboard') {
+        expect(calls.some(call=>call.includes('shell mkdir')||call.includes(' push '))).toBe(false);
+        expect(calls.filter(call=>call.includes('reverse --remove'))).toEqual(rejected?[]:['-s emulator-5580 reverse --remove tcp:45678']);
         await expect(readFile(gradleArgs,'utf8')).rejects.toMatchObject({code:'ENOENT'});
         await expect(readFile(join(directory,'android-fixture.json'),'utf8')).rejects.toMatchObject({code:'ENOENT'});
+        if(failure==='keyboard') {
+          const unavailable=JSON.parse(await readFile(join(android,'app/build/outputs/androidTest-results/herdr-ui/package-exit.json'),'utf8'));
+          expect(unavailable.softwareKeyboard).toEqual({state:'unavailable'});
+          expect(JSON.stringify(unavailable)).not.toContain('private-keyboard-secret');
+        }
         expect(warning.mock.calls).toContainEqual(['Owned Android SSH cleanup stage failed: Herdr']);
         return;
       }
@@ -230,6 +237,7 @@ test.each([false,true]).skipIf(process.platform!=='linux')('explicit reverse own
       const testCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client.test');
       const appCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client');
       const diagnostics=JSON.parse(await readFile(join(android,'app/build/outputs/androidTest-results/herdr-ui/package-exit.json'),'utf8'));
+      expect(diagnostics.softwareKeyboard).toEqual({ime:'aosp-latin',previous:'enabled',requested:'enabled'});
       expect(diagnostics.persistedCrash).toEqual({scope:'persisted-crash-buffer-sample',state:'ineligible',exceptions:[]});
       expect(diagnostics.hostAdbServer).toEqual({before:{state:'inconclusive',hash:null,reason:'unsupported-endpoint'},after:{state:'inconclusive',hash:null,reason:'unsupported-endpoint'},comparison:'unknown'});
       expect(calls.some(call=>call.includes('logcat -b crash -d'))).toBe(false);
@@ -246,6 +254,102 @@ test.each([false,true]).skipIf(process.platform!=='linux')('explicit reverse own
     }
   });
 },5000);
+
+const latinIme='com.android.inputmethod.latin/.LatinIME';
+async function withKeyboardAdb(options:{previous:string;failure?:string;ime?:string;installed?:string},run:(adb:string,state:()=>Promise<string>,calls:()=>Promise<string[][]>,pid:()=>Promise<number>)=>Promise<void>) {
+  await withDiagnosticAdb(options.previous,0,async(adb,args,fixture)=>{
+    await writeFile(adb,`#!${process.execPath}
+const fs=require('node:fs'),a=process.argv.slice(2),state=process.env.EXIT_INFO_FIXTURE,options=${JSON.stringify(options)};
+fs.appendFileSync(process.env.EXIT_INFO_ARGS,JSON.stringify(a)+'\\n');process.stderr.write('private-keyboard-secret');
+const command=a.slice(2).join(' '),key='show_ime_with_hard_keyboard',latin=${JSON.stringify(latinIme)};
+const hang=()=>{fs.writeFileSync(state+'.pid',String(process.pid));setInterval(()=>{},1000);};
+if(command==='shell settings get secure default_input_method') {
+  if(options.failure==='read-timeout')hang();else process.stdout.write(options.ime??latin);
+} else if(command==='shell ime list -s')process.stdout.write(options.installed??latin);
+else if(command==='shell settings get secure '+key) {
+  const value=fs.readFileSync(state,'utf8');
+  if(options.failure==='readback' && value==='1' && !fs.existsSync(state+'.gate')){fs.writeFileSync(state+'.gate','');process.stdout.write('private-keyboard-secret');}
+  else process.stdout.write(value);
+} else {
+  const enabling=command==='shell settings put secure '+key+' 1';
+  if(enabling && options.failure==='enable-unapplied')process.exit(31);
+  if(!enabling && ['restore-failed','enable-and-restore'].includes(options.failure))process.exit(31);
+  fs.writeFileSync(state,command==='shell settings delete secure '+key?'null':a.at(-1));
+  if(enabling && options.failure==='enable-timeout')hang();
+  else if(options.failure===(enabling?'enable-applied':'restore-applied') || (enabling && options.failure==='enable-and-restore'))process.exit(31);
+}
+`);
+    await run(adb,()=>readFile(fixture,'utf8'),async()=>{
+      try{return (await readFile(args,'utf8')).trim().split('\n').map(line=>JSON.parse(line));}
+      catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error;}
+    },async()=>Number(await readFile(fixture+'.pid','utf8')));
+  });
+}
+
+test.each(['0','1','null']).skipIf(process.platform!=='linux')('owned software keyboard verifies and restores original preference %s',async previous=>{
+  await withKeyboardAdb({previous},async(adb,state,calls)=>{
+    const owner=await ownedSoftwareKeyboard(adb,'emulator-5580');
+    expect(await state()).toBe('1');
+    expect(owner.observation).toEqual({ime:'aosp-latin',previous:previous==='0'?'disabled':previous==='1'?'enabled':'unset',requested:'enabled'});
+    expect(JSON.stringify(owner.observation)).not.toContain('com.android');
+    await owner.restore();const count=(await calls()).length;await owner.restore();
+    expect(await state()).toBe(previous);expect((await calls()).length).toBe(count);
+    expect((await calls()).every(args=>args[0]==='-s' && args[1]==='emulator-5580')).toBe(true);
+    const writes=(await calls()).filter(args=>args[4]==='put'||args[4]==='delete');
+    expect(writes.map(args=>args.slice(2))).toEqual(previous==='1'?[]:[['shell','settings','put','secure','show_ime_with_hard_keyboard','1'],['shell','settings',previous==='null'?'delete':'put','secure','show_ime_with_hard_keyboard',...(previous==='null'?[]:[previous])]]);
+  });
+});
+test.each([{previous:'private-keyboard-secret'},{previous:'0',ime:'private-keyboard-secret'},{previous:'0',installed:'private-keyboard-secret'},{previous:'0',installed:'private-keyboard-secret'.repeat(1024)}]).skipIf(process.platform!=='linux')('software keyboard rejects unsupported admission without mutation %#',async options=>{
+  await withKeyboardAdb(options,async(adb,state,calls)=>{
+    const failure=await ownedSoftwareKeyboard(adb,'emulator-5580').catch(error=>error);
+    expect(failure).toBeInstanceOf(Error);expect(String(failure)).not.toContain('private-keyboard-secret');
+    expect(await state()).toBe(options.previous);
+    expect((await calls()).some(args=>args[4]==='put'||args[4]==='delete')).toBe(false);
+    const count=(await calls()).length;
+    await expect(ownedSoftwareKeyboard(adb,'personal-device')).rejects.toThrow('explicit emulator');
+    expect((await calls()).length).toBe(count);
+  });
+});
+test.each(['enable-applied','enable-unapplied','readback','enable-timeout']).skipIf(process.platform!=='linux')('partial software keyboard setup restores state after %s',async failure=>{
+  await withKeyboardAdb({previous:'0',failure},async(adb,state,_calls,pid)=>{
+    const result=await ownedSoftwareKeyboard(adb,'emulator-5580',failure==='enable-timeout'?500:5000).catch(error=>error);
+    expect(result).toBeInstanceOf(Error);expect(String(result)).not.toContain('private-keyboard-secret');
+    expect(await state()).toBe('0');
+    if(failure==='enable-timeout'){const ownedPid=await pid();expect(()=>process.kill(ownedPid,0)).toThrow();}
+  });
+});
+test.each(['restore-failed','restore-applied']).skipIf(process.platform!=='linux')('software keyboard restoration failure remains explicit: %s',async failure=>{
+  await withKeyboardAdb({previous:'0',failure},async(adb,state)=>{
+    const owner=await ownedSoftwareKeyboard(adb,'emulator-5580');
+    await expect(owner.restore()).rejects.toThrow('Owned software keyboard');
+    expect(await state()).toBe(failure==='restore-applied'?'0':'1');
+  });
+});
+test.skipIf(process.platform!=='linux')('unset software keyboard restoration survives a lost enabling acknowledgement',async()=>{
+  await withKeyboardAdb({previous:'null',failure:'enable-applied'},async(adb,state,calls)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580')).rejects.toThrow('unavailable: enable');
+    expect(await state()).toBe('null');
+    expect((await calls()).some(args=>args[4]==='delete')).toBe(true);
+  });
+});
+test.skipIf(process.platform!=='linux')('keyboard setup keeps its primary failure when restoration also fails',async()=>{
+  await withKeyboardAdb({previous:'0',failure:'enable-and-restore'},async(adb,state)=>{
+    const warning=spyOn(console,'error').mockImplementation(()=>{});
+    try {
+      await expect(ownedSoftwareKeyboard(adb,'emulator-5580')).rejects.toThrow('unavailable: enable');
+      expect(await state()).toBe('1');
+      expect(warning.mock.calls).toContainEqual(['Owned Android SSH cleanup stage failed: software-keyboard']);
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('private-keyboard-secret');
+    } finally {warning.mockRestore();}
+  });
+});
+test.skipIf(process.platform!=='linux')('keyboard read timeout retires its actual child before any mutation',async()=>{
+  await withKeyboardAdb({previous:'0',failure:'read-timeout'},async(adb,state,calls,pid)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580',500)).rejects.toThrow('unavailable: default IME');
+    const ownedPid=await pid();expect(()=>process.kill(ownedPid,0)).toThrow();
+    expect(await state()).toBe('0');expect(await calls()).toHaveLength(1);
+  });
+});
 
 async function withHostAdbEndpoint(port:string,run:()=>Promise<void>,address?:string,socket?:string) {
   const values={ANDROID_ADB_SERVER_PORT:port,ANDROID_ADB_SERVER_ADDRESS:address,ADB_SERVER_SOCKET:socket};
@@ -704,4 +808,55 @@ test('collector process-start failure is finite and cannot masquerade as a corre
     expect(summary).toMatchObject({stream:'unavailable',correlated:false,close:{phase:'before-stop',exitCode:null,signal:'none',processError:true,stopFailed:true}});
     expect(JSON.stringify(summary)).not.toContain('nonexistent');
   } finally {await collector.stop();}
+});
+
+test('native keyboard oracle uses fractional visible bounds and rejects overflow, offset clipping and unavailable geometry',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-keyboard-viewport.js'),'utf8');
+  const contains=new Function(`${source}; return ownedKeyboardViewportContains;`)();
+  const viewport={offsetLeft:0,offsetTop:0,width:412.19049072265625,height:365.33331298828125,scale:1};
+  const rect=(left:number,top:number,right:number,bottom:number)=>({left,top,right,bottom,width:right-left,height:bottom-top});
+  const geometry=[rect(0,155.762,viewport.width,181.786),rect(0,282.81,viewport.width,338.571),rect(6,291.571,41.53,330.571),rect(91.06,291.571,126.589,330.571)];
+  expect(geometry[0].right>Math.trunc(viewport.width)).toBe(true);
+  expect(contains(viewport,geometry)).toBe(true);
+  for(const index of [0,1,2,3]){
+    const overflow=geometry.map((value,i)=>i===index?rect(value.left,value.top,viewport.width+1/64,value.bottom):value);
+    expect(contains(viewport,overflow)).toBe(false);
+  }
+  expect(contains(viewport,geometry.map((value,i)=>i===2?rect(-180,value.top,-144,value.bottom):value))).toBe(false);
+  const shifted={...viewport,offsetLeft:10.25,offsetTop:20.5};
+  const shiftedGeometry=geometry.map(value=>rect(value.left+shifted.offsetLeft,value.top+shifted.offsetTop,value.right+shifted.offsetLeft,value.bottom+shifted.offsetTop));
+  expect(contains(shifted,shiftedGeometry)).toBe(true);
+  for(const field of ['left','top'])expect(contains(shifted,shiftedGeometry.map((value,i)=>i===0?{...value,[field]:shifted[field==='left'?'offsetLeft':'offsetTop']-1/64}:value))).toBe(false);
+  for(const invalid of [null,{...viewport,width:0},{...viewport,height:NaN},{...viewport,scale:Infinity},{...viewport,offsetTop:undefined}])expect(contains(invalid,geometry)).toBe(false);
+  expect(contains(viewport,geometry.slice(1))).toBe(false);
+  expect(contains(viewport,geometry.map((value,i)=>i===0?{...value,height:0}:value))).toBe(false);
+});
+
+test('passive native tap evidence retains only bounded trusted/target flags and removes its own listeners',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-native-tap.js'),'utf8');
+  const listeners=new Map<string,(event:unknown)=>void>();
+  const target={value:'private-key-material',disabled:false,isConnected:true,getBoundingClientRect:()=>({left:1,top:2,right:101,bottom:42,width:100,height:40})};
+  const window={innerWidth:412,innerHeight:365,devicePixelRatio:2.625,visualViewport:{width:412.19,height:365.33,offsetLeft:0,offsetTop:0,scale:1},
+    addEventListener(type:string,listener:(event:unknown)=>void,options:unknown){expect(options).toEqual({capture:true,passive:true});listeners.set(type,listener);},
+    removeEventListener(type:string,listener:unknown,capture:boolean){expect(capture).toBe(true);if(listeners.get(type)===listener)listeners.delete(type);}};
+  const observe=new Function('window',`${source};return ownedNativeTapObservation;`)(window)(target);
+  listeners.get('pointerdown')!({isTrusted:true,target,clientX:51,clientY:22,message:'private-data',preventDefault(){throw new Error('Must remain passive');}});
+  listeners.get('pointerup')!({isTrusted:false,target:{value:'other-private-value'},clientX:Infinity,clientY:NaN});
+  for(let count=0;count<4;count++)listeners.get('click')!({isTrusted:true,target,clientX:51,clientY:22});
+  const sample=observe.read();
+  expect(sample.before).toMatchObject({enabled:true,connected:true,focused:false});
+  expect(sample.down).toEqual({count:1,overflow:false,trusted:true,target:true,point:[51,22]});
+  expect(sample.up).toEqual({count:1,overflow:false,trusted:false,target:false,point:[null,null]});
+  expect(sample.click.count).toBe(2);expect(sample.click.overflow).toBe(true);
+  expect(JSON.stringify(sample)).not.toContain('private');
+  expect(observe.close()).toBe(true);expect(listeners.size).toBe(0);expect(observe.close()).toBe(true);
+  expect(observe.read().closed).toBe(true);
+});
+test('partial passive tap setup failure attempts listener cleanup without exposing private error text',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-native-tap.js'),'utf8');
+  const attached=new Set<string>();let calls=0;
+  const window={visualViewport:null,addEventListener(type:string){if(++calls===2)throw new Error('private-setup-failure');attached.add(type);},removeEventListener(type:string){attached.delete(type);}};
+  const create=new Function('window',`${source};return ownedNativeTapObservation;`)(window);
+  expect(()=>create({getBoundingClientRect:()=>({})})).toThrow('Owned native tap observation unavailable');
+  expect(attached.size).toBe(0);
 });

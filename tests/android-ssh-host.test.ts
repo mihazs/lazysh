@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {stat} from 'node:fs/promises';
+import {readFile,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
@@ -42,6 +42,25 @@ test.skipIf(process.platform!=='linux')('owned server teardown retires an admitt
     expect(stopped()).toBe(true);
   } finally {await client.stop();await fixture.stop();}
 },10_000);
+
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced SSH preserves host groups and rejects lost supervisor ownership',async()=>{
+  const groups=await readFile('/etc/group');
+  const fixture=await SshFixture.start(undefined,{privateTtyGroup:true});
+  try {
+    const client=await fixture.client();
+    client.child.stdin!.end(`${fixture.challenge}\nexit\n`);
+    const output=await client.finish('namespaced SSH challenge',5000);
+    expect(output.includes(fixture.prompt)).toBe(true);
+    expect(output.includes(fixture.expected)).toBe(true);
+  } finally {await fixture.stop();}
+  expect(await listening(fixture.port)).toBe(false);
+  expect(await readFile('/etc/group')).toEqual(groups);
+  const lost=await SshFixture.start(undefined,{privateTtyGroup:true});
+  await lost.daemon.stop();
+  await expect(lost.stop()).rejects.toThrow('Owned SSH root identity unavailable');
+  expect(await listening(lost.port)).toBe(false);
+  await expect(stat(lost.directory)).rejects.toMatchObject({code:'ENOENT'});
+},15_000);
 
 test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails explicitly while still removing its private directory',async()=>{
   const fixture=await SshFixture.start();
