@@ -251,3 +251,49 @@ it.each(['success','failure'])('retires held history %s when its board becomes h
   view.rerender(<AgentPanel sessionId="hidden-history" onUseReportedHistory={route}/>);await screen.findByText('Permission requested');
   expect(route).not.toHaveBeenCalled();expect(screen.queryByText('hidden history failure')).toBeNull();
 });
+
+it('refreshes reported activity only on the foreground visible board without reloading settings',async()=>{
+  vi.useFakeTimers();
+  const foreground=vi.spyOn(document,'hidden','get').mockReturnValue(false);
+  try {
+    const rows=[session];const invoke=await historyFixture(reported,rows);
+    const snapshots=()=>invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
+    const view=render(<AgentPanel sessionId="live-board"/>);
+    await act(async()=>{});expect(snapshots()).toBe(1);
+    rows[0]={...session,state:'working',summary:'New host activity',eventCount:3};
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(screen.getByText('New host activity')).toBeTruthy();expect(snapshots()).toBe(2);
+    foreground.mockReturnValue(true);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});expect(snapshots()).toBe(2);
+    foreground.mockReturnValue(false);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(snapshots()).toBe(3);
+    view.rerender(<AgentPanel sessionId="live-board" visible={false}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(3);
+    view.rerender(<AgentPanel sessionId="live-board"/>);await act(async()=>{});expect(snapshots()).toBe(4);
+    expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
+    expect(invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(0);
+    view.unmount();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(4);
+    foreground.mockReturnValue(true);
+    render(<AgentPanel sessionId="background-board"/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(4);
+  } finally {cleanup();foreground.mockRestore();vi.useRealTimers();}
+});
+
+it('coalesces pending snapshots and keeps late old-source completion from unlocking the new source',async()=>{
+  vi.useFakeTimers();
+  try {
+    const {invoke}=await import('@tauri-apps/api/core');
+    const pending:((value:unknown)=>void)[]=[];
+    vi.mocked(invoke).mockImplementation(command=>command==='agent_snapshot'?new Promise(resolve=>pending.push(resolve)):Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true}));
+    const view=render(<AgentPanel sessionId="old-pending"/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});expect(pending).toHaveLength(1);
+    view.rerender(<AgentPanel sessionId="new-pending"/>);expect(pending).toHaveLength(2);
+    await act(async()=>{pending[0]({schemaVersion:1,sessions:[session]});});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(pending).toHaveLength(2);
+    expect(screen.queryByText('Permission requested')).toBeNull();
+    await act(async()=>{pending[1]({schemaVersion:1,sessions:[{...session,summary:'Current source report'}]});});
+    expect(screen.getByText('Current source report')).toBeTruthy();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(pending).toHaveLength(3);
+  } finally {cleanup();vi.useRealTimers();}
+});

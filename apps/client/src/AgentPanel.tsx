@@ -86,6 +86,7 @@ export function AgentPanel({ sessionId,onUseReportedHistory,visible:panelVisible
   const selected=selection?.source===sessionId ? visible.find(row=>reportKey(row)===selection.key) : undefined;
   useEffect(()=>{if(selection && !selected)setSelection(null);},[selection,selected]);
   const request = useRef(0);
+  const snapshotFlight=useRef<number|null>(null);
   const historyRequest=useRef(0);
   const historyOwner=useRef<{source:string;key:string}|null>(null);
   const historyFlight=useRef<number|null>(null);
@@ -121,9 +122,10 @@ export function AgentPanel({ sessionId,onUseReportedHistory,visible:panelVisible
   },[sessions,sessionId,error,loadedSessionId]);
 
   async function refresh() {
-    if(!visibility.current || !access.current())return;
+    if(!visibility.current || !access.current() || snapshotFlight.current!==null)return;
     const source=sessionId;
     const current = ++request.current;
+    snapshotFlight.current=current;
     setBusy(true); setError('');
     try {
       const value = await invoke<unknown>('agent_snapshot', { sessionId });
@@ -132,13 +134,17 @@ export function AgentPanel({ sessionId,onUseReportedHistory,visible:panelVisible
       if (visibility.current && selectedSource.current===source && current === request.current) { setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); }
     } catch (e) {
       if (visibility.current && selectedSource.current===source && current === request.current) setError(captureUiError(e));
-    } finally { if (visibility.current && selectedSource.current===source && current === request.current) setBusy(false); }
+    } finally {
+      if(snapshotFlight.current===current)snapshotFlight.current=null;
+      if (visibility.current && selectedSource.current===source && current === request.current) setBusy(false);
+    }
   }
   useEffect(()=>{setSessions([]);setLoaded(false);},[sessionId]);
   useEffect(()=>{
-    if(panelVisible)void refresh();
-    else {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
-    return()=>{request.current++;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
+    if(panelVisible && !document.hidden)void refresh();
+    else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
+    const interval=panelVisible ? window.setInterval(()=>{if(!document.hidden)void refresh();},5000) : undefined;
+    return()=>{window.clearInterval(interval);request.current++;snapshotFlight.current=null;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
   },[sessionId,panelVisible]);
 
   return <section className="tool-panel agent-panel" hidden={!panelVisible} aria-label={t('agentsTitle')}>
