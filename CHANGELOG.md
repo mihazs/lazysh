@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Require actual Windows NSIS installation, same-version repair with preserved owned data, and uninstall acceptance before staging release bytes. Native Windows PR checks run the same acceptance; application defaults are unchanged.
+
 - Support desktop `--dir` launches while lazysh is running, resolving relative paths against the caller’s working directory and preserving the original access guards. Ambiguous Unicode conversions are refused; no-argument startup is unchanged.
 
 - Fix Windows release packaging validation of workspace path separators without changing application defaults.
