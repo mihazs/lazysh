@@ -23,14 +23,21 @@ class PublishedApkTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private val target = "app.lazysh.client"
+    // Chromium's Android hint joins the implicit label and placeholder.
+    private val nameHint = "Name Home workstation"
+    private val hostnameHint = "Hostname or IP workstation.local"
+    private val usernameHint = "Username Your SSH username"
     private val deadline = System.nanoTime() + 45_000_000_000L
 
     private fun <T> stage(name: Stage, action: () -> T): T = try {
         check(System.nanoTime() < deadline)
         action()
-    } catch (_: Throwable) {
-        // Framework exceptions may include node text or paths; never retain their cause.
-        throw AssertionError("Published APK UI: ${name.name}")
+    } catch (failure: Throwable) {
+        // Retain a nested owned stage; discard every arbitrary framework detail.
+        val closed = Stage.entries.firstOrNull {
+            failure is AssertionError && failure.message == "Published APK UI: ${it.name}"
+        } ?: name
+        throw AssertionError("Published APK UI: ${closed.name}")
     }
 
     private fun waitMillis(): Long = ((deadline - System.nanoTime()) / 1_000_000L).coerceIn(1, 5_000)
@@ -102,18 +109,18 @@ class PublishedApkTest {
                 check(captions("Edit $name").isEmpty())
                 named("Add host", Stage.ADD_HOST).click()
             }
-            setInput("Home workstation", name, Stage.NAME)
-            setInput("workstation.local", "$name.invalid", Stage.HOSTNAME)
-            setInput("Your SSH username", "owned", Stage.USERNAME)
+            setInput(nameHint, name, Stage.NAME)
+            setInput(hostnameHint, "$name.invalid", Stage.HOSTNAME)
+            setInput(usernameHint, "owned", Stage.USERNAME)
             hideKeyboard()
             stage(Stage.SAVE_HOST) { named("Save host", Stage.SAVE_HOST).click() }
         }
         named("Edit $name", Stage.SAVED_HOST)
         stage(Stage.EDIT_HOST) { named("Edit $name", Stage.EDIT_HOST).click() }
         stage(Stage.READBACK) {
-            check(input("Home workstation", Stage.READBACK).text == name)
-            check(input("workstation.local", Stage.READBACK).text == "$name.invalid")
-            check(input("Your SSH username", Stage.READBACK).text == "owned")
+            check(input(nameHint, Stage.READBACK).text == name)
+            check(input(hostnameHint, Stage.READBACK).text == "$name.invalid")
+            check(input(usernameHint, Stage.READBACK).text == "owned")
         }
         stage(Stage.COMPLETE) {
             instrumentation.sendStatus(0, Bundle().apply {

@@ -65,3 +65,15 @@ Refs #467.
 
 The pinned action resets `ANDROID_AVD_HOME` to `$HOME/.android/avd` before creating
 the AVD ([immutable installer source](https://github.com/mihazs/lazysh-android-emulator-runner/blob/46beb5d59b664ea61462125a023549a5a7b0418b/src/sdk-installer.ts#L39)); the absence check uses that exact location. No private-AVD-home support is assumed.
+
+The first closed driver-stage run admitted translation for both variants, then
+failed FOSS at `NAME` and Google at `WORKSPACE`. These are distinct observations,
+not proof of one JNI or accessibility cause. The strict text-field selectors now
+use the implicit label plus placeholder: Chromium's Android accessibility
+[`GetHint`](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/content/browser/accessibility/browser_accessibility_android.cc#L790)
+joins those values for text fields, including fields with an existing value.
+The public source's exact labels/placeholders define the three expected hints;
+there is no substring, positional or JavaScript fallback. Nested owned failures
+keep their nearest closed stage rather than being hidden by an outer workspace
+stage. The workspace wait, overall deadline, actual UI actions and exact saved
+field readback remain unchanged. Successful hosted completion remains required.
