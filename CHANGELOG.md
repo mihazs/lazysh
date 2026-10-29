@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep session toolbar icons and labels inside their buttons on narrow screens and with enlarged text. Scroll horizontally to reach additional views without widening the workspace.
+
 - Add a manual smoke for public signed ARM64 Android APK installation, native UI startup and same-byte reinstall with preserved synthetic host data on an explicitly admitted ARM translation guest. Physical-device and cross-version acceptance remain separate; application defaults are unchanged.
 
 - Remove unused desktop browser archive tooling from the Android source-build input before scanning, and admit an exact-source retry for the unpublished 1.0.0 release. All source/binary scans and tag protections remain required.
