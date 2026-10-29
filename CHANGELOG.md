@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Allow the local native app to reach the existing Reconnect uploads action and host companion settings. Keep other windows and remote pages denied, require current unlocked app access, and preserve host verification, authentication and settings revision checks.
+
 - Preserve only bounded, fully framed Android published-APK driver stage entry/exit observations when the original qualification command fails. Progress remains separate from success, failure cause and owned cleanup; application defaults and public APK bytes are unchanged.
 
 - Add explicit same-tab upload recovery for verified direct Mosh connections. Reuse saved or manually entered SSH authentication without starting another terminal or saving credentials; preserve attachment edits and require a separate Upload action afterward. Other SSH tools keep their existing connection, and existing upload limits, path guards and no-overwrite behavior are unchanged.
