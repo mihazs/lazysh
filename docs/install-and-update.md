@@ -115,19 +115,22 @@ acceptance (#344/#459) retain their separate outstanding gates.
 
 Linux native GUI acceptance passed all nine owned cases, including authenticated
 SSH, exact binary identity and singleton/network isolation ([GUI evidence](https://github.com/mihazs/lazysh/actions/runs/40884642182/job/123489192812)).
-The later tmux suite in that job failed two cases; supported binary provenance and
-full multiplexer acceptance remain separate work in #7. Windows installer checks
+Later supported tmux 3.4 execution passed five of six cases; fresh-SSH server
+retirement remains unresolved in #7 ([tmux evidence](https://github.com/mihazs/lazysh/actions/runs/40896489309/job/123529437350)). Windows installer checks
 cover installation, same-version repair and uninstall; installed GUI acceptance
-(#457), version upgrade and data migration remain pending. Rex compatibility
+(#457), version upgrade and data migration remain pending. Concurrent Windows
+companion startup has intermittently returned SQLite busy errors
+([#36](https://github.com/mihazs/lazysh/issues/36)); this remains under investigation.
+Rex compatibility
 requires authorized beta access that is not available. Apple distribution is
 deferred. These limits remain explicit even when source builds, signatures and
 installer checks pass. Consult the linked issues for current acceptance evidence.
 
 ## What updates automatically
 
-The release pipeline publishes 1.0.0 through its reviewed allowlist and an explicit,
-source-bound dispatch after the source-recipe correction, then each future individually merged Changesets
-version through verified source builds and installation artifacts. It does not
+The release pipeline published 1.0.0 through its reviewed allowlist and an explicit,
+source-bound dispatch after the source-recipe correction. Each future individually
+merged Changesets version requires verified source builds and installation artifacts. It does not
 backfill historical versions or silently replace a running desktop/mobile app.
 Every gate rebuilds the exact acknowledged source. The published 0.23.0 remains
 immutable; pending Changesets remain for the next version during allowlisted publication.
