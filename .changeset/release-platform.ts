@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards, windowsGuiProbePhases } from './windows-installed-gui';
+import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleSubset } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
@@ -61,12 +61,14 @@ export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (!markers.length || markers.length > 3) return;
   const labels: string[] = [];
   for (const marker of markers) {
-    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z0-9_]+)(?::(?!HEALTH_)([A-Z_]+))?(?::HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED))?$/.exec(marker);
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z0-9_]+)(?::(?!HEALTH_)([A-Z_]+))?(?::ROLES_([1-9][0-9]{0,3}))?(?::HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED))?$/.exec(marker);
     if (!match || !windowsInstallerGuards.has(match[2])) return;
     if (match[3] && (match[1] !== 'gui' || !windowsGuiSessionGuards.includes(match[2]) || !match[2].endsWith('_WINDOW_UNVERIFIED')
       || !windowsGuiProbePhases.some(phase => phase === match[3]))) return;
-    if(match[4] && (match[1]!=='gui'||!windowsGuiSessionGuards.includes(match[2])))return;
-    labels.push(`${match[1]}:${match[2]}${match[3] ? ':' + match[3] : ''}${match[4] ? ':HEALTH_'+match[4]+'_NATIVE_'+match[5] : ''}`);
+    const roles=match[4]?windowsGuiRoleSubset(match[3],Number(match[4])):undefined;
+    if(match[4] && (!roles||match[1]!=='gui'||!match[2].endsWith('_WINDOW_UNVERIFIED')))return;
+    if(match[5] && (match[1]!=='gui'||!windowsGuiSessionGuards.includes(match[2])))return;
+    labels.push(`${match[1]}:${match[2]}${match[3] ? ':' + match[3] : ''}${roles ? ':ROLES_'+roles.join('+') : ''}${match[5] ? ':HEALTH_'+match[5]+'_NATIVE_'+match[6] : ''}`);
   }
   return labels.join('; ');
 }

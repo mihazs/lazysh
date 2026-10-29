@@ -3,10 +3,23 @@ import {win32} from 'node:path';
 
 export const windowsGuiRoleRejections = ['ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES'] as const;
 export const windowsGuiProbePhases = [...windowsGuiRoleRejections, 'PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED'] as const;
-export function windowsGuiProbeFailure(stdout:unknown):typeof windowsGuiProbePhases[number] {
-  if(typeof stdout!=='string'||stdout.length>1024)return 'PROBE_UNVERIFIED';
-  const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)$/.exec(stdout.trim());
-  return windowsGuiProbePhases.find(phase=>phase===match?.[1])??'PROBE_UNVERIFIED';
+// Bit positions are fixed by this closed list; the aggregate phase is not a concrete role.
+export const windowsGuiRoleReasons=windowsGuiRoleRejections.filter(reason=>reason!=='MULTIPLE_ROLE_MISMATCHES');
+export function windowsGuiRoleSubset(phase:string,mask:unknown) {
+  if(!Number.isInteger(mask)||typeof mask!=='number'||mask<1||mask>=2**windowsGuiRoleReasons.length)return;
+  const reasons=windowsGuiRoleReasons.filter((_,index)=>(mask & 2**index)!==0);
+  if(phase==='MULTIPLE_ROLE_MISMATCHES'?reasons.length<2:reasons.length!==1||reasons[0]!==phase)return;
+  return reasons;
+}
+export function windowsGuiProbeDiagnostic(stdout:unknown):{phase:typeof windowsGuiProbePhases[number];roleMask?:number} {
+  const unverified={phase:'PROBE_UNVERIFIED'} as const;
+  if(typeof stdout!=='string'||stdout.length>1024)return unverified;
+  const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)(?::ROLES_([1-9][0-9]{0,3}))?$/.exec(stdout.trim());
+  const phase=windowsGuiProbePhases.find(phase=>phase===match?.[1]);
+  if(!phase)return unverified;
+  if(!match?.[2])return {phase};
+  const roleMask=Number(match[2]);
+  return windowsGuiRoleSubset(phase,roleMask)?{phase,roleMask}:unverified;
 }
 
 export const windowsGuiSessionOutcomes = ['CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE'] as const;
@@ -124,10 +137,17 @@ function GuiWindowRole($className, $style, $extended, $ownerless, $width, $heigh
   return 'UNKNOWN_CLASS'
 }
 function GuiMainWindow($handles) {
+  $script:roleMask = 0
+  $roleReasons = @(${windowsGuiRoleReasons.map(reason=>"'"+reason+"'").join(', ')})
   if (@($handles | Where-Object { $_.Role -eq 'UNVERIFIED' }).Count -gt 0) { $script:phase = 'WINDOW_ROLE_UNVERIFIED'; throw 'window' }
   if (@($handles | Where-Object { $_.Handle -isnot [string] -or $_.Handle -notmatch '^[1-9][0-9]{0,19}$' }).Count -gt 0) { $script:phase = 'UNEXPECTED_VISIBLE_ROLE'; throw 'window' }
   $rejections = @($handles | Where-Object { $_.Role -notin @('MAIN', 'TAO_EVENT_HELPER') } | Select-Object -ExpandProperty Role -Unique)
   if ($rejections.Count -gt 0) {
+    if (@($rejections | Where-Object { $_ -notin $roleReasons }).Count -eq 0) {
+      for ($index=0; $index -lt $roleReasons.Count; $index++) {
+        if ($roleReasons[$index] -in $rejections) { $script:roleMask = $script:roleMask -bor (1 -shl $index) }
+      }
+    }
     $script:phase = if ($rejections.Count -eq 1 -and $rejections[0] -in @('ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES')) { $rejections[0] } else { 'MULTIPLE_ROLE_MISMATCHES' }
     throw 'window'
   }
@@ -143,6 +163,7 @@ export const windowsGuiOwnerScript = String.raw`
 ${windowsGuiWindowRoleScript}
 $ErrorActionPreference = 'Stop'
 $phase = 'PROBE_UNVERIFIED'
+$script:roleMask = 0
 try {
   Add-Type -TypeDefinition @'
 using System;
@@ -210,7 +231,11 @@ public static class OwnedGuiWindow {
   if ($script:windows.Count -eq 0) { $phase = 'OWNED_HANDLES_INVISIBLE'; throw 'window' }
   $mainHandle = GuiMainWindow $script:windows
   @{pid=$app.Id;start=$app.StartTime.ToUniversalTime().Ticks.ToString();window=$mainHandle;sha256=$env:LAZYSH_NSIS_BINARY_SHA256} | ConvertTo-Json -Compress
-} catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_PROBE:' + $phase); exit 1 }
+} catch {
+  $label = 'LAZYSH_WINDOWS_GUI_PROBE:' + $phase
+  if ($script:roleMask -gt 0) { $label += ':ROLES_' + $script:roleMask }
+  [Console]::Out.WriteLine($label); exit 1
+}
 `;
 
 export function parseWindowsGuiOwner(value:string, expectedHash:string) {
@@ -352,6 +377,10 @@ function ExerciseInstalledGui {
           if ($rejected.ownedWindow -eq 'UNVERIFIED') {
             Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED', 'ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES')) 'GUI_CLIENT'
             $sessionCode += ':' + $rejected.probe
+          }
+          if ($null -ne $rejected.roleMask) {
+            Require ($rejected.ownedWindow -eq 'UNVERIFIED' -and ($rejected.roleMask -is [long] -or $rejected.roleMask -is [int]) -and $rejected.roleMask -gt 0 -and $rejected.roleMask -lt ${2**windowsGuiRoleReasons.length}) 'GUI_CLIENT'
+            $sessionCode += ':ROLES_' + $rejected.roleMask
           }
           Require ($rejected.proxyHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED') -and $rejected.nativeHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode += ':HEALTH_' + $rejected.proxyHealth + '_NATIVE_' + $rejected.nativeHealth

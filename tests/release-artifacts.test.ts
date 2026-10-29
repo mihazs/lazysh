@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiProbeFailure, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -321,6 +321,18 @@ foreach ($case in @(
   try { $null=GuiMainWindow $case.Handles } catch { $rejected=$true }
   if (!$rejected -or $script:phase -cne $case.Code) { throw 'wrong role rejection' }
 }
+$script:phase='PROBE_UNVERIFIED'
+try { GuiMainWindow @([PSCustomObject]@{Handle='123';Role='MAIN_EXSTYLE_MISMATCH'},[PSCustomObject]@{Handle='456';Role='TAO_STYLE_CLIPSIBLINGS_ONLY'}) } catch { }
+if ($script:roleMask -ne 144 -or $script:phase -cne 'MULTIPLE_ROLE_MISMATCHES') { throw 'exact subset not retained' }
+$allReasons=@(${windowsGuiRoleReasons.map(reason=>"'"+reason+"'").join(',')})
+$allHandles=@($allReasons | ForEach-Object { [PSCustomObject]@{Handle='123';Role=$_} })
+try { GuiMainWindow $allHandles } catch { }
+if ($script:roleMask -ne 2047 -or $script:phase -cne 'MULTIPLE_ROLE_MISMATCHES') { throw 'full subset not retained' }
+foreach ($index in 0..10) {
+  try { GuiMainWindow @([PSCustomObject]@{Handle='123';Role=$allReasons[$index]}) } catch { }
+  if ($script:roleMask -ne (1 -shl $index) -or $script:phase -cne $allReasons[$index]) { throw 'single reason bit mismatch' }
+}
+if ((GuiMainWindow @($main,$helper)) -cne '123' -or $script:roleMask -ne 0) { throw 'stale mask survived valid roles' }
 'owned GUI window roles passed'
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI window roles passed');
@@ -464,16 +476,38 @@ test('Windows session and owned-window diagnostics expose only the finite outcom
     expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:'+code)).toBeUndefined();
   }
 });
+test('Windows role masks project only exact finite subsets and preserve session plus cleanup failures',()=>{
+  expect(windowsGuiRoleReasons).toEqual(['ROLE_DATA_UNVERIFIED','MAIN_OWNER_MISMATCH','MAIN_GEOMETRY_MISMATCH','MAIN_STYLE_MISMATCH','MAIN_EXSTYLE_MISMATCH','TAO_OWNER_MISMATCH','TAO_GEOMETRY_MISMATCH','TAO_STYLE_CLIPSIBLINGS_ONLY','TAO_STYLE_MISMATCH','TAO_EXSTYLE_MISMATCH','UNKNOWN_CLASS']);
+  for(let mask=1;mask<=2047;mask++){
+    const expected=windowsGuiRoleReasons.filter((_,index)=>Boolean(mask & (1<<index)));
+    const phase=expected.length===1?expected[0]:'MULTIPLE_ROLE_MISMATCHES';
+    expect(windowsGuiRoleSubset(phase,mask)).toEqual(expected);
+    expect(windowsGuiProbeDiagnostic('LAZYSH_WINDOWS_GUI_PROBE:'+phase+':ROLES_'+mask)).toEqual({phase,roleMask:mask});
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:'+phase+':ROLES_'+mask)).toBe('gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:'+phase+':ROLES_'+expected.join('+'));
+  }
+  const label='gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:MULTIPLE_ROLE_MISMATCHES:ROLES_144:HEALTH_READY_NATIVE_READY';
+  expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+label+'\nLAZYSH_WINDOWS_INSTALLER:gui:GUI_CLEANUP\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED')).toBe('gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:MULTIPLE_ROLE_MISMATCHES:ROLES_MAIN_EXSTYLE_MISMATCH+TAO_STYLE_CLIPSIBLINGS_ONLY:HEALTH_READY_NATIVE_READY; gui:GUI_CLEANUP; cleanup:UNEXPECTED');
+  for(const [phase,mask] of [['UNKNOWN_CLASS',0],['UNKNOWN_CLASS',1024.5],['UNKNOWN_CLASS','1024'],['UNKNOWN_CLASS',2048],['UNKNOWN_CLASS',2049],['UNKNOWN_CLASS',2047],['MULTIPLE_ROLE_MISMATCHES',1024],['WINDOW_UNVERIFIED',144],['PRIVATE',144]]){
+    expect(windowsGuiRoleSubset(phase as string,mask)).toBeUndefined();
+  }
+  for(const suffix of ['UNKNOWN_CLASS:ROLES_0','UNKNOWN_CLASS:ROLES_01024','UNKNOWN_CLASS:ROLES_1024.0','UNKNOWN_CLASS:ROLES_-1','UNKNOWN_CLASS:ROLES_2048','MULTIPLE_ROLE_MISMATCHES:ROLES_1024','WINDOW_UNVERIFIED:ROLES_144','MULTIPLE_ROLE_MISMATCHES:ROLES_144 raw','MULTIPLE_ROLE_MISMATCHES:ROLES_144:ROLES_144']){
+    expect(windowsGuiProbeDiagnostic('LAZYSH_WINDOWS_GUI_PROBE:'+suffix)).toEqual({phase:'PROBE_UNVERIFIED'});
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_UNVERIFIED:'+suffix)).toBeUndefined();
+  }
+  for(const prefix of ['install:BINARY_MISMATCH','gui:GUI_OWNER','gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED']){
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+prefix+':MULTIPLE_ROLE_MISMATCHES:ROLES_144')).toBeUndefined();
+  }
+});
 test('Windows probe phases never turn unknown output or probe errors into candidate absence', () => {
   for (const phase of windowsGuiProbePhases) {
-    expect(windowsGuiProbeFailure('LAZYSH_WINDOWS_GUI_PROBE:'+phase)).toBe(phase);
+    expect(windowsGuiProbeDiagnostic('LAZYSH_WINDOWS_GUI_PROBE:'+phase).phase).toBe(phase);
     const marker='LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:'+phase;
     expect(windowsInstallerFailure(marker)).toBe('gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:'+phase);
   }
   for (const output of [undefined, 'private native exception', 'LAZYSH_WINDOWS_GUI_PROBE:MISSING',
     'LAZYSH_WINDOWS_GUI_PROBE:EXPECTED_IMAGE_CANDIDATE_ABSENT private path',
     'LAZYSH_WINDOWS_GUI_PROBE:WINDOW_UNVERIFIED\nLAZYSH_WINDOWS_GUI_PROBE:EXPECTED_IMAGE_CANDIDATE_ABSENT']) {
-    expect(windowsGuiProbeFailure(output)).toBe('PROBE_UNVERIFIED');
+    expect(windowsGuiProbeDiagnostic(output).phase).toBe('PROBE_UNVERIFIED');
   }
   for (const marker of [
     'gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:MISSING',
