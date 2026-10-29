@@ -34,6 +34,11 @@ export function windowsGuiMetadataProjection(stdout:unknown):string|undefined {
   if(lines.length!==1||lines[0].length>4096)return;
   try {return JSON.stringify(parseWindowsGuiMetadata(JSON.parse(lines[0].slice('LAZYSH_WINDOWS_GUI_METADATA:'.length))));}catch{return;}
 }
+// Pinned Chromium remote_debugging_server.cc:85–94 binds the default debug server to loopback.
+export function windowsGuiCapabilities(application:string, treatment:string|undefined) {
+  if(treatment!=='0'&&treatment!=='1')throw new Error('Invalid installed GUI treatment');
+  return {'tauri:options':{application,...(treatment==='1'?{webviewOptions:{additionalBrowserArguments:['--remote-debugging-port=0']}}:{})},'wdio:enforceWebDriverClassic':true as const};
+}
 export const windowsGuiOverrideNames={browserFolder:'WEBVIEW2_BROWSER_EXECUTABLE_FOLDER',userDataFolder:'WEBVIEW2_USER_DATA_FOLDER',browserArguments:'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS',channelSearchKind:'WEBVIEW2_CHANNEL_SEARCH_KIND',releaseChannels:'WEBVIEW2_RELEASE_CHANNELS',waitForScriptDebugger:'WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER',pipeForScriptDebugger:'WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER'} as const;
 const startupUnavailable={available:false,overflow:false,signature:'UNVERIFIED'} as const;
 export const windowsGuiDebugTransports=['PIPE','EPHEMERAL_PORT','FIXED_PORT','ABSENT','AMBIGUOUS','UNVERIFIED'] as const;
@@ -544,7 +549,7 @@ try { GuiHealthOwnership; [Console]::Out.Write('VERIFIED') } catch { exit 1 }
 
 export const windowsInstalledGuiScript = String.raw`
 ${windowsGuiEndpointsScript}
-function GuiProcess($file, $arguments) {
+function GuiProcess($file, $arguments, $counterfactual = $false) {
   Plain $file
   $info = [Diagnostics.ProcessStartInfo]::new($file)
   $info.UseShellExecute = $false
@@ -552,6 +557,7 @@ function GuiProcess($file, $arguments) {
   $info.WorkingDirectory = $env:LAZYSH_GUI_CLIENT_ROOT
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
+  if ($file -eq $env:LAZYSH_GUI_NODE) { $info.Environment['LAZYSH_GUI_COUNTERFACTUAL'] = $(if ($counterfactual) {'1'} else {'0'}) }
   foreach ($argument in $arguments) { $info.ArgumentList.Add($argument) }
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $info
@@ -576,7 +582,24 @@ function RemoveGuiDirectory($path) {
   foreach ($item in $items) { Plain $item.FullName }
   Remove-Item -LiteralPath $path -Recurse
 }
-function ExerciseInstalledGui {
+function GuiCounterfactual($baselineFailure) {
+  try {
+    if ($baselineFailure -cnotmatch '\AGUI_SESSION_[A-Z_]+_WINDOW_VERIFIED:HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)\z') { return }
+    if (!$guiCleanupVerified) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:NOT_RUN_CLEANUP');return }
+    # Same 600-second parent: reserve 420 seconds for client/startup, owned cleanup and native uninstall.
+    $elapsed=[Environment]::TickCount64-$guiParentStarted
+    if ($elapsed -lt 0 -or $elapsed -gt 180000) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:NOT_RUN_BUDGET');return }
+    $script:failure='UNEXPECTED'
+    Installed
+    foreach ($tool in @(@{Path=$env:LAZYSH_GUI_DRIVER;Hash=$env:LAZYSH_GUI_DRIVER_SHA256},@{Path=$env:LAZYSH_GUI_EDGE;Hash=$env:LAZYSH_GUI_EDGE_SHA256})) {
+      Plain $tool.Path
+      Require ((Get-FileHash -LiteralPath $tool.Path -Algorithm SHA256).Hash -eq $tool.Hash) 'GUI_TOOLS'
+    }
+    ExerciseInstalledGui -counterfactual
+  } catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:gui:' + $script:failure) }
+  finally { $script:failure=$baselineFailure }
+}
+function ExerciseInstalledGui([switch]$counterfactual) {
   $script:stage = 'gui'
   Require ([Environment]::UserInteractive -and (Get-Process -Id $PID).SessionId -ne 0) 'GUI_INTERACTIVE'
   foreach ($file in @($env:LAZYSH_GUI_DRIVER, $env:LAZYSH_GUI_EDGE, $env:LAZYSH_GUI_NODE, $env:LAZYSH_GUI_VITEST)) { Plain $file; Require (Test-Path -LiteralPath $file -PathType Leaf) 'GUI_TOOLS' }
@@ -589,6 +612,7 @@ function ExerciseInstalledGui {
   $driver = $null
   $client = $null
   $primaryFailure = $null
+  $guiCleanupVerified = $false
   try {
     GuiDirectory $roaming
     GuiDirectory $local
@@ -601,7 +625,7 @@ function ExerciseInstalledGui {
         $ports += $listener.LocalEndpoint.Port
       }
     } finally { foreach ($listener in $listeners) { $listener.Stop() } }
-    $env:LAZYSH_GUI_RECEIPT = Join-Path $directory 'gui-receipt.json'
+    $env:LAZYSH_GUI_RECEIPT = Join-Path $directory $(if ($counterfactual) {'gui-counterfactual-receipt.json'} else {'gui-receipt.json'})
     Require (!(OptionalItem $env:LAZYSH_GUI_RECEIPT)) 'EXISTING_PATH'
     $env:LAZYSH_GUI_BINARY = $installed
     $env:LAZYSH_GUI_PORT = [string]$ports[0]
@@ -626,7 +650,7 @@ function ExerciseInstalledGui {
     $env:LAZYSH_GUI_EDGE_START = $edgeProcess.StartTime.ToUniversalTime().Ticks.ToString()
     $env:LAZYSH_GUI_EDGE_SHA256 = (Get-FileHash -LiteralPath $env:LAZYSH_GUI_EDGE -Algorithm SHA256).Hash
     $env:LAZYSH_GUI_DRIVER_SHA256 = (Get-FileHash -LiteralPath $env:LAZYSH_GUI_DRIVER -Algorithm SHA256).Hash
-    $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts')
+    $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts') $counterfactual
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {
       Plain $env:LAZYSH_GUI_RECEIPT
@@ -645,8 +669,8 @@ function ExerciseInstalledGui {
           }
           Require ($rejected.proxyHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED') -and $rejected.nativeHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode += ':HEALTH_' + $rejected.proxyHealth + '_NATIVE_' + $rejected.nativeHealth
-          if ($null -ne $rejected.metadata) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_METADATA:' + ($rejected.metadata | ConvertTo-Json -Depth 4 -Compress)) }
-          if ($null -ne $rejected.startup) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_STARTUP:' + ($rejected.startup | ConvertTo-Json -Depth 4 -Compress)) }
+          if ($null -ne $rejected.metadata) { [Console]::Out.WriteLine($(if ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:'} else {'LAZYSH_WINDOWS_GUI_METADATA:'}) + ($rejected.metadata | ConvertTo-Json -Depth 4 -Compress)) }
+          if ($null -ne $rejected.startup) { [Console]::Out.WriteLine($(if ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:'} else {'LAZYSH_WINDOWS_GUI_STARTUP:'}) + ($rejected.startup | ConvertTo-Json -Depth 4 -Compress)) }
           Require $false $sessionCode
         }
         if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }
@@ -657,7 +681,7 @@ function ExerciseInstalledGui {
     Require ((Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le 1024) 'GUI_CLIENT'
     $receipt = Get-Content -Raw -LiteralPath $env:LAZYSH_GUI_RECEIPT | ConvertFrom-Json
     Require ($receipt.source -eq $env:GITHUB_SHA -and $receipt.version -eq $env:LAZYSH_VERSION -and $receipt.sha256 -eq $env:LAZYSH_NSIS_BINARY_SHA256 -and $receipt.pid -gt 0 -and $receipt.start -match '^[1-9][0-9]{0,19}$' -and $receipt.window -match '^[1-9][0-9]{0,19}$') 'GUI_CLIENT'
-    [Console]::Out.WriteLine((@{source=$receipt.source;version=$receipt.version;sha256=$receipt.sha256;pid=$receipt.pid;start=$receipt.start;window=$receipt.window;webview=$runtime;edgeDriver=$edgeVersion} | ConvertTo-Json -Compress))
+    if (!$counterfactual) { [Console]::Out.WriteLine((@{source=$receipt.source;version=$receipt.version;sha256=$receipt.sha256;pid=$receipt.pid;start=$receipt.start;window=$receipt.window;webview=$runtime;edgeDriver=$edgeVersion} | ConvertTo-Json -Compress)) }
     Installed
   } catch {
     $primaryFailure = $script:failure
@@ -691,11 +715,21 @@ function ExerciseInstalledGui {
     if ($env:LAZYSH_GUI_RECEIPT -and (OptionalItem $env:LAZYSH_GUI_RECEIPT)) { try { Plain $env:LAZYSH_GUI_RECEIPT; Remove-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT } catch { $cleanupFailed = $true } }
     if (!$cleanupFailed) { foreach ($path in $script:guiRoots) { try { RemoveGuiDirectory $path } catch { $cleanupFailed = $true } } }
     if ($cleanupFailed) {
-      if ($primaryFailure) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:' + $primaryFailure) }
+      if ($primaryFailure) { [Console]::Out.WriteLine($(if ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:gui:'} else {'LAZYSH_WINDOWS_INSTALLER:gui:'}) + $primaryFailure) }
       Require $false 'GUI_CLEANUP'
     }
+    $guiCleanupVerified = $true
   }
-  if ($primaryFailure) { Require $false $primaryFailure }
+  if ($primaryFailure) {
+    if (!$counterfactual) {
+      [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:' + $primaryFailure)
+      $script:guiBaselineEmitted=$true
+      GuiCounterfactual $primaryFailure
+    }
+    # The original automatic-launch failure remains primary even if the treatment passes.
+    Require $false $primaryFailure
+  }
+  if ($counterfactual) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED');return }
   $script:failure = 'UNEXPECTED'
   [Console]::Out.WriteLine('Windows installed GUI bundled version, source, image and owned window passed')
 }

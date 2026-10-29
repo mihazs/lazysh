@@ -7,8 +7,8 @@ import { aggregatePackages, artifactName, artifactTargets, releaseTargets, diges
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
-import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsNsisBinaryDigest } from '../.changeset/release-platform';
+import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const startupFixture=()=>({available:true,overflow:false,signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:['EPHEMERAL_PORT'],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
@@ -488,6 +488,61 @@ if ((GuiMainWindow @($main,$helper)) -cne '123' -or $script:roleMask -ne 0) { th
 `;
   expect(await native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', script], process.env, 30000)).toBe('owned GUI window roles passed');
 });
+test('Windows counterfactual changes only the documented browser argument and preserves baseline projection',()=>{
+  const baseline=windowsGuiCapabilities('owned.exe','0'),treatment=windowsGuiCapabilities('owned.exe','1');
+  expect(treatment).toEqual({...baseline,'tauri:options':{...baseline['tauri:options'],webviewOptions:{additionalBrowserArguments:['--remote-debugging-port=0']}}});
+  expect(baseline['tauri:options']).toEqual({application:'owned.exe'});
+  for(const invalid of [undefined,'','automatic','true'])expect(()=>windowsGuiCapabilities('owned.exe',invalid)).toThrow('Invalid installed GUI treatment');
+  const prefix='LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:',primary='LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY';
+  for(const outcome of ['PASSED','NOT_RUN_BUDGET','NOT_RUN_CLEANUP']){
+    const text=primary+'\n'+prefix+outcome;
+    expect(windowsGuiCounterfactual(text)).toEqual({outcome});
+    expect(windowsInstallerFailure(text)).toBe('gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY');
+  }
+  const startup=startupFixture(),text=primary+'\n'+prefix+'gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY\nLAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:'+JSON.stringify(startup);
+  expect(windowsGuiCounterfactual(text)).toEqual({outcome:'REJECTED',rejection:'gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY',startup});
+  expect(windowsGuiStartupProbe(text).startup).toBeUndefined();
+  expect(windowsGuiCounterfactual(prefix+'PASSED\nLAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:'+JSON.stringify(startup))).toEqual({outcome:'UNVERIFIED'});
+  for(const invalid of ['PRIVATE', 'PASSED\n'+prefix+'gui:GUI_CLEANUP','gui:PRIVATE','gui:GUI_CLIENT private','gui:GUI_CLIENT\n'+prefix+'gui:GUI_CLEANUP\n'+prefix+'gui:GUI_CLEANUP']){
+    expect(windowsGuiCounterfactual(primary+'\n'+prefix+invalid)).toEqual({outcome:'UNVERIFIED'});
+  }
+});
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint counterfactual gates cleanup, identity and budget while retaining primary failure',()=>fixture(async root=>{
+  const image=join(root,'owned-image');await Bun.write(image,'fixed owned candidate');
+  const expected=await digestFile(image),baseline='GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY';
+  const script=windowsInstallerPathsScript+windowsInstalledGuiScript+String.raw`
+$ErrorActionPreference='Stop'
+$baseline='GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY'
+$guiCleanupVerified=$env:LAZYSH_COUNTER_CASE -ne 'cleanup'
+$guiParentStarted=[Environment]::TickCount64-$(if ($env:LAZYSH_COUNTER_CASE -eq 'budget') {180001L} else {0L})
+$script:called=0
+function Installed {
+  Plain $env:LAZYSH_GUI_BINARY
+  Require ((Get-FileHash -LiteralPath $env:LAZYSH_GUI_BINARY).Hash -eq $env:LAZYSH_NSIS_BINARY_SHA256) 'BINARY_MISMATCH'
+}
+function ExerciseInstalledGui([switch]$counterfactual) {
+  if (!$counterfactual) { throw 'treatment not explicitly selected' }
+  $script:called++
+  if ($env:LAZYSH_COUNTER_CASE -eq 'rejected') { Require $false 'GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY' }
+  if ($env:LAZYSH_COUNTER_CASE -eq 'treatment-cleanup') { Require $false 'GUI_CLEANUP' }
+  [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED')
+}
+if ($env:LAZYSH_COUNTER_CASE -eq 'image') { $env:LAZYSH_NSIS_BINARY_SHA256='0'*64 }
+if ($env:LAZYSH_COUNTER_CASE -eq 'tool') { $env:LAZYSH_GUI_EDGE_SHA256='0'*64 }
+[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:'+$baseline)
+GuiCounterfactual $baseline
+if ($script:failure -cne $baseline -or $script:called -ne $(if ($env:LAZYSH_COUNTER_CASE -in @('passed','rejected','treatment-cleanup')) {1} else {0})) { throw 'baseline or admission changed' }
+exit 1
+`;
+  for(const [name,outcome] of [['passed','PASSED'],['cleanup','NOT_RUN_CLEANUP'],['budget','NOT_RUN_BUDGET'],['image','REJECTED'],['tool','REJECTED'],['rejected','REJECTED'],['treatment-cleanup','REJECTED']]){
+    const env={...process.env,LAZYSH_COUNTER_CASE:name,LAZYSH_GUI_BINARY:image,LAZYSH_NSIS_BINARY_SHA256:expected.sha256,LAZYSH_GUI_DRIVER:image,LAZYSH_GUI_EDGE:image,LAZYSH_GUI_DRIVER_SHA256:expected.sha256,LAZYSH_GUI_EDGE_SHA256:expected.sha256};
+    await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],env,30000)).rejects.toThrow(`Release validation failed: pwsh.exe (gui:${baseline})\nOwned Windows GUI counterfactual: {"outcome":"${outcome}"`);
+  }
+  for(const label of ['gui:GUI_CLIENT','gui:'+baseline+'\nLAZYSH_WINDOWS_INSTALLER:cleanup:LOCAL_DATA']){
+    const rejected=`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:${label}');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED');exit 1`;
+    await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',rejected],process.env,30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe ('+label.replace('\nLAZYSH_WINDOWS_INSTALLER:','; ')+')'});
+  }
+}));
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
   const binary = join(import.meta.dir, '../target/release/lazysh.exe');

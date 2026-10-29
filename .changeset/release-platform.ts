@@ -27,7 +27,8 @@ export async function native(command: string, args: string[], env = process.env,
     const metadata=label&&windowsGuiSessionGuards.some(code=>code.endsWith('_WINDOW_UNVERIFIED')&&label.startsWith('gui:'+code))
       ? windowsGuiMetadataProjection((error as {stdout?:unknown}).stdout):undefined;
     const startup=label&&windowsGuiSessionGuards.some(code=>label.startsWith('gui:'+code))?windowsGuiStartupProbe((error as {stdout?:unknown}).stdout).startup:undefined;
-    throw new Error(`Release validation failed: ${tool}${label ? ` (${label})` : ''}${metadata ? '\nOwned Windows GUI metadata: '+metadata : ''}${startup ? '\nOwned Windows GUI startup: '+JSON.stringify(startup) : ''}`);
+    const counterfactual=label&&/^gui:GUI_SESSION_[A-Z_]+_WINDOW_VERIFIED:HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)$/.test(label)?windowsGuiCounterfactual((error as {stdout?:unknown}).stdout):undefined;
+    throw new Error(`Release validation failed: ${tool}${label ? ` (${label})` : ''}${metadata ? '\nOwned Windows GUI metadata: '+metadata : ''}${startup ? '\nOwned Windows GUI startup: '+JSON.stringify(startup) : ''}${counterfactual ? '\nOwned Windows GUI counterfactual: '+JSON.stringify(counterfactual) : ''}`);
   }
 }
 function requirePlatform(condition: unknown, message: string): asserts condition {
@@ -74,6 +75,21 @@ export function windowsInstallerFailure(stdout: unknown): string | undefined {
     labels.push(`${match[1]}:${match[2]}${match[3] ? ':' + match[3] : ''}${roles ? ':ROLES_'+roles.join('+') : ''}${match[5] ? ':HEALTH_'+match[5]+'_NATIVE_'+match[6] : ''}`);
   }
   return labels.join('; ');
+}
+// Diagnostic treatment cannot replace the baseline's failure or expose native output.
+export function windowsGuiCounterfactual(stdout:unknown) {
+  if(typeof stdout!=='string'||stdout.length>2_097_152)return;
+  const prefix='LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:';
+  const lines=stdout.split(/\r?\n/).filter(line=>line.startsWith(prefix));
+  if(!lines.length)return;
+  const unknown={outcome:'UNVERIFIED'} as const;
+  for(const outcome of ['NOT_RUN_BUDGET','NOT_RUN_CLEANUP'] as const)if(lines.length===1&&lines[0]===prefix+outcome)return {outcome};
+  if(lines.length===1&&lines[0]===prefix+'PASSED')return stdout.includes('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:')||stdout.includes('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:')?unknown:{outcome:'PASSED'} as const;
+  const rejection=windowsInstallerFailure(lines.map(line=>line.replace(prefix,'LAZYSH_WINDOWS_INSTALLER:')).join('\n'));
+  if(!rejection||lines.length>2||!lines.every(line=>line.startsWith(prefix+'gui:')))return unknown;
+  const startup=windowsGuiStartupProbe(stdout.split(/\r?\n/).filter(line=>line.startsWith('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:')).map(line=>line.replace('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:','LAZYSH_WINDOWS_GUI_STARTUP:')).join('\n')).startup;
+  const metadata=rejection.includes('_WINDOW_UNVERIFIED')?windowsGuiMetadataProjection(stdout.split(/\r?\n/).filter(line=>line.startsWith('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:')).map(line=>line.replace('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:','LAZYSH_WINDOWS_GUI_METADATA:')).join('\n')):undefined;
+  return {outcome:'REJECTED',rejection,...(startup?{startup}:{}),...(metadata?{metadata:JSON.parse(metadata)}:{})} as const;
 }
 export async function windowsNsisBinaryDigest(path: string, source: { bytes: number; sha256: string }) {
   requirePlatform(Number.isSafeInteger(source.bytes) && source.bytes > 0 && source.bytes <= 2_147_483_648
@@ -128,6 +144,8 @@ export async function windowsInstallation(installer: string, binary: string, ver
   const root = resolve(import.meta.dir, '..');
   return native('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', String.raw`
 $ErrorActionPreference = 'Stop'
+$guiParentStarted=[Environment]::TickCount64
+$guiBaselineEmitted=$false
 ${windowsInstallerPathsScript}
 function RunInstaller($file, $arguments) {
   Plain $file
@@ -224,7 +242,7 @@ try {
   Plain $marker
   Require ((Get-Content -Raw -LiteralPath $marker) -ceq $content) 'REPAIR_MARKER'
 } catch {
-  [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:' + $stage + ':' + $failure)
+  if (!$guiBaselineEmitted) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:' + $stage + ':' + $failure) }
   $primaryFailed = $true
 } finally {
   $stage = 'cleanup'

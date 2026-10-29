@@ -3,7 +3,7 @@ import {execFile} from 'node:child_process';
 import {writeFile} from 'node:fs/promises';
 import {promisify} from 'node:util';
 import {remote} from 'webdriverio';
-import {parseWindowsGuiOwner,windowsGuiOwnerScript,windowsGuiSessionResponse,windowsGuiSessionNoResponse,windowsGuiProbeDiagnostic,windowsGuiSessionHealth,windowsGuiHealthOwnerScript,windowsGuiStartupProbe} from '../../../../.changeset/windows-installed-gui';
+import {parseWindowsGuiOwner,windowsGuiCapabilities,windowsGuiOwnerScript,windowsGuiSessionResponse,windowsGuiSessionNoResponse,windowsGuiProbeDiagnostic,windowsGuiSessionHealth,windowsGuiHealthOwnerScript,windowsGuiStartupProbe} from '../../../../.changeset/windows-installed-gui';
 import {assertDirectDriverEnvironment} from '../policy';
 
 let browser:Awaited<ReturnType<typeof remote>>|undefined;
@@ -23,7 +23,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
       return parseWindowsGuiOwner(typeof core==='string'?core.trim():'',process.env.LAZYSH_NSIS_BINARY_SHA256??'');
     } catch(error) {throw new Error('Installed GUI native window/image ownership rejected',{cause:windowsGuiProbeDiagnostic(core??(error as {stdout?:unknown}).stdout)});}
   };
-  const capabilities:WebdriverIO.Capabilities&{'tauri:options':{application:string}}={'tauri:options':{application:process.env.LAZYSH_GUI_BINARY!},'wdio:enforceWebDriverClassic':true};
+  const capabilities=windowsGuiCapabilities(process.env.LAZYSH_GUI_BINARY!,process.env.LAZYSH_GUI_COUNTERFACTUAL);
   let stage='GUI_SESSION';
   let session:ReturnType<typeof windowsGuiSessionResponse>|undefined;
   try {
