@@ -223,7 +223,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
       - name: Verify native GUI namespace prerequisites
         run: |
           test "$(id -u)" -ne 0
@@ -231,6 +231,22 @@ jobs:
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
           bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid --dev-bind / / --proc /proc -- /usr/bin/true
+      - name: Build the pinned official Mosh fixture outside the checkout
+        timeout-minutes: 10
+        run: |
+          mosh_root=$(mktemp -d "$RUNNER_TEMP/lazysh-mosh-1.4.0-XXXXXX")
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 2097152 https://github.com/mobile-shell/mosh/releases/download/mosh-1.4.0/mosh-1.4.0.tar.gz -o "$mosh_root/mosh-1.4.0.tar.gz"
+          printf '%s  %s\n' '872e4b134e5df29c8933dff12350785054d2fd2839b5ae6b5587b14db1465ddd' "$mosh_root/mosh-1.4.0.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$mosh_root/mosh-1.4.0.tar.gz" --directory "$mosh_root" --no-same-owner --no-same-permissions
+          cd "$mosh_root/mosh-1.4.0"
+          ./configure --prefix="$mosh_root/install"
+          make -j2
+          make install
+          export PATH="$mosh_root/install/bin:$PATH"
+          test "$(command -v mosh-server)" = "$mosh_root/install/bin/mosh-server"
+          mosh_version=$(mosh-server --version)
+          test "${mosh_version%%$'\n'*}" = 'mosh-server (mosh 1.4.0) [build mosh 1.4.0]'
+          echo "$mosh_root/install/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
         with:
           # Native dependency objects must match this runner's glibc baseline.
