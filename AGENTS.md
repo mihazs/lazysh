@@ -8,6 +8,7 @@ Use trunk-based development.
 - If a change depends on another change, merge that prerequisite into `main` first, then start the dependent branch from updated `main`.
 - Keep branches short-lived. Track work with GitHub issues, the project board, and pull requests.
 - Review changes, address findings, and run relevant checks. Once ready, merge autonomously; do not leave a ready pull request open awaiting user confirmation.
+- Every completed milestone must lead to a published version. Follow the release policy in `CONTRIBUTING.md`; version preparation or a merge alone is not delivery. Verify the public release and its assets before reporting the milestone released.
 - Create every Git worktree under `~/dev/.worktrees/`.
 
 # Continuing implementation
