@@ -1902,11 +1902,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         ) : (
           <div className="welcome">
             <div className="welcome-content">
-              <div className="welcome-terminal">
-                <span>l<span>_</span>
-                </span>
-                <div className="terminal-corner" />
-              </div>
+              <img className="welcome-brand-mark" src={bedModeMark} alt="lazysh" width={112} height={112}/>
               <p className="welcome-kicker">{t("appALittleCloserToYourMachines")}</p>
               <h1>{t("appGoodWorkDoesnT")}<br />{t("appNeedADesk")}</h1>
               <p className="welcome-copy">{t("appYourTerminalYourAgentsYourOwnInfrastructure")}<br />{t("appConnectOverSSHAndPickUpWhereYouLeft")}</p>
