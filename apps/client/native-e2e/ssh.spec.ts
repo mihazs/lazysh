@@ -24,7 +24,12 @@ afterEach(async context=>{
 
 it('trusts the exact ephemeral server and types a non-echoable challenge through the bundled SSH terminal',async()=>{
   captureSafe=false;
-  ssh=await SshFixture.start();
+  ssh=await SshFixture.start(undefined,{privateTtyGroup:true});
+  const control=await ssh.client();
+  control.child.stdin!.end(`${ssh.challenge}\nexit\n`);
+  const output=await control.finish('owned namespace SSH preflight',5000);
+  expect(output.includes(ssh.prompt)).toBe(true);
+  expect(output.includes(ssh.expected)).toBe(true);
   gui=await NativeGui.start();const browser=gui.browser!;
   const owner=await gui.appOwner();
   gui.stage='owned SSH host editor';

@@ -36,13 +36,15 @@ async function retireDescendants(parent:OwnedPid) {
   }
   if((await Promise.all(owned.map(same))).some(Boolean))throw new Error('Owned SSH descendants survived teardown');
 }
-export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH') {
+export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH',cleanSupervisorExit=false) {
   let primary:unknown;
   try {
     const root=await daemon.liveIdentity();
     if(!root)throw new Error(`Owned ${label} root identity unavailable`);
     await retireDescendants(root);
-    if((await daemon.liveIdentity())?.start!==root.start)throw new Error(`Owned ${label} root identity lost`);
+    // The explicit mount supervisor exits cleanly when its owned sshd child is
+    // retired. A root missing before retirement still fails the check above.
+    if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
   } catch(error){primary=error;}
   try{await daemon.stop();}catch(error){primary??=error;}
   if(primary)throw primary;
@@ -55,8 +57,8 @@ export class SshFixture {
   get expected(){return `SSH_${this.nonce}_END`;}
   get challenge(){return `printf 'SSH_%s_END\\n' '${this.nonce}'`;}
   readonly username=userInfo().username;
-  private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv) {this.nonce=nonce;}
-  static async start(tools?:HerdrTools) {
+  private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv,private readonly privateTtyGroup=false) {this.nonce=nonce;}
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean}={}) {
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
     const directory=await mkdtemp(join(tools?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
@@ -95,9 +97,25 @@ export class SshFixture {
         environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
         environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s 90s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`,
         `Banner none`,''].join('\n'),{mode:0o600});
-      daemon=new OwnedProcess(sshd,['-D','-e','-f',config]);
+      const arguments_=['-D','-e','-f',config];
+      if(options.privateTtyGroup) {
+        // An unprivileged user namespace maps only our primary group. OpenSSH
+        // otherwise chowns its PTY to the host's unmapped tty group and rejects it.
+        // Change only this daemon's read-only NSS view; never the host group file.
+        const groupSource='/etc/group';
+        if((await stat(groupSource)).size>65_536)throw new Error('Owned namespace group file exceeds its bound');
+        const groups=(await readFile(groupSource,'utf8')).split('\n');
+        const tty=groups.map((row,index)=>row.startsWith('tty:')?index:-1).filter(index=>index>=0);
+        if(tty.length!==1)throw new Error('Owned namespace requires one tty group entry');
+        const fields=groups[tty[0]].split(':');
+        if(fields.length!==4 || !/^\d+$/.test(fields[2]))throw new Error('Owned namespace tty group is invalid');
+        fields[2]=String(userInfo().gid);groups[tty[0]]=fields.join(':');
+        const groupFile=join(directory,'namespace-group');
+        await writeFile(groupFile,groups.join('\n'),{mode:0o600,flag:'wx'});
+        daemon=new OwnedProcess('/usr/bin/bwrap',['--die-with-parent','--unshare-user','--dev-bind','/','/','--ro-bind',groupFile,groupSource,'--',sshd,...arguments_]);
+      } else daemon=new OwnedProcess(sshd,arguments_);
       if(!await daemon.liveIdentity())throw new Error('Owned SSH root identity unavailable');
-      const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment);
+      const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,options.privateTtyGroup);
       const deadline=performance.now()+3000;
       while(!await listening(port)) {
         if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error('Owned sshd not ready');
@@ -105,7 +123,7 @@ export class SshFixture {
       }
       return fixture;
     } catch(error) {
-      try{if(daemon)await stopOwnedTree(daemon);}catch{console.error('Owned SSH startup cleanup failed');}
+      try{if(daemon)await stopOwnedTree(daemon,'SSH',options.privateTtyGroup===true);}catch{console.error('Owned SSH startup cleanup failed');}
       try{await rm(directory,{recursive:true,force:true});}catch{console.error('Owned SSH startup directory cleanup failed');}
       throw error;
     }
@@ -120,7 +138,7 @@ export class SshFixture {
   async stop() {
     if(this.stopped)return;
     let primary:unknown;
-    try {await stopOwnedTree(this.daemon);if(await listening(this.port))throw new Error('Owned SSH listener survived teardown');}
+    try {await stopOwnedTree(this.daemon,'SSH',this.privateTtyGroup);if(await listening(this.port))throw new Error('Owned SSH listener survived teardown');}
     catch(error){primary=error;}
     try{await rm(this.directory,{recursive:true,force:true});}catch(error){primary??=error;}
     if(primary)throw primary;
