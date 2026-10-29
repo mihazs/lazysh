@@ -1,5 +1,6 @@
 //! Private relay half of the owned Bun/Android ntfy acceptance case.
 use super::*;
+use axum::response::IntoResponse;
 use sha2::{Digest, Sha256};
 use std::{fs, os::unix::fs::MetadataExt, path::PathBuf};
 
@@ -8,6 +9,55 @@ fn fixture_authorized(headers: &HeaderMap, nonce: &str) -> bool {
         .get("X-Lazysh-Fixture")
         .and_then(|h| h.to_str().ok())
         == Some(nonce)
+}
+
+// Extract only the frozen window from the same snapshot encrypted below.
+// Neither a new clock sample nor private subscription/event fields leave here.
+fn event_window_headers(snapshot: &str) -> Option<HeaderMap> {
+    let value: serde_json::Value = serde_json::from_str(snapshot).ok()?;
+    let issued = value.get("issuedAt")?.as_i64()?;
+    let expires = value.get("expiresAt")?.as_i64()?;
+    if value.get("schemaVersion")?.as_u64()? != 2
+        || issued < 0
+        || expires <= issued
+        || expires.checked_sub(issued)? > 300
+    {
+        return None;
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-lazysh-fixture-issued-at",
+        issued.to_string().parse().ok()?,
+    );
+    headers.insert(
+        "x-lazysh-fixture-expires-at",
+        expires.to_string().parse().ok()?,
+    );
+    Some(headers)
+}
+
+#[test]
+fn event_window_response_preserves_frozen_bounds_and_rejects_invalid_metadata() {
+    let headers = event_window_headers(
+        r#"{"schemaVersion":2,"issuedAt":1000,"expiresAt":1300,"subscription":"private"}"#,
+    )
+    .unwrap();
+    assert_eq!(headers.len(), 2);
+    assert_eq!(headers["x-lazysh-fixture-issued-at"], "1000");
+    assert_eq!(headers["x-lazysh-fixture-expires-at"], "1300");
+    for input in [
+        "{}",
+        r#"{"schemaVersion":1,"issuedAt":1000,"expiresAt":1300}"#,
+        r#"{"schemaVersion":2,"issuedAt":-1,"expiresAt":200}"#,
+        r#"{"schemaVersion":2,"issuedAt":1000,"expiresAt":1000}"#,
+        r#"{"schemaVersion":2,"issuedAt":1000,"expiresAt":1301}"#,
+        r#"{"schemaVersion":2,"issuedAt":"1000","expiresAt":1300}"#,
+        r#"{"schemaVersion":2,"issuedAt":1000.5,"expiresAt":1300}"#,
+        r#"{"schemaVersion":2,"issuedAt":9223372036854775807,"expiresAt":9223372036854775808}"#,
+    ] {
+        assert!(event_window_headers(input).is_none());
+    }
+    assert!(event_window_headers(r#"{"schemaVersion":2,"issuedAt":0,"expiresAt":1}"#).is_some());
 }
 
 fn signal(nonce: String, gate: Arc<Semaphore>) -> axum::routing::MethodRouter {
@@ -271,12 +321,12 @@ async fn real_ntfy_android_encrypted_challenge() {
                     let replay = replay.clone();
                     async move {
                         if !fixture_authorized(&headers, &nonce) {
-                            return StatusCode::UNAUTHORIZED;
+                            return StatusCode::UNAUTHORIZED.into_response();
                         }
                         if !confirmed.load(Ordering::SeqCst)
                             || requested.swap(true, Ordering::SeqCst)
                         {
-                            return StatusCode::CONFLICT;
+                            return StatusCode::CONFLICT.into_response();
                         }
                         // An explicit test-operator action, not Android authority:
                         // the original admin/source APIs and production worker deliver it.
@@ -314,11 +364,16 @@ async fn real_ntfy_android_encrypted_challenge() {
                                 assert!(encoded.len() <= 16384, "Bounded owned event replay");
                                 *replay.lock().unwrap() = Some(Zeroizing::new(encoded));
                                 accepted.store(true, Ordering::SeqCst);
-                                return StatusCode::NO_CONTENT;
+                                return (
+                                    StatusCode::NO_CONTENT,
+                                    event_window_headers(&snapshot)
+                                        .expect("Exact frozen event window required"),
+                                )
+                                    .into_response();
                             }
                             tokio::time::sleep(Duration::from_millis(10)).await;
                         }
-                        StatusCode::GATEWAY_TIMEOUT
+                        StatusCode::GATEWAY_TIMEOUT.into_response()
                     }
                 }
             }),
