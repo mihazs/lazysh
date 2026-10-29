@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:native-gui": "bwrap --unshare-user --unshare-net --dev-bind / / -- vitest run --config vitest.native-gui.config.ts",
+    "check:native-gui": "tsc --project tsconfig.native-gui.json",
     "tauri": "tauri",
     "dev:native": "tauri dev",
     "build:native": "tauri build --no-bundle",
@@ -78,6 +80,7 @@
     "typescript": "~5.9.2",
     "vite": "^7.1.7",
     "vitest": "^5.0.5",
+    "webdriverio": "10.1.0",
     "@lazysh/apple-status": "workspace:*",
     "@lazysh/push-registration": "workspace:*"
   },
