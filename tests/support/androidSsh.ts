@@ -291,7 +291,7 @@ export function gradleFailureClasses(stdout:string,stderr:string) {
   return {scope:'last-output-window-only',...flags,unclassified:!Object.values(flags).some(Boolean)};
 }
 
-type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH'|'app-package'|'test-package';
+type AndroidCleanupStage='reverse'|'fixture-file'|'Herdr'|'SSH'|'app-package'|'test-package'|'software-keyboard';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
   for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
@@ -356,6 +356,56 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
   timer=setTimeout(()=>{stream='deadline';void stop();},600_000);
   return {stop,snapshot,elapsedMs,recover:()=>recoverOwnedCaseCrash(adb,serial,parser)};
 }
+// LatinIME can acknowledge a visible IME window while hardware input suppresses
+// its keyboard view. Admit real software input only on the owned test emulator,
+// and restore the exact previous preference before package/fixture cleanup.
+export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000) {
+  if(!/^emulator-[0-9]{4,5}$/.test(serial) || !Number.isSafeInteger(budget) || budget<1 || budget>5000)
+    throw new Error('Owned software keyboard requires an explicit emulator and bounded budget');
+  const key='show_ime_with_hard_keyboard';
+  const deadline=performance.now()+budget;
+  const probe=async(args:string[],until:number,stage:string)=>{
+    const result=await continuityOutput(adb,serial,['shell',...args],until);
+    if(result.state!=='available')throw new Error(`Owned software keyboard unavailable: ${stage}`);
+    return result.output;
+  };
+  const latin=(value:string)=>['com.android.inputmethod.latin/.LatinIME','com.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'].includes(value);
+  if(!latin(await probe(['settings','get','secure','default_input_method'],deadline,'default IME')))
+    throw new Error('Owned software keyboard requires the image AOSP LatinIME');
+  const installed=await probe(['ime','list','-s'],deadline,'installed IME');
+  if(!installed.split(/\r?\n/).some(latin))throw new Error('Owned software keyboard image IME is not installed');
+  const get=(until:number)=>probe(['settings','get','secure',key],until,'preference');
+  const previous=await get(deadline);
+  if(!['0','1','null'].includes(previous))throw new Error('Owned software keyboard preference is unrecognized');
+  let changed=false;
+  const restore=async()=>{
+    if(!changed)return;
+    const until=performance.now()+budget;
+    const current=await get(until);
+    if(current===previous){changed=false;return;}
+    if(current!=='1')throw new Error('Owned software keyboard preference changed unexpectedly');
+    let failure:unknown;
+    try {await probe(['settings',previous==='null'?'delete':'put','secure',key,...(previous==='null'?[]:[previous])],until,'restore');}
+    catch(error){failure=error;}
+    if(await get(until)!==previous)throw new Error('Owned software keyboard restoration was not verified');
+    changed=false;
+    if(failure)throw failure;
+  };
+  try {
+    if(previous!=='1') {
+      // Retain restoration ownership before the command: a lost acknowledgement
+      // or deadline can follow an already-applied secure setting.
+      changed=true;
+      await probe(['settings','put','secure',key,'1'],deadline,'enable');
+      if(await get(deadline)!=='1')throw new Error('Owned software keyboard enabling was not verified');
+    }
+  } catch(error) {
+    await androidSshCleanup(true,[['software-keyboard',restore]]);
+    throw error;
+  }
+  return {observation:{ime:'aosp-latin' as const,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
+}
+
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
   const serial=process.env.ANDROID_SERIAL;
@@ -370,6 +420,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let hostServerBefore:HostAdbServerSample|undefined;
   let gradle:OwnedProcess|undefined;
   let crashes:ReturnType<typeof captureOwnedCaseCrashes>|undefined;
+  let keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined;
   const timing:{gradleStartMs:number|null,gradleEndMs:number|null}={gradleStartMs:null,gradleEndMs:null};
   let primary=false;
   const shell=(args:string[])=>command('owned emulator command',adb,['-s',serial,...args]);
@@ -377,6 +428,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     // The host allowlist key must match the concrete device port removed in cleanup.
     await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
     reverse=String(fixture.port);
+    keyboard=await ownedSoftwareKeyboard(adb,serial);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:Number(reverse),username:fixture.username,
@@ -408,7 +460,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       const hostServerAfter=await hostAdbServerIdentity(adb);
       const persistedCrash={scope:'persisted-crash-buffer-sample',...await crashes?.recover()??{state:'ineligible',exceptions:[]}};
       const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
-      const summary={...exitInfo,...(packages?{packages}:{}),timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
+      const summary={...exitInfo,...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
@@ -416,6 +468,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   } finally {
     await crashes?.stop();
     await androidSshCleanup(primary,[
+      ['software-keyboard',()=>keyboard?.restore()??Promise.resolve()],
       ['reverse',()=>reverse?shell(['reverse','--remove',`tcp:${reverse}`]):Promise.resolve()],
       ['fixture-file',()=>remoteCreated?shell(['shell','rm','-rf','--',remote]):Promise.resolve()],
       ...(retainedPackages?[

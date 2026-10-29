@@ -3,6 +3,7 @@ package app.lazysh.client
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Configuration
 import android.view.KeyEvent
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -1457,6 +1458,19 @@ class NativeWorkspaceTest {
                         .put("decorHeight", decor.height.coerceIn(0, 65535))
                         .put("webWindowY", position[1].coerceIn(-65535, 65535))
                         .put("webHeight", web.height.coerceIn(0, 65535))
+                        .put("keyboard", when (activity.resources.configuration.keyboard) {
+                            Configuration.KEYBOARD_NOKEYS -> "none"
+                            Configuration.KEYBOARD_QWERTY -> "qwerty"
+                            Configuration.KEYBOARD_12KEY -> "12key"
+                            Configuration.KEYBOARD_UNDEFINED -> "undefined"
+                            else -> "other"
+                        })
+                        .put("hardKeyboardHidden", when (activity.resources.configuration.hardKeyboardHidden) {
+                            Configuration.HARDKEYBOARDHIDDEN_YES -> "hidden"
+                            Configuration.HARDKEYBOARDHIDDEN_NO -> "visible"
+                            Configuration.HARDKEYBOARDHIDDEN_UNDEFINED -> "undefined"
+                            else -> "other"
+                        })
                     runCatching {
                         val content = activity.findViewById<View>(android.R.id.content)
                         keyboardGeometry.put("contentHeight", content.height.coerceIn(0, 65535))
