@@ -1492,14 +1492,18 @@ class NativeWorkspaceTest {
                 assertTrue("Real docked IME must resize the native WebView; geometry=$keyboardGeometry", System.nanoTime() < keyboardDeadline)
                 Thread.sleep(50)
             }
+            val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
+                .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
+                .also { require(it.size <= 2048) { "Keyboard viewport oracle bound" } }.toString(Charsets.UTF_8)
             val canvasHeight = "document.querySelector('.terminal-canvas').getBoundingClientRect().height"
             awaitDocument(scenario, "terminal and special keys inside the keyboard-resized WebView", """
                 (()=>{
                   const canvas=document.querySelector('.terminal-canvas'), keys=document.querySelector('.terminal-keys');
                   if(!canvas || !keys || canvas.getBoundingClientRect().height<=0) return false;
                   const special=Array.from(keys.querySelectorAll('button')).filter(x=>['esc','tab'].includes(x.textContent));
-                  return special.length===2 && [canvas,keys,...special]
-                    .every(x=>{const r=x.getBoundingClientRect();return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight;});
+                  $viewportOracle
+                  return special.length===2 && ownedKeyboardViewportContains(window.visualViewport,
+                    [canvas,keys,...special].map(x=>x.getBoundingClientRect()));
                 })()
             """, { remaining ->
                 val native = JSONObject()
@@ -1519,6 +1523,8 @@ class NativeWorkspaceTest {
                       const composer=document.querySelector('.terminal-compose'),toggle=document.querySelector('.terminal-toolbar-toggle');
                       const buttons=keys?Array.from(keys.querySelectorAll('button')):[];
                       return {viewport:[n(innerWidth),n(innerHeight),n(document.documentElement.clientHeight),n(devicePixelRatio)],
+                        visualViewport:[n(window.visualViewport?.width),n(window.visualViewport?.height),
+                          n(window.visualViewport?.offsetLeft),n(window.visualViewport?.offsetTop),n(window.visualViewport?.scale)],
                         canvas:rect(canvas),screenHeight:n(canvas?.querySelector('.xterm-screen')?.getBoundingClientRect().height),
                         keys:rect(keys),esc:rect(buttons.find(x=>x.textContent==='esc')),tab:rect(buttons.find(x=>x.textContent==='tab')),
                         composer:rect(composer),toggle:rect(toggle),header:rect(document.querySelector('.workspace-header')),

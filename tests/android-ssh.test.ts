@@ -809,3 +809,25 @@ test('collector process-start failure is finite and cannot masquerade as a corre
     expect(JSON.stringify(summary)).not.toContain('nonexistent');
   } finally {await collector.stop();}
 });
+
+test('native keyboard oracle uses fractional visible bounds and rejects overflow, offset clipping and unavailable geometry',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-keyboard-viewport.js'),'utf8');
+  const contains=new Function(`${source}; return ownedKeyboardViewportContains;`)();
+  const viewport={offsetLeft:0,offsetTop:0,width:412.19049072265625,height:365.33331298828125,scale:1};
+  const rect=(left:number,top:number,right:number,bottom:number)=>({left,top,right,bottom,width:right-left,height:bottom-top});
+  const geometry=[rect(0,155.762,viewport.width,181.786),rect(0,282.81,viewport.width,338.571),rect(6,291.571,41.53,330.571),rect(91.06,291.571,126.589,330.571)];
+  expect(geometry[0].right>Math.trunc(viewport.width)).toBe(true);
+  expect(contains(viewport,geometry)).toBe(true);
+  for(const index of [0,1,2,3]){
+    const overflow=geometry.map((value,i)=>i===index?rect(value.left,value.top,viewport.width+1/64,value.bottom):value);
+    expect(contains(viewport,overflow)).toBe(false);
+  }
+  expect(contains(viewport,geometry.map((value,i)=>i===2?rect(-180,value.top,-144,value.bottom):value))).toBe(false);
+  const shifted={...viewport,offsetLeft:10.25,offsetTop:20.5};
+  const shiftedGeometry=geometry.map(value=>rect(value.left+shifted.offsetLeft,value.top+shifted.offsetTop,value.right+shifted.offsetLeft,value.bottom+shifted.offsetTop));
+  expect(contains(shifted,shiftedGeometry)).toBe(true);
+  for(const field of ['left','top'])expect(contains(shifted,shiftedGeometry.map((value,i)=>i===0?{...value,[field]:shifted[field==='left'?'offsetLeft':'offsetTop']-1/64}:value))).toBe(false);
+  for(const invalid of [null,{...viewport,width:0},{...viewport,height:NaN},{...viewport,scale:Infinity},{...viewport,offsetTop:undefined}])expect(contains(invalid,geometry)).toBe(false);
+  expect(contains(viewport,geometry.slice(1))).toBe(false);
+  expect(contains(viewport,geometry.map((value,i)=>i===0?{...value,height:0}:value))).toBe(false);
+});
