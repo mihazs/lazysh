@@ -9,8 +9,23 @@ import {preparePublishedApk,publishedAssetFailure} from './androidPublishedAsset
 export type PublishedCommand=(program:string,args:string[],milliseconds:number)=>Promise<string>;
 export const publishedPackage='app.lazysh.client',driverPackage='app.lazysh.acceptance';
 const component=`${driverPackage}/androidx.test.runner.AndroidJUnitRunner`;
-export function publishedCommandFailure(error:unknown):'deadline'|'nonzero'|'start'|'teardown'|'output-bound'|'unavailable'{
+type CommandFailure='deadline'|'nonzero'|'start'|'teardown'|'output-bound'|'unavailable';
+class PublishedCommandError extends Error {
+  readonly #outcome:CommandFailure;
+  readonly #progress:DriverProgress;
+  constructor(outcome:CommandFailure,progress:DriverProgress){
+    super('Published APK command failed');this.#outcome=outcome;this.#progress=Object.freeze(progress);
+  }
+  get outcome(){return this.#outcome;}
+  get progress(){return this.#progress;}
+}
+export function publishedCommandProgress(error:unknown):DriverProgress{
+  try{if(error instanceof PublishedCommandError)return error.progress;}catch{}
+  return {state:'unavailable'};
+}
+export function publishedCommandFailure(error:unknown):CommandFailure{
   try{
+    if(error instanceof PublishedCommandError)return error.outcome;
     const message=error instanceof Error?error.message:'';
     if(typeof message!=='string'||message.length>256)return 'unavailable';
     if(message==='Owned fixture deadline: published APK command')return 'deadline';
@@ -36,9 +51,13 @@ export async function publishedOutput(program:string,args:string[],milliseconds:
   const process=new OwnedProcess(program,args,undefined,undefined,false);
   const chunks:Buffer[]=[];let bytes=0;
   process.child.stdout!.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes<=65536)chunks.push(chunk);});
-  await process.finish('published APK command',milliseconds);
-  if(bytes>65536)throw new Error('Published APK output exceeded bound');
-  return Buffer.concat(chunks).toString('utf8').trim();
+  try{
+    await process.finish('published APK command',milliseconds);
+    if(bytes>65536)throw new Error('Published APK output exceeded bound');
+    return Buffer.concat(chunks).toString('utf8').trim();
+  }catch(error){
+    throw new PublishedCommandError(publishedCommandFailure(error),bytes>65536?{state:'unavailable'}:publishedDriverProgress(Buffer.concat(chunks).toString('utf8')));
+  }
 }
 export function publishedInstrumentation(output:string,phase:'create'|'verify'){
   if(output.length>65536||output.includes('\0'))return false;
@@ -51,6 +70,29 @@ export function publishedInstrumentation(output:string,phase:'create'|'verify'){
     && !lines.some(line=>/^INSTRUMENTATION_STATUS_CODE: -|^INSTRUMENTATION_FAILED|^INSTRUMENTATION_RESULT: shortMsg=/.test(line));
 }
 const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','LAUNCH_WINDOW','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SCROLL_OWNER','FORM_SCROLL','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
+type DriverProgress={state:'unavailable'}|{state:'available';stage:typeof driverStages[number];event:'entry'|'exit'};
+export function publishedDriverProgress(output:string):DriverProgress{
+  const unavailable=():DriverProgress=>({state:'unavailable'});
+  if(Buffer.byteLength(output)>65536||output.includes('\0'))return unavailable();
+  const lines=output.split('\n');lines.pop();
+  const prefix='INSTRUMENTATION_STATUS: lazyshPublishedProgress=';
+  let last:DriverProgress=unavailable(),records=0;
+  for(let index=0;index<lines.length;index++){
+    const line=lines[index].replace(/\r$/,'');
+    if(!line.startsWith(prefix))continue;
+    if(++records>256||line.length>256)return unavailable();
+    // A complete marker requires its own completed sendStatus(0) frame.
+    if(index+1===lines.length)break;
+    if(lines[index+1].replace(/\r$/,'')!=='INSTRUMENTATION_STATUS_CODE: 0')return unavailable();
+    try{
+      const value=JSON.parse(line.slice(prefix.length));
+      if(!value||Array.isArray(value)||JSON.stringify(value)!==line.slice(prefix.length)||Object.keys(value).sort().join(',')!=='event,stage'
+        ||!driverStages.includes(value.stage)||(value.event!=='entry'&&value.event!=='exit'))return unavailable();
+      last={state:'available',stage:value.stage,event:value.event};
+    }catch{return unavailable();}
+  }
+  return last;
+}
 export function publishedDriverStage(output:string):typeof driverStages[number]|'unavailable'{
   if(output.length>65536||output.includes('\0'))return 'unavailable';
   const reported=[...output.matchAll(/^INSTRUMENTATION_STATUS: stack=java\.lang\.AssertionError: Published APK UI: ([A-Z_]+)\r?$/gm)].map(match=>match[1]);
@@ -126,20 +168,20 @@ export async function publishedAcceptance(asset:Asset,driver:string,nonce:string
     return run(adb,['-s',serial!,...args],limit);
   };
   const owned:string[]=[],cleanup:string[]=[];let stage='guest-admission',failure=false;
-  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null,driverStage:null as ReturnType<typeof publishedDriverStage>|null,driverObservation:null as DriverObservation|null,driverCommand:{outcome:'unavailable' as ReturnType<typeof publishedCommandFailure>|'completed',elapsedMs:null as number|null}};
+  const receipt={schema:1,flavor:asset.flavor,version:asset.version,source:asset.sha,apkSha256:asset.sha256,certificateSha256:asset.certificateSha256,scope:'translated-arm64' as const,guestAdmitted:false,created:false,relaunched:false,reinstalled:false,preserved:false,guestBootSha256:null as string|null,guestFingerprintSha256:null as string|null,cleanup:'pending' as 'pending'|'passed'|'failed'|'unconfirmed',failureStage:null as string|null,driverStage:null as ReturnType<typeof publishedDriverStage>|null,driverObservation:null as DriverObservation|null,driverProgress:null as DriverProgress|null,driverCommand:{outcome:'unavailable' as ReturnType<typeof publishedCommandFailure>|'completed',elapsedMs:null as number|null}};
   const instrument=async(phase:'create'|'verify')=>{
-    receipt.driverStage='unavailable';receipt.driverObservation={state:'unavailable'};
+    receipt.driverStage='unavailable';receipt.driverObservation={state:'unavailable'};receipt.driverProgress={state:'unavailable'};
     receipt.driverCommand={outcome:'unavailable',elapsedMs:null};const started=performance.now();let output:string;
     try{
       output=await command(['shell','am','instrument','-w','-r','-e','class','app.lazysh.acceptance.PublishedApkTest#publishedHost','-e','phase',phase,'-e','nonce',nonce,component],45000);
       receipt.driverCommand.outcome='completed';
-    }catch(error){receipt.driverCommand.outcome=publishedCommandFailure(error);throw error;}
+    }catch(error){receipt.driverCommand.outcome=publishedCommandFailure(error);receipt.driverProgress=publishedCommandProgress(error);throw error;}
     finally{receipt.driverCommand.elapsedMs=Math.floor(Math.max(0,Math.min(60000,performance.now()-started)));}
     if(!publishedInstrumentation(output,phase)){
-      receipt.driverStage=publishedDriverStage(output);receipt.driverObservation=publishedDriverObservation(output);
+      receipt.driverStage=publishedDriverStage(output);receipt.driverObservation=publishedDriverObservation(output);receipt.driverProgress=publishedDriverProgress(output);
       throw new Error('Published APK UI phase incomplete');
     }
-    receipt.driverStage=null;receipt.driverObservation=null;
+    receipt.driverStage=null;receipt.driverObservation=null;receipt.driverProgress=null;
   };
   try{
     const values=[];

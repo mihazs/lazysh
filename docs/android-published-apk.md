@@ -214,6 +214,19 @@ the module's typed error, not arbitrary error text. Unknown, malformed, private
 or nonmatching errors produce unavailable. No raw message, command argument,
 path, stdout or stderr is retained. Driver actions and all budgets are unchanged.
 
+The existing stage wrapper also emits finite entry and normal-return exit markers,
+without querying the UI or changing its actions. On command failure,
+`driverProgress` retains only the last complete allowlisted `{stage,event}` status
+frame, separately from the original command outcome, UI failure and cleanup.
+A complete frame ends with its own `INSTRUMENTATION_STATUS_CODE: 0`; unfinished
+later data cannot replace an earlier complete marker. Missing or malformed data,
+NUL bytes, unknown/extra/duplicate fields, more than 256 records, or output beyond
+the unchanged 64KiB limit make progress unavailable. No partial output or raw
+exception is retained. Entry proves only that a wrapper was entered; exit proves
+its action returned normally. Neither identifies the currently blocked operation
+or the cause of a timeout, and even COMPLETE progress cannot grant a phase pass.
+The 45-second command and 240-second overall budgets remain unchanged. Refs #525.
+
 ## Verified qualification: public v1.0.0
 
 Both Google and FOSS completed the actual gate at driver head
