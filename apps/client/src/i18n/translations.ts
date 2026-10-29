@@ -2,6 +2,17 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  navigationAgents: ["Navegação de agentes", "Navegación de agentes"],
+  navigationTitle: ["Navegação do espaço de trabalho", "Navegación del espacio de trabajo"],
+  navigationConnections: ["Conexões", "Conexiones"],
+  navigationWorkspaces: ["Espaços", "Espacios"],
+  navigationLiveSessions: ["Sessões ativas do app", "Sesiones activas de la app"],
+  navigationNoSessions: ["Conecte a um servidor ou abra um terminal local para ver suas sessões do app.", "Conecta a un servidor o abre un terminal local para ver tus sesiones de la app."],
+  navigationManageSessions: ["Abrir gerenciador de sessões", "Abrir gestor de sesiones"],
+  navigationManagerHint: ["Use o gerenciador existente para descobrir e gerenciar tmux, Herdr ou Zellij. A navegação entre painéis aqui requer uma sessão tmux conectada.", "Usa el gestor existente para descubrir y gestionar tmux, Herdr o Zellij. La navegación entre paneles aquí requiere una sesión tmux conectada."],
+  navigationManagerOpen: ["O gerenciador de sessões está aberto na área de trabalho.", "El gestor de sesiones está abierto en el área de trabajo."],
+  agentsReportTechnicalDetails: ["Detalhes do relato", "Detalles del informe"],
+
   agentsSearch: ["Buscar agentes reportados", "Buscar agentes reportados"],
   agentsSearchHint: ["Agente, projeto ou resumo", "Agente, proyecto o resumen"],
   agentsFilterStatus: ["Estado reportado", "Estado reportado"],
@@ -15,7 +26,7 @@ const translations = {
   agentsReportSession: ["ID de sessão reportado", "ID de sesión reportado"],
   agentsReportEvents: ["Eventos reportados", "Eventos reportados"],
   agentsReportPane: ["ID de painel reportado", "ID de panel reportado"],
-  agentsReportContext: ["Este contexto foi reportado pelo servidor. Um ID de painel não comprova um alvo ativo nem permissão para agir.", "Este contexto fue reportado por el servidor. Un ID de panel no establece un destino activo ni permiso para actuar."],
+  agentsReportContext: ["Último relato deste servidor. Confira o estado atual no terminal.", "Último informe de este servidor. Comprueba su estado actual en el terminal."],
   agentsNoMatches: ["Nenhum agente reportado corresponde", "No hay agentes reportados coincidentes"],
   agentsNoMatchesHint: ["Altere a busca ou o filtro de estado reportado para ver outros relatos.", "Cambia la búsqueda o el filtro de estado reportado para ver otros informes."],
   agentsClearFilters: ["Limpar filtros", "Borrar filtros"],

@@ -365,3 +365,47 @@ it('retires a late native-focus subscription after unmount without refreshing me
   await act(async()=>{finish(remove);focus();});
   expect(remove).toHaveBeenCalledOnce();expect(vi.mocked(invoke).mock.calls).toEqual(calls);
 });
+
+it('keeps an initially hidden board idle and releases its owned ticket on sidebar hide',async()=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="nav-board" visible={false}/>);
+  await act(async()=>{});expect(invoke).not.toHaveBeenCalled();expect(listen).not.toHaveBeenCalled();view.rerender(<KeepAwakeControl sessionId="nav-board"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const owner=native.active();
+  view.rerender(<KeepAwakeControl sessionId="nav-board" visible={false}/>);await waitFor(()=>expect(native.active()).toBeUndefined());
+  expect(invoke).toHaveBeenCalledWith('board_keep_awake_release',{request:owner});const calls=vi.mocked(invoke).mock.calls.length;
+  await act(async()=>{fireEvent(window,new Event('focus'));nativeFocus();});expect(invoke).toHaveBeenCalledTimes(calls);expect(localStorage.getItem(boardAwakeKey)).toBe('true');
+  view.rerender(<KeepAwakeControl sessionId="nav-board"/>);await waitFor(()=>expect(native.active()?.ticket).toBeGreaterThan(owner!.ticket));
+});
+it('retains the native-loss opt-in latch across hidden navigation',async()=>{
+  const native=backend();localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="lost-board"/>);
+  await screen.findByText('This board owns an acknowledged idle-inhibition request.');const owner=native.active()!;
+  await act(async()=>nativeLoss({...native.status(owner.ticket),active:false,reason:'Owned display lost'}));
+  const acquired=vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_acquire').length;
+  view.rerender(<KeepAwakeControl sessionId="lost-board" visible={false}/>);view.rerender(<KeepAwakeControl sessionId="lost-board"/>);await act(async()=>{});
+  expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='board_keep_awake_acquire')).toHaveLength(acquired);expect(screen.getByText('Turn this off and on to request ownership again.')).toBeTruthy();
+});
+it('does not let a held acquire result cross a hide/reopen ownership boundary',async()=>{
+  const native=backend();const original=vi.mocked(invoke).getMockImplementation()!;
+  let complete!:(value:unknown)=>void,first:Owner|undefined;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>{
+    if(command==='board_keep_awake_acquire' && !first) {
+      first=(args as {request:Owner}).request;native.acquire(first);
+      return new Promise(resolve=>{complete=resolve;}) as never;
+    }
+    return original(command,args,options);
+  });
+  localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="held-nav"/>);
+  await waitFor(()=>expect(first).toBeTruthy());view.rerender(<KeepAwakeControl sessionId="held-nav" visible={false}/>);
+  await waitFor(()=>expect(native.active()).toBeUndefined());view.rerender(<KeepAwakeControl sessionId="held-nav"/>);
+  await waitFor(()=>expect(native.active()?.ticket).toBeGreaterThan(first!.ticket));const current=native.active();
+  await act(async()=>complete({...native.status(first!.ticket),active:true}));
+  expect(native.active()).toEqual(current);expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText('This board owns an acknowledged idle-inhibition request.')).toBeTruthy();
+});
+
+it('observes another window disabling the preference while this board is hidden',async()=>{
+  backend();localStorage.setItem(boardAwakeKey,'true');const view=render(<KeepAwakeControl sessionId="hidden-preference" visible={false}/>);
+  await act(async()=>{localStorage.setItem(boardAwakeKey,'false');window.dispatchEvent(new StorageEvent('storage',{key:boardAwakeKey,newValue:'false'}));});
+  expect(invoke).not.toHaveBeenCalled();view.rerender(<KeepAwakeControl sessionId="hidden-preference"/>);
+  await waitFor(()=>expect(toggle()).toHaveProperty('disabled',false));expect(toggle()).toHaveProperty('checked',false);
+  expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='board_keep_awake_acquire')).toBe(false);
+});

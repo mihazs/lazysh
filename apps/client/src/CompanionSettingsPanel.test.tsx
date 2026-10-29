@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import CompanionSettingsPanel, { parseCompanionSettings } from "./CompanionSettingsPanel";
 vi.mock("@tauri-apps/api/core",async original=>({...await original<typeof import("@tauri-apps/api/core")>(),invoke:vi.fn()}));
@@ -35,4 +35,33 @@ it("discards settings arriving after the selected SSH session changes",async()=>
   await screen.findByLabelText("Recorded usage inspection");resolve(settings);
   await waitFor(()=>expect((screen.getByLabelText("Recorded usage inspection") as HTMLInputElement).checked).toBe(false));
   expect(invoke).toHaveBeenLastCalledWith("get_companion_settings",{sessionId:"new"}, { headers: { "X-Lazysh-Access": expect.any(String) } });
+});
+
+it('preserves the loaded settings draft across hide/reopen without another host read',async()=>{
+  vi.mocked(invoke).mockResolvedValue(settings);const view=render(<CompanionSettingsPanel sessionId="draft-owner"/>);
+  const usage=await screen.findByLabelText('Recorded usage inspection');fireEvent.click(usage);
+  view.rerender(<CompanionSettingsPanel sessionId="draft-owner" visible={false}/>);fireEvent.submit(usage.closest('form')!);expect(invoke).toHaveBeenCalledTimes(1);
+  view.rerender(<CompanionSettingsPanel sessionId="draft-owner"/>);
+  expect(screen.getByLabelText('Recorded usage inspection')).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(invoke).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button',{name:'Save host settings'}));await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(invoke).mock.lastCall?.[1]).toMatchObject({sessionId:'draft-owner',settings:{expectedRevision:0,recordedUsageEnabled:false}});
+});
+it('keeps initial hidden settings unread and retires a held load across a hidden source change',async()=>{
+  let finish!:(value:unknown)=>void;
+  vi.mocked(invoke).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;})).mockResolvedValue({...settings,revision:9,recordedUsageEnabled:false});
+  const view=render(<CompanionSettingsPanel sessionId="old-source" visible={false}/>);expect(invoke).not.toHaveBeenCalled();
+  view.rerender(<CompanionSettingsPanel sessionId="old-source"/>);expect(invoke).toHaveBeenCalledTimes(1);
+  view.rerender(<CompanionSettingsPanel sessionId="new-source" visible={false}/>);await act(async()=>finish(settings));expect(invoke).toHaveBeenCalledTimes(1);
+  view.rerender(<CompanionSettingsPanel sessionId="new-source"/>);
+  expect(await screen.findByLabelText('Recorded usage inspection')).toHaveProperty('checked',false);expect(vi.mocked(invoke).mock.lastCall?.[1]).toEqual({sessionId:'new-source'});
+});
+it.each(['success','error'])('does not apply a held settings save %s after hiding, retaining the original draft',async outcome=>{
+  let finish!:(value:unknown)=>void,fail!:(error:unknown)=>void;
+  vi.mocked(invoke).mockResolvedValueOnce(settings).mockImplementationOnce(()=>new Promise((yes,no)=>{finish=yes;fail=no;}));
+  const view=render(<CompanionSettingsPanel sessionId="pending-settings"/>);const usage=await screen.findByLabelText('Recorded usage inspection');fireEvent.click(usage);
+  fireEvent.click(screen.getByRole('button',{name:'Save host settings'}));view.rerender(<CompanionSettingsPanel sessionId="pending-settings" visible={false}/>);
+  await act(async()=>{if(outcome==='success')finish({...settings,revision:1});else fail('obsolete settings result');});
+  view.rerender(<CompanionSettingsPanel sessionId="pending-settings"/>);
+  expect(screen.getByLabelText('Recorded usage inspection')).toBe(usage);expect(usage).toHaveProperty('checked',false);
+  expect(screen.queryByText('Host settings saved for new operations.')).toBeNull();expect(screen.queryByText('obsolete settings result')).toBeNull();expect(invoke).toHaveBeenCalledTimes(2);
 });

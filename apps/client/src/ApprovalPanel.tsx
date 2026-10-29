@@ -51,7 +51,7 @@ export function parseApprovals(value: unknown): Approval[] {
     return item as Approval;
   });
 }
-export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
+export default function ApprovalPanel({ sessionId, visible=true }: { sessionId: string; visible?:boolean }) {
   useUi();
   const invoke = useProtectedInvoke();
   const [requests, setRequests] = useState<Approval[]>([]);
@@ -59,21 +59,24 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const running = useRef(false);
+  const scope=useRef({sessionId,visible});scope.current={sessionId,visible};
+  const owns=(current:number)=>current===generation.current && scope.current.visible && scope.current.sessionId===sessionId;
+  function beginRequest() {
+    if (running.current || !scope.current.visible || scope.current.sessionId!==sessionId) return null;
+    running.current=true;setBusy(true);setError('');
+    return generation.current;
+  }
   async function refresh() {
-    if (running.current) return;
-    running.current = true;
-    setBusy(true);
-    setError("");
-    const current = generation.current;
+    const current=beginRequest();if(current===null)return;
     try {
       const rows = parseApprovals(
         await invoke("agent_approvals", { sessionId }),
       );
-      if (current === generation.current) setRequests(rows);
+      if (owns(current)) setRequests(rows);
     } catch (e) {
-      if (current === generation.current) setError(captureUiError(e));
+      if (owns(current)) setError(captureUiError(e));
     } finally {
-      if (current === generation.current) {
+      if (owns(current)) {
         setBusy(false);
         running.current = false;
       }
@@ -82,7 +85,8 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     generation.current++;
     running.current = false;
-    setRequests([]);
+    setRequests([]);setBusy(false);setError("");
+    if(!visible)return ()=>{generation.current++;};
     void refresh();
     const interval = window.setInterval(() => {
       if (!document.hidden) void refresh();
@@ -91,13 +95,9 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
       generation.current++;
       window.clearInterval(interval);
     };
-  }, [sessionId]);
+  }, [sessionId,visible]);
   async function decide(request: Approval, decision: "allow" | "deny") {
-    if (running.current) return;
-    running.current = true;
-    setBusy(true);
-    setError("");
-    const current = generation.current;
+    const current=beginRequest();if(current===null)return;
     try {
       const result = await invoke<{ schemaVersion: number; accepted: boolean }>(
         "resolve_agent_approval",
@@ -112,24 +112,24 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
       );
       if (result?.schemaVersion !== 1 || result.accepted !== true)
         throw new LocalUiError('approvalsNotAccepted');
-      if (current === generation.current)
+      if (owns(current))
         setRequests((previous) =>
           previous.filter((item) => item.id !== request.id),
         );
     } catch (e) {
-      if (current === generation.current) setError(captureUiError(e));
+      if (owns(current)) setError(captureUiError(e));
     } finally {
-      if (current === generation.current) {
+      if (owns(current)) {
         running.current = false;
         setBusy(false);
       }
     }
   }
   return (
-    <section aria-label={t('approvalsTitle')} className="approval-panel">
+    <section hidden={!visible} style={visible?undefined:{display:'none'}} aria-label={t('approvalsTitle')} className="approval-panel">
       <div className="tool-bar">
         <h3>{t('approvalsTitle')}</h3>
-        <button disabled={busy} onClick={() => void refresh()}>
+        <button disabled={busy || !visible} onClick={() => void refresh()}>
           {t('approvalsRefresh')}
         </button>
       </div>
@@ -152,13 +152,13 @@ export default function ApprovalPanel({ sessionId }: { sessionId: string }) {
           <pre>{JSON.stringify(request.toolInput, null, 2)}</pre>
           <p><time dateTime={request.expiresAt}>{t('approvalsExpires',{time:formatDateTime(new Date(request.expiresAt))})}</time></p>
           <button
-            disabled={busy || Date.parse(request.expiresAt) <= Date.now()}
+            disabled={!visible || busy || Date.parse(request.expiresAt) <= Date.now()}
             onClick={() => void decide(request, "deny")}
           >
             {t('approvalsDeny')}
           </button>
           <button
-            disabled={busy || Date.parse(request.expiresAt) <= Date.now()}
+            disabled={!visible || busy || Date.parse(request.expiresAt) <= Date.now()}
             onClick={() => void decide(request, "allow")}
           >
             {t('approvalsAllow')}

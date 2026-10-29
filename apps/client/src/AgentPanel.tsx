@@ -64,8 +64,9 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,onUseReportedHistory }: { sessionId: string;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,onUseReportedHistory,visible:panelVisible=true }: { sessionId: string;visible?:boolean;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
+  const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const [access]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
@@ -93,10 +94,10 @@ export function AgentPanel({ sessionId,onUseReportedHistory }: { sessionId: stri
   const [historyStatus,setHistoryStatus]=useState<'missing'|'ambiguous'|''>('');
   const selectedSource=useRef(sessionId);selectedSource.current=sessionId;
   async function useReportedHistory(row:AgentSession) {
-    if(historyFlight.current!==null || !access.current() || row.agent!=='Claude Code' || !onUseReportedHistory)return;
+    if(!visibility.current || historyFlight.current!==null || !access.current() || row.agent!=='Claude Code' || !onUseReportedHistory)return;
     const current=++historyRequest.current;historyFlight.current=current;
     const source=sessionId;const key=reportKey(row);historyOwner.current={source,key};
-    const currentOwner=()=>historyRequest.current===current && selectedSource.current===source && access.current() && currentReports.current.some(value=>reportKey(value)===key);
+    const currentOwner=()=>visibility.current && historyRequest.current===current && selectedSource.current===source && access.current() && currentReports.current.some(value=>reportKey(value)===key);
     setHistoryBusy(true);setHistoryError('');setHistoryStatus('');
     try {
       const result=parseReportedHistory(await invoke('agent_reported_history',{sessionId:source,agentSessionId:row.sessionId}),row.sessionId);
@@ -120,22 +121,29 @@ export function AgentPanel({ sessionId,onUseReportedHistory }: { sessionId: stri
   },[sessions,sessionId,error,loadedSessionId]);
 
   async function refresh() {
+    if(!visibility.current || !access.current())return;
+    const source=sessionId;
     const current = ++request.current;
     setBusy(true); setError('');
     try {
       const value = await invoke<unknown>('agent_snapshot', { sessionId });
       const rows = parseSnapshot(value);
       if(new Set(rows.map(reportKey)).size!==rows.length)throw new LocalUiError('agentsInvalidSession');
-      if (current === request.current) { setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); }
+      if (visibility.current && selectedSource.current===source && current === request.current) { setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); }
     } catch (e) {
-      if (current === request.current) setError(captureUiError(e));
-    } finally { if (current === request.current) setBusy(false); }
+      if (visibility.current && selectedSource.current===source && current === request.current) setError(captureUiError(e));
+    } finally { if (visibility.current && selectedSource.current===source && current === request.current) setBusy(false); }
   }
-  useEffect(() => { setSessions([]); setLoaded(false); void refresh(); return () => { request.current++; }; }, [sessionId]);
+  useEffect(()=>{setSessions([]);setLoaded(false);},[sessionId]);
+  useEffect(()=>{
+    if(panelVisible)void refresh();
+    else {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
+    return()=>{request.current++;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
+  },[sessionId,panelVisible]);
 
-  return <section className="tool-panel agent-panel" aria-label={t('agentsTitle')}>
-    <KeepAwakeControl sessionId={sessionId} />
-    <ApprovalPanel sessionId={sessionId} />
+  return <section className="tool-panel agent-panel" hidden={!panelVisible} aria-label={t('agentsTitle')}>
+    <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
+    <ApprovalPanel sessionId={sessionId} visible={panelVisible} />
     <div className="tool-bar"><h3>{t('agentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />{busy ? t('agentsRefreshing') : t('agentsRefresh')}</button></div>
     <p className="agent-note">{t('agentsReportedHint')}</p>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
@@ -149,7 +157,8 @@ export function AgentPanel({ sessionId,onUseReportedHistory }: { sessionId: stri
       {selected && <section className="agent-selected-report" aria-label={t('agentsSelectedReport')}>
         <div className="tool-bar"><h4>{t('agentsSelectedReport')}</h4><button className="subtle-button" onClick={()=>setSelection(null)}>{t('agentsClearSelection')}</button></div>
         <strong>{selected.agent}</strong><p>{selected.summary}</p>
-        <dl><dt>{t('agentsReportProject')}</dt><dd><code>{selected.project}</code></dd><dt>{t('agentsFilterStatus')}</dt><dd>{t(names[selected.state])}</dd><dt>{t('agentsReportSession')}</dt><dd><code>{selected.sessionId}</code></dd><dt>{t('agentsReportEvents')}</dt><dd>{formatNumber(selected.eventCount)}</dd>{selected.paneId && <><dt>{t('agentsReportPane')}</dt><dd><code>{selected.paneId}</code></dd></>}</dl>
+        <dl><dt>{t('agentsReportProject')}</dt><dd><code>{selected.project}</code></dd><dt>{t('agentsFilterStatus')}</dt><dd>{t(names[selected.state])}</dd></dl>
+        <details><summary>{t('agentsReportTechnicalDetails')}</summary><dl><dt>{t('agentsReportSession')}</dt><dd><code>{selected.sessionId}</code></dd><dt>{t('agentsReportEvents')}</dt><dd>{formatNumber(selected.eventCount)}</dd>{selected.paneId && <><dt>{t('agentsReportPane')}</dt><dd><code>{selected.paneId}</code></dd></>}</dl></details>
         <p><time dateTime={selected.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(selected.updatedAt))})}</time></p><p className="agent-report-hint">{t('agentsReportContext')}</p>
       </section>}
       {reports.length>0 && visible.length===0 && <div className="panel-empty"><h4>{t('agentsNoMatches')}</h4><p>{t('agentsNoMatchesHint')}</p></div>}
@@ -159,8 +168,8 @@ export function AgentPanel({ sessionId,onUseReportedHistory }: { sessionId: stri
     {historyStatus && <div><p role="status">{t(historyStatus==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous')}</p><p>{t('agentsHistoryManual')}</p></div>}
     {busy && <p className="loading" role="status">{t('agentsReading')}</p>}
     {!busy && !error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p></div>}
-    {visible.length > 0 && <div className="agent-board">{states.filter(state=>filter==='all' || state===filter).map(state => <section key={state} aria-label={t(names[state])} className="agent-column"><h4>{t(names[state])} <span>{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><strong><Bot size={16} /> {s.agent}</strong><button className="subtle-button" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={()=>setSelection({source:sessionId,key:reportKey(s)})}>{t('agentsDetails')}</button><p>{s.summary}</p><code title={s.project}>{s.project}</code><small><time dateTime={s.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}</time></small>{s.paneId && <small>{t('agentsPaneEvents',{pane:s.paneId,events:formatNumber(s.eventCount)})}</small>}{s.agent==='Claude Code' && onUseReportedHistory && <button className="subtle-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
-    {ready && !error && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} />}
+    {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column"><h4>{t(names[state])} <span>{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{visible.filter(s => s.state === state).map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><strong><Bot size={16} /> {s.agent}</strong><button className="subtle-button" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={()=>setSelection({source:sessionId,key:reportKey(s)})}>{t('agentsDetails')}</button><p>{s.summary}</p><code title={s.project}>{s.project}</code><small><time dateTime={s.updatedAt}>{t('agentsReported',{time:formatDateTime(new Date(s.updatedAt))})}</time></small>{s.agent==='Claude Code' && onUseReportedHistory && <button className="subtle-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}</article>)}</section>)}</div>}
+    {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} visible={panelVisible && !error} />}
   </section>;
 }
 

@@ -16,7 +16,8 @@ test('closed About notices wrap through visible summaries and restore their open
   await page.keyboard.press('Tab');await expect(dialog.getByRole('button',{name:'Mosh source and notices',exact:true})).toBeFocused();
   await page.keyboard.press('Shift+Tab');await expect(mosh).toBeFocused();await page.keyboard.press('Enter');
   await close.focus();await page.keyboard.press('Shift+Tab');await expect(lastSummary).toBeFocused();
-  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);await expect(opener).toBeFocused();
+  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
+  await expect((page.viewportSize()?.width??1280)<=600?page.getByRole('button',{name:'Open hosts',exact:true}):opener).toBeFocused();
 });
 
 test('Preferences trap excludes hidden, inert and disabled controls while following natural links and summaries',async({page})=>{
