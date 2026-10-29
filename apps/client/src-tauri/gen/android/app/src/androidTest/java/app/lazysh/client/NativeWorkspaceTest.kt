@@ -1672,10 +1672,13 @@ class NativeWorkspaceTest {
             val literalClipboard = " # CLIP_${nonce}_\$literal"
             instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
             clickButton("paste")
-            closeSoftKeyboard()
             awaitDocument(scenario, "native clipboard text pasted literally without Enter",
                 screenContains(literalClipboard) + " && !(" + screenContains(fixture.getString("expected")) + ")")
             assertEquals("Clipboard paste must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+            // Native clipboard completion refocuses xterm asynchronously; dismiss
+            // after that acknowledgement so Enter/output use the expanded viewport.
+            closeSoftKeyboard()
+            assertEquals("Keyboard dismissal must preserve clipboard paste input focus", "true", evaluate(scenario, terminalFocused))
             // Normal native Enter submits the real shell input.
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",

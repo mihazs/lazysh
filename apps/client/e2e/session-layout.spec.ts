@@ -153,13 +153,15 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
   });
 }
 
-test('visible-screen challenge oracle distinguishes one-row clipping from retained terminal output', async ({page}) => {
+test('visible-screen challenge oracle requires dismissal after a held native clipboard paste refocuses', async ({page}) => {
   await page.goto('/');
   await openSessions(page);
   await page.keyboard.press('Escape');
   const observation = await page.evaluate(async () => {
     const modulePath = '/src/terminal.ts';
     const {createTerminal} = await import(modulePath);
+    const clipboardPath = '/src/deviceClipboard.ts';
+    const {readClipboardText} = await import(clipboardPath);
     // An isolated terminal fixture; this never injects into a connected application session.
     const terminal = createTerminal(), element = document.createElement('div');
     element.style.cssText = 'position:fixed;inset:0;width:400px;height:84px';
@@ -167,16 +169,34 @@ test('visible-screen challenge oracle distinguishes one-row clipping from retain
     const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     const expected = 'OWNED_EXPANDED_OUTPUT', prompt = 'OWNED_PROMPT>';
     const combined = (text: string) => text.includes(expected) && text.lastIndexOf(prompt) > text.indexOf(expected);
+    const originalInvoke = window.nativeFixtureInvoke;
+    let resolveRead!: (value: unknown) => void, requested!: () => void;
+    const request = new Promise<void>(resolve => { requested = resolve; });
+    window.nativeFixtureInvoke = (command, args, options) => {
+      if (command === 'clipboard_is_android') return Promise.resolve(true);
+      if (command === 'clipboard_read') { requested(); return new Promise(resolve => { resolveRead = resolve; }); }
+      return originalInvoke(command, args, options);
+    };
     try {
-      terminal.open(element); terminal.resize(80, 1);
+      terminal.open(element); terminal.resize(80, 4);
+      // Model the externally imposed docked-IME row budget on actual focus. No
+      // connected session or backend receives this isolated fixture's bytes.
+      element.querySelector('.xterm-helper-textarea')!.addEventListener('focus', () => terminal.resize(80, 1));
+      const paste = readClipboardText(new AbortController().signal).then(text => {
+        terminal.paste(text); terminal.focus();
+      });
+      await request;
+      terminal.resize(80, 4); // Early dismissal while the native read is still held.
+      resolveRead({kind: 'text', text: 'literal clipboard fixture'});
+      await paste; await frame();
       await new Promise<void>(resolve => terminal.write(`${expected}\r\n${prompt}`, resolve));
       await frame();
       const oneRow = terminal.rows;
       const clipped = combined(element.querySelector('.xterm-screen')!.textContent ?? '');
       const lines = Array.from({length: terminal.buffer.active.length}, (_, index) => terminal.buffer.active.getLine(index)?.translateToString() ?? '').join('\n');
-      terminal.resize(80, 4); await frame();
+      terminal.resize(80, 4); await frame(); // Dismiss only after read/paste/focus acknowledgement.
       return {oneRow, clipped, bufferRetained: combined(lines), expanded: combined(element.querySelector('.xterm-screen')!.textContent ?? '')};
-    } finally { terminal.dispose(); element.remove(); }
+    } finally { window.nativeFixtureInvoke = originalInvoke; terminal.dispose(); element.remove(); }
   });
   expect(observation).toEqual({oneRow: 1, clipped: false, bufferRetained: true, expanded: true});
 });

@@ -223,5 +223,19 @@ Terminal reads also retire when their tab, connection or terminal context leaves
 including leave-and-return transitions. Browser fallback requires exactly boolean
 false from the protected platform probe; malformed results never grant fallback.
 
+At source `e3d3cfa9`, run40956660183/job123742295599 passed actual native literal
+clipboard text, no-Enter and retained-focus checks in both owned SSH cases, then
+failed the unchanged output-plus-later-prompt assertion. Artifact12936585942 SHA256
+`03d5e00764ab93a75328078e94701aa533681824749f0003325b08c2ef336c97`
+records an IME window at failure and hide-before-read followed by a later IME show
+in both cases. Exact output-stage row geometry was not retained. The real-xterm
+browser owner holds the native read and demonstrates that early dismissal can be
+undone by delayed refocus; dismissing after completion restores the same visible
+output/prompt oracle. The native fixture therefore performs its same ordinary
+dismissal after literal paste/focus acknowledgement and rechecks focus before its
+unchanged native Enter. This is a test-precondition repair, not a production IME
+policy change or proof of the precise failed row count. Image preview was not
+reached in that run and remains unverified until the next owning runtime result.
+
 Source contracts: [Tauri mobile dispatch](https://docs.rs/crate/tauri/2.12.5/source/src/plugin/mobile.rs),
 [Wry Android main pipe](https://docs.rs/crate/wry/0.57.1/source/src/android/main_pipe.rs).
