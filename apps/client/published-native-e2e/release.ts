@@ -66,5 +66,5 @@ export async function publishedCompanion():Promise<PublishedCompanion> {
   requirePublic(file.name===`lazysh-${version}-linux-agent-x64.bin` && Number.isSafeInteger(file.bytes) && file.bytes>0 && file.bytes<=64*1024*1024 && /^[0-9a-f]{64}$/.test(file.sha256));
   const binary=asset(release,file.name);
   requirePublic(binary.size===file.bytes && binary.digest===`sha256:${file.sha256}`);
-  return {releaseId:release.id,version,source:manifest.sha,assetId:binary.id,...file};
+  return {releaseId:release.id,version,source:manifest.sha,assetId:binary.id,name:file.name,bytes:file.bytes,sha256:file.sha256};
 }
