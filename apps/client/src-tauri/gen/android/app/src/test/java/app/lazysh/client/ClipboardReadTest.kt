@@ -59,14 +59,33 @@ class ClipboardReadTest {
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             assertNull(state.cancel(second)); assertTrue(state.current(operation, true))
             assertSame(operation, state.cancel(first)); assertFalse(state.current(operation, true))
+            assertTrue(state.owns(first)); assertFalse(state.owns(second))
             rejected("clipboard_busy") { state.begin(second, true, 0) }
             state.advanceDocument(1)
             rejected("clipboard_busy") { state.begin(second, true, 1) }
         } finally { release.countDown(); worker.join(5000) }
         assertFalse(worker.isAlive)
+        assertFalse(state.owns(first))
         val next = state.begin(second, true, 1)
         state.finish(operation)
         assertTrue(state.current(next, true))
+    }
+
+    @Test fun sameDocumentResumeCannotFreshenAnOldEpochOrCancelItsReplacement() {
+        val state = ClipboardReadState()
+        val old = state.begin(first, true, 0)
+        state.invalidate()
+        assertNull(state.advanceDocument(0))
+        assertFalse(state.current(old, true))
+        rejected("clipboard_busy") { state.begin(second, true, 0) }
+        state.finish(old)
+        val replacement = state.begin(second, true, 0)
+        state.finish(old)
+        assertNull(state.cancel(first))
+        assertFalse(state.owns(first)); assertTrue(state.owns(second))
+        assertTrue(state.current(replacement, true))
+        state.invalidate()
+        assertFalse(state.current(replacement, true))
     }
 
     @Test fun literalTextUsesUtf8BytesAndNeverCoercesOtherItems() {

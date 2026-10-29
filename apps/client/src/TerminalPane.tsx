@@ -52,7 +52,9 @@ export default function TerminalPane({ session, active, reportError }: {
   const [clipboard, setClipboard] = useState<string | null>(null);
   const pendingClipboard = useRef(false);
   const pasteRead = useRef<AbortController | null>(null);
-  useEffect(() => () => { pasteRead.current?.abort(); }, [session.id]);
+  const pasteView = useRef({active, connected: session.connected, id: session.id, terminal: session.terminal});
+  pasteView.current = {active, connected: session.connected, id: session.id, terminal: session.terminal};
+  useEffect(() => () => { pasteRead.current?.abort(); }, [session.id, session.terminal, session.connected, active]);
   const [link, setLink] = useState<string | null>(null);
   const [openingLink, setOpeningLink] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -218,16 +220,18 @@ export default function TerminalPane({ session, active, reportError }: {
     finally { setOpeningLink(false); }
   }
   async function paste() {
-    if (!session.connected || !mounted.current || !access.current() || pasteRead.current) return;
+    if (!active || !session.connected || !mounted.current || !access.current() || pasteRead.current) return;
     const read = new AbortController(); pasteRead.current = read;
+    const current = () => mounted.current && access.current() && !read.signal.aborted && pasteView.current.active && pasteView.current.connected
+      && pasteView.current.id === session.id && pasteView.current.terminal === session.terminal;
     try {
       const text = await readClipboardText(read.signal);
       // The retained terminal may now have a fresh onData handler after unlock.
-      if (!mounted.current || !access.current() || read.signal.aborted) return;
+      if (!current()) return;
       checkPasteSize(text, session.terminal.modes?.bracketedPasteMode);
       session.terminal.paste(text); session.terminal.focus();
     }
-    catch { if (mounted.current && access.current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
+    catch { if (current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
     finally { if (pasteRead.current === read) pasteRead.current = null; }
   }
   function search(direction: number) {

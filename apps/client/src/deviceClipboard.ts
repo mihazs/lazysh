@@ -1,10 +1,14 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { api } from './bridge';
-import { captureAccess, subscribeAccess } from './access';
+import { captureAccess, subscribeAccess, type AccessLease } from './access';
 import { ATTACHMENT_LIMIT, imageSize } from './attachment';
 import { LocalUiError } from './i18n/localError';
 
 type Kind = 'text' | 'image';
+function current(lease: AccessLease, signal: AbortSignal) {
+  lease.assert();
+  if (signal.aborted) throw new LocalUiError('terminalPasteUnavailable');
+}
 export type ClipboardPayload = { kind: 'text'; text: string } | { kind: 'image'; mime: 'image/png' | 'image/jpeg'; bytes: string };
 export function checkPasteSize(text: string, bracketed = false) {
   if (new TextEncoder().encode(text).length + (bracketed ? 12 : 0) > 65536) throw new LocalUiError('terminalPasteUnavailable');
@@ -28,17 +32,17 @@ async function readNative(kind: Kind, signal: AbortSignal): Promise<ClipboardPay
   const lease = captureAccess();
   lease.assert();
   // An unsupported platform is the only route to browser fallback.
-  if (!await api.clipboardIsAndroid()) return null;
-  lease.assert();
-  if (signal.aborted) throw new LocalUiError('terminalPasteUnavailable');
+  const android = await api.clipboardIsAndroid();
+  current(lease, signal);
+  if (android === false) return null;
+  if (android !== true) throw new LocalUiError('terminalPasteUnavailable');
   const token = crypto.randomUUID();
   const cancel = () => { void api.clipboardCancel(token).catch(() => {}); };
   const stop = subscribeAccess(() => { if (!lease.current()) cancel(); });
   signal.addEventListener('abort', cancel, { once: true });
   try {
     const value = await api.clipboardRead({ token, kind });
-    lease.assert();
-    if (signal.aborted) throw new LocalUiError('terminalPasteUnavailable');
+    current(lease, signal);
     return parsePayload(value, kind);
   } catch {
     lease.assert();
@@ -49,7 +53,9 @@ async function readNative(kind: Kind, signal: AbortSignal): Promise<ClipboardPay
 }
 export async function readClipboardText(signal: AbortSignal): Promise<string> {
   if (!isTauri()) return navigator.clipboard.readText();
+  const lease = captureAccess();
   const native = await readNative('text', signal);
+  current(lease, signal);
   if (native) {
     if (native.kind !== 'text') throw new LocalUiError('terminalPasteUnavailable');
     return native.text;
@@ -57,7 +63,9 @@ export async function readClipboardText(signal: AbortSignal): Promise<string> {
   return navigator.clipboard.readText();
 }
 export async function readClipboardImage(signal: AbortSignal): Promise<File> {
+  const lease = captureAccess();
   const native = await readNative('image', signal);
+  current(lease, signal);
   let blob: Blob;
   if (native) {
     if (native.kind !== 'image') throw new LocalUiError('attachmentClipboardImagesUnavailable');
@@ -67,9 +75,11 @@ export async function readClipboardImage(signal: AbortSignal): Promise<File> {
   } else {
     if (!navigator.clipboard?.read) throw new LocalUiError('attachmentClipboardImagesUnavailable');
     const items = await navigator.clipboard.read();
+    current(lease, signal);
     const item = items.find(value => value.types.includes('image/png') || value.types.includes('image/jpeg'));
     if (!item) throw new LocalUiError('attachmentClipboardEmpty');
     blob = await item.getType(item.types.includes('image/png') ? 'image/png' : 'image/jpeg');
+    current(lease, signal);
   }
   return new File([blob], `clipboard-${Date.now()}.${blob.type === 'image/png' ? 'png' : 'jpg'}`, { type: blob.type });
 }

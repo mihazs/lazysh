@@ -17,6 +17,24 @@ beforeEach(() => {
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: vi.fn().mockResolvedValue('browser'), read: vi.fn() } });
 });
 afterEach(() => { vi.resetAllMocks(); });
+it('never treats malformed platform probes as permission for browser fallback', async () => {
+  for (const value of [undefined, null, 0, '', 'false', {}]) {
+    vi.mocked(api.clipboardIsAndroid).mockResolvedValue(value as boolean);
+    await expect(readClipboardText(new AbortController().signal)).rejects.toThrow();
+  }
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled();
+  expect(api.clipboardRead).not.toHaveBeenCalled();
+});
+it.each(['lock/unlock', 'abort'] as const)('does not start a browser read after a held unsupported-platform probe crosses %s', async change => {
+  let finish!: (value: boolean) => void;
+  vi.mocked(api.clipboardIsAndroid).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const owner = new AbortController(); const read = readClipboardText(owner.signal);
+  const rejected = expect(read).rejects.toThrow();
+  if (change === 'lock/unlock') { access(true); access(); } else owner.abort();
+  finish(false); await rejected;
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled();
+  expect(api.clipboardRead).not.toHaveBeenCalled();
+});
 it('keeps browser reads on unsupported platforms and never falls back after Android rejection', async () => {
   vi.mocked(isTauri).mockReturnValue(false);
   expect(await readClipboardText(new AbortController().signal)).toBe('browser');

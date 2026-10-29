@@ -56,6 +56,7 @@ internal class ClipboardReadState(private val clock: () -> Long = System::nanoTi
     @Synchronized fun current(operation: Operation, ready: Boolean): Boolean =
         active === operation && !operation.cancelled && operation.epoch == epoch && ready && clock() < operation.deadline
     @Synchronized fun cancel(token: String): Operation? = active?.takeIf { it.token == token }?.also { it.cancelled = true }
+    @Synchronized fun owns(token: String): Boolean = active?.token == token
     @Synchronized fun invalidate(): Operation? {
         epoch++
         return active?.also { it.cancelled = true }
@@ -126,12 +127,30 @@ internal object ClipboardPayload {
     }
 }
 
-/** Private mobile handle only: the Rust plugin deliberately exposes no JavaScript handler. */
+internal object NativeClipboardAuthority {
+    external fun admit(token: String, kind: String, document: Long, action: ClipboardAdmission): Boolean
+    external fun current(token: String): Boolean
+    external fun invalidate()
+    external fun retire(token: String)
+}
+
+/** JNI may invoke only this fixed, synchronous UI admission; it cannot run an arbitrary action. */
+internal class ClipboardAdmission(private val plugin: ClipboardPlugin, private val invoke: Invoke,
+    private val token: String, private val kind: String, private val document: Long) {
+    fun run() { plugin.admit(invoke, token, kind, document) }
+}
+
+/** Private mobile handle only: Rust rejects renderer plugin commands before SDK mobile fallback. */
 @TauriPlugin
 class ClipboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
     companion object {
         private var current = WeakReference<ClipboardPlugin>(null)
         private val state = ClipboardReadState()
+        private fun permitted(operation: ClipboardReadState.Operation, ready: Boolean) =
+            state.current(operation, ready) && NativeClipboardAuthority.current(operation.token)
+        private fun retireIfIdle(token: String) {
+            if (!state.owns(token)) NativeClipboardAuthority.retire(token)
+        }
         private val worker = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, SynchronousQueue<Runnable>()).apply {
             allowCoreThreadTimeOut(true)
         }
@@ -164,6 +183,7 @@ class ClipboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
         override fun onViewDetachedFromWindow(view: View) { invalidateOwner() }
     }
     override fun load(webView: WebView) = owner.runOnUiThread {
+        if (current.get() !== this) NativeClipboardAuthority.invalidate()
         invalidateOwner(); detach(); current = WeakReference(this); webview = webView
         webView.addOnAttachStateChangeListener(attach)
         webView.viewTreeObserver.addOnWindowFocusChangeListener(focus)
@@ -188,17 +208,23 @@ class ClipboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
         try { job.signal.cancel() } catch (_: Exception) {}
         job.invoke?.reject("clipboard_cancelled"); job.invoke = null
     }
-    private fun invalidateOwner() { state.invalidate(); pending?.let(::stop) }
+    private fun invalidateOwner() {
+        if (current.get() === this) {
+            NativeClipboardAuthority.invalidate()
+            state.invalidate()
+        } else pending?.let { state.cancel(it.operation.token) }
+        pending?.let(::stop)
+    }
     private fun settle(job: Job, payload: JSObject?, failure: String?) {
         job.timeout?.let(main::removeCallbacks); job.timeout = null
-        if (!state.current(job.operation, ready())) stop(job)
-        else {
-            if (failure == null && payload != null) job.invoke?.resolve(payload)
-            else job.invoke?.reject(failure ?: "clipboard_unavailable")
-            job.invoke = null
-        }
+        val admitted = permitted(job.operation, ready())
+        val callback = job.invoke; job.invoke = null
         state.finish(job.operation)
+        NativeClipboardAuthority.retire(job.operation.token)
         if (pending === job) pending = null
+        if (!admitted) callback?.reject("clipboard_cancelled")
+        else if (failure == null && payload != null) callback?.resolve(payload)
+        else callback?.reject(failure ?: "clipboard_unavailable")
     }
     private fun document(invoke: Invoke): Long {
         val number = invoke.getArgs().get("document")
@@ -218,21 +244,35 @@ class ClipboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
     @Command fun cancel(invoke: Invoke) = owner.runOnUiThread {
         val token = runCatching { invoke.getArgs().getString("token") }.getOrNull()
         pending?.takeIf { it.operation.token == token }?.let { state.cancel(it.operation.token); stop(it) }
+        token?.let(::retireIfIdle)
         invoke.resolve()
     }
     @Command fun read(invoke: Invoke) = owner.runOnUiThread {
         val kind: String
-        val operation: ClipboardReadState.Operation
+        val token = runCatching { invoke.getArgs().getString("token") }.getOrNull()
+        val document: Long
         try {
             val args = invoke.getArgs()
             check(args.length() == 3) { "clipboard_unavailable" }
             kind = args.getString("kind")
             check(kind == "text" || kind == "image") { "clipboard_unsupported" }
-            val document = document(invoke)
+            document = document(invoke)
             advanceDocument(document)
-            operation = state.begin(args.getString("token"), ready(), document)
+            check(token != null) { "clipboard_unavailable" }
         } catch (error: Exception) {
+            token?.let(::retireIfIdle)
             invoke.reject(ClipboardPayload.failure(error)); return@runOnUiThread
+        }
+        if (!NativeClipboardAuthority.admit(token, kind, document, ClipboardAdmission(this, invoke, token, kind, document))) {
+            retireIfIdle(token)
+            invoke.reject("clipboard_cancelled")
+        }
+    }
+    internal fun admit(invoke: Invoke, token: String, kind: String, document: Long) {
+        val operation = try { state.begin(token, ready(), document) }
+        catch (error: Exception) {
+            val failure = ClipboardPayload.failure(error)
+            main.post { retireIfIdle(token); invoke.reject(failure) }; return
         }
         val job = Job(operation, invoke); pending = job
         job.timeout = Runnable { state.cancel(operation.token); stop(job) }.also { main.postDelayed(it, 5000) }
@@ -243,8 +283,9 @@ class ClipboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
             val item = clip.getItemAt(0)
             if (kind == "text") {
                 val text = ClipboardPayload.text(item.text)
-                settle(job, JSObject().apply { put("kind", "text"); put("text", text) }, null)
-                return@runOnUiThread
+                // Settlement re-enters Rust's current gate only after admit releases its permit/access monitors.
+                main.post { settle(job, JSObject().apply { put("kind", "text"); put("text", text) }, null) }
+                return
             }
             val uri = item.uri
             ClipboardPayload.contentUri(uri?.scheme)
@@ -261,14 +302,14 @@ class ClipboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
                 var result: JSObject? = null
                 var failure: String? = null
                 try {
-                    check(state.current(operation, true)) { "clipboard_cancelled" }
+                    check(permitted(operation, true)) { "clipboard_cancelled" }
                     val asset = resolver.openTypedAssetFileDescriptor(requireNotNull(uri), mime, null, job.signal)
                         ?: error("clipboard_unavailable")
                     job.asset.set(asset)
-                    check(state.current(operation, true)) { "clipboard_cancelled" }
-                    bytes = asset.createInputStream().use { ClipboardPayload.bytes(it) { state.current(operation, true) } }
+                    check(permitted(operation, true)) { "clipboard_cancelled" }
+                    bytes = asset.createInputStream().use { ClipboardPayload.bytes(it) { permitted(operation, true) } }
                     ClipboardPayload.image(requireNotNull(bytes), mime)
-                    check(state.current(operation, true)) { "clipboard_cancelled" }
+                    check(permitted(operation, true)) { "clipboard_cancelled" }
                     result = JSObject().apply {
                         put("kind", "image"); put("mime", mime)
                         put("bytes", Base64.encodeToString(bytes, Base64.NO_WRAP))
@@ -277,10 +318,16 @@ class ClipboardPlugin(private val owner: Activity) : MobilePlugin(owner) {
                 finally { bytes?.fill(0); job.close() }
                 val payload = result; val error = failure
                 dispatcher.post {
-                    reply.get()?.settle(job, payload, error) ?: state.finish(operation)
+                    reply.get()?.settle(job, payload, error) ?: run {
+                        state.finish(operation)
+                        NativeClipboardAuthority.retire(operation.token)
+                    }
                 }
             }
-        } catch (error: Exception) { settle(job, null, ClipboardPayload.failure(error)) }
+        } catch (error: Exception) {
+            val failure = ClipboardPayload.failure(error)
+            main.post { settle(job, null, failure) }
+        }
     }
     override fun onPause(activity: AppCompatActivity) { if (activity === owner) owner.runOnUiThread { invalidateOwner() } }
     override fun onStop(activity: AppCompatActivity) { if (activity === owner) owner.runOnUiThread { invalidateOwner() } }

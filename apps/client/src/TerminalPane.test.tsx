@@ -42,6 +42,23 @@ function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
 describe("terminal interactions", () => {
+  it.each(['active tab', 'connection', 'terminal context'] as const)('discards a held paste after %s leaves and returns to the original state', async change => {
+    let finish!: (value: string) => void;
+    vi.mocked(navigator.clipboard.readText).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const original = { id: 'clipboard-original', name: 'Host', connected: true, terminal } as unknown as LiveSession;
+    const reportError = vi.fn();
+    const view = render(<TerminalPane session={original} active reportError={reportError} />);
+    fireEvent.click(screen.getByRole('button', {name: 'paste'}));
+    expect(navigator.clipboard.readText).toHaveBeenCalledOnce();
+    const replacement = change === 'terminal context' ? {...original, terminal: createMockTerminal()} as unknown as LiveSession
+      : change === 'connection' ? {...original, connected: false} : original;
+    view.rerender(<TerminalPane session={replacement} active={change !== 'active tab'} reportError={reportError} />);
+    view.rerender(<TerminalPane session={original} active reportError={reportError} />);
+    await act(async () => finish('literal delayed clipboard'));
+    expect(terminal.paste).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
+  });
   it.each(['toolbar','custom D-pad'] as const)('fences held timed %s failures and dispatch on the same stale mount after lock/unlock',async source=>{
     savePreferences({...defaults,toolbar:[...defaults.toolbar,'dpad'],chords:[{label:'Timed',keys:'C-b T'}],dpadCorners:{...defaults.dpadCorners,left:'custom'},gestureChords:{cornerLeft:'C-b T'}});
     let reject!:(error:Error)=>void;

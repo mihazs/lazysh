@@ -175,7 +175,7 @@ does not justify replacing the dialog matcher without an observed cause.
 
 Explicit terminal Paste actions and attachment image Paste use app-private Android
 mobile commands behind the main-window ACL and original native access lease. The
-plugin exposes no renderer invoke handler. It reads only while its current Activity
+plugin explicitly rejects renderer plugin commands, preventing SDK mobile fallback. It reads only while its current Activity
 is resumed and its current WebView is attached, shown and focused. Pause, focus,
 document/Activity replacement, app locking and exact-owner cancellation invalidate
 the read. No startup reads or clipboard listeners are installed. Other platforms
@@ -201,3 +201,27 @@ does not share that ForceCommand. This case does not add actual Android upload p
 Explicit upload remains covered by existing attachment UI and Rust SFTP owners;
 packaged Android upload and physical Samsung/SwiftKey behavior remain separate under
 #20. Packaged clipboard behavior remains unverified until its owning run completes.
+
+Clipboard admission uses the existing native-consent permit pattern rather than
+relying on dispatch FIFO. Tauri 2.12.5 queues mobile commands through the Android
+context; Wry 0.57.1 resolves its Activity/WebView when the JNI message is dequeued.
+A delayed command therefore cannot establish ownership from whichever context is
+current at that later point. Rust issues a private, single-use nonce bound to the
+original access lease, request kind and document. Immediately before primary-clip
+capture, Kotlin invokes one fixed JNI admission action; it cannot supply a renderer
+callback. Cancellation and current-owner lifecycle/rebind events revoke the permit
+synchronously. Provider work separately checks that original authority.
+
+A cancelled slot remains occupied until native retirement acknowledges no admitted
+worker or completed worker cleanup. Normal native completion retains the original
+authority until Rust consumes the response, so closing a watch sender cannot turn
+a successful response into cancellation. Late cancellation/retirement for A cannot
+affect private permit B. The selector checks cancellation before polling native
+dispatch. Regression owners cover cancel-before-admission, rebind before admission,
+one-shot replay, original access/deadline, and successful response retirement.
+Terminal reads also retire when their tab, connection or terminal context leaves,
+including leave-and-return transitions. Browser fallback requires exactly boolean
+false from the protected platform probe; malformed results never grant fallback.
+
+Source contracts: [Tauri mobile dispatch](https://docs.rs/crate/tauri/2.12.5/source/src/plugin/mobile.rs),
+[Wry Android main pipe](https://docs.rs/crate/wry/0.57.1/source/src/android/main_pipe.rs).
