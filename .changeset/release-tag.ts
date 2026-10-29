@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { appendFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { androidVersionCode, verifyRelease } from './bun-lock';
 
@@ -9,6 +8,7 @@ export type ReleasePolicy = {
   fossPushAccepted: boolean;
   officialSubmissionPrerequisitesAccepted: boolean;
   recipeSha256: string;
+  initialPublication: { version: string; ancestor: string };
 };
 export type Candidate = { sha: string; version: string; versionCode: number; tag: string };
 function requireGate(condition: unknown, message: string): asserts condition {
@@ -28,6 +28,19 @@ export function candidate(input: {
     'stable version transition from first parent required');
   requireGate(input.pending.length === 0, 'pending Changesets');
   return { sha: input.sha, version: input.version, versionCode, tag: `v${input.version}` };
+}
+
+// Initial publication is explicit, prospective and source-bound; it never consumes Changesets.
+export function initialCandidate(input: Parameters<typeof candidate>[0], policy: ReleasePolicy,
+  expectedSha: string, ancestors: string[]): Candidate {
+  requireGate(input.ref === 'refs/heads/main' && input.event === 'workflow_dispatch', 'initial main dispatch required');
+  requireGate(/^[a-f0-9]{40}$/.exec(input.sha)?.[0] === input.sha && expectedSha === input.sha, 'initial exact source acknowledgement required');
+  requireGate(policy.initialPublication?.version === input.version, 'initial version not allowlisted');
+  const anchor = policy.initialPublication?.ancestor;
+  requireGate(typeof anchor === 'string' && /^[a-f0-9]{40}$/.exec(anchor)?.[0] === anchor
+    && input.sha !== anchor && ancestors[0] === input.sha && ancestors.slice(1).includes(anchor),
+    'initial source must follow allowlisted first-parent ancestor');
+  return { sha: input.sha, version: input.version, versionCode: androidVersionCode(input.version), tag: `v${input.version}` };
 }
 
 function reviewedRecipe(template: string, policy: ReleasePolicy) {
@@ -104,8 +117,8 @@ export async function createStableTag(next: Candidate, policy: ReleasePolicy, bu
   return 'created';
 }
 
-// Inspect data from the observed main commit using candidate-owned validation
-// code. Never execute scripts from a newer checkout. No worktree or tag mutation.
+// Main may advance to later versions while this exact verified candidate builds.
+// Admit only bounded first-parent ancestry; never execute newer checkout code.
 export async function requireCurrentRelease(root: string, next: Candidate, main: string) {
   requireGate(/^[a-f0-9]{40}$/.exec(main)?.[0] === main, 'invalid main identity');
   const git = (args: string[]) => {
@@ -113,21 +126,9 @@ export async function requireCurrentRelease(root: string, next: Candidate, main:
     requireGate(result.exitCode === 0, 'cannot inspect current main');
     return result.stdout.toString().trim();
   };
-  // Fetch only the observed immutable object. This does not advance local branches.
   git(['fetch', '--no-tags', 'origin', main]);
   const ancestors = git(['rev-list', '--first-parent', '--max-count=4097', main]).split('\n');
   requireGate(ancestors.includes(next.sha), 'candidate is not a bounded first-parent ancestor of main');
-  const directory = await mkdtemp(join(tmpdir(), 'lazysh-release-main-'));
-  try {
-    const archive = join(directory, 'source.tar');
-    git(['archive', '--format=tar', `--output=${archive}`, main]);
-    const source = join(directory, 'source');
-    await mkdir(source);
-    const unpack = Bun.spawnSync(['tar', '-xf', archive, '-C', source], { stdout: 'pipe', stderr: 'pipe' });
-    requireGate(unpack.exitCode === 0, 'cannot inspect main source metadata');
-    await verifyRelease(source);
-    requireGate((await Bun.file(join(source, 'package.json')).json()).version === next.version, 'candidate superseded by another version');
-  } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
 export async function currentCandidate(root: string, skipUnchanged = false) {
@@ -140,10 +141,19 @@ export async function currentCandidate(root: string, skipUnchanged = false) {
   await verifyRelease(root);
   const version = (await Bun.file(join(root, 'package.json')).json()).version;
   const parentVersion = JSON.parse(git(['show', 'HEAD^:package.json'])).version;
-  if (skipUnchanged && version === parentVersion) return null;
-  return candidate({ sha: process.env.GITHUB_SHA!, ref: process.env.GITHUB_REF!, event: process.env.GITHUB_EVENT_NAME!,
+  const initial = process.env.LAZYSH_RELEASE_INITIAL ?? '';
+  requireGate(['', 'false', 'true'].includes(initial), 'invalid initial publication selection');
+  const expectedSha = process.env.LAZYSH_RELEASE_EXPECTED_SHA ?? '';
+  requireGate(initial === 'true' || expectedSha === '', 'source acknowledgement requires initial publication');
+  const input = { sha: process.env.GITHUB_SHA!, ref: process.env.GITHUB_REF!, event: process.env.GITHUB_EVENT_NAME!,
     version, parentVersion,
-    pending: (await readdir(join(root, '.changeset'))).filter(name => name.endsWith('.md') && name !== 'README.md') });
+    pending: (await readdir(join(root, '.changeset'))).filter(name => name.endsWith('.md') && name !== 'README.md') };
+  if (initial === 'true') {
+    const policy: ReleasePolicy = await Bun.file(join(root, '.changeset/release-policy.json')).json();
+    return initialCandidate(input, policy, expectedSha, git(['rev-list', '--first-parent', '--max-count=4097', 'HEAD']).split('\n'));
+  }
+  if (skipUnchanged && version === parentVersion) return null;
+  return candidate(input);
 }
 
 if (import.meta.main) {

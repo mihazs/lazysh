@@ -1,7 +1,8 @@
 # Verified GitHub release gate
 
 `.github/workflows/release-tag.yml` publishes verified Android, Linux and Windows
-installers after a Changesets version merge. Publication is enabled by default;
+installers for the explicit initial 0.23.0 publication and each future individually
+merged Changesets version. Historical versions are not backfilled. Publication is enabled by default;
 setting `enabled` to false stops new release admission and publication API calls.
 Ordinary unchanged-version main pushes skip release builds successfully.
 Apple releases remain deferred. Official F-Droid inclusion and free-software
@@ -12,13 +13,24 @@ builds, scans, signing and artifact verification still gate every release.
 A prior version's APK cannot authorize a new candidate.
 The initial #353 local recipe checkpoint is qualified in `fdroid/README.md`.
 
-The gate accepts only an exact main event SHA checked
-out by the workflow, with a stable version/code increase from its first parent.
-Existing release-consistency checks cover all owned manifests, locks and native
-Android authority. Every pending Changeset fragment blocks admission; a version
-PR must consume them before release. Non-main candidates, prereleases and
-regressions fail closed. Dispatch has no arbitrary
-source or tag input. The repository must retain candidate history.
+Ordinary admission accepts only an exact main event SHA checked out by the
+workflow, with a stable version/code increase from its first parent and no pending
+Changesets. A version PR must consume those fragments before ordinary release.
+Existing consistency checks cover all owned manifests, locks and native Android
+authority. Non-main candidates, prereleases and regressions fail closed.
+
+Initial publication alone uses a main `workflow_dispatch` with `initial: true` and
+`expected-source-sha` equal to the exact event/checkout SHA. Committed policy
+allowlists 0.23.0 and a bounded first-parent ancestor
+`f5cdacea70f313fa216e8963b76effd098340007`; the initial source must follow it.
+This mode admits an unchanged version and retains pending Changesets for the next
+release. Prepare, tag and publish repeat the same checks. Dispatch cannot select
+arbitrary source or tags. Ordinary unchanged-version pushes skip builds; neither
+mode discards pending fragments to force admission.
+
+The supported future workflow merges one Changesets version per main push; it does
+not enumerate arbitrary batched transitions or history. Per-source concurrency
+preserves different version runs. The repository must retain candidate history.
 
 The committed manual-update recipe remains unchanged. Its SHA256 must match the
 reviewed policy digest. Only source commit, build version/code and current
@@ -38,9 +50,10 @@ container build path, not a claim of Vagrant `--server` execution or hermeticity
 
 Only the dependent tag and publication jobs have contents-write tokens. Every
 platform installation build and the independent F-Droid source build must pass
-before tagging. The tag command rechecks synchronized current-main metadata and
-requires the candidate within its bounded first-parent ancestry with the same
-release version; a newer version supersedes it. Existing lightweight
+before tagging. Tagging and publication require the exact verified candidate
+within observed main’s bounded first-parent ancestry (at most 4097 commits).
+A newer main version does not supersede it, and newer source is not executed or
+substituted. Side ancestry or replaced main history is rejected. Existing lightweight
 tags at the same commit are idempotent; different/annotated targets fail. A
 concurrent create can succeed only if its new ref resolves to that same commit.
 The workflow never updates/deletes/forces a tag and never ignores a failed
@@ -51,8 +64,14 @@ always names the verified candidate rather than an inferred moving branch.
 The normal GITHUB_TOKEN does not trigger downstream workflows through tags;
 installation publication is an explicit dependent job in the same workflow.
 It rechecks every package/checksum, creates a draft, verifies each uploaded asset's
-acknowledged digest, and publishes only after all uploads succeed. Existing
+acknowledged digest, and publishes only after all uploads succeed. The final PATCH
+uses `make_latest: legacy` to select latest by creation date and semantic version
+rather than build completion order. Existing
 releases are never overwritten or automatically resumed after uncertain outcomes.
+Every release includes the current native acceptance status from
+[install-and-update.md](install-and-update.md#current-native-acceptance-status);
+initial notes additionally include the root Unreleased changes. Missing status
+blocks note generation. Passing build gates does not claim full native parity.
 See [release-artifacts.md](release-artifacts.md) for signing and activation limits.
 
 `bun run test:release` runs the native Bun release tests. The tag tests use

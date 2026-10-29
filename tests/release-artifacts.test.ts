@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
-  validateReceipt, type ArtifactTarget } from '../.changeset/release-artifacts';
+  validateReceipt, releaseNotes, type ArtifactTarget } from '../.changeset/release-artifacts';
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
@@ -142,13 +142,42 @@ async function publication(root: string, failure?: string, enabled = true) {
   });
   return { calls, result };
 }
+test('initial notes include current development changes and explicit native limits without backfill', () => fixture(async root => {
+  await mkdir(join(root, 'apps/client'), { recursive: true });
+  await mkdir(join(root, '.changeset'));
+  await mkdir(join(root, 'docs'));
+  await Bun.write(join(root, 'docs/install-and-update.md'), '# Install\n\n## Current native acceptance status\n\nNative gaps #352 #344 #379 #306 #459 #457 #458; same-version repair does not establish full parity.\n\n## Historical status\n\nOld native status.\n');
+  await Bun.write(join(root, '.changeset/release-policy.json'), JSON.stringify(policy));
+  await Bun.write(join(root, 'apps/client/CHANGELOG.md'), '# Client\n\n## 0.23.0\n\nPrepared release.\n\n## 0.22.0\n\nHistorical release.\n');
+  await Bun.write(join(root, 'CHANGELOG.md'), '# Changes\n\n## [Unreleased]\n\nCurrent source change.\n\n## [0.22.0]\n\nOld source change.\n');
+  const initial = await releaseNotes(root, '0.23.0', true);
+  for (const text of ['Prepared release.', 'Current source change.', '#352', '#344', '#379', '#306', '#459', '#457', '#458', 'does not establish full', 'same-version repair']) {
+    expect(initial).toContain(text);
+  }
+  expect(initial).not.toContain('Historical release.');
+  expect(initial).not.toContain('Old source change.');
+  const ordinary = await releaseNotes(root, '0.23.0');
+  expect(ordinary).not.toContain('Current source change.');
+  expect(ordinary).toContain('Native gaps #352 #344 #379 #306 #459 #457 #458');
+  expect(ordinary).not.toContain('Old native status.');
+  expect(initial).not.toContain('Old native status.');
+  await expect(releaseNotes(root, '0.22.0', true)).rejects.toThrow('not allowlisted');
+  await Bun.write(join(root, 'CHANGELOG.md'), '# Empty');
+  await expect(releaseNotes(root, '0.23.0', true)).rejects.toThrow('development changes');
+  for (const status of ['# Missing', '## Current native acceptance status\n\n## Next\nEmpty',
+    '## Current native acceptance status\nOne\n## Current native acceptance status\nTwo']) {
+    await Bun.write(join(root, 'docs/install-and-update.md'), status);
+    await expect(releaseNotes(root, '0.23.0')).rejects.toThrow('native acceptance status');
+  }
+}));
+
 test('publication uploads a complete digest-acknowledged draft before making it public', () => fixture(async root => {
   const { calls, result } = await publication(root);
   await result;
   const uploads = calls.filter(call => call.method === 'UPLOAD');
   expect(uploads).toHaveLength(9);
   expect(calls.find(call => call.path === 'releases')?.body).toMatchObject({ draft: true, target_commitish: identity.sha });
-  expect(calls.at(-1)).toEqual({ path: 'releases/8', method: 'PATCH', body: { draft: false } });
+  expect(calls.at(-1)).toEqual({ path: 'releases/8', method: 'PATCH', body: { draft: false, make_latest: 'legacy' } });
 }));
 test.each(['tag', 'changed-tag', 'existing', 'upload', 'digest', 'main'])(
   'uncertain or invalid release state cannot publish or overwrite: %s', failure => fixture(async root => {
