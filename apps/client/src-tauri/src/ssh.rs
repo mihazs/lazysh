@@ -5391,6 +5391,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut context = tauri::generate_context!(test = true);
         for command in [
+            "install_companion",
             "restore_file_transfer",
             "get_companion_settings",
             "update_companion_settings",
@@ -5421,7 +5422,8 @@ mod tests {
                 crate::attachment_upload::upload_reserve,
                 crate::host_clipboard::host_clipboard_copy,
                 crate::companion_settings::get_companion_settings,
-                crate::companion_settings::update_companion_settings
+                crate::companion_settings::update_companion_settings,
+                crate::companion::install_companion
             ])
             .build(context)
             .unwrap();
@@ -5490,6 +5492,21 @@ mod tests {
             error["kind"], "disconnected",
             "the real clipboard handler must be reached, not denied by ACL"
         );
+        let installer =
+            serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"});
+        let failure = tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "install_companion", installer.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure["kind"], "disconnected",
+            "the real installer handler must accept the Channel/body and reach session preflight"
+        );
+        assert!(
+            failure.get("phase").is_some_and(serde_json::Value::is_null),
+            "preflight rejection must carry the companion-only structured failure phase"
+        );
         let settings = serde_json::json!({"sessionId":"not-connected"});
         let update = serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":false,"deviceToolsEnabled":false}});
         for (command, body) in [
@@ -5504,6 +5521,7 @@ mod tests {
             );
         }
         for (command, body) in [
+            ("install_companion", installer),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),
             ("list_hosts", serde_json::json!({})),

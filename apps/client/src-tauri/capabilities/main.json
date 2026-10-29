@@ -130,6 +130,7 @@
     "allow-herdr-chat",
     "allow-agent-snapshot",
     "allow-agent-reported-history",
+    "allow-install-companion",
     "allow-get-companion-settings",
     "allow-update-companion-settings",
     "allow-agent-transcript",
