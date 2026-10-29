@@ -1435,12 +1435,52 @@ class NativeWorkspaceTest {
         repeat(2) { assertTrue("Only two owned preference scrolls allowed",settings.scroll(TimeUnit.SECONDS.toNanos(4),true)) }
         assertTrue("Scroll allowance cannot be reused",!settings.scroll(TimeUnit.SECONDS.toNanos(4),true))
         assertTrue("Expired settings cannot scroll",!NtfySettingsScroll(0).scroll(TimeUnit.SECONDS.toNanos(5),true))
+        for((at,category) in listOf(-1L to "negative",999L to "rollback",1000L to "beforeIssued",
+            1100L to "withinWindow",1299L to "withinWindow",1300L to "expired")) {
+            val observed=NtfyEventRead();var calls=0
+            observed.increment(observed.reads);observed.increment(observed.returnedReads);observed.highWater.set(1000)
+            assertEquals(at,observed.clock {calls++;at});assertEquals(1,calls)
+            assertEquals(category,observed.clockCategory(1100L to 1300L))
+            assertEquals("unavailable",NtfyEventRead().clockCategory(1100L to 1300L))
+            observed.increment(observed.reads)
+            assertEquals("unavailable",observed.clockCategory(1100L to 1300L))
+            repeat(5) {observed.increment(observed.reads)}
+            assertEquals("many",observed.count(observed.reads))
+        }
+        val failedClock=NtfyEventRead();val originalFailure=IllegalStateException("Owned clock failure")
+        try {failedClock.clock {throw originalFailure};throw AssertionError("Original clock failure required")}
+        catch(failure:IllegalStateException) {assertSame(originalFailure,failure)}
     }
 
     private class NtfyEventRead {
         val entered=CountDownLatch(1)
         val returned=CountDownLatch(1)
         val receipts=AtomicReference("unavailable")
+        val reads=java.util.concurrent.atomic.AtomicInteger()
+        val returnedReads=java.util.concurrent.atomic.AtomicInteger()
+        val writes=java.util.concurrent.atomic.AtomicInteger()
+        val returnedWrites=java.util.concurrent.atomic.AtomicInteger()
+        val storedEnabled=AtomicReference("unavailable")
+        val highWater=AtomicReference<Long?>(null)
+        private val at=AtomicReference<Long?>(null)
+        private val clocks=java.util.concurrent.atomic.AtomicInteger()
+        @Synchronized fun increment(counter:java.util.concurrent.atomic.AtomicInteger) {counter.updateAndGet {minOf(it+1,2)}}
+        fun count(counter:java.util.concurrent.atomic.AtomicInteger)=when(counter.get()) {0->"zero";1->"one";else->"many"}
+        fun clock(original:()->Long):Long {
+            val value=original()
+            synchronized(this) {increment(clocks);at.set(value)}
+            return value
+        }
+        @Synchronized fun clockCategory(window:Pair<Long,Long>?):String {
+            // Multiple callbacks cannot be collapsed into one clock decision.
+            if(reads.get()!=1 || returnedReads.get()!=1 || clocks.get()!=1)return "unavailable"
+            val value=at.get() ?: return "unavailable"
+            val high=highWater.get() ?: return "unavailable"
+            if(value<0)return "negative"
+            if(value<high)return "rollback"
+            val bounds=window ?: return "unavailable"
+            return when {value<bounds.first->"beforeIssued";value>=bounds.second->"expired";else->"withinWindow"}
+        }
     }
 
     private fun <T> withOwnedRestoration(label:String, restore:()->Unit, action:()->T):T {
@@ -1460,14 +1500,17 @@ class NativeWorkspaceTest {
         org.junit.Assume.assumeTrue("Owned ntfy acceptance only",InstrumentationRegistry.getArguments().getString("lazyshNtfyAcceptance")=="true")
         val context=instrumentation.targetContext
         val primary=AssertionError("Owned primary failure")
-        var restorationAttempted=false
+        val restorations=mutableListOf<String>()
         var observed:Throwable?=null
         try {
-            withOwnedRestoration("Owned restoration failed",{restorationAttempted=true;error("private restoration details")}) {throw primary}
+            withOwnedRestoration("Owned store restoration failed",{restorations.add("store");error("private store details")}) {
+                withOwnedRestoration("Owned clock restoration failed",{restorations.add("clock");error("private clock details")}) {throw primary}
+            }
         } catch(failure:Throwable) {observed=failure}
         assertTrue("Restoration preserves primary failure and finite metadata",observed===primary &&
-            primary.suppressed.singleOrNull()?.message=="Owned restoration failed" && primary.suppressed.single().cause==null)
-        assertTrue("Restoration always attempted",restorationAttempted)
+            primary.suppressed.map {it.message}==listOf("Owned clock restoration failed","Owned store restoration failed") &&
+            primary.suppressed.all {it.cause==null})
+        assertEquals("Both original dependencies are restored",listOf("clock","store"),restorations)
         fun native(name:String)=Class.forName("app.lazysh.unifiedpush.$name",true,context.classLoader)
         val parser=native("EventDisplayKt").getDeclaredMethod("parseDisplayEvent",ByteArray::class.java,Boolean::class.javaPrimitiveType)
         val device=java.util.UUID.randomUUID().toString()
@@ -1691,7 +1734,7 @@ class NativeWorkspaceTest {
         }
         awaitDocument(scenario,"Actual distributor registration","window.__lazyshNtfyControl===true")
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-        fun signal(name:String) {
+        fun signal(name:String):Pair<Long,Long>? {
             assertTrue("Fixed fixture control",name in listOf("background","replay","complete","event","event-replay"))
             val connection=java.net.URL(data.getString("relayOrigin")+"/__fixture/"+name).openConnection(java.net.Proxy.NO_PROXY) as javax.net.ssl.HttpsURLConnection
             try {
@@ -1702,6 +1745,16 @@ class NativeWorkspaceTest {
                 connection.instanceFollowRedirects=false
                 connection.requestMethod="POST";connection.setRequestProperty("X-Lazysh-Fixture",nonce)
                 assertTrue("Owned fixture control acknowledged",connection.responseCode==204)
+                if(name!="event")return null
+                fun header(name:String):Long {
+                    val values=connection.headerFields.filterKeys {it?.equals(name,true)==true}.values.flatten()
+                    check(values.size==1 && Regex("0|[1-9][0-9]{0,18}").matches(values.single())) {"Exact owned event window required"}
+                    return checkNotNull(values.single().toLongOrNull()) {"Exact owned event window required"}
+                }
+                val issued=header("x-lazysh-fixture-issued-at")
+                val expires=header("x-lazysh-fixture-expires-at")
+                check(expires>issued && expires-issued<=300) {"Exact owned event window required"}
+                return issued to expires
             } finally {connection.disconnect()}
         }
         signal("background")
@@ -1729,6 +1782,9 @@ class NativeWorkspaceTest {
         val displayType=native("EventDisplayController")
         val storeField=displayType.getDeclaredField("store").apply {isAccessible=true}
         val originalStore=storeField.get(display)
+        val clockField=displayType.getDeclaredField("now").apply {isAccessible=true}
+        @Suppress("UNCHECKED_CAST")
+        val originalNow=clockField.get(display) as ()->Long
         val storeType=native("DisplayStore")
         val getValue=storeType.getDeclaredMethod("getValue")
         fun displayState()=checkNotNull(getValue.invoke(originalStore))
@@ -1748,27 +1804,39 @@ class NativeWorkspaceTest {
         val initialReceipts=receipts {beforeEvent}
         val eventRead=NtfyEventRead()
         val readPhase=AtomicReference(eventRead)
+        fun messageRead()=Thread.currentThread().stackTrace.any {
+            it.className=="app.lazysh.unifiedpush.EventDisplayController" && it.methodName=="message"
+        }
+        val observedNow:()->Long={if(messageRead())readPhase.get().clock(originalNow) else originalNow()}
         val observer=java.lang.reflect.Proxy.newProxyInstance(context.classLoader,arrayOf(storeType)) { _,method,args ->
-            val observation=if(Thread.currentThread().stackTrace.any {
-                it.className=="app.lazysh.unifiedpush.EventDisplayController" && it.methodName=="message"
-            })readPhase.get() else null
+            val observation=if(messageRead())readPhase.get() else null
             val reading=method.name=="getValue"
             val writing=method.name=="setValue"
-            if(reading)observation?.entered?.countDown()
+            if(reading)observation?.let {synchronized(it) {
+                it.increment(it.reads);it.entered.countDown();it.highWater.set(null);it.storedEnabled.set("unavailable")
+            }}
+            if(writing)observation?.let {it.increment(it.writes)}
             if(reading || writing)observation?.receipts?.set("unavailable")
             val result=try {method.invoke(originalStore,*(args?:emptyArray()))}
                 catch(error:java.lang.reflect.InvocationTargetException) {throw error.targetException}
             // Categorize completed original operations, never add a diagnostic Keystore read.
             if(reading || writing)observation?.receipts?.set(receipts {if(reading)result else args?.firstOrNull()})
-            if(reading)observation?.returned?.countDown()
+            if(reading)observation?.let {synchronized(it) {
+                it.highWater.set(runCatching {(displayStateType.getDeclaredMethod("getHighWater").invoke(result) as Number).toLong()}.getOrNull())
+                it.storedEnabled.set(flag {displayStateType.getDeclaredMethod("getEnabled").invoke(result) as Boolean})
+                it.increment(it.returnedReads);it.returned.countDown()
+            }}
+            if(writing)observation?.let {it.increment(it.returnedWrites)}
             result
         }
         withOwnedRestoration("Original owned store observer restoration failed",{storeField.set(display,originalStore)}) {
+          withOwnedRestoration("Original owned clock observer restoration failed",{clockField.set(display,originalNow)}) {
             // Test-only read observer; every operation delegates unchanged to the
             // original real Keystore store/controller/notification implementation.
             storeField.set(display,observer)
+            clockField.set(display,observedNow)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-            signal("event")
+            val eventWindow=checkNotNull(signal("event")) {"Exact owned event window required"}
             val notificationDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
             while(ownedNotification()==null && System.nanoTime()<notificationDeadline)Thread.sleep(20)
             val delivered=checkNotNull(ownedNotification()) {
@@ -1779,7 +1847,10 @@ class NativeWorkspaceTest {
                     " appNotifications=${flag {notifications.areNotificationsEnabled()}}"+
                     " postPermission=${flag {Build.VERSION.SDK_INT<33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED}}"+
                     " channelEnabled=${flag {Build.VERSION.SDK_INT<26 || (notifications.getNotificationChannel("lazysh-remote-events-v1")?.importance ?: android.app.NotificationManager.IMPORTANCE_NONE)!=android.app.NotificationManager.IMPORTANCE_NONE}}"+
-                    " ownedNotification=${flag {ownedNotification()!=null}}]"
+                    " ownedNotification=${flag {ownedNotification()!=null}}"+
+                    " reads=${eventRead.count(eventRead.reads)} returnedReads=${eventRead.count(eventRead.returnedReads)}"+
+                    " writes=${eventRead.count(eventRead.writes)} returnedWrites=${eventRead.count(eventRead.returnedWrites)}"+
+                    " storedEnabled=${eventRead.storedEnabled.get()} clock=${eventRead.clockCategory(eventWindow)}]"
             }
             val notification=delivered.notification
             assertTrue("Actual private generic notification",notification.visibility==android.app.Notification.VISIBILITY_PRIVATE &&
@@ -1799,6 +1870,7 @@ class NativeWorkspaceTest {
             assertTrue("Replay callback completed with original consent",displayType.getDeclaredMethod("enabled",native("DisplayBinding")).invoke(display,binding)==true)
             assertTrue("Replay retains exact durable receipt state",displayState()==admitted)
             assertTrue("Replay cannot replace actual notification",ownedNotification()?.postTime==delivered.postTime)
+          }
         }
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         awaitUnlockedWorkspace(scenario,"Original workspace after actual event display")
