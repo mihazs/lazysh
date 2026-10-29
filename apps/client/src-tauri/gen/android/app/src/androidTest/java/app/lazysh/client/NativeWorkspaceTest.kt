@@ -1335,6 +1335,7 @@ class NativeWorkspaceTest {
         fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun selectSsh() {
+            closeSoftKeyboard()
             val selector = "[role=dialog] select"
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
             // A DOM click atom does not activate Chromium's native select popup.
@@ -1379,7 +1380,6 @@ class NativeWorkspaceTest {
                 pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
                 pressKey(KeyEvent.KEYCODE_DEL))
             typeInto(scenario, ".port-field input", fixture.getInt("port").toString())
-            closeSoftKeyboard()
             selectSsh()
             clickButton("Save host")
             val connect = "button[aria-label='Connect to $name']"
