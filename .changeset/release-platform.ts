@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards } from './windows-installed-gui';
+import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards, windowsGuiProbePhases } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
@@ -61,9 +61,11 @@ export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (!markers.length || markers.length > 3) return;
   const labels: string[] = [];
   for (const marker of markers) {
-    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z0-9_]+)$/.exec(marker);
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z0-9_]+)(?::([A-Z_]+))?$/.exec(marker);
     if (!match || !windowsInstallerGuards.has(match[2])) return;
-    labels.push(`${match[1]}:${match[2]}`);
+    if (match[3] && (match[1] !== 'gui' || !windowsGuiSessionGuards.includes(match[2]) || !match[2].endsWith('_WINDOW_UNVERIFIED')
+      || !windowsGuiProbePhases.some(phase => phase === match[3]))) return;
+    labels.push(`${match[1]}:${match[2]}${match[3] ? ':' + match[3] : ''}`);
   }
   return labels.join('; ');
 }

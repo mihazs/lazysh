@@ -1,5 +1,12 @@
 import {win32} from 'node:path';
 
+export const windowsGuiProbePhases = ['PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED'] as const;
+export function windowsGuiProbeFailure(stdout:unknown):typeof windowsGuiProbePhases[number] {
+  if(typeof stdout!=='string'||stdout.length>1024)return 'PROBE_UNVERIFIED';
+  const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)$/.exec(stdout.trim());
+  return windowsGuiProbePhases.find(phase=>phase===match?.[1])??'PROBE_UNVERIFIED';
+}
+
 export const windowsGuiSessionOutcomes = ['CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE'] as const;
 export const windowsGuiSessionGuards = windowsGuiSessionOutcomes.flatMap(outcome =>
   ['VERIFIED', 'UNVERIFIED'].map(window => `GUI_SESSION_${outcome}_WINDOW_${window}`));
@@ -14,12 +21,12 @@ export function windowsGuiSessionResponse(response:unknown):typeof windowsGuiSes
   }
 }
 export function windowsGuiSessionNoResponse(error:unknown,port:number):typeof windowsGuiSessionOutcomes[number] {
-  // Pinned webdriver 10.1.0 request/error.ts emits this exact prefix; utils.ts preserves
-  // the message while wrapping the request error. Never retain its raw args suffix.
-  const prefix=`WebDriverError: Request timed out! Consider increasing the "connectionRetryTimeout" option. when running "http://127.0.0.1:${port}/session" with method "POST" and args "`;
+  // Pinned webdriver 10.1.0 request/error.ts emits this exact message; utils.ts preserves
+  // the message while wrapping the request error. Node serializes body to a string,
+  // so getExecCmdArgs emits no args suffix. Match the entire known message only.
+  const expected=`WebDriverError: Request timed out! Consider increasing the "connectionRetryTimeout" option. when running "http://127.0.0.1:${port}/session" with method "POST"`;
   return Number.isInteger(port) && port>0 && port<=65535 && error instanceof Error
-    && error.message.length<=65_536 && error.message.startsWith(prefix) && error.message.endsWith('"')
-    && !error.message.includes('\n') && !error.message.includes('\r') ? 'CLIENT_TIMEOUT' : 'NO_RESPONSE';
+    && error.message===expected ? 'CLIENT_TIMEOUT' : 'NO_RESPONSE';
 }
 
 export function windowsGuiToolEnvironment(driver:string,edge:string) {
@@ -55,6 +62,7 @@ function Plain($path) {
 // Windows-only installed GUI acceptance. Paths are supplied exclusively through the child environment.
 export const windowsGuiOwnerScript = String.raw`
 $ErrorActionPreference = 'Stop'
+$phase = 'PROBE_UNVERIFIED'
 try {
   Add-Type -TypeDefinition @'
 using System;
@@ -66,20 +74,31 @@ public static class OwnedGuiWindow {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
 }
 '@
+  $phase = 'DRIVER_IDENTITY_UNVERIFIED'
   $driver = Get-Process -Id ([int]$env:LAZYSH_GUI_DRIVER_PID)
   if ($driver.StartTime.ToUniversalTime().Ticks.ToString() -ne $env:LAZYSH_GUI_DRIVER_START -or $driver.Path -ne $env:LAZYSH_GUI_DRIVER) { throw 'owner' }
+  $phase = 'OWNED_INVENTORY_UNVERIFIED'
   $all = @(Get-CimInstance Win32_Process -OperationTimeoutSec 5)
   $owned = @([int]$driver.Id)
+  $complete = $false
   for ($depth=0; $depth -lt 16; $depth++) {
     $next = @($all | Where-Object { [int]$_.ParentProcessId -in $owned -and [int]$_.ProcessId -notin $owned })
-    if (!$next.Count) { break }
+    if (!$next.Count) { $complete = $true; break }
     $owned += @($next | ForEach-Object { [int]$_.ProcessId })
     if ($owned.Count -gt 128) { throw 'bound' }
   }
-  $apps = @($all | Where-Object { [int]$_.ProcessId -in $owned -and $_.ExecutablePath -eq $env:LAZYSH_GUI_BINARY })
+  $inventory = @($all | Where-Object { [int]$_.ProcessId -in $owned })
+  $apps = @($inventory | Where-Object { $_.ExecutablePath -eq $env:LAZYSH_GUI_BINARY })
+  if ($apps.Count -eq 0) {
+    $retainedDriver = Get-Process -Id $driver.Id
+    if ($retainedDriver.StartTime.ToUniversalTime().Ticks.ToString() -eq $env:LAZYSH_GUI_DRIVER_START -and $retainedDriver.Path -eq $env:LAZYSH_GUI_DRIVER -and $complete -and @($inventory | Where-Object { $_.ProcessId -eq $driver.Id -and $_.ExecutablePath -eq $env:LAZYSH_GUI_DRIVER }).Count -eq 1 -and @($inventory | Where-Object { !$_.ExecutablePath }).Count -eq 0) { $phase = 'EXPECTED_IMAGE_CANDIDATE_ABSENT' }
+    throw 'application'
+  }
+  $phase = 'IMAGE_IDENTITY_UNVERIFIED'
   if ($apps.Count -ne 1) { throw 'application' }
   $app = Get-Process -Id $apps[0].ProcessId
   if ($app.Path -ne $env:LAZYSH_GUI_BINARY -or (Get-FileHash -LiteralPath $app.Path -Algorithm SHA256).Hash -ne $env:LAZYSH_NSIS_BINARY_SHA256) { throw 'image' }
+  $phase = 'WINDOW_UNVERIFIED'
   $script:windows = @()
   $callback = [OwnedGuiWindow+Callback] {
     param($window, $state)
@@ -90,7 +109,7 @@ public static class OwnedGuiWindow {
   }
   if (![OwnedGuiWindow]::EnumWindows($callback, [IntPtr]::Zero) -or $script:windows.Count -ne 1) { throw 'window' }
   @{pid=$app.Id;start=$app.StartTime.ToUniversalTime().Ticks.ToString();window=$script:windows[0];sha256=$env:LAZYSH_NSIS_BINARY_SHA256} | ConvertTo-Json -Compress
-} catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:GUI_OWNER'); exit 1 }
+} catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_PROBE:' + $phase); exit 1 }
 `;
 
 export function parseWindowsGuiOwner(value:string, expectedHash:string) {
@@ -198,7 +217,12 @@ function ExerciseInstalledGui {
         $rejected = Get-Content -Raw -LiteralPath $env:LAZYSH_GUI_RECEIPT | ConvertFrom-Json
         if ($rejected.failure -eq 'GUI_SESSION') {
           Require ($rejected.session -in @('CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE') -and $rejected.ownedWindow -in @('VERIFIED', 'UNVERIFIED')) 'GUI_CLIENT'
-          Require $false ('GUI_SESSION_' + $rejected.session + '_WINDOW_' + $rejected.ownedWindow)
+          $sessionCode = 'GUI_SESSION_' + $rejected.session + '_WINDOW_' + $rejected.ownedWindow
+          if ($rejected.ownedWindow -eq 'UNVERIFIED') {
+            Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED')) 'GUI_CLIENT'
+            $sessionCode += ':' + $rejected.probe
+          }
+          Require $false $sessionCode
         }
         if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }
       }

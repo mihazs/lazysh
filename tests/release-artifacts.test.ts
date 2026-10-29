@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiProbeFailure } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -311,16 +311,37 @@ test('Windows session diagnostics classify exact W3C codes without retaining or 
   }
 });
 test('Windows client timeout classification requires the pinned exact own-session error contract', () => {
-  const message='WebDriverError: Request timed out! Consider increasing the "connectionRetryTimeout" option. when running "http://127.0.0.1:12345/session" with method "POST" and args "{private-capabilities}"';
+  const message='WebDriverError: Request timed out! Consider increasing the "connectionRetryTimeout" option. when running "http://127.0.0.1:12345/session" with method "POST"';
   expect(windowsGuiSessionNoResponse(new Error(message),12345)).toBe('CLIENT_TIMEOUT');
   for (const error of [new Error(message.replace('12345','54321')), new Error(message.replace('POST','GET')),
     new Error(message.replace('Request timed out!','Request timed out')), new Error('prefix '+message),
-    new Error(message+'\nprivate'), new Error(message.slice(0,-1)), {message}, new Error('ETIMEDOUT')]) {
+    new Error(message+' and args "private"'), new Error(message+'\nprivate'), new Error(message.slice(0,-1)), {message}, new Error('ETIMEDOUT')]) {
     expect(windowsGuiSessionNoResponse(error,12345)).toBe('NO_RESPONSE');
   }
   expect(windowsGuiSessionNoResponse(new Error(message),0)).toBe('NO_RESPONSE');
   expect(windowsGuiSessionNoResponse(new Error(message),12345.5)).toBe('NO_RESPONSE');
 });
+test('pinned Node WebDriver timeout contract is reproduced against an owned nonresponding unit endpoint', async () => {
+  const result = await native('node', ['--input-type=module', '-e', String.raw`
+import {createServer} from 'node:http';
+import {createRequire} from 'node:module';
+const {windowsGuiSessionNoResponse}=await import(process.env.LAZYSH_GUI_CONTRACT_MODULE);
+const {remote}=createRequire(process.env.LAZYSH_GUI_CONTRACT_MODULE)('webdriverio');
+let requests=0;
+const server=createServer((request)=>{if(request.method==='POST'&&request.url==='/session')requests++;});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const port=server.address().port;
+try {
+  await remote({hostname:'127.0.0.1',port,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:200,
+    capabilities:{'tauri:options':{application:'owned-contract-unit-only'},'wdio:enforceWebDriverClassic':true}});
+  throw new Error('Unexpected unit endpoint response');
+} catch(error) {
+  if(requests!==1||windowsGuiSessionNoResponse(error,port)!=='CLIENT_TIMEOUT')throw new Error('Pinned timeout contract not observed');
+  console.info('CLIENT_TIMEOUT');
+} finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+`], {...process.env, LAZYSH_GUI_CONTRACT_MODULE: new URL('../.changeset/windows-installed-gui.ts', import.meta.url).href}, 15000);
+  expect(result).toBe('CLIENT_TIMEOUT');
+},20000);
 test('Windows session and owned-window diagnostics expose only the finite outcomes', () => {
   for (const code of windowsGuiSessionGuards) {
     expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:'+code)).toBe('gui:'+code);
@@ -329,6 +350,28 @@ test('Windows session and owned-window diagnostics expose only the finite outcom
     'GUI_SESSION_NOT_CREATED_WINDOW_VERIFIED private path','GUI_SESSION_NOT_CREATED_WINDOW_VERIFIED:private']) {
     expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:'+code)).toBeUndefined();
   }
+});
+test('Windows probe phases never turn unknown output or probe errors into candidate absence', () => {
+  for (const phase of windowsGuiProbePhases) {
+    expect(windowsGuiProbeFailure('LAZYSH_WINDOWS_GUI_PROBE:'+phase)).toBe(phase);
+    const marker='LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:'+phase;
+    expect(windowsInstallerFailure(marker)).toBe('gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:'+phase);
+  }
+  for (const output of [undefined, 'private native exception', 'LAZYSH_WINDOWS_GUI_PROBE:MISSING',
+    'LAZYSH_WINDOWS_GUI_PROBE:EXPECTED_IMAGE_CANDIDATE_ABSENT private path',
+    'LAZYSH_WINDOWS_GUI_PROBE:WINDOW_UNVERIFIED\nLAZYSH_WINDOWS_GUI_PROBE:EXPECTED_IMAGE_CANDIDATE_ABSENT']) {
+    expect(windowsGuiProbeFailure(output)).toBe('PROBE_UNVERIFIED');
+  }
+  for (const marker of [
+    'gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:MISSING',
+    'gui:GUI_SESSION_NO_RESPONSE_WINDOW_VERIFIED:EXPECTED_IMAGE_CANDIDATE_ABSENT',
+    'cleanup:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:EXPECTED_IMAGE_CANDIDATE_ABSENT',
+    'gui:GUI_OWNER:EXPECTED_IMAGE_CANDIDATE_ABSENT',
+    'gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:WINDOW_UNVERIFIED private path']) {
+    expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:'+marker)).toBeUndefined();
+  }
+  expect(windowsInstallerFailure('LAZYSH_WINDOWS_INSTALLER:gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:OWNED_INVENTORY_UNVERIFIED\nLAZYSH_WINDOWS_INSTALLER:gui:GUI_CLEANUP\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_BINARY'))
+    .toBe('gui:GUI_SESSION_NO_RESPONSE_WINDOW_UNVERIFIED:OWNED_INVENTORY_UNVERIFIED; gui:GUI_CLEANUP; cleanup:UNINSTALL_BINARY');
 });
 test('Windows GUI tool environment normalizes both mixed-slash image identities', () => {
   expect(windowsGuiToolEnvironment(String.raw`D:\a\_temp/tools/bin/tauri-driver.exe`, String.raw`D:\a\_temp/tools/edge/msedgedriver.exe`)).toEqual({
