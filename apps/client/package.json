@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:native-gui": "bwrap --unshare-user --unshare-net --dev-bind / / -- vitest run --config vitest.native-gui.config.ts",
+    "test:published-native-gui": "vitest run --config vitest.published-native.config.ts",
     "check:native-gui": "tsc --project tsconfig.native-gui.json",
     "tauri": "tauri",
     "dev:native": "tauri dev",

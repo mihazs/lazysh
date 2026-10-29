@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {readFile,stat} from 'node:fs/promises';
+import {readFile,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
@@ -20,6 +20,26 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
     await expect(rejected.finish('no ephemeral credential',5000)).rejects.toThrow('Owned fixture failed: no ephemeral credential');
   } finally {await fixture.stop();}
   expect(await listening(port)).toBe(false);
+},15_000);
+
+test.skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools',async()=>{
+  const fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+  try {
+    const command=await fixture.client(true,'printf "%s\\n" "$HOME" "$XDG_DATA_HOME" "$LAZYSH_STATE_DIR"; if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
+    expect((await command.finish('owned companion exec environment',5000)).trim().split('\n')).toEqual([fixture.directory,join(fixture.directory,'data'),join(fixture.directory,'state')]);
+    const bytes=Buffer.from(`OWNED-SFTP:${fixture.nonce}`),source=join(fixture.directory,'source'),returned=join(fixture.directory,'returned');
+    await writeFile(source,bytes,{mode:0o600,flag:'wx'});
+    const transfer=await fixture.sftp();
+    transfer.child.stdin!.end(`put ${source} upload\nget upload ${returned}\nrm upload\nbye\n`);
+    await transfer.finish('owned companion SFTP roundtrip',5000);
+    expect(await readFile(returned)).toEqual(bytes);
+    const client=await fixture.client();
+    client.child.stdin!.end(`${fixture.challenge}\nexit\n`);
+    const output=await client.finish('owned long-lived companion shell',5000);
+    expect(output.includes(fixture.prompt) && output.includes(fixture.expected)).toBe(true);
+  } finally {await fixture.stop();}
+  expect(await listening(fixture.port)).toBe(false);
+  await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
 
 test.skipIf(process.platform!=='linux')('owned server teardown retires an admitted interactive shell and client',async()=>{
