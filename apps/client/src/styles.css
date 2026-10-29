@@ -611,6 +611,12 @@ button svg {
   min-height: 46px;
   flex-shrink: 0;
 }
+.session-toolbar button {
+  min-height: 44px;
+}
+.session-toolbar > button {
+  flex-shrink: 0;
+}
 .view-tabs {
   flex: 1;
   min-width: 0;
