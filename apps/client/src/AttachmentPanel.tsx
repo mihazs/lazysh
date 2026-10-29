@@ -1,6 +1,6 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
-import { readClipboardImage } from './deviceClipboard';
+import { readClipboardImage, useClipboardPlatform } from './deviceClipboard';
 import { useMountedAccess, useProtectedApi, useProtectedCallback } from './access';
 import type {AttachmentPathPaste} from './attachmentPaste';
 import {useHostUpload} from './useHostUpload';
@@ -15,6 +15,7 @@ type Stroke = { points: Point[]; color: string; width: number };
 export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRestoreFileTransfer }: { sessionId: string; onAttach?: (path:string)=>void; onPastePath?:(request:AttachmentPathPaste)=>Promise<void>; onRestoreFileTransfer?:(restored:()=>void)=>void }) {
   useUi();
   const api = useProtectedApi(nativeApi);
+  const clipboardPlatform = useClipboardPlatform();
   const guard = useProtectedCallback();
   const owner=useMountedAccess();
   const originalSession=useRef(sessionId).current;
@@ -176,7 +177,7 @@ export default function AttachmentPanel({ sessionId, onAttach, onPastePath, onRe
     <div className="button-row">
       <label>{t('attachmentChoose')}<input aria-label={t('attachmentChooseLabel')} type="file" disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choose(file); }} /></label>
       <label>{t('attachmentPhoto')}<input aria-label={t('attachmentPhotoLabel')} type="file" accept="image/*" capture="environment" disabled={busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choose(file); }} /></label>
-      <button type="button" disabled={busy} onClick={() => void pasteImage()}>{t('attachmentPaste')}</button>
+      <button type="button" disabled={busy || clipboardPlatform.phase === "loading"} onClick={() => { if (clipboardPlatform.phase === "ready") void pasteImage(); else if (currentPasteOwner()) void clipboardPlatform.retry(); }}>{t(clipboardPlatform.phase === "ready" ? "attachmentPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry")}</button>
     </div>
     {uploadJob.cancelled && <p role="status">{t('uploadCancelledWarning')}</p>}
     {recoveryNeeded && onRestoreFileTransfer && <button type="button" disabled={busy} onClick={guard(()=>onRestoreFileTransfer(()=>{if(currentPasteOwner()){setError('');setRecoveryNeeded(false);setNotice({key:'attachmentRestored'});}}))}>{t('attachmentRestore')}</button>}

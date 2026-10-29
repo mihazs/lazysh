@@ -3,10 +3,12 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listener: undefined as undefined | ((event: {payload:unknown})=>void), order: [] as string[] }));
+vi.mock('./deviceClipboard',()=>({prepareClipboardPlatform:vi.fn(async()=>{})}));
 vi.mock('@tauri-apps/api/core',()=>({invoke:mocks.invoke}));
 vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async(_event:string,listener:(event:{payload:unknown})=>void)=>{
   mocks.listener=listener;return()=>{mocks.listener=undefined;};
 })}));
+import {prepareClipboardPlatform} from './deviceClipboard';
 import AccessShell, {type SessionRegistry} from './AccessShell';
 import AccessPanel from './AccessPanel';
 import { applyAccessStatus, useProtectedInvoke } from './access';
@@ -19,6 +21,7 @@ let generationBase=0;
 const unlocked=(generation='a')=>({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(generationBase+({a:1,b:2,c:3}[generation]??0)),nonce:generation.repeat(64)});
 const locked=()=>({initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(generationBase+2)});
 beforeEach(()=>{
+  vi.mocked(prepareClipboardPlatform).mockClear();
   generationBase+=10;mocks.invoke.mockReset();mocks.order=[];applyAccessStatus(unlocked());
   vi.mocked(listen).mockClear();
   mocks.invoke.mockImplementation(async(command:string)=>{
@@ -124,4 +127,14 @@ it.each([
     expect(mocks.invoke.mock.calls).toEqual(calls);expect(workspace).toHaveBeenCalledTimes(renders);
     expect(listen).toHaveBeenCalledTimes(1);
   }
+});
+
+it('preflights metadata after native readiness without holding the workspace cover', async()=>{
+  let ready!:()=>void;
+  mocks.invoke.mockImplementation((command:string)=>command==='app_lock_status'?Promise.resolve(unlocked()):new Promise<void>(resolve=>{ready=resolve;}));
+  render(<AccessShell native>{()=> <button>Owned workspace</button>}</AccessShell>);
+  await screen.findByRole('button',{name:'Owned workspace'});
+  expect(prepareClipboardPlatform).not.toHaveBeenCalled();
+  await act(async()=>ready());
+  expect(prepareClipboardPlatform).toHaveBeenCalledOnce();
 });

@@ -255,3 +255,15 @@ and unmounted completions; the isolated real-xterm clipping owner remains intact
 
 Source contracts: [Tauri mobile dispatch](https://docs.rs/crate/tauri/2.12.5/source/src/plugin/mobile.rs),
 [Wry Android main pipe](https://docs.rs/crate/wry/0.57.1/source/src/android/main_pipe.rs).
+
+Clipboard platform metadata is now preflighted after the existing native access
+readiness acknowledgement, without reading clipboard data or blocking workspace
+readiness. Only an exact boolean for the current access lease is cached. Unknown
+or failed metadata fails closed; both Paste controls show localized checking/retry
+labels. Retry checks metadata only and requires a new explicit Paste gesture. On
+known non-Android and browser routes, text/image browser reads start synchronously
+within that gesture, before any await. Android errors never fall back. Held probe,
+lease replacement, malformed result, synchronous browser dispatch, and current/stale
+read ownership are covered by the existing adapter/control/bootstrap owners.
+This preserves the gesture required by WebKit's full DOM-paste access contract; it
+is source-supported prevention, not a claim that a macOS runtime failure was seen.

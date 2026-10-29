@@ -4,6 +4,7 @@ import {uiI18n,useUi} from "./i18n/core";
 import {uiErrorText,type UiErrorCause} from "./i18n/localError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {prepareClipboardPlatform} from "./deviceClipboard";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
 import type { LiveSession } from "./terminal";
@@ -42,9 +43,28 @@ function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
 describe("terminal interactions", () => {
+  it('offers a metadata-only retry, reports loading, and requires a new Paste gesture after readiness', async () => {
+    vi.stubGlobal('isTauri', true);
+    mocks.clipboardIsAndroid.mockRejectedValueOnce(new Error('private metadata failure'));
+    const view = mount();
+    fireEvent.click(screen.getByRole('button', {name:'Retry clipboard check'}));
+    await waitFor(() => expect(screen.getByRole('button', {name:'Retry clipboard check'})).toHaveProperty('disabled',false));
+    let finish!: (value:boolean)=>void;
+    mocks.clipboardIsAndroid.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+    fireEvent.click(screen.getByRole('button', {name:'Retry clipboard check'}));
+    expect(screen.getByRole('button', {name:'Checking clipboard support…'})).toHaveProperty('disabled',true);
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled(); expect(mocks.clipboardRead).not.toHaveBeenCalled();
+    await act(async()=>finish(false));
+    expect(screen.getByRole('button', {name:'paste'})).toHaveProperty('disabled',false);
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', {name:'paste'}));
+    expect(navigator.clipboard.readText).toHaveBeenCalledOnce();
+    await waitFor(()=>expect(terminal.paste).toHaveBeenCalledExactlyOnceWith('paste me'));
+    view.unmount();
+  });
   it.each(['current', 'current failure', 'inactive then active', 'unmounted'] as const)('exposes owned native paste progress until its %s completion', async outcome => {
     vi.stubGlobal('isTauri', true);
-    mocks.clipboardIsAndroid.mockResolvedValue(true); mocks.clipboardCancel.mockResolvedValue(undefined);
+    mocks.clipboardIsAndroid.mockResolvedValue(true); await prepareClipboardPlatform(); mocks.clipboardCancel.mockResolvedValue(undefined);
     let finish!: (value: unknown) => void;
     let reject!: (error: string) => void;
     mocks.clipboardRead.mockImplementation(() => new Promise((resolve, fail) => { finish = resolve; reject = fail; }));

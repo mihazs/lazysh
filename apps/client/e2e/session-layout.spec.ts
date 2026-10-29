@@ -16,7 +16,7 @@ async function openSessions(page: Page) {
 }
 
 test.beforeEach(async ({page}) => {
-  await installNativeBridge(page, {reason:'Synthetic native access fixture.',generation:'1'});
+  await installNativeBridge(page, {reason:'Synthetic native access fixture.',generation:'1'}, {clipboardAndroid: true});
   await page.addInitScript(() => {
     let connections = 0;
     const sizes: {cols: number; rows: number}[] = [];

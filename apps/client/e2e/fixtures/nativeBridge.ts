@@ -5,7 +5,7 @@ declare global { interface Window {
   nativeFixtureEmit: (event:string,payload:unknown)=>void;
 } }
 /** Shared synthetic native admission; each spec retains its own command behavior. */
-export async function installNativeBridge(page: Page, access = {reason:'Browser fixture', generation:'0'}, options:{nativeLocale?:boolean;nativeEvents?:boolean}={}) {
+export async function installNativeBridge(page: Page, access = {reason:'Browser fixture', generation:'0'}, options:{nativeLocale?:boolean;nativeEvents?:boolean;clipboardAndroid?:boolean}={}) {
   await page.addInitScript(({access,options}) => {
     let next=0;
     const callbacks=new Map<number,(value:unknown)=>void>();
@@ -23,6 +23,7 @@ export async function installNativeBridge(page: Page, access = {reason:'Browser 
         if(options.nativeEvents && command==='plugin:event|unlisten'){listeners.delete(Number(args.eventId));return;}
         if (command === 'app_lock_status') return {initialized:true,supported:false,enabled:false,locked:false,...access};
         if (command === 'ui_locale_status' && !options.nativeLocale) return {nativeAuthority:false};
+        if (command === 'clipboard_is_android') return options.clipboardAndroid === true;
         if (command === 'app_lock_ready' || command === 'adopt_session') return;
         if (command === 'desktop_launch_read') return {directoryReceipt:null,hostReceipt:null,notice:null};
         return window.nativeFixtureInvoke(command, args, invokeOptions);

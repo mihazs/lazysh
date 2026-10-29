@@ -1,10 +1,50 @@
 import { isTauri } from '@tauri-apps/api/core';
+import { useSyncExternalStore } from 'react';
 import { api } from './bridge';
 import { captureAccess, subscribeAccess, type AccessLease } from './access';
 import { ATTACHMENT_LIMIT, imageSize } from './attachment';
 import { LocalUiError } from './i18n/localError';
 
 type Kind = 'text' | 'image';
+type PlatformPhase = 'unknown' | 'loading' | 'ready' | 'error';
+let platform: { lease: AccessLease; phase: PlatformPhase; android?: boolean; pending?: Promise<void> } | undefined;
+const platformListeners = new Set<() => void>();
+const publishPlatform = () => { for (const listener of platformListeners) listener(); };
+function platformPhase(): PlatformPhase {
+  return !isTauri() ? 'ready' : platform?.lease.current() ? platform.phase : 'unknown';
+}
+/** Metadata only: finish before the gesture so browser clipboard APIs keep its activation. */
+export function prepareClipboardPlatform(): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  if (platform?.lease.current() && (platform.phase === 'ready' || platform.phase === 'loading')) return platform.pending ?? Promise.resolve();
+  const record = { lease: captureAccess(), phase: 'loading' as PlatformPhase, android: undefined as boolean | undefined, pending: undefined as Promise<void> | undefined };
+  platform = record;
+  record.pending = (async () => {
+    try {
+      record.lease.assert();
+      const android = await api.clipboardIsAndroid();
+      record.lease.assert();
+      if (typeof android !== 'boolean') throw new Error();
+      record.android = android; record.phase = 'ready';
+    } catch { record.phase = 'error'; }
+    finally { if (platform === record) publishPlatform(); }
+  })();
+  publishPlatform();
+  return record.pending;
+}
+export function useClipboardPlatform() {
+  const phase = useSyncExternalStore(listener => {
+    platformListeners.add(listener); const stop = subscribeAccess(listener);
+    return () => { platformListeners.delete(listener); stop(); };
+  }, platformPhase, platformPhase);
+  return { phase, retry: prepareClipboardPlatform };
+}
+function nativePlatform(lease: AccessLease, signal: AbortSignal): boolean {
+  current(lease, signal);
+  if (!isTauri()) return false;
+  if (platform?.lease.current() && platform.phase === 'ready' && typeof platform.android === 'boolean') return platform.android;
+  throw new LocalUiError('terminalPasteUnavailable');
+}
 function current(lease: AccessLease, signal: AbortSignal) {
   lease.assert();
   if (signal.aborted) throw new LocalUiError('terminalPasteUnavailable');
@@ -27,15 +67,9 @@ function parsePayload(value: unknown, kind: Kind): ClipboardPayload {
   }
   throw new LocalUiError('attachmentClipboardImagesUnavailable');
 }
-async function readNative(kind: Kind, signal: AbortSignal): Promise<ClipboardPayload | null> {
-  if (!isTauri()) return null;
+async function readNative(kind: Kind, signal: AbortSignal): Promise<ClipboardPayload> {
   const lease = captureAccess();
-  lease.assert();
-  // An unsupported platform is the only route to browser fallback.
-  const android = await api.clipboardIsAndroid();
   current(lease, signal);
-  if (android === false) return null;
-  if (android !== true) throw new LocalUiError('terminalPasteUnavailable');
   const token = crypto.randomUUID();
   const cancel = () => { void api.clipboardCancel(token).catch(() => {}); };
   const stop = subscribeAccess(() => { if (!lease.current()) cancel(); });
@@ -52,22 +86,22 @@ async function readNative(kind: Kind, signal: AbortSignal): Promise<ClipboardPay
   }
 }
 export async function readClipboardText(signal: AbortSignal): Promise<string> {
-  if (!isTauri()) return navigator.clipboard.readText();
   const lease = captureAccess();
+  if (!nativePlatform(lease, signal)) {
+    const text = await navigator.clipboard.readText();
+    current(lease, signal); return text;
+  }
   const native = await readNative('text', signal);
   current(lease, signal);
-  if (native) {
-    if (native.kind !== 'text') throw new LocalUiError('terminalPasteUnavailable');
-    return native.text;
-  }
-  return navigator.clipboard.readText();
+  if (native.kind !== 'text') throw new LocalUiError('terminalPasteUnavailable');
+  return native.text;
 }
 export async function readClipboardImage(signal: AbortSignal): Promise<File> {
   const lease = captureAccess();
-  const native = await readNative('image', signal);
-  current(lease, signal);
   let blob: Blob;
-  if (native) {
+  if (nativePlatform(lease, signal)) {
+    const native = await readNative('image', signal);
+    current(lease, signal);
     if (native.kind !== 'image') throw new LocalUiError('attachmentClipboardImagesUnavailable');
     const bytes = Uint8Array.from(atob(native.bytes), byte => byte.charCodeAt(0));
     if (bytes.length > ATTACHMENT_LIMIT || imageSize(bytes)?.mime !== native.mime) throw new LocalUiError('attachmentTypeMismatch');

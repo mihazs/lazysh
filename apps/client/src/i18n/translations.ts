@@ -2,6 +2,8 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  clipboardChecking: ["Verificando suporte à área de transferência…", "Comprobando compatibilidad del portapapeles…"],
+  clipboardRetry: ["Tentar verificar a área de transferência novamente", "Reintentar comprobación del portapapeles"],
   navigationAgents: ["Navegação de agentes", "Navegación de agentes"],
   navigationTitle: ["Navegação do espaço de trabalho", "Navegación del espacio de trabajo"],
   navigationConnections: ["Conexões", "Conexiones"],
