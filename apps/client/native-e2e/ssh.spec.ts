@@ -36,9 +36,13 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   expect(await (await connect.$('select')).getValue()).toBe('ssh');
   await (await connect.$('button=Private key')).click();
   expect(await (await connect.$('input[type="checkbox"]')).isSelected()).toBe(false);
-  try{await (await connect.$('textarea')).setValue(ssh.privateKey);}
+  const keyInput=await connect.$('textarea');
+  expect(await keyInput.getValue()==='').toBe(true);
+  // Enter key events keep multiline input on the native keyboard path.
+  try{await keyInput.click();await browser.keys([...ssh.privateKey].map(value=>value==='\n'?'\uE007':value));}
   catch{throw new Error('Owned SSH private-key input failed');}
-  expect(await (await connect.$('textarea')).getValue()===ssh.privateKey).toBe(true);
+  const entered=await keyInput.getValue();
+  if(entered!==ssh.privateKey)throw new Error(`Owned SSH private-key input mismatch (${entered===''?'empty':entered.replace(/\s/g,'')===ssh.privateKey.replace(/\s/g,'')?'whitespace':'content'})`);
   await (await connect.$('button=Connect')).click();
   gui.stage='owned SSH explicit fingerprint review';
   const trust=await browser.$('[role="dialog"][aria-label="Verify this host"]');await trust.waitForDisplayed({timeout:20_000});
