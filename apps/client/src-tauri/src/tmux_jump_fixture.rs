@@ -2881,7 +2881,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         _ => panic!("request lost Herdr kind"),
     };
     let attempt = launch.begin_host(&receipt, &lease, &f.host.id).unwrap();
-    let (bound, guard) = locked_connect_host(&state, &f.host.id, Some(&attempt), 80, 24)
+    let (bound, guard) = locked_connect_host(&state, &f.host.id, Some(&attempt))
         .await
         .unwrap();
     assert_eq!(bound.credential_binding(), f.host.credential_binding());

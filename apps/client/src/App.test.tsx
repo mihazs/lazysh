@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     deleteHost: vi.fn(),
     trustHostKey: vi.fn(),
     connect: vi.fn(),
+    restoreFileTransfer: vi.fn(),
     connectLocal: vi.fn(),
     connectMosh: vi.fn(),
     connectEt: vi.fn(),
@@ -1656,4 +1657,40 @@ it('keeps a requested desktop mux manager and its lease while workspace navigati
   expect(mocks.api.tmuxJumpSnapshot).not.toHaveBeenCalled();
   expect(mocks.api.attachTmux).not.toHaveBeenCalled();
   expect(mocks.api.connect).toHaveBeenCalledWith(host.id,{password:'entry'},expect.any(Function),{launchReceipt:hostLaunchReceipt});
+});
+
+it.each([
+  {name:'restored',response:{schemaVersion:1,status:'restored'},valid:true},
+  {name:'missing',response:undefined,valid:false},
+  {name:'wrong schema',response:{schemaVersion:2,status:'restored'},valid:false},
+  {name:'uncertain status',response:{schemaVersion:1,status:'uncertain'},valid:false},
+  {name:'extra field',response:{schemaVersion:1,status:'restored',extra:true},valid:false},
+])('validates $name upload recovery without creating or adopting a terminal',async({response,valid})=>{
+  const user=userEvent.setup(),restored=vi.fn(),connected=vi.fn();
+  mocks.api.restoreFileTransfer.mockResolvedValue(response);
+  render(<ConnectDialog host={{...host,transport:'mosh'}} hosts={[host]} connected={connected} close={vi.fn()} recovery={{sessionId:'original-mosh',restored}}/>);
+  expect(screen.queryByLabelText('Transport')).toBeNull();
+  expect(screen.queryByText('Save credentials on this device after connecting')).toBeNull();
+  await user.type(screen.getByLabelText('Password'),'ephemeral-restore');
+  await user.click(screen.getByRole('button',{name:'Reconnect uploads'}));
+  if(valid)await waitFor(()=>expect(restored).toHaveBeenCalledOnce());
+  else {expect(await screen.findByRole('alert')).toHaveProperty('textContent',t('attachmentRestoreInvalid'));expect(restored).not.toHaveBeenCalled();}
+  expect(mocks.api.restoreFileTransfer).toHaveBeenCalledWith('original-mosh',{password:'ephemeral-restore'},{useSavedCredentials:false});
+  expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.connectMosh).not.toHaveBeenCalled();
+  expect(mocks.api.adoptSession).not.toHaveBeenCalled();expect(mocks.createTerminal).not.toHaveBeenCalled();expect(connected).not.toHaveBeenCalled();
+});
+
+it('uses existing saved credential authorization for upload recovery and suppresses stale completion after lock',async()=>{
+  const user=userEvent.setup(),restored=vi.fn();let complete!:(value:{schemaVersion:1;status:'restored'})=>void;
+  mocks.invoke.mockImplementation(async command=>command==='has_credentials');
+  mocks.api.restoreFileTransfer.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
+  render(<ConnectDialog host={{...host,credentialsStored:true,biometricUnlock:true}} hosts={[host]} connected={vi.fn()} close={vi.fn()} recovery={{sessionId:'original-mosh',restored}}/>);
+  await user.click(await screen.findByLabelText('Use saved credentials'));
+  await user.click(screen.getByRole('button',{name:'Reconnect uploads'}));
+  expect(mocks.api.restoreFileTransfer).toHaveBeenCalledWith('original-mosh',{}, {useSavedCredentials:true});
+  await act(async()=>{
+    applyAccessStatus({...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined});
+    complete({schemaVersion:1,status:'restored'});
+  });
+  expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });

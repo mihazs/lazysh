@@ -594,12 +594,14 @@ export function ConnectDialog({
   connected,
   close,
   launch,
+  recovery,
 }: {
   host: Host;
   hosts: Host[];
   connected: (session: LiveSession) => void;
   close: () => void;
   launch?: DesktopHostLaunch;
+  recovery?: {sessionId:string;restored:()=>void};
 }) {
   useUi();
   const [lease] = useState(() => launch?.lease ?? captureAccess());
@@ -623,8 +625,8 @@ export function ConnectDialog({
   const [jumpPassword, setJumpPassword] = useState("");
   const [exportedIdentity, setExportedIdentity] = useState("");
   // Explicit launch receipts keep their original directory/multiplexer semantics.
-  const defaultMultiplexer=launch ? undefined : host.defaultMultiplexer;
-  const [transport, setTransport] = useState<TransportMode>(launch?.mux || defaultMultiplexer ? "ssh" : host.transport ?? "ssh");
+  const defaultMultiplexer=launch || recovery ? undefined : host.defaultMultiplexer;
+  const [transport, setTransport] = useState<TransportMode>(recovery || launch?.mux || defaultMultiplexer ? "ssh" : host.transport ?? "ssh");
   const [moshAvailable, setMoshAvailable] = useState(false);
   const [etAvailable, setEtAvailable] = useState(false);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
@@ -704,6 +706,12 @@ export function ConnectDialog({
         : method === "password"
           ? { password }
           : { privateKey, ...(passphrase ? { passphrase } : {}) };
+      if(recovery) {
+        const result=await api.restoreFileTransfer(recovery.sessionId,credentials,{useSavedCredentials});
+        if(!result || typeof result!=='object' || result.schemaVersion!==1 || result.status!=='restored' || Object.keys(result).some(key=>!['schemaVersion','status'].includes(key)))throw new LocalUiError('attachmentRestoreInvalid');
+        if(alive.current && lease.current()) {setPassword('');setPrivateKey('');setPassphrase('');recovery.restored();}
+        return;
+      }
       const pending = await prepareSession(
         host.id,
         host.name,
@@ -765,7 +773,7 @@ export function ConnectDialog({
       disposeTerminal(bootstrap);
       if (!alive.current || !lease.current()) return;
       const detail = e as SshError;
-      if (detail?.kind === "unknown_host_key" && detail.fingerprint) {
+      if (!recovery && detail?.kind === "unknown_host_key" && detail.fingerprint) {
         setTrustHostId(detail.hostId || host.id);
         setTrust(detail.fingerprint);
       } else {
@@ -792,7 +800,7 @@ export function ConnectDialog({
   }
   return (
     <Dialog
-      title={trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
+      title={recovery ? t("attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
       {trust ? (
@@ -837,7 +845,7 @@ export function ConnectDialog({
             <Server size={15} />
             {host.username}@{host.hostname}:{host.port}
           </p>
-          <label>{t("appTransport")}<select
+          {!recovery && <label>{t("appTransport")}<select
               value={transport}
               disabled={busy || !!launch?.mux || !!defaultMultiplexer}
               onChange={(event) =>
@@ -854,13 +862,13 @@ export function ConnectDialog({
                 {!etAvailable ? t("appUnavailableForThisConnection") : ""}
               </option>
             </select>
-          </label>
+          </label>}
           {launch?.mux && <p className="security-note">{t('desktopLaunchMuxSsh')}</p>}
           {defaultMultiplexer && <p className="security-note">{t('defaultMuxConnecting',{kind:defaultMultiplexer.kind,name:defaultMultiplexer.name})} {t('defaultMuxSsh')}</p>}
-          <TransportOptions mode={transport} busy={busy}
+          {!recovery && <TransportOptions mode={transport} busy={busy}
             options={{mosh:{serverPath:moshServer,portMin:moshPortMin,portMax:moshPortMax},et:{serverPath:etServer,port:etPort}}}
-            change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />
-          {host.jumpHostId && (
+            change={({mosh,et}) => {setMoshServer(mosh.serverPath);setMoshPortMin(mosh.portMin);setMoshPortMax(mosh.portMax);setEtServer(et.serverPath);setEtPort(et.port);}} />}
+          {!recovery && host.jumpHostId && (
             <fieldset>
               <legend>{t("appBastion")}{" "}
                 {hosts.find((item) => item.id === host.jumpHostId)?.name ||
@@ -1023,7 +1031,7 @@ export function ConnectDialog({
           )}
           <p className="security-note">
             <KeyRound size={15} />{" "}{t("appCredentialsStayInMemoryUnlessYouChooseToSave")}</p>
-          {!useSavedCredentials && (
+          {!recovery && !useSavedCredentials && (
             <label>
               <input
                 type="checkbox"
@@ -1041,7 +1049,7 @@ export function ConnectDialog({
           <div className="dialog-actions">
             <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
             <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
-              {busy ? t("appConnecting") : t("appConnect")}
+              {busy ? t("appConnecting") : t(recovery ? "attachmentRestore" : "appConnect")}
               <ChevronRight size={16} />
             </button>
           </div>
@@ -1082,6 +1090,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [view, setView] = useState<View>("terminal");
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
+  const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;restored:()=>void}|null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
   const [muxLaunch, setMuxLaunch] = useState<DesktopMuxRequest>();
   const [deleting, setDeleting] = useState<Host | null>(null);
@@ -1173,7 +1182,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const sidebarShown=wideSidebar || sidebar;
-  const navigationCovered=!!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
+  const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
   navigationOwner.current={sessionId:activeId,agents:agentsVisible};
@@ -1223,7 +1232,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     return()=>{alive=false;};
   },[]);
   useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
-  const launchBusy=openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || pickerInFlight || (!wideSidebar && sidebar)
+  const launchBusy=!!fileRecovery || openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || pickerInFlight || (!wideSidebar && sidebar)
     || pushSettings || preferences || sync || sharing || mobileTools || about || inbox || restoring
     || (view==='sessions' && muxLaunch?.sessionId===activeId);
   useDesktopLaunch(native,localCapability.available,launchBusy,
@@ -1954,7 +1963,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                   <PreviewPanel key={active.id} sessionId={active.id} />
                 )}
                 {active.connected && !active.local && view === "attachments" && (
-                  <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} />
+                  <AttachmentPanel key={active.id} sessionId={active.id} onPastePath={pasteAttachmentPath} onRestoreFileTransfer={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{const host=hosts.find(host=>host.id===active.hostId);if(host)setFileRecovery({sessionId:active.id,host,restored});}:undefined} />
                 )}
                 {active.connected && view === "voice" && (
                   <VoicePanel key={active.id} sessionId={active.id} onDirectDictation={deliverDictation} />
@@ -2040,6 +2049,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           close={() => setEditor(null)}
         />
       )}
+      {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
       {connectingHost && (
         <ConnectDialog
           key={connectingHost.id}
