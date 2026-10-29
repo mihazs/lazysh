@@ -119,6 +119,28 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.getByRole('button',{name:'Connect to Navigation host',exact:true}).click();
   await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
   await page.getByRole('button',{name:'Connect',exact:true}).click();
+  const views=page.getByRole('navigation',{name:'Session views',exact:true});
+  for(const width of (phone?[360,393,412]:[1280])){
+    await page.setViewportSize({width,height:844});
+    for(const fontSize of [null,'16px']){
+      await views.evaluate((node,size)=>{for(const button of node.querySelectorAll('button'))button.style.fontSize=size??'';},fontSize);
+      const layout=await views.evaluate(node=>({
+        pageFits:document.documentElement.scrollWidth<=window.innerWidth,
+        scrolls:node.scrollWidth>node.clientWidth,
+        contained:[...node.querySelectorAll('button')].every(button=>{
+          const target=button.getBoundingClientRect();
+          return [...button.children].every(child=>{const rect=child.getBoundingClientRect();return rect.left>=target.left&&rect.right<=target.right;});
+        }),
+      }));
+      expect(layout.pageFits).toBe(true);
+      expect(layout.contained).toBe(true);
+      if(phone)expect(layout.scrolls).toBe(true);
+      const last=views.getByRole('button').last();await last.scrollIntoViewIfNeeded();await expect(last).toBeInViewport();
+    }
+  }
+  await page.screenshot({path:testInfo.outputPath('session-toolbar.png')});
+  await views.evaluate(node=>{for(const button of node.querySelectorAll('button'))button.style.fontSize='';});
+  await views.getByRole('button').first().scrollIntoViewIfNeeded();
   await page.getByRole('button',{name:'Agents',exact:true}).click();
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await expect(board.getByRole('button',{name:'Install companion',exact:true})).toBeVisible();

@@ -1124,20 +1124,7 @@ mod tests {
         let (launch, receipt) = host_offer("target", &lease);
         let prepared = launch.prepare_host(&hosts, &receipt, &lease).unwrap();
         for original in &prepared.hosts {
-            let value = serde_json::to_value(original).unwrap();
-            for (field, changed) in [
-                ("id", serde_json::json!("another")),
-                ("hostname", serde_json::json!("other.invalid")),
-                ("port", serde_json::json!(23)),
-                ("username", serde_json::json!("another")),
-                ("fingerprint", serde_json::json!("SHA256:changed")),
-                ("jumpHostId", serde_json::json!("other-route")),
-                ("forwardAgent", serde_json::json!(true)),
-                ("biometricUnlock", serde_json::json!(true)),
-            ] {
-                let mut changed_host = value.clone();
-                changed_host[field] = changed;
-                let changed_host: Host = serde_json::from_value(changed_host).unwrap();
+            for (field, changed_host) in crate::ssh::test_support::changed_host_bindings(original) {
                 assert!(prepared.check_host(&changed_host).is_err(), "{field}");
             }
             let mut preferences = original.clone();

@@ -1,5 +1,43 @@
 # @lazysh/client
 
+## 1.1.0
+
+### Minor Changes
+
+- 0ad69a5: Add explicit same-tab upload recovery for direct Mosh sessions using the original verified host and existing saved/manual SSH authentication. Preserve attachment drafts, terminal/output identity, access leases, exclusive creation and upload limits; never save credentials, start a new terminal or automatically retry an upload. Other SSH tools retain their original connection.
+
+### Patch Changes
+
+- b63304b: Style native file-picker buttons with the active lazysh theme and minimum 44px touch targets.
+- @lazysh/common@1.1.0
+  - @lazysh/display-idle@1.1.0
+  - @lazysh/et-transport@1.1.0
+  - @lazysh/mosh-transport@1.1.0
+
+## 1.0.2
+
+### Patch Changes
+
+- 496025f: Prevent mobile session toolbar labels and icons from overlapping by keeping complete buttons in a horizontally scrollable row.
+- ea2426d: Explain a positively closed SSH attachment-transfer connection instead of showing a generic channel-send error. Direct users to the existing verified saved-host connection flow while preserving a live Mosh tab, partial-file warnings, upload limits and exclusive file creation. Automatic in-place SSH reauthentication remains separate work.
+- @lazysh/common@1.0.2
+  - @lazysh/display-idle@1.0.2
+  - @lazysh/et-transport@1.0.2
+  - @lazysh/mosh-transport@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- e1b0208: Require a published, verified GitHub version for every completed milestone, including internal milestones, and clarify version preparation versus publication.
+
+  Remove unused desktop browser archive tooling before Android source scans, and allow an exact-source retry of unpublished 1.0.0 with every build, scan, artifact and tag check preserved.
+- c02f548: Restore the owned tmux shutdown discriminator's receipt assertion so its stopped-client/resume proof runs to completion. Product retirement guards and deadlines remain unchanged; this does not resolve the separate hosted fresh-SSH teardown failure.
+- @lazysh/common@1.0.1
+  - @lazysh/display-idle@1.0.1
+  - @lazysh/et-transport@1.0.1
+  - @lazysh/mosh-transport@1.0.1
+
 ## 1.0.0
 
 ### Major Changes

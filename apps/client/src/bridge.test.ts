@@ -2,6 +2,7 @@ import {beforeEach,expect,it,vi} from 'vitest';
 const invoke=vi.hoisted(()=>vi.fn().mockResolvedValue(undefined));
 vi.mock('@tauri-apps/api/core',()=>({invoke,isTauri:()=>true,Channel:class {onmessage?:unknown;}}));
 import {api} from './bridge';
+import {registerSessionOutput,disposeSessionOutput} from './pendingSessions';
 import { accessSnapshot, acknowledgeAccessReady, applyAccessStatus } from './access';
 beforeEach(()=>invoke.mockClear());
 it('sends installation through one protected native command with no renderer URL or binary data',async()=>{
@@ -60,4 +61,13 @@ it('requests only the typed named default entry through the existing native atta
   await api.attachDefaultMultiplexer('verified-parent',{kind:'tmux',name:'exact-work'},()=>{});
   expect(invoke).toHaveBeenCalledWith('attach_multiplexer',expect.objectContaining({sessionId:'verified-parent',kind:'tmux',name:'exact-work',createIfMissing:true,cols:100,rows:30}),expect.anything());
   expect(invoke.mock.calls[0][1]).not.toHaveProperty('command');
+});
+
+it('restores uploads through a guarded ordinary request without replacing terminal output ownership',async()=>{
+  const original=vi.fn();registerSessionOutput('original-mosh',original);
+  invoke.mockResolvedValueOnce({schemaVersion:1,status:'restored'});
+  await api.restoreFileTransfer('original-mosh',{privateKey:'owned-ephemeral-key'},{useSavedCredentials:false});
+  expect(invoke).toHaveBeenLastCalledWith('restore_file_transfer',{sessionId:'original-mosh',privateKey:'owned-ephemeral-key',useSavedCredentials:false},expect.anything());
+  expect(invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty('events');
+  disposeSessionOutput('original-mosh');expect(original).toHaveBeenCalledOnce();
 });

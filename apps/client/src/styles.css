@@ -48,6 +48,21 @@ button {
   border-radius: 8px;
   padding: 8px 12px;
 }
+input[type="file"]::file-selector-button {
+  font: inherit;
+  color: var(--theme-text);
+  background: var(--theme-control);
+  border: 1px solid var(--theme-border);
+  border-radius: 6px;
+  min-height: 44px;
+  padding: 8px 12px;
+  margin-inline-end: 8px;
+  cursor: pointer;
+}
+input[type="file"]:disabled::file-selector-button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -611,13 +626,22 @@ button svg {
   min-height: 46px;
   flex-shrink: 0;
 }
+.session-toolbar button {
+  min-height: 44px;
+}
+.session-toolbar > button {
+  flex-shrink: 0;
+}
 .view-tabs {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
   overflow-x: auto;
 }
 .view-tabs button {
+  flex: 0 0 auto;
   background: transparent;
   color: var(--theme-muted, #849779);
   display: flex;
@@ -1283,8 +1307,7 @@ button svg {
     min-height: 46px;
   }
   .view-tabs {
-    width: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
   }
   .view-tabs button {
     font-size: 10px;

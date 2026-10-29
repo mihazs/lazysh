@@ -109,6 +109,8 @@ export const api = {
       rows: 30,
     },onEvent);
   },
+  restoreFileTransfer: (sessionId:string, credentials:Credentials, options:{useSavedCredentials?:boolean}={}) =>
+    remoteInvoke<{schemaVersion:1;status:'restored'}>('restore_file_transfer',{sessionId,...credentials,...options}),
   adoptSession: (sessionId:string) => invoke<void>('adopt_session',{sessionId}),
   write: (sessionId: string, data: string) =>
     invoke<void>(sessionId.startsWith('local:') ? 'local_write' : "write_stdin", { sessionId, data }),

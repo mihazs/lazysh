@@ -105,6 +105,29 @@ installation or physical-device acceptance is claimed before it is executed.
 
 ## Current native acceptance status
 
+The mobile session toolbar now keeps complete buttons in a horizontally scrolling
+row, with 44px minimum touch targets. The complete phone/desktop browser suite
+passed 426 cases; two phone-only checks on desktop and two opt-in live-font
+downloads were skipped. This is browser layout evidence,
+not a physical Samsung/SwiftKey acceptance result.
+
+Attachment uploads use SSH even when the terminal uses Mosh. The real owned
+Mosh/OpenSSH check passed an image-sized relative-path upload, reproduced a closed
+SSH channel while the UDP terminal stayed live, and uploaded successfully through
+a fresh verified connection. Direct Mosh sessions also offer **Reconnect uploads**
+after a confirmed closed upload connection. Explicit authentication reuses the
+original verified saved host, keeps the Mosh terminal and attachment edits, and
+requires a separate manual Upload retry. It does not save credentials or restore
+other SSH tools. Recovery protocol and cancellation tests passed against owned
+Mosh/OpenSSH; physical Samsung/native UI recovery remains unexecuted, and the
+original Galaxy connection-loss cause is unproven. See [attachment recovery](attachments.md).
+
+Exact public v1.0.2 Google and FOSS signed ARM64 APKs passed native UI host save,
+relaunch and identical-byte reinstall with preserved data on admitted translated
+ARM64 guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/40941781856)).
+This does not qualify this later release's APKs, cross-version migration or
+physical Samsung hardware automatically.
+
 This release does not establish full Android/desktop parity. Owned packaged Android
 SSH and guarded Herdr Chat passed on the API36 x86_64 emulator, including native
 keep-awake hide/reveal acknowledgement ([runtime evidence](https://github.com/mihazs/lazysh/actions/runs/40894669216/job/123524957621)).
@@ -115,19 +138,24 @@ acceptance (#344/#459) retain their separate outstanding gates.
 
 Linux native GUI acceptance passed all nine owned cases, including authenticated
 SSH, exact binary identity and singleton/network isolation ([GUI evidence](https://github.com/mihazs/lazysh/actions/runs/40884642182/job/123489192812)).
-The later tmux suite in that job failed two cases; supported binary provenance and
-full multiplexer acceptance remain separate work in #7. Windows installer checks
+Supported tmux 3.4 has passed all six cases in a later owned run
+([passing sample](https://github.com/mihazs/lazysh/actions/runs/40911475774/job/123587208815)),
+but fresh-SSH server retirement remains intermittent and unresolved in #7
+([five-of-six sample](https://github.com/mihazs/lazysh/actions/runs/40896489309/job/123529437350)). Windows installer checks
 cover installation, same-version repair and uninstall; installed GUI acceptance
-(#457), version upgrade and data migration remain pending. Rex compatibility
+(#457), version upgrade and data migration remain pending. Concurrent Windows
+companion startup has intermittently returned SQLite busy errors
+([#36](https://github.com/mihazs/lazysh/issues/36)); this remains under investigation.
+Rex compatibility
 requires authorized beta access that is not available. Apple distribution is
 deferred. These limits remain explicit even when source builds, signatures and
 installer checks pass. Consult the linked issues for current acceptance evidence.
 
 ## What updates automatically
 
-The release pipeline publishes 1.0.0 through its reviewed allowlist and an explicit,
-source-bound dispatch after the source-recipe correction, then each future individually merged Changesets
-version through verified source builds and installation artifacts. It does not
+The release pipeline published 1.0.0 through its reviewed allowlist and an explicit,
+source-bound dispatch after the source-recipe correction. Each future individually
+merged Changesets version requires verified source builds and installation artifacts. It does not
 backfill historical versions or silently replace a running desktop/mobile app.
 Every gate rebuilds the exact acknowledged source. The published 0.23.0 remains
 immutable; pending Changesets remain for the next version during allowlisted publication.

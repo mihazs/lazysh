@@ -59,7 +59,7 @@ it('handles clipboard permission denial without automatic uploads', async () => 
   expect(api.uploadFile).not.toHaveBeenCalled();
 });
 
-async function openEditableImage() {
+async function openEditableImage(onRestoreFileTransfer?:(restored:()=>void)=>void) {
   const bytes = attachmentPngHeader();
   const image = new File([bytes], 'shot.png', { type: 'image/png' });
   Object.defineProperty(image, 'arrayBuffer', { value: async () => bytes.buffer });
@@ -72,7 +72,7 @@ async function openEditableImage() {
   Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:local-image') });
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   vi.mocked(api.uploadFile).mockResolvedValue({path:"/work/a'b.txt"});
-  render(<AttachmentPanel sessionId="ssh-one" />);
+  render(<AttachmentPanel sessionId="ssh-one" onRestoreFileTransfer={onRestoreFileTransfer} />);
   fireEvent.change(screen.getByLabelText('Choose attachment'), { target: { files: [image] } });
   fireEvent.click(await screen.findByLabelText('Crop or annotate PNG/JPEG'));
   await waitFor(() => expect(context.drawImage).toHaveBeenCalled());
@@ -114,4 +114,26 @@ it('a clipboard read started earlier cannot replace the selection during an owne
   await act(async()=>{paste([{types:['image/png'],getType:async()=>new Blob([attachmentPngHeader()],{type:'image/png'})}]);});
   expect(screen.getByText(/report.txt · 5 bytes/)).toBeTruthy();expect(decode).not.toHaveBeenCalled();
   await act(async()=>{finish({path:"/host/report.txt"});});expect(screen.getByLabelText('Host path')).toHaveProperty('value',"'/host/report.txt'");
+});
+
+it('keeps edited attachment and destination through explicit upload recovery without retrying automatically',async()=>{
+  let restored!:()=>void;const recover=vi.fn((done:()=>void)=>{restored=done;});
+  await openEditableImage(recover);
+  vi.spyOn(HTMLCanvasElement.prototype,'toBlob').mockImplementation(callback=>callback({size:3,arrayBuffer:async()=>new Uint8Array([7,8,9]).buffer} as Blob));
+  vi.mocked(api.uploadFile).mockRejectedValue({kind:'ssh_control_closed',message:'SSH control closed'});
+  fireEvent.change(screen.getByLabelText('Crop x'),{target:{value:'10'}});
+  fireEvent.change(screen.getByLabelText('Crop width'),{target:{value:'40'}});
+  fireEvent.change(screen.getByLabelText('Destination path'),{target:{value:'./original-edited.png'}});
+  fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Reconnect uploads'}));
+  expect(recover).toHaveBeenCalledOnce();
+  await act(async()=>restored());
+  expect(screen.getByLabelText('Crop x')).toHaveProperty('value','10');
+  expect(screen.getByLabelText('Destination path')).toHaveProperty('value','./original-edited.png');
+  expect(screen.getByRole('status').textContent).toContain('Uploads reconnected');
+  expect(api.uploadFile).toHaveBeenCalledTimes(1);
+  vi.mocked(api.uploadFile).mockResolvedValue({path:'/owned/original-edited.png'});
+  fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  await waitFor(()=>expect(api.uploadFile).toHaveBeenCalledTimes(2));
+  expect(api.uploadFile).toHaveBeenLastCalledWith('ssh-one','./original-edited.png',[7,8,9],attachmentReceipt);
 });
