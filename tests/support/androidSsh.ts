@@ -459,9 +459,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let primary=false;
   const shell=(args:string[])=>command('owned emulator command',adb,['-s',serial,...args]);
   try {
-    const allocated=(await shell(['reverse','--no-rebind','tcp:0',`tcp:${fixture.port}`])).trim();
-    if(!/^[0-9]{1,5}$/.test(allocated)||Number(allocated)<1||Number(allocated)>65535)throw new Error('Invalid owned reverse port');
-    reverse=allocated;
+    // The host allowlist key must match the concrete device port removed in cleanup.
+    await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
+    reverse=String(fixture.port);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:Number(reverse),username:fixture.username,

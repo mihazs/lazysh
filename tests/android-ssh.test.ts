@@ -189,12 +189,12 @@ test.each([
   });
 });
 
-test.skipIf(process.platform!=='linux')('dedicated retained packages are probed before cleanup without replacing the original failure',async()=>{
+test.each([false,true]).skipIf(process.platform!=='linux')('explicit reverse ownership preserves the original failure: rejected=$0',async rejected=>{
   await withDiagnosticAdb('45001\n',0,async(adb,args)=>{
     const directory=dirname(adb),sdk=join(directory,'sdk'),root=join(directory,'checkout');
     const android=join(root,'apps/client/src-tauri/gen/android');
     await mkdir(join(sdk,'platform-tools'),{recursive:true});await mkdir(android,{recursive:true});
-    await writeFile(join(sdk,'platform-tools/adb'),(await readFile(adb,'utf8')).replace('case \"$3 $4\" in', 'case \"$3 $4\" in\n  \'uninstall app.lazysh.client.test\'|\'uninstall app.lazysh.client\') exit 31 ;;'));
+    await writeFile(join(sdk,'platform-tools/adb'),(await readFile(adb,'utf8')).replace('case \"$3 $4\" in', 'case \"$3 $4\" in\n'+(rejected?"  'reverse --no-rebind') exit 31 ;;\n":'')+"  'uninstall app.lazysh.client.test'|'uninstall app.lazysh.client') exit 31 ;;"));
     await chmod(join(sdk,'platform-tools/adb'),0o700);
     const gradleArgs=join(directory,'gradle-args');
     await writeFile(join(android,'gradlew'),`#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(gradleArgs)},JSON.stringify(process.argv.slice(2)));process.exit(31);\n`);
@@ -208,11 +208,23 @@ test.skipIf(process.platform!=='linux')('dedicated retained packages are probed 
     const fixture={ssh:{directory,nonce:'a'.repeat(32),port:45678,username:'owned',privateKey:'private-fixture-key',fingerprint:'owned',prompt:'owned',challenge:'owned',expected:'owned'},
       metadata:()=>({name:'owned'}),stop:async()=>{stopped=true;throw new Error('private-cleanup-error');}} as unknown as HerdrFixture;
     try {
-      await expect(androidSshAcceptance(root,fixture)).rejects.toThrow('Owned fixture failed: actual Android SSH UI instrumentation; exit=31');
+      await expect(androidSshAcceptance(root,fixture)).rejects.toThrow(`Owned fixture failed: ${rejected?'owned emulator command':'actual Android SSH UI instrumentation'}; exit=31`);
+      const calls=(await readFile(args,'utf8')).trim().split('\n');
+      expect(calls[0]).toBe('-s emulator-5580 reverse --no-rebind tcp:45678 tcp:45678');
+      expect(calls.some(call=>call.includes('tcp:0'))).toBe(false);
+      expect(stopped).toBe(true);
+      if(rejected) {
+        expect(calls.some(call=>call.includes('reverse --remove')||call.includes('shell mkdir')||call.includes(' push '))).toBe(false);
+        await expect(readFile(gradleArgs,'utf8')).rejects.toMatchObject({code:'ENOENT'});
+        await expect(readFile(join(directory,'android-fixture.json'),'utf8')).rejects.toMatchObject({code:'ENOENT'});
+        expect(warning.mock.calls).toContainEqual(['Owned Android SSH cleanup stage failed: Herdr']);
+        return;
+      }
+      expect(JSON.parse(await readFile(join(directory,'android-fixture.json'),'utf8')).port).toBe(45678);
+      expect(calls.filter(call=>call.includes('reverse --remove'))).toEqual(['-s emulator-5580 reverse --remove tcp:45678']);
       const passed=JSON.parse(await readFile(gradleArgs,'utf8')) as string[];
       expect(passed).toContain('-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true');
       expect(passed).toContain('-PlazyshHerdrAcceptance=true');
-      const calls=(await readFile(args,'utf8')).trim().split('\n');
       const probe=calls.indexOf('-s emulator-5580 shell dumpsys activity exit-info app.lazysh.client');
       const packages=calls.indexOf('-s emulator-5580 shell pm list packages app.lazysh.client');
       const testCleanup=calls.indexOf('-s emulator-5580 uninstall app.lazysh.client.test');
