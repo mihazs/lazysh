@@ -269,20 +269,30 @@ if ($mainRole -cne 'MAIN' -or $helperRole -cne 'TAO_EVENT_HELPER') { throw 'vali
 $main = [PSCustomObject]@{Handle='123';Role=$mainRole}
 $helper = [PSCustomObject]@{Handle='456';Role=$helperRole}
 if ((GuiMainWindow @($main,$helper)) -cne '123') { throw 'wrong main selection' }
-foreach ($role in @(
-  (GuiWindowRole 'unknown class' 281542656L 262144L $true 1200L 800L),
-  (GuiWindowRole 'Tauri Window' 281542656L 262144L $false 1200L 800L),
-  (GuiWindowRole 'Tauri Window' 281542656L 262144L $true 0L 800L),
-  (GuiWindowRole 'Tauri Window' 2415919104L 262144L $true 1200L 800L),
-  (GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 1L 0L),
-  (GuiWindowRole 'Tao Thread Event Target' 2415919104L 128L $true 0L 0L),
-  (GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $false 0L 0L),
-  (GuiWindowRole 'Tao Thread Event Target' '2415919104' 134742176L $true 0L 0L)
-)) { if ($role -cne 'UNEXPECTED') { throw 'unknown or malformed role admitted' } }
+$cases = @(
+  @{Role=(GuiWindowRole 'unknown class' 281542656L 262144L $true 1200L 800L);Code='UNKNOWN_CLASS'},
+  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 262144L $false 1200L 800L);Code='MAIN_OWNER_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 262144L $true 0L 800L);Code='MAIN_GEOMETRY_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tauri Window' 2415919104L 262144L $true 1200L 800L);Code='MAIN_STYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tauri Window' 281542656L 128L $true 1200L 800L);Code='MAIN_EXSTYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $true 1L 0L);Code='TAO_GEOMETRY_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 128L $true 0L 0L);Code='TAO_EXSTYLE_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919104L 134742176L $false 0L 0L);Code='TAO_OWNER_MISMATCH'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' '2415919104' 134742176L $true 0L 0L);Code='ROLE_DATA_UNVERIFIED'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2483027968L 134742176L $true 0L 0L);Code='TAO_STYLE_CLIPSIBLINGS_ONLY'},
+  @{Role=(GuiWindowRole 'Tao Thread Event Target' 2415919105L 134742176L $true 0L 0L);Code='TAO_STYLE_MISMATCH'}
+)
+foreach ($case in $cases) {
+  if ($case.Role -cne $case.Code) { throw 'wrong role diagnostic' }
+  $script:phase='PROBE_UNVERIFIED';$rejected=$false
+  try { $null=GuiMainWindow @($main,[PSCustomObject]@{Handle='456';Role=$case.Role}) } catch { $rejected=$true }
+  if (!$rejected -or $script:phase -cne $case.Code) { throw 'role diagnostic admitted or misclassified' }
+}
 foreach ($case in @(
   @{Handles=@($main,$main);Code='VISIBLE_HANDLES_AMBIGUOUS'},
-  @{Handles=@($main,[PSCustomObject]@{Handle='789';Role='UNEXPECTED'});Code='UNEXPECTED_VISIBLE_ROLE'},
+  @{Handles=@($main,[PSCustomObject]@{Handle='789';Role='UNKNOWN_CLASS'});Code='UNKNOWN_CLASS'},
   @{Handles=@($helper);Code='NO_MAIN_WINDOW_OBSERVED'},
+  @{Handles=@([PSCustomObject]@{Handle='123';Role='MAIN_OWNER_MISMATCH'},[PSCustomObject]@{Handle='456';Role='TAO_STYLE_MISMATCH'});Code='MULTIPLE_ROLE_MISMATCHES'},
   @{Handles=@([PSCustomObject]@{Handle='123';Role='UNVERIFIED'});Code='WINDOW_ROLE_UNVERIFIED'}
 )) {
   $script:phase='PROBE_UNVERIFIED';$rejected=$false

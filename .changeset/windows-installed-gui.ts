@@ -1,6 +1,7 @@
 import {win32} from 'node:path';
 
-export const windowsGuiProbePhases = ['PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED'] as const;
+export const windowsGuiRoleRejections = ['ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES'] as const;
+export const windowsGuiProbePhases = [...windowsGuiRoleRejections, 'PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED'] as const;
 export function windowsGuiProbeFailure(stdout:unknown):typeof windowsGuiProbePhases[number] {
   if(typeof stdout!=='string'||stdout.length>1024)return 'PROBE_UNVERIFIED';
   const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)$/.exec(stdout.trim());
@@ -62,16 +63,34 @@ function Plain($path) {
 // Exact roles from pinned runtime-wry 2.12.3 and Tao 0.37.2; never choose the first HWND.
 export const windowsGuiWindowRoleScript = String.raw`
 function GuiWindowRole($className, $style, $extended, $ownerless, $width, $height) {
-  if ($className -isnot [string] -or $style -isnot [long] -or $extended -isnot [long] -or $ownerless -isnot [bool] -or $width -isnot [long] -or $height -isnot [long]) { return 'UNEXPECTED' }
+  if ($className -isnot [string] -or $style -isnot [long] -or $extended -isnot [long] -or $ownerless -isnot [bool] -or $width -isnot [long] -or $height -isnot [long]) { return 'ROLE_DATA_UNVERIFIED' }
   $bits = $style -band 4294967295L
   $extra = $extended -band 4294967295L
-  if ($className -ceq 'Tauri Window' -and $ownerless -and $width -gt 0 -and $height -gt 0 -and ($bits -band 268435456L) -ne 0 -and ($bits -band 3221225472L) -eq 0 -and ($bits -band 13107200L) -eq 13107200L -and ($extra -band 262144L) -ne 0 -and ($extra -band 128L) -eq 0) { return 'MAIN' }
-  if ($className -ceq 'Tao Thread Event Target' -and $ownerless -and $width -eq 0 -and $height -eq 0 -and $bits -eq 2415919104L -and $extra -eq 134742176L) { return 'TAO_EVENT_HELPER' }
-  return 'UNEXPECTED'
+  if ($className -ceq 'Tauri Window') {
+    if (!$ownerless) { return 'MAIN_OWNER_MISMATCH' }
+    if ($width -le 0 -or $height -le 0) { return 'MAIN_GEOMETRY_MISMATCH' }
+    if (($bits -band 268435456L) -eq 0 -or ($bits -band 3221225472L) -ne 0 -or ($bits -band 13107200L) -ne 13107200L) { return 'MAIN_STYLE_MISMATCH' }
+    if (($extra -band 262144L) -eq 0 -or ($extra -band 128L) -ne 0) { return 'MAIN_EXSTYLE_MISMATCH' }
+    return 'MAIN'
+  }
+  if ($className -ceq 'Tao Thread Event Target') {
+    if (!$ownerless) { return 'TAO_OWNER_MISMATCH' }
+    if ($width -ne 0 -or $height -ne 0) { return 'TAO_GEOMETRY_MISMATCH' }
+    if ($extra -ne 134742176L) { return 'TAO_EXSTYLE_MISMATCH' }
+    if ($bits -eq 2483027968L) { return 'TAO_STYLE_CLIPSIBLINGS_ONLY' }
+    if ($bits -ne 2415919104L) { return 'TAO_STYLE_MISMATCH' }
+    return 'TAO_EVENT_HELPER'
+  }
+  return 'UNKNOWN_CLASS'
 }
 function GuiMainWindow($handles) {
   if (@($handles | Where-Object { $_.Role -eq 'UNVERIFIED' }).Count -gt 0) { $script:phase = 'WINDOW_ROLE_UNVERIFIED'; throw 'window' }
-  if (@($handles | Where-Object { $_.Role -notin @('MAIN', 'TAO_EVENT_HELPER') -or $_.Handle -isnot [string] -or $_.Handle -notmatch '^[1-9][0-9]{0,19}$' }).Count -gt 0) { $script:phase = 'UNEXPECTED_VISIBLE_ROLE'; throw 'window' }
+  if (@($handles | Where-Object { $_.Handle -isnot [string] -or $_.Handle -notmatch '^[1-9][0-9]{0,19}$' }).Count -gt 0) { $script:phase = 'UNEXPECTED_VISIBLE_ROLE'; throw 'window' }
+  $rejections = @($handles | Where-Object { $_.Role -notin @('MAIN', 'TAO_EVENT_HELPER') } | Select-Object -ExpandProperty Role -Unique)
+  if ($rejections.Count -gt 0) {
+    $script:phase = if ($rejections.Count -eq 1 -and $rejections[0] -in @('ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES')) { $rejections[0] } else { 'MULTIPLE_ROLE_MISMATCHES' }
+    throw 'window'
+  }
   $main = @($handles | Where-Object { $_.Role -eq 'MAIN' })
   if ($main.Count -eq 0) { $script:phase = 'NO_MAIN_WINDOW_OBSERVED'; throw 'window' }
   if ($main.Count -ne 1) { $script:phase = 'VISIBLE_HANDLES_AMBIGUOUS'; throw 'window' }
@@ -261,7 +280,7 @@ function ExerciseInstalledGui {
           Require ($rejected.session -in @('CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE') -and $rejected.ownedWindow -in @('VERIFIED', 'UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode = 'GUI_SESSION_' + $rejected.session + '_WINDOW_' + $rejected.ownedWindow
           if ($rejected.ownedWindow -eq 'UNVERIFIED') {
-            Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED')) 'GUI_CLIENT'
+            Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED', 'ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES')) 'GUI_CLIENT'
             $sessionCode += ':' + $rejected.probe
           }
           Require $false $sessionCode
