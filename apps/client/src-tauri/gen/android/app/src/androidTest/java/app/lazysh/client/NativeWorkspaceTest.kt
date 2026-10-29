@@ -1517,7 +1517,7 @@ class NativeWorkspaceTest {
                 }
                 val dom = JSONObject(evaluate(scenario, """
                     (()=>{
-                      const n=x=>Number.isFinite(x)&&Math.abs(x)<=65535?Math.round(x*1000)/1000:null;
+                      const n=x=>Number.isFinite(x)&&Math.abs(x)<=65535?x:null;
                       const rect=e=>e?['left','top','right','bottom','width','height'].map(k=>n(e.getBoundingClientRect()[k])):null;
                       const canvas=document.querySelector('.terminal-canvas'),keys=document.querySelector('.terminal-keys');
                       const composer=document.querySelector('.terminal-compose'),toggle=document.querySelector('.terminal-toolbar-toggle');
