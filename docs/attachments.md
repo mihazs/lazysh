@@ -14,6 +14,15 @@ offers a shell-quoted path and an editable prompt. Copy and Stage are explicit;
 upload completion never sends a prompt or terminal input. Optional expiring public
 URLs use the independent, opt-in [sharing service](sharing.md).
 
+Mosh terminal traffic and SSH file transfer use separate connections. If the
+SSH connection closes while the Mosh terminal survives, the upload reports that
+specific failure. Open **Connections**, connect to the same saved host using the
+existing host-key verification and credential/manual-authentication flow, and
+upload from that new connection. Keep the original Mosh tab open if needed.
+An interrupted transfer may leave a partial new file; choose a fresh destination
+or inspect that file before retrying. Uploads never overwrite it. Restoring the
+SSH side channel in place without opening a new connection is not implemented.
+
 ## Explicit terminal path paste
 
 Standalone Attachments also offers **Paste uploaded path** after a current upload

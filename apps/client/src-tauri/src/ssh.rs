@@ -2290,7 +2290,7 @@ pub(crate) async fn transfer_file(
             "Upload is limited to 10 MiB",
         ));
     }
-    timeout(OP_TIMEOUT, async {
+    let result = timeout(OP_TIMEOUT, async {
         let stream = crate::sftp_stream::SftpStream::with_cancellation(
             sftp_channel(session, lease).await?,
             ownership.cancellation(),
@@ -2305,7 +2305,17 @@ pub(crate) async fn transfer_file(
             "timeout",
             "Upload timed out; check for a partial remote file",
         )
-    })?
+    })?;
+    match result {
+        Err(error) if error.kind() == "ssh_error" && session.handle.is_closed() => {
+            lease.check()?;
+            Err(SshError::new(
+                "ssh_control_closed",
+                "The SSH file-transfer connection is closed. Open Connections and connect to this saved host again, then upload from the new connection. If a Mosh terminal is still running, it can stay open. A partial new file may remain; uploads never overwrite existing files.",
+            ))
+        }
+        result => result,
+    }
 }
 pub(crate) async fn transfer_sftp(
     sftp: SftpSession,
@@ -5380,18 +5390,25 @@ mod tests {
         state.config().unwrap().hosts.push(host.clone());
         let app = tauri::test::mock_app();
         app.manage(state);
-        let connected = start_session(
-            &app.state(),
-            host.id.clone(),
-            None,
-            Some(user_key.to_openssh(Default::default()).unwrap().to_string()),
-            None,
-            80,
-            24,
-            Channel::new(|_| Ok(())),
-        )
-        .await
-        .unwrap();
+        async fn manual_session(
+            state: &AppState,
+            host: &Host,
+            key: &russh::keys::PrivateKey,
+        ) -> Connected {
+            start_session(
+                state,
+                host.id.clone(),
+                None,
+                Some(key.to_openssh(Default::default()).unwrap().to_string()),
+                None,
+                80,
+                24,
+                Channel::new(|_| Ok(())),
+            )
+            .await
+            .unwrap()
+        }
+        let connected = manual_session(&app.state(), &host, &user_key).await;
         let id = connected.session_id;
         if matches!(check, OpenSshCheck::TranscriptImages) {
             transcript_image_fixture::verify(&app, &id, dir.path()).await;
@@ -5563,6 +5580,97 @@ mod tests {
                     .unwrap(),
                 "SSH control remains alive"
             );
+            let screenshot = vec![0xa5; 462_702];
+            let uploaded = upload_file(
+                access_lease(),
+                app.state(),
+                mosh_id.clone(),
+                "./Screenshot.jpg".into(),
+                screenshot.clone(),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            assert_eq!(fs::read(uploaded.path).unwrap(), screenshot);
+            native_session
+                .handle
+                .disconnect(
+                    russh::Disconnect::ByApplication,
+                    "owned side-channel closure",
+                    "",
+                )
+                .await
+                .unwrap();
+            timeout(Duration::from_secs(2), async {
+                while !native_session.handle.is_closed() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            write_stdin(
+                access_lease(),
+                app.state(),
+                mosh_id.clone(),
+                "printf 'MOSH_%s_ALIVE\\n' 'SIDECHANNEL'\r".into(),
+                None,
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            marker(&mut rx, &native_session, "MOSH_SIDECHANNEL_ALIVE").await;
+            let error = upload_file(
+                access_lease(),
+                app.state(),
+                mosh_id.clone(),
+                "./Screenshot-after-close.jpg".into(),
+                screenshot.clone(),
+            )
+            .await
+            .unwrap_err()
+            .into_inner()
+            .unwrap();
+            assert_eq!(error.kind(), "ssh_control_closed");
+            assert!(error.message.contains("Connections"));
+            assert!(error.message.contains("partial new file"));
+            assert!(!dir.path().join("Screenshot-after-close.jpg").exists());
+            let recovered = manual_session(&app.state(), &host, &user_key).await;
+            let recovered_session = app
+                .state::<AppState>()
+                .session(&recovered.session_id)
+                .await
+                .unwrap();
+            assert!(!Arc::ptr_eq(
+                &native_session.handle,
+                &recovered_session.handle
+            ));
+            let recovered_file = upload_file(
+                access_lease(),
+                app.state(),
+                recovered.session_id.clone(),
+                "./Screenshot-after-close.jpg".into(),
+                screenshot.clone(),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            assert_eq!(fs::read(recovered_file.path).unwrap(), screenshot);
+            disconnect(app.state(), recovered.session_id).await.unwrap();
+            write_stdin(
+                access_lease(),
+                app.state(),
+                mosh_id.clone(),
+                "printf 'MOSH_%s_RECOVERED\\n' 'SIDECHANNEL'\r".into(),
+                None,
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            marker(&mut rx, &native_session, "MOSH_SIDECHANNEL_RECOVERED").await;
             assert!(
                 resize(access_lease(), app.state(), mosh_id.clone(), 512, 256)
                     .await
