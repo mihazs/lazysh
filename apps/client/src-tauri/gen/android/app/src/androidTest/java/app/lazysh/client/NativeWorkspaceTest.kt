@@ -1437,6 +1437,7 @@ class NativeWorkspaceTest {
             clickButton("Compose")
             typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
             val keyboardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            var keyboardGeometry = JSONObject()
             while (true) {
                 var fitsAboveKeyboard = false
                 scenario.onActivity { activity ->
@@ -1446,11 +1447,33 @@ class NativeWorkspaceTest {
                     val web = requireNotNull(webView(decor))
                     val position = IntArray(2)
                     web.getLocationInWindow(position)
-                    fitsAboveKeyboard = insets.isVisible(WindowInsetsCompat.Type.ime()) && keyboardHeight > 0 &&
+                    val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+                    fitsAboveKeyboard = imeVisible && keyboardHeight > 0 &&
                         position[1] + web.height <= decor.height - keyboardHeight
+                    // Closed, bounded geometry only: never DOM content, paths,
+                    // input values, view descriptions or exception messages.
+                    keyboardGeometry = JSONObject().put("rootImeVisible", imeVisible)
+                        .put("rootImeBottom", keyboardHeight.coerceIn(0, 65535))
+                        .put("decorHeight", decor.height.coerceIn(0, 65535))
+                        .put("webWindowY", position[1].coerceIn(-65535, 65535))
+                        .put("webHeight", web.height.coerceIn(0, 65535))
+                    runCatching {
+                        val content = activity.findViewById<View>(android.R.id.content)
+                        keyboardGeometry.put("contentHeight", content.height.coerceIn(0, 65535))
+                            .put("contentPaddingBottom", content.paddingBottom.coerceIn(0, 65535))
+                        web.getLocationOnScreen(position)
+                        keyboardGeometry.put("webScreenY", position[1].coerceIn(-65535, 65535))
+                        if (Build.VERSION.SDK_INT >= 30) {
+                            val metrics = activity.windowManager.currentWindowMetrics
+                            keyboardGeometry.put("metricsTop", metrics.bounds.top.coerceIn(-65535, 65535))
+                                .put("metricsBottom", metrics.bounds.bottom.coerceIn(-65535, 65535))
+                                .put("metricsImeBottom", metrics.windowInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom.coerceIn(0, 65535))
+                                .put("metricsImeVisible", metrics.windowInsets.isVisible(android.view.WindowInsets.Type.ime()))
+                        }
+                    }.onFailure { keyboardGeometry.put("supplementalUnavailable", true) }
                 }
                 if (fitsAboveKeyboard) break
-                assertTrue("Real docked IME must resize the native WebView", System.nanoTime() < keyboardDeadline)
+                assertTrue("Real docked IME must resize the native WebView; geometry=$keyboardGeometry", System.nanoTime() < keyboardDeadline)
                 Thread.sleep(50)
             }
             val canvasHeight = "document.querySelector('.terminal-canvas').getBoundingClientRect().height"
