@@ -13,6 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  companion-candidates:
+    uses: ./.github/workflows/companion-artifacts.yml
+
   client:
     runs-on: ubuntu-24.04
     steps:
