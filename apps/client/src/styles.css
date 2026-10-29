@@ -48,6 +48,21 @@ button {
   border-radius: 8px;
   padding: 8px 12px;
 }
+input[type="file"]::file-selector-button {
+  font: inherit;
+  color: var(--theme-text);
+  background: var(--theme-control);
+  border: 1px solid var(--theme-border);
+  border-radius: 6px;
+  min-height: 44px;
+  padding: 8px 12px;
+  margin-inline-end: 8px;
+  cursor: pointer;
+}
+input[type="file"]:disabled::file-selector-button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;

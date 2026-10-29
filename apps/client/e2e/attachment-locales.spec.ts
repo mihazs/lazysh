@@ -7,6 +7,14 @@ declare global{interface Window{attachment:ReturnType<typeof mountAttachment>;}}
 for(const locale of ['en','pt-BR','es'])test(`${locale} attachment keeps the real crop/drawing, held upload and editable draft across languages`,async({page})=>{
   const external=await openLocalizedApp(page,locale);await page.evaluate(async()=>{const {mountAttachment}=await import('/e2e/fixtures/AttachmentHarness.tsx');window.attachment=mountAttachment();});
   const root=page.locator('.attachment-fixture');
+  const fileControls=root.locator('input[type=file]');
+  await expect(fileControls).toHaveCount(2);
+  expect(await fileControls.evaluateAll(inputs=>inputs.every(input=>{
+    const picker=getComputedStyle(input,'::file-selector-button');
+    const button=getComputedStyle(input.closest('.button-row')!.querySelector('button')!);
+    return picker.backgroundColor===button.backgroundColor&&picker.color===button.color&&parseFloat(picker.minHeight)>=44;
+  }))).toBe(true);
+  await page.screenshot({path:test.info().outputPath('file-controls.png')});
   const png=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=100;canvas.height=80;const context=canvas.getContext('2d')!;context.fillStyle='#fff';context.fillRect(0,0,100,80);return canvas.toDataURL('image/png').split(',')[1];});
   await root.locator('input[type=file]').first().setInputFiles({name:'literal {{name}}.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await root.getByRole('checkbox').check();
   const canvas=root.locator('canvas');await expect(canvas).toBeVisible();
