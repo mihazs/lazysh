@@ -1,10 +1,11 @@
 import {expect,test} from 'bun:test';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
-import {join} from 'node:path';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
+import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,publishedDriverStage,publishedDriverObservation,publishedCommandFailure,publishedCliFailure,translatedGuest,type PublishedCommand} from './support/androidPublished';
+import {publishedAcceptance,publishedInstrumentation,publishedOutput,publishedState,publishedDriverStage,publishedDriverObservation,publishedCommandFailure,publishedCommandProgress,publishedDriverProgress,publishedCliFailure,translatedGuest,type PublishedCommand} from './support/androidPublished';
 import {preparePublishedApk} from './support/androidPublishedAssets';
+import {identity} from './support/ownedProcess';
 
 const nonce='a'.repeat(32),component='app.lazysh.acceptance/androidx.test.runner.AndroidJUnitRunner';
 const output=(phase:string)=>`INSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS: lazyshPublishedPhase=${phase}\nINSTRUMENTATION_STATUS: lazyshPublishedPassed=true\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_CODE: -1`;
@@ -253,3 +254,70 @@ test('diagnostic metadata cannot satisfy or relax the original successful UI pha
   expect(publishedInstrumentation(output('create')+'\n'+report,'create')).toBe(true);
   expect(publishedDriverObservation('INSTRUMENTATION_STATUS: lazyshPublishedObservation='+JSON.stringify(observedInput).slice(0,-1))).toEqual({state:'unavailable'});
 });
+
+const progressFrame=(stage='WORKSPACE_READINESS',event='entry')=>`INSTRUMENTATION_STATUS: lazyshPublishedProgress=${JSON.stringify({stage,event})}\nINSTRUMENTATION_STATUS_CODE: 0\n`;
+test('progress retains only the last completely framed allowlisted wrapper boundary',()=>{
+  expect(publishedDriverProgress(progressFrame())).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'entry'});
+  const completed=progressFrame('WORKSPACE')+progressFrame()+progressFrame('WORKSPACE_READINESS','exit');
+  expect(publishedDriverProgress(completed)).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'exit'});
+  expect(publishedDriverProgress(progressFrame().replaceAll('\n','\r\n'))).toMatchObject({state:'available'});
+  for(let end=0;end<progressFrame().length;end++)expect(publishedDriverProgress(progressFrame().slice(0,end))).toEqual({state:'unavailable'});
+  // A later unfinished frame cannot replace an earlier complete observation.
+  expect(publishedDriverProgress(completed+progressFrame('SAVE_HOST').slice(0,-2))).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'exit'});
+  expect(publishedDriverProgress(progressFrame().repeat(256))).toMatchObject({state:'available'});
+  expect(publishedDriverProgress(progressFrame().repeat(257))).toEqual({state:'unavailable'});
+});
+test('malformed, private, oversized and NUL progress fails closed rather than projecting partial fields',()=>{
+  const prefix='INSTRUMENTATION_STATUS: lazyshPublishedProgress=';
+  const malformed=[progressFrame('PRIVATE_CLASS'),progressFrame('NAME','private-event'),
+    `${prefix}{"stage":"NAME","event":"entry","message":"private-value"}\nINSTRUMENTATION_STATUS_CODE: 0\n`,
+    ...['null','[]','{}','{"stage":"NAME"}','{"event":"entry"}','{"stage":"NAME","event":"entry","stage":"SAVE_HOST"}','private-value'].map(value=>`${prefix}${value}\nINSTRUMENTATION_STATUS_CODE: 0\n`),
+    progressFrame().replace('STATUS_CODE: 0','STATUS_CODE: 1'),
+    progressFrame().replace('INSTRUMENTATION_STATUS_CODE: 0','INSTRUMENTATION_STATUS: private=private-value\nINSTRUMENTATION_STATUS_CODE: 0'),
+    progressFrame()+'\0',progressFrame()+'x'.repeat(65536),progressFrame()+'é'.repeat(32768),
+    `${prefix}${'x'.repeat(257)}\nINSTRUMENTATION_STATUS_CODE: 0\n`];
+  for(const sample of malformed){
+    const result=publishedDriverProgress(sample);expect(result).toEqual({state:'unavailable'});
+    expect(JSON.stringify(result)).not.toContain('private');
+  }
+  expect(publishedCommandProgress(new Error('private-value'))).toEqual({state:'unavailable'});
+});
+test.skipIf(process.platform!=='linux')('actual fragmented output preserves complete progress on nonzero exit without retaining private bytes',async()=>{
+  const marker=progressFrame('SAVE_HOST','exit');
+  const script=`const marker=${JSON.stringify(marker)};process.stdout.write(marker.slice(0,31));setTimeout(()=>{process.stdout.write(marker.slice(31));process.stdout.write('private-stdout');process.stderr.write('private-stderr');process.exitCode=9;},10);`;
+  const error=await publishedOutput(process.execPath,['-e',script],1000).catch(error=>error);
+  expect(publishedCommandFailure(error)).toBe('nonzero');
+  expect(publishedCommandProgress(error)).toEqual({state:'available',stage:'SAVE_HOST',event:'exit'});
+  expect(JSON.stringify(error)+String(error)).not.toContain('private');
+  expect(publishedCommandProgress(Object.create(Object.getPrototypeOf(error)))).toEqual({state:'unavailable'});
+});
+test.skipIf(process.platform!=='linux').each([false,true])('actual marker-then-hang keeps deadline and owned cleanup failure=%s',cleanupFails=>fixture(async asset=>{
+  const pidFile=join(dirname(asset.apk),'child.pid'),marker=progressFrame();
+  const script=`require('node:fs').writeFileSync(process.argv[1],String(process.pid));process.stdout.write(${JSON.stringify(marker)});process.stdout.write('private-stdout');process.stderr.write('private-stderr');setInterval(()=>{},1000);`;
+  const f=fake();let calls=0;
+  const run:PublishedCommand=async(program,args,milliseconds)=>{
+    if(args.includes('instrument')){
+      calls++;expect(milliseconds).toBe(45000);
+      return publishedOutput(process.execPath,['-e',script,pidFile],300);
+    }
+    const value=await f.run(program,args,milliseconds);
+    if(cleanupFails&&args.includes('uninstall')&&args.at(-1)==='app.lazysh.acceptance')throw new Error('private-cleanup');
+    return value;
+  };
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,run,admitted);
+  expect(result.passed).toBe(false);expect(calls).toBe(1);
+  expect(result.receipt).toMatchObject({failureStage:'create',created:false,relaunched:false,reinstalled:false,preserved:false,
+    driverCommand:{outcome:'deadline'},driverStage:'unavailable',driverObservation:{state:'unavailable'},
+    driverProgress:{state:'available',stage:'WORKSPACE_READINESS',event:'entry'},cleanup:cleanupFails?'failed':'passed'});
+  expect(f.calls.slice(-2).map(args=>args.at(-1))).toEqual(['app.lazysh.acceptance','app.lazysh.client']);
+  const pid=Number(await readFile(pidFile,'utf8'));expect(Number.isInteger(pid)&&pid>0).toBe(true);
+  expect(await identity(pid)).toBeUndefined();expect(JSON.stringify(result)).not.toContain('private');
+}));
+test.each(['entry','exit'])('COMPLETE %s progress alone cannot grant success or skip owned cleanup',event=>fixture(async asset=>{
+  const f=fake(args=>args.includes('instrument')?progressFrame('COMPLETE',event):undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',created:false,relaunched:false,reinstalled:false,preserved:false,
+    driverCommand:{outcome:'completed'},driverStage:'unavailable',driverObservation:{state:'unavailable'},
+    driverProgress:{state:'available',stage:'COMPLETE',event},cleanup:'passed'});
+  expect(f.calls.filter(args=>args.includes('instrument'))).toHaveLength(1);
+}));
