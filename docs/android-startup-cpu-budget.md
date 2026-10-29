@@ -65,3 +65,56 @@ checkpoint fields contain no underlying error, PID, path, argv, or raw boot UUID
 They locate a failed operation, not its root cause. Existing observation evidence
 survives a subsequent cleanup failure. Missing PID fields in the summary do not
 locate failure: PID/start proofs are internal and never uploaded.
+
+## AVD serialization and closed field observations
+
+Upstream qemu commit `ae9d18d2b6261179fbd57fffec720a04f7bfb053` writes
+[`key = value` assignments and atomically replaces INI files](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/android-emu-base/android/base/files/IniFile.cpp).
+That file's SHA-256 is
+`806aa822a42a8d6065de655f8078d4ecd8ae09e0f4827eec5cbcd2c8007885ce`.
+The [C INI writer](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/files/src/android/utils/ini.cpp)
+delegates to it. [First-boot partition configuration](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/avd/src/android/avd/info.c)
+can rewrite config.ini. These source contracts justify parsing whitespace around
+assignments while retaining exact key/value and unique index-path checks.
+They do not identify which field changed in the failed hosted sample or establish
+the exact source revision of SDK emulator build 16428233.
+
+Run 40825846679 artifact 12875968930, SHA-256
+`b99e21eba8872de8a2cdc1cd2094f3a03690624558de15f60e18aa5bd4974699`,
+passed camera attestation and stopped at `avd-proof`, before inode comparison.
+The next probe retains only closed directory/config/index inode-stability flags,
+core/device/image/index validity, RAM encoding, and assignment-format categories.
+A failed subcheck has a closed `avdFailure.check`; no raw config, path, UID or PID
+is retained. The observation phase distinguishes seal, post-boot and retirement
+snapshots; a later cleanup failure preserves the original observation.
+
+The [hardware definition](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/avd/src/android/avd/hardware-properties.ini)
+declares integer megabytes. The observed config retained `3072M`; the configured
+and allowed RAM value remains unchanged. UID, link, canonical path, RAM/core/device/image and directory/index inode checks
+remain strict. After camera attestation and all those checks pass, post-boot
+admission may replace the sealed config inode once with its freshly proved
+config inode. Retirement compares all three inodes exactly against that admitted
+baseline; a later config replacement still prevents deletion.
+
+Branch probe 40827477335 artifact 12877695809, SHA-256
+`56546a7d29d52233d9587e33fbfbd9724e59352d9838d1f6b1e2172f444d64b4`,
+retained valid core/RAM/device/image/index fields, unchanged directory/index
+inodes, spaced assignments, and a changed config inode. RAM remained `3072M`.
+It stopped at the original inode comparison. This observed replacement matches
+the documented SDK atomic writer. The one-time admission handoff addresses that
+setup contract; it does not establish an ANR cause or CPU-budget outcome.
+
+## Completed hosted comparison
+
+Run [40828476933](https://github.com/mihazs/lazysh/actions/runs/40828476933)
+completed all four samples at source `7aa8410d98c245a3d75110be51a3723dd178f671`.
+Artifact 12878475654 has SHA-256
+`f0646c70f9f6533e0733a681873e6e048f8238c8b4900568892017d254dea548`.
+Guest core counts were 2, 4, 4, 2; all captures and owned cleanup completed.
+The four boot identities were distinct, image/emulator/camera fingerprints matched,
+and the host identity stayed unchanged.
+
+No SystemUI ANR was observed in any of the four retained event buffers. This
+sample does not distinguish the CPU settings, establish ANR absence outside
+those buffers, or identify the earlier startup failure's cause. No acceptance
+CPU setting changes follow from it; issue #379 remains open.

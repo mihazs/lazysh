@@ -16,13 +16,24 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('sidebar displays the canonical decorative Bed Mode mark without duplicate name text',async({page},testInfo)=>{
+test('home and sidebar display the canonical Bed Mode mark',async({page},testInfo)=>{
   await page.goto('/');
+  const welcomeMark=page.getByRole('img',{name:'lazysh',exact:true});
+  await expect(welcomeMark).toBeVisible();
+  await expect.poll(()=>welcomeMark.evaluate(image=>(image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth)).toBe(256);
+  const homeBounds=await welcomeMark.boundingBox();
+  expect(homeBounds!.width).toBeGreaterThan(64);
+  expect(homeBounds!.height).toBe(homeBounds!.width);
+  expect(homeBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(homeBounds!.x+homeBounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  const welcomeSource=await welcomeMark.getAttribute('src');
+  await page.screenshot({path:testInfo.outputPath('welcome-brand.png')});
   if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).tap();
   const brand=page.getByRole('complementary',{name:'Hosts and connections'}).locator('.brand');
   const mark=brand.locator('img.brand-mark');
   await expect(brand).toBeVisible();
   await expect(mark).toBeVisible();
+  expect(await mark.getAttribute('src')).toBe(welcomeSource);
   await expect(mark).toHaveAttribute('alt','');
   await expect(mark).toHaveAttribute('aria-hidden','true');
   await expect(brand.getByRole('img',{name:/lazysh|Bed Mode/})).toHaveCount(0);

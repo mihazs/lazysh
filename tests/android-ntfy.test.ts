@@ -52,6 +52,30 @@ test('missing event retains only closed admission, receipt and OS observations',
   }
 });
 
+const clockDiagnostic=eventDiagnostic.replace('readReturned=false','readReturned=true').replace('ownedNotification=false]',
+  'ownedNotification=false reads=one returnedReads=one writes=zero returnedWrites=zero storedEnabled=true clock=beforeIssued]');
+test('event diagnosis retains bounded operation counts and closed clock categories, never raw values',()=>{
+  const observed=eventObservation('private-prefix '+clockDiagnostic+' private-suffix');
+  expect(observed).toMatchObject({reads:'one',returnedReads:'one',writes:'zero',returnedWrites:'zero',storedEnabled:true,clock:'beforeIssued'});
+  expect(JSON.stringify(observed)).not.toMatch(/private|issuedAt|expiresAt|highWater|[0-9]/);
+  for(const clock of ['unavailable','negative','rollback','beforeIssued','expired','withinWindow']) {
+    expect(eventObservation(clockDiagnostic.replace('clock=beforeIssued','clock='+clock))?.clock).toBe(clock);
+  }
+  for(const name of ['reads','returnedReads','writes','returnedWrites']) for(const value of ['zero','one','many']) {
+    const text=clockDiagnostic.replace(new RegExp(name+'=(zero|one|many)'),name+'='+value);
+    expect(eventObservation(text)?.[name as keyof NonNullable<ReturnType<typeof eventObservation>>]).toBe(value);
+  }
+  for(const flag of ['true','false','unavailable']) {
+    expect(eventObservation(clockDiagnostic.replace('storedEnabled=true','storedEnabled='+flag))?.storedEnabled).toBe(flag==='unavailable'?null:flag==='true');
+  }
+  for(const text of [clockDiagnostic.replace('reads=one','reads=3'),clockDiagnostic.replace('returnedWrites=zero','returnedWrites=-1'),
+    clockDiagnostic.replace('storedEnabled=true','storedEnabled=private'),clockDiagnostic.replace('clock=beforeIssued','clock=1000'),
+    clockDiagnostic.replace('clock=beforeIssued','clock=beforeIssued clock=expired'),clockDiagnostic.replace(' reads=one',''),
+    clockDiagnostic.replace('clock=beforeIssued','clock=beforeIssued issuedAt=1000'),clockDiagnostic+clockDiagnostic]) {
+    expect(eventObservation(text)).toBeUndefined();
+  }
+});
+
 test.each([
   eventDiagnostic.replace('entered=true','entered=private'),
   eventDiagnostic.replace('entered=true','entered=false').replace('readReturned=false','readReturned=true'),

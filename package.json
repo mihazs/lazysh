@@ -30,6 +30,7 @@
     "check": "turbo run check check:rust",
     "test": "turbo run test test:rust",
     "test:e2e": "turbo run test:e2e",
+    "test:native-gui": "turbo run test:native-gui --filter=@lazysh/client --concurrency=1",
     "test:openssh": "turbo run test:openssh",
     "test:multiplexers": "turbo run test:multiplexers",
     "test:voice": "turbo run test:voice",

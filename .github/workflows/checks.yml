@@ -72,7 +72,8 @@ jobs:
   # Build outside the checkout: Zig 0.16.0 writes source-local zig-pkg dependencies.
   # Source/build contract: packages/herdr-upstream/PROVENANCE.md and ../herdr-guard/README.md.
   herdr-native:
-    runs-on: ubuntu-24.04
+    # Match the oldest native consumer's glibc floor.
+    runs-on: ubuntu-22.04
     outputs:
       guarded-sha256: ${{ steps.guarded-artifact.outputs.sha256 }}
     timeout-minutes: 30
@@ -214,7 +215,7 @@ jobs:
 
   native-linux:
     needs: herdr-native
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -223,18 +224,103 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config mosh openssh-server tmux dbus-daemon xdg-desktop-portal
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
+      - name: Verify native GUI namespace prerequisites
+        run: |
+          test "$(id -u)" -ne 0
+          bwrap --version
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
+          bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid --dev-bind / / --proc /proc -- /usr/bin/true
+      - name: Build the pinned official tmux fixture outside the checkout
+        timeout-minutes: 10
+        run: |
+          test "$(/usr/bin/tmux -V)" = 'tmux 3.2a'
+          tmux_root=$(mktemp -d "$RUNNER_TEMP/lazysh-tmux-3.4-XXXXXX")
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 707213 https://github.com/tmux/tmux/releases/download/3.4/tmux-3.4.tar.gz -o "$tmux_root/tmux-3.4.tar.gz"
+          test "$(stat -c%s "$tmux_root/tmux-3.4.tar.gz")" -eq 707213
+          printf '%s  %s\n' '551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa' "$tmux_root/tmux-3.4.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$tmux_root/tmux-3.4.tar.gz" --directory "$tmux_root" --no-same-owner --no-same-permissions
+          cd "$tmux_root/tmux-3.4"
+          ./configure --prefix="$tmux_root/install"
+          make -j2
+          make install
+          export PATH="$tmux_root/install/bin:$PATH"
+          test "$(command -v tmux)" = "$tmux_root/install/bin/tmux"
+          test "$(tmux -V)" = 'tmux 3.4'
+          echo "$tmux_root/install/bin" >> "$GITHUB_PATH"
+      - name: Build the pinned official Mosh fixture outside the checkout
+        timeout-minutes: 10
+        run: |
+          mosh_root=$(mktemp -d "$RUNNER_TEMP/lazysh-mosh-1.4.0-XXXXXX")
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 2097152 https://github.com/mobile-shell/mosh/releases/download/mosh-1.4.0/mosh-1.4.0.tar.gz -o "$mosh_root/mosh-1.4.0.tar.gz"
+          printf '%s  %s\n' '872e4b134e5df29c8933dff12350785054d2fd2839b5ae6b5587b14db1465ddd' "$mosh_root/mosh-1.4.0.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$mosh_root/mosh-1.4.0.tar.gz" --directory "$mosh_root" --no-same-owner --no-same-permissions
+          cd "$mosh_root/mosh-1.4.0"
+          ./configure --prefix="$mosh_root/install"
+          make -j2
+          make install
+          export PATH="$mosh_root/install/bin:$PATH"
+          test "$(command -v mosh-server)" = "$mosh_root/install/bin/mosh-server"
+          mosh_version=$(mosh-server --version)
+          test "${mosh_version%%$'\n'*}" = 'mosh-server (mosh 1.4.0) [build mosh 1.4.0]'
+          echo "$mosh_root/install/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Native dependency objects must match this runner's glibc baseline.
+          prefix-key: v0-rust-ubuntu-22.04
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Check combined native voice startup and clean shutdown without models
         run: bunx turbo run test:voice-interop:smoke --filter=@lazysh/client
-      - run: bun run build:native
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned native GUI protocol driver
+        run: cargo install --locked --version 2.1.0 tauri-driver --root "$RUNNER_TEMP/lazysh-native-driver"
+      - name: Prepare owned native GUI system tools
+        run: |
+          tools_dir=$(mktemp -d "$RUNNER_TEMP/lazysh-native-tools.XXXXXX")
+          for tool in WebKitWebDriver Xvfb; do
+            source=$(readlink -f "/usr/bin/$tool")
+            install -m 0755 "$source" "$tools_dir/$tool"
+            cmp "$source" "$tools_dir/$tool"
+          done
+          echo "LAZYSH_NATIVE_GUI_WEBKIT_DRIVER=$tools_dir/WebKitWebDriver" >> "$GITHUB_ENV"
+          echo "LAZYSH_NATIVE_GUI_XVFB=$tools_dir/Xvfb" >> "$GITHUB_ENV"
+      - name: Exercise owned Linux native singleton GUI delivery
+        id: native-gui
+        env:
+          LAZYSH_NATIVE_GUI_DRIVER: ${{ runner.temp }}/lazysh-native-driver/bin/tauri-driver
+        run: bun run test:native-gui
+      - name: Retain only the owned synthetic native GUI image
+        if: ${{ !cancelled() && (steps.native-gui.outcome == 'success' || steps.native-gui.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-native-singleton-gui
+          path: apps/client/test-results/native-gui
+          if-no-files-found: warn
       - run: bun run test:mosh
       - name: Exercise retained tmux display navigation and hostile control streams
         run: bunx turbo run test:tmux --filter=@lazysh/client
+      - name: Exercise original-display Chat input and retirement on supported tmux
+        shell: bash
+        run: |
+          test "$(tmux -V)" = 'tmux 3.4'
+          case_name=ssh::tmux_jump_fixture::real_tmux_chat_original_display_namespace_bytes_and_retirement
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+      - name: Reject unsupported apt tmux loops without binding authority
+        shell: bash
+        env:
+          LAZYSH_TEST_TMUX: /usr/bin/tmux
+        run: |
+          test "$(/usr/bin/tmux -V)" = 'tmux 3.2a'
+          case_name=ssh::tmux_jump_fixture::real_tmux_unsupported_client_loops_keep_terminal_without_binding
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - uses: actions/download-artifact@v4
         with:
           name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
@@ -247,6 +333,7 @@ jobs:
           cd "$RUNNER_TEMP/lazysh-guarded-herdr"
           printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
           chmod 700 herdr
+          timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
           cd "$GITHUB_WORKSPACE"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
 
