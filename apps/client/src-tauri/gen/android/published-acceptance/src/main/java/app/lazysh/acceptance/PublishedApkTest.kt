@@ -47,9 +47,18 @@ class PublishedApkTest {
     private val usernameHint = "Username"
     private val deadline = System.nanoTime() + 45_000_000_000L
 
+    private fun progress(name: Stage, event: String) {
+        try {
+            instrumentation.sendStatus(0, Bundle().apply {
+                putString("lazyshPublishedProgress", JSONObject().put("stage", name.name).put("event", event).toString())
+            })
+        } catch (_: Throwable) { /* Observation cannot replace the original UI result. */ }
+    }
+
     private fun <T> stage(name: Stage, action: () -> T): T = try {
+        progress(name, "entry")
         check(System.nanoTime() < deadline)
-        action()
+        action().also { progress(name, "exit") }
     } catch (failure: Throwable) {
         // Retain a nested owned stage; discard every arbitrary framework detail.
         val closed = Stage.entries.firstOrNull {

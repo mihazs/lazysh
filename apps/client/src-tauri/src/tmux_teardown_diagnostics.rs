@@ -1,4 +1,4 @@
-//! Failure-only receipts for the four PIDs already captured by the owned fixture.
+//! Failure-only receipts for captured fixture identities and bounded owned ancestry.
 use std::{io, os::unix::process::ExitStatusExt, process::ExitStatus};
 
 pub(super) enum Stop {
@@ -198,6 +198,450 @@ mod linux {
         }
     }
     struct Clients(Result<Vec<Client>, &'static str>);
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum FdKind {
+        Pipe,
+        Socket,
+        Tty,
+        Other,
+        Unavailable,
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Ancestry {
+        Reached,
+        Reparented,
+        Bounded,
+        Unavailable,
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    struct Peer {
+        ancestry: Ancestry,
+        stdio: [FdKind; 3],
+    }
+    impl Peer {
+        fn unavailable() -> Self {
+            Self {
+                ancestry: Ancestry::Unavailable,
+                stdio: [FdKind::Unavailable; 3],
+            }
+        }
+    }
+    fn relation(sample: Sample) -> Option<(u64, i32)> {
+        match sample {
+            Sample::Observed {
+                start,
+                state,
+                parent,
+            } if !matches!(state, 'Z' | 'X' | 'x') => Some((start, parent)),
+            _ => None,
+        }
+    }
+    fn fd_kind(bytes: &[u8]) -> FdKind {
+        let number = |value: &[u8]| !value.is_empty() && value.iter().all(u8::is_ascii_digit);
+        if bytes.is_empty() || bytes.len() > 4096 {
+            return FdKind::Unavailable;
+        }
+        for (prefix, kind) in [
+            (b"pipe:[".as_slice(), FdKind::Pipe),
+            (b"socket:[".as_slice(), FdKind::Socket),
+        ] {
+            if bytes
+                .strip_prefix(prefix)
+                .and_then(|tail| tail.strip_suffix(b"]"))
+                .is_some_and(number)
+            {
+                return kind;
+            }
+        }
+        if bytes == b"/dev/tty" || bytes.strip_prefix(b"/dev/pts/").is_some_and(number) {
+            FdKind::Tty
+        } else {
+            FdKind::Other
+        }
+    }
+    fn read_fd(pid: i32, fd: i32) -> FdKind {
+        // readlink observes only a fixed descriptor's link, never its target/data.
+        if pid <= 1 || !(0..=2).contains(&fd) {
+            return FdKind::Unavailable;
+        }
+        let path = std::ffi::CString::new(format!("/proc/{pid}/fd/{fd}")).unwrap();
+        let mut bytes = [0u8; 4097];
+        let length =
+            unsafe { libc::readlink(path.as_ptr(), bytes.as_mut_ptr().cast(), bytes.len()) };
+        if length < 0 {
+            FdKind::Unavailable
+        } else {
+            fd_kind(&bytes[..length as usize])
+        }
+    }
+    fn peer_probe(
+        client: ClientIdentity,
+        anchor: ClientIdentity,
+        mut sample: impl FnMut(i32) -> Sample,
+        mut descriptor: impl FnMut(i32, i32) -> FdKind,
+    ) -> Peer {
+        if client.pid <= 1 || anchor.pid <= 1 || client.pid == anchor.pid {
+            return Peer::unavailable();
+        }
+        let valid = |identity: ClientIdentity, value| {
+            relation(value).is_some_and(|(start, _)| start == identity.start)
+        };
+        let anchor_before = sample(anchor.pid);
+        let first = sample(client.pid);
+        if !valid(anchor, anchor_before) || !valid(client, first) {
+            return Peer::unavailable();
+        }
+        let mut chain = vec![(client.pid, first)];
+        let mut ancestry = Ancestry::Bounded;
+        for _ in 0..8 {
+            let &(pid, before) = chain.last().unwrap();
+            if pid == anchor.pid {
+                if !valid(anchor, before) {
+                    return Peer::unavailable();
+                }
+                ancestry = Ancestry::Reached;
+                break;
+            }
+            let Some((_, parent)) = relation(before) else {
+                return Peer::unavailable();
+            };
+            if parent == 1 {
+                ancestry = Ancestry::Reparented;
+                break;
+            }
+            if parent <= 1 || chain.iter().any(|&(seen, _)| seen == parent) {
+                return Peer::unavailable();
+            }
+            let next = sample(parent);
+            if relation(next).is_none() {
+                return Peer::unavailable();
+            }
+            chain.push((parent, next));
+            if parent == anchor.pid {
+                if !valid(anchor, next) {
+                    return Peer::unavailable();
+                }
+                ancestry = Ancestry::Reached;
+                break;
+            }
+        }
+        if ancestry == Ancestry::Bounded
+            && relation(chain.last().unwrap().1)
+                .is_some_and(|(_, parent)| chain.iter().any(|&(pid, _)| parent == pid))
+        {
+            return Peer::unavailable();
+        }
+        let stdio = std::array::from_fn(|fd| descriptor(client.pid, fd as i32));
+        // UID admission is repeated by every real sample. Fence every observed
+        // parent edge as well as the original client and explicitly owned anchor.
+        if chain
+            .iter()
+            .rev()
+            .any(|&(pid, before)| relation(sample(pid)) != relation(before))
+            || !valid(anchor, sample(anchor.pid))
+        {
+            return Peer::unavailable();
+        }
+        Peer { ancestry, stdio }
+    }
+    fn fresh_client(clients: &Clients, lifetimes: &Lifetimes) -> Option<ClientIdentity> {
+        let identity = lifetimes.0[1]?;
+        let mut selected = clients
+            .0
+            .as_ref()
+            .ok()?
+            .iter()
+            .filter(|row| row.control && ClientIdentity::of(row) == Some(identity));
+        selected.next()?;
+        selected.next().is_none().then_some(identity)
+    }
+    #[test]
+    fn fresh_peer_requires_one_previously_attributed_control_identity() {
+        let fresh = ClientIdentity {
+            pid: 30,
+            start: 300,
+        };
+        let lifetimes = Lifetimes([
+            Some(ClientIdentity {
+                pid: 10,
+                start: 100,
+            }),
+            Some(fresh),
+        ]);
+        let row = |start, control| Client {
+            pid: 30,
+            control,
+            written: 0,
+            discarded: 0,
+            original: Sample::Observed {
+                start,
+                state: 'S',
+                parent: 20,
+            },
+        };
+        assert!(fresh_client(&Clients(Ok(vec![row(300, true)])), &lifetimes) == Some(fresh));
+        for rows in [
+            vec![],
+            vec![row(301, true)],
+            vec![row(300, false)],
+            vec![row(300, true), row(300, true)],
+        ] {
+            assert!(fresh_client(&Clients(Ok(rows)), &lifetimes).is_none());
+        }
+        assert!(fresh_client(&Clients(Err("Unavailable")), &lifetimes).is_none());
+        assert!(fresh_client(&Clients(Ok(vec![row(300, true)])), &Lifetimes::default()).is_none());
+    }
+    #[test]
+    fn peer_probe_fences_owned_parent_edges_and_never_reads_pid_one() {
+        let mut seen = Vec::new();
+        let result = peer_probe(
+            ClientIdentity {
+                pid: 30,
+                start: 300,
+            },
+            ClientIdentity {
+                pid: 10,
+                start: 100,
+            },
+            |pid| {
+                seen.push(pid);
+                let (start, parent) = match pid {
+                    30 => (300, 20),
+                    20 => (200, 10),
+                    10 => (100, 1),
+                    _ => panic!("Unexpected process read"),
+                };
+                Sample::Observed {
+                    start,
+                    state: 'S',
+                    parent,
+                }
+            },
+            |pid, fd| {
+                assert_eq!(pid, 30);
+                [FdKind::Pipe, FdKind::Socket, FdKind::Other][fd as usize]
+            },
+        );
+        assert_eq!(
+            result,
+            Peer {
+                ancestry: Ancestry::Reached,
+                stdio: [FdKind::Pipe, FdKind::Socket, FdKind::Other]
+            }
+        );
+        assert!(!seen.contains(&1));
+        let receipt = format!("{result:?}");
+        for private in ["30", "20", "10", "/proc", "private"] {
+            assert!(!receipt.contains(private));
+        }
+    }
+    #[test]
+    fn peer_probe_suppresses_all_fd_results_on_reuse_reparenting_or_uid_change() {
+        for mutation in 0..5 {
+            let after = std::cell::Cell::new(false);
+            let result = peer_probe(
+                ClientIdentity {
+                    pid: 30,
+                    start: 300,
+                },
+                ClientIdentity {
+                    pid: 10,
+                    start: 100,
+                },
+                |pid| {
+                    if after.get() && ((mutation == 2 && pid == 10) || (mutation == 4 && pid == 30))
+                    {
+                        return Sample::Unowned;
+                    }
+                    let (mut start, mut parent) = match pid {
+                        30 => (300, 20),
+                        20 => (200, 10),
+                        10 => (100, 1),
+                        _ => panic!("Unexpected process read"),
+                    };
+                    if after.get() && ((mutation == 0 && pid == 30) || (mutation == 3 && pid == 10))
+                    {
+                        start += 1;
+                    }
+                    if after.get() && mutation == 1 && pid == 20 {
+                        parent = 1;
+                    }
+                    Sample::Observed {
+                        start,
+                        state: 'S',
+                        parent,
+                    }
+                },
+                |_, _| {
+                    after.set(true);
+                    FdKind::Pipe
+                },
+            );
+            assert_eq!(result, Peer::unavailable());
+        }
+    }
+    #[test]
+    fn peer_probe_rejects_unowned_missing_dead_looping_and_unsafe_identities() {
+        for invalid in [
+            Sample::Unowned,
+            Sample::Missing,
+            Sample::Invalid,
+            Sample::Unavailable(io::ErrorKind::PermissionDenied),
+            Sample::Observed {
+                start: 200,
+                state: 'Z',
+                parent: 10,
+            },
+            Sample::Observed {
+                start: 200,
+                state: 'S',
+                parent: 30,
+            },
+        ] {
+            let result = peer_probe(
+                ClientIdentity {
+                    pid: 30,
+                    start: 300,
+                },
+                ClientIdentity {
+                    pid: 10,
+                    start: 100,
+                },
+                |pid| match pid {
+                    30 => Sample::Observed {
+                        start: 300,
+                        state: 'S',
+                        parent: 20,
+                    },
+                    10 => Sample::Observed {
+                        start: 100,
+                        state: 'S',
+                        parent: 1,
+                    },
+                    20 => invalid,
+                    _ => panic!("Unexpected process read"),
+                },
+                |_, _| panic!("Unavailable ancestry must not read descriptors"),
+            );
+            assert_eq!(result, Peer::unavailable());
+        }
+        for (client, anchor) in [(1, 10), (30, 1), (30, 30)] {
+            assert_eq!(
+                peer_probe(
+                    ClientIdentity {
+                        pid: client,
+                        start: 1
+                    },
+                    ClientIdentity {
+                        pid: anchor,
+                        start: 1
+                    },
+                    |_| panic!("Unsafe identity must not be sampled"),
+                    |_, _| panic!("Unsafe identity must not read descriptors")
+                ),
+                Peer::unavailable()
+            );
+        }
+    }
+    #[test]
+    fn peer_probe_bounds_parent_edges_and_reports_stable_reparenting_without_pid_one() {
+        for reparented in [true, false] {
+            let mut seen = Vec::new();
+            let result = peer_probe(
+                ClientIdentity {
+                    pid: 30,
+                    start: 300,
+                },
+                ClientIdentity {
+                    pid: 100,
+                    start: 1000,
+                },
+                |pid| {
+                    assert_ne!(pid, 1);
+                    seen.push(pid);
+                    assert!(
+                        pid == 100 || (22..=30).contains(&pid),
+                        "Parent traversal exceeded eight edges"
+                    );
+                    Sample::Observed {
+                        start: pid as u64 * 10,
+                        state: 'S',
+                        parent: if reparented || pid == 100 { 1 } else { pid - 1 },
+                    }
+                },
+                |_, _| FdKind::Unavailable,
+            );
+            assert_eq!(
+                result.ancestry,
+                if reparented {
+                    Ancestry::Reparented
+                } else {
+                    Ancestry::Bounded
+                }
+            );
+            assert!(!seen.contains(&21));
+        }
+    }
+    #[test]
+    fn descriptor_classes_are_closed_and_never_return_paths_or_link_contents() {
+        for (value, expected) in [
+            (b"pipe:[123]".as_slice(), FdKind::Pipe),
+            (b"socket:[456]", FdKind::Socket),
+            (b"/dev/pts/7", FdKind::Tty),
+            (b"/dev/tty", FdKind::Tty),
+            (b"/private/secret", FdKind::Other),
+            (b"pipe:[private]", FdKind::Other),
+            (b"/dev/pts/private", FdKind::Other),
+            (&[255], FdKind::Other),
+        ] {
+            assert_eq!(fd_kind(value), expected);
+        }
+        assert_eq!(fd_kind(&[]), FdKind::Unavailable);
+        assert_eq!(fd_kind(&[b'x'; 4097]), FdKind::Unavailable);
+    }
+    #[test]
+    fn real_owned_child_reports_anchor_and_descriptor_kinds_without_process_data() {
+        let (input, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let input: std::os::fd::OwnedFd = input.into();
+        let mut child = Observer(Some(
+            std::process::Command::new("/bin/sleep")
+                .arg("10")
+                .stdin(std::process::Stdio::from(input))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        ));
+        let anchor = std::process::id() as i32;
+        let client = child.0.as_ref().unwrap().id() as i32;
+        let result = peer_probe(
+            ClientIdentity {
+                pid: client,
+                start: relation(read(client))
+                    .expect("Owned client metadata required")
+                    .0,
+            },
+            ClientIdentity {
+                pid: anchor,
+                start: relation(read(anchor))
+                    .expect("Owned anchor metadata required")
+                    .0,
+            },
+            read,
+            read_fd,
+        );
+        assert_eq!(
+            result,
+            Peer {
+                ancestry: Ancestry::Reached,
+                stdio: [FdKind::Socket, FdKind::Pipe, FdKind::Other]
+            }
+        );
+        let receipt = format!("{result:?}");
+        assert!(!receipt.contains(&client.to_string()) && !receipt.contains(&anchor.to_string()));
+        child.0.as_mut().unwrap().kill().unwrap();
+        child.0.take().unwrap().wait().unwrap();
+    }
     struct Observer(Option<std::process::Child>);
     impl Drop for Observer {
         fn drop(&mut self) {
@@ -362,7 +806,12 @@ mod linux {
             Err(kind) => kind.into(),
         }
     }
-    pub(super) struct Processes(Vec<(i32, Sample, Sample)>, Option<Clients>, Lifetimes);
+    pub(super) struct Processes(
+        Vec<(i32, Sample, Sample)>,
+        Option<Clients>,
+        Lifetimes,
+        Option<ClientIdentity>,
+    );
     impl Processes {
         pub(super) async fn remember_clients(
             &mut self,
@@ -470,7 +919,28 @@ mod linux {
                     .collect(),
                 None,
                 Lifetimes::default(),
+                None,
             )
+        }
+        pub(super) fn remember_ssh_anchor(&mut self, pid: i32) {
+            // The caller retains this unreaped Child, so its PID cannot be reused.
+            self.3 = if pid > 1 {
+                relation(read(pid)).map(|(start, _)| ClientIdentity { pid, start })
+            } else {
+                None
+            };
+        }
+        pub(super) fn fresh_peer(&self) -> String {
+            let peer = self
+                .3
+                .zip(
+                    self.1
+                        .as_ref()
+                        .and_then(|clients| fresh_client(clients, &self.2)),
+                )
+                .map(|(anchor, client)| peer_probe(client, anchor, read, read_fd))
+                .unwrap_or_else(Peer::unavailable);
+            format!("{peer:?}")
         }
         pub(super) fn before_stop(&mut self) {
             for (pid, _, before) in &mut self.0 {
@@ -786,6 +1256,18 @@ pub(super) struct Processes {
     inner: linux::Processes,
 }
 impl Processes {
+    pub(super) fn remember_ssh_anchor(&mut self, pid: i32) {
+        #[cfg(target_os = "linux")]
+        self.inner.remember_ssh_anchor(pid);
+        #[cfg(not(target_os = "linux"))]
+        let _ = pid;
+    }
+    pub(super) fn fresh_peer(&self) -> String {
+        #[cfg(target_os = "linux")]
+        return self.inner.fresh_peer();
+        #[cfg(not(target_os = "linux"))]
+        "Unsupported".into()
+    }
     pub(super) async fn remember_clients(
         &mut self,
         ordinal: usize,

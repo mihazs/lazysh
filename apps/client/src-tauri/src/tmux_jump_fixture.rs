@@ -2343,6 +2343,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         })
         .collect::<Vec<_>>();
     let mut diagnostics = teardown::Processes::capture(&owned_pids);
+    diagnostics.remember_ssh_anchor(f.daemon.0.id() as i32);
     let authority = AccessState::disabled();
     let lease = authority.lease(None).unwrap();
     let first = tauri::test::mock_app();
@@ -2471,7 +2472,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
     drop(servers);
     for pid in owned_pids {
         retired_process(pid).await
-        .unwrap_or_else(|error| panic!("owned tmux server/workload must exit during teardown: {error:?}; cleanup={cleanup:?}; processes(before,after)={}", diagnostics.failure()));
+        .unwrap_or_else(|error| panic!("owned tmux server/workload must exit during teardown: {error:?}; cleanup={cleanup:?}; processes(before,after)={}; fresh_peer={}", diagnostics.failure(), diagnostics.fresh_peer()));
     }
     f.stop_listener().await;
 }
