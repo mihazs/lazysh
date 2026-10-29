@@ -122,17 +122,18 @@ other SSH tools. Recovery protocol and cancellation tests passed against owned
 Mosh/OpenSSH; physical Samsung/native UI recovery remains unexecuted, and the
 original Galaxy connection-loss cause is unproven. See [attachment recovery](attachments.md).
 
-Exact public v1.0.2 Google and FOSS signed ARM64 APKs passed native UI host save,
+Exact public v1.1.0 Google and FOSS signed ARM64 APKs passed native UI host save,
 relaunch and identical-byte reinstall with preserved data on admitted translated
-ARM64 guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/40941781856)).
+ARM64 guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/40958281779)).
 This does not qualify this later release's APKs, cross-version migration or
 physical Samsung hardware automatically.
 
-Both public v1.1.0 APKs installed on admitted translated ARM64 guests, but their
+An earlier qualification installed both public v1.1.0 APKs, but their
 host-creation driver commands reached the existing 45-second deadline
 ([failed qualification](https://github.com/mihazs/lazysh/actions/runs/40955241164)).
-Host creation, relaunch, reinstall and persistence were not verified; owned cleanup
-passed. The cause remains unproven. The external driver now preserves only bounded
+That sample did not verify host creation, relaunch, reinstall or persistence;
+owned cleanup passed. The later pass does not explain the earlier timeout. The
+external driver now preserves only bounded
 stage entry/exit observations on failure, without changing APKs, actions, deadlines
 or success requirements. A progress boundary does not establish a failure cause.
 
