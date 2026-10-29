@@ -141,3 +141,16 @@ admission and assertions. It has no foreground-package query inside the predicat
 so the trace does not add one or claim an ownership-guard race. Unknown/private,
 inconsistent or out-of-bound trace fields make the failure observation unavailable
 without replacing the original failure. No startup fix is claimed.
+
+The original readiness trace then returned true for both1.0 variants (10,404ms /
+four polls and11,659ms / five polls), followed by later `SAVE_HOST` failures.
+Neither case completed a save or exercised relaunch/reinstall. Save now records
+lookup/click/complete progress and raw-versus-visible exact caption categories
+from the original query collections and their original bounds reads. Each lookup
+resets both categories; a query/property failure leaves the unfinished part
+unavailable. No extra query, bounds read, click, wait or scroll is added. Complete
+means the original click returned, not that durable save was acknowledged.
+The host accepts only the exact three closed fields with consistent count
+categories; raw labels, coordinates, exceptions and arbitrary fields are rejected.
+The scrollable form footer remains a hypothesis until actual match evidence
+distinguishes absence, ambiguity, empty visible bounds and click failure.

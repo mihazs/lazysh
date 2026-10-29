@@ -34,6 +34,9 @@ class PublishedApkTest {
     private var readinessOverflow = false
     private var readinessAdd = "unavailable"
     private var readinessOpen = "unavailable"
+    private var saveOperation = "unavailable"
+    private var saveRaw = "unavailable"
+    private var saveVisible = "unavailable"
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private val target = "app.lazysh.client"
@@ -55,9 +58,15 @@ class PublishedApkTest {
     }
 
     private fun waitMillis(): Long = ((deadline - System.nanoTime()) / 1_000_000L).coerceIn(1, 5_000)
-    private fun captions(caption: String, current: UiDevice = device): List<UiObject2> =
-        (current.findObjects(By.pkg(target).text(caption)) + current.findObjects(By.pkg(target).desc(caption)))
-            .distinct().filter { !it.visibleBounds.isEmpty }
+    private fun captions(caption: String, current: UiDevice = device): List<UiObject2> {
+        val traceSave = caption == "Save host" && saveOperation == "lookup"
+        if (traceSave) { saveRaw = "unavailable"; saveVisible = "unavailable" }
+        val found = (current.findObjects(By.pkg(target).text(caption)) + current.findObjects(By.pkg(target).desc(caption))).distinct()
+        if (traceSave) saveRaw = matchCount(found.size)
+        val visible = found.filter { !it.visibleBounds.isEmpty }
+        if (traceSave) saveVisible = matchCount(visible.size)
+        return visible
+    }
 
     private fun matchCount(count: Int) = when (count) {
         0 -> "zero"
@@ -153,6 +162,7 @@ class PublishedApkTest {
             .put("readiness", JSONObject().put("outcome", readinessOutcome)
                 .put("elapsedMs", readinessElapsedMs ?: JSONObject.NULL).put("polls", readinessPolls)
                 .put("overflow", readinessOverflow).put("lastAdd", readinessAdd).put("lastOpen", readinessOpen))
+            .put("save", JSONObject().put("operation", saveOperation).put("raw", saveRaw).put("visible", saveVisible))
             .toString().also { check(it.length <= 2048) }
     }
 
@@ -231,7 +241,13 @@ class PublishedApkTest {
             setInput(hostnameHint, "$name.invalid", Stage.HOSTNAME)
             setInput(usernameHint, "owned", Stage.USERNAME)
             hideKeyboard()
-            stage(Stage.SAVE_HOST) { named("Save host", Stage.SAVE_HOST).click() }
+            stage(Stage.SAVE_HOST) {
+                saveOperation = "lookup"
+                val button = named("Save host", Stage.SAVE_HOST)
+                saveOperation = "click"
+                button.click()
+                saveOperation = "complete"
+            }
         }
         named("Edit $name", Stage.SAVED_HOST)
         stage(Stage.EDIT_HOST) { named("Edit $name", Stage.EDIT_HOST).click() }

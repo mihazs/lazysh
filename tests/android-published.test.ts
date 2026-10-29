@@ -104,7 +104,8 @@ test('parent UI phase and closed driver stage survive independently without raw 
 }));
 
 const noReadiness={outcome:'unavailable',elapsedMs:null,polls:0,overflow:false,lastAdd:'unavailable',lastOpen:'unavailable'};
-const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label'],addHostMatches:'zero',openHostsMatches:'one',webView:true,readiness:noReadiness};
+const noSave={operation:'unavailable',raw:'unavailable',visible:'unavailable'};
+const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label'],addHostMatches:'zero',openHostsMatches:'one',webView:true,readiness:noReadiness,save:noSave};
 const observationLine=(value:unknown)=>`INSTRUMENTATION_STATUS: lazyshPublishedObservation=${JSON.stringify(value)}`;
 test('driver operation observation projects exact closed fields and explicit unavailable samples',()=>{
   expect(publishedDriverObservation(observationLine(observedInput))).toEqual({state:'available',...observedInput});
@@ -145,6 +146,33 @@ test('readiness projection rejects unbounded, inconsistent, missing and private 
   const {readiness:missing,...legacy}=observedInput;
   expect(publishedDriverObservation(observationLine(legacy))).toEqual({state:'unavailable'});
 });
+test('save trace distinguishes unavailable, absent, ambiguous, clipped and click-stage original matches',()=>{
+  for(const save of [noSave,{operation:'lookup',raw:'unavailable',visible:'unavailable'},
+    {operation:'lookup',raw:'zero',visible:'zero'},{operation:'lookup',raw:'multiple',visible:'multiple'},
+    {operation:'lookup',raw:'one',visible:'zero'},{operation:'lookup',raw:'one',visible:'unavailable'},
+    {operation:'click',raw:'one',visible:'one'},{operation:'complete',raw:'multiple',visible:'one'}]){
+    expect(publishedDriverObservation(observationLine({...observedInput,save}))).toMatchObject({state:'available',save});
+  }
+  for(const save of [null,{},[],{operation:'private-action',raw:'one',visible:'one'},
+    {...noSave,message:'private-error'},{...noSave,raw:'one'},
+    {operation:'lookup',raw:'private-label',visible:'zero'},{operation:'lookup',raw:1,visible:'zero'},
+    {operation:'lookup',raw:'unavailable',visible:'zero'},{operation:'lookup',raw:'zero',visible:'one'},
+    {operation:'lookup',raw:'one',visible:'multiple'},{operation:'click',raw:'multiple',visible:'multiple'},
+    {operation:'complete',raw:'one',visible:'zero'}]){
+    const result=publishedDriverObservation(observationLine({...observedInput,save}));
+    expect(result).toEqual({state:'unavailable'});expect(JSON.stringify(result)).not.toContain('private');
+  }
+  const {save:missing,...legacy}=observedInput;
+  expect(publishedDriverObservation(observationLine(legacy))).toEqual({state:'unavailable'});
+});
+test.each(['lookup','click'])('save %s failure preserves the original stage and cleanup independently of caption diagnosis',operation=>fixture(async asset=>{
+  const save={operation,raw:'one',visible:operation==='lookup'?'zero':'one'};
+  const f=fake(args=>args.includes('instrument')?observationLine({...observedInput,save})+'\nINSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: SAVE_HOST\nINSTRUMENTATION_STATUS_CODE: -2\nprivate-AX-error':undefined);
+  const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
+  expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',driverStage:'SAVE_HOST',driverObservation:{state:'available',save},cleanup:'passed'});
+  expect(JSON.stringify(result)).not.toContain('private-AX-error');
+  expect(f.calls.filter(args=>args.includes('instrument'))).toHaveLength(1);
+}));
 test.each(['WORKSPACE_READINESS','WORKSPACE_ADD_HOST'])('workspace %s failure survives independently of failure-only sampled counts',stage=>fixture(async asset=>{
   const readiness={outcome:stage==='WORKSPACE_READINESS'?'exception':'true',elapsedMs:42,polls:1,overflow:false,lastAdd:stage==='WORKSPACE_READINESS'?'unavailable':'one',lastOpen:'unavailable'};
   const observation={...observedInput,inputOperation:'NONE',inputField:'NONE',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false,readiness};

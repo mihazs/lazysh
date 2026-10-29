@@ -41,7 +41,9 @@ const hintShapes=['empty','other','unavailable','name-label','name-placeholder',
 const captionMatches=['zero','one','multiple','unavailable'] as const;
 const readinessOutcomes=['true','false','exception','unavailable'] as const;
 type ReadinessTrace={outcome:typeof readinessOutcomes[number];elapsedMs:number|null;polls:number;overflow:boolean;lastAdd:typeof captionMatches[number];lastOpen:typeof captionMatches[number]};
-type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][];addHostMatches:typeof captionMatches[number];openHostsMatches:typeof captionMatches[number];webView:boolean|null;readiness:ReadinessTrace};
+const saveOperations=['unavailable','lookup','click','complete'] as const;
+type SaveTrace={operation:typeof saveOperations[number];raw:typeof captionMatches[number];visible:typeof captionMatches[number]};
+type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][];addHostMatches:typeof captionMatches[number];openHostsMatches:typeof captionMatches[number];webView:boolean|null;readiness:ReadinessTrace;save:SaveTrace};
 export function publishedDriverObservation(output:string):DriverObservation{
   const unavailable=():DriverObservation=>({state:'unavailable'});
   if(output.length>65536||output.includes('\0'))return unavailable();
@@ -50,7 +52,7 @@ export function publishedDriverObservation(output:string):DriverObservation{
   if(reported.length!==1||reported[0].length>2048)return unavailable();
   try{
     const data=JSON.parse(reported[0]),flag=(value:unknown)=>value===null||typeof value==='boolean';
-    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).sort().join(',')!=='addHostMatches,editableCount,editableOverflow,foreground,hintShapes,inputField,inputOperation,keyguardLocked,openHostsMatches,readbackMatched,readiness,screenOn,webView'
+    if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).sort().join(',')!=='addHostMatches,editableCount,editableOverflow,foreground,hintShapes,inputField,inputOperation,keyguardLocked,openHostsMatches,readbackMatched,readiness,save,screenOn,webView'
       ||!inputOperations.includes(data.inputOperation)||!inputFields.includes(data.inputField)
       ||!['target','driver','other','unavailable'].includes(data.foreground)
       ||![data.readbackMatched,data.screenOn,data.keyguardLocked,data.webView].every(flag)
@@ -66,6 +68,14 @@ export function publishedDriverObservation(output:string):DriverObservation{
     }else if(!Number.isInteger(trace.elapsedMs)||trace.elapsedMs<0||trace.elapsedMs>60000
       ||(trace.outcome!=='exception'&&trace.polls===0)
       ||(trace.polls===0&&(trace.lastAdd!=='unavailable'||trace.lastOpen!=='unavailable')))return unavailable();
+    const save=data.save;
+    if(!save||typeof save!=='object'||Array.isArray(save)||Object.keys(save).sort().join(',')!=='operation,raw,visible'
+      ||!saveOperations.includes(save.operation)||![save.raw,save.visible].every(value=>captionMatches.includes(value))
+      ||(save.operation==='unavailable'&&(save.raw!=='unavailable'||save.visible!=='unavailable'))
+      ||(save.raw==='unavailable'&&save.visible!=='unavailable')
+      ||(save.raw==='zero'&&!['zero','unavailable'].includes(save.visible))
+      ||(save.raw==='one'&&save.visible==='multiple')
+      ||(['click','complete'].includes(save.operation)&&(save.visible!=='one'||!['one','multiple'].includes(save.raw))))return unavailable();
     const absent=data.editableCount===null&&data.editableOverflow===null&&data.hintShapes.length===0;
     const present=Number.isInteger(data.editableCount)&&data.editableCount>=0&&data.editableCount<=8&&typeof data.editableOverflow==='boolean'
       &&data.hintShapes.length===data.editableCount&&(!data.editableOverflow||data.editableCount===8);
@@ -75,7 +85,7 @@ export function publishedDriverObservation(output:string):DriverObservation{
       foreground:data.foreground,screenOn:data.screenOn,keyguardLocked:data.keyguardLocked,
       editableCount:data.editableCount,editableOverflow:data.editableOverflow,hintShapes:[...data.hintShapes],
       addHostMatches:data.addHostMatches,openHostsMatches:data.openHostsMatches,webView:data.webView,
-      readiness:{outcome:trace.outcome,elapsedMs:trace.elapsedMs,polls:trace.polls,overflow:trace.overflow,lastAdd:trace.lastAdd,lastOpen:trace.lastOpen}};
+      readiness:{outcome:trace.outcome,elapsedMs:trace.elapsedMs,polls:trace.polls,overflow:trace.overflow,lastAdd:trace.lastAdd,lastOpen:trace.lastOpen},save:{operation:save.operation,raw:save.raw,visible:save.visible}};
   }catch{return unavailable();}
 }
 export function translatedGuest(values:string[]){
