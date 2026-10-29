@@ -2130,7 +2130,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       )}
       {preferences && (
         <Dialog title={t("appPreferences")} close={() => setPreferences(false)}>
-          <div className="preferences-content" ref={setThemeLinkTarget}>
+          <div className="preferences-content">
+          <div ref={setThemeLinkTarget} />
           {native && <section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
