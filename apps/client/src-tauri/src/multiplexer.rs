@@ -45,6 +45,65 @@ pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<Strin
     })
 }
 
+// Default entry creates only the explicitly named target in the default namespace.
+pub(crate) fn default_entry_command(kind: MultiplexerKind, value: &str) -> Result<String> {
+    attach_command(kind, value)?;
+    if value.trim().is_empty() {
+        return Err(SshError::new(
+            "invalid_target",
+            "Enter a named default multiplexer session",
+        ));
+    }
+    // The pinned Herdr CLI uses these names as private session directories.
+    if matches!(kind, MultiplexerKind::Herdr)
+        && (value.len() > 64
+            || matches!(value, "." | "..")
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+    {
+        return Err(SshError::new("invalid_target","Herdr session names need 1–64 ASCII letters, numbers, periods, underscores or hyphens, excluding . and .."));
+    }
+    let (tool, version) = match kind {
+        MultiplexerKind::Tmux => ("tmux", "-V"),
+        MultiplexerKind::Herdr => ("herdr", "--version"),
+        MultiplexerKind::Zellij => ("zellij", "--version"),
+    };
+    let mut command =
+        format!("command -v {tool} >/dev/null 2>&1 && {tool} {version} >/dev/null 2>&1");
+    if matches!(kind, MultiplexerKind::Tmux) {
+        let server = crate::tmux_server::TmuxServer::Default;
+        let create = action_command_for(
+            &TmuxAction::CreateSession {
+                name: value.into(),
+                directory: ".".into(),
+            },
+            &server,
+        )?;
+        let exists = format!(
+            "{} has-session -t {} 2>/dev/null",
+            server.prefix(),
+            tmux_arg(&format!("={value}"))
+        );
+        // A competing creator is accepted only after checking this exact name.
+        command.push_str(&format!(
+            " && ({exists} || {{ {create} >/dev/null 2>&1; {exists}; }})"
+        ));
+    }
+    Ok(format!("sh -c {}", quote(&command)))
+}
+pub(crate) async fn prepare_default_entry(
+    session: &crate::ssh::Session,
+    lease: &AccessLease,
+    kind: MultiplexerKind,
+    value: &str,
+) -> Result<()> {
+    let command = default_entry_command(kind, value)?;
+    crate::ssh::exec_for_access(session,command,lease).await.map(|_|()).map_err(|error| {
+        if error.kind()=="remote_command_failed" {SshError::new("multiplexer_unavailable","Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")} else {error}
+    })
+}
+
 fn persistent_sessions(kind: MultiplexerKind, output: &str) -> Result<Vec<PersistentSession>> {
     let names: Vec<String> = match kind {
         MultiplexerKind::Herdr => {
@@ -449,6 +508,37 @@ pub async fn tmux_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn default_entry_refuses_missing_and_unrunnable_tools_before_attachment() {
+        use std::{os::unix::fs::PermissionsExt, process::Command};
+        let tools = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/bin/sh", tools.path().join("sh")).unwrap();
+        for (kind, tool) in [
+            (MultiplexerKind::Tmux, "tmux"),
+            (MultiplexerKind::Herdr, "herdr"),
+            (MultiplexerKind::Zellij, "zellij"),
+        ] {
+            let command = default_entry_command(kind, "literal-session").unwrap();
+            let run = || {
+                Command::new("/bin/sh")
+                    .args(["-c", &command])
+                    .env_clear()
+                    .env("PATH", tools.path())
+                    .output()
+                    .unwrap()
+            };
+            assert!(!run().status.success(), "missing {tool} must fail");
+            let binary = tools.path().join(tool);
+            std::fs::write(&binary, "#!/bin/sh\nexit 70\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(!run().status.success(), "unrunnable {tool} must fail");
+            std::fs::remove_file(binary).unwrap();
+        }
+        assert!(default_entry_command(MultiplexerKind::Tmux, "bad:name").is_err());
+        assert!(default_entry_command(MultiplexerKind::Tmux, "bad.name").is_err());
+        assert!(default_entry_command(MultiplexerKind::Zellij, "--flag").is_err());
+    }
     #[test]
     fn parses_exact_ids_and_refuses_ambiguous_output() {
         let tree = parse_tree("tmux\t1\nherdr\t0\nzellij\t1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\n").unwrap();
