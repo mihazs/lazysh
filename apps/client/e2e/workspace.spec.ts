@@ -86,7 +86,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(()=>{
-    const calls:string[]=[];Object.assign(window,{workspaceNavigationCalls:calls});
+    const calls:string[]=[];const state={updated:false};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command)=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
@@ -94,7 +94,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
       if(command==='connect')return {sessionId:'owned-navigation-ssh'};
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:'Reported work',paneId:'%7',eventCount:3}]};
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:4,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
       if(command==='board_keep_awake_status')return {available:false,active:false,reason:'Synthetic keep-awake unavailable',epoch:'0/11111111-1111-4111-8111-111111111111',ticket:1};
@@ -118,6 +118,10 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   const search=board.getByRole('searchbox');await search.fill('/nav');
   const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
   const original=await settings.elementHandle();
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{updated:boolean}}).workspaceNavigationState.updated=true;});
+  await page.clock.runFor(5000);
+  await expect(board.getByText('Refreshed work',{exact:true})).toBeVisible();
+  await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
   if(phone)await page.getByRole('button',{name:'Close hosts',exact:true}).click();
   else await modes.getByRole('button',{name:'Connections',exact:true}).click();
   await expect(board).toBeHidden();

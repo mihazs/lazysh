@@ -80,7 +80,7 @@ This shortcut itself still grants no input authority. Claude Chat on an existing
 native tmux attachment offers a separate [confirmed terminal input](chat-terminal-input.md)
 flow; the user must choose and confirm its destination explicitly.
 
-The displayed status is the last reported event, not proof that a process is still running. Refresh explicitly. Respond to prompts in the live terminal until race-safe approvals are implemented.
+The displayed status is the last reported event, not proof that a process is still running. The visible Agents board refreshes every five seconds while the app is in the foreground; hidden boards and background windows do not start automatic reads. A pending snapshot is never duplicated, and Refresh remains available. Automatic refresh does not scan transcripts, load history or reload host settings. Respond to prompts in the live terminal until race-safe approvals are implemented.
 
 ## Other agents and scripts
 
