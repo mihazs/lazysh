@@ -157,7 +157,11 @@ function ExerciseInstalledGui {
     } while ([DateTime]::UtcNow -lt $deadline)
     if ($sockets.Count -eq 0) { Require $false 'GUI_LISTENER_NONE' }
     if ($sockets.Count -eq 1) { Require $false 'GUI_LISTENER_ONE' }
-    Require ($sockets.Count -eq 2) 'GUI_LISTENER_EXTRA'
+    if ($sockets.Count -gt 2) {
+      if (@($sockets | Where-Object { $_.LocalAddress -notin @('127.0.0.1', '::1') }).Count -gt 0) { Require $false 'GUI_LISTENER_EXTRA_OTHER' }
+      if (@($sockets | Where-Object { $_.LocalAddress -eq '::1' }).Count -gt 0) { Require $false 'GUI_LISTENER_EXTRA_LOOPBACK_V6' }
+      Require $false 'GUI_LISTENER_EXTRA_LOOPBACK_V4'
+    }
     Require (@($sockets | Where-Object { $_.LocalAddress -ne '127.0.0.1' }).Count -eq 0) 'GUI_LISTENER_ADDRESS'
     $nativeDriver = @(Get-CimInstance Win32_Process -OperationTimeoutSec 5 | Where-Object { $_.ParentProcessId -eq $driver.Id -and $_.ExecutablePath -eq $env:LAZYSH_GUI_EDGE })
     Require ($nativeDriver.Count -eq 1) 'GUI_NATIVE_DRIVER'

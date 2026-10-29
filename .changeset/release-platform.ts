@@ -51,7 +51,8 @@ const windowsInstallerGuards = new Set([
   'REGISTRY_VALUES', 'REGISTRY_CHILDREN', 'UNINSTALL_MARKER', 'DATA_CONTENTS',
   'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
   'UNSUPPORTED_SIGNING', 'GUI_OWNER', 'GUI_START', 'GUI_INTERACTIVE', 'GUI_TOOLS', 'GUI_RUNTIME',
-  'GUI_LISTENER_NONE', 'GUI_LISTENER_ONE', 'GUI_LISTENER_EXTRA', 'GUI_LISTENER_ADDRESS', 'GUI_NATIVE_DRIVER',
+  'GUI_LISTENER_NONE', 'GUI_LISTENER_ONE', 'GUI_LISTENER_EXTRA_LOOPBACK_V6',
+  'GUI_LISTENER_EXTRA_LOOPBACK_V4', 'GUI_LISTENER_EXTRA_OTHER', 'GUI_LISTENER_ADDRESS', 'GUI_NATIVE_DRIVER',
   'GUI_DATA', 'GUI_SESSION', 'GUI_FRONTEND', 'GUI_VERSION', 'GUI_ENDPOINT', 'GUI_TIMEOUT', 'GUI_CLIENT', 'GUI_CLEANUP',
 ]);
 export function windowsInstallerFailure(stdout: unknown): string | undefined {
@@ -60,7 +61,7 @@ export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (!markers.length || markers.length > 3) return;
   const labels: string[] = [];
   for (const marker of markers) {
-    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z_]+)$/.exec(marker);
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|gui|cleanup):([A-Z0-9_]+)$/.exec(marker);
     if (!match || !windowsInstallerGuards.has(match[2])) return;
     labels.push(`${match[1]}:${match[2]}`);
   }
