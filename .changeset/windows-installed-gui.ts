@@ -1,6 +1,6 @@
 import {win32} from 'node:path';
 
-export const windowsGuiProbePhases = ['PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED'] as const;
+export const windowsGuiProbePhases = ['PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS'] as const;
 export function windowsGuiProbeFailure(stdout:unknown):typeof windowsGuiProbePhases[number] {
   if(typeof stdout!=='string'||stdout.length>1024)return 'PROBE_UNVERIFIED';
   const match=/^LAZYSH_WINDOWS_GUI_PROBE:([A-Z_]+)$/.exec(stdout.trim());
@@ -100,14 +100,21 @@ public static class OwnedGuiWindow {
   if ($app.Path -ne $env:LAZYSH_GUI_BINARY -or (Get-FileHash -LiteralPath $app.Path -Algorithm SHA256).Hash -ne $env:LAZYSH_NSIS_BINARY_SHA256) { throw 'image' }
   $phase = 'WINDOW_UNVERIFIED'
   $script:windows = @()
+  $script:ownedHandles = 0
   $callback = [OwnedGuiWindow+Callback] {
     param($window, $state)
     [uint32]$owner = 0
     $null = [OwnedGuiWindow]::GetWindowThreadProcessId($window, [ref]$owner)
-    if ($owner -eq $app.Id -and [OwnedGuiWindow]::IsWindowVisible($window)) { $script:windows += $window.ToInt64().ToString() }
+    if ($owner -eq $app.Id) {
+      $script:ownedHandles += 1
+      if ([OwnedGuiWindow]::IsWindowVisible($window)) { $script:windows += $window.ToInt64().ToString() }
+    }
     return $true
   }
-  if (![OwnedGuiWindow]::EnumWindows($callback, [IntPtr]::Zero) -or $script:windows.Count -ne 1) { throw 'window' }
+  if (![OwnedGuiWindow]::EnumWindows($callback, [IntPtr]::Zero)) { $phase = 'WINDOW_ENUMERATION_FAILED'; throw 'window' }
+  if ($script:ownedHandles -eq 0) { $phase = 'NO_OWNED_HANDLES_OBSERVED'; throw 'window' }
+  if ($script:windows.Count -eq 0) { $phase = 'OWNED_HANDLES_INVISIBLE'; throw 'window' }
+  if ($script:windows.Count -ne 1) { $phase = 'VISIBLE_HANDLES_AMBIGUOUS'; throw 'window' }
   @{pid=$app.Id;start=$app.StartTime.ToUniversalTime().Ticks.ToString();window=$script:windows[0];sha256=$env:LAZYSH_NSIS_BINARY_SHA256} | ConvertTo-Json -Compress
 } catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_PROBE:' + $phase); exit 1 }
 `;
@@ -219,7 +226,7 @@ function ExerciseInstalledGui {
           Require ($rejected.session -in @('CLIENT_TIMEOUT', 'NO_RESPONSE', 'NOT_CREATED', 'ARGUMENT', 'REMOTE_ERROR', 'SERVER_TIMEOUT', 'RESPONSE') -and $rejected.ownedWindow -in @('VERIFIED', 'UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode = 'GUI_SESSION_' + $rejected.session + '_WINDOW_' + $rejected.ownedWindow
           if ($rejected.ownedWindow -eq 'UNVERIFIED') {
-            Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED')) 'GUI_CLIENT'
+            Require ($rejected.probe -in @('PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS')) 'GUI_CLIENT'
             $sessionCode += ':' + $rejected.probe
           }
           Require $false $sessionCode
