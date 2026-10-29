@@ -65,13 +65,22 @@ Select one release impact in the PR: patch for a fix without new surface, minor
 for additive behavior, or major for a breaking format, API or removed surface.
 All changes target `main`; release impact does not select a different branch.
 Breaking changes must explain migration and compatibility in the PR and changelog.
-No release is published merely by merging a PR.
+Every completed milestone must lead to a version release. An implementation merge,
+Changeset, version bump or tag alone does not finish delivery: merge the reviewed
+version PR, wait for verified GitHub publication, and check the public release and
+all expected assets. Record that release URL on the milestone's issue and project
+card before reporting it released. Publish every current and future version;
+historical versions are not backfilled.
+
+Internal/test-only milestones still need at least a patch Changeset when no other
+release bump covers them. Empty fragments are suitable only for follow-up work
+covered by a planned release; an empty-only plan cannot deliver a milestone.
 
 Add a Changesets fragment with `bun run changeset` for the selected release
 impact, alongside the required root changelog entry below. The private workspace
 packages release together; generated package changelogs and synchronized
 Bun/Cargo/Tauri versions are prepared in a separate reviewed release PR. See
-[versioning without publishing](docs/versioning.md) for tooling, native version
+[versioning and milestone releases](docs/versioning.md) for tooling, native version
 inheritance and the GitHub PR-creation/CI-approval prerequisites. This does not
 configure registry or application-store publishing.
 

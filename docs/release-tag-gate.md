@@ -1,7 +1,7 @@
 # Verified GitHub release gate
 
 `.github/workflows/release-tag.yml` publishes verified Android, Linux and Windows
-installers for the explicit initial 0.23.0 publication and each future individually
+installers for explicitly allowlisted publication and each future individually
 merged Changesets version. Historical versions are not backfilled. Publication is enabled by default;
 setting `enabled` to false stops new release admission and publication API calls.
 Ordinary unchanged-version main pushes skip release builds successfully.
@@ -19,10 +19,10 @@ Changesets. A version PR must consume those fragments before ordinary release.
 Existing consistency checks cover all owned manifests, locks and native Android
 authority. Non-main candidates, prereleases and regressions fail closed.
 
-Initial publication alone uses a main `workflow_dispatch` with `initial: true` and
+Allowlisted publication alone uses a main `workflow_dispatch` with `initial: true` and
 `expected-source-sha` equal to the exact event/checkout SHA. Committed policy
-allowlists 0.23.0 and a bounded first-parent ancestor
-`f5cdacea70f313fa216e8963b76effd098340007`; the initial source must follow it.
+allowlists 1.0.0 and its failed, unpublished candidate as bounded first-parent ancestor
+`f2223e0d0673e7ef48f1c92ca91761b77f4c8508`; the corrected source must follow it.
 This mode admits an unchanged version and retains pending Changesets for the next
 release. Prepare, tag and publish repeat the same checks. Dispatch cannot select
 arbitrary source or tags. Ordinary unchanged-version pushes skip builds; neither
@@ -32,7 +32,18 @@ The supported future workflow merges one Changesets version per main push; it do
 not enumerate arbitrary batched transitions or history. Per-source concurrency
 preserves different version runs. The repository must retain candidate history.
 
-The committed manual-update recipe remains unchanged. Its SHA256 must match the
+The original 1.0.0 candidate failed its source scan because newly installed desktop
+WebDriver tools carried prebuilt zip.js WebAssembly. The corrected recipe removes
+that unused acceptance-only package before scanning; unexpected binaries still
+fail. Ordinary unchanged-version pushes intentionally skip admission, and rerunning
+the old event would rebuild its old recipe. After reviewing and merging the fix,
+dispatch the allowlisted path with the exact corrected main SHA. It rebuilds every
+source and installation gate for that new source before creating any tag. It does
+not reuse old build receipts, rewrite the failed candidate, alter a published tag,
+or bypass a scan. The already published 0.23.0 remains unchanged. Pending patch
+fragments remain for the next version instead of being consumed by this retry.
+
+The committed manual-update recipe is pinned to its reviewed inputs. Its SHA256 must match the
 reviewed policy digest. Only source commit, build version/code and current
 version/code selectors change in a disposable copy. The source selector equals
 the exact event SHA, avoiding a self-referential committed SHA. All provisioning,
