@@ -86,13 +86,23 @@ No synthetic metadata test establishes native installer or device acceptance.
 
 Windows staging additionally executes the freshly built NSIS installer on its
 owned GitHub-hosted Windows VM: silent per-user installation into a fresh job-temp
-directory, exact installed executable hash/version comparison with the build,
+directory, exact installed executable length/hash/version comparison with the expected NSIS image,
 restoration of a deliberately removed executable by same-version reinstallation,
 preservation of a unique marker in a newly created application-data directory,
 and native uninstall. Missing WebView2, existing lazysh paths/registrations,
 reparse points, nonzero exits, timeouts and uncertain cleanup fail closed. Only
 owned files, the empty owned data directory and the exact newly owned install
 registry key are removed; registry parents and existing user data are not adopted.
+The current unsigned Windows channel models exactly the pinned Tauri CLI 2.12.4
+bundle transformation: it replaces the unique `__TAURI_BUNDLE_TYPE_VAR_UNK`
+constant with `__TAURI_BUNDLE_TYPE_VAR_NSS` before packaging, then restores the raw
+Cargo binary. Acceptance streams the raw build to predict that entire packaged
+image, binds the raw source hash/length, and compares every installed byte through
+its full SHA256 and length. Missing or duplicate unpatched markers, already patched
+inputs, a different CLI version and signing transformations fail closed; no PE header or
+other byte is ignored or normalized. Signing requires a separately reviewed image
+model. See the [pinned bundler patch and restore implementation](https://github.com/tauri-apps/tauri/blob/993038c49185307dfc895ab7657d77ca0d5ed7c7/crates/tauri-bundler/src/bundle.rs).
+
 The installer never launches the app. Windows native PR CI packages NSIS and runs
 the same helper through the existing Bun release-artifact test owner with
 `LAZYSH_TEST_WINDOWS_INSTALLER=1`; ordinary release-tool suites explicitly skip

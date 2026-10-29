@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, lstat, rm, rmdir, symlink, unlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
@@ -7,7 +7,7 @@ import { aggregatePackages, artifactName, artifactTargets, releaseTargets, diges
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
-import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsMismatchCapture } from '../.changeset/release-platform';
+import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -200,9 +200,8 @@ test.each([
   ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
   ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
   ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
-  ['LAZYSH_WINDOWS_INSTALLER:install:BINARY_MISMATCH\nLAZYSH_WINDOWS_INSTALLER:capture:CAPTURE_COPY\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'install:BINARY_MISMATCH; capture:CAPTURE_COPY; cleanup:UNINSTALL_OWNERSHIP'],
   ['LAZYSH_WINDOWS_INSTALLER:identity:SOURCE_HASH_MISMATCH', 'identity:SOURCE_HASH_MISMATCH'],
-  [Array(4).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
+  [Array(3).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
   ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:private-stage:VERSION_MISMATCH', undefined],
   ['LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED private-path', undefined],
@@ -253,76 +252,39 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_HASH !== '1')('actual Windows SHA256
   }
 }), 65_000);
 
-test.skipIf(!process.env.LAZYSH_TEST_POWERSHELL)('owned Windows mismatch capture preserves collisions and retains only verified public binaries', () => fixture(async root => {
-  const source = join(root, 'source.exe'), installed = join(root, 'installed.exe'), installer = join(root, 'installer.exe');
-  await Bun.write(source, 'owned built binary');
-  await Bun.write(installed, 'owned mismatched installed binary');
-  await Bun.write(installer, 'owned installer input');
-  const before = await digestFile(source), packaged = await digestFile(installer), observed = await digestFile(installed);
-  const output = join(root, 'github-output');
-  await Bun.write(output, '');
-  const directory = join(root, 'lazysh-windows-installer-mismatch');
-  const env = { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: output, GITHUB_SHA: identity.sha,
-    GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', LAZYSH_TEST_WINDOWS_INSTALLER: '1',
-    LAZYSH_BINARY: source, LAZYSH_CAPTURE_INSTALLED: installed, LAZYSH_INSTALLER: installer,
-    LAZYSH_BINARY_SHA256: before.sha256, LAZYSH_BINARY_BYTES: String(before.bytes),
-    LAZYSH_INSTALLER_SHA256: packaged.sha256, LAZYSH_INSTALLER_BYTES: String(packaged.bytes),
-    LAZYSH_CAPTURE_OBSERVED_SHA256: observed.sha256, LAZYSH_CAPTURE_OBSERVED_BYTES: String(observed.bytes) };
-  const invoke = (selected = env) => native(process.env.LAZYSH_TEST_POWERSHELL!, ['-NoProfile', '-NonInteractive', '-Command',
-    `$ErrorActionPreference = 'Stop'; $failure = 'UNEXPECTED'; ${windowsMismatchCapture}
-$observed = @{ sha256 = $env:LAZYSH_CAPTURE_OBSERVED_SHA256; bytes = [long]$env:LAZYSH_CAPTURE_OBSERVED_BYTES }
-try { CaptureMismatch $env:LAZYSH_CAPTURE_INSTALLED $observed; 'capture-ok' } catch { 'capture-rejected:' + $failure }`], selected, 30_000);
-  expect(await invoke({ ...env, LAZYSH_TEST_WINDOWS_INSTALLER: '0' })).toBe('capture-ok');
-  expect(await lstat(directory).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })).toBe(false);
-  expect(await Bun.file(output).text()).toBe('');
-  for (const linked of [false, true]) {
-    const foreign = join(root, 'foreign');
-    await mkdir(foreign);
-    if (linked) await symlink(foreign, directory, process.platform === 'win32' ? 'junction' : 'dir');
-    else await mkdir(directory);
-    const marker = join(linked ? foreign : directory, 'existing-data');
-    await Bun.write(marker, 'do not adopt foreign capture state');
-    try {
-      expect(await invoke()).toBe(`capture-rejected:${linked ? 'REPARSE_POINT' : 'CAPTURE_COLLISION'}`);
-      expect(await Bun.file(marker).text()).toBe('do not adopt foreign capture state');
-      expect(await Bun.file(output).text()).toBe('');
-    } finally {
-      await rm(marker);
-      if (linked) await unlink(directory);
-      else await rmdir(directory);
-      await rmdir(foreign);
-    }
-  }
-  expect(await invoke({ ...env, LAZYSH_INSTALLER_SHA256: '0'.repeat(64) })).toBe('capture-rejected:CAPTURE_IDENTITY');
-  expect(await Bun.file(output).text()).toBe('');
-  await rm(directory, { recursive: true });
-  await Bun.write(installed, 'owned built binary');
-  expect(await invoke()).toBe('capture-ok');
-  const names = ['source', 'installed', 'installer'];
-  for (const name of names) expect(await digestFile(join(directory, `${name}.exe`))).toEqual(await digestFile(join(root, `${name}.exe`)));
-  const receipt = await Bun.file(join(directory, 'receipt.json')).json();
-  const expected: Record<string, unknown> = { schema: 1, checkoutSha: identity.sha,
-    sourceBefore: { sha256: before.sha256, bytes: before.bytes }, installedObserved: observed };
-  for (const name of names) {
-    const digest = await digestFile(join(root, `${name}.exe`));
-    expected[name === 'source' ? 'sourceAfter' : name] = { before: digest, after: digest, copy: digest };
-  }
-  expect(receipt).toEqual(expected);
-  expect(receipt.installedObserved.sha256).not.toBe(receipt.installed.copy.sha256);
-  expect(await Bun.file(output).text()).toBe(`mismatch-ready=true${process.platform === 'win32' ? '\r\n' : '\n'}`);
-  expect((await Array.fromAsync(new Bun.Glob('*').scan({ cwd: directory }))).sort()).toEqual([...names.map(name => `${name}.exe`), 'receipt.json'].sort());
-  await rm(directory, { recursive: true });
-  await Bun.write(output, '');
-  await Bun.write(installed, '');
-  await Bun.write(source, '');
-  const empty = { sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', bytes: 0 };
-  expect(await invoke({ ...env, LAZYSH_CAPTURE_OBSERVED_SHA256: empty.sha256, LAZYSH_CAPTURE_OBSERVED_BYTES: '0' })).toBe('capture-ok');
-  const partial = await Bun.file(join(directory, 'receipt.json')).json();
-  expect(partial.installedObserved).toEqual(empty);
-  expect(partial.sourceBefore).toEqual({ sha256: before.sha256, bytes: before.bytes });
-  expect(partial.sourceAfter).toEqual({ before: empty, after: empty, copy: empty });
-  expect(partial.installed).toEqual({ before: empty, after: empty, copy: empty });
-  expect(await Bun.file(join(directory, 'installed.exe')).text()).toBe('');
-  expect(await Bun.file(output).text()).toBe(`mismatch-ready=true${process.platform === 'win32' ? '\r\n' : '\n'}`);
-  expect((await Array.fromAsync(new Bun.Glob('*').scan({ cwd: directory }))).sort()).toEqual([...names.map(name => `${name}.exe`), 'receipt.json'].sort());
-}), 180_000);
+
+const rawBundleMarker = '__TAURI_BUNDLE_TYPE_VAR_UNK';
+const nsisBundleMarker = '__TAURI_BUNDLE_TYPE_VAR_NSS';
+test.each([0, 65_536 - 1, 65_536 - rawBundleMarker.length + 1, 65_536])(
+  'NSIS image prediction changes only the unique marker across stream boundary %i', offset => fixture(async root => {
+    const leading = Buffer.alloc(offset, 0x5a), trailing = Buffer.alloc(73, 0x42);
+    const source = join(root, 'raw.exe');
+    await Bun.write(source, Buffer.concat([leading, Buffer.from(rawBundleMarker), trailing]));
+    const expected = Buffer.concat([leading, Buffer.from(nsisBundleMarker), trailing]);
+    expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: expected.length,
+      sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
+    expect(await Bun.file(source).bytes()).toEqual(Buffer.concat([leading, Buffer.from(rawBundleMarker), trailing]));
+  }));
+test.each(['missing marker', rawBundleMarker + rawBundleMarker, nsisBundleMarker, '__TAURI_BUNDLE_TYPE_VAR_XYZ'])(
+  'NSIS image prediction refuses unsupported layout %s', contents => fixture(async root => {
+    const source = join(root, 'raw.exe');
+    await Bun.write(source, contents);
+    await expect(windowsNsisBinaryDigest(source, await digestFile(source))).rejects.toThrow('unsupported Windows NSIS bundle marker');
+  }));
+test('NSIS image prediction binds the entire source including bytes outside the marker', () => fixture(async root => {
+  const source = join(root, 'raw.exe');
+  await Bun.write(source, `before:${rawBundleMarker}:after`);
+  const baseline = await digestFile(source), expected = await windowsNsisBinaryDigest(source, baseline);
+  await Bun.write(source, `BEFORE:${rawBundleMarker}:after`);
+  await expect(windowsNsisBinaryDigest(source, baseline)).rejects.toThrow('source identity mismatch');
+  expect((await windowsNsisBinaryDigest(source, await digestFile(source))).sha256).not.toBe(expected.sha256);
+}));
+
+test('NSIS image prediction preserves the runtime bundle-comparison constants byte for byte', () => fixture(async root => {
+  const source = join(root, 'raw.exe');
+  const raw = `${['DEB', 'RPM', 'APP', 'MSI', 'NSS', 'XYZ', ''].map(kind => `__TAURI_BUNDLE_TYPE_VAR_${kind}`).join('|')}|${rawBundleMarker}`;
+  await Bun.write(source, raw);
+  const expected = raw.replace(rawBundleMarker, nsisBundleMarker);
+  expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: Buffer.byteLength(expected),
+    sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
+}));
