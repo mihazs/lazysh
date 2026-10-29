@@ -810,7 +810,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -834,18 +834,54 @@ mod tests {
             }
             fixture_request("list_hosts", headers)
         };
+        let settings_requests = |nonce: Option<&str>| {
+            let mut read = request(nonce);
+            read.cmd = "get_companion_settings".into();
+            read.body =
+                tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
+            let mut update = request(nonce);
+            update.cmd = "update_companion_settings".into();
+            update.body = tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":false,"deviceToolsEnabled":false}}),
+            );
+            [read, update]
+        };
+        let rejected = |nonce: Option<&str>| {
+            for request in settings_requests(nonce) {
+                let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
+                assert!(
+                    error.is_string(),
+                    "invalid access must be denied before the settings backend"
+                );
+            }
+        };
+        let admitted = |nonce: &str| {
+            for request in settings_requests(Some(nonce)) {
+                let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
+                assert_eq!(
+                    error["kind"], "disconnected",
+                    "valid access must reach the real settings handler"
+                );
+            }
+        };
+        rejected(None);
         assert!(tauri::test::get_ipc_response(&window, request(None)).is_err());
         authority
             .authorize(authority.generation().unwrap())
             .unwrap();
         let old = authority.status().unwrap().nonce.unwrap();
+        admitted(&old);
         assert!(tauri::test::get_ipc_response(&window, request(Some(&old))).is_ok());
         authority.background().unwrap();
+        rejected(Some(&old));
         assert!(tauri::test::get_ipc_response(&window, request(Some(&old))).is_err());
         authority.foreground().unwrap();
         authority
             .authorize(authority.generation().unwrap())
             .unwrap();
+        rejected(Some(&old));
+        rejected(None);
+        admitted(authority.status().unwrap().nonce.as_deref().unwrap());
         assert!(tauri::test::get_ipc_response(&window, request(Some(&old))).is_err());
         assert!(tauri::test::get_ipc_response(&window, request(None)).is_err());
         assert!(tauri::test::get_ipc_response(
