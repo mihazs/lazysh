@@ -4,8 +4,9 @@
 
 ### Patch Changes
 
-- cafea79: Retain bounded driver stage entry/exit progress on failed published Android APK qualification commands without changing public APK bytes, UI operations, deadlines or success requirements.
 - 81f0e63: Add bounded failure-only diagnostics for the already captured fresh-SSH tmux control client: fenced ancestry to the owned SSH daemon and closed descriptor-kind categories. Product behavior, acceptance predicates and retirement deadlines remain unchanged; the hosted teardown cause remains unproven until actual evidence is captured.
+- cafea79: Retain bounded driver stage entry/exit progress on failed published Android APK qualification commands without changing public APK bytes, UI operations, deadlines or success requirements.
+- 2739871: Observe the existing Windows concurrent Store initialization case with bounded, closed storage phases before the unchanged native host harness. Raw output is not published, the original failure remains primary, and storage behavior, write semantics and wait budgets remain unchanged pending actual phase evidence.
 - @lazysh/common@1.1.1
   - @lazysh/display-idle@1.1.1
   - @lazysh/et-transport@1.1.1
