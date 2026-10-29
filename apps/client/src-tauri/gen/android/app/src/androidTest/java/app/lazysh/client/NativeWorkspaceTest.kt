@@ -1437,6 +1437,12 @@ class NativeWorkspaceTest {
         assertTrue("Expired settings cannot scroll",!NtfySettingsScroll(0).scroll(TimeUnit.SECONDS.toNanos(5),true))
     }
 
+    private class NtfyEventRead {
+        val entered=CountDownLatch(1)
+        val returned=CountDownLatch(1)
+        val receipts=AtomicReference("unavailable")
+    }
+
     private fun <T> withOwnedRestoration(label:String, restore:()->Unit, action:()->T):T {
         var primary:Throwable?=null
         try {return action()} catch(failure:Throwable) {primary=failure;throw failure}
@@ -1733,35 +1739,61 @@ class NativeWorkspaceTest {
         val notifications=context.getSystemService(android.app.NotificationManager::class.java)
         fun ownedNotification()=notifications.activeNotifications.singleOrNull {it.tag=="lazysh-unifiedpush-event" && it.id==4201}
         assertTrue("Consent alone cannot post a remote notification",ownedNotification()==null)
-        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-        signal("event")
-        val notificationDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
-        while(ownedNotification()==null && System.nanoTime()<notificationDeadline)Thread.sleep(20)
-        val delivered=checkNotNull(ownedNotification()) {"Actual bound-event notification required"}
-        val notification=delivered.notification
-        assertTrue("Actual private generic notification",notification.visibility==android.app.Notification.VISIBILITY_PRIVATE &&
-            notification.channelId=="lazysh-remote-events-v1" && notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()=="lazysh" &&
-            notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()=="A remote agent event is available. Open lazysh to inspect your sessions.")
-        assertTrue("Actual immutable own-app intent without remote actions",notification.contentIntent?.isImmutable==true &&
-            notification.contentIntent?.creatorPackage==context.packageName && notification.actions.isNullOrEmpty())
-        assertTrue("Event arrived while Activity backgrounded",scenario.state==androidx.lifecycle.Lifecycle.State.CREATED)
-        val admitted=displayState()
-        assertTrue("One durable receipt admitted",(displayStateType.getDeclaredMethod("getReceipts").invoke(admitted) as List<*>).size==1)
-        val callbackRead=java.util.concurrent.CountDownLatch(1)
+        fun receipts(read:()->Any?)=runCatching {
+            when((displayStateType.getDeclaredMethod("getReceipts").invoke(read()) as List<*>).size) {
+                0->"zero";1->"one";else->"many"
+            }
+        }.getOrDefault("unavailable")
+        fun flag(read:()->Boolean)=runCatching {read().toString()}.getOrDefault("unavailable")
+        val initialReceipts=receipts {beforeEvent}
+        val eventRead=NtfyEventRead()
+        val readPhase=AtomicReference(eventRead)
         val observer=java.lang.reflect.Proxy.newProxyInstance(context.classLoader,arrayOf(storeType)) { _,method,args ->
+            val observation=if(Thread.currentThread().stackTrace.any {
+                it.className=="app.lazysh.unifiedpush.EventDisplayController" && it.methodName=="message"
+            })readPhase.get() else null
+            val reading=method.name=="getValue"
+            val writing=method.name=="setValue"
+            if(reading)observation?.entered?.countDown()
+            if(reading || writing)observation?.receipts?.set("unavailable")
             val result=try {method.invoke(originalStore,*(args?:emptyArray()))}
                 catch(error:java.lang.reflect.InvocationTargetException) {throw error.targetException}
-            if(method.name=="getValue" && Thread.currentThread().stackTrace.any {
-                it.className=="app.lazysh.unifiedpush.EventDisplayController" && it.methodName=="message"
-            })callbackRead.countDown()
+            // Categorize completed original operations, never add a diagnostic Keystore read.
+            if(reading || writing)observation?.receipts?.set(receipts {if(reading)result else args?.firstOrNull()})
+            if(reading)observation?.returned?.countDown()
             result
         }
         withOwnedRestoration("Original owned store observer restoration failed",{storeField.set(display,originalStore)}) {
             // Test-only read observer; every operation delegates unchanged to the
             // original real Keystore store/controller/notification implementation.
             storeField.set(display,observer)
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            signal("event")
+            val notificationDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15)
+            while(ownedNotification()==null && System.nanoTime()<notificationDeadline)Thread.sleep(20)
+            val delivered=checkNotNull(ownedNotification()) {
+                val readReturned=eventRead.returned.count==0L
+                val entered=eventRead.entered.count==0L
+                "Actual bound-event notification required; eventObservation[entered=$entered readReturned=$readReturned"+
+                    " initialReceipts=$initialReceipts finalReceipts=${eventRead.receipts.get()}"+
+                    " appNotifications=${flag {notifications.areNotificationsEnabled()}}"+
+                    " postPermission=${flag {Build.VERSION.SDK_INT<33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED}}"+
+                    " channelEnabled=${flag {Build.VERSION.SDK_INT<26 || (notifications.getNotificationChannel("lazysh-remote-events-v1")?.importance ?: android.app.NotificationManager.IMPORTANCE_NONE)!=android.app.NotificationManager.IMPORTANCE_NONE}}"+
+                    " ownedNotification=${flag {ownedNotification()!=null}}]"
+            }
+            val notification=delivered.notification
+            assertTrue("Actual private generic notification",notification.visibility==android.app.Notification.VISIBILITY_PRIVATE &&
+                notification.channelId=="lazysh-remote-events-v1" && notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()=="lazysh" &&
+                notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()=="A remote agent event is available. Open lazysh to inspect your sessions.")
+            assertTrue("Actual immutable own-app intent without remote actions",notification.contentIntent?.isImmutable==true &&
+                notification.contentIntent?.creatorPackage==context.packageName && notification.actions.isNullOrEmpty())
+            assertTrue("Event arrived while Activity backgrounded",scenario.state==androidx.lifecycle.Lifecycle.State.CREATED)
+            val admitted=displayState()
+            assertTrue("One durable receipt admitted",(displayStateType.getDeclaredMethod("getReceipts").invoke(admitted) as List<*>).size==1)
+            val replayRead=NtfyEventRead()
+            readPhase.set(replayRead)
             signal("event-replay")
-            assertTrue("Actual replay callback reached bound admission",callbackRead.await(15,TimeUnit.SECONDS))
+            assertTrue("Actual replay callback reached bound admission",replayRead.returned.await(15,TimeUnit.SECONDS))
             // enabled() takes the same monitor as message(): this is a completion
             // barrier after arrival, not a sleep that could precede a late post.
             assertTrue("Replay callback completed with original consent",displayType.getDeclaredMethod("enabled",native("DisplayBinding")).invoke(display,binding)==true)
