@@ -311,7 +311,7 @@ jobs:
         run: |
           test "$(/usr/bin/tmux -V)" = 'tmux 3.2a'
           case_name=ssh::tmux_jump_fixture::real_tmux_unsupported_client_loops_keep_terminal_without_binding
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | rg --fixed-strings --line-regexp "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - uses: actions/download-artifact@v4
         with:

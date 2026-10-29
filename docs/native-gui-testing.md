@@ -45,6 +45,9 @@ This is the [official direct-driver route](https://v2.tauri.app/develop/tests/we
 
 [Run 40807640820, job 123232191258](https://github.com/mihazs/lazysh/actions/runs/40807640820/job/123232191258) at source `813d28074f84f5eed9a2cdce3f317ba2f6261c86` also passed all eight GUI cases, with binary SHA256 `c99a02b97581147603be26c1d352596a7e32a73bf97fb83e10231fcd96102d31`. Both official and app Mosh owners passed after the private SSH environment bound the verified server path. The full job then failed two tmux cases, including the stale-client guard on unsupported tmux 3.2a; the separate teardown survivor remains unexplained. The final Herdr step was skipped. Current integration of the product guard repair, modern fixture and explicit older-server rejection still requires CI; no full-job acceptance is claimed.
 
+[Run 40819338984, job 123269758740](https://github.com/mihazs/lazysh/actions/runs/40819338984/job/123269758740) at source `11501ad98b453cbcd03909d7ff6d0f4abb98ed79` passed all eight GUI cases, Mosh and the modern tmux suite. The legacy owner did not execute: its discovery pipeline failed because `rg` was unavailable, causing the test-list producer to report a broken pipe. Discovery now uses the standard non-quiet `grep -Fx` matcher, preserving exact qualified-case matching and consuming the full listing. The legacy runtime owner and final Herdr step still require the corrected workflow execution; no full-job pass is claimed.
+
+
 ## Acceptance limits
 
 The suite covers Linux singleton handoff through the real WebView/native IPC,
