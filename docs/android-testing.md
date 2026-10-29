@@ -114,7 +114,8 @@ separate assertions. WebView 133.0.6943.137 ([commit 49ec12c](https://github.com
 returns [integer inner dimensions](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/third_party/blink/renderer/core/frame/local_dom_window.cc#L1471)
 but [double visual dimensions and offsets](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/third_party/blink/renderer/core/frame/visual_viewport.cc#L444).
 The distinction matters on the owned 2.625-density guest: a 412.190px full-width
-rectangle exceeds integer innerWidth 412 even when it fits the visible viewport.
+rectangle exceeds integer innerWidth 412. That comparison alone cannot establish
+physical overflow; the oracle uses the actual visible bounds instead.
 Actual visual dimensions are retained only as bounded numeric failure metadata;
 physical-device behavior remains a separate acceptance requirement.
 
