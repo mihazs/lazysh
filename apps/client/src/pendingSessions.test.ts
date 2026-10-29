@@ -17,6 +17,9 @@ it('allows only late creation-result cleanup and refuses to cancel a retained re
   await disposeStaleSessionResult('read_file',{sessionId:'pending'});
   retainSession('adopted');await disposeStaleSessionResult('connect',{sessionId:'adopted'});
   expect(invoke).not.toHaveBeenCalled();
+  await disposeStaleSessionResult('attachDefaultMultiplexer',{sessionId:'late-default'});
+  expect(invoke).toHaveBeenLastCalledWith('disconnect',{sessionId:'late-default'});
+  invoke.mockClear();
   await disposeStaleSessionResult('local_connect',{sessionId:'local:late-created'});
   expect(invoke).toHaveBeenCalledExactlyOnceWith('local_disconnect',{sessionId:'local:late-created'});
 });

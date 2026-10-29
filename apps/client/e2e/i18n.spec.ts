@@ -124,9 +124,11 @@ test('pseudo expansion preserves host drafts, native diagnostics, keyboard focus
   await page.getByRole('button',{name:pseudo.shortcutSaveValue1Chord.replace('{{value1}}',pseudo.gestureDoubleTap),exact:true}).click();
   expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lazysh.preferences.v1')!).gestureChords.doubleTap)).toBe('C-b, T');
   expect(await page.locator('[role=dialog]').evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
-  await expect(page.locator('img')).toHaveCount(1);
+  await expect(page.locator('img')).toHaveCount(2);
+  await expect(page.locator('img:not(.brand-mark):not(.welcome-brand-mark)')).toHaveCount(0);
+  for (const image of await page.locator('img').all()) await expect(image).toHaveAttribute('src',originalSource!);
   expect(await originalBrand!.evaluate((node,source)=>node.isConnected
-    && document.querySelector('img')===node && node.getAttribute('src')===source,originalSource)).toBe(true);
+    && document.querySelector('.brand > img.brand-mark')===node && node.getAttribute('src')===source,originalSource)).toBe(true);
   await expect(page.locator('script[src^="http"]')).toHaveCount(0);
 });
 
