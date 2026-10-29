@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.0.0
+
+### Minor Changes
+
+- e61e477: Publish verified companion executables for Linux x64/ARM64, macOS Intel/ARM64 and Windows x64 in future complete releases, with native staged-byte CLI/storage acceptance and existing source-bound receipts. Existing companion behavior and storage defaults are unchanged.
+- 58b3c9f: Add explicit preview-bound Unix companion installation with verified source bytes, a fixed private user namespace and kernel-locked atomic replacement. Windows installation remains explicitly unsupported; existing runtime and data defaults are unchanged.
+
+### Patch Changes
+
+- @lazysh/common@1.0.0
+  - @lazysh/notification-client@1.0.0
+
 ## 0.23.0
 
 ### Patch Changes

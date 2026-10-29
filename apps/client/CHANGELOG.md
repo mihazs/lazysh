@@ -1,5 +1,37 @@
 # @lazysh/client
 
+## 1.0.0
+
+### Major Changes
+
+- f5e61f1: Accept only lazysh theme share codes and raw JSON, and remove vendor-identifying repository references.
+
+### Minor Changes
+
+- f5e61f1: Add a localized named/function-key picker to shared shortcut editors with independent drafts and existing validated bindings.
+- 3651a8c: Add optional per-host default multiplexer and named-session SSH direct entry while preserving saved transport and explicit launch behavior.
+- 1de657d: Refresh reported agent activity every five seconds while its board is visible and the app is in the foreground, preserving manual refresh and existing host permissions.
+- ac60385: Add client-side reported-agent search, status filters and selected-report context while preserving explicit host actions and reported-only identity semantics.
+- 49a2d4a: Support warm desktop directory launches with caller-relative paths and one-shot guarded admission.
+- 726ace1: Add persistent connected-workspace sidebar navigation, suspended hidden agent owners and a guarded tmux picker that adopts each returned native snapshot.
+- 8fe533a: Add separate opt-in private Android UnifiedPush event notification display with confirmed device binding and durable bounded replay admission. Existing enrollment alone leaves display off.
+
+### Patch Changes
+
+- 5f3857a: Prepare Android, Linux and Windows release artifacts while Apple releases are deferred.
+- 0b9b2b9: Refresh the default app appearance with lazysh brand colors, restrained glass surfaces, and consistent controls while retaining saved and terminal theme choices.
+- 3fbb8c7: Fail closed on unsupported tmux client/session loops before enabling navigation or guarded Chat input, and require exactly one matching original client per action. Older servers retain ordinary terminal access.
+- f5e9d70: Enable verified Android, Linux and Windows GitHub releases after Changesets version merges; defer Apple and official F-Droid inclusion.
+- 196fc79: Fix Windows release packaging validation of native workspace path separators.
+- 698ed5e: Show the canonical lazysh logo on the welcome screen instead of the placeholder terminal illustration.
+- 7968d3d: Fit the Android WebView to system bars, display cutouts and docked keyboard insets so the terminal resizes and special keys stay visible.
+- f5cdace: Require native Windows NSIS install, same-version repair with preserved owned data, and uninstall acceptance before staging release bytes.
+- 9520102: Publish the current version explicitly and preserve future verified version releases without superseding older in-flight builds.
+- @lazysh/common@1.0.0
+  - @lazysh/display-idle@1.0.0
+  - @lazysh/et-transport@1.0.0
+  - @lazysh/mosh-transport@1.0.0
+
 ## 0.23.0
 
 ### Minor Changes
