@@ -155,6 +155,27 @@ export async function buildIdentity(root: string): Promise<Identity> {
   return identity;
 }
 
+export async function releaseNotes(root: string, version: string, initial = false) {
+  const changelog = await Bun.file(join(root, 'apps/client/CHANGELOG.md')).text();
+  const section = changelog.split(new RegExp(`^## ${version.replaceAll('.', '\\.')}\\s*$`, 'm'))[1]?.split(/^## /m)[0];
+  requireArtifact(section?.trim(), 'missing version changelog');
+  let notes = section.trim();
+  if (initial) {
+    const policy = await Bun.file(join(root, '.changeset/release-policy.json')).json();
+    requireArtifact(policy.initialPublication?.version === version, 'initial notes version not allowlisted');
+    const current = (await Bun.file(join(root, 'CHANGELOG.md')).text()).split(/^## \[Unreleased\]\s*$/m)[1]?.split(/^## /m)[0];
+    requireArtifact(current?.trim(), 'missing initial development changes');
+    notes += `\n\n## Changes since version preparation\n\n${current.trim()}`;
+  }
+  const guide = await Bun.file(join(root, 'docs/install-and-update.md')).text();
+  const status = guide.split(/^## Current native acceptance status\s*$/m);
+  requireArtifact(status.length === 2, 'missing or ambiguous native acceptance status');
+  const sectionStatus = status[1].split(/^## /m)[0].trim();
+  requireArtifact(sectionStatus, 'empty native acceptance status');
+  notes += `\n\n## Current native acceptance status\n\n${sectionStatus}`;
+  return `${notes}\n\nSee the attached installation guide and release.json for architecture, signing and channel limitations.\n`;
+}
+
 if (import.meta.main) {
   const root = process.cwd();
   const identity = await buildIdentity(root);
@@ -168,10 +189,7 @@ if (import.meta.main) {
   } else if (command === 'verify') {
     await verifyAggregate(identity, directory);
   } else if (command === 'notes') {
-    const changelog = await Bun.file(join(root, 'apps/client/CHANGELOG.md')).text();
-    const section = changelog.split(new RegExp(`^## ${identity.version.replaceAll('.', '\\.')}\\s*$`, 'm'))[1]?.split(/^## /m)[0];
-    requireArtifact(section?.trim(), 'missing version changelog');
-    await Bun.write(join(directory, 'release-notes.md'), `${section.trim()}\n\nSee the attached installation guide and release.json for architecture, signing and channel limitations.\n`);
+    await Bun.write(join(directory, 'release-notes.md'), await releaseNotes(root, identity.version, process.env.LAZYSH_RELEASE_INITIAL === 'true'));
     await copyFile(join(root, 'docs/install-and-update.md'), join(directory, 'INSTALL-AND-UPDATE.md'));
   } else {
     requireArtifact(command === 'stage', 'unknown command');
