@@ -170,7 +170,7 @@ class PublishedApkTest {
     private fun hideKeyboard() = stage(Stage.KEYBOARD) {
         val selector = By.Window.type(AccessibilityWindowInfo.TYPE_INPUT_METHOD)
         if (device.hasWindow(selector)) {
-            check(device.pressBack())
+            device.pressBack()
             check(device.wait(Condition<UiDevice, Boolean> { !it.hasWindow(selector) }, waitMillis()))
         }
     }
@@ -233,11 +233,9 @@ class PublishedApkTest {
             check(device.currentPackageName == target && owner.applicationPackage == target && owner.isScrollable)
             check(!owner.visibleBounds.isEmpty)
             check(System.nanoTime() < deadline)
-            val more = owner.scroll(Direction.DOWN, 0.8f)
+            owner.scroll(Direction.DOWN, 0.8f)
             if (visible()) return@stage
-            check(more)
         }
-        error("Save host was not revealed by the bounded owned form scroll")
     }
 
     @Test(timeout = 60_000)

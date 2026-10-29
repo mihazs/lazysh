@@ -175,9 +175,25 @@ exact owned Name field and its synthetic value, traverses at most16 same-package
 parents up to the WebView, and requires exactly one scrollable ancestor below
 that WebView. It never chooses a global first scrollable view. With target and
 container ownership rechecked, at most four normal native DOWN gestures of0.8
-container lengths may reveal the footer. End-of-scroll, ambiguity, foreign/stale
-ownership or an exhausted original deadline fails closed. The exact visible,
+container lengths may reveal the footer. Ambiguity, foreign/stale ownership or
+an exhausted original deadline fails closed. The exact visible,
 unique Save-host lookup and single click still follow, with every durable-save,
 relaunch and same-byte reinstall assertion intact. No random tap, input retry,
 sleep, fallback or deadline extension is introduced. Runtime verification of
 these fixture actions remains required; no product footer repair is claimed.
+
+The first owned-navigation cases both failed inside `FORM_SCROLL`. That outer
+stage also includes checks before owner admission, so it does not establish that
+the nested owner check or a particular gesture ran. The lower-form failure
+samples are consistent with movement, not proof of its count or cause.
+
+UI Automator2.4.0 `scroll` returns false for either a detected end or a missing
+accessibility scroll event. `pressBack` returns whether a content-changed event
+arrived, not whether the IME is absent. The fixture therefore ignores these event
+booleans: scroll preparation still permits at most four owned gestures and exits
+early on exact Save visibility, then always hands off to the ORIGINAL named Save
+wait and single click. Keyboard dismissal still uses one ordinary Back and the
+ORIGINAL IME-absence wait. No actual UI-state assertion, flow deadline, input,
+launch count or persistence requirement changes. These are source-contract
+repairs; the historical KEYBOARD/FORM_SCROLL causes remain unproven until runtime
+evidence, and full both-flavor qualification is still required.
