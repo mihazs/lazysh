@@ -1,9 +1,18 @@
-# Versioning without publishing
+# Versioning and milestone releases
 
 lazysh uses Changesets 3.0.3 under Bun 1.3.14 to prepare reviewed version PRs.
 All 15 owned private workspace packages form one fixed release group. Their
-generated package changelogs describe each release. This does not publish to a
-registry, distribute installers, create tags, or submit an application to a store.
+generated package changelogs describe each release. Version preparation itself
+does not publish packages or installers. Merging the reviewed version transition
+to main starts the [verified GitHub publication workflow](release-tag-gate.md).
+Registry and application-store distribution remain separate.
+
+Every completed milestone must lead to a published version. Delivery includes
+the version PR, successful publication gates, and verification of the public
+release and all expected assets. Link the released version from the milestone's
+issue and project card; a fragment, merge or tag alone is not a release. This
+applies to the current version and every future version, without backfilling
+historical versions. Existing signing, scan and installer gates remain mandatory.
 
 For a user-facing change, keep the required root `CHANGELOG.md` `[Unreleased]`
 entry, including changed defaults, and run `bun run changeset` to add a fragment
@@ -11,8 +20,10 @@ with the appropriate patch, minor or major impact. Select an affected owned
 package; the fixed group releases together. Existing root history and
 `[Unreleased]` entries are retained verbatim by versioning, not automatically
 retrospectively converted into fragments. Generated package changelogs begin
-with the first consumed fragment. Internal/test-only changes can use an empty
-changeset (`bun run changeset --empty`). No registry configuration is needed.
+with the first consumed fragment. Internal/test-only follow-up changes can use an
+empty changeset (`bun run changeset --empty`) when covered by a planned release.
+A completed milestone must have a real version bump, including at least a patch
+fragment for an internal/test-only milestone. No registry configuration is needed.
 An empty-only plan does not create a version PR: fragments remain until a real
 release fragment arrives, and the workflow checks planned releases rather than
 the number of fragment files.
@@ -88,9 +99,10 @@ UpdateCheckData: 'apps/client/android-version.properties|(?m)^versionCode=([0-9]
 ```
 
 These are documentation examples, not an enabled F-Droid submission or publisher.
-The current workflow still prepares version PRs only. Tagging, unsigned FOSS
-release builds, dependency scanning, signing and initial F-Droid acceptance remain
-separate work under #333. The SDK-gated generator fixture compares the real
+The version and publication workflows have separate responsibilities. The
+publication workflow gates stable tags and GitHub assets on source builds,
+FOSS scans, signing, native installer acceptance and artifact verification.
+Official F-Droid inclusion remains separate. The SDK-gated generator fixture compares the real
 Tauri-generated properties with this committed format; it deliberately stops
 before compilation and does not establish successful release APK acceptance.
 
@@ -114,9 +126,12 @@ documentation requires uncached treatment for tasks with external side effects.
 
 The `version` workflow validates the real-tool fixtures on PRs and main. Its
 separate main-only write job uses the **version-only** Changesets action pinned
-to v2.1.2's immutable commit. There is no publish action, publish script, registry
-token, App token or PAT. The generated PR body is replaced with the repository's
-release review template so it does not claim that merging publishes packages.
+to v2.1.2's immutable commit. This job prepares versions; the separate stable-tag
+workflow publishes verified GitHub release artifacts. A repository-scoped Release
+App token is used when configured, otherwise the default GitHub token and its
+normal workflow-admission constraints apply. No registry token is needed. The
+generated PR body uses the repository's release review template and retains the
+pending publication gates.
 Reviewers must record applicable checks and the highest consumed release impact.
 
 On 2026-10-26, the repository administrator enabled **Settings → Actions →

@@ -2,9 +2,9 @@
   "enabled": true,
   "fossPushAccepted": false,
   "officialSubmissionPrerequisitesAccepted": false,
-  "recipeSha256": "87fa027a9c013dc08148f0638f01ecd301995a1ee8c8e56665beb4e543b2ff38",
+  "recipeSha256": "e4db709606d1edd5f76df51dc3ec0ba966bd3026ebe31f41a7e4038d54044546",
   "initialPublication": {
-    "version": "0.23.0",
-    "ancestor": "f5cdacea70f313fa216e8963b76effd098340007"
+    "version": "1.0.0",
+    "ancestor": "f2223e0d0673e7ef48f1c92ca91761b77f4c8508"
   }
 }

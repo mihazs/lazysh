@@ -65,9 +65,10 @@ test.each([
 });
 
 test('initial publication alone admits unchanged version and retains pending Changesets', () => {
-  const bootstrap = { ...input, event: 'workflow_dispatch', version: '0.23.0', parentVersion: '0.23.0', pending: ['retained.md'] };
+  const version = policy.initialPublication.version;
+  const bootstrap = { ...input, event: 'workflow_dispatch', version, parentVersion: version, pending: ['retained.md'] };
   const ancestry = [sha, policy.initialPublication.ancestor];
-  expect(initialCandidate(bootstrap, policy, sha, ancestry)).toEqual({ sha, version: '0.23.0', versionCode: 23000, tag: 'v0.23.0' });
+  expect(initialCandidate(bootstrap, policy, sha, ancestry)).toEqual({ sha, version, versionCode: androidVersionCode(version), tag: `v${version}` });
   expect(() => candidate(bootstrap)).toThrow('transition');
   for (const change of [{ event: 'push' }, { ref: 'refs/heads/topic' }, { version: '0.24.0' }, { sha: 'main' }]) {
     expect(() => initialCandidate({ ...bootstrap, ...change }, policy, sha, ancestry)).toThrow();
@@ -79,7 +80,7 @@ test('initial publication alone admits unchanged version and retains pending Cha
     expect(() => initialCandidate(bootstrap, policy, sha, ancestors)).toThrow('first-parent');
   }
   for (const ancestor of ['', 'not-a-sha', sha]) {
-    expect(() => initialCandidate(bootstrap, { ...policy, initialPublication: { version: '0.23.0', ancestor } }, sha, ancestry)).toThrow('first-parent');
+    expect(() => initialCandidate(bootstrap, { ...policy, initialPublication: { version, ancestor } }, sha, ancestry)).toThrow('first-parent');
   }
 });
 
