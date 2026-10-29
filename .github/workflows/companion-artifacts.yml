@@ -72,10 +72,10 @@ jobs:
           else
             bun .changeset/release-companion.ts candidate ${{ matrix.target }} "$RUNNER_TEMP/companion-installation-files"
           fi
-      - name: Native host harness runs CLI and WAL owners against the exact prepared executable
+      - name: Native host harness runs CLI, WAL and installation owners against the exact prepared executable
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
-        run: cargo test --locked --package lazysh-agent --test cli --test settings --test storage_wal
+        run: cargo test --locked --package lazysh-agent --test cli --test settings --test storage_wal --test installation
       - name: Revalidate exact prepared bytes after the native owners
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}

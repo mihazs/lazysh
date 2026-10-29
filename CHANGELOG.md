@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit companion installation inspection and preview-bound local installation for Linux and macOS. The CLI derives one private user-local destination, preserves existing binaries on pre-commit rejection, and distinguishes committed durability uncertainty. Windows installation reports unsupported pending native ownership and SSH verification; existing binary distribution, data, settings, hooks and PATH defaults are unchanged. In-app transfer and installation remain separate work.
+
 - Add persistent Connections, Workspaces and Agents navigation to the existing sidebar/drawer. Connections remains the default; agent drafts persist while hidden owners suspend activity, and Jump To uses one guarded persistent tmux picker.
 
 - Add verified companion executable builds to future complete release sets for Linux x64/ARM64, macOS Intel/ARM64 and Windows x64. Candidate checks create no publication receipts; trusted release builds retain exact source/version/hash and staged-byte CLI/storage gates. Existing companion/data defaults and deferred Apple application packages are unchanged; in-app installation remains separate work.

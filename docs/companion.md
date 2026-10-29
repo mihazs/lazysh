@@ -806,3 +806,49 @@ Set `LAZYSH_STORAGE_DIAGNOSTICS=1` explicitly to add one bounded stderr record w
 The `lazysh-storage-diagnostic ` prefix is followed by a finite JSON record containing `phase`, `result` and optional numeric `sqliteCode` (null when unavailable). Phases distinguish non-SQL preparation, native bootstrap locking, SQLite open/configuration and individual constructor/ingest boundaries, including commit. Extensible error strings are classified as `OtherError`; no error text, SQL, paths, descriptors, timestamps, command arguments or lifecycle content enters this record. A phase names the call that returned the error, not an asserted underlying cause. Errors outside the instrumented Store constructor/ingest boundaries have no phase record; there is no retained last-phase state.
 
 The existing Linux concurrent-hooks syscall fixture opts in only its traced child processes. Its bounded manifest retains at most one validated finite record per worker alongside the existing worker/PID trace association, never arbitrary child stderr. This observes the same CLI invocation; the separate ignored fresh-store profiler remains a different experiment. Diagnostics do not add retries, alter validation, increase deadlines or weaken FULL synchronization. Syscall observation can itself affect scheduling, and a new phase record does not establish the cause of earlier unobserved failures.
+
+## Explicit local installation prerequisite
+
+Future companion binaries expose `lazysh-agent installation inspect` and
+`lazysh-agent installation install --expected-plan <planSha256>` on Linux and
+macOS. This is the local operation needed by the future in-app SSH installer;
+the application does not yet transfer or install the companion for you. Historical
+v0.23.0 binaries and release assets remain unchanged.
+
+Inspect does not create directories, locks, settings or event state. Its schema-v1
+JSON includes `supported`, the actual running executable's `source`
+(`version`, lowercase `sha256`, `bytes`), absolute `destination`, `existing`
+(`state: "missing"`, or `state: "present"` with `sha256` and `bytes`), and opaque
+`planSha256`. The caller must compare source identity to its trusted release
+receipt and show the destination/version before explicit confirmation. The plan
+hash binds all source fields, the derived destination and existing identity; a
+changed user-data location or intervening installation invalidates it.
+
+The only destination is `lazysh/companion/lazysh-agent` below the operating
+system's user-local data directory (Linux uses an absolute `XDG_DATA_HOME` or
+`~/.local/share`; macOS uses `~/Library/Application Support`). There is no arbitrary
+destination flag and `LAZYSH_STATE_DIR` does not redirect installation. Custom
+symlink routes, shared/private-file violations, nonlocal or unknown filesystems,
+nonregular files, and executables larger than 64 MiB are refused. An existing
+managed executable must be owned, single-linked and mode 0700.
+
+Install rechecks the plan under a kernel file lock, copies the retained actual
+executable into a private same-directory temporary file, verifies its exact hash
+and size, synchronizes it, and renames within the retained directory descriptor.
+Schema-v1 result JSON contains `status`, `committed` and the resulting `plan`.
+`installed` means replacement and directory synchronization succeeded; `reused`
+means the exact executable already existed without replacement. Ordinary
+rejections exit nonzero with a redacted finite error class and no success JSON.
+`committedDurabilityUnknown` with `committed: true` means the rename happened but
+its subsequent directory synchronization or identity readback was inconclusive:
+inspect again before retrying, and never assume rollback. A killed process can
+leave an operation-owned `.install-*` temporary file; cancellation must never
+remove the installed destination. Installation does not update PATH, hooks,
+settings, database contents or running agents.
+
+Windows inspect returns `supported: false` and
+`reason: "windowsInstallerUnsupported"`; install rejects before filesystem
+inspection or mutation. Windows binary downloads and normal CLI/storage checks
+remain supported. Native SID/DACL ownership, busy-executable replacement and a
+Windows OpenSSH shell adapter remain tracked in issue #490; the complete in-app
+installer remains issue #476.
