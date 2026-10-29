@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.0.2
+
+### Patch Changes
+
+- 496025f: Prevent mobile session toolbar labels and icons from overlapping by keeping complete buttons in a horizontally scrollable row.
+- ea2426d: Explain a positively closed SSH attachment-transfer connection instead of showing a generic channel-send error. Direct users to the existing verified saved-host connection flow while preserving a live Mosh tab, partial-file warnings, upload limits and exclusive file creation. Automatic in-place SSH reauthentication remains separate work.
+- @lazysh/common@1.0.2
+  - @lazysh/display-idle@1.0.2
+  - @lazysh/et-transport@1.0.2
+  - @lazysh/mosh-transport@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes
