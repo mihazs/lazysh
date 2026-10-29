@@ -2,7 +2,7 @@ import {afterEach,expect,test} from 'bun:test';
 import {chmod,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {capture,cpuCount,hostBudget,quota,startupObservation,cpuAllocation,waitForRetirement,startupFailure} from './support/androidStartup';
+import {capture,cpuCount,hostBudget,quota,startupObservation,cpuAllocation,waitForRetirement,startupFailure,avdConfiguration} from './support/androidStartup';
 const temporary:string[]=[];
 afterEach(async()=>{for(const path of temporary.splice(0))await rm(path,{recursive:true,force:true});});
 
@@ -217,4 +217,45 @@ for(const scenario of ['avd-proof','avd-seal-match','pid-nomination','process-id
   expect(JSON.stringify(summary)).not.toContain(f.directory);expect(JSON.stringify(summary)).not.toContain('private');
   expect(JSON.stringify(summary)).not.toContain(boot);
   if(scenario.startsWith('guest-'))expect(summary.samples[3].captures.online).toMatchObject({status:'complete'});
+});
+
+const canonicalAvd='hw.cpu.ncore=2\nhw.ramSize=3072M\nhw.device.name=pixel_2\nimage.sysdir.1=system-images/android-36/default/x86_64/\n';
+test('AVD config accepts upstream spaced INI serialization and keeps exact field meanings',()=>{
+  expect(avdConfiguration(canonicalAvd.replaceAll('=',' = '),2)).toEqual({coresExpected:true,ramEncoding:'suffix-mb',deviceExpected:true,imageExpected:true,configEncoding:'spaced'});
+  expect(avdConfiguration(canonicalAvd+' hw.cpu.ncore = 4\n',2).coresExpected).toBe(false);
+  expect(avdConfiguration(canonicalAvd.replace('3072M','3072'),2).ramEncoding).toBe('integer-mb');
+  const privateValue=avdConfiguration(canonicalAvd.replace('3072M','private-config-path'),2);
+  expect(privateValue.ramEncoding).toBe('other');expect(JSON.stringify(privateValue)).not.toContain('private');
+  expect(avdConfiguration('',2).configEncoding).toBe('missing');
+  expect(avdConfiguration(canonicalAvd.replace('hw.cpu.ncore','\u2003hw.cpu.ncore'),2).coresExpected).toBe(false);
+  expect(avdConfiguration(canonicalAvd.replace('3072M','3072M\u2003'),2).ramEncoding).toBe('other');
+  for(const text of ['x'.repeat(65537),'hw.cpu.ncore=2\0'])expect(()=>avdConfiguration(text,2)).toThrow();
+});
+for(const scenario of ['spaced','integer-ram','atomic-replacement'] as const)test.skipIf(process.platform!=='linux')(`AVD ${scenario} retains field and identity flags without widening proof`,async()=>{
+  const {runStartup}=await import('./support/androidStartup');const {rename}=await import('node:fs/promises');
+  const child=Bun.spawn([process.execPath,'-e',''],{stdout:'ignore',stderr:'ignore'});await child.exited;
+  const f=await readyRetirementFixture(child.pid,'recorded-fixture-start');
+  if(scenario==='atomic-replacement')await rename(f.config,`${f.config}.old`);
+  if(scenario==='spaced')await writeFile(f.ini,` path = ${f.ini.slice(0,-4)}.avd \n`);
+  await writeFile(f.config,canonicalAvd.replaceAll('=',' = ').replace('3072M',scenario==='integer-ram'?'3072':'3072M'));
+  const statePath=join(f.base,'state.json'),state=JSON.parse(await readFile(statePath,'utf8'));state.rows[3].sealed=true;await writeFile(statePath,JSON.stringify(state));
+  if(scenario==='spaced')await runStartup('retire',{...f.env,STARTUP_ACTION_OUTCOME:'success'});
+  else await expect(runStartup('observe',f.env,async()=>({check:async()=>{}}))).rejects.toThrow('inconclusive');
+  const summary=JSON.parse(await readFile(join(f.base,'results/summary.json'),'utf8')),sample=summary.samples[3];
+  expect(sample.avdObservation).toMatchObject({coresExpected:true,deviceExpected:true,imageExpected:true,indexValid:true,directoryInodeStable:true,indexInodeStable:true,configInodeStable:scenario!=='atomic-replacement',ramEncoding:scenario==='integer-ram'?'integer-mb':'suffix-mb',configEncoding:'spaced'});
+  if(scenario==='spaced')expect(sample.status).toBe('complete');
+  else expect(sample.observationFailure.checkpoint).toBe(scenario==='integer-ram'?'avd-proof':'avd-seal-match');
+  if(scenario==='integer-ram')expect(sample.avdFailure.check).toBe('config-values');
+  expect(JSON.stringify(sample)).not.toContain(f.directory);expect(JSON.stringify(sample)).not.toContain('private');
+});
+
+test.skipIf(process.platform!=='linux')('spaced duplicate index paths remain ambiguous and never authorize cleanup',async()=>{
+  const {runStartup}=await import('./support/androidStartup');
+  const child=Bun.spawn([process.execPath,'-e',''],{stdout:'ignore',stderr:'ignore'});await child.exited;
+  const f=await readyRetirementFixture(child.pid,'recorded-fixture-start');
+  await writeFile(f.ini,`path=${f.ini.slice(0,-4)}.avd\n path = /private/unowned\n`);
+  await expect(runStartup('retire',{...f.env,STARTUP_ACTION_OUTCOME:'success'})).rejects.toThrow('inconclusive');
+  const summary=JSON.parse(await readFile(join(f.base,'results/summary.json'),'utf8'));
+  expect(summary.samples[3].avdObservation.indexValid).toBe(false);expect(await Bun.file(f.config).exists()).toBe(true);
+  expect(JSON.stringify(summary)).not.toContain('/private/unowned');
 });

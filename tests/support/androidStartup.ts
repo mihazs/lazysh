@@ -101,6 +101,17 @@ async function fingerprint(path:string,deadline=performance.now()+60_000){
   }
   await visit(path,0);return hash.digest('hex');
 }
+// Android writes spaced assignments; compare exact parsed keys and values.
+function iniValues(text:string,key:string){
+  if(text.length>64*1024||text.includes('\0'))throw new Error('AVD INI bound');
+  const trim=(value:string)=>value.replace(/^[ \t\r]+|[ \t\r]+$/g,'');
+  return text.split('\n').flatMap(line=>{const equals=line.indexOf('=');return equals<0||trim(line.slice(0,equals))!==key?[]:[{value:trim(line.slice(equals+1)),spaced:line.slice(0,equals)!==key}];});
+}
+export function avdConfiguration(text:string,cores:number){
+  const keys=['hw.cpu.ncore','hw.ramSize','hw.device.name','image.sysdir.1'];
+  const entries=keys.map(key=>iniValues(text,key).at(-1)),values=entries.map(entry=>entry?.value);
+  return {coresExpected:values[0]===String(cores),ramEncoding:values[1]===undefined?'missing':values[1]==='3072M'?'suffix-mb':values[1]==='3072'?'integer-mb':'other',deviceExpected:values[2]==='pixel_2',imageExpected:values[3]==='system-images/android-36/default/x86_64/',configEncoding:entries.some(entry=>entry===undefined)?'missing':entries.every(entry=>entry!.spaced)?'spaced':entries.some(entry=>entry!.spaced)?'mixed':'compact'};
+}
 type State={index:number;host:string;failure?:string;avd?:{directory:string;config:string;index:string};pid?:number;start?:string;fingerprints?:{emulator:string;image:string;camera:string};rows:Record<string,unknown>[]};
 async function processIdentity(pid:number){
   try{const text=await read(`/proc/${pid}/stat`,4096);const fields=text.slice(text.lastIndexOf(')')+2).split(/\s+/);if(!/^[0-9]+$/.test(fields[19]??''))throw new Error('Process identity unavailable');return {start:fields[19],retired:['Z','X'].includes(fields[0])};}
@@ -145,14 +156,26 @@ export async function runStartup(phase:string,env=process.env,attest=attestQrCam
     await save();await variables(true);
   }
   async function avdProof(){
-    const directory=await lstat(avd),config=await lstat(join(avd,'config.ini'));
-    if(!directory.isDirectory()||directory.isSymbolicLink()||!config.isFile()||config.isSymbolicLink()||directory.uid!==process.getuid!()||config.uid!==process.getuid!()||await realpath(avd)!==avd)throw new Error('Owned AVD unavailable');
-    const configText=await read(join(avd,'config.ini'));
-    function value(key:string){return configText.split('\n').filter(l=>l.startsWith(`${key}=`)).at(-1)?.slice(key.length+1).trim();}
-    if(value('hw.cpu.ncore')!==String(plan[state.index])||value('hw.ramSize')!=='3072M'||value('hw.device.name')!=='pixel_2'||value('image.sysdir.1')!=='system-images/android-36/default/x86_64/')throw new Error('AVD configuration differs');
-    const index=await lstat(ini),paths=(await read(ini,4096)).split('\n').filter(line=>line.startsWith('path='));
-    if(!index.isFile()||index.isSymbolicLink()||index.uid!==process.getuid!()||paths.length!==1||paths[0]!==`path=${avd}`)throw new Error('AVD index ownership unavailable');
-    return {directory:String(directory.ino),config:String(config.ino),index:String(index.ino)};
+    let check='directory-stat';
+    const observation:Record<string,boolean|string|null>={phase:phase==='seal'?'seal':phase==='observe'?'observe':'retire',directoryInodeStable:null,configInodeStable:null,indexInodeStable:null,coresExpected:null,ramEncoding:'unavailable',deviceExpected:null,imageExpected:null,indexValid:null,configEncoding:'unavailable'};
+    if(phase==='observe'||row().avdObservation===undefined)row().avdObservation=observation;
+    try{
+      const directory=await lstat(avd);check='config-stat';const config=await lstat(join(avd,'config.ini'));
+      if(state.avd){observation.directoryInodeStable=String(directory.ino)===state.avd.directory;observation.configInodeStable=String(config.ino)===state.avd.config;}
+      check='filesystem-proof';
+      if(!directory.isDirectory()||directory.isSymbolicLink()||!config.isFile()||config.isSymbolicLink()||directory.uid!==process.getuid!()||config.uid!==process.getuid!()||await realpath(avd)!==avd)throw new Error('Owned AVD unavailable');
+      check='config-read';Object.assign(observation,avdConfiguration(await read(join(avd,'config.ini')),plan[state.index]));
+      check='index-stat';const index=await lstat(ini);
+      if(state.avd)observation.indexInodeStable=String(index.ino)===state.avd.index;
+      check='index-proof';
+      if(!index.isFile()||index.isSymbolicLink()||index.uid!==process.getuid!()){observation.indexValid=false;throw new Error('AVD index ownership unavailable');}
+      check='index-read';const paths=iniValues(await read(ini,4096),'path');
+      observation.indexValid=paths.length===1&&paths[0].value===avd;
+      check='config-values';
+      if(!observation.coresExpected||observation.ramEncoding!=='suffix-mb'||!observation.deviceExpected||!observation.imageExpected)throw new Error('AVD configuration differs');
+      check='index-proof';if(!observation.indexValid)throw new Error('AVD index ownership unavailable');
+      return {directory:String(directory.ino),config:String(config.ino),index:String(index.ino)};
+    }catch{row().avdFailure??={check};throw new Error('Owned AVD proof unavailable');}
   }
   let primary=false,checkpoint='observe-entry';
   try{

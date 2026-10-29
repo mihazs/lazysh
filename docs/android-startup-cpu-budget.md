@@ -65,3 +65,33 @@ checkpoint fields contain no underlying error, PID, path, argv, or raw boot UUID
 They locate a failed operation, not its root cause. Existing observation evidence
 survives a subsequent cleanup failure. Missing PID fields in the summary do not
 locate failure: PID/start proofs are internal and never uploaded.
+
+## AVD serialization and closed field observations
+
+Upstream qemu commit `ae9d18d2b6261179fbd57fffec720a04f7bfb053` writes
+[`key = value` assignments and atomically replaces INI files](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/android-emu-base/android/base/files/IniFile.cpp).
+That file's SHA-256 is
+`806aa822a42a8d6065de655f8078d4ecd8ae09e0f4827eec5cbcd2c8007885ce`.
+The [C INI writer](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/files/src/android/utils/ini.cpp)
+delegates to it. [First-boot partition configuration](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/avd/src/android/avd/info.c)
+can rewrite config.ini. These source contracts justify parsing whitespace around
+assignments while retaining exact key/value and unique index-path checks.
+They do not identify which field changed in the failed hosted sample or establish
+the exact source revision of SDK emulator build 16428233.
+
+Run 40825846679 artifact 12875968930, SHA-256
+`b99e21eba8872de8a2cdc1cd2094f3a03690624558de15f60e18aa5bd4974699`,
+passed camera attestation and stopped at `avd-proof`, before inode comparison.
+The next probe retains only closed directory/config/index inode-stability flags,
+core/device/image/index validity, RAM encoding, and assignment-format categories.
+A failed subcheck has a closed `avdFailure.check`; no raw config, path, UID or PID
+is retained. The observation phase distinguishes seal, post-boot and retirement
+snapshots; a later cleanup failure preserves the original observation.
+
+RAM `3072M` versus integer `3072` remains an unverified runtime distinction.
+The [hardware definition](https://android.googlesource.com/platform/external/qemu/+/ae9d18d2b6261179fbd57fffec720a04f7bfb053/android/emu/avd/src/android/avd/hardware-properties.ini)
+declares integer megabytes. This probe leaves the configured RAM and allowed RAM
+value unchanged pending actual flags. Directory/index/config inode comparisons,
+UID, link and canonical path checks remain strict; an atomic replacement is
+observed but still rejected. A source-supported config-inode repair requires
+reviewing the owned post-boot evidence first.
