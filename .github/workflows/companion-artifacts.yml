@@ -1,0 +1,91 @@
+name: Verify companion executables
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        description: Stage source-bound release receipts only from trusted main
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, target: linux-agent-x64, triple: x86_64-unknown-linux-musl}
+          - {os: ubuntu-24.04-arm, target: linux-agent-arm64, triple: aarch64-unknown-linux-musl}
+          - {os: macos-15-intel, target: macos-agent-x64, triple: x86_64-apple-darwin, minimum: '10.15'}
+          - {os: macos-15, target: macos-agent-arm64, triple: aarch64-apple-darwin, minimum: '11.0'}
+          - {os: windows-2025, target: windows-agent-x64, triple: x86_64-pc-windows-msvc}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '4'
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.minimum || '' }}
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: '-C target-feature=+crt-static'
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: '-C target-feature=+crt-static'
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools binutils build-essential libssl-dev pkg-config
+      - if: runner.os == 'macOS'
+        run: brew install openssl@3 pkgconf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: companion-${{ matrix.triple }}
+      - run: bun install --frozen-lockfile
+      - name: Build final production target without test-only dependencies
+        run: cargo build --release --locked --package lazysh-agent --bin lazysh-agent --target ${{ matrix.triple }}
+      - name: Ad hoc sign final macOS CLI before hashing
+        if: runner.os == 'macOS'
+        run: /usr/bin/codesign --force --sign - --identifier app.lazysh.agent "target/${{ matrix.triple }}/release/lazysh-agent"
+      - name: Prepare and validate owned bytes for native acceptance
+        id: prepare
+        env:
+          STAGE_COMPANION: ${{ inputs.stage }}
+        run: |
+          if [ "$STAGE_COMPANION" = true ]; then
+            bun .changeset/release-companion.ts stage ${{ matrix.target }} "$RUNNER_TEMP/companion-installation-files"
+          else
+            bun .changeset/release-companion.ts candidate ${{ matrix.target }} "$RUNNER_TEMP/companion-installation-files"
+          fi
+      - name: Native host harness runs CLI and WAL owners against the exact prepared executable
+        env:
+          LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
+        run: cargo test --locked --package lazysh-agent --test cli --test settings --test storage_wal
+      - name: Revalidate exact prepared bytes after the native owners
+        env:
+          LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
+          EXPECTED_COMPANION_SHA: ${{ steps.prepare.outputs.sha256 }}
+          EXPECTED_COMPANION_BYTES: ${{ steps.prepare.outputs.bytes }}
+        run: bun .changeset/release-companion.ts verify ${{ matrix.target }} "$LAZYSH_TEST_COMPANION_BINARY" "$EXPECTED_COMPANION_SHA" "$EXPECTED_COMPANION_BYTES"
+      - uses: actions/upload-artifact@v4
+        if: inputs.stage
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ runner.temp }}/companion-installation-files
+          if-no-files-found: error
+          retention-days: 14
