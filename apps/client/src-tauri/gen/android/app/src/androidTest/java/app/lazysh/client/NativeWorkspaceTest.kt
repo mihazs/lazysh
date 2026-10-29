@@ -1196,7 +1196,7 @@ class NativeWorkspaceTest {
         require(transcript.startsWith("/") && transcript.length <= 4096 && transcript.none { it.isISOControl() })
         require(draft.toByteArray(Charsets.UTF_8).size in 1..4096 && !draft.contains('\r') && !draft.contains('\u001b'))
         fun click(text: String) {
-            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$text']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='$text']")).perform(webClick())
         }
         fun hasButton(text: String) = "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote(text)}).length===1"
         val region = "section[aria-label='Terminal input']"
