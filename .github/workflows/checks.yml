@@ -386,9 +386,9 @@ jobs:
         env:
           LAZYSH_TEST_WINDOWS_HASH: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
-      - run: bun run build:native
       - name: Exercise account quota collectors and process ownership
         run: bunx turbo run test:rust --filter=@lazysh/account-usage
+      - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
       - name: Package and validate native macOS permission localizations
         if: runner.os == 'macOS'
