@@ -4,7 +4,7 @@
   "officialSubmissionPrerequisitesAccepted": false,
   "recipeSha256": "e4db709606d1edd5f76df51dc3ec0ba966bd3026ebe31f41a7e4038d54044546",
   "initialPublication": {
-    "version": "1.0.0",
-    "ancestor": "f2223e0d0673e7ef48f1c92ca91761b77f4c8508"
+    "version": "1.3.0",
+    "ancestor": "f5186cf2dbd534ec24e4d1eed63033a8b9728126"
   }
 }
