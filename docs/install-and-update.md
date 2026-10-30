@@ -4,10 +4,10 @@ Use the signing status and availability recorded for the particular release.
 Actions debug APKs and simulator apps are development artifacts, not production
 installation downloads. Pipeline activation and outstanding distribution
 requirements are tracked separately in #423 and #424.
-The automatic application release set targets Android, Linux and Windows. macOS,
-iOS and watchOS application packages are deferred and are not included. Future
-complete releases also include the separate companion CLI targets below; that does
-not enable deferred Apple application packages or claim full native parity.
+The automatic release set includes Android, Linux and Windows applications and
+the separate companion CLI targets below. macOS, iOS and watchOS application
+packages are deferred and are not included. Companion availability does not enable
+those application packages or establish full native parity.
 
 When a verified release is available, use the assets on the repository's
 [Releases page](https://github.com/mihazs/lazysh/releases). Check the version,
@@ -30,8 +30,19 @@ Use the matching version, target, size and SHA256 from the same source-bound
 release manifest, and check `SHA256SUMS`. Each companion is capped at 64 MiB. On
 Unix, mark the verified file executable before running it; downloads do not
 preserve executable mode. Install it only on the intended remote account and
-ensure `lazysh-agent` is available on its noninteractive SSH PATH. These artifacts
+ensure `lazysh-agent` is available on its noninteractive SSH PATH for a manual
+installation. These artifacts
 do not install hooks, enable publishing or change existing companion settings.
+
+Starting with 1.2.0, connect to the intended Linux or macOS account and open
+**Agents → Install companion** (or **Update companion**). This action is available
+even when the helper is missing; on phones, open Agents through **More**.
+The app verifies a stable published executable,
+transfers it through the existing SSH connection and checks the installation.
+It prefers a valid managed executable without changing PATH; an absent managed
+installation keeps legacy PATH behavior. Installation never starts automatically
+or changes host permissions or hooks. See [companion setup](companion.md) for the
+explicit action and uncertain-result semantics.
 
 Mac companion signatures are ad hoc, not Developer ID signatures or notarization.
 Do not disable host security policies to run one. Source SHA/version, content
@@ -40,8 +51,9 @@ before release staging. Candidate PR checks run the same byte acceptance but
 produce no publication receipt. No Apple account is used by these CLI builds.
 
 Published v0.23.0 remains unchanged and has no companion binary assets; no earlier
-version is backfilled. In-app SSH installation is tracked separately in
-[issue #476](https://github.com/mihazs/lazysh/issues/476).
+version is backfilled. Broader in-app installation coverage remains in
+[issue #476](https://github.com/mihazs/lazysh/issues/476); native Windows installation
+remains separate work in [issue #490](https://github.com/mihazs/lazysh/issues/490).
 
 ## Android
 
@@ -105,11 +117,24 @@ installation or physical-device acceptance is claimed before it is executed.
 
 ## Current native acceptance status
 
-The mobile session toolbar now keeps complete buttons in a horizontally scrolling
-row, with 44px minimum touch targets. The complete phone/desktop browser suite
-passed 426 cases; two phone-only checks on desktop and two opt-in live-font
-downloads were skipped. This is browser layout evidence,
-not a physical Samsung/SwiftKey acceptance result.
+Active phone terminals use one compact header; tool navigation, the restore prompt
+and single-session tab actions remain reachable through More. Expanded tool rows
+keep complete buttons and 44px minimum touch targets. Candidate `0e97f0ce` passed
+436 phone/desktop browser cases with four existing skips
+([client evidence](https://github.com/mihazs/lazysh/actions/runs/41049046930/job/124040257924)).
+This is browser layout evidence, not physical Samsung/SwiftKey acceptance. Direct
+finger scrolling still needs its separate native Herdr viewport check in #20.
+
+The same candidate passed actual companion Install → Update/reuse through the
+packaged API36 x86_64 Android UI and Linux native GUI. Both retained the original
+shell and independently verified the installed public 1.1.7 helper's bytes,
+version and staging cleanup; Linux also checked unchanged reuse inode identity
+([Android](https://github.com/mihazs/lazysh/actions/runs/41049046930/job/124042197045),
+[Linux](https://github.com/mihazs/lazysh/actions/runs/41049046930/job/124042197000)).
+These flows used a Linux x64 SSH host. They do not qualify a public ARM64 APK's
+installer UI, physical Samsung hardware or every desktop/remote-host combination.
+In-app installation targets Linux and macOS hosts; remote Windows installation
+remains [separate work](https://github.com/mihazs/lazysh/issues/490).
 
 Attachment uploads use SSH even when the terminal uses Mosh. The real owned
 Mosh/OpenSSH check passed an image-sized relative-path upload, reproduced a closed
@@ -147,6 +172,17 @@ ARM64 guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/4095
 This does not qualify this later release's APKs, cross-version migration or
 physical Samsung hardware automatically.
 
+Both exact public 1.1.7 APK flavors also passed install, host save/readback,
+relaunch and identical-byte reinstall with preserved data on translated API35
+guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/41055735317)).
+The driver change in that run adds only bounded wrapper nesting depth. A prior
+1.1.7 run passed Google but reached the original create-command deadline on FOSS
+([mixed run](https://github.com/mihazs/lazysh/actions/runs/41047565031)). Its last
+READBACK exit could belong to a nested lookup, so it does not prove outer readback
+completion or a timeout cause. The later pass does not explain that failure;
+[issue #555](https://github.com/mihazs/lazysh/issues/555) remains open. Neither sample
+automatically qualifies later APKs, cross-version upgrades or native ARM64 hardware.
+
 An earlier qualification installed both public v1.1.0 APKs, but their
 host-creation driver commands reached the existing 45-second deadline
 ([failed qualification](https://github.com/mihazs/lazysh/actions/runs/40955241164)).
@@ -164,8 +200,9 @@ ARM64 APK or testing the physical Samsung Galaxy S23+. First-Activity focus/runt
 reliability (#352), SystemUI/ANR startup health (#379), and free-software notification
 acceptance (#344/#459) retain their separate outstanding gates.
 
-Linux native GUI acceptance passed all nine owned cases, including authenticated
-SSH, exact binary identity and singleton/network isolation ([GUI evidence](https://github.com/mihazs/lazysh/actions/runs/40884642182/job/123489192812)).
+Linux candidate `0e97f0ce` passed all ten owned baseline GUI cases, including
+authenticated SSH, exact binary identity and singleton/network isolation
+([GUI evidence](https://github.com/mihazs/lazysh/actions/runs/41049046930/job/124042197000)).
 Supported tmux 3.4 has passed all six cases in a later owned run
 ([passing sample](https://github.com/mihazs/lazysh/actions/runs/40911475774/job/123587208815)),
 but fresh-SSH server retirement remains intermittent and unresolved in #7
@@ -173,7 +210,12 @@ but fresh-SSH server retirement remains intermittent and unresolved in #7
 cover installation, same-version repair and uninstall; installed GUI acceptance
 (#457), version upgrade and data migration remain pending. Concurrent Windows
 companion startup has intermittently returned SQLite busy errors
-([#36](https://github.com/mihazs/lazysh/issues/36)); this remains under investigation.
+([#552](https://github.com/mihazs/lazysh/issues/552)); this remains under investigation.
+The current candidate's ntfy run rejected an event as before its issued time,
+before writing a receipt or posting a notification. Permissions were enabled;
+the relevant push source was unchanged. The underlying clock cause remains open
+in [#459](https://github.com/mihazs/lazysh/issues/459), and overall CI is not described
+as green merely because the installer checks passed.
 Rex compatibility
 requires authorized beta access that is not available. Apple distribution is
 deferred. These limits remain explicit even when source builds, signatures and
