@@ -1581,6 +1581,41 @@ class NativeWorkspaceTest {
             } == true).put("wakeLock", held)
     }
 
+    private fun initialNotificationReady(sample: JSONObject, observedAt: Long, deadline: Long): Boolean {
+        require(observedAt < deadline) { "Owned initial notification observation exceeded deadline" }
+        require(sample.get("serviceCount") == 1 && sample.get("foreground") == true && sample.get("wakeLock") == true) {
+            "Owned initial notification requires exact active kernel resources"
+        }
+        val count = sample.get("notificationCount")
+        require((count == 0 && sample.get("notificationForeground") == false) ||
+            (count == 1 && sample.get("notificationForeground") == true)) {
+            "Owned initial notification identity or flags unverified"
+        }
+        return count == 1
+    }
+
+    @Test fun initialNotificationReadinessAllowsOnlyTimelyPublicationWithOwnedKernelResources() {
+        val deadline = 100L
+        fun sample() = JSONObject().put("serviceCount", 1).put("foreground", true).put("wakeLock", true)
+            .put("notificationCount", 0).put("notificationForeground", false)
+        val pending = sample()
+        assertFalse(initialNotificationReady(pending, deadline - 1, deadline))
+        val ready = sample().put("notificationCount", 1).put("notificationForeground", true)
+        assertTrue(initialNotificationReady(ready, deadline - 1, deadline))
+        for (invalid in listOf(
+            sample().put("serviceCount", 0), sample().put("serviceCount", 2),
+            sample().put("foreground", false), sample().put("wakeLock", false),
+            sample().put("notificationCount", 2), sample().put("notificationForeground", true),
+            sample().put("notificationCount", 1), sample().put("notificationCount", "0"),
+            sample().apply { remove("wakeLock") },
+        )) assertTrue("Kernel, ownership and malformed notification observations must fail immediately",
+            runCatching { initialNotificationReady(invalid, deadline - 1, deadline) }.isFailure)
+        for (late in listOf(deadline, deadline + 1)) {
+            for (observation in listOf(pending, ready)) assertTrue("Late pending and ready observations must fail",
+                runCatching { initialNotificationReady(observation, late, deadline) }.isFailure)
+        }
+    }
+
     private fun verifyMoshBackground(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, name: String, label: String) {
         val owned = fixture.getJSONObject("moshBackground")
         val directory = owned.getString("directory")
@@ -1642,6 +1677,15 @@ class NativeWorkspaceTest {
                 "printf '%s\\n' \"${'$'}i\" >$directory/background-samples; " +
                 "if ! test -f $directory/background-stop; then touch $directory/background-expired; fi) & BG_JOB=${'$'}!")
             awaitDocument(scenario, "owned Mosh busy output started", proof(ready))
+            // Android may defer the first FGS notification publication for 10s.
+            // Keep kernel resources mandatory throughout this initial-only wait.
+            val notificationUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (true) {
+                assertTrue("Owned initial notification publication exceeded deadline", System.nanoTime() < notificationUntil)
+                val sample = connectionExecutionObservation()
+                if (initialNotificationReady(sample, System.nanoTime(), notificationUntil)) break
+                Thread.sleep(100)
+            }
             execution(true)
             home()
             val backgroundUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(36)
