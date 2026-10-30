@@ -26,6 +26,7 @@ mod previews;
 mod push;
 mod repository;
 mod routing;
+mod session_background;
 mod sftp_stream;
 mod share;
 mod ssh;
@@ -72,6 +73,7 @@ pub fn run() {
         .plugin(tauri_plugin_lazysh_apple_status::init())
         .plugin(tauri_plugin_lazysh_display_idle::init())
         .plugin(clipboard::init())
+        .plugin(session_background::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -95,7 +97,11 @@ pub fn run() {
         .manage(desktop_launch::LaunchState::new(directory))
         .setup(|app| {
             use tauri::Manager;
-            let state = ssh::AppState::new(app.path().app_config_dir()?)?;
+            let mut state = ssh::AppState::new(app.path().app_config_dir()?)?;
+            state.background = app
+                .state::<session_background::Controller>()
+                .inner()
+                .clone();
             app.manage(state);
             local::install_cleanup(app)?;
             voice::cloud::install_cleanup(app)?;

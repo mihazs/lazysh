@@ -691,7 +691,7 @@ describe("extended touch toolbar", () => {
     view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
   });
-  it.each(["pending", "repeating"] as const)("cancels a %s held key and clears modifiers when the document hides", phase => {
+  it.each((["pending", "repeating"] as const).flatMap(phase=>[true,false].map(notify=>({phase,notify}))))("cancels a $phase held key when hidden (visibility event=$notify)", ({phase,notify}) => {
     vi.useFakeTimers(); mount();
     for (const name of ['ctrl','Alt']) {
       const modifier=screen.getByRole('button',{name}); fireEvent.click(modifier); fireEvent.click(modifier);
@@ -704,9 +704,9 @@ describe("extended touch toolbar", () => {
     expect(sent).toBe(phase === 'pending' ? 0 : 3);
     const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);
     try {
-      fireEvent(document,new Event('visibilitychange'));
-      for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name}).getAttribute('aria-pressed')).toBe('false');
+      if(notify)fireEvent(document,new Event('visibilitychange'));
       act(()=>vi.advanceTimersByTime(2000)); expect(mocks.write).toHaveBeenCalledTimes(sent);
+      for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name}).getAttribute('aria-pressed')).toBe('false');
       hidden.mockReturnValue(false); fireEvent(document,new Event('visibilitychange'));
       act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(sent);
       fireEvent.pointerUp(left,{pointerId:9}); fireEvent.click(left,{detail:1});

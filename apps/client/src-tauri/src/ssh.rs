@@ -243,6 +243,7 @@ impl Config {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub(crate) background: crate::session_background::Controller,
     pub(crate) uploads: crate::attachment_upload::Uploads,
     config: Arc<StdMutex<Config>>,
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
@@ -259,6 +260,7 @@ impl AppState {
             Err(e) => return Err(e),
         };
         Ok(Self {
+            background: Default::default(),
             uploads: Default::default(),
             config: Arc::new(StdMutex::new(Config {
                 path,
@@ -1738,6 +1740,7 @@ pub(crate) async fn deliver_output(
 ) -> std::result::Result<(), String> {
     let mut remaining = OP_TIMEOUT;
     let mut changes = access.subscribe();
+    let mut background = access.background_epoch().map_err(String::from)?;
     loop {
         if *cancellation.borrow() {
             return Err("Terminal closed".into());
@@ -1745,18 +1748,31 @@ pub(crate) async fn deliver_output(
         tokio::select! {
             biased;
             _ = cancellation.changed() => return Err("Terminal closed".into()),
-            result = access.wait_unlocked() => { result.map_err(String::from)?; }
+            result = access.wait_transport_output() => { result.map_err(String::from)?; }
+        }
+        let current_background = access.background_epoch().map_err(String::from)?;
+        // A background interval can begin and end before this worker is polled.
+        if current_background != background {
+            background = current_background;
+            remaining = OP_TIMEOUT;
         }
         let began = tokio::time::Instant::now();
         let permit = tokio::select! {
             biased;
             _ = cancellation.changed() => return Err("Terminal closed".into()),
             _ = changes.changed() => {
-                remaining = remaining.saturating_sub(began.elapsed());
+                if access.background_epoch().map_err(String::from)? == background {
+                    remaining = remaining.saturating_sub(began.elapsed());
+                }
                 continue;
             },
             permit = credits.acquire_many(data.len() as u32) => permit.map_err(|_| "Terminal closed")?,
-            _ = tokio::time::sleep(remaining) => return Err("Terminal stopped consuming output".into()),
+            _ = tokio::time::sleep(remaining) => {
+                if access.background_epoch().map_err(String::from)? != background {
+                    continue;
+                }
+                return Err("Terminal stopped consuming output".into());
+            },
         };
         remaining = remaining.saturating_sub(began.elapsed());
         // Same authority mutex as lock: no Channel index is created while locked.
@@ -1774,7 +1790,7 @@ pub(crate) async fn deliver_output(
         };
         let sent = match owner {
             Some((creation, adopted, _)) => creation.with_transport_output(adopted, send),
-            None => access.with_unlocked(send),
+            None => access.with_transport_output(send),
         };
         match sent {
             Ok(result) => {
@@ -1811,7 +1827,7 @@ pub(crate) async fn close_output(
         tokio::select! {
             biased;
             _ = async { if let Some(gone) = retired.as_mut() { let _ = gone.changed().await; } else { std::future::pending::<()>().await; } } => return,
-            result = access.wait_unlocked() => if result.is_err() { return; },
+            result = access.wait_transport_output() => if result.is_err() { return; },
         }
         let send = || {
             if owner.is_some_and(|(_, _, gone)| *gone.borrow()) {
@@ -1829,7 +1845,7 @@ pub(crate) async fn close_output(
                 if creation.check().is_err() && !adopted.load(std::sync::atomic::Ordering::SeqCst) {
                     // The renderer retained this id before an ACK that may have been lost.
                     // Retire the known tab after unlock without replaying an old private error.
-                    access.with_unlocked(|| {
+                    access.with_transport_output(|| {
                         if *gone.borrow() {
                             return Ok(());
                         }
@@ -1841,7 +1857,7 @@ pub(crate) async fn close_output(
                     creation.with_transport_output(adopted, send)
                 }
             }
-            None => access.with_unlocked(send),
+            None => access.with_transport_output(send),
         };
         if sent.is_ok() {
             return;
@@ -1876,6 +1892,11 @@ async fn spawn_terminal(
     events: Channel<SshEvent>,
 ) -> Result<Connected> {
     let mut channel = channel.into();
+    let background = state
+        .background
+        .acquire()
+        .await
+        .map_err(|error| SshError::new("background_execution", error))?;
     let (input, mut rx) = mpsc::channel(32);
     let (cancel, mut cancellation) = watch::channel(false);
     let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
@@ -1919,6 +1940,7 @@ async fn spawn_terminal(
         let _ = timeout(Duration::from_secs(2), channel.close()).await;
         retire_session(&sessions, &retiring, &task_id, &session).await;
         completion.finish();
+        drop(background);
         close_output(
             &session.access,
             Some((&session.creation, &session.adopted, &session.renderer_gone)),
@@ -2026,6 +2048,11 @@ where
         tokio::sync::oneshot::Sender<Result<()>>,
     ) -> tauri::async_runtime::JoinHandle<Result<()>>,
 {
+    let background = state
+        .background
+        .acquire()
+        .await
+        .map_err(|error| SshError::new("background_execution", error))?;
     let (input, input_rx) = mpsc::channel(32);
     let (cancel, cancellation) = watch::channel(false);
     let name = kind.name();
@@ -2063,34 +2090,43 @@ where
     tauri::async_runtime::spawn(async move {
         let completion = SessionCompletion::new(active.finished.clone());
         let mut cancelled = active.cancel.subscribe();
-        let delivery: Result<()> = async {
-            loop {
-                if *cancelled.borrow() {
-                    break;
-                }
-                tokio::select! {
-                    _ = cancelled.changed() => break,
-                    item = output_rx.recv() => match item {
-                        Some(bytes) => send_output(&active, &events, &bytes).await?,
-                        None => break,
+        let delivery = async {
+            let result: Result<()> = async {
+                loop {
+                    if *cancelled.borrow() {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = cancelled.changed() => break,
+                        item = output_rx.recv() => match item {
+                            Some(bytes) => send_output(&active, &events, &bytes).await?,
+                            None => break,
+                        }
                     }
                 }
+                Ok(())
             }
-            Ok(())
-        }
-        .await;
-        let _ = active.cancel.send(true);
-        active.output_credits.close();
-        drop(output_rx);
-        let native = worker
-            .await
-            .map_err(|_| {
-                SshError::new(
-                    "terminal_worker",
-                    format!("{name} worker ended unexpectedly"),
-                )
-            })
-            .and_then(|result| result);
+            .await;
+            let _ = active.cancel.send(true);
+            active.output_credits.close();
+            drop(output_rx);
+            result
+        };
+        let native = async move {
+            // The native transport may finish while final output waits for the UI.
+            // Its execution reservation must follow the driver, not renderer retirement.
+            let _background = background;
+            worker
+                .await
+                .map_err(|_| {
+                    SshError::new(
+                        "terminal_worker",
+                        format!("{name} worker ended unexpectedly"),
+                    )
+                })
+                .and_then(|result| result)
+        };
+        let (delivery, native) = tokio::join!(delivery, native);
         retire_session(&sessions, &retiring, &task_id, &active).await;
         completion.finish();
         close_output(
@@ -2586,7 +2622,7 @@ async fn exec_inner(
     };
     let closed = || {
         SshError::new(
-            "ssh_control_closed",
+            "ssh_host_tools_closed",
             "The host-tools SSH connection is closed. Reconnect host tools to continue.",
         )
     };
@@ -6180,6 +6216,21 @@ mod tests {
             ));
             let sessions_before = state.sessions.lock().await.len();
             // Upload-only recovery must not silently grant remote-command authority.
+            // Exercise the real closed-command-to-quota boundary without a provider read.
+            app.manage(crate::local::LocalState::default());
+            app.manage(crate::account_usage::UsageState::default());
+            let quota = crate::account_usage::account_usage(
+                access_lease(),
+                app.state(),
+                app.state(),
+                app.state(),
+                mosh_id.clone(),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            assert_eq!(quota.state, "disconnected");
             assert_eq!(
                 exec_for_access(
                     &native_session,
@@ -6189,7 +6240,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .kind(),
-                "ssh_control_closed"
+                "ssh_host_tools_closed"
             );
             let authenticate_control =
                 |original: Host, _permit: Arc<tokio::sync::OwnedSemaphorePermit>| {
@@ -6251,7 +6302,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .kind(),
-                "ssh_control_closed"
+                "ssh_host_tools_closed"
             );
             assert!(native_session.handle.is_closed());
             assert!(!restored_control.is_closed());
@@ -6780,54 +6831,101 @@ mod tests {
         .unwrap();
     }
     #[tokio::test(start_paused = true)]
-    async fn locked_terminal_delivery_pauses_deadline_and_resumes_without_dropped_indices() {
-        let access = unlocked_access();
-        let credits = Semaphore::new(0);
-        let inflight = StdMutex::new(0);
-        let (cancel, mut cancellation) = watch::channel(false);
-        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let events = counting_events(&calls);
-        let delivery = deliver_output(
-            &access,
-            &credits,
-            &inflight,
-            &mut cancellation,
-            &events,
-            b"abc",
-            None,
-        );
-        tokio::pin!(delivery);
-        assert_pending(delivery.as_mut()).await;
-        access.lock().unwrap();
-        assert_pending(delivery.as_mut()).await;
-        tokio::time::advance(OP_TIMEOUT * 2).await;
-        credits.add_permits(3);
-        assert_pending(delivery.as_mut()).await;
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert_eq!(*inflight.lock().unwrap(), 0);
-        access.authorize(access.generation().unwrap()).unwrap();
-        // Native authentication alone does not resume delivery before UI reset ACK.
-        assert_pending(delivery.as_mut()).await;
-        access.ready(access.generation().unwrap()).unwrap();
-        delivery.await.unwrap();
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(*inflight.lock().unwrap(), 3);
-        access.lock().unwrap();
-        let mut cancellation = cancel.subscribe();
-        let pending = deliver_output(
-            &access,
-            &credits,
-            &inflight,
-            &mut cancellation,
-            &events,
-            b"x",
-            None,
-        );
-        tokio::pin!(pending);
-        assert_pending(pending.as_mut()).await;
-        cancel.send_replace(true);
-        assert!(pending.await.is_err());
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    async fn background_terminal_delivery_pauses_deadline_and_resumes_without_dropped_indices() {
+        for (protected, delayed_resume, direct_lock) in [
+            (true, false, false),
+            (false, false, false),
+            (false, true, false),
+            (true, false, true),
+        ] {
+            let access = if protected {
+                unlocked_access()
+            } else {
+                AccessState::disabled()
+            };
+            let credits = Semaphore::new(0);
+            let inflight = StdMutex::new(0);
+            let (cancel, mut cancellation) = watch::channel(false);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let events = counting_events(&calls);
+            let delivery = deliver_output(
+                &access,
+                &credits,
+                &inflight,
+                &mut cancellation,
+                &events,
+                b"abc",
+                None,
+            );
+            tokio::pin!(delivery);
+            assert_pending(delivery.as_mut()).await;
+            if direct_lock {
+                access.lock().unwrap();
+            } else {
+                access.background().unwrap();
+            }
+            if !delayed_resume {
+                assert_pending(delivery.as_mut()).await;
+            }
+            tokio::time::advance(OP_TIMEOUT * 2).await;
+            if delayed_resume {
+                access.foreground().unwrap();
+            }
+            let observed = timeout(Duration::ZERO, delivery.as_mut()).await;
+            assert!(
+                observed.is_err(),
+                "Background delivery retired while protected={protected}: {observed:?}"
+            );
+            credits.add_permits(3);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(*inflight.lock().unwrap(), 0);
+            if !delayed_resume {
+                assert_pending(delivery.as_mut()).await;
+                access.foreground().unwrap();
+            }
+            if protected {
+                access.authorize(access.generation().unwrap()).unwrap();
+                // Native authentication alone does not resume delivery before UI reset ACK.
+                assert_pending(delivery.as_mut()).await;
+                access.ready(access.generation().unwrap()).unwrap();
+            }
+            delivery.await.unwrap();
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(*inflight.lock().unwrap(), 3);
+            let mut foreground_cancel = cancel.subscribe();
+            let stalled = deliver_output(
+                &access,
+                &credits,
+                &inflight,
+                &mut foreground_cancel,
+                &events,
+                b"x",
+                None,
+            );
+            assert_eq!(
+                timeout(OP_TIMEOUT * 2, stalled)
+                    .await
+                    .expect("Foreground output must retain its deadline")
+                    .unwrap_err(),
+                "Terminal stopped consuming output"
+            );
+            access.background().unwrap();
+            let mut cancellation = cancel.subscribe();
+            let pending = deliver_output(
+                &access,
+                &credits,
+                &inflight,
+                &mut cancellation,
+                &events,
+                b"x",
+                None,
+            );
+            tokio::pin!(pending);
+            assert_pending(pending.as_mut()).await;
+            cancel.send_replace(true);
+            assert!(pending.await.is_err());
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
     }
     #[test]
     fn ssh_errors_keep_fingerprints_only_for_the_original_unlocked_generation() {
@@ -6855,9 +6953,113 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn naturally_finished_native_worker_releases_background_hold_before_final_output_resumes()
+    {
+        let TerminalFixture {
+            mut state,
+            task,
+            connected: parent_id,
+            directory: _directory,
+            ..
+        } = json_terminal_fixture().await;
+        let (updates, mut background) = mpsc::unbounded_channel();
+        state.background = crate::session_background::Controller::start(move |revision, active| {
+            updates.send((revision, active)).unwrap();
+            async { Ok(()) }
+        });
+        let parent = state.session(&parent_id.session_id).await.unwrap();
+        let access = AccessState::disabled();
+        let (finish, finishing) = tokio::sync::oneshot::channel();
+        let (ended, worker_ended) = tokio::sync::oneshot::channel();
+        let (sent, mut received) = mpsc::unbounded_channel();
+        let events = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(body) = body {
+                sent.send(serde_json::from_str::<serde_json::Value>(&body).unwrap())
+                    .unwrap();
+            }
+            Ok(())
+        });
+        let connected = spawn_native_terminal(
+            &state,
+            access.lease(None).unwrap(),
+            parent.clone(),
+            events,
+            NativeTerminalKind::Fixture,
+            check_size,
+            move |_access, input, _cancel, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    ready.send(Ok(())).unwrap();
+                    finishing.await.unwrap();
+                    output.send(b"FINAL_NATIVE_FRAME".to_vec()).await.unwrap();
+                    ended.send(()).unwrap();
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        let native = state.session(&connected.session_id).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(2), background.recv())
+                .await
+                .unwrap(),
+            Some((1, true))
+        );
+        access.background().unwrap();
+        finish.send(()).unwrap();
+        timeout(Duration::from_secs(2), worker_ended)
+            .await
+            .unwrap()
+            .unwrap();
+        let released_while_backgrounded =
+            timeout(Duration::from_millis(500), background.recv()).await;
+        assert!(
+            received.try_recv().is_err(),
+            "Private final output escaped into the background renderer"
+        );
+        assert!(
+            !*native.finished.borrow(),
+            "Renderer retirement must wait for the queued final frame"
+        );
+        access.foreground().unwrap();
+        let mut output = Vec::new();
+        let mut closed = 0;
+        timeout(Duration::from_secs(2), async {
+            while let Some(event) = received.recv().await {
+                if event["type"] == "data" {
+                    output.extend(
+                        event["data"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|byte| byte.as_u64().unwrap() as u8),
+                    );
+                } else if event["type"] == "closed" {
+                    closed += 1;
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(output, b"FINAL_NATIVE_FRAME");
+        assert_eq!(closed, 1);
+        assert!(*native.finished.borrow());
+        finish_session(&parent).await;
+        task.abort();
+        assert!(matches!(released_while_backgrounded, Ok(Some((2, false)))),
+            "Finished native worker retained its background hold until UI foreground: {released_while_backgrounded:?}");
+    }
+    #[tokio::test]
     async fn cancelled_native_start_reaps_unpublished_worker_and_preserves_parent() {
         let (host, _, server_task) = server(false).await;
-        let (_directory, state) = fixture_state();
+        let (_directory, mut state) = fixture_state();
+        let (background_updates, mut observed_background) = mpsc::unbounded_channel();
+        state.background = crate::session_background::Controller::start(move |revision, active| {
+            background_updates.send((revision, active)).unwrap();
+            async { Ok(()) }
+        });
         state.config().unwrap().hosts.push(host.clone());
         let connected = start_session(
             &state,
@@ -6874,11 +7076,13 @@ mod tests {
         let parent = state.session(&connected.session_id).await.unwrap();
         let (began, started) = tokio::sync::oneshot::channel();
         let (done, stopped) = tokio::sync::oneshot::channel();
+        let native_access = AccessState::disabled();
+        let creation = native_access.lease(None).unwrap();
         let worker_state = state.clone();
         let attempt = tokio::spawn(async move {
             spawn_native_terminal(
                 &worker_state,
-                access_lease(),
+                creation,
                 parent,
                 Channel::new(|_| Ok(())),
                 NativeTerminalKind::Fixture,
@@ -6905,6 +7109,7 @@ mod tests {
             !attempt.is_finished(),
             "native fixture ended before cancellation"
         );
+        native_access.background().unwrap();
         attempt.abort();
         match attempt.await {
             Err(error) => assert!(error.is_cancelled()),
@@ -6923,6 +7128,28 @@ mod tests {
         .await
         .unwrap();
         assert!(state.session(&connected.session_id).await.is_ok());
+        for expected in [(1, true), (2, true), (3, true)] {
+            assert_eq!(
+                timeout(Duration::from_secs(2), observed_background.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                expected,
+            );
+        }
+        // The worker hold ended even though its Closed event cannot reach the background UI.
+        assert_eq!(state.retiring.lock().await.len(), 1);
+        native_access.foreground().unwrap();
+        let parent = state.session(&connected.session_id).await.unwrap();
+        parent.cancel.send_replace(true);
+        parent.output_credits.close();
+        assert_eq!(
+            timeout(Duration::from_secs(2), observed_background.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            (4, false)
+        );
         server_task.abort();
     }
     #[tokio::test]
