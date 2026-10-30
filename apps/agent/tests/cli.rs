@@ -31,6 +31,11 @@ fn run_traced(
         || Command::new(&program),
         |(trace, worker)| trace.command(worker, &program),
     );
+    // The full native test process may opt into phase records; ordinary CLI
+    // children retain their normal stderr contract. Explicit traces opt in above.
+    if trace.is_none() {
+        command.env_remove("LAZYSH_STORAGE_DIAGNOSTICS");
+    }
     process::run(
         command
             .args(args)
