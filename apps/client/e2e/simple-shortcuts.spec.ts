@@ -285,3 +285,69 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([arrows]);
   await input.detach();
 });
+
+
+test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and protocol input', async ({page,context}) => {
+  await fixture(page);
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if ((page.viewportSize()?.width??1280)<=600) await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  const keys=page.getByLabel('Terminal keys',{exact:true});
+  const input=page.locator('.xterm-helper-textarea');
+  const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  const clear=()=>page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  const ctrl=()=>keys.getByRole('button',{name:'ctrl',exact:true}).click();
+  const alt=()=>keys.getByRole('button',{name:'Alt',exact:true}).click();
+  await ctrl(); await input.focus(); await page.keyboard.type('c');
+  await expect.poll(writes).toEqual(['\x03']); await clear();
+  await alt(); await input.focus(); await page.keyboard.type('x');
+  await expect.poll(writes).toEqual(['\x1bx']); await clear();
+  const cdp=await context.newCDPSession(page);
+  await ctrl(); await input.focus();
+  await cdp.send('Input.imeSetComposition',{text:'你',selectionStart:1,selectionEnd:1});
+  // DSR during composition must neither acquire modifiers nor consume the pending IME lane.
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[6n'));
+  await expect.poll(async()=> (await writes()).some(value=>/^\x1b\[\d+;\d+R$/.test(value))).toBe(true);
+  await cdp.send('Input.insertText',{text:'你好'});
+  await expect.poll(async()=> (await writes()).at(-1)).toBe('你好'); await clear();
+  await alt(); await input.focus(); await cdp.send('Input.insertText',{text:'世界'});
+  await expect.poll(writes).toEqual(['\x1b世界']); await clear();
+  await context.grantPermissions(['clipboard-read','clipboard-write']);
+  await page.evaluate(()=>navigator.clipboard.writeText('c'));
+  await ctrl(); await input.focus(); await page.keyboard.press('Control+Shift+v');
+  await expect.poll(writes).toEqual(['c']);
+  await expect(keys.getByRole('button',{name:'ctrl',exact:true})).toHaveAttribute('aria-pressed','true');
+  await clear(); await page.keyboard.type('c'); await expect.poll(writes).toEqual(['\x03']); await clear();
+  await alt();
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.getByLabel('Compose text',{exact:true}).fill('x');
+  await page.getByRole('button',{name:'Paste draft',exact:true}).click();
+  await expect.poll(writes).toEqual(['x']);
+  await expect(keys.getByRole('button',{name:'Alt',exact:true})).toHaveAttribute('aria-pressed','true');
+  await page.getByRole('button',{name:'Close composer',exact:true}).click(); await clear();
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000h\x1b[?1006h'));
+  await input.focus();
+  await page.locator('.xterm-screen').click({position:{x:12,y:12}});
+  await expect.poll(async()=> (await writes()).some(value=>value.startsWith('\x1b[<'))).toBe(true);
+  expect((await writes()).every(value=>!value.startsWith('\x1b\x1b'))).toBe(true);
+  await expect(keys.getByRole('button',{name:'Alt',exact:true})).toHaveAttribute('aria-pressed','true');
+  await clear(); await page.keyboard.type('x'); await expect.poll(writes).toEqual(['\x1bx']);
+  await expect(input).toBeFocused();
+  await clear(); await alt(); await alt(); await page.keyboard.type('x');
+  await expect.poll(writes).toEqual(['\x1bx']); await clear();
+  await page.locator('.xterm-screen').click({position:{x:12,y:12}});
+  await expect.poll(async()=> (await writes()).length).toBe(2);
+  expect(await writes()).toEqual([expect.stringMatching(/^\x1b\[</),expect.stringMatching(/^\x1b\[</)]);
+  await keys.getByRole('button',{name:'Alt · lock',exact:true}).click();
+  await clear(); await keys.getByRole('button',{name:'ctrl',exact:true}).click();
+  await expect(input).toBeFocused();
+  if ((page.viewportSize()?.width??1280)<=600) {
+    const bounds=await keys.boundingBox(); if (!bounds) throw new Error('toolbar must be visible');
+    const y=bounds.y+bounds.height/2, x=bounds.x+bounds.width-30;
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+    for (const offset of [30,80,160]) await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-offset,y}]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(()=>keys.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
+    expect(await writes()).toEqual([]);
+  }
+});

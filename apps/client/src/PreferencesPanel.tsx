@@ -7,7 +7,7 @@ import {useMountedAccess} from './access';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
-import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabelKeys, savePreferences, themes, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
+import { bodyGestureSlots, defaults, gestureActions, gestureDirections, gestureLabelKeys, savePreferences, themes, toolbarKeyLabel, toolbarKeys, usePreferences, type GestureAction, type GestureSlot, type Preferences, type ToolbarKey } from "./preferences";
 import { deleteAllFonts, deleteFont, fontFamilyFor, fontErrorCause, fontWarningKey, fontWarningText, importFont, resetFontSelection, selectFont, useDeviceFonts } from "./fonts";
 
 export default function PreferencesPanel() {
@@ -105,8 +105,8 @@ export default function PreferencesPanel() {
     </details>
     <ThemeImportPanel preferences={preferences} apply={update} />
     <details><summary>{t("preferencesToolbarKeysAndOrder")}</summary>
-      <ul>{preferences.toolbar.map((key, index) => <li key={key}><span>{key}</span><button aria-label={t("preferencesMoveValue1Earlier", {value1: key})} disabled={index === 0} onClick={() => move(key, -1)}>↑</button><button aria-label={t("preferencesMoveValue1Later", {value1: key})} disabled={index === preferences.toolbar.length - 1} onClick={() => move(key, 1)}>↓</button><button aria-label={t("preferencesRemoveValue1", {value1: key})} onClick={() => update({toolbar: preferences.toolbar.filter(item => item !== key)})}>{t("appRemove")}</button></li>)}</ul>
-      {toolbarKeys.filter(key => !preferences.toolbar.includes(key)).map(key => <button key={key} onClick={() => update({toolbar: [...preferences.toolbar, key]})}>{t("preferencesAdd")}{" "}{key}</button>)}
+      <ul>{preferences.toolbar.map((key, index) => <li key={key}><span>{toolbarKeyLabel(key)}</span><button aria-label={t("preferencesMoveValue1Earlier", {value1: key})} disabled={index === 0} onClick={() => move(key, -1)}>↑</button><button aria-label={t("preferencesMoveValue1Later", {value1: key})} disabled={index === preferences.toolbar.length - 1} onClick={() => move(key, 1)}>↓</button><button aria-label={t("preferencesRemoveValue1", {value1: key})} onClick={() => update({toolbar: preferences.toolbar.filter(item => item !== key)})}>{t("appRemove")}</button></li>)}</ul>
+      {toolbarKeys.filter(key => !preferences.toolbar.includes(key)).map(key => <button key={key} onClick={() => update({toolbar: [...preferences.toolbar, key]})}>{t("preferencesAdd")}{" "}{toolbarKeyLabel(key)}</button>)}
     </details>
     <details><summary>{t("preferencesTextSnippets")}</summary>
       <p>{t("preferencesSnippetsPasteLiteralTextIntoTheActiveProgramReview")}</p>

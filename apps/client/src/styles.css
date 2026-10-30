@@ -679,7 +679,7 @@ button svg {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: 0 12px 0 17px;
+  padding: 0 max(2px, env(safe-area-inset-right)) 0 max(2px, env(safe-area-inset-left));
   overflow: hidden;
 }
 .terminal-canvas .xterm {
@@ -703,7 +703,8 @@ button svg {
   color: var(--theme-text, #b2c3a4);
   border-radius: 5px;
   padding: 7px 10px;
-  min-width: 35px;
+  min-width: 44px;
+  min-height: 44px;
   font-family: monospace;
   font-size: 11px;
 }
@@ -1321,16 +1322,13 @@ button svg {
   .disconnect-button {
     display: none;
   }
-  .terminal-canvas {
-    padding: 0 6px 0 8px;
-  }
   .terminal-keys {
     gap: 4px;
     padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
   }
   .terminal-keys button {
-    min-width: 30px;
-    min-height: 39px;
+    min-width: 44px;
+    min-height: 44px;
     padding: 8px;
     font-size: 10px;
   }
@@ -1556,8 +1554,9 @@ button svg {
 .repository-diff .diff-line-comment { display: block; min-width: 28px; min-height: 28px; padding: 2px 6px; margin-top: 3px; }
 .repository-diff .diff-hunk { font-family: inherit; font-weight: normal; color: var(--muted); }
 @media (max-width: 700px) { .repository-layout { grid-template-columns: minmax(0, 1fr); } .repository-list { max-height: 230px; } }
-.terminal-toolbar-toggle { text-align: right; padding: 0 12px; flex-shrink: 0; }
-.terminal-toolbar-toggle button { background: transparent; color: var(--theme-text, #a7b79b); border: 0; padding: 6px; font-size: 11px; cursor: pointer; }
+.terminal-toolbar-toggle { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 0 6px; flex-shrink: 0; }
+.terminal-toolbar-toggle button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; max-width: 100%; white-space: normal; }
+.terminal-toolbar-toggle svg { flex-shrink: 0; }
 .repository-image { display: block; max-width: 100%; max-height: 65vh; object-fit: contain; }
 .repository-comments { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border); }
 .repository-comments label { display: flex; flex-direction: column; margin: 12px 0; gap: 6px; }
