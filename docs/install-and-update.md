@@ -270,11 +270,18 @@ cover installation, same-version repair and uninstall; installed GUI acceptance
 (#457), version upgrade and data migration remain pending. Concurrent Windows
 companion startup has intermittently returned SQLite busy errors
 ([#552](https://github.com/mihazs/lazysh/issues/552)); this remains under investigation.
-The current candidate's ntfy run rejected an event as before its issued time,
+An earlier ntfy run rejected an event as before its issued time,
 before writing a receipt or posting a notification. Permissions were enabled;
 the relevant push source was unchanged. The underlying clock cause remains open
 in [#459](https://github.com/mihazs/lazysh/issues/459), and overall CI is not described
 as green merely because the installer checks passed.
+At candidate `4184ff81`, ntfy instead failed native distributor-menu admission
+while its owned permission dialog remained foreground; notification delivery
+was not established ([retained result](https://github.com/mihazs/lazysh/issues/459#issuecomment-6535058083)).
+The same candidate's iOS standalone test discovery exceeded its existing
+45-second bound before protocol assertions; separate XCTest and workspace UI
+checks passed ([retained result](https://github.com/mihazs/lazysh/issues/45#issuecomment-6535058428)).
+Neither failure's underlying cause is established.
 Rex compatibility
 requires authorized beta access that is not available. Apple distribution is
 deferred. These limits remain explicit even when source builds, signatures and
