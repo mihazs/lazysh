@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsGuiMediumOutcome, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiAccessibilitySource, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiFrontendReasons, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiAccessibilitySource, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const launchFailureDetails=['CREATE_PROCESS_WITH_TOKEN','RESUME_THREAD'].flatMap(call=>windowsGuiLaunchErrors.map(error=>call+':'+error)).concat('RESUME_THREAD:RESUME_COUNT_UNEXPECTED');
@@ -1119,6 +1119,15 @@ test('owned frontend evidence remains finite and requires the already observed e
     expect(windowsGuiStartupProbe('owned-core\nLAZYSH_WINDOWS_GUI_STARTUP:'+JSON.stringify(snapshot))).toEqual({core:'owned-core',startup:snapshot});
   }
   for(const invalid of [{frontend:'private title'},{frontend:true},{frontend:'EXACT_ABOUT_ACTION_OBSERVED',appIntegrity:'MEDIUM'},{frontend:'EXACT_ABOUT_ACTION_OBSERVED',appElevation:'NOT_ELEVATED'},{frontend:'EXACT_ABOUT_ACTION_OBSERVED',extra:'private path'}])expect(()=>parseWindowsGuiStartup({...startupFixture(),appIntegrity:'HIGH',appElevation:'ELEVATED',...invalid})).toThrow();
+  const observed={...startupFixture(),appIntegrity:'HIGH',appElevation:'ELEVATED',frontend:'EXACT_ABOUT_ACTION_OBSERVED',frontendReason:'OBSERVED'};
+  for(const frontendReason of windowsGuiFrontendReasons){
+    const value={...observed,frontend:frontendReason==='OBSERVED'?'EXACT_ABOUT_ACTION_OBSERVED':'UNVERIFIED',frontendReason,...(frontendReason==='NOT_ADMITTED'?{appIntegrity:'MEDIUM',appElevation:'NOT_ELEVATED'}:{})};
+    expect(parseWindowsGuiStartup(value)).toEqual(value);
+    expect(windowsGuiStartupProbe('owned-core\nLAZYSH_WINDOWS_GUI_STARTUP:'+JSON.stringify(value))).toEqual({core:'owned-core',startup:value});
+  }
+  for(const change of [{frontendReason:'private path'},{frontendReason:null},{frontendReason:true},{frontendReason:{}},{frontendReason:'NO_ABOUT\n'},{frontend:undefined},{frontend:'UNVERIFIED'},{frontendReason:'NO_ABOUT'},{frontendReason:'NOT_ADMITTED'},{appIntegrity:'MEDIUM'},{appElevation:'NOT_ELEVATED'}])expect(()=>parseWindowsGuiStartup({...observed,...change})).toThrow();
+  expect(()=>parseWindowsGuiStartup({...observed,frontend:'UNVERIFIED',frontendReason:'NO_ABOUT',appIntegrity:'MEDIUM'})).toThrow();
+  expect(()=>parseWindowsGuiStartup({available:false,overflow:false,signature:'UNVERIFIED',frontendReason:'SOURCE_REJECTED'})).toThrow();
 });
 
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('owned UIA candidate contract rejects unknown providers, hidden controls and invalid physical rectangles',async()=>{
@@ -1132,7 +1141,15 @@ if(!$about.Invoke($null,$base)){throw 'exact bounded candidate rejected'}
 foreach($case in @(@(1,'About lazysh · 1.1.5'),@(1,'about lazysh · 1.1.4'),@(2,50001),@(3,$false),@(4,$true),@(5,99),@(6,[int[]]@()),@(6,[int[]](1..34)),@(7,[double[]]@(9,12,20,10)),@(7,[double[]]@(11,12,0,10)),@(7,[double[]]@(11,12,20,-1)),@(7,[double[]]@(11,12,40,10)),@(7,[double[]]@(11,12,20,40)),@(7,[double[]]@([double]::NaN,12,20,10)),@(7,[double[]]@(11,[double]::PositiveInfinity,20,10)),@(7,[double[]]@(11,12,20)),@(8,[double[]]@(10,10,9,50)))){
   $changed=$base.Clone();$changed[$case[0]]=$case[1];if($about.Invoke($null,$changed)){throw 'unverified UIA candidate admitted'}
 }
-foreach($case in @(@(0L,7,'1.1.4',[int[]]@(7)),@(1L,0,'1.1.4',[int[]]@(7)),@(1L,7,'private',[int[]]@(7)),@(1L,7,'1.1.4',[int[]]@()),@(4294967296L,7,'1.1.4',[int[]]@(7)))){if([OwnedGuiAccessibility]::Observe($case[0],$case[1],$case[2],$case[3]) -ne 0){throw 'invalid root reached UIA'}}
+$countFailure=[OwnedGuiAccessibility].GetMethod('CountFailure',$flags)
+foreach($case in @(@(1,$null),@(0,'NO_ABOUT'),@(2,'AMBIGUOUS_ABOUT'),@(2147483647,'AMBIGUOUS_ABOUT'),@(-1,'COM_OR_CACHE_UNAVAILABLE'))){if($countFailure.Invoke($null,@($case[0])) -cne $case[1]){throw 'query count changed observation meaning'}}
+foreach($case in @(@(0L,7,'1.1.4',[int[]]@(7)),@(1L,0,'1.1.4',[int[]]@(7)),@(1L,7,'private',[int[]]@(7)),@(1L,7,'1.1.4',[int[]]@()),@(4294967296L,7,'1.1.4',[int[]]@(7)))){
+  [string]$reason='';if([OwnedGuiAccessibility]::Observe($case[0],$case[1],$case[2],$case[3],[ref]$reason) -ne 0 -or $reason -cne 'INPUT_REJECTED'){throw 'invalid root reached UIA'}
+}
+$env:LAZYSH_GUI_ACCESSIBILITY_PROBE='0';$notAdmitted=GuiAccessibility @(7)
+if($notAdmitted.Count -ne 2 -or $notAdmitted[0] -cne 'UNVERIFIED' -or $notAdmitted[1] -cne 'NOT_ADMITTED'){throw 'unselected observation reached UIA'}
+$env:LAZYSH_GUI_ACCESSIBILITY_PROBE='1';$missing=GuiAccessibility @(7)
+if($missing.Count -ne 2 -or $missing[0] -cne 'UNVERIFIED' -or $missing[1] -cne 'SOURCE_REJECTED'){throw 'missing observer source reached UIA'}
 # Exercise the existing snapshot fences around an optional UIA observation without Win32.
 $epoch=[DateTime]::new(2025,1,1,0,0,0,[DateTimeKind]::Utc)
 $env:LAZYSH_GUI_DRIVER_PID='1';$env:LAZYSH_GUI_EDGE_PID='2'
@@ -1143,12 +1160,13 @@ $complete=$true;$script:metadataEligible=$true;$script:metadataAppId=3;$script:m
 function GuiImageIdentity { return !$script:retired }
 function Get-Item { [PSCustomObject]@{VersionInfo=[PSCustomObject]@{ProductVersion='1.2.3.4'}} }
 function GuiAppToken { return @($script:testIntegrity,$script:testElevation) }
-function GuiAccessibility { $script:observations++;if($script:retireAfter){$script:retired=$true};return 'EXACT_ABOUT_ACTION_OBSERVED' }
+function GuiAccessibility { $script:observations++;if($script:retireAfter){$script:retired=$true};return @('EXACT_ABOUT_ACTION_OBSERVED','OBSERVED') }
 foreach($case in @(@('0','HIGH','ELEVATED',$false,$null,0),@('1','HIGH','ELEVATED',$false,'EXACT_ABOUT_ACTION_OBSERVED',1),@('1','MEDIUM','NOT_ELEVATED',$false,'UNVERIFIED',0),@('1','HIGH','UNVERIFIED',$false,'UNVERIFIED',0),@('1','HIGH','ELEVATED',$true,$null,1))){
   $env:LAZYSH_GUI_ACCESSIBILITY_PROBE=$case[0];$script:testIntegrity=$case[1];$script:testElevation=$case[2];$script:retireAfter=$case[3];$script:retired=$false;$script:observations=0
   $snapshot=GuiStartupSnapshot
   if($script:observations -ne $case[5]){throw 'UIA observation escaped failure/high gate'}
-  if($case[3]){if($snapshot.available -or $snapshot.frontend){throw 'retired lifetime published UIA positive'}}elseif(!$snapshot.available -or $snapshot.frontend -cne $case[4]){throw 'optional UIA changed snapshot/core semantics'}
+  $expectedReason=if($null -eq $case[4]){$null}elseif($case[4] -ceq 'EXACT_ABOUT_ACTION_OBSERVED'){'OBSERVED'}else{'NOT_ADMITTED'}
+  if($case[3]){if($snapshot.available -or $snapshot.frontend -or $snapshot.frontendReason){throw 'retired lifetime published UIA positive'}}elseif(!$snapshot.available -or $snapshot.frontend -cne $case[4] -or $snapshot.frontendReason -cne $expectedReason){throw 'optional UIA changed snapshot/core semantics'}
 }
 [Console]::Out.Write('PORTABLE_UIA_CONTRACT')
 `;

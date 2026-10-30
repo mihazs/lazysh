@@ -46,7 +46,9 @@ type GuiDebugTransport=typeof windowsGuiDebugTransports[number];
 export const windowsGuiRootRoles=['BROWSER_CANDIDATE','TYPED_CHILD','AMBIGUOUS','UNVERIFIED'] as const;
 type GuiRootDebug={role:typeof windowsGuiRootRoles[number];transport:GuiDebugTransport};
 export const windowsGuiIntegrityLevels=['LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED'] as const;
-type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];appElevation:'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED';observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>;frontend?:'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED'};
+export const windowsGuiFrontendReasons=['NOT_ADMITTED','SOURCE_REJECTED','INPUT_REJECTED','NATIVE_GUARD','COM_OR_CACHE_UNAVAILABLE','OWNERSHIP_REJECTED','NO_ABOUT','AMBIGUOUS_ABOUT','CANDIDATE_REJECTED','CLEANUP_FAILED','TIMEOUT','OBSERVED'] as const;
+type GuiFrontendReason=typeof windowsGuiFrontendReasons[number];
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];appElevation:'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED';observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>;frontend?:'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED';frontendReason?:GuiFrontendReason};
 function guiNumericVersion(value:unknown):value is string {
   return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
 }
@@ -57,7 +59,12 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(row.available===false&&typeof row.overflow==='boolean'&&row.signature==='UNVERIFIED'&&Object.keys(row).sort().join(',')==='available,overflow,signature')return {available:false,overflow:row.overflow,signature:'UNVERIFIED'};
   if(row.frontend!==undefined&&!['EXACT_ABOUT_ACTION_OBSERVED','UNVERIFIED'].includes(row.frontend as string))return fail();
   if(row.frontend==='EXACT_ABOUT_ACTION_OBSERVED'&&(row.appIntegrity!=='HIGH'||row.appElevation!=='ELEVATED'))return fail();
-  if(Object.keys(row).filter(key=>key!=='frontend').sort().join(',')!=='appElevation,appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
+  if(row.frontendReason!==undefined){
+    if(row.frontend===undefined||!windowsGuiFrontendReasons.includes(row.frontendReason as GuiFrontendReason)||(row.frontend==='EXACT_ABOUT_ACTION_OBSERVED')!==(row.frontendReason==='OBSERVED'))return fail();
+    const admitted=row.appIntegrity==='HIGH'&&row.appElevation==='ELEVATED';
+    if(row.frontendReason==='NOT_ADMITTED'?admitted:!admitted)return fail();
+  }
+  if(Object.keys(row).filter(key=>key!=='frontend'&&key!=='frontendReason').sort().join(',')!=='appElevation,appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
   const {observedProcesses,observedRootGroups}=row;
   if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
   if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
@@ -69,7 +76,7 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
   const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
   for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
-  return {available:true,overflow:false,appElevation:row.appElevation as 'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED',appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence,...(row.frontend!==undefined?{frontend:row.frontend as 'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED'}:{})};
+  return {available:true,overflow:false,appElevation:row.appElevation as 'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED',appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence,...(row.frontend!==undefined?{frontend:row.frontend as 'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED'}:{}),...(row.frontendReason!==undefined?{frontendReason:row.frontendReason as GuiFrontendReason}:{})};
 }
 export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
   if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
@@ -512,26 +519,35 @@ public static class OwnedGuiAccessibility {
   static object Cached(IUIAutomationElement element,int property){object value;Ok(element.GetCachedPropertyValueEx(property,1,out value));if(value!=null&&Marshal.IsComObject(value)){Release(value);throw new InvalidOperationException();}return value;}
   static void Remember(int status,IntPtr condition,System.Collections.Generic.List<IntPtr> conditions){if(condition!=IntPtr.Zero)conditions.Add(condition);Ok(status);Need(condition!=IntPtr.Zero);}
   static bool Release(object value){try{if(value!=null)Marshal.FinalReleaseComObject(value);return true;}catch{return false;}}
-  static int Inspect(IntPtr window,int process,string version,int[] owned){
+  static string CountFailure(int count){return count==1?null:count==0?"NO_ABOUT":count>1?"AMBIGUOUS_ABOUT":"COM_OR_CACHE_UNAVAILABLE";}
+  static int Inspect(IntPtr window,int process,string version,int[] owned,out string reason){
     IUIAutomation2 client=null;IUIAutomationCacheRequest cache=null;IUIAutomationElement root=null,button=null;IUIAutomationElementArray found=null;var conditions=new System.Collections.Generic.List<IntPtr>();IntPtr previous=IntPtr.Zero;bool initialized=false;int result=0;
-    try{Ok(CoInitializeEx(IntPtr.Zero,0));initialized=true;previous=SetThreadDpiAwarenessContext(new IntPtr(-4));Need(previous!=IntPtr.Zero&&GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext())==2);var rectangle=Client(window,process);
+    reason="COM_OR_CACHE_UNAVAILABLE";
+    try{Ok(CoInitializeEx(IntPtr.Zero,0));initialized=true;reason="NATIVE_GUARD";previous=SetThreadDpiAwarenessContext(new IntPtr(-4));Need(previous!=IntPtr.Zero&&GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext())==2);var rectangle=Client(window,process);
+      reason="COM_OR_CACHE_UNAVAILABLE";
       var clsid=new Guid("e22ad333-b25f-460c-83d0-0581107395c9");var iid=typeof(IUIAutomation2).GUID;Ok(CoCreateInstance(ref clsid,IntPtr.Zero,1,ref iid,out client));Ok(client.put_ConnectionTimeout(250));Ok(client.put_TransactionTimeout(250));Ok(client.CreateCacheRequest(out cache));
       foreach(int property in new[]{30001,30002,30003,30005,30010,30020,30022})Ok(cache.AddProperty(property));Ok(cache.put_TreeScope(1));Ok(client.ElementFromHandleBuildCache(window,cache,out root));
-      object rootProcess=Cached(root,30002),rootWindow=Cached(root,30020);Need(rootProcess is int&&(int)rootProcess==process&&rootWindow is int&&unchecked((uint)(int)rootWindow)==window.ToInt64());
+      object rootProcess=Cached(root,30002),rootWindow=Cached(root,30020);reason="OWNERSHIP_REJECTED";Need(rootProcess is int&&(int)rootProcess==process&&rootWindow is int&&unchecked((uint)(int)rootWindow)==window.ToInt64());
+      reason="COM_OR_CACHE_UNAVAILABLE";
       string expected="About lazysh · "+version;IntPtr name,type,condition;Remember(client.CreatePropertyCondition(30005,expected,out name),name,conditions);Remember(client.CreatePropertyCondition(30003,50000,out type),type,conditions);Remember(client.CreateAndCondition(name,type,out condition),condition,conditions);
-      Ok(root.FindAllBuildCache(4,condition,cache,out found));Need(found!=null);int count;Ok(found.get_Length(out count));Need(count==1);Ok(found.GetElement(0,out button));
+      Ok(root.FindAllBuildCache(4,condition,cache,out found));Need(found!=null);int count;Ok(found.get_Length(out count));
+      var rejection=CountFailure(count);if(rejection!=null){reason=rejection;return 0;}
+      Ok(found.GetElement(0,out button));
       object actualName=Cached(button,30005),actualType=Cached(button,30003),enabled=Cached(button,30010),offscreen=Cached(button,30022),provider=Cached(button,30002),bounds=Cached(button,30001);
+      reason="CANDIDATE_REJECTED";
       Need(actualName is string&&actualType is int&&enabled is bool&&offscreen is bool&&provider is int&&About(expected,(string)actualName,(int)actualType,(bool)enabled,(bool)offscreen,(int)provider,owned,bounds as double[],rectangle));
-      var after=Client(window,process);for(int index=0;index<4;index++)Need(after[index]==rectangle[index]);result=(int)provider;
+      reason="OWNERSHIP_REJECTED";var after=Client(window,process);for(int index=0;index<4;index++)Need(after[index]==rectangle[index]);result=(int)provider;reason="OBSERVED";
     }catch{result=0;}
     finally{bool clean=true;clean&=Release(button);clean&=Release(found);clean&=Release(root);clean&=Release(cache);foreach(var condition in conditions)try{Need(condition!=IntPtr.Zero);Marshal.Release(condition);}catch{clean=false;}clean&=Release(client);
       if(initialized)try{CoUninitialize();}catch{clean=false;}
-      if(previous!=IntPtr.Zero)try{clean&=SetThreadDpiAwarenessContext(previous)!=IntPtr.Zero&&AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),previous);}catch{clean=false;}if(!clean)result=0;
+      if(previous!=IntPtr.Zero)try{clean&=SetThreadDpiAwarenessContext(previous)!=IntPtr.Zero&&AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),previous);}catch{clean=false;}if(!clean){result=0;reason="CLEANUP_FAILED";}
     }return result;
   }
-  public static int Observe(long handle,int process,string version,int[] owned){
+  public static int Observe(long handle,int process,string version,int[] owned,out string reason){
+    reason="INPUT_REJECTED";
     if(handle<=0||handle>uint.MaxValue||process<=0||version==null||!System.Text.RegularExpressions.Regex.IsMatch(version,@"\A[0-9]{1,6}(?:\.[0-9]{1,6}){2}\z")||owned==null||owned.Length<1||owned.Length>33)return 0;
-    int result=0;var thread=new System.Threading.Thread(()=>{result=Inspect(new IntPtr(handle),process,version,owned);});thread.IsBackground=true;thread.SetApartmentState(System.Threading.ApartmentState.MTA);thread.Start();return thread.Join(2000)?result:0;
+    reason="NATIVE_GUARD";int result=0;string observedReason="NATIVE_GUARD";var thread=new System.Threading.Thread(()=>{result=Inspect(new IntPtr(handle),process,version,owned,out observedReason);});thread.IsBackground=true;thread.SetApartmentState(System.Threading.ApartmentState.MTA);thread.Start();
+    if(!thread.Join(2000)){reason="TIMEOUT";return 0;}reason=observedReason;return result;
   }
 }
 `;
@@ -580,15 +596,18 @@ function GuiRuntimeRoots($inventory, $memberIds, $driverId) {
   return $roots
 }
 function GuiAccessibility($providerIds) {
+  $reason='SOURCE_REJECTED'
   try {
-    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -cne '1') { return 'UNVERIFIED' }
+    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -cne '1') { return @('UNVERIFIED','NOT_ADMITTED') }
     $source=[Console]::In.ReadToEnd()
-    if (!$source -or [Text.Encoding]::UTF8.GetByteCount($source) -gt 65536) { return 'UNVERIFIED' }
+    if (!$source -or [Text.Encoding]::UTF8.GetByteCount($source) -gt 65536) { return @('UNVERIFIED',$reason) }
     Add-Type -TypeDefinition $source -ErrorAction Stop
-    $provider=[OwnedGuiAccessibility]::Observe([long]$mainHandle,[int]$script:metadataAppId,$env:LAZYSH_VERSION,[int[]]$providerIds)
-    if ($provider -gt 0 -and $provider -in $providerIds) { return 'EXACT_ABOUT_ACTION_OBSERVED' }
+    $reason='NATIVE_GUARD'
+    $provider=[OwnedGuiAccessibility]::Observe([long]$mainHandle,[int]$script:metadataAppId,$env:LAZYSH_VERSION,[int[]]$providerIds,[ref]$reason)
+    if ($provider -gt 0 -and $provider -in $providerIds -and $reason -ceq 'OBSERVED') { return @('EXACT_ABOUT_ACTION_OBSERVED',$reason) }
+    if ($provider -gt 0 -or $reason -ceq 'OBSERVED') { $reason='OWNERSHIP_REJECTED' }
   } catch { }
-  return 'UNVERIFIED'
+  return @('UNVERIFIED',$reason)
 }
 function GuiStartupSnapshot {
   $unverified=@{available=$false;overflow=$false;signature='UNVERIFIED'}
@@ -637,12 +656,12 @@ function GuiStartupSnapshot {
     if ($integrity -ceq 'IDENTITY_UNVERIFIED') { return $unverified }
     if ($integrity -cnotin @('LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED')) { $integrity='UNVERIFIED' }
     if ($elevation -cnotin @('ELEVATED','NOT_ELEVATED','UNVERIFIED')) { $elevation='UNVERIFIED' }
-    $frontend=$null
-    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -ceq '1') { $frontend='UNVERIFIED';if ($integrity -ceq 'HIGH' -and $elevation -ceq 'ELEVATED') { $frontend=GuiAccessibility (@([int]$script:metadataAppId)+@($retained.Keys)) } }
+    $frontend=$null;$frontendReason=$null
+    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -ceq '1') { $frontend='UNVERIFIED';$frontendReason='NOT_ADMITTED';if ($integrity -ceq 'HIGH' -and $elevation -ceq 'ELEVATED') { $observation=GuiAccessibility (@([int]$script:metadataAppId)+@($retained.Keys));$frontend=$observation[0];$frontendReason=$observation[1] } }
     foreach ($fence in $fences) { if (!(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified } }
     # Snapshot groups only: no observed owned runtime does not prove it never started or crashed.
     $snapshot=@{available=$true;overflow=$false;appIntegrity=$integrity;appElevation=$elevation;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
-    if ($frontend) { $snapshot.frontend=$frontend }
+    if ($frontend) { $snapshot.frontend=$frontend;$snapshot.frontendReason=$frontendReason }
     return $snapshot
   } catch { return $unverified }
 }
