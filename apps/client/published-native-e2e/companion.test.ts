@@ -1,39 +1,14 @@
 import {expect,it} from 'vitest';
-import {constants} from 'node:fs';
-import {lstat,open,readdir} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
+import {lstat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {NativeGui} from '../native-e2e/fixture';
 import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui} from '../native-e2e/sshUi';
 import {SshFixture} from '../../../tests/support/sshFixture';
-import {publishedCompanion,type PublishedCompanion} from './release';
+import {installedCompanion,publishedCompanion} from './release';
 import {companionInstallFailure,companionInstallStage} from '../src/CompanionInstallPanel';
 
 const fixture=ownedSshGui();
 
-async function installed(fixture:SshFixture,evidence:PublishedCompanion) {
-  const path=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
-  const handle=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
-  let before;
-  try {
-    before=await handle.stat();
-    expect(before.isFile() && before.uid===process.getuid!() && before.nlink===1 && (before.mode&0o777)===0o700).toBe(true);
-    expect(before.size).toBe(evidence.bytes);
-    const digest=createHash('sha256');let length=0;
-    for await(const chunk of handle.createReadStream({autoClose:false})) {
-      length+=chunk.length;
-      if(length>evidence.bytes)throw new Error('Installed companion exceeds its public receipt');
-      digest.update(chunk);
-    }
-    expect(length).toBe(evidence.bytes);expect(digest.digest('hex')).toBe(evidence.sha256);
-    const after=await handle.stat();
-    expect([after.dev,after.ino,after.size,after.mtimeMs,after.ctimeMs]).toEqual([before.dev,before.ino,before.size,before.mtimeMs,before.ctimeMs]);
-  } finally {await handle.close();}
-  const version=await fixture.client(true,`${path} --version`);
-  expect((await version.finish('published installed companion version',5000)).trim()).toBe(`lazysh-agent ${evidence.version}`);
-  expect((await readdir(fixture.directory)).some(name=>name.startsWith('.lazysh-install-'))).toBe(false);
-  return {path,identity:[before.dev,before.ino,before.size,before.mtimeMs,before.ctimeMs]};
-}
 
 it('installs the published verified companion through the actual native GUI and reuses its exact bytes',async()=>{
   // This explicit network-enabled case belongs only on the disposable hosted runner.
@@ -94,7 +69,7 @@ it('installs the published verified companion through the actual native GUI and 
     }
     expect(await (await panel.$('code')).getText()).toBe(destination);
     expect(await panel.getText()).not.toContain('Some temporary installation files remain');
-    const current=await installed(ssh,evidence);
+    const current=await installedCompanion(ssh,evidence);
     if(index===0)firstIdentity=current.identity;
     else expect(current.identity).toEqual(firstIdentity);
     expect(await gui.appOwner()).toEqual(owner);

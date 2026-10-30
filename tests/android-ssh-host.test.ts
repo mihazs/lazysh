@@ -1,8 +1,10 @@
 import {expect,test} from 'bun:test';
-import {readFile,stat,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,readFile,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
+import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -43,6 +45,26 @@ async function verifyCompanionFixture(privateTtyGroup:boolean) {
 }
 
 test.skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools',()=>verifyCompanionFixture(false),15_000);
+
+test.skipIf(process.platform!=='linux')('installed companion evidence rejects wrong bytes, public mode, links and staging residue',async()=>{
+  const fixture=await SshFixture.start(undefined,{companion:true});
+  const parent=join(fixture.directory,'data/lazysh/companion'),path=join(parent,'lazysh-agent');
+  const bytes=Buffer.from("#!/bin/sh\nprintf 'lazysh-agent 1.2.3\\n'\n");
+  const evidence:PublishedCompanion={releaseId:1,assetId:2,version:'1.2.3',source:'a'.repeat(40),name:'owned-test',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+  try {
+    await mkdir(parent,{recursive:true,mode:0o700});await writeFile(path,bytes,{mode:0o700,flag:'wx'});
+    const first=await installedCompanion(fixture,evidence);
+    expect((await installedCompanion(fixture,evidence)).identity).toEqual(first.identity);
+    await expect(installedCompanion(fixture,{...evidence,sha256:'0'.repeat(64)})).rejects.toThrow();
+    await chmod(path,0o744);await expect(installedCompanion(fixture,evidence)).rejects.toThrow();await chmod(path,0o700);
+    const alternate=join(parent,'owned-version');await writeFile(alternate,bytes,{mode:0o700,flag:'wx'});
+    await unlink(path);await symlink(alternate,path);await expect(installedCompanion(fixture,evidence)).rejects.toThrow();
+    expect(await readFile(alternate)).toEqual(bytes);
+    await unlink(path);await writeFile(path,bytes,{mode:0o700,flag:'wx'});
+    await mkdir(join(fixture.directory,'.lazysh-install-owned'),{mode:0o700});
+    await expect(installedCompanion(fixture,evidence)).rejects.toThrow();
+  } finally {await fixture.stop();}
+},15_000);
 
 test.skipIf(process.platform!=='linux')('owned server teardown retires an admitted interactive shell and client',async()=>{
   const fixture=await SshFixture.start();
@@ -94,6 +116,10 @@ test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails ex
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app performs explicit trust and authenticated interactive SSH',async()=>{
   await androidSshAcceptance();
+},610_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app installs and reuses the verified public companion through its UI',async()=>{
+  await androidSshAcceptance(undefined,undefined,true);
 },610_000);
 
 // Real tools are explicit; ordinary host checks never download or guess a binary.

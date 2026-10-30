@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { steps: { name?: string; run?: string; with?: { script?: string } }[] }>;
+  jobs: Record<string, { env?: Record<string,string>; steps: { name?: string; run?: string; with?: { script?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -24,6 +24,16 @@ test('mandatory Linux namespaced SSH owner keeps private-TTY companion coverage 
   expect(linux[owner].run).toContain("bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH'");
   expect(workflow.jobs['native-android-runtime'].steps.some(step => step.name === 'Verify native SSH namespace prerequisites')).toBe(false);
   expect(decoded).toContain('test:android-ssh');
+});
+
+test('packaged companion UI acceptance has an explicit owned Android invocation',async()=>{
+  expect(workflow.jobs['native-android-runtime'].env?.LAZYSH_ANDROID_UI_COMPANION).toBe('1');
+  expect(decoded).toContain('test:android-ssh');
+  const pkg=await Bun.file(new URL('../apps/client/package.json',import.meta.url)).json();
+  expect(pkg.scripts['test:android']).toContain('NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi');
+  const gradle=await Bun.file(new URL('../apps/client/src-tauri/gen/android/app/build.gradle.kts',import.meta.url)).text();
+  expect(gradle).toContain('lazyshCompanionAcceptance');
+  expect(gradle).toContain('outputs/androidTest-results/companion-ui');
 });
 
 test.each([

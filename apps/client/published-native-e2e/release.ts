@@ -1,4 +1,8 @@
 import {createHash} from 'node:crypto';
+import {constants,type Stats} from 'node:fs';
+import {open,readdir} from 'node:fs/promises';
+import {join} from 'node:path';
+import type {SshFixture} from '../../../tests/support/sshFixture';
 import {request} from 'node:https';
 import {assertDirectDriverEnvironment} from '../native-e2e/policy';
 
@@ -67,4 +71,25 @@ export async function publishedCompanion():Promise<PublishedCompanion> {
   const binary=asset(release,file.name);
   requirePublic(binary.size===file.bytes && binary.digest===`sha256:${file.sha256}`);
   return {releaseId:release.id,version,source:manifest.sha,assetId:binary.id,name:file.name,bytes:file.bytes,sha256:file.sha256};
+}
+
+export async function installedCompanion(fixture:SshFixture,evidence:PublishedCompanion) {
+  const path=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
+  const handle=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  let before:Stats;
+  try {
+    before=await handle.stat();
+    requirePublic(before.isFile() && before.uid===process.getuid!() && before.nlink===1 && (before.mode&0o777)===0o700 && before.size===evidence.bytes);
+    const digest=createHash('sha256');let length=0;
+    for await(const chunk of handle.createReadStream({autoClose:false})) {
+      length+=chunk.length;requirePublic(length<=evidence.bytes);digest.update(chunk);
+    }
+    requirePublic(length===evidence.bytes && digest.digest('hex')===evidence.sha256);
+    const after=await handle.stat();
+    requirePublic([after.dev,after.ino,after.size,after.mtimeMs,after.ctimeMs].every((value,index)=>value===[before.dev,before.ino,before.size,before.mtimeMs,before.ctimeMs][index]));
+  } finally {await handle.close();}
+  const version=await fixture.client(true,`${path} --version`);
+  requirePublic((await version.finish('published installed companion version',5000)).trim()===`lazysh-agent ${evidence.version}`);
+  requirePublic(!(await readdir(fixture.directory)).some(name=>name.startsWith('.lazysh-install-')));
+  return {path,identity:[before.dev,before.ino,before.size,before.mtimeMs,before.ctimeMs]};
 }
