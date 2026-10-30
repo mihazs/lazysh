@@ -21,6 +21,8 @@ const counterprobePrefix='LAZYSH_MEDIUM_COUNTERPROBE:';
 // Creation-only failures admit only the current Win32Failure mapping, independently of resume labels.
 const counterprobeDenied=['ACCESS_DENIED','INVALID_HANDLE','INVALID_PARAMETER','PRIVILEGE_NOT_HELD','FILE_NOT_FOUND','PATH_NOT_FOUND','BAD_EXE_FORMAT','DIRECTORY','OTHER'];
 const counterprobeResults=['NOT_RUN_BUDGET','CREATED_RETIRED','UNAVAILABLE_JOB','UNAVAILABLE_IDENTITY','UNAVAILABLE_TOKEN','UNAVAILABLE_INPUT','UNAVAILABLE_OTHER','CLEANUP_UNVERIFIED',...counterprobeDenied.map(error=>'DENIED:'+error)];
+const daclPrefix='LAZYSH_MEDIUM_DACL:';
+const daclNames=['imageReadExecute','cwdTraverse','cwdCreateFile','stationReadAttributes','desktopCreateReadWrite'];
 const probeDenial='UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED';
 function mediumAdmissionObservation(value:unknown){
   const unknown={result:'UNVERIFIED',counterprobe:'UNVERIFIED'};
@@ -29,12 +31,16 @@ function mediumAdmissionObservation(value:unknown){
   if(lines.length===1)return {result:mediumAdmissionResult(value)};
   const result=mediumAdmissionResult(lines.at(-1));
   const rejected=result==='CLEANUP_UNVERIFIED'?{result,counterprobe:'UNVERIFIED'}:unknown;
-  if(lines.length!==2||!lines[0].startsWith(counterprobePrefix))return rejected;
+  if(![2,3].includes(lines.length)||!lines[0].startsWith(counterprobePrefix))return rejected;
   const detail=lines[0].slice(counterprobePrefix.length),separator=detail.indexOf(':');
   const kind=detail.slice(0,separator),outcome=detail.slice(separator+1);
   if(!['LINKED','RESTRICTED'].includes(kind)||!counterprobeResults.includes(outcome)||![probeDenial,'CLEANUP_UNVERIFIED'].includes(result)
     ||(outcome==='CLEANUP_UNVERIFIED'&&result!=='CLEANUP_UNVERIFIED'))return rejected;
-  return {result,counterprobe:{kind,outcome}};
+  const base={result,counterprobe:{kind,outcome}};
+  if(lines.length===2)return base;
+  const fields=lines[1].slice(daclPrefix.length).split(':');
+  if(!lines[1].startsWith(daclPrefix)||fields.length!==6||fields[0]!==kind||outcome!=='DENIED:ACCESS_DENIED'||fields.slice(1).some(value=>!['ALLOWS','DENIES','UNVERIFIED'].includes(value)))return rejected;
+  return {...base,dacl:{kind,...Object.fromEntries(daclNames.map((name,index)=>[name,fields[index+1]]))}};
 }
 
 const startupFixture=()=>({available:true,overflow:false,appElevation:'UNVERIFIED',appIntegrity:'UNVERIFIED',signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport:'EPHEMERAL_PORT'}],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
@@ -637,6 +643,16 @@ test('restricted Windows admission reports only exact finite smoke results',()=>
   for(const result of mediumAdmissionResults)expect(mediumAdmissionResult(result)).toBe(result);
   for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_LAUNCH_UNAVAILABLE:PRIVATE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:RESUME_COUNT_UNEXPECTED','UNAVAILABLE_LAUNCH_UNAVAILABLE:DRIVER:RESUME_THREAD:5','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:OTHER private','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
 });
+test('fixed DACL observations retain only the five named checks after paired access denial',()=>{
+  const prefix=counterprobePrefix+'RESTRICTED:DENIED:ACCESS_DENIED\n';
+  const values=['ALLOWS','DENIES','UNVERIFIED','ALLOWS','DENIES'];
+  const line=daclPrefix+'RESTRICTED:'+values.join(':');
+  expect(mediumAdmissionObservation(prefix+line+'\n'+probeDenial)).toEqual({result:probeDenial,counterprobe:{kind:'RESTRICTED',outcome:'DENIED:ACCESS_DENIED'},dacl:{kind:'RESTRICTED',...Object.fromEntries(daclNames.map((name,index)=>[name,values[index]]))}});
+  for(const invalid of [line+':ALLOWS',line.replace('RESTRICTED','LINKED'),line.replace('DENIES','private'),line.replace('ALLOWS',''),line+'\n'+line,'private'])expect(mediumAdmissionObservation(prefix+invalid+'\n'+probeDenial)).toEqual({result:'UNVERIFIED',counterprobe:'UNVERIFIED'});
+  expect(mediumAdmissionObservation(prefix.replace('DENIED:ACCESS_DENIED','CREATED_RETIRED')+line+'\n'+probeDenial)).toEqual({result:'UNVERIFIED',counterprobe:'UNVERIFIED'});
+  expect(mediumAdmissionObservation(prefix+line.replace('DENIES','private')+'\nCLEANUP_UNVERIFIED')).toEqual({result:'CLEANUP_UNVERIFIED',counterprobe:'UNVERIFIED'});
+});
+
 test('creation-only counterprobe results cannot replace the original denial or conceal cleanup uncertainty',()=>{
   for(const kind of ['LINKED','RESTRICTED'])for(const outcome of counterprobeResults){
     const result=outcome==='CLEANUP_UNVERIFIED'?'CLEANUP_UNVERIFIED':probeDenial;
@@ -706,6 +722,19 @@ foreach($kind in @(-1,0,1,2,3,19,25,27,[int]::MaxValue)){
   try{$null=$word.Invoke($null,@([IntPtr]::Zero,[int]$kind))}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'TOKEN_UNAVAILABLE'}
   if(!$failed -or [OwnedMediumGui]::TokenFailure -cne 'SCALAR_LAYOUT'){throw 'unsupported scalar class reached native API'}
 }
+$mapping=[OwnedMediumGui].GetMethod('DaclMapping',$flags)
+foreach($case in @(@(1,0x120089,0x120116,0x1200a0,0x1f01ff),@(2,0x20303,0x2001c,0x20060,0xf037f),@(3,0x20041,0x200be,0x20100,0xf01ff))){
+  $value=$mapping.Invoke($null,@([int]$case[0]));$index=1
+  foreach($name in @('Read','Write','Execute','All')){if($value.$name -ne $case[$index]){throw 'SDK mapping changed'};$index++}
+}
+foreach($name in @('DaclMapping','DaclMask')){$failed=$false;try{$null=[OwnedMediumGui].GetMethod($name,$flags).Invoke($null,@(-1))}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'DACL_UNVERIFIED'};if(!$failed){throw 'unknown DACL selector admitted'}}
+$mask=[OwnedMediumGui].GetMethod('DaclMask',$flags)
+$expected=@(0x1200a9,0x20,2,2,0x83)
+foreach($index in 0..4){if($mask.Invoke($null,@([int]$index)) -ne $expected[$index]){throw 'fixed DACL mask changed'}}
+$result=[OwnedMediumGui].GetMethod('DaclResult',$flags)
+foreach($case in @(@($false,$false,'UNVERIFIED'),@($false,$true,'UNVERIFIED'),@($true,$false,'DENIES'),@($true,$true,'ALLOWS'))){if($result.Invoke($null,@([bool]$case[0],[bool]$case[1])) -cne $case[2]){throw 'DACL result projected incorrectly'}}
+$eligible=[OwnedMediumGui].GetMethod('DaclEligible',$flags)
+foreach($case in @(@('DENIED:ACCESS_DENIED',30000L,$true),@('DENIED:ACCESS_DENIED',29999L,$false),@('DENIED:ACCESS_DENIED',100001L,$false),@('CREATED_RETIRED',90000L,$false),@('CLEANUP_UNVERIFIED',90000L,$false))){if($eligible.Invoke($null,@([string]$case[0],[long]$case[1])) -ne $case[2]){throw 'DACL admission changed'}}
 $quoted=[OwnedMediumGui]::Command('tool',[string[]]@('space value','quote"value','trailing\',''))
 foreach ($value in @([string]::new([char]'x',1020),('bad'+[char]0))) {
   $rejected=$false;try {$null=[OwnedMediumGui]::Command('tool',[string[]]@($value))}catch{$rejected=$true};if(!$rejected){throw 'native command bound admitted'}
@@ -774,11 +803,13 @@ if($job -and $job.CounterprobeOutcome -and $job.CounterprobeOutcome -cne 'NOT_EL
   $counterprobe=$(if($outcome -ceq 'CLEANUP_UNVERIFIED'){'CLEANUP_UNVERIFIED'}else{$job.CounterprobeOutcome})
   [Console]::Out.WriteLine('LAZYSH_MEDIUM_COUNTERPROBE:'+$job.Kind+':'+$counterprobe)
 }
+if($job -and $job.DaclObservations){[Console]::Out.WriteLine('LAZYSH_MEDIUM_DACL:'+$job.Kind+':'+$job.DaclObservations)}
 [Console]::Out.Write($outcome)
 `;
     const result=await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,...tools,LAZYSH_MEDIUM_ROOT:root,LAZYSH_MEDIUM_PROBE:probe},100000,windowsGuiMediumSource);
     const observed=mediumAdmissionObservation(result);
     if(observed.counterprobe)console.info('Owned never-resumed creation-only counterprobe: '+JSON.stringify(observed.counterprobe));
+    if('dacl' in observed)console.info('Owned token fixed DACL-only observations: '+JSON.stringify(observed.dacl));
     expect(process.platform==='win32'?['ADMITTED_LINKED','ADMITTED_RESTRICTED']:['PORTABLE_CONTRACT']).toContain(observed.result);
   }finally{await rm(root,{recursive:true,force:true});}
 },110000);

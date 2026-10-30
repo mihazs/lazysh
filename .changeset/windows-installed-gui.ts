@@ -899,6 +899,7 @@ public sealed class OwnedMediumGui : System.IDisposable {
   static LaunchError ResumeFailure(uint count,int error){return count==uint.MaxValue?Win32Failure(error):count==1?LaunchError.UNVERIFIED:LaunchError.RESUME_COUNT_UNEXPECTED;}
   bool probeStarted;
   public string CounterprobeOutcome {get;private set;}
+  public string DaclObservations {get;private set;}
   static string CounterprobeAdmission(string code,long remaining){
     if(code!="LAUNCH_UNAVAILABLE"||launchCall!=LaunchCall.CREATE_PROCESS_WITH_TOKEN||launchError!=LaunchError.ACCESS_DENIED||remaining>100000)return "NOT_ELIGIBLE";
     return remaining<30000?"NOT_RUN_BUDGET":"RUN";
@@ -938,6 +939,49 @@ public sealed class OwnedMediumGui : System.IDisposable {
   [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformation(IntPtr handle,int index,System.Text.StringBuilder name,uint length,out uint needed);
+  [StructLayout(LayoutKind.Sequential)] struct Mapping {public uint Read,Write,Execute,All;public Mapping(uint read,uint write,uint execute,uint all){Read=read;Write=write;Execute=execute;All=all;}}
+  [StructLayout(LayoutKind.Sequential)] struct FileIdentity {public uint Attributes;public uint CreatedLow,CreatedHigh,AccessedLow,AccessedHigh,WrittenLow,WrittenHigh;public uint Volume,SizeHigh,SizeLow,Links,IndexHigh,IndexLow;}
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr handle,out FileIdentity identity);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern uint GetFinalPathNameByHandle(IntPtr handle,System.Text.StringBuilder path,uint length,uint flags);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr handle,int kind,uint information,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern bool IsValidSecurityDescriptor(IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool AccessCheck(IntPtr descriptor,IntPtr client,uint desired,ref Mapping mapping,IntPtr privileges,ref uint length,out uint granted,out bool allowed);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+  // Fixed SDK masks only; these observations model DACL access, not MIC or process-creation authority.
+  static Mapping DaclMapping(int kind){switch(kind){case 1:return new Mapping(0x120089,0x120116,0x1200a0,0x1f01ff);case 2:return new Mapping(0x20303,0x2001c,0x20060,0xf037f);case 3:return new Mapping(0x20041,0x200be,0x20100,0xf01ff);default:throw new System.InvalidOperationException("DACL_UNVERIFIED");}}
+  static uint DaclMask(int observation){switch(observation){case 0:return 0x1200a9;case 1:return 0x20;case 2:return 2;case 3:return 2;case 4:return 0x83;default:throw new System.InvalidOperationException("DACL_UNVERIFIED");}}
+  static string DaclResult(bool queried,bool allowed){return !queried?"UNVERIFIED":allowed?"ALLOWS":"DENIES";}
+  static bool DaclEligible(string counter,long remaining){return counter=="DENIED:ACCESS_DENIED"&&remaining>=30000&&remaining<=100000;}
+  static void PlainDaclPath(string path){for(var current=new System.IO.DirectoryInfo(System.IO.Path.GetDirectoryName(path));current!=null;current=current.Parent)Need((current.Attributes&System.IO.FileAttributes.ReparsePoint)==0,"DACL_UNVERIFIED");Need((System.IO.File.GetAttributes(path)&System.IO.FileAttributes.ReparsePoint)==0,"DACL_UNVERIFIED");}
+  static IntPtr DaclFile(string path,bool directory){
+    PlainDaclPath(path);var attributes=new SA{Length=Marshal.SizeOf(typeof(SA))};IntPtr handle=CreateFile(path,0x20000,7,ref attributes,3,0x02200000,IntPtr.Zero);
+    if(handle==IntPtr.Zero||handle==new IntPtr(-1))throw new System.InvalidOperationException("DACL_UNVERIFIED");
+    try{FileIdentity identity;var final=new System.Text.StringBuilder(32768);uint length=GetFinalPathNameByHandle(handle,final,32768,0);Need(GetFileInformationByHandle(handle,out identity)&&(identity.Attributes&0x400)==0&&((identity.Attributes&0x10)!=0)==directory&&(directory||identity.SizeHigh!=0||identity.SizeLow!=0)&&length>0&&length<32768&&String.Equals(final.ToString(),"\\\\?\\"+System.IO.Path.GetFullPath(path),StringComparison.OrdinalIgnoreCase),"DACL_UNVERIFIED");PlainDaclPath(path);return handle;}
+    catch{Need(CloseHandle(handle),"CLEANUP_UNVERIFIED");throw;}
+  }
+  static bool DaclFileMatches(IntPtr original,string path,bool directory){IntPtr current=IntPtr.Zero;try{current=DaclFile(path,directory);FileIdentity a,b;return GetFileInformationByHandle(original,out a)&&GetFileInformationByHandle(current,out b)&&(a.IndexHigh!=0||a.IndexLow!=0)&&a.Volume==b.Volume&&a.IndexHigh==b.IndexHigh&&a.IndexLow==b.IndexLow&&a.SizeHigh==b.SizeHigh&&a.SizeLow==b.SizeLow&&a.WrittenHigh==b.WrittenHigh&&a.WrittenLow==b.WrittenLow;}finally{if(current!=IntPtr.Zero)Need(CloseHandle(current),"CLEANUP_UNVERIFIED");}}
+  static string CheckDacl(IntPtr handle,IntPtr client,int kind,int observation){
+    IntPtr descriptor=IntPtr.Zero,privileges=IntPtr.Zero,owner,group,dacl,sacl;
+    try{if(handle==IntPtr.Zero||GetSecurityInfo(handle,kind==1?1:7,7,out owner,out group,out dacl,out sacl,out descriptor)!=0||descriptor==IntPtr.Zero||owner==IntPtr.Zero||group==IntPtr.Zero||!IsValidSecurityDescriptor(descriptor))return "UNVERIFIED";
+      uint size=GetSecurityDescriptorLength(descriptor);if(size==0||size>65536)return "UNVERIFIED";
+      var mapping=DaclMapping(kind);uint length=4096,granted;bool allowed;privileges=Marshal.AllocHGlobal(4096);
+      bool queried=AccessCheck(descriptor,client,DaclMask(observation),ref mapping,privileges,ref length,out granted,out allowed);return DaclResult(queried&&length<=4096,allowed);
+    }finally{if(privileges!=IntPtr.Zero)Marshal.FreeHGlobal(privileges);if(descriptor!=IntPtr.Zero)Need(LocalFree(descriptor)==IntPtr.Zero,"CLEANUP_UNVERIFIED");}
+  }
+  string ObserveDacls(string image,string directory){
+    var values=new[]{"UNVERIFIED","UNVERIFIED","UNVERIFIED","UNVERIFIED","UNVERIFIED"};IntPtr client=IntPtr.Zero,file=IntPtr.Zero,cwd=IntPtr.Zero;
+    try{if(!DuplicateTokenEx(token,8,IntPtr.Zero,2,2,out client))return String.Join(":",values);
+      try{Need(String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName),StringComparison.OrdinalIgnoreCase),"DACL_UNVERIFIED");file=DaclFile(image,false);values[0]=CheckDacl(file,client,1,0);if(!DaclFileMatches(file,image,false))values[0]="UNVERIFIED";}catch(System.InvalidOperationException e){values[0]="UNVERIFIED";if(e.Message=="CLEANUP_UNVERIFIED")throw;}catch{values[0]="UNVERIFIED";}
+      try{cwd=DaclFile(directory,true);values[1]=CheckDacl(cwd,client,1,1);values[2]=CheckDacl(cwd,client,1,2);if(!DaclFileMatches(cwd,directory,true)){values[1]="UNVERIFIED";values[2]="UNVERIFIED";}}catch(System.InvalidOperationException e){values[1]="UNVERIFIED";values[2]="UNVERIFIED";if(e.Message=="CLEANUP_UNVERIFIED")throw;}catch{values[1]="UNVERIFIED";values[2]="UNVERIFIED";}
+      // Borrowed current user-object handles are never closed or replaced.
+      IntPtr station=GetProcessWindowStation(),desktop=GetThreadDesktop(GetCurrentThreadId());
+      if(ObjectName(station)=="WinSta0")values[3]=CheckDacl(station,client,2,3);
+      if(ObjectName(desktop)=="Default")values[4]=CheckDacl(desktop,client,3,4);
+      return String.Join(":",values);
+    }catch(System.InvalidOperationException e){if(e.Message=="CLEANUP_UNVERIFIED")throw;return String.Join(":",values);}catch{return String.Join(":",values);}
+    finally{bool closed=true;if(file!=IntPtr.Zero)closed&=CloseHandle(file);if(cwd!=IntPtr.Zero)closed&=CloseHandle(cwd);if(client!=IntPtr.Zero)closed&=CloseHandle(client);Need(closed,"CLEANUP_UNVERIFIED");}
+  }
   sealed class Data : System.IDisposable { public IntPtr Pointer;public uint Length;public Data(IntPtr token,int kind) { uint length;bool queried=GetTokenInformation(token,kind,IntPtr.Zero,0,out length);TokenNeed(!queried&&Marshal.GetLastWin32Error()==122,TokenReason.QUERY_SIZE_REJECTED);TokenNeed(length>0&&length<=65536,TokenReason.QUERY_LENGTH_REJECTED);Pointer=Marshal.AllocHGlobal((int)length);Length=length;try {uint used;TokenNeed(GetTokenInformation(token,kind,Pointer,length,out used),TokenReason.QUERY_READ_FAILED);TokenNeed(used<=length,TokenReason.QUERY_LENGTH_REJECTED);Length=used;}catch {Dispose();throw;} } public void Dispose(){if(Pointer!=IntPtr.Zero){Marshal.FreeHGlobal(Pointer);Pointer=IntPtr.Zero;}} }
   sealed class Group { public byte[] Sid;public uint Attributes; }
   IntPtr job,token;
@@ -1014,6 +1058,7 @@ public sealed class OwnedMediumGui : System.IDisposable {
         }
       }catch{CounterprobeOutcome="CLEANUP_UNVERIFIED";throw new System.InvalidOperationException("CLEANUP_UNVERIFIED");}
       finally{launchCall=originalCall;launchError=originalError;tokenFailure=originalToken;}
+      if(DaclEligible(CounterprobeOutcome,deadline-Environment.TickCount64))DaclObservations=ObserveDacls(image,directory);
       // This experiment cannot replace the original denied probe with a passing fallback.
       throw;
     }
