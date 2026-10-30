@@ -113,3 +113,53 @@ test('phone host form stays legible and fits the viewport while focusing fields'
     await dialog.getByRole('button', {name:'Save host', exact:true}).tap({trial:true});
   }
 });
+
+test('preferences expose host multiplexer editing and keep mobile checkbox text beside controls', async ({page},testInfo) => {
+  await page.goto('/');
+  await page.getByRole('button', {name:'Preferences',exact:true}).click();
+  const settings=page.getByRole('dialog',{name:'Preferences',exact:true});
+  const lock=settings.getByRole('region',{name:'App lock settings',exact:true});
+  await lock.scrollIntoViewIfNeeded();
+  const gutter=await lock.evaluate(element=>{
+    const dialog=element.closest('[role="dialog"]')!.getBoundingClientRect();
+    const bounds=element.getBoundingClientRect();
+    return {left:bounds.left-dialog.left,right:dialog.right-bounds.right};
+  });
+  expect(gutter.left).toBeGreaterThanOrEqual(16);
+  expect(gutter.right).toBeGreaterThanOrEqual(16);
+  await settings.screenshot({path:testInfo.outputPath('settings-gutters.png')});
+  await settings.getByRole('region',{name:'Default multiplexer',exact:true}).getByRole('button',{name:'Edit Touch workstation',exact:true}).click();
+  const editor=page.getByRole('dialog',{name:'Edit host',exact:true});
+  await editor.getByRole('combobox',{name:'Default multiplexer',exact:true}).selectOption('herdr');
+  await editor.getByRole('textbox',{name:'Default multiplexer session',exact:true}).fill('mobile');
+  const checkbox=editor.getByRole('checkbox').last();
+  await checkbox.scrollIntoViewIfNeeded();
+  const row=await checkbox.evaluate(input=>{
+    const label=input.closest('label')!;
+    const text=document.createRange();text.selectNodeContents(label);text.setStartAfter(input);
+    const control=input.getBoundingClientRect(), words=text.getBoundingClientRect();
+    return {controlRight:control.right,textLeft:words.left,controlTop:control.top,textBottom:words.bottom,scrolls:label.scrollWidth>label.clientWidth};
+  });
+  expect(row.textLeft).toBeGreaterThan(row.controlRight);
+  expect(row.textBottom).toBeGreaterThan(row.controlTop);
+  expect(row.scrolls).toBe(false);
+  await editor.screenshot({path:testInfo.outputPath('checkbox-alignment.png')});
+  expect(await editor.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+});
+
+test('workspace restore explanation wraps below reachable actions on phones',async({page},testInfo)=>{
+  await page.addInitScript(()=>localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture-host'}])));
+  await page.goto('/');
+  const restore=page.getByRole('button',{name:'Restore previous workspace',exact:true});
+  const dismiss=page.getByRole('button',{name:'Dismiss',exact:true});
+  await expect(restore).toBeVisible();
+  const banner=restore.locator('..');
+  expect(await banner.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  if(testInfo.project.name==='phone'){
+    const actions=await dismiss.boundingBox(), text=await banner.locator('span').boundingBox();
+    expect(text!.y).toBeGreaterThanOrEqual(actions!.y+actions!.height);
+  }
+  await banner.screenshot({path:testInfo.outputPath('workspace-restore.png')});
+  await dismiss.click();
+  await expect(restore).toHaveCount(0);
+});

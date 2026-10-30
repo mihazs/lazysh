@@ -1,5 +1,25 @@
 # @lazysh/client
 
+## 1.1.3
+
+### Patch Changes
+
+- 6e6c9cd: Fix mobile settings, checkbox and attachment layout and expose existing per-host multiplexer preferences.
+- @lazysh/common@1.1.3
+  - @lazysh/display-idle@1.1.3
+  - @lazysh/et-transport@1.1.3
+  - @lazysh/mosh-transport@1.1.3
+
+## 1.1.2
+
+### Patch Changes
+
+- 8e3b293: Grant the local native app access to the existing upload recovery and host companion settings commands, preserving unlock, verified-host, authentication and settings revision guards. Other windows and remote pages remain denied.
+- @lazysh/common@1.1.2
+  - @lazysh/display-idle@1.1.2
+  - @lazysh/et-transport@1.1.2
+  - @lazysh/mosh-transport@1.1.2
+
 ## 1.1.1
 
 ### Patch Changes
