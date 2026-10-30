@@ -1,5 +1,22 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  herdrAgentsTitle: "Live Herdr agents",
+  herdrAgentsRefresh: "Refresh Herdr",
+  herdrAgentsHint: "Detected by Herdr on this connected host. These are live pane statuses, separate from companion reports.",
+  herdrAgentsInvalid: "Invalid Herdr agent response.",
+  herdrAgentsUnavailable: "Herdr discovery is unavailable.",
+  herdrAgentsNoServers: "No running Herdr servers found on this host.",
+  herdrAgentsServer: "Herdr server",
+  herdrAgentsChoose: "Choose a Herdr server",
+  herdrAgentsScope: "Running servers: {{servers}}. Only the selected server is checked; other servers are not included.",
+  herdrAgentsSearch: "Search live Herdr agents",
+  herdrAgentsCount: "Showing {{shown}} of {{total}} detected agents in this server.",
+  herdrAgentIdle: "Idle",
+  herdrAgentWorking: "Working",
+  herdrAgentBlocked: "Needs attention",
+  herdrAgentDone: "Done",
+  herdrAgentUnknown: "Unknown status",
+
   attachmentRestore: "Reconnect uploads",
   attachmentRestoreTitle: "Reconnect uploads to {{value1}}",
   attachmentRestored: "Uploads reconnected. Select Upload attachment to retry.",

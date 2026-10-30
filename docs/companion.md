@@ -852,3 +852,17 @@ inspection or mutation. Windows binary downloads and normal CLI/storage checks
 remain supported. Native SID/DACL ownership, busy-executable replacement and a
 Windows OpenSSH shell adapter remain tracked in issue #490; the complete in-app
 installer remains issue #476.
+
+## Live Herdr discovery
+
+The Agents view also reads live agent metadata directly from Herdr through the
+connected SSH session. This does not need companion lifecycle hooks and can show
+Codex panes even when the companion report list is empty or unavailable. A single
+running Herdr server is selected automatically. If several are running, choose a
+server; only the selected server is queried, not every server in the list.
+
+Herdr statuses retain their meaning, including Idle and Unknown. They are separate
+from companion lifecycle reports and do not establish approval, input or transcript
+authority. Search the live Herdr section by agent, project or pane. Discovery stops
+while the Agents view is hidden. Failed reads remove the previous live results;
+check the terminal when a status cannot be read.

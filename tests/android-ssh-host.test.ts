@@ -83,6 +83,15 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(JSON.stringify(value.messages)).toContain(owned.record);
     const listing=await owned.ssh.client(true,'herdr session list --json');
     expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
+    const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
+    const {agent}=owned.metadata();
+    expect(snapshot.agents).toHaveLength(1);
+    expect(snapshot.agents[0]).toMatchObject({agent:'codex',agent_status:'unknown',terminal_id:agent.terminalId,
+      workspace_id:agent.workspaceId,tab_id:agent.tabId,pane_id:agent.paneId});
+    expect(snapshot.panes.find((pane:{pane_id:string})=>pane.pane_id===agent.paneId)).toMatchObject({
+      terminal_id:agent.terminalId,workspace_id:agent.workspaceId,tab_id:agent.tabId});
+    const reports=await owned.ssh.client(true,'lazysh-agent snapshot --limit 50');
+    expect(JSON.parse(await reports.finish('owned empty companion reports',5000))).toEqual({schemaVersion:1,sessions:[]});
     await owned.expectBytes(Buffer.alloc(0));
   } finally {await owned.stop();}
 },15_000);

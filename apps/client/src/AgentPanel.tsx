@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Bot, RefreshCw } from 'lucide-react';
 import ApprovalPanel from './ApprovalPanel';
+import HerdrAgentsPanel from './HerdrAgentsPanel';
 import KeepAwakeControl from './KeepAwakeControl';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
 import './AgentPanel.css';
@@ -151,6 +152,7 @@ export function AgentPanel({ sessionId,onUseReportedHistory,visible:panelVisible
     <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
     <ApprovalPanel sessionId={sessionId} visible={panelVisible} />
     <div className="tool-bar"><h3>{t('agentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />{busy ? t('agentsRefreshing') : t('agentsRefresh')}</button></div>
+    <HerdrAgentsPanel sessionId={sessionId} visible={panelVisible} />
     <p className="agent-note">{t('agentsReportedHint')}</p>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
     <div className="agent-discovery">

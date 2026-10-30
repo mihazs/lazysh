@@ -17,3 +17,10 @@
 .agent-panel .agent-card > button { margin-top: 10px; }
 
 .agent-panel[hidden], .agent-panel [hidden] { display: none; }
+
+.herdr-agents { margin: 18px; min-width: 0; overflow-wrap: anywhere; }
+.herdr-agents .tool-bar { padding: 0; flex-wrap: wrap; }
+.herdr-agents label { display: grid; gap: 8px; margin-block: 12px; }
+.herdr-agents :is(select,input) { width: 100%; min-width: 0; min-height: 44px; }
+.herdr-agents p { font-size: 12px; line-height: 1.6; }
+.herdr-agents .live-agent-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 12px; }

@@ -6,7 +6,7 @@ import { errorMessage } from './SessionTools';
 
 type Workspace = { workspace_id: string; label: string; focused: boolean; agent_status: string };
 type Tab = { tab_id: string; workspace_id: string; label: string; number: number; focused: boolean; agent_status: string };
-type Pane = { pane_id: string; workspace_id: string; tab_id: string; cwd: string; focused: boolean; agent_status: string };
+type Pane = { pane_id: string; workspace_id: string; tab_id: string; cwd?: string | null; focused: boolean; agent_status: string };
 type Tree = { workspaces: Workspace[]; tabs: Tab[]; panes: Pane[] };
 type Action =
   | { type: 'createWorkspace'; label: string; directory: string }
@@ -48,6 +48,9 @@ export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: 
     } catch (e) { if (generation.current === current) setError(errorMessage(e)); }
     finally { locked.current = false; if (generation.current === current) setBusy(false); }
   }
+  function split(pane: Pane, horizontal: boolean) {
+    if (pane.cwd) void run({ type: 'splitPane', target: pane.pane_id, horizontal, directory: pane.cwd });
+  }
   function begin(edit: Edit, initial = '') { setEdit(edit); setLabel(initial); }
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -68,7 +71,7 @@ export default function HerdrPanel({ sessionId, name, projectDirectory = '.' }: 
         <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'focusTab', target: tab.tab_id })}>{t('herdrFocus',{id:tab.tab_id})}</button><button className="subtle-button" disabled={busy} onClick={() => begin({ type: 'renameTab', target: tab.tab_id }, tab.label)}>{t('herdrRenameTab')}</button></div>
         {tree.panes.filter(pane => pane.tab_id === tab.tab_id).map(pane => <div className="mux-row" key={pane.pane_id}><div><strong>{pane.pane_id} · {pane.agent_status}{pane.focused ? ` · ${t('herdrFocused')}` : ''}</strong><small>{pane.cwd}</small></div>
           <button className="subtle-button" disabled={busy || pane.agent_status === 'unknown'} onClick={() => void run({ type: 'focusAgent', target: pane.pane_id })}>{t('herdrFocusAgent',{id:pane.pane_id})}</button><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'zoomPane', target: pane.pane_id })}>{t('muxZoom',{id:pane.pane_id})}</button>
-          <button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.pane_id, horizontal: true, directory: pane.cwd })}>{t('herdrSplitRight',{id:pane.pane_id})}</button><button className="subtle-button" disabled={busy} onClick={() => void run({ type: 'splitPane', target: pane.pane_id, horizontal: false, directory: pane.cwd })}>{t('herdrSplitDown',{id:pane.pane_id})}</button>
+          <button className="subtle-button" disabled={busy || !pane.cwd} onClick={() => split(pane, true)}>{t('herdrSplitRight',{id:pane.pane_id})}</button><button className="subtle-button" disabled={busy || !pane.cwd} onClick={() => split(pane, false)}>{t('herdrSplitDown',{id:pane.pane_id})}</button>
         </div>)}
       </details>)}
     </details>)}
