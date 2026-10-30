@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { steps: { name?: string; with?: { script?: string } }[] }>;
+  jobs: Record<string, { steps: { name?: string; run?: string; with?: { script?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -13,6 +13,19 @@ const commands = decoded.trim().split(/\r\n|\n|\r/).map(line => line.trim()).fil
 
 afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+test('Android SSH admission requires its user namespace and private NSS bind without Linux GUI network isolation', () => {
+  const steps = workflow.jobs['native-android-runtime'].steps;
+  const admission = steps.findIndex(step => step.name === 'Verify native SSH namespace prerequisites');
+  expect(admission).toBeGreaterThan(0);
+  expect(steps[admission - 1].run).toContain('bubblewrap');
+  const run = steps[admission].run!;
+  expect(run).toContain('/usr/bin/bwrap --die-with-parent --unshare-user --dev-bind / / --ro-bind "$namespace_group" /etc/group -- /usr/bin/true');
+  expect(run).toContain('trap');
+  expect(run).not.toMatch(/--unshare-(?:net|pid)|sudo|sysctl/);
+  const linux = workflow.jobs['native-linux'].steps.find(step => step.name === 'Verify native GUI namespace prerequisites')!.run!;
+  expect(linux).toContain('bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid');
 });
 
 test.each([
