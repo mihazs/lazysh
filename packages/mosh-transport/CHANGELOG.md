@@ -1,5 +1,11 @@
 # @lazysh/mosh-transport
 
+## 1.1.5
+
+### Patch Changes
+
+- 3c1171d: Keep active Mosh sessions alive after an empty nonblocking receive instead of treating “No packet received: Success” as fatal.
+
 ## 1.1.4
 
 No changes in this release.

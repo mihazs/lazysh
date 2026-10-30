@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/display-idle",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "private": true,
   "license": "GPL-3.0-or-later",
   "scripts": {

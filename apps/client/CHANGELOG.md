@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 1.1.5
+
+### Patch Changes
+
+- Updated dependencies [3c1171d]
+  - @lazysh/mosh-transport@1.1.5
+  - @lazysh/common@1.1.5
+  - @lazysh/display-idle@1.1.5
+  - @lazysh/et-transport@1.1.5
+
 ## 1.1.4
 
 ### Patch Changes
