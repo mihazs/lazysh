@@ -810,7 +810,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -834,7 +834,7 @@ mod tests {
             }
             fixture_request("list_hosts", headers)
         };
-        let settings_requests = |nonce: Option<&str>| {
+        let protected_requests = |nonce: Option<&str>| {
             let mut read = request(nonce);
             read.cmd = "get_companion_settings".into();
             read.body =
@@ -844,23 +844,32 @@ mod tests {
             update.body = tauri::ipc::InvokeBody::Json(
                 serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":false,"deviceToolsEnabled":false}}),
             );
-            [read, update]
+            let mut installer = request(nonce);
+            installer.cmd = "install_companion".into();
+            installer.body = tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"}),
+            );
+            [read, update, installer]
         };
         let rejected = |nonce: Option<&str>| {
-            for request in settings_requests(nonce) {
+            for request in protected_requests(nonce) {
                 let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
                 assert!(
                     error.is_string(),
-                    "invalid access must be denied before the settings backend"
+                    "invalid access must be denied before the protected backend"
                 );
             }
         };
         let admitted = |nonce: &str| {
-            for request in settings_requests(Some(nonce)) {
+            for request in protected_requests(Some(nonce)) {
+                let installer = request.cmd == "install_companion";
                 let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
+                if installer {
+                    assert!(error.get("phase").is_some_and(serde_json::Value::is_null));
+                }
                 assert_eq!(
                     error["kind"], "disconnected",
-                    "valid access must reach the real settings handler"
+                    "valid access must reach the real protected handler"
                 );
             }
         };

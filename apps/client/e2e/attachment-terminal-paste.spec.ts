@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {attachmentReceipt,attachmentUploadedPath} from '../src/test/attachmentData';
@@ -39,7 +40,7 @@ for(const scenario of [
   await expect(page.getByLabel('Terminal keys',{exact:true})).toBeVisible();
   await page.evaluate(bracketed=>window.attachmentPasteApp.emit((bracketed?'\x1b[?2004h':'\x1b[?2004l')+'paste-ready'),scenario.bracketed);
   await expect(page.locator('.xterm-screen')).toContainText('paste-ready');
-  await page.getByRole('button',{name:'Attach',exact:true}).click();
+  await (await workspaceControl(page,'Attach')).click();
   await page.getByLabel('Choose attachment',{exact:true}).setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('literal upload bytes')});
   await page.getByRole('button',{name:'Upload attachment',exact:true}).click();
   const prompt=page.getByRole('textbox',{name:'Editable prompt',exact:true});

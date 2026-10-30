@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
+import {StrictMode} from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
 import {applyAccessStatus} from './access';
+import HerdrAgentsPanel,{parseHerdrAgents} from './HerdrAgentsPanel';
 import {t,uiI18n} from './i18n/core';
 
-vi.mock('@tauri-apps/api/core', async original => ({...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn()}));
+vi.mock('@tauri-apps/api/core', async original => ({...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn(),Channel:class {onmessage?:unknown;}}));
 vi.mock('./ApprovalPanel', () => ({default: () => null}));
 const session = { sessionId: 'a', agent: 'Claude Code', project: '/work', state: 'needs_attention', updatedAt: '2026-10-24T19:30:00Z', summary: 'Permission requested', paneId: '%1', eventCount: 2 };
 let generation=0;
@@ -34,6 +36,7 @@ describe('agent activity', () => {
     render(<AgentPanel sessionId="ssh-one" />);
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('Connect your agents.')).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Install companion'})).toBeTruthy();
     expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   });
@@ -296,4 +299,150 @@ it('coalesces pending snapshots and keeps late old-source completion from unlock
     expect(screen.getByText('Current source report')).toBeTruthy();
     await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});expect(pending).toHaveLength(3);
   } finally {cleanup();vi.useRealTimers();}
+});
+
+it('refreshes a newly installed companion before a held pre-install read can publish its obsolete error',async()=>{
+  const {invoke}=await import('@tauri-apps/api/core');let reads=0;
+  let finishInstall!:(value:unknown)=>void,rejectOld!:(reason:unknown)=>void;
+  vi.mocked(invoke).mockImplementation(command=>{
+    if(command==='agent_snapshot'){
+      reads++;
+      if(reads===1)return Promise.reject({message:'Missing companion'});
+      if(reads===2)return new Promise((_resolve,reject)=>{rejectOld=reject;});
+      return Promise.resolve({schemaVersion:1,sessions:[session]});
+    }
+    if(command==='install_companion')return new Promise(resolve=>{finishInstall=resolve;});
+    return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+  });
+  render(<AgentPanel sessionId="install-race"/>);
+  fireEvent.click(await screen.findByRole('button',{name:'Install companion'}));
+  await screen.findByText('Missing companion');
+  fireEvent.click(screen.getByRole('button',{name:'Refresh'}));expect(reads).toBe(2);
+  await act(async()=>{finishInstall({schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/agent',cleanup:'complete'});});
+  expect(await screen.findByText('Permission requested')).toBeTruthy();expect(reads).toBe(3);
+  await act(async()=>{rejectOld({message:'Obsolete companion failure'});});
+  expect(screen.queryByText('Obsolete companion failure')).toBeNull();
+});
+
+describe('live Herdr discovery',()=>{
+  const tree={workspaces:[{workspace_id:'w1',label:'Work',focused:true,agent_status:'working'}],tabs:[{tab_id:'w1:t1',workspace_id:'w1',label:'Code',number:1,focused:true,agent_status:'working'}],panes:[{pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',cwd:'/work/codex',focused:true,agent_status:'working'}],agents:[{terminal_id:'term-one',name:'builder',agent:'codex',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',agent_status:'working'}]};
+  it.each(['missing','empty'])('shows Herdr Codex when companion reports are %s',async companion=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>{
+      if(command==='multiplexer_sessions')return [{name:'default'}];
+      if(command==='herdr_tree')return tree;
+      if(command==='agent_snapshot'){if(companion==='missing')throw new Error('companion missing');return {schemaVersion:1,sessions:[]};}
+      return {schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+    });
+    render(<AgentPanel sessionId="codex-host"/>);
+    expect(await screen.findByText('builder')).toBeTruthy();
+    const live=screen.getByRole('region',{name:'Live Herdr agents'});
+    expect(within(live).getByText('codex')).toBeTruthy();expect(within(live).getByText('/work/codex')).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith('herdr_tree',{sessionId:'codex-host',name:'default'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}});
+    expect(within(live).queryByRole('button',{name:/approve|send|history/i})).toBeNull();
+  });
+  it('projects only live agent metadata and rejects malformed, duplicate or unmatched rows',()=>{
+    const secret={...tree.agents[0],tokens:{secret:'must-not-leak'},agent_session:{transcript:'private'}};
+    expect(parseHerdrAgents({...tree,agents:[secret]})[0]).toEqual({...tree.agents[0],cwd:'/work/codex'});
+    expect(parseHerdrAgents({...tree,agents:undefined})).toEqual([]);
+    expect(parseHerdrAgents({...tree,panes:[{...tree.panes[0],cwd:null}]})[0].cwd).toBeNull();
+    for(const value of [null,{...tree,agents:{}},{...tree,agents:[tree.agents[0],tree.agents[0]]},
+      {...tree,agents:[{...tree.agents[0],agent_status:'approved'}]},
+      {...tree,agents:[{...tree.agents[0],pane_id:'w2:p1'}]},
+      {...tree,agents:[{...tree.agents[0],terminal_id:''}]},
+      {...tree,panes:[{...tree.panes[0],cwd:'/bad\u0000path'}]},
+      {...tree,agents:Array(4097).fill(tree.agents[0])}])expect(()=>parseHerdrAgents(value)).toThrow();
+  });
+  it('requires a server choice for multiple servers and never mixes same-pane agents across them',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      if(command==='multiplexer_sessions')return [{name:'first'},{name:'second'}];
+      if(command==='herdr_tree')return {...tree,agents:[{...tree.agents[0],name:`builder-${(args as {name:string}).name}`,agent_status:'idle'}]};
+      throw new Error('Unexpected live Herdr request');
+    });
+    render(<HerdrAgentsPanel sessionId="multi-host" visible/>);
+    const select=await screen.findByRole('combobox',{name:'Herdr server'});
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree')).toHaveLength(0);
+    fireEvent.change(select,{target:{value:'second'}});
+    await screen.findByText('builder-second');expect(screen.getByText('Idle')).toBeTruthy();
+    await waitFor(()=>expect((select as HTMLSelectElement).disabled).toBe(false));
+    fireEvent.change(select,{target:{value:'first'}});
+    await screen.findByText('builder-first');expect(screen.queryByText('builder-second')).toBeNull();
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree').map(([,args])=>(args as {name:string}).name)).toEqual(['second','first']);
+  });
+  it('suspends discovery when hidden and drops an old source before issuing its snapshot',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    let complete!:(value:unknown)=>void;
+    vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?new Promise(resolve=>{complete=resolve;}):Promise.resolve(tree));
+    const view=render(<HerdrAgentsPanel sessionId="old-host" visible={false}/>);
+    expect(invoke).not.toHaveBeenCalled();
+    view.rerender(<HerdrAgentsPanel sessionId="old-host" visible/>);
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    view.rerender(<HerdrAgentsPanel sessionId="new-host" visible={false}/>);
+    await act(async()=>complete([{name:'default'}]));
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree')).toHaveLength(0);
+    expect(screen.queryByText('builder')).toBeNull();
+  });
+  it('does not overlap periodic discovery while a server snapshot remains pending',async()=>{
+    vi.useFakeTimers();
+    try {
+      const {invoke}=await import('@tauri-apps/api/core');
+      let complete!:(value:unknown)=>void;
+      vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):new Promise(resolve=>{complete=resolve;}));
+      render(<HerdrAgentsPanel sessionId="bounded-host" visible/>);
+      await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});
+      expect(vi.mocked(invoke).mock.calls.map(([name])=>name)).toEqual(['multiplexer_sessions','herdr_tree']);
+      await act(async()=>complete(tree));expect(screen.getByText('builder')).toBeTruthy();
+      await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+      expect(vi.mocked(invoke).mock.calls.map(([name])=>name)).toEqual(['multiplexer_sessions','herdr_tree','multiplexer_sessions','herdr_tree']);
+    } finally {cleanup();vi.useRealTimers();}
+  });
+
+  it('starts the current discovery immediately after StrictMode replaces its first pending owner',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    render(<StrictMode><HerdrAgentsPanel sessionId="strict-host" visible/></StrictMode>);
+    expect(await screen.findByText('builder')).toBeTruthy();
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree')).toHaveLength(1);
+  });
+
+  it.each(['en','pt-BR','es'])('localizes live discovery and preserves unknown status in %s',async locale=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:[{...tree.agents[0],agent_status:'unknown'}]});
+    try {
+      await uiI18n.changeLanguage(locale);render(<HerdrAgentsPanel sessionId="localized-host" visible/>);
+      await screen.findByText('builder');
+      expect(screen.getByRole('region',{name:t('herdrAgentsTitle')})).toBeTruthy();
+      expect(screen.getByText(t('herdrAgentUnknown'))).toBeTruthy();
+      expect(screen.getByRole('combobox',{name:t('herdrAgentsServer')})).toBeTruthy();
+    } finally {await uiI18n.changeLanguage('en');}
+  });
+
+  it('keeps server selection usable after a failed server read and removes its old live rows',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      if(command==='multiplexer_sessions')return [{name:'offline'},{name:'online'}];
+      if((args as {name:string}).name==='offline')throw new Error('Owned server unavailable');
+      return tree;
+    });
+    render(<HerdrAgentsPanel sessionId="recover-host" visible/>);
+    const picker=await screen.findByRole('combobox',{name:'Herdr server'});
+    fireEvent.change(picker,{target:{value:'online'}});await screen.findByText('builder');
+    await waitFor(()=>expect((picker as HTMLSelectElement).disabled).toBe(false));
+    fireEvent.change(picker,{target:{value:'offline'}});await screen.findByText(/Owned server unavailable/);
+    expect(screen.queryByText('builder')).toBeNull();
+    fireEvent.change(picker,{target:{value:'online'}});await screen.findByText('builder');
+  });
+
+  it('does not publish live metadata or issue the next RPC after app access changes',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    let complete!:(value:unknown)=>void;
+    vi.mocked(invoke).mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
+    render(<HerdrAgentsPanel sessionId="locked-host" visible/>);
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    await act(async()=>{access(true);complete([{name:'default'}]);});
+    expect(screen.queryByText('builder')).toBeNull();
+    expect(vi.mocked(invoke).mock.calls.map(([name])=>name)).toEqual(['multiplexer_sessions']);
+  });
+
 });

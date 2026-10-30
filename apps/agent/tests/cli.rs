@@ -31,6 +31,11 @@ fn run_traced(
         || Command::new(&program),
         |(trace, worker)| trace.command(worker, &program),
     );
+    // The full native test process may opt into phase records; ordinary CLI
+    // children retain their normal stderr contract. Explicit traces opt in above.
+    if trace.is_none() {
+        command.env_remove("LAZYSH_STORAGE_DIAGNOSTICS");
+    }
     process::run(
         command
             .args(args)
@@ -290,33 +295,39 @@ fn opening_another_store_preserves_an_existing_sqlite_writer_lock() {
 
 #[test]
 fn simultaneous_initialization_and_ingest_preserve_every_event() {
-    for _ in 0..4 {
+    for round in 0..4 {
         let dir = tempfile::tempdir().unwrap();
         let barrier = std::sync::Barrier::new(16);
         let normalized = lazysh_agent::normalize(&event("same", "working"), Agent::Generic, None)
             .unwrap()
             .unwrap();
-        std::thread::scope(|scope| {
-            let workers = (0..16)
-                .map(|_| {
-                    scope.spawn(|| {
-                        barrier.wait();
-                        let mut store = Store::open(dir.path()).expect("concurrent Store::open");
-                        store
-                            .ingest(&normalized, chrono::Utc::now())
-                            .expect("concurrent ingest");
-                    })
-                })
-                .collect::<Vec<_>>();
-            for worker in workers {
-                worker.join().unwrap();
-            }
+        // Reference the round's spawn epoch without adding a barrier participant.
+        let epoch = std::time::Instant::now();
+        let workers = std::thread::scope(|scope| {
+            let workers = ContendedWorker::spawn(scope, &barrier, dir.path(), &normalized, epoch);
+            thread_join::join_workers(workers)
         });
+        if workers.iter().any(|worker| worker.result.is_err()) {
+            storage_trace::initialization_workers(round, &workers);
+        }
+        for worker in &workers {
+            worker.result.as_ref().expect(if worker.stage == "open" {
+                "concurrent Store::open"
+            } else {
+                "concurrent ingest"
+            });
+        }
         let mut store = Store::open(dir.path()).unwrap();
-        assert_eq!(
-            store.snapshot(50, chrono::Utc::now()).unwrap().sessions[0].event_count,
-            16
-        );
+        let count = store
+            .snapshot(50, chrono::Utc::now())
+            .unwrap()
+            .sessions
+            .first()
+            .map_or(0, |session| session.event_count);
+        if count != 16 {
+            storage_trace::initialization_workers(round, &workers);
+        }
+        assert_eq!(count, 16);
     }
 }
 
@@ -327,6 +338,49 @@ struct ContendedWorker {
     total_elapsed: std::time::Duration,
     stage: &'static str,
     result: lazysh_agent::Result<()>,
+}
+
+impl ContendedWorker {
+    fn spawn<'scope>(
+        scope: &'scope std::thread::Scope<'scope, '_>,
+        barrier: &'scope std::sync::Barrier,
+        directory: &'scope Path,
+        normalized: &'scope lazysh_agent::Event,
+        epoch: std::time::Instant,
+    ) -> Vec<std::thread::ScopedJoinHandle<'scope, Self>> {
+        (0..16)
+            .map(|_| {
+                scope.spawn(move || {
+                    barrier.wait();
+                    Self::ingest(directory, normalized, epoch)
+                })
+            })
+            .collect()
+    }
+    fn ingest(
+        directory: &Path,
+        normalized: &lazysh_agent::Event,
+        epoch: std::time::Instant,
+    ) -> Self {
+        let started = std::time::Instant::now();
+        let started_after = started.duration_since(epoch);
+        let opened = Store::open(directory);
+        let open_elapsed = started.elapsed();
+        let (stage, result) = match opened {
+            Ok(mut store) => match store.ingest(normalized, chrono::Utc::now()) {
+                Ok(()) => ("complete", Ok(())),
+                Err(error) => ("ingest", Err(error)),
+            },
+            Err(error) => ("open", Err(error)),
+        };
+        ContendedWorker {
+            started_after,
+            open_elapsed,
+            total_elapsed: started.elapsed(),
+            stage,
+            result,
+        }
+    }
 }
 
 fn exclusive_store() -> (tempfile::TempDir, rusqlite::Connection) {
@@ -346,43 +400,13 @@ fn contended_ingests(
         .unwrap();
     let epoch = std::time::Instant::now();
     let (workers, actual_hold) = std::thread::scope(|scope| {
-        let workers = (0..16)
-            .map(|_| {
-                scope.spawn(|| {
-                    barrier.wait();
-                    let started = std::time::Instant::now();
-                    let started_after = started.duration_since(epoch);
-                    let opened = Store::open(dir.path());
-                    let open_elapsed = started.elapsed();
-                    let (stage, result) = match opened {
-                        Ok(mut store) => match store.ingest(&normalized, chrono::Utc::now()) {
-                            Ok(()) => ("complete", Ok(())),
-                            Err(error) => ("ingest", Err(error)),
-                        },
-                        Err(error) => ("open", Err(error)),
-                    };
-                    ContendedWorker {
-                        started_after,
-                        open_elapsed,
-                        total_elapsed: started.elapsed(),
-                        stage,
-                        result,
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
+        let workers = ContendedWorker::spawn(scope, &barrier, dir.path(), &normalized, epoch);
         barrier.wait();
         let hold_started = std::time::Instant::now();
         std::thread::sleep(hold);
         blocker.execute_batch("ROLLBACK").unwrap();
         let actual_hold = hold_started.elapsed();
-        (
-            workers
-                .into_iter()
-                .map(|worker| worker.join().unwrap())
-                .collect::<Vec<_>>(),
-            actual_hold,
-        )
+        (thread_join::join_workers(workers), actual_hold)
     });
     let stored = Store::open(dir.path())
         .unwrap()

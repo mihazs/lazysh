@@ -12,7 +12,7 @@ pub async fn agent_approvals(
         .run(async {
             let session = state.session(&session_id).await?;
             Ok(serde_json::from_str(
-                &crate::ssh::exec_for_access(
+                &crate::companion::exec(
                     &session,
                     "lazysh-agent approval-list --limit 20".into(),
                     &access,
@@ -77,7 +77,7 @@ pub async fn resolve_agent_approval(
             )?;
             let session = state.session(&session_id).await?;
             Ok(serde_json::from_str(
-                &crate::ssh::exec_for_access(&session, command, &access).await?,
+                &crate::companion::exec(&session, command, &access).await?,
             )?)
         })
         .await

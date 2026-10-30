@@ -2,10 +2,11 @@ import { afterEach, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { steps: { name?: string; with?: { script?: string } }[] }>;
+  jobs: Record<string, { env?: Record<string,string>; steps: { name?: string; run?: string; with?: { script?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -14,6 +15,48 @@ const commands = decoded.trim().split(/\r\n|\n|\r/).map(line => line.trim()).fil
 afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
 });
+
+test('mandatory Linux namespaced SSH owner keeps private-TTY companion coverage outside Android runtime', () => {
+  const linux = workflow.jobs['native-linux'].steps;
+  const admission = linux.findIndex(step => step.name === 'Verify native GUI namespace prerequisites');
+  expect(linux[admission].run).toContain('bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid');
+  const owner = linux.findIndex(step => step.run?.includes('LAZYSH_TEST_SSH_USER_NAMESPACE=1'));
+  expect(owner).toBeGreaterThan(admission);
+  expect(linux[owner].run).toContain("bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH'");
+  expect(workflow.jobs['native-android-runtime'].steps.some(step => step.name === 'Verify native SSH namespace prerequisites')).toBe(false);
+  expect(decoded).toContain('test:android-ssh');
+});
+
+test('packaged companion UI acceptance has an explicit owned Android invocation',async()=>{
+  expect(workflow.jobs['native-android-runtime'].env?.LAZYSH_ANDROID_UI_COMPANION).toBe('1');
+  expect(decoded).toContain('test:android-ssh');
+  const pkg=await Bun.file(new URL('../apps/client/package.json',import.meta.url)).json();
+  expect(pkg.scripts['test:android']).toContain('NativeWorkspaceTest#ownedCompanionInstallsThroughRealUi');
+  const gradle=await Bun.file(new URL('../apps/client/src-tauri/gen/android/app/build.gradle.kts',import.meta.url)).text();
+  expect(gradle).toContain('lazyshCompanionAcceptance');
+  expect(gradle).toContain('outputs/androidTest-results/companion-ui');
+});
+
+test('actual Turbo task forwards companion opt-in and hosted metadata while filtering unrelated environment',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-android-turbo-'));temporary.push(directory);
+  const client=join(directory,'apps/client');await mkdir(client,{recursive:true});
+  const config=await Bun.file(new URL('../turbo.json',import.meta.url)).json();
+  const pkg=await Bun.file(new URL('../package.json',import.meta.url)).json();
+  await writeFile(join(directory,'package.json'),JSON.stringify({name:'owned-android-env',private:true,packageManager:pkg.packageManager,workspaces:['apps/*']}));
+  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{'test:android-ssh':'bun env-probe.ts'}}));
+  const keys=['LAZYSH_ANDROID_UI_COMPANION','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'];
+  await writeFile(join(client,'env-probe.ts'),`await Bun.write('../../observed.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),unrelatedFiltered:process.env.LAZYSH_UNRELATED_SENTINEL===undefined}));`);
+  for(const admitted of [true,false]) {
+    const task={...config.tasks['test:android-ssh']};
+    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>key!=='LAZYSH_ANDROID_UI_COMPANION');
+    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,'test:android-ssh':task}}));
+    await rm(join(directory,'observed.json'),{force:true});
+    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run','test:android-ssh','--filter=@lazysh/client','--only'],directory,
+      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',LAZYSH_ANDROID_UI_COMPANION:'1',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
+    await child.finish('actual Turbo task environment',10_000);
+    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:[admitted?'1':null,'true','github-hosted'],unrelatedFiltered:true});
+  }
+},25_000);
 
 test.each([
   { mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: false, overflow: false },

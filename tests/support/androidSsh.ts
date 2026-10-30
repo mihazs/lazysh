@@ -2,11 +2,12 @@ import {OwnedProcess, OUTPUT_LIMIT, identity} from './ownedProcess';
 import {SshFixture, sshCommand} from './sshFixture';
 export {SshFixture, listening, stopOwnedTree, type HerdrTools} from './sshFixture';
 export {OwnedProcess, identity, type OwnedPid} from './ownedProcess';
-import {mkdir, readlink, realpath, stat, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, readlink, realpath, stat, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import type {HerdrFixture} from './androidHerdr';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
+import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
 
 // Android 16 ApplicationExitInfo.dump fields; free-form descriptions/traces never leave memory.
 // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
@@ -285,12 +286,15 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
   return {observation:{ime:'aosp-latin' as const,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture) {
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(companion && (herdr || process.arch!=='x64' || process.env.GITHUB_ACTIONS!=='true' || process.env.RUNNER_ENVIRONMENT!=='github-hosted'))throw new Error('Published Android companion acceptance requires its explicit disposable hosted runner');
   const serial=process.env.ANDROID_SERIAL;
   if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
   const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
-  const fixture=herdr?.ssh??await SshFixture.start();
+  const evidence=companion?await publishedCompanion():undefined;
+  const fixture=herdr?.ssh??await (companion?SshFixture.start(undefined,{companion:true}):SshFixture.start());
+  const managed=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
   const remote=`/data/local/tmp/lazysh-ui-ssh-${fixture.nonce}`;
   let reverse:string|undefined;
   let remoteCreated=false;
@@ -304,6 +308,12 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let primary=false;
   const shell=(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args]);
   try {
+    if(evidence) {
+      const missing=await fixture.client(true,'if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
+      await missing.finish('no preinstalled Android companion fixture executable',5000);
+      await lstat(managed).then(()=>{throw new Error('Owned companion destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw new Error('Owned companion absence could not be verified');});
+      console.log(`Public Android companion receipt version=${evidence.version} source=${evidence.source} sha256=${evidence.sha256} bytes=${evidence.bytes}`);
+    }
     // The host allowlist key must match the concrete device port removed in cleanup.
     await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
     reverse=String(fixture.port);
@@ -311,7 +321,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:Number(reverse),username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{})}),{mode:0o600});
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{})}),{mode:0o600});
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
     try {[before,hostServerBefore]=await Promise.all([emulatorContinuity(adb,serial,reverse,fixture.port),hostAdbServerIdentity(adb)]);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
@@ -320,20 +330,25 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      herdr?'-PlazyshHerdrAcceptance=true':'-PlazyshSshAcceptance=true',
+      herdr?'-PlazyshHerdrAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':'-PlazyshSshAcceptance=true',
       ...(herdr?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr;
     try {await gradle.finish('actual Android SSH UI instrumentation',600_000);}
     finally {timing.gradleEndMs=crashes?.elapsedMs()??null;}
     await crashes?.stop();
+    if(evidence) {
+      await installedCompanion(fixture,evidence);
+      if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
+      console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
+    }
     if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
     console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;
     try {
-      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':'ssh-ui');
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':companion?'companion-ui':'ssh-ui');
       const crash=await crashes?.stop();
       // Sample before an inspection adb command could implicitly restart its server.
       const hostServerAfter=await hostAdbServerIdentity(adb);

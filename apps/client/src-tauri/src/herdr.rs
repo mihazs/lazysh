@@ -8,6 +8,8 @@ pub struct HerdrTree {
     pub workspaces: Vec<Workspace>,
     pub tabs: Vec<Tab>,
     pub panes: Vec<Pane>,
+    #[serde(default)]
+    pub agents: Vec<Agent>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Workspace {
@@ -27,12 +29,26 @@ pub struct Tab {
 }
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Pane {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<String>,
     pub pane_id: String,
     pub workspace_id: String,
     pub tab_id: String,
-    pub cwd: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
     pub focused: bool,
     pub agent_status: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Agent {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub agent_status: String,
+    pub agent: Option<String>,
+    pub name: Option<String>,
 }
 
 fn text(value: &str, max: usize) -> Result<()> {
@@ -81,23 +97,75 @@ fn parse(output: &str) -> Result<HerdrTree> {
         ));
     }
     let tree = value.result.snapshot;
-    if tree.workspaces.len() > 1000 || tree.tabs.len() > 2000 || tree.panes.len() > 4096 {
+    if tree.workspaces.len() > 1000
+        || tree.tabs.len() > 2000
+        || tree.panes.len() > 4096
+        || tree.agents.len() > 4096
+    {
         return Err(SshError::new(
             "output_too_large",
             "Herdr workspace tree is too large",
         ));
     }
+    let invalid = || SshError::new("invalid_output", "Invalid Herdr tree metadata");
+    let status = |value: &str| matches!(value, "idle" | "working" | "blocked" | "done" | "unknown");
+    let mut workspaces = std::collections::HashSet::new();
     for w in &tree.workspaces {
         target(&w.workspace_id, None)?;
+        if !workspaces.insert(w.workspace_id.as_str()) || !status(&w.agent_status) {
+            return Err(invalid());
+        }
     }
+    let mut tabs = std::collections::HashMap::new();
     for t in &tree.tabs {
         target(&t.workspace_id, None)?;
         target(&t.tab_id, Some('t'))?;
+        if !workspaces.contains(t.workspace_id.as_str())
+            || t.tab_id.split_once(':').map(|(workspace, _)| workspace)
+                != Some(t.workspace_id.as_str())
+            || tabs
+                .insert(t.tab_id.as_str(), t.workspace_id.as_str())
+                .is_some()
+            || !status(&t.agent_status)
+        {
+            return Err(invalid());
+        }
     }
+    let mut panes = std::collections::HashMap::new();
     for p in &tree.panes {
         target(&p.workspace_id, None)?;
         target(&p.tab_id, Some('t'))?;
         target(&p.pane_id, Some('p'))?;
+        if tabs.get(p.tab_id.as_str()).copied() != Some(p.workspace_id.as_str())
+            || p.pane_id.split_once(':').map(|(workspace, _)| workspace)
+                != Some(p.workspace_id.as_str())
+            || panes.insert(p.pane_id.as_str(), p).is_some()
+            || !status(&p.agent_status)
+            || p.terminal_id
+                .as_ref()
+                .is_some_and(|v| text(v, 256).is_err())
+            || p.cwd
+                .as_ref()
+                .is_some_and(|v| v.len() > 4096 || v.chars().any(char::is_control))
+        {
+            return Err(invalid());
+        }
+    }
+    let mut identities = std::collections::HashSet::new();
+    for a in &tree.agents {
+        if !identities.insert((&a.terminal_id, &a.pane_id))
+            || text(&a.terminal_id, 256).is_err()
+            || !status(&a.agent_status)
+            || !panes.get(a.pane_id.as_str()).is_some_and(|p| {
+                p.terminal_id.as_deref() == Some(a.terminal_id.as_str())
+                    && p.tab_id == a.tab_id
+                    && p.workspace_id == a.workspace_id
+            })
+            || a.agent.as_ref().is_some_and(|v| text(v, 200).is_err())
+            || a.name.as_ref().is_some_and(|v| text(v, 64).is_err())
+        {
+            return Err(invalid());
+        }
     }
     Ok(tree)
 }
@@ -249,6 +317,156 @@ pub async fn herdr_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn reported_snapshot() -> serde_json::Value {
+        serde_json::json!({"result":{"type":"session_snapshot","snapshot":{
+            "workspaces":[{"workspace_id":"w1","label":"Owned","focused":true,"agent_status":"working"}],
+            "tabs":[{"workspace_id":"w1","tab_id":"w1:t2","label":"Agent","number":1,"focused":true,"agent_status":"working"}],
+            "panes":[{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","terminal_id":"terminal-3","focused":true,"agent_status":"working"}],
+            "agents":[{"terminal_id":"terminal-3","workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","agent":"codex","name":null,"agent_status":"working"}]
+        }}})
+    }
+    #[test]
+    fn projects_reported_agents_without_fabricating_events_or_retaining_private_fields() {
+        for status in ["idle", "working", "blocked", "done", "unknown"] {
+            let mut source = reported_snapshot();
+            let agent = &mut source["result"]["snapshot"]["agents"][0];
+            agent["agent_status"] = status.into();
+            for key in [
+                "tokens",
+                "state_labels",
+                "agent_session",
+                "title",
+                "terminal_title",
+                "display_agent",
+            ] {
+                agent[key] = serde_json::json!({"private":"not retained"});
+            }
+            let tree = parse(&source.to_string()).unwrap();
+            assert_eq!(tree.agents[0].agent_status, status);
+            let projected = serde_json::to_value(&tree.agents[0]).unwrap();
+            assert_eq!(
+                projected,
+                serde_json::json!({"terminal_id":"terminal-3","workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","agent":"codex","name":null,"agent_status":status})
+            );
+            assert!(!serde_json::to_string(&tree)
+                .unwrap()
+                .contains("not retained"));
+        }
+    }
+    #[test]
+    fn accepts_legacy_snapshots_and_absent_null_or_known_directories() {
+        let mut legacy = reported_snapshot();
+        legacy["result"]["snapshot"]
+            .as_object_mut()
+            .unwrap()
+            .remove("agents");
+        legacy["result"]["snapshot"]["panes"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_id");
+        assert!(parse(&legacy.to_string()).unwrap().agents.is_empty());
+        for directory in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!("/owned/project")),
+        ] {
+            let mut source = reported_snapshot();
+            if let Some(value) = directory.clone() {
+                source["result"]["snapshot"]["panes"][0]["cwd"] = value;
+            }
+            let tree = parse(&source.to_string()).unwrap();
+            assert_eq!(
+                tree.panes[0].cwd.as_deref(),
+                directory.as_ref().and_then(|value| value.as_str())
+            );
+        }
+    }
+    #[test]
+    fn rejects_inconsistent_agent_and_parent_identity_or_unbounded_metadata() {
+        for (path, value) in [
+            (
+                "/result/snapshot/agents/0/agent_status",
+                serde_json::json!("needs_attention"),
+            ),
+            (
+                "/result/snapshot/agents/0/terminal_id",
+                serde_json::json!("different-terminal"),
+            ),
+            (
+                "/result/snapshot/agents/0/pane_id",
+                serde_json::json!("w1:p99"),
+            ),
+            (
+                "/result/snapshot/agents/0/workspace_id",
+                serde_json::json!("w2"),
+            ),
+            (
+                "/result/snapshot/agents/0/tab_id",
+                serde_json::json!("w1:t99"),
+            ),
+            (
+                "/result/snapshot/agents/0/agent",
+                serde_json::json!("x".repeat(201)),
+            ),
+            (
+                "/result/snapshot/agents/0/name",
+                serde_json::json!("x".repeat(65)),
+            ),
+            (
+                "/result/snapshot/agents/0/terminal_id",
+                serde_json::json!("x".repeat(257)),
+            ),
+            (
+                "/result/snapshot/agents/0/terminal_id",
+                serde_json::json!("terminal\n3"),
+            ),
+            (
+                "/result/snapshot/tabs/0/workspace_id",
+                serde_json::json!("w2"),
+            ),
+            (
+                "/result/snapshot/panes/0/tab_id",
+                serde_json::json!("w1:t99"),
+            ),
+        ] {
+            let mut source = reported_snapshot();
+            *source.pointer_mut(path).unwrap() = value;
+            assert!(parse(&source.to_string()).is_err(), "accepted {path}");
+        }
+        let mut source = reported_snapshot();
+        source["result"]["snapshot"]["panes"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_id");
+        assert!(
+            parse(&source.to_string()).is_err(),
+            "agent without matching terminal"
+        );
+    }
+    #[test]
+    fn rejects_duplicate_tree_identities_and_excess_collection_counts() {
+        for key in ["workspaces", "tabs", "panes", "agents"] {
+            let mut source = reported_snapshot();
+            let rows = source["result"]["snapshot"][key].as_array_mut().unwrap();
+            rows.push(rows[0].clone());
+            assert!(parse(&source.to_string()).is_err(), "duplicate {key}");
+        }
+        for (key, count) in [
+            ("workspaces", 1001),
+            ("tabs", 2001),
+            ("panes", 4097),
+            ("agents", 4097),
+        ] {
+            let mut source = reported_snapshot();
+            let rows = source["result"]["snapshot"][key].as_array_mut().unwrap();
+            rows.resize(count, rows[0].clone());
+            assert_eq!(
+                parse(&source.to_string()).unwrap_err().kind(),
+                "output_too_large",
+                "{key}"
+            );
+        }
+    }
     #[test]
     #[ignore = "requires herdr on PATH; runs an isolated headless server"]
     fn real_herdr_lifecycle_and_tree() {
@@ -256,6 +474,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let configure = |command: &mut Command| {
             command
+                .env("HOME", temp.path())
+                .env("ZDOTDIR", temp.path())
+                .env("SHELL", "/bin/sh")
+                .env_remove("ENV")
+                .env_remove("BASH_ENV")
+                .current_dir(temp.path())
                 .env("XDG_CONFIG_HOME", temp.path())
                 .env("HERDR_CONFIG_PATH", temp.path().join("config.toml"))
                 .env_remove("HERDR_SOCKET_PATH")
@@ -300,18 +524,37 @@ mod tests {
         }
         assert!(ready, "isolated Herdr server did not become ready");
         let session = "default";
+        run(action_command(
+            session,
+            &HerdrAction::CreateWorkspace {
+                label: "owned".into(),
+                directory: temp.path().to_str().unwrap().into(),
+            },
+        )
+        .unwrap());
         let snapshot = || parse(&run(command(session, "api snapshot".into()).unwrap())).unwrap();
         let tree = snapshot();
         let workspace = tree.workspaces[0].workspace_id.clone();
         let pane = tree.panes[0].pane_id.clone();
+        let terminal = tree.panes[0].terminal_id.clone().unwrap();
+        let tab = tree.panes[0].tab_id.clone();
         run(command(
             session,
             format!(
-                "pane report-agent --source lazysh-test --agent lazysh-test --state idle {}",
+                "pane report-agent --source lazysh-test --agent codex --state blocked {}",
                 quote(&pane)
             ),
         )
         .unwrap());
+        let reported = snapshot();
+        assert_eq!(reported.agents.len(), 1);
+        let agent = &reported.agents[0];
+        assert_eq!(agent.agent.as_deref(), Some("codex"));
+        assert_eq!(agent.agent_status, "blocked");
+        assert_eq!(agent.terminal_id, terminal);
+        assert_eq!(agent.workspace_id, workspace);
+        assert_eq!(agent.tab_id, tab);
+        assert_eq!(agent.pane_id, pane);
         run(action_command(
             session,
             &HerdrAction::FocusAgent {

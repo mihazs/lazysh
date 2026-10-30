@@ -1,6 +1,7 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<crate::ssh::SshError>>;
-use crate::ssh::{exec_for_access, quote, AppState, Result, SshError};
+use crate::companion::exec as exec_for_access;
+use crate::ssh::{quote, AppState, Result, SshError};
 use tauri::State;
 pub mod stream;
 pub use stream::DeviceStreams;

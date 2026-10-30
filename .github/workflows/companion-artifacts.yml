@@ -72,14 +72,14 @@ jobs:
           else
             bun .changeset/release-companion.ts candidate ${{ matrix.target }} "$RUNNER_TEMP/companion-installation-files"
           fi
-      - name: Observe the exact Windows concurrent initialization owner with finite phases
+      - name: Observe full Windows CLI, WAL and installation owners with finite phases
         if: runner.os == 'Windows'
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
         run: |
           spool="$RUNNER_TEMP/owned-initialization-diagnostics.log"
           set +e
-          LAZYSH_STORAGE_DIAGNOSTICS=1 cargo test --locked --package lazysh-agent --test cli simultaneous_initialization_and_ingest_preserve_every_event -- --exact --nocapture 2>&1 | LAZYSH_STORAGE_SPOOL="$spool" bun -e '
+          LAZYSH_STORAGE_DIAGNOSTICS=1 cargo test --locked --package lazysh-agent --test cli --test settings --test storage_wal --test installation 2>&1 | LAZYSH_STORAGE_SPOOL="$spool" bun -e '
             let output, failed = false;
             try { output = Bun.file(process.env.LAZYSH_STORAGE_SPOOL).writer(); }
             catch { failed = true; }
@@ -108,6 +108,7 @@ jobs:
           if [ "$projection" -ne 0 ]; then exit "$projection"; fi
           exit "$cleanup"
       - name: Native host harness runs CLI, WAL and installation owners against the exact prepared executable
+        if: runner.os != 'Windows'
         env:
           LAZYSH_TEST_COMPANION_BINARY: ${{ steps.prepare.outputs.binary }}
         run: cargo test --locked --package lazysh-agent --test cli --test settings --test storage_wal --test installation

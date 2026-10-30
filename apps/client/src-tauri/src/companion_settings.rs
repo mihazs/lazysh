@@ -55,12 +55,8 @@ pub async fn get_companion_settings(
         .run(async {
             let session = state.session(&session_id).await?;
             parse(
-                &crate::ssh::exec_for_access(
-                    &session,
-                    "lazysh-agent settings show".into(),
-                    &access,
-                )
-                .await?,
+                &crate::companion::exec(&session, "lazysh-agent settings show".into(), &access)
+                    .await?,
             )
         })
         .await
@@ -76,7 +72,7 @@ pub async fn update_companion_settings(
         .run(async {
             let command = update_command(&settings)?;
             let session = state.session(&session_id).await?;
-            parse(&crate::ssh::exec_for_access(&session, command, &access).await?)
+            parse(&crate::companion::exec(&session, command, &access).await?)
         })
         .await
 }

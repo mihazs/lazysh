@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {pseudoEnglish} from '../src/test/pseudoLocale';
@@ -63,7 +64,7 @@ test('Paste draft returns keyboard Enter to the existing terminal without losing
 test('system and English persist, reset safely, and locale changes preserve the existing live terminal',async({page})=>{
   await fixture(page);await expect(page.locator('html')).toHaveAttribute('lang','en-GB');
   const {screen,canvas}=await connectedTerminal(page);
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   const language=page.getByRole('combobox',{name:'App language',exact:true});
   await expect(language).toBeVisible();
   expect(await language.locator('option').evaluateAll(options=>options.map(option=>(option as HTMLOptionElement).value))).toEqual(['system','en','pt-BR','es']);
@@ -73,7 +74,7 @@ test('system and English persist, reset safely, and locale changes preserve the 
   expect(await page.evaluate(()=>window.localeFixture.calls.includes('local_disconnect'))).toBe(false);
   await page.keyboard.press('Escape');await expect(screen).toContainText('RAW C-b, {{text}} 世界');
   await page.reload();await expect(page.locator('html')).toHaveAttribute('lang','en');
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   await expect(page.getByRole('combobox',{name:'App language',exact:true})).toHaveValue('en');
   await page.getByRole('button',{name:'Reset preferences',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('lang','en-GB');
@@ -114,7 +115,7 @@ test('pseudo expansion preserves host drafts, native diagnostics, keyboard focus
   expect(await page.evaluate(()=>window.localeFixture.calls.includes('save_host'))).toBe(false);
   await page.keyboard.press('Escape');
   if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:pseudo.appCloseHosts,exact:true}).click();
-  await page.getByRole('button',{name:pseudo.appPreferences,exact:true}).click();
+  await (await workspaceControl(page,pseudo.appPreferences)).click();
   await expect(page.getByRole('combobox',{name:pseudo.language,exact:true})).toBeVisible();
   expect(await page.getByRole('combobox',{name:pseudo.language,exact:true}).locator('option').evaluateAll(options=>options.map(option=>(option as HTMLOptionElement).value))).toEqual(['system','en','pt-BR','es']);
   await page.getByText(pseudo.preferencesTerminalTouchGestures,{exact:true}).click();
@@ -138,7 +139,7 @@ for(const locale of [
 ] as const) test(`${locale.code} selection translates real workflows, persists, and keeps live terminal and host draft identities`,async({page})=>{
   await fixture(page);
   const {screen,canvas:terminal}=await connectedTerminal(page);
-  await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   await page.getByRole('combobox',{name:'App language',exact:true}).selectOption(locale.code);
   await expect(page.locator('html')).toHaveAttribute('lang',locale.code);
   await expect(page.getByRole('heading',{name:locale.heading,exact:true})).toBeVisible();
@@ -176,7 +177,7 @@ for(const locale of [
   expect(await page.evaluate(()=>window.localeFixture.calls.filter(command=>command==='local_connect'))).toHaveLength(1);
   expect(await page.evaluate(()=>window.localeFixture.calls.includes('local_disconnect'))).toBe(false);
   await page.reload();await expect(page.locator('html')).toHaveAttribute('lang',locale.code);
-  await page.getByRole('button',{name:locale.preferences,exact:true}).click();
+  await (await workspaceControl(page,locale.preferences)).click();
   await expect(page.getByRole('combobox',{name:locale.language,exact:true})).toHaveValue(locale.code);
   await page.getByRole('button',{name:locale.reset,exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('lang','en-GB');
@@ -189,7 +190,7 @@ for(const system of [
 ]) test(`System selects bundled resources for ${system.languages.join(',')} without persisting a guessed override`,async({page})=>{
   await fixture(page,system.languages);
   await expect(page.locator('html')).toHaveAttribute('lang',system.locale);
-  await page.getByRole('button',{name:system.preferences,exact:true}).click();
+  await (await workspaceControl(page,system.preferences)).click();
   await expect(page.getByRole('combobox',{name:system.language,exact:true})).toHaveValue('system');
   await expect(page.getByRole('option',{name:system.system,exact:true})).toHaveAttribute('value','system');
   expect(await page.evaluate(()=>localStorage.getItem('lazysh.preferences.v1'))).toBeNull();

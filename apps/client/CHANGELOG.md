@@ -1,5 +1,35 @@
 # @lazysh/client
 
+## 1.1.7
+
+### Patch Changes
+
+- b835cbd: Show live Herdr-reported Codex and other agent panes even when companion lifecycle reports are empty or unavailable, with explicit server selection and distinct live statuses.
+- @lazysh/common@1.1.7
+  - @lazysh/display-idle@1.1.7
+  - @lazysh/et-transport@1.1.7
+  - @lazysh/mosh-transport@1.1.7
+
+## 1.1.6
+
+### Patch Changes
+
+- efa13fd: Enable terminal touch scrolling in Herdr and other full-screen apps, and give active phone terminals one compact header with secondary controls in More.
+- @lazysh/common@1.1.6
+  - @lazysh/display-idle@1.1.6
+  - @lazysh/et-transport@1.1.6
+  - @lazysh/mosh-transport@1.1.6
+
+## 1.1.5
+
+### Patch Changes
+
+- Updated dependencies [3c1171d]
+  - @lazysh/mosh-transport@1.1.5
+  - @lazysh/common@1.1.5
+  - @lazysh/display-idle@1.1.5
+  - @lazysh/et-transport@1.1.5
+
 ## 1.1.4
 
 ### Patch Changes

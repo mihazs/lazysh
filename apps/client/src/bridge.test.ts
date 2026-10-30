@@ -5,6 +5,15 @@ import {api} from './bridge';
 import {registerSessionOutput,disposeSessionOutput} from './pendingSessions';
 import { accessSnapshot, acknowledgeAccessReady, applyAccessStatus } from './access';
 beforeEach(()=>invoke.mockClear());
+it('sends installation through one protected native command with no renderer URL or binary data',async()=>{
+  const progress=vi.fn();
+  await api.installCompanion('ssh-installer',progress);
+  expect(invoke).toHaveBeenCalledWith('install_companion',{sessionId:'ssh-installer',progress:expect.any(Object)},expect.anything());
+  expect(Object.keys(invoke.mock.calls[0][1]).sort()).toEqual(['progress','sessionId']);
+  const channel=invoke.mock.calls[0][1].progress;
+  channel.onmessage({stage:'uploading'});expect(progress).not.toHaveBeenCalled();
+  invoke.mockClear();await expect(api.installCompanion('local:owned',progress)).rejects.toThrow('SSH connection');expect(invoke).not.toHaveBeenCalled();
+});
 it('submits a complete sequence through one protected native request for either transport',async()=>{
   for (const [id,command] of [['local:sequence','local_write'],['ssh-sequence','write_stdin']]) {
     await api.writeSequence(id,['\x02','T']);

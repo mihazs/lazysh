@@ -1,8 +1,10 @@
 import {expect,test} from 'bun:test';
-import {readFile,stat} from 'node:fs/promises';
+import {chmod,mkdir,readFile,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
+import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -20,6 +22,48 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
     await expect(rejected.finish('no ephemeral credential',5000)).rejects.toThrow('Owned fixture failed: no ephemeral credential');
   } finally {await fixture.stop();}
   expect(await listening(port)).toBe(false);
+},15_000);
+
+async function verifyCompanionFixture(privateTtyGroup:boolean) {
+  const fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup});
+  try {
+    const command=await fixture.client(true,'printf "%s\\n" "$HOME" "$XDG_DATA_HOME" "$LAZYSH_STATE_DIR"; if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
+    expect((await command.finish('owned companion exec environment',5000)).trim().split('\n')).toEqual([fixture.directory,join(fixture.directory,'data'),join(fixture.directory,'state')]);
+    const bytes=Buffer.from(`OWNED-SFTP:${fixture.nonce}`),source=join(fixture.directory,'source'),returned=join(fixture.directory,'returned');
+    await writeFile(source,bytes,{mode:0o600,flag:'wx'});
+    const transfer=await fixture.sftp();
+    transfer.child.stdin!.end(`put ${source} upload\nget upload ${returned}\nrm upload\nbye\n`);
+    await transfer.finish('owned companion SFTP roundtrip',5000);
+    expect(await readFile(returned)).toEqual(bytes);
+    const client=await fixture.client();
+    client.child.stdin!.end(`${fixture.challenge}\nexit\n`);
+    const output=await client.finish('owned long-lived companion shell',5000);
+    expect(output.includes(fixture.prompt) && output.includes(fixture.expected)).toBe(true);
+  } finally {await fixture.stop();}
+  expect(await listening(fixture.port)).toBe(false);
+  await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+}
+
+test.skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools',()=>verifyCompanionFixture(false),15_000);
+
+test.skipIf(process.platform!=='linux')('installed companion evidence rejects wrong bytes, public mode, links and staging residue',async()=>{
+  const fixture=await SshFixture.start(undefined,{companion:true});
+  const parent=join(fixture.directory,'data/lazysh/companion'),path=join(parent,'lazysh-agent');
+  const bytes=Buffer.from("#!/bin/sh\nprintf 'lazysh-agent 1.2.3\\n'\n");
+  const evidence:PublishedCompanion={releaseId:1,assetId:2,version:'1.2.3',source:'a'.repeat(40),name:'owned-test',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+  try {
+    await mkdir(parent,{recursive:true,mode:0o700});await writeFile(path,bytes,{mode:0o700,flag:'wx'});
+    const first=await installedCompanion(fixture,evidence);
+    expect((await installedCompanion(fixture,evidence)).identity).toEqual(first.identity);
+    await expect(installedCompanion(fixture,{...evidence,sha256:'0'.repeat(64)})).rejects.toThrow();
+    await chmod(path,0o744);await expect(installedCompanion(fixture,evidence)).rejects.toThrow();await chmod(path,0o700);
+    const alternate=join(parent,'owned-version');await writeFile(alternate,bytes,{mode:0o700,flag:'wx'});
+    await unlink(path);await symlink(alternate,path);await expect(installedCompanion(fixture,evidence)).rejects.toThrow();
+    expect(await readFile(alternate)).toEqual(bytes);
+    await unlink(path);await writeFile(path,bytes,{mode:0o700,flag:'wx'});
+    await mkdir(join(fixture.directory,'.lazysh-install-owned'),{mode:0o700});
+    await expect(installedCompanion(fixture,evidence)).rejects.toThrow();
+  } finally {await fixture.stop();}
 },15_000);
 
 test.skipIf(process.platform!=='linux')('owned server teardown retires an admitted interactive shell and client',async()=>{
@@ -45,6 +89,7 @@ test.skipIf(process.platform!=='linux')('owned server teardown retires an admitt
 
 test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced SSH preserves host groups and rejects lost supervisor ownership',async()=>{
   const groups=await readFile('/etc/group');
+  await verifyCompanionFixture(true);
   const fixture=await SshFixture.start(undefined,{privateTtyGroup:true});
   try {
     const client=await fixture.client();
@@ -73,6 +118,10 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app perform
   await androidSshAcceptance();
 },610_000);
 
+test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app installs and reuses the verified public companion through its UI',async()=>{
+  await androidSshAcceptance(undefined,undefined,true);
+},610_000);
+
 // Real tools are explicit; ordinary host checks never download or guess a binary.
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr SSH exec reads its real companion transcript in the private namespace',async()=>{
   const owned=await HerdrFixture.start(herdrTools());
@@ -83,6 +132,15 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(JSON.stringify(value.messages)).toContain(owned.record);
     const listing=await owned.ssh.client(true,'herdr session list --json');
     expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
+    const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
+    const {agent}=owned.metadata();
+    expect(snapshot.agents).toHaveLength(1);
+    expect(snapshot.agents[0]).toMatchObject({agent:'codex',agent_status:'unknown',terminal_id:agent.terminalId,
+      workspace_id:agent.workspaceId,tab_id:agent.tabId,pane_id:agent.paneId});
+    expect(snapshot.panes.find((pane:{pane_id:string})=>pane.pane_id===agent.paneId)).toMatchObject({
+      terminal_id:agent.terminalId,workspace_id:agent.workspaceId,tab_id:agent.tabId});
+    const reports=await owned.ssh.client(true,'lazysh-agent snapshot --limit 50');
+    expect(JSON.parse(await reports.finish('owned empty companion reports',5000))).toEqual({schemaVersion:1,sessions:[]});
     await owned.expectBytes(Buffer.alloc(0));
   } finally {await owned.stop();}
 },15_000);

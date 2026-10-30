@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Discover live Codex and other agent panes reported by Herdr independently of companion lifecycle reports. A single running Herdr server is selected automatically; choose a server when several are running. Only that server is refreshed, and its Idle, Working, Needs attention, Done and Unknown statuses remain distinct from companion history. No input, approval or history authority is inferred from discovery.
+
+- Enable direct vertical touch scrolling through the terminal’s wheel handling, including Herdr mouse reporting and alternate-screen applications. Active phone terminals now default to one compact header: single-session tabs, tool navigation and the workspace restore prompt collapse into More, where their actions remain reachable. Multiple-session navigation, desktop/nonterminal layouts, terminal keys above the keyboard and accessibility gestures remain supported.
+
+- Keep Mosh sessions alive when UDP readiness has drained instead of closing with “No packet received: Success”. Later authenticated traffic resumes on the same client; genuine socket/protocol errors, explicit shutdown, output bounds and connection defaults are unchanged.
+
 - Read Android primary clipboard text and PNG/JPEG images through protected foreground native operations when Paste is explicitly requested. Terminal Paste reports busy and temporarily disables repeated requests while its existing owned read settles. Paste stays literal without Enter; images open in attachment preview and still require a separate Upload action. Existing access locks and payload limits remain in place. Platform metadata is checked before Paste so other-platform browser reads start within the click; failed checks offer a metadata-only retry.
 
 - Keep mobile settings, attachment and tool-panel text inside consistent gutters, align wrapped form and transcript checkbox labels beside their controls, and separate workspace restore actions from their explanation. Expose per-host default multiplexer editing from Preferences, including Herdr. Connection and multiplexer defaults are unchanged.
@@ -29,6 +35,8 @@
 - Add persistent Connections, Workspaces and Agents navigation to the existing sidebar/drawer. Connections remains the default; agent drafts persist while hidden owners suspend activity, and Jump To uses one guarded persistent tmux picker.
 
 - Add verified companion executable builds to future complete release sets for Linux x64/ARM64, macOS Intel/ARM64 and Windows x64. Candidate checks create no publication receipts; trusted release builds retain exact source/version/hash and staged-byte CLI/storage gates. Existing companion/data defaults and deferred Apple application packages are unchanged; in-app installation remains separate work.
+
+- Add an explicit in-app Install/Update companion action for supported Linux and macOS hosts, including when agent loading fails. It verifies published release bytes, transfers through the current SSH connection, preserves uncertain outcomes and uses the managed executable for subsequent companion commands. Missing managed installations retain legacy PATH behavior. Installation never starts automatically or changes host permissions, agent hooks or PATH; Windows installation remains separate work.
 
 - Add reported-agent search, status filters and selected-report context while preserving explicit refresh, history and approval ownership. Reported pane IDs remain context; application defaults are unchanged.
 

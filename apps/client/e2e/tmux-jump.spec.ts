@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import { expect, test } from '@playwright/test';
 
 declare global { interface Window {
@@ -45,7 +46,7 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
   expect(await page.evaluate(()=>window.tmuxJumpFixture.attachments.map(({sessionId,name,tmuxServer})=>({sessionId,name,...(tmuxServer===undefined?{}:{tmuxServer})})))).toEqual([{sessionId:'ssh-2',name:'work',...(server===undefined?{}:{tmuxServer:server})}]);
   await expect(page.getByRole('button',{name:'Jump To',exact:true})).toHaveCount(0);
   await page.getByRole('tab',{name:'Fixture / work',exact:true}).click();
-  const trigger=page.getByRole('button',{name:'Jump To',exact:true});
+  const trigger=await workspaceControl(page,'Jump To');
   await expect(trigger).toBeVisible();
   const bounds=await trigger.boundingBox();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -79,17 +80,17 @@ for(const server of [undefined, "世界 '$(touch NO);"])test(`attached display J
   for(const value of ['list','accordion']){
     await layout.selectOption(value);
     await dialog.getByRole('button',{name:'0: agent · Current',exact:true}).click();
-    if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await trigger.click();}
+    if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await (await workspaceControl(page,'Jump To')).click();}
     else await expect(dialog).toBeVisible();
     await expect(layout).toHaveValue(value);
   }
   expect(await page.evaluate(()=>window.tmuxJumpFixture.jumps)).toEqual([]);
   await layout.selectOption('list');
   await dialog.getByRole('button',{name:'1: compiler',exact:true}).click();
-  if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await trigger.click();}
+  if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await (await workspaceControl(page,'Jump To')).click();}
   await expect(dialog.getByRole('button',{name:'1: compiler · Current',exact:true})).toHaveAttribute('aria-current','location');
   await dialog.getByRole('button',{name:'0: agent',exact:true}).click();
-  if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await trigger.click();}
+  if(testInfo.project.name==='phone'){await expect(dialog).toHaveCount(0);await (await workspaceControl(page,'Jump To')).click();}
   await expect(dialog.getByRole('button',{name:'0: agent · Current',exact:true})).toHaveAttribute('aria-current','location');
   expect((await page.evaluate(()=>window.tmuxJumpFixture.jumps))[1]).toMatchObject({generation:'returned-1',targetSessionId:'$1',windowId:'@1'});
   await page.screenshot({path:testInfo.outputPath('workspace-navigation.png')});

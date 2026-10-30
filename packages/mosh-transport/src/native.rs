@@ -120,6 +120,12 @@ unsafe extern "C" {
     fn lazysh_mosh_test_set_errno(value: c_int);
     #[cfg(test)]
     fn lazysh_mosh_test_receive_mtu() -> usize;
+    #[cfg(test)]
+    fn lazysh_mosh_test_receive_empty(
+        client: *mut c_void,
+        error: *mut c_char,
+        capacity: usize,
+    ) -> c_int;
 }
 
 fn operation(call: impl FnOnce(*mut c_char, usize) -> c_int) -> Result<()> {
@@ -452,6 +458,37 @@ mod tests {
         assert!(client.poll().unwrap().bytes.is_empty());
         client.pause_output(false).unwrap();
         assert!(String::from_utf8_lossy(&client.poll().unwrap().bytes).contains("LATEST_LOCKED"));
+    }
+    #[test]
+    fn drained_receive_is_nonfatal_and_same_client_accepts_later_traffic() {
+        let (mut client, socket, address) = fake_server();
+        for (old, new, text) in [(0, 1, "BEFORE_DRAIN"), (1, 2, "AFTER_DRAIN")] {
+            for _ in 0..3 {
+                let _guard = locked().unwrap();
+                operation(|error, capacity| {
+                    // SAFETY: this client is exclusively owned, its sockets are empty,
+                    // and the serialized native boundary contains all exceptions.
+                    unsafe {
+                        lazysh_mosh_test_receive_empty(client.pointer.as_ptr(), error, capacity)
+                    }
+                })
+                .unwrap();
+            }
+            socket
+                .send_to(&packet(true, old, new, 0, &host_bytes(text)), address)
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let update = client.poll().unwrap();
+                assert!(!update.finished);
+                if String::from_utf8_lossy(&update.bytes).contains(text) {
+                    assert!(update.connected);
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                client.wait(Duration::from_millis(10)).unwrap();
+            }
+        }
     }
     #[test]
     fn unauthenticated_oversize_datagram_is_dropped_before_valid_traffic() {

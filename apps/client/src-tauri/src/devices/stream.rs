@@ -92,6 +92,12 @@ pub(crate) async fn receive(
     if *cancel.borrow() || *disconnected.borrow() {
         return Ok(());
     }
+    let command = tokio::select! {biased;
+        _=access.cancelled()=>return Ok(()),
+        _=cancel.changed()=>return Ok(()),
+        _=disconnected.changed()=>return Ok(()),
+        result=crate::companion::command(&session,command,&access)=>result?,
+    };
     let mut channel = tokio::select! { biased;
         _=access.cancelled()=>return Ok(()),
         _=cancel.changed()=>return Ok(()),
