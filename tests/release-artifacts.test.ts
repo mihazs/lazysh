@@ -637,6 +637,12 @@ $empty=[Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject([OwnedM
 $failed=$false
 try {$null=$empty.Start('owned',[string[]]@(),'',[string]::new([char]0,2))}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'TOKEN_UNAVAILABLE'}
 if(!$failed -or [OwnedMediumGui]::TokenFailure -cne 'LAUNCHER_STATE'){throw 'terminal token reason not preserved'}
+$word=[OwnedMediumGui].GetMethod('Word',[Reflection.BindingFlags]'NonPublic,Static')
+foreach($kind in @(-1,0,1,2,3,19,25,27,[int]::MaxValue)){
+  $failed=$false
+  try{$null=$word.Invoke($null,@([IntPtr]::Zero,[int]$kind))}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'TOKEN_UNAVAILABLE'}
+  if(!$failed -or [OwnedMediumGui]::TokenFailure -cne 'SCALAR_LAYOUT'){throw 'unsupported scalar class reached native API'}
+}
 $quoted=[OwnedMediumGui]::Command('tool',[string[]]@('space value','quote"value','trailing\',''))
 foreach ($value in @([string]::new([char]'x',1020),('bad'+[char]0))) {
   $rejected=$false;try {$null=[OwnedMediumGui]::Command('tool',[string[]]@($value))}catch{$rejected=$true};if(!$rejected){throw 'native command bound admitted'}

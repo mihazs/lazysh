@@ -901,6 +901,7 @@ public sealed class OwnedMediumGui : System.IDisposable {
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr data,uint length,out uint needed);
+  [DllImport("advapi32.dll",EntryPoint="GetTokenInformation",SetLastError=true)] static extern bool GetTokenUInt(IntPtr token,int kind,out uint value,uint length,out uint used);
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool LookupPrivilegeValue(string host,string name,out Luid id);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool DuplicateTokenEx(IntPtr source,uint access,IntPtr attributes,int level,int type,out IntPtr token);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool CreateRestrictedToken(IntPtr source,uint flags,uint count,IntPtr disabled,uint deletes,IntPtr privileges,uint restricts,IntPtr sids,out IntPtr token);
@@ -934,7 +935,9 @@ public sealed class OwnedMediumGui : System.IDisposable {
     TokenNeed(count<=15&&offset+length<=data.Length,TokenReason.SID_LAYOUT);var sid=new byte[length];Marshal.Copy(IntPtr.Add(data.Pointer,(int)offset),sid,0,length);TokenNeed(sid[0]==1,TokenReason.SID_LAYOUT);return sid;
   }
   static bool Equal(byte[] a,byte[] b){if(a.Length!=b.Length)return false;for(int i=0;i<a.Length;i++)if(a[i]!=b[i])return false;return true;}
-  static uint Word(IntPtr token,int kind){using(var data=new Data(token,kind)){TokenNeed(data.Length==4,TokenReason.SCALAR_LAYOUT);return unchecked((uint)Marshal.ReadInt32(data.Pointer));}}
+  // These SDK classes have exactly one DWORD/32-bit enum; a zero-size probe is unnecessary.
+  // dotnet/runtime WindowsIdentity.cs also documents BAD_LENGTH for TokenSessionId probes.
+  static uint Word(IntPtr token,int kind){TokenNeed(kind==8||kind==12||kind==18||kind==20||kind==26,TokenReason.SCALAR_LAYOUT);uint value,used;TokenNeed(GetTokenUInt(token,kind,out value,4,out used),TokenReason.QUERY_READ_FAILED);TokenNeed(used==4,TokenReason.SCALAR_LAYOUT);return value;}
   static byte[] User(IntPtr token){using(var data=new Data(token,1))return SidAt(data,0);}
   static Group[] Groups(IntPtr token){using(var data=new Data(token,2)){TokenNeed(data.Length>=4,TokenReason.GROUP_LAYOUT);int count=Marshal.ReadInt32(data.Pointer);int offset=IntPtr.Size,entry=IntPtr.Size*2;TokenNeed(count>=0&&count<=256&&offset+(long)count*entry<=data.Length,TokenReason.GROUP_LAYOUT);var result=new Group[count];for(int i=0;i<count;i++)result[i]=new Group{Sid=SidAt(data,offset+i*entry),Attributes=unchecked((uint)Marshal.ReadInt32(data.Pointer,offset+i*entry+IntPtr.Size))};return result;}}
   static bool Admin(Group group){var s=group.Sid;if((group.Attributes&8)!=0)return true;if(s.Length<16||s[7]!=5)return false;for(int i=2;i<7;i++)if(s[i]!=0)return false;uint first=BitConverter.ToUInt32(s,8),last=BitConverter.ToUInt32(s,s.Length-4);return first==32&&(last==544||(last>=547&&last<=552))||first==21&&(last==512||last==518||last==519||last==520);}
