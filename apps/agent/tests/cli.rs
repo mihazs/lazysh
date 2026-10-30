@@ -313,7 +313,12 @@ fn simultaneous_initialization_and_ingest_preserve_every_event() {
             });
         }
         let mut store = Store::open(dir.path()).unwrap();
-        let count = store.snapshot(50, chrono::Utc::now()).unwrap().sessions[0].event_count;
+        let count = store
+            .snapshot(50, chrono::Utc::now())
+            .unwrap()
+            .sessions
+            .first()
+            .map_or(0, |session| session.event_count);
         if count != 16 {
             storage_trace::initialization_workers(round, &workers);
         }
