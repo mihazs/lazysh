@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {OwnedProcess,SshFixture,stopOwnedTree,identity,type OwnedPid,type HerdrTools} from './androidSsh';
 
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";
+type ReportedAgent={terminalId:string;workspaceId:string;tabId:string;paneId:string};
 export class HerdrFixture {
   readonly name:string;
   readonly record:string;
@@ -11,6 +12,7 @@ export class HerdrFixture {
   readonly pidFile:string;
   private server:OwnedProcess|undefined;
   private receiver:OwnedPid|undefined;
+  private agent:ReportedAgent|undefined;
   private stopped=false;
   private constructor(readonly ssh:SshFixture) {
     this.name='owned-guard';
@@ -64,6 +66,26 @@ export class HerdrFixture {
         if(performance.now()>=deadline)throw new Error('Owned receiver startup deadline');
         await Bun.sleep(10);
       }
+      // A custom hook report has no elapsed-time TTL. Seed only after the
+      // original receiver is running; never heartbeat or mask its retirement.
+      await owned.run(['pane','report-agent',pane,'--source','lazysh-owned-ui','--agent','codex','--state','unknown']);
+      const reported=JSON.parse(await owned.run(['api','snapshot']))?.result?.snapshot;
+      const rows=reported?.agents;
+      const panes=reported?.panes;
+      if(!Array.isArray(rows) || rows.length!==1 || !Array.isArray(panes) || panes.length!==1)
+        throw new Error('Owned Herdr agent snapshot unavailable');
+      const row=rows[0],source=panes[0];
+      if(!row || !source || row.agent!=='codex' || row.agent_status!=='unknown'
+        || row.pane_id!==pane || source.pane_id!==pane || row.terminal_id!==source.terminal_id
+        || row.workspace_id!==source.workspace_id || row.tab_id!==source.tab_id
+        || typeof row.terminal_id!=='string' || !row.terminal_id || row.terminal_id.length>256
+        || /[\x00-\x1f\x7f-\x9f]/.test(row.terminal_id)
+        || typeof row.workspace_id!=='string' || row.workspace_id.length>50 || !/^w[0-9]+$/.test(row.workspace_id)
+        || typeof row.tab_id!=='string' || row.tab_id.length>50 || !/^w[0-9]+:t[0-9]+$/.test(row.tab_id)
+        || pane.length>50 || !/^w[0-9]+:p[0-9]+$/.test(pane)
+        || !row.tab_id.startsWith(row.workspace_id+':') || !pane.startsWith(row.workspace_id+':'))
+        throw new Error('Owned Herdr agent identity changed');
+      owned.agent={terminalId:row.terminal_id,workspaceId:row.workspace_id,tabId:row.tab_id,paneId:pane};
       await owned.expectBytes(Buffer.alloc(0));
       return owned;
     } catch(error) {
@@ -96,7 +118,8 @@ export class HerdrFixture {
     if(!await this.receiverAlive())throw new Error('Owned receiver identity changed');
   }
   metadata() {
-    return {name:this.name,transcript:this.transcript,record:this.record,draft:this.draft};
+    if(!this.agent)throw new Error('Owned Herdr agent report required');
+    return {name:this.name,transcript:this.transcript,record:this.record,draft:this.draft,agent:this.agent};
   }
   async stop() {
     if(this.stopped)return;

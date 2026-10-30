@@ -1138,7 +1138,7 @@ class NativeWorkspaceTest {
 
     // Called only from the real, authenticated owned-SSH UI flow below. Native
     // Window reads observe the shipping plugin; no test fixture changes its flag.
-    private fun verifyBoardKeepAwake(scenario: ActivityScenario<MainActivity>) {
+    private fun verifyBoardKeepAwake(scenario: ActivityScenario<MainActivity>, herdr: JSONObject? = null) {
         val checkbox = ".keep-awake-control input[type=checkbox]"
         val active = "This board owns an acknowledged idle-inhibition request."
         val off = "Keep awake is off."
@@ -1173,6 +1173,33 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, stage, "document.querySelector('$checkbox:not(:disabled)')?.checked===true && ${status(active)}")
             awaitFlag(true, stage)
         }
+        val liveHerdr = herdr?.let {
+            val agent = it.getJSONObject("agent")
+            val server = it.getString("name")
+            val workspace = agent.getString("workspaceId")
+            val tab = agent.getString("tabId")
+            val pane = agent.getString("paneId")
+            val terminal = agent.getString("terminalId")
+            require(Regex("[a-zA-Z0-9._-]{1,64}").matches(server) &&
+                Regex("w[0-9]+").matches(workspace) && workspace.length <= 50 &&
+                Regex("${Regex.escape(workspace)}:t[0-9]+").matches(tab) && tab.length <= 50 &&
+                Regex("${Regex.escape(workspace)}:p[0-9]+").matches(pane) && pane.length <= 50 &&
+                terminal.length in 1..256 && terminal.none { c -> c.isISOControl() }) { "Owned Herdr report identity required" }
+            // Terminal correlation is checked against the real host snapshot and
+            // native parser. The UI exposes server/workspace/tab/pane scope only.
+            val scope = JSONObject.quote("$server · $workspace · $tab · $pane")
+            """(()=>{
+              const panel=document.querySelector('.herdr-agents');
+              const cards=panel?.querySelectorAll('.live-agent-list .agent-card');
+              return panel?.querySelector('select')?.value===${JSONObject.quote(server)} && cards?.length===1 &&
+                cards[0].querySelector('strong')?.textContent==='codex' &&
+                Array.from(cards[0].querySelectorAll('p')).some(x=>x.textContent==='Unknown status') &&
+                cards[0].querySelector('small')?.textContent===$scope &&
+                !cards[0].querySelector('button,input,textarea') &&
+                Array.from(document.querySelectorAll('.agent-panel .panel-empty h3')).some(x=>x.textContent==='No agent events yet.') &&
+                !document.querySelector('.agent-panel .agent-board .agent-card');
+            })()"""
+        } ?: "true"
         var primaryFailure: Throwable? = null
         try {
             awaitFlag(false, "connected terminal before opt-in")
@@ -1180,7 +1207,35 @@ class NativeWorkspaceTest {
                 "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='Agents']]"))
                 .perform(webScrollIntoView()).perform(webClick())
             awaitDocument(scenario, "board keep-awake available and off",
-                "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}")
+                "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)} && ($liveHerdr)")
+            if (herdr != null) {
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".herdr-agents .live-agent-list .agent-card"))
+                    .perform(webScrollIntoView())
+                val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
+                    .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
+                    .also { require(it.size <= 2048) { "Viewport oracle bound" } }.toString(Charsets.UTF_8)
+                assertEquals("Owned live Herdr report must be visible over empty companion reports", "true", evaluate(scenario, """
+                    (()=>{
+                      if(!($liveHerdr)) return false;
+                      const card=document.querySelector('.herdr-agents .live-agent-list .agent-card');
+                      const labels=[card?.querySelector('strong'),
+                        Array.from(card?.querySelectorAll('p')??[]).find(label=>label.textContent==='Unknown status'),
+                        card?.querySelector('small')];
+                      if(!card || labels.some(label=>!label)) return false;
+                      const ranges=labels.map(label=>{
+                        const range=document.createRange(); range.selectNodeContents(label); return range;
+                      });
+                      $viewportOracle
+                      return ownedKeyboardViewportContains(window.visualViewport,
+                        [card.getBoundingClientRect(),...ranges.map(range=>range.getBoundingClientRect())]) &&
+                        ranges.every((range,index)=>Array.from(range.getClientRects()).every(r=>{
+                          const hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);
+                          return hit===labels[index] || labels[index].contains(hit);
+                        }));
+                    })()
+                """))
+                println("lazysh live Herdr agents: synthetic Codex report visible with exact server/pane scope and empty companion reports")
+            }
             assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')!=='true'"))
             awaitFlag(false, "board default off")
@@ -1688,7 +1743,7 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                 screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
             if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
-            verifyBoardKeepAwake(scenario)
+            verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
             if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Disconnect $name']")).perform(webClick())
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
