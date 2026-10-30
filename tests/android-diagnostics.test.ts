@@ -6,7 +6,7 @@ import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { 'runs-on'?: string; env?: Record<string,string>; steps: { name?: string; env?: Record<string,string>; run?: string; with?: { script?: string; 'env-vars'?: string } }[] }>;
+  jobs: Record<string, { 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; run?: string; with?: { script?: string; 'env-vars'?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -100,24 +100,45 @@ test('packaged companion UI acceptance has an explicit owned Android invocation'
   expect(gradle).toContain('outputs/androidTest-results/companion-ui');
 });
 
-test('actual Turbo task forwards companion opt-in and hosted metadata while filtering unrelated environment',async()=>{
+test('Android and Linux share the guarded official Mosh producer before emulator boot',async()=>{
+  const name='Build the pinned official Mosh fixture outside the checkout';
+  const producer=workflow.jobs['native-linux'].steps.find(step=>step.name===name)!;
+  const android=workflow.jobs['native-android-runtime'].steps;
+  const build=android.findIndex(step=>step.name===name);
+  expect(android[build]).toEqual(producer);
+  expect(build).toBeGreaterThan(android.findIndex(step=>step.name==='Verify native GUI namespace prerequisites'));
+  expect(android.findIndex(step=>step.name==='Run native Android instrumentation')).toBeGreaterThan(build);
+  expect(producer['timeout-minutes']).toBe(10);
+  expect(workflow.jobs['native-android-runtime']['timeout-minutes']).toBe(30);
+  expect(producer.run).toContain("--proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 2097152");
+  expect(producer.run).toContain('872e4b134e5df29c8933dff12350785054d2fd2839b5ae6b5587b14db1465ddd');
+  expect(producer.run).toContain('sha256sum --check --strict');
+  expect(producer.run).toContain("= 'mosh-server (mosh 1.4.0) [build mosh 1.4.0]'");
+  expect(producer.run).toContain('LAZYSH_NATIVE_MOSH_SERVER=$mosh_root/install/bin/mosh-server');
+  expect(producer.run).toContain('echo "$mosh_root/install/bin" >> "$GITHUB_PATH"');
+  expect(android.find(step=>step.name==='Install native Mosh fixture dependencies')!.run).toContain('libncurses-dev');
+  const tasks=(await Bun.file(new URL('../turbo.json',import.meta.url)).json()).tasks;
+  for(const task of ['test:android-ssh','test:native-gui'])expect(tasks[task].passThroughEnv).toContain('LAZYSH_NATIVE_MOSH_SERVER');
+});
+
+test('actual Turbo task forwards pinned Mosh path, companion opt-in and hosted metadata while filtering unrelated environment',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-android-turbo-'));temporary.push(directory);
   const client=join(directory,'apps/client');await mkdir(client,{recursive:true});
   const config=await Bun.file(new URL('../turbo.json',import.meta.url)).json();
   const pkg=await Bun.file(new URL('../package.json',import.meta.url)).json();
   await writeFile(join(directory,'package.json'),JSON.stringify({name:'owned-android-env',private:true,packageManager:pkg.packageManager,workspaces:['apps/*']}));
   await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{'test:android-ssh':'bun env-probe.ts'}}));
-  const keys=['LAZYSH_ANDROID_UI_COMPANION','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'];
+  const keys=['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'];
   await writeFile(join(client,'env-probe.ts'),`await Bun.write('../../observed.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),unrelatedFiltered:process.env.LAZYSH_UNRELATED_SENTINEL===undefined}));`);
   for(const admitted of [true,false]) {
     const task={...config.tasks['test:android-ssh']};
-    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>key!=='LAZYSH_ANDROID_UI_COMPANION');
+    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER'].includes(key));
     await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,'test:android-ssh':task}}));
     await rm(join(directory,'observed.json'),{force:true});
     const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run','test:android-ssh','--filter=@lazysh/client','--only'],directory,
-      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',LAZYSH_ANDROID_UI_COMPANION:'1',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
+      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',LAZYSH_ANDROID_UI_COMPANION:'1',LAZYSH_NATIVE_MOSH_SERVER:'/owned/pinned/mosh-server',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
     await child.finish('actual Turbo task environment',10_000);
-    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:[admitted?'1':null,'true','github-hosted'],unrelatedFiltered:true});
+    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:[admitted?'1':null,admitted?'/owned/pinned/mosh-server':null,'true','github-hosted'],unrelatedFiltered:true});
   }
 },25_000);
 

@@ -262,7 +262,8 @@ jobs:
           test "$(tmux -V)" = 'tmux 3.4'
           echo "$tmux_root/install/bin" >> "$GITHUB_PATH"
           echo "LAZYSH_TEST_TMUX=$tmux_root/install/bin/tmux" >> "$GITHUB_ENV"
-      - name: Build the pinned official Mosh fixture outside the checkout
+      - &official-mosh-fixture
+        name: Build the pinned official Mosh fixture outside the checkout
         timeout-minutes: 10
         run: |
           mosh_root=$(mktemp -d "$RUNNER_TEMP/lazysh-mosh-1.4.0-XXXXXX")
@@ -278,6 +279,7 @@ jobs:
           mosh_version=$(mosh-server --version)
           test "${mosh_version%%$'\n'*}" = 'mosh-server (mosh 1.4.0) [build mosh 1.4.0]'
           echo "$mosh_root/install/bin" >> "$GITHUB_PATH"
+          echo "LAZYSH_NATIVE_MOSH_SERVER=$mosh_root/install/bin/mosh-server" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           # Native dependency objects must match this runner's glibc baseline.
@@ -502,11 +504,12 @@ jobs:
         with:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
+        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
       - name: Verify native GUI namespace prerequisites
         env:
           LAZYSH_NATIVE_NAMESPACE_NETWORK: shared
         run: *native-fixture-namespace
+      - *official-mosh-fixture
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment
