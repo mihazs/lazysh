@@ -1437,10 +1437,15 @@ class NativeWorkspaceTest {
             val frame = listOf(origin[0], origin[1], view.width, view.height)
             if (startFrame == null) startFrame = frame else assertEquals("Swipe WebView frame must remain stable", startFrame, frame)
             val density = view.resources.displayMetrics.density.toDouble()
-            assertTrue("Owned swipe requires the focused, stable WebView without IME overlap",
-                view is WebView && view.isAttachedToWindow && view.isShown && view.hasWindowFocus() && !view.isLayoutRequested &&
-                    view.width > 0 && view.height > 0 && density.isFinite() && density > 0 && geometry.getDouble("density") == density &&
-                    ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime()) == false)
+            val predicates = mapOf(
+                "webView" to (view is WebView), "attached" to view.isAttachedToWindow, "shown" to view.isShown,
+                "windowFocused" to view.hasWindowFocus(), "layoutSettled" to !view.isLayoutRequested,
+                "sizePositive" to (view.width > 0 && view.height > 0), "densityValid" to (density.isFinite() && density > 0),
+                "densityMatchesDom" to (geometry.getDouble("density") == density))
+            val imeVisible = ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime())
+            val imeState = when (imeVisible) { true -> "visible"; false -> "hidden"; null -> "unavailable" }
+            assertTrue("Owned swipe requires the focused, stable WebView without IME overlap: native=$predicates ime=$imeState",
+                predicates.values.all { it } && imeVisible == false)
             val scaleX = view.width / visible[2]
             val scaleY = view.height / visible[3]
             val travel = (bounds[3] - bounds[1]) * 0.5 * scaleY
