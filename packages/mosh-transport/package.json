@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/mosh-transport",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "private": true,
   "scripts": {
     "check:rust": "cargo check --manifest-path Cargo.toml --locked",
