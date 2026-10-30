@@ -70,7 +70,7 @@ export function publishedInstrumentation(output:string,phase:'create'|'verify'){
     && !lines.some(line=>/^INSTRUMENTATION_STATUS_CODE: -|^INSTRUMENTATION_FAILED|^INSTRUMENTATION_RESULT: shortMsg=/.test(line));
 }
 const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','LAUNCH_WINDOW','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SCROLL_OWNER','FORM_SCROLL','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
-type DriverProgress={state:'unavailable'}|{state:'available';stage:typeof driverStages[number];event:'entry'|'exit'};
+type DriverProgress={state:'unavailable'}|{state:'available';stage:typeof driverStages[number];event:'entry'|'exit';depth:0|1|2|null};
 export function publishedDriverProgress(output:string):DriverProgress{
   const unavailable=():DriverProgress=>({state:'unavailable'});
   if(Buffer.byteLength(output)>65536||output.includes('\0'))return unavailable();
@@ -86,9 +86,12 @@ export function publishedDriverProgress(output:string):DriverProgress{
     if(lines[index+1].replace(/\r$/,'')!=='INSTRUMENTATION_STATUS_CODE: 0')return unavailable();
     try{
       const value=JSON.parse(line.slice(prefix.length));
-      if(!value||Array.isArray(value)||JSON.stringify(value)!==line.slice(prefix.length)||Object.keys(value).sort().join(',')!=='event,stage'
+      const keys=value&&typeof value==='object'?Object.keys(value).sort().join(','):'';
+      if(!value||Array.isArray(value)||JSON.stringify(value)!==line.slice(prefix.length)||!['event,stage','depth,event,stage'].includes(keys)
         ||!driverStages.includes(value.stage)||(value.event!=='entry'&&value.event!=='exit'))return unavailable();
-      last={state:'available',stage:value.stage,event:value.event};
+      // FORM_SCROLL→SCROLL_OWNER→input and WORKSPACE→DRAWER→named reach depth2.
+      if(keys==='depth,event,stage'&&(!Number.isInteger(value.depth)||value.depth<0||value.depth>2))return unavailable();
+      last={state:'available',stage:value.stage,event:value.event,depth:keys==='event,stage'?null:value.depth};
     }catch{return unavailable();}
   }
   return last;
