@@ -46,7 +46,7 @@ type GuiDebugTransport=typeof windowsGuiDebugTransports[number];
 export const windowsGuiRootRoles=['BROWSER_CANDIDATE','TYPED_CHILD','AMBIGUOUS','UNVERIFIED'] as const;
 type GuiRootDebug={role:typeof windowsGuiRootRoles[number];transport:GuiDebugTransport};
 export const windowsGuiIntegrityLevels=['LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED'] as const;
-type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];appElevation:'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED';observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];appElevation:'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED';observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>;frontend?:'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED'};
 function guiNumericVersion(value:unknown):value is string {
   return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
 }
@@ -55,7 +55,9 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!value||typeof value!=='object')return fail();
   const row=value as Record<string,unknown>;
   if(row.available===false&&typeof row.overflow==='boolean'&&row.signature==='UNVERIFIED'&&Object.keys(row).sort().join(',')==='available,overflow,signature')return {available:false,overflow:row.overflow,signature:'UNVERIFIED'};
-  if(Object.keys(row).sort().join(',')!=='appElevation,appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
+  if(row.frontend!==undefined&&!['EXACT_ABOUT_ACTION_OBSERVED','UNVERIFIED'].includes(row.frontend as string))return fail();
+  if(row.frontend==='EXACT_ABOUT_ACTION_OBSERVED'&&(row.appIntegrity!=='HIGH'||row.appElevation!=='ELEVATED'))return fail();
+  if(Object.keys(row).filter(key=>key!=='frontend').sort().join(',')!=='appElevation,appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
   const {observedProcesses,observedRootGroups}=row;
   if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
   if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
@@ -67,7 +69,7 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
   const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
   for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
-  return {available:true,overflow:false,appElevation:row.appElevation as 'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED',appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence};
+  return {available:true,overflow:false,appElevation:row.appElevation as 'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED',appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence,...(row.frontend!==undefined?{frontend:row.frontend as 'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED'}:{})};
 }
 export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
   if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
@@ -390,6 +392,150 @@ ${windowsGuiIntegritySource}
 function GuiAppIntegrity($appId,$start) { return (GuiAppToken $appId $start)[0] }
 `;
 
+// UIAutomationClient.h interface prefixes from microsoft/win32metadata commit
+// 64ed9177fb76eb244fc9051c74b8a93fdfe20873, generation/WinSDK/RecompiledIdlHeaders/um.
+// Native COM declarations retain every inherited slot through the last used method.
+export const windowsGuiAccessibilitySource=String.raw`
+using System;
+using System.Runtime.InteropServices;
+public static class OwnedGuiAccessibility {
+  [ComImport,Guid("34723aff-0c9d-49d0-9896-7ab52df8cd8a"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] public interface IUIAutomation2 {
+    [PreserveSig] int CompareElements(IntPtr el1,IntPtr el2,out int areSame);
+    [PreserveSig] int CompareRuntimeIds(IntPtr runtimeId1,IntPtr runtimeId2,out int areSame);
+    [PreserveSig] int GetRootElement(out IUIAutomationElement root);
+    [PreserveSig] int ElementFromHandle(IntPtr hwnd,out IUIAutomationElement element);
+    [PreserveSig] int ElementFromPoint(Point pt,out IUIAutomationElement element);
+    [PreserveSig] int GetFocusedElement(out IUIAutomationElement element);
+    [PreserveSig] int GetRootElementBuildCache(IUIAutomationCacheRequest cacheRequest,out IUIAutomationElement root);
+    [PreserveSig] int ElementFromHandleBuildCache(IntPtr hwnd,IUIAutomationCacheRequest cacheRequest,out IUIAutomationElement element);
+    [PreserveSig] int ElementFromPointBuildCache(Point pt,IUIAutomationCacheRequest cacheRequest,out IUIAutomationElement element);
+    [PreserveSig] int GetFocusedElementBuildCache(IUIAutomationCacheRequest cacheRequest,out IUIAutomationElement element);
+    [PreserveSig] int CreateTreeWalker(IntPtr pCondition,out IntPtr walker);
+    [PreserveSig] int get_ControlViewWalker(out IntPtr walker);
+    [PreserveSig] int get_ContentViewWalker(out IntPtr walker);
+    [PreserveSig] int get_RawViewWalker(out IntPtr walker);
+    [PreserveSig] int get_RawViewCondition(out IntPtr condition);
+    [PreserveSig] int get_ControlViewCondition(out IntPtr condition);
+    [PreserveSig] int get_ContentViewCondition(out IntPtr condition);
+    [PreserveSig] int CreateCacheRequest(out IUIAutomationCacheRequest cacheRequest);
+    [PreserveSig] int CreateTrueCondition(out IntPtr newCondition);
+    [PreserveSig] int CreateFalseCondition(out IntPtr newCondition);
+    [PreserveSig] int CreatePropertyCondition(int propertyId,[MarshalAs(UnmanagedType.Struct)] object value,out IntPtr newCondition);
+    [PreserveSig] int CreatePropertyConditionEx(int propertyId,[MarshalAs(UnmanagedType.Struct)] object value,int flags,out IntPtr newCondition);
+    [PreserveSig] int CreateAndCondition(IntPtr condition1,IntPtr condition2,out IntPtr newCondition);
+    [PreserveSig] int CreateAndConditionFromArray(IntPtr conditions,out IntPtr newCondition);
+    [PreserveSig] int CreateAndConditionFromNativeArray(IntPtr conditions,int conditionCount,out IntPtr newCondition);
+    [PreserveSig] int CreateOrCondition(IntPtr condition1,IntPtr condition2,out IntPtr newCondition);
+    [PreserveSig] int CreateOrConditionFromArray(IntPtr conditions,out IntPtr newCondition);
+    [PreserveSig] int CreateOrConditionFromNativeArray(IntPtr conditions,int conditionCount,out IntPtr newCondition);
+    [PreserveSig] int CreateNotCondition(IntPtr condition,out IntPtr newCondition);
+    [PreserveSig] int AddAutomationEventHandler(int eventId,IntPtr element,int scope,IUIAutomationCacheRequest cacheRequest,IntPtr handler);
+    [PreserveSig] int RemoveAutomationEventHandler(int eventId,IntPtr element,IntPtr handler);
+    [PreserveSig] int AddPropertyChangedEventHandlerNativeArray(IntPtr element,int scope,IUIAutomationCacheRequest cacheRequest,IntPtr handler,IntPtr propertyArray,int propertyCount);
+    [PreserveSig] int AddPropertyChangedEventHandler(IntPtr element,int scope,IUIAutomationCacheRequest cacheRequest,IntPtr handler,IntPtr propertyArray);
+    [PreserveSig] int RemovePropertyChangedEventHandler(IntPtr element,IntPtr handler);
+    [PreserveSig] int AddStructureChangedEventHandler(IntPtr element,int scope,IUIAutomationCacheRequest cacheRequest,IntPtr handler);
+    [PreserveSig] int RemoveStructureChangedEventHandler(IntPtr element,IntPtr handler);
+    [PreserveSig] int AddFocusChangedEventHandler(IUIAutomationCacheRequest cacheRequest,IntPtr handler);
+    [PreserveSig] int RemoveFocusChangedEventHandler(IntPtr handler);
+    [PreserveSig] int RemoveAllEventHandlers();
+    [PreserveSig] int IntNativeArrayToSafeArray(IntPtr array,int arrayCount,out IntPtr safeArray);
+    [PreserveSig] int IntSafeArrayToNativeArray(IntPtr intArray,out IntPtr array,out int arrayCount);
+    [PreserveSig] int RectToVariant(Rect rc,[MarshalAs(UnmanagedType.Struct)] out object var);
+    [PreserveSig] int VariantToRect([MarshalAs(UnmanagedType.Struct)] object var,out Rect rc);
+    [PreserveSig] int SafeArrayToRectNativeArray(IntPtr rects,out IntPtr rectArray,out int rectArrayCount);
+    [PreserveSig] int CreateProxyFactoryEntry(IntPtr factory,out IntPtr factoryEntry);
+    [PreserveSig] int get_ProxyFactoryMapping(out IntPtr factoryMapping);
+    [PreserveSig] int GetPropertyProgrammaticName(int property,out IntPtr name);
+    [PreserveSig] int GetPatternProgrammaticName(int pattern,out IntPtr name);
+    [PreserveSig] int PollForPotentialSupportedPatterns(IntPtr pElement,out IntPtr patternIds,out IntPtr patternNames);
+    [PreserveSig] int PollForPotentialSupportedProperties(IntPtr pElement,out IntPtr propertyIds,out IntPtr propertyNames);
+    [PreserveSig] int CheckNotSupported([MarshalAs(UnmanagedType.Struct)] object value,out int isNotSupported);
+    [PreserveSig] int get_ReservedNotSupportedValue(out IntPtr notSupportedValue);
+    [PreserveSig] int get_ReservedMixedAttributeValue(out IntPtr mixedAttributeValue);
+    [PreserveSig] int ElementFromIAccessible(IntPtr accessible,int childId,out IUIAutomationElement element);
+    [PreserveSig] int ElementFromIAccessibleBuildCache(IntPtr accessible,int childId,IUIAutomationCacheRequest cacheRequest,out IUIAutomationElement element);
+    [PreserveSig] int get_AutoSetFocus(out int autoSetFocus);
+    [PreserveSig] int put_AutoSetFocus(int autoSetFocus);
+    [PreserveSig] int get_ConnectionTimeout(out uint timeout);
+    [PreserveSig] int put_ConnectionTimeout(uint timeout);
+    [PreserveSig] int get_TransactionTimeout(out uint timeout);
+    [PreserveSig] int put_TransactionTimeout(uint timeout);
+  }
+  [ComImport,Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] public interface IUIAutomationElement {
+    [PreserveSig] int SetFocus();
+    [PreserveSig] int GetRuntimeId(out IntPtr runtimeId);
+    [PreserveSig] int FindFirst(int scope,IntPtr condition,out IUIAutomationElement found);
+    [PreserveSig] int FindAll(int scope,IntPtr condition,out IUIAutomationElementArray found);
+    [PreserveSig] int FindFirstBuildCache(int scope,IntPtr condition,IUIAutomationCacheRequest cacheRequest,out IUIAutomationElement found);
+    [PreserveSig] int FindAllBuildCache(int scope,IntPtr condition,IUIAutomationCacheRequest cacheRequest,out IUIAutomationElementArray found);
+    [PreserveSig] int BuildUpdatedCache(IUIAutomationCacheRequest cacheRequest,out IUIAutomationElement updatedElement);
+    [PreserveSig] int GetCurrentPropertyValue(int propertyId,[MarshalAs(UnmanagedType.Struct)] out object retVal);
+    [PreserveSig] int GetCurrentPropertyValueEx(int propertyId,int ignoreDefaultValue,[MarshalAs(UnmanagedType.Struct)] out object retVal);
+    [PreserveSig] int GetCachedPropertyValue(int propertyId,[MarshalAs(UnmanagedType.Struct)] out object retVal);
+    [PreserveSig] int GetCachedPropertyValueEx(int propertyId,int ignoreDefaultValue,[MarshalAs(UnmanagedType.Struct)] out object retVal);
+  }
+  [ComImport,Guid("b32a92b5-bc25-4078-9c08-d7ee95c48e03"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] public interface IUIAutomationCacheRequest {
+    [PreserveSig] int AddProperty(int propertyId);
+    [PreserveSig] int AddPattern(int patternId);
+    [PreserveSig] int Clone(out IUIAutomationCacheRequest clonedRequest);
+    [PreserveSig] int get_TreeScope(out int scope);
+    [PreserveSig] int put_TreeScope(int scope);
+  }
+  [ComImport,Guid("14314595-b4bc-4055-95f2-58f2e42c9855"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] public interface IUIAutomationElementArray {
+    [PreserveSig] int get_Length(out int length);
+    [PreserveSig] int GetElement(int index,out IUIAutomationElement element);
+  }
+  [StructLayout(LayoutKind.Sequential)] public struct Point {public int X,Y;}
+  [StructLayout(LayoutKind.Sequential)] public struct Rect {public int Left,Top,Right,Bottom;}
+  [DllImport("ole32.dll")] static extern int CoInitializeEx(IntPtr reserved,uint mode);
+  [DllImport("ole32.dll")] static extern void CoUninitialize();
+  [DllImport("ole32.dll")] static extern int CoCreateInstance(ref Guid clsid,IntPtr outer,uint context,ref Guid iid,out IUIAutomation2 client);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+  [DllImport("user32.dll")] static extern IntPtr GetThreadDpiAwarenessContext();
+  [DllImport("user32.dll")] static extern IntPtr GetWindowDpiAwarenessContext(IntPtr window);
+  [DllImport("user32.dll")] static extern int GetAwarenessFromDpiAwarenessContext(IntPtr context);
+  [DllImport("user32.dll")] static extern bool AreDpiAwarenessContextsEqual(IntPtr first,IntPtr second);
+  [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr window,out Rect rectangle);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window,ref Point point);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+  static void Need(bool value){if(!value)throw new InvalidOperationException();}
+  static void Ok(int result){Need(result>=0);}
+  static bool Finite(double value){return !double.IsNaN(value)&&!double.IsInfinity(value)&&Math.Abs(value)<=100000;}
+  static bool About(string expected,string name,int control,bool enabled,bool offscreen,int provider,int[] owned,double[] bounds,double[] client){
+    if(expected==null||!String.Equals(name,expected,StringComparison.Ordinal)||control!=50000||!enabled||offscreen||provider<=0||owned==null||owned.Length==0||owned.Length>33||Array.IndexOf(owned,provider)<0||bounds==null||bounds.Length!=4||client==null||client.Length!=4)return false;
+    foreach(double value in bounds)if(!Finite(value))return false;foreach(double value in client)if(!Finite(value))return false;
+    return bounds[2]>0&&bounds[3]>0&&client[2]>client[0]&&client[3]>client[1]&&Finite(bounds[0]+bounds[2])&&Finite(bounds[1]+bounds[3])&&bounds[0]>=client[0]&&bounds[1]>=client[1]&&bounds[0]+bounds[2]<=client[2]&&bounds[1]+bounds[3]<=client[3];
+  }
+  static double[] Client(IntPtr window,int process){uint owner;Need(GetWindowThreadProcessId(window,out owner)!=0&&owner==process&&IsWindowVisible(window)&&GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext())==2&&GetAwarenessFromDpiAwarenessContext(GetWindowDpiAwarenessContext(window))==2);Rect rectangle;Need(GetClientRect(window,out rectangle)&&rectangle.Left==0&&rectangle.Top==0&&rectangle.Right>0&&rectangle.Bottom>0);var top=new Point();var bottom=new Point{X=rectangle.Right,Y=rectangle.Bottom};Need(ClientToScreen(window,ref top)&&ClientToScreen(window,ref bottom));return new double[]{top.X,top.Y,bottom.X,bottom.Y};}
+  static object Cached(IUIAutomationElement element,int property){object value;Ok(element.GetCachedPropertyValueEx(property,1,out value));if(value!=null&&Marshal.IsComObject(value)){Release(value);throw new InvalidOperationException();}return value;}
+  static void Remember(int status,IntPtr condition,System.Collections.Generic.List<IntPtr> conditions){if(condition!=IntPtr.Zero)conditions.Add(condition);Ok(status);Need(condition!=IntPtr.Zero);}
+  static bool Release(object value){try{if(value!=null)Marshal.FinalReleaseComObject(value);return true;}catch{return false;}}
+  static int Inspect(IntPtr window,int process,string version,int[] owned){
+    IUIAutomation2 client=null;IUIAutomationCacheRequest cache=null;IUIAutomationElement root=null,button=null;IUIAutomationElementArray found=null;var conditions=new System.Collections.Generic.List<IntPtr>();IntPtr previous=IntPtr.Zero;bool initialized=false;int result=0;
+    try{Ok(CoInitializeEx(IntPtr.Zero,0));initialized=true;previous=SetThreadDpiAwarenessContext(new IntPtr(-4));Need(previous!=IntPtr.Zero&&GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext())==2);var rectangle=Client(window,process);
+      var clsid=new Guid("e22ad333-b25f-460c-83d0-0581107395c9");var iid=typeof(IUIAutomation2).GUID;Ok(CoCreateInstance(ref clsid,IntPtr.Zero,1,ref iid,out client));Ok(client.put_ConnectionTimeout(250));Ok(client.put_TransactionTimeout(250));Ok(client.CreateCacheRequest(out cache));
+      foreach(int property in new[]{30001,30002,30003,30005,30010,30020,30022})Ok(cache.AddProperty(property));Ok(cache.put_TreeScope(1));Ok(client.ElementFromHandleBuildCache(window,cache,out root));
+      object rootProcess=Cached(root,30002),rootWindow=Cached(root,30020);Need(rootProcess is int&&(int)rootProcess==process&&rootWindow is int&&unchecked((uint)(int)rootWindow)==window.ToInt64());
+      string expected="About lazysh · "+version;IntPtr name,type,condition;Remember(client.CreatePropertyCondition(30005,expected,out name),name,conditions);Remember(client.CreatePropertyCondition(30003,50000,out type),type,conditions);Remember(client.CreateAndCondition(name,type,out condition),condition,conditions);
+      Ok(root.FindAllBuildCache(4,condition,cache,out found));Need(found!=null);int count;Ok(found.get_Length(out count));Need(count==1);Ok(found.GetElement(0,out button));
+      object actualName=Cached(button,30005),actualType=Cached(button,30003),enabled=Cached(button,30010),offscreen=Cached(button,30022),provider=Cached(button,30002),bounds=Cached(button,30001);
+      Need(actualName is string&&actualType is int&&enabled is bool&&offscreen is bool&&provider is int&&About(expected,(string)actualName,(int)actualType,(bool)enabled,(bool)offscreen,(int)provider,owned,bounds as double[],rectangle));
+      var after=Client(window,process);for(int index=0;index<4;index++)Need(after[index]==rectangle[index]);result=(int)provider;
+    }catch{result=0;}
+    finally{bool clean=true;clean&=Release(button);clean&=Release(found);clean&=Release(root);clean&=Release(cache);foreach(var condition in conditions)try{Need(condition!=IntPtr.Zero);Marshal.Release(condition);}catch{clean=false;}clean&=Release(client);
+      if(initialized)try{CoUninitialize();}catch{clean=false;}
+      if(previous!=IntPtr.Zero)try{clean&=SetThreadDpiAwarenessContext(previous)!=IntPtr.Zero&&AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),previous);}catch{clean=false;}if(!clean)result=0;
+    }return result;
+  }
+  public static int Observe(long handle,int process,string version,int[] owned){
+    if(handle<=0||handle>uint.MaxValue||process<=0||version==null||!System.Text.RegularExpressions.Regex.IsMatch(version,@"\A[0-9]{1,6}(?:\.[0-9]{1,6}){2}\z")||owned==null||owned.Length<1||owned.Length>33)return 0;
+    int result=0;var thread=new System.Threading.Thread(()=>{result=Inspect(new IntPtr(handle),process,version,owned);});thread.IsBackground=true;thread.SetApartmentState(System.Threading.ApartmentState.MTA);thread.Start();return thread.Join(2000)?result:0;
+  }
+}
+`;
+
 export const windowsGuiStartupScript=String.raw`
 ${windowsGuiDebugTransportScript}
 ${windowsGuiIntegrityScript}
@@ -432,6 +578,17 @@ function GuiRuntimeRoots($inventory, $memberIds, $driverId) {
     if (!$hasRuntimeAncestor) { $roots += [int]$memberId }
   }
   return $roots
+}
+function GuiAccessibility($providerIds) {
+  try {
+    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -cne '1') { return 'UNVERIFIED' }
+    $source=[Console]::In.ReadToEnd()
+    if (!$source -or [Text.Encoding]::UTF8.GetByteCount($source) -gt 65536) { return 'UNVERIFIED' }
+    Add-Type -TypeDefinition $source -ErrorAction Stop
+    $provider=[OwnedGuiAccessibility]::Observe([long]$mainHandle,[int]$script:metadataAppId,$env:LAZYSH_VERSION,[int[]]$providerIds)
+    if ($provider -gt 0 -and $provider -in $providerIds) { return 'EXACT_ABOUT_ACTION_OBSERVED' }
+  } catch { }
+  return 'UNVERIFIED'
 }
 function GuiStartupSnapshot {
   $unverified=@{available=$false;overflow=$false;signature='UNVERIFIED'}
@@ -480,9 +637,13 @@ function GuiStartupSnapshot {
     if ($integrity -ceq 'IDENTITY_UNVERIFIED') { return $unverified }
     if ($integrity -cnotin @('LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED')) { $integrity='UNVERIFIED' }
     if ($elevation -cnotin @('ELEVATED','NOT_ELEVATED','UNVERIFIED')) { $elevation='UNVERIFIED' }
+    $frontend=$null
+    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -ceq '1') { $frontend='UNVERIFIED';if ($integrity -ceq 'HIGH' -and $elevation -ceq 'ELEVATED') { $frontend=GuiAccessibility (@([int]$script:metadataAppId)+@($retained.Keys)) } }
     foreach ($fence in $fences) { if (!(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified } }
     # Snapshot groups only: no observed owned runtime does not prove it never started or crashed.
-    return @{available=$true;overflow=$false;appIntegrity=$integrity;appElevation=$elevation;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
+    $snapshot=@{available=$true;overflow=$false;appIntegrity=$integrity;appElevation=$elevation;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
+    if ($frontend) { $snapshot.frontend=$frontend }
+    return $snapshot
   } catch { return $unverified }
 }
 `;

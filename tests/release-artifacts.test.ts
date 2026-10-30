@@ -8,7 +8,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsGuiMediumOutcome, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiAccessibilitySource, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const launchFailureDetails=['CREATE_PROCESS_WITH_TOKEN','RESUME_THREAD'].flatMap(call=>windowsGuiLaunchErrors.map(error=>call+':'+error)).concat('RESUME_THREAD:RESUME_COUNT_UNEXPECTED');
@@ -1063,6 +1063,49 @@ test('owned Windows framework metadata projects exact bounded records and reject
   expect(windowsGuiProbeDiagnostic(phase+'\n'+marker)).toEqual({phase:'UNKNOWN_CLASS',roleMask:1024,metadata:value});
   expect(windowsGuiProbeDiagnostic(phase+'\nLAZYSH_WINDOWS_GUI_METADATA:malformed')).toEqual({phase:'UNKNOWN_CLASS',roleMask:1024,metadata:{available:false}});
 });
+test('owned frontend evidence remains finite and requires the already observed elevated HIGH lifetime snapshot',()=>{
+  for(const frontend of ['EXACT_ABOUT_ACTION_OBSERVED','UNVERIFIED']){
+    const snapshot={...startupFixture(),appIntegrity:'HIGH',appElevation:'ELEVATED',frontend};
+    expect(parseWindowsGuiStartup(snapshot)).toEqual(snapshot);
+    expect(windowsGuiStartupProbe('owned-core\nLAZYSH_WINDOWS_GUI_STARTUP:'+JSON.stringify(snapshot))).toEqual({core:'owned-core',startup:snapshot});
+  }
+  for(const invalid of [{frontend:'private title'},{frontend:true},{frontend:'EXACT_ABOUT_ACTION_OBSERVED',appIntegrity:'MEDIUM'},{frontend:'EXACT_ABOUT_ACTION_OBSERVED',appElevation:'NOT_ELEVATED'},{frontend:'EXACT_ABOUT_ACTION_OBSERVED',extra:'private path'}])expect(()=>parseWindowsGuiStartup({...startupFixture(),appIntegrity:'HIGH',appElevation:'ELEVATED',...invalid})).toThrow();
+});
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('owned UIA candidate contract rejects unknown providers, hidden controls and invalid physical rectangles',async()=>{
+  const script=windowsGuiStartupScript+String.raw`
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop
+$flags=[Reflection.BindingFlags]'NonPublic,Static'
+$about=[OwnedGuiAccessibility].GetMethod('About',$flags)
+$base=[object[]]@('About lazysh · 1.1.4','About lazysh · 1.1.4',50000,$true,$false,7,[int[]]@(7,8),[double[]]@(11,12,20,10),[double[]]@(10,10,50,50))
+if(!$about.Invoke($null,$base)){throw 'exact bounded candidate rejected'}
+foreach($case in @(@(1,'About lazysh · 1.1.5'),@(1,'about lazysh · 1.1.4'),@(2,50001),@(3,$false),@(4,$true),@(5,99),@(6,[int[]]@()),@(6,[int[]](1..34)),@(7,[double[]]@(9,12,20,10)),@(7,[double[]]@(11,12,0,10)),@(7,[double[]]@(11,12,20,-1)),@(7,[double[]]@(11,12,40,10)),@(7,[double[]]@(11,12,20,40)),@(7,[double[]]@([double]::NaN,12,20,10)),@(7,[double[]]@(11,[double]::PositiveInfinity,20,10)),@(7,[double[]]@(11,12,20)),@(8,[double[]]@(10,10,9,50)))){
+  $changed=$base.Clone();$changed[$case[0]]=$case[1];if($about.Invoke($null,$changed)){throw 'unverified UIA candidate admitted'}
+}
+foreach($case in @(@(0L,7,'1.1.4',[int[]]@(7)),@(1L,0,'1.1.4',[int[]]@(7)),@(1L,7,'private',[int[]]@(7)),@(1L,7,'1.1.4',[int[]]@()),@(4294967296L,7,'1.1.4',[int[]]@(7)))){if([OwnedGuiAccessibility]::Observe($case[0],$case[1],$case[2],$case[3]) -ne 0){throw 'invalid root reached UIA'}}
+# Exercise the existing snapshot fences around an optional UIA observation without Win32.
+$epoch=[DateTime]::new(2025,1,1,0,0,0,[DateTimeKind]::Utc)
+$env:LAZYSH_GUI_DRIVER_PID='1';$env:LAZYSH_GUI_EDGE_PID='2'
+$env:LAZYSH_GUI_DRIVER='owned-driver';$env:LAZYSH_GUI_EDGE='owned-edge';$env:LAZYSH_GUI_BINARY='owned-app';$env:LAZYSH_GUI_RUNTIME_VERSION='1.2.3.4'
+$env:LAZYSH_GUI_DRIVER_START=$epoch.Ticks.ToString();$env:LAZYSH_GUI_EDGE_START=$epoch.AddTicks(10).Ticks.ToString()
+$inventory=@([PSCustomObject]@{ProcessId=1;ParentProcessId=0;Name='driver';ExecutablePath='owned-driver';CreationDate=$epoch},[PSCustomObject]@{ProcessId=2;ParentProcessId=1;Name='edge';ExecutablePath='owned-edge';CreationDate=$epoch.AddTicks(10)},[PSCustomObject]@{ProcessId=3;ParentProcessId=2;Name='app';ExecutablePath='owned-app';CreationDate=$epoch.AddTicks(20)})
+$complete=$true;$script:metadataEligible=$true;$script:metadataAppId=3;$script:metadataStart=$epoch.AddTicks(20).Ticks.ToString()
+function GuiImageIdentity { return !$script:retired }
+function Get-Item { [PSCustomObject]@{VersionInfo=[PSCustomObject]@{ProductVersion='1.2.3.4'}} }
+function GuiAppToken { return @($script:testIntegrity,$script:testElevation) }
+function GuiAccessibility { $script:observations++;if($script:retireAfter){$script:retired=$true};return 'EXACT_ABOUT_ACTION_OBSERVED' }
+foreach($case in @(@('0','HIGH','ELEVATED',$false,$null,0),@('1','HIGH','ELEVATED',$false,'EXACT_ABOUT_ACTION_OBSERVED',1),@('1','MEDIUM','NOT_ELEVATED',$false,'UNVERIFIED',0),@('1','HIGH','UNVERIFIED',$false,'UNVERIFIED',0),@('1','HIGH','ELEVATED',$true,$null,1))){
+  $env:LAZYSH_GUI_ACCESSIBILITY_PROBE=$case[0];$script:testIntegrity=$case[1];$script:testElevation=$case[2];$script:retireAfter=$case[3];$script:retired=$false;$script:observations=0
+  $snapshot=GuiStartupSnapshot
+  if($script:observations -ne $case[5]){throw 'UIA observation escaped failure/high gate'}
+  if($case[3]){if($snapshot.available -or $snapshot.frontend){throw 'retired lifetime published UIA positive'}}elseif(!$snapshot.available -or $snapshot.frontend -cne $case[4]){throw 'optional UIA changed snapshot/core semantics'}
+}
+[Console]::Out.Write('PORTABLE_UIA_CONTRACT')
+`;
+  expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],process.env,30000,windowsGuiAccessibilitySource)).toBe('PORTABLE_UIA_CONTRACT');
+},35000);
+
 test('Windows startup projection admits only bounded signed runtime group evidence and strict versions',()=>{
   const value=startupFixture();
   expect(parseWindowsGuiStartup(value)).toEqual(value); // Loaded runtime may differ: retain evidence, do not normalize it.

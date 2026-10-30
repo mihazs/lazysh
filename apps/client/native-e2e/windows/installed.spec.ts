@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
 import {remote} from 'webdriverio';
-import {parseWindowsGuiOwner,windowsGuiCapabilities,windowsGuiOwnerScript,windowsGuiSessionResponse,windowsGuiSessionNoResponse,windowsGuiProbeDiagnostic,windowsGuiSessionHealth,windowsGuiHealthOwnerScript,windowsGuiStartupProbe} from '../../../../.changeset/windows-installed-gui';
+import {parseWindowsGuiOwner,windowsGuiCapabilities,windowsGuiOwnerScript,windowsGuiSessionResponse,windowsGuiSessionNoResponse,windowsGuiProbeDiagnostic,windowsGuiSessionHealth,windowsGuiHealthOwnerScript,windowsGuiStartupProbe,windowsGuiAccessibilitySource} from '../../../../.changeset/windows-installed-gui';
 import {assertDirectDriverEnvironment} from '../policy';
 
 let browser:Awaited<ReturnType<typeof remote>>|undefined;
@@ -17,10 +17,14 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   if(!Number.isInteger(port)||port<1||port>65535||!/^[a-f0-9]{40}$/.test(sha)||!/^\d+\.\d+\.\d+$/.test(version))throw new Error('Invalid installed GUI invocation');
   const medium=process.env.LAZYSH_GUI_MEDIUM_ARM==='1';
   let startup:ReturnType<typeof windowsGuiStartupProbe>['startup'];
-  const owner=async(diagnostic=false)=>{
+  const owner=async(diagnostic=false,accessibility=false)=>{
     let core:unknown;
     try {
-      const result=await promisify(execFile)('pwsh.exe',['-NoProfile','-NonInteractive','-Command',windowsGuiOwnerScript],{timeout:15000,maxBuffer:16384,env:{...process.env,LAZYSH_GUI_STARTUP_PROBE:diagnostic?'1':'0'}}).catch(error=>{if(!diagnostic)throw error;return {stdout:typeof error.stdout==='string'?error.stdout:''};});
+      const observe=accessibility&&Buffer.byteLength(windowsGuiAccessibilitySource)<=65536;
+      const pending=promisify(execFile)('pwsh.exe',['-NoProfile','-NonInteractive','-Command',windowsGuiOwnerScript],{timeout:15000,maxBuffer:16384,env:{...process.env,LAZYSH_GUI_STARTUP_PROBE:diagnostic?'1':'0',LAZYSH_GUI_ACCESSIBILITY_PROBE:observe?'1':'0'}});
+      // Optional diagnostic input cannot replace already emitted native ownership proof.
+      pending.child.stdin?.on('error',()=>{});pending.child.stdin?.end(observe?windowsGuiAccessibilitySource:undefined);
+      const result=await pending.catch(error=>{if(!diagnostic)throw error;return {stdout:typeof error.stdout==='string'?error.stdout:''};});
       core=result.stdout;
       if(diagnostic){const projected=windowsGuiStartupProbe(core);core=projected.core;startup=projected.startup??{available:false,overflow:false,signature:'UNVERIFIED'};}
       return parseWindowsGuiOwner(typeof core==='string'?core.trim():'',process.env.LAZYSH_NSIS_BINARY_SHA256??'');
@@ -70,7 +74,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
       });
       failure.proxyHealth=health.proxy;failure.nativeHealth=health.native;
       failure.session=session??windowsGuiSessionNoResponse(error,port);
-      try {await owner(true);failure.ownedWindow='VERIFIED';}
+      try {await owner(true,!medium);failure.ownedWindow='VERIFIED';}
       catch(probe) {
         failure.ownedWindow='UNVERIFIED';
         const diagnostic=probe instanceof Error ? probe.cause as ReturnType<typeof windowsGuiProbeDiagnostic> : undefined;
