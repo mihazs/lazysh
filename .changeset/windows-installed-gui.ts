@@ -45,7 +45,8 @@ export const windowsGuiDebugTransports=['PIPE','EPHEMERAL_PORT','FIXED_PORT','AB
 type GuiDebugTransport=typeof windowsGuiDebugTransports[number];
 export const windowsGuiRootRoles=['BROWSER_CANDIDATE','TYPED_CHILD','AMBIGUOUS','UNVERIFIED'] as const;
 type GuiRootDebug={role:typeof windowsGuiRootRoles[number];transport:GuiDebugTransport};
-type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
+export const windowsGuiIntegrityLevels=['LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED'] as const;
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
 function guiNumericVersion(value:unknown):value is string {
   return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
 }
@@ -54,17 +55,18 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!value||typeof value!=='object')return fail();
   const row=value as Record<string,unknown>;
   if(row.available===false&&typeof row.overflow==='boolean'&&row.signature==='UNVERIFIED'&&Object.keys(row).sort().join(',')==='available,overflow,signature')return {available:false,overflow:row.overflow,signature:'UNVERIFIED'};
-  if(Object.keys(row).sort().join(',')!=='available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
+  if(Object.keys(row).sort().join(',')!=='appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
   const {observedProcesses,observedRootGroups}=row;
   if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
   if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
+  if(!windowsGuiIntegrityLevels.includes(row.appIntegrity as typeof windowsGuiIntegrityLevels[number]))return fail();
   if(!Array.isArray(row.rootDebugTransports)||row.rootDebugTransports.length!==observedRootGroups||!row.rootDebugTransports.every(value=>value&&typeof value==='object'&&Object.keys(value).sort().join(',')==='role,transport'&&windowsGuiRootRoles.includes(value.role)&&windowsGuiDebugTransports.includes(value.transport)))return fail();
   if(observedProcesses===0 ? observedRootGroups!==0||row.rootImageVersions.length!==0||row.signature!=='NONE_OBSERVED' : observedRootGroups===0||row.rootImageVersions.length===0||row.signature!=='MICROSOFT')return fail();
   const presence=row.observerEnvPresence;
   if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
   const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
   for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
-  return {available:true,overflow:false,signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence};
+  return {available:true,overflow:false,appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence};
 }
 export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
   if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
@@ -310,8 +312,75 @@ public static class OwnedGuiArguments {
 }
 `;
 
+// Query only the retained installed application's mandatory token label, never account/group data.
+export const windowsGuiIntegrityScript=String.raw`
+function GuiAppIntegrity($appId, $start) {
+  try {
+    if (!('OwnedGuiIntegrity' -as [type])) {
+      Add-Type -TypeDefinition @'
+using System;
+using System.Globalization;
+using System.Runtime.InteropServices;
+public static class OwnedGuiIntegrity {
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,int id);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long created,out long exited,out long kernel,out long user);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr buffer,uint length,out uint required);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  public static string Classify(byte[] sid,int queryError) {
+    if(queryError!=0 || sid==null || sid.Length!=12 || sid[0]!=1 || sid[1]!=1) return "UNVERIFIED";
+    for(int i=2;i<7;i++) if(sid[i]!=0) return "UNVERIFIED";
+    if(sid[7]!=16) return "UNVERIFIED"; // SECURITY_MANDATORY_LABEL_AUTHORITY, S-1-16.
+    uint rid=(uint)sid[8]|((uint)sid[9]<<8)|((uint)sid[10]<<16)|((uint)sid[11]<<24);
+    switch(rid) {
+      case 0x1000:return "LOW";
+      case 0x2000:return "MEDIUM";
+      case 0x3000:return "HIGH";
+      case 0x4000:return "SYSTEM";
+      default:return "UNVERIFIED";
+    }
+  }
+  public static string Query(int processId,string expectedStart) {
+    IntPtr process=IntPtr.Zero,token=IntPtr.Zero,memory=IntPtr.Zero;
+    try {
+      long expected;
+      if(processId<=0 || !long.TryParse(expectedStart,NumberStyles.None,CultureInfo.InvariantCulture,out expected) || expected<=0) return "UNVERIFIED";
+      process=OpenProcess(0x1000,false,processId); // PROCESS_QUERY_LIMITED_INFORMATION only.
+      if(process==IntPtr.Zero) return Classify(null,Marshal.GetLastWin32Error());
+      long created,exited,kernel,user;
+      if(!GetProcessTimes(process,out created,out exited,out kernel,out user)) return Classify(null,Marshal.GetLastWin32Error());
+      if(DateTime.FromFileTimeUtc(created).Ticks!=expected) return "IDENTITY_UNVERIFIED";
+      if(!OpenProcessToken(process,0x0008,out token)) return Classify(null,Marshal.GetLastWin32Error()); // TOKEN_QUERY only.
+      uint required;
+      if(GetTokenInformation(token,25,IntPtr.Zero,0,out required) || Marshal.GetLastWin32Error()!=122 || required<(uint)(IntPtr.Size+4) || required>4096) return "UNVERIFIED";
+      uint allocated=required;
+      memory=Marshal.AllocHGlobal((int)allocated);
+      if(!GetTokenInformation(token,25,memory,allocated,out required)) return Classify(null,Marshal.GetLastWin32Error()); // TokenIntegrityLevel.
+      if(required>allocated || required<(uint)(IntPtr.Size+4)) return "UNVERIFIED";
+      long offset=checked(Marshal.ReadIntPtr(memory).ToInt64()-memory.ToInt64());
+      if(offset<0 || offset>(long)required-12) return "UNVERIFIED";
+      var sid=new byte[12];Marshal.Copy(IntPtr.Add(memory,(int)offset),sid,0,12);
+      return Classify(sid,0);
+    } catch { return "UNVERIFIED"; }
+    finally {
+      if(memory!=IntPtr.Zero) Marshal.FreeHGlobal(memory);
+      bool closed=true;
+      if(token!=IntPtr.Zero) closed &= CloseHandle(token);
+      if(process!=IntPtr.Zero) closed &= CloseHandle(process);
+      if(!closed) throw new InvalidOperationException();
+    }
+  }
+}
+'@ -ErrorAction Stop
+    }
+    return [OwnedGuiIntegrity]::Query([int]$appId,[string]$start)
+  } catch { return 'UNVERIFIED' }
+}
+`;
+
 export const windowsGuiStartupScript=String.raw`
 ${windowsGuiDebugTransportScript}
+${windowsGuiIntegrityScript}
 function GuiNumericVersion($value) {
   return ($value -is [string] -and $value -cmatch '\A(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}\z' -and $value -cne '0.0.0.0' -and @($value.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -eq 0)
 }
@@ -394,9 +463,12 @@ function GuiStartupSnapshot {
     $registered=$env:LAZYSH_GUI_RUNTIME_VERSION
     $edgeVersion=(Get-Item -LiteralPath $env:LAZYSH_GUI_EDGE -ErrorAction Stop).VersionInfo.ProductVersion
     if (!(GuiNumericVersion $registered) -or !(GuiNumericVersion $edgeVersion)) { return $unverified }
+    $integrity=GuiAppIntegrity $script:metadataAppId $script:metadataStart
+    if ($integrity -ceq 'IDENTITY_UNVERIFIED') { return $unverified }
+    if ($integrity -cnotin @('LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED')) { $integrity='UNVERIFIED' }
     foreach ($fence in $fences) { if (!(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified } }
     # Snapshot groups only: no observed owned runtime does not prove it never started or crashed.
-    return @{available=$true;overflow=$false;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
+    return @{available=$true;overflow=$false;appIntegrity=$integrity;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
   } catch { return $unverified }
 }
 `;
