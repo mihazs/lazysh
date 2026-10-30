@@ -1633,7 +1633,7 @@ class NativeWorkspaceTest {
             fun terminalProof(after: Boolean) {
                 val part = if (after) "after" else "before"
                 val guard = if (after) """test "${'$'}LAZYSH_OWNED_INSTALL" = '$nonce' && """ else "LAZYSH_OWNED_INSTALL='$nonce'; "
-                clickButton("Compose")
+                if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
                 typeInto(scenario, ".terminal-compose textarea", guard + "printf 'COMPANION_%s_END\\n' '${nonce}_$part'")
                 closeSoftKeyboard()
                 clickButton("Paste draft")
