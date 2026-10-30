@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   terminal: { write: vi.fn(), dispose: vi.fn() },
   createTerminal: vi.fn(),
   invoke: vi.fn(),
+  terminalPaneProps: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
   realAgents:false,
@@ -66,8 +67,10 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
 vi.mock("./TerminalPane", () => ({
-  default: ({ active }: { active: boolean }) =>
-    active ? <div>Live SSH terminal</div> : null,
+  default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
+    mocks.terminalPaneProps(props);
+    return props.active ? <div>Live SSH terminal</div> : null;
+  },
 }));
 vi.mock('./AgentPanel',async original=>{
   const actual=await original<typeof import('./AgentPanel')>();
@@ -124,6 +127,19 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it('opens attachments from the live toolbar and retires held callbacks after navigation or unmount',async()=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'toolbar-attachments'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  const open=mocks.terminalPaneProps.mock.lastCall![0].onOpenAttachments;
+  expect(open).toBeTypeOf('function');
+  await act(async()=>open());await screen.findByText('Attach to this host');
+  await user.click(screen.getByRole('button',{name:'Usage'}));
+  await screen.findByRole('button',{name:'Use latest report for Watch'});
+  await act(async()=>open());expect(screen.queryByText('Attach to this host')).toBeNull();
+  cleanup();await act(async()=>open());expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
 it('uses the canonical Bed Mode mark decoratively beside one app name',async()=>{

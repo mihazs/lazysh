@@ -86,3 +86,8 @@ describe("OSC52 clipboard requests", () => {
     for (const input of ["c;?", "p;YWJj", "c;%%%", "c;/w==", "c;" + "A".repeat(90000), "missing-separator"]) expect(decodeClipboardRequest(input)).toBeUndefined();
   });
 });
+
+ it("upgrades only the previous default toolbar and preserves explicit customization", () => {
+  expect(parsePreferences({...defaults, toolbar:["esc","ctrl","tab","c","d","paste","left","up","down","right"]}).toolbar).toEqual(defaults.toolbar);
+  for (const toolbar of [[], ["meta","F12","attach","shift"]]) expect(parsePreferences({...defaults,toolbar}).toolbar).toEqual(toolbar);
+ });

@@ -1184,6 +1184,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(!request.claim())return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
     return api.write(live.id,data);
   }
+  function openTerminalAttachments(session: LiveSession) {
+    if(!mounted.current || !lease.current() || currentView.current.activeId!==session.id
+      || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
+      || session.local || !session.connected || session.disposed || closingSessions.current.has(session.id)
+      || !sessionsRef.current.includes(session))return;
+    setView('attachments');setSidebar(false);
+  }
   const active = sessions.find((session) => session.id === activeId);
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
@@ -1955,6 +1962,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal"}
                     reportError={setError}
+                    onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
                 ))}
                 {active.connected && !active.local && view === "usage" && (

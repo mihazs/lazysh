@@ -10,8 +10,10 @@ export const themes = {
   midnight: { background: "#101622", foreground: "#dee6f3", cursor: "#9fc6ff", selectionBackground: "#354763" },
   paper: { background: "#faf8f2", foreground: "#242822", cursor: "#375c29", selectionBackground: "#cbdac0" },
 } satisfies Record<string, ITheme>;
-export const toolbarKeys = ["esc", "ctrl", "meta", "tab", "c", "d", "enter", "backspace", "paste", "dpad", "left", "up", "down", "right"] as const;
+export const toolbarKeys = ["esc", "ctrl", "meta", "shift", "altgr", "tab", "c", "d", "enter", "backspace", "paste", "attach", "keyboard", "dpad", "left", "up", "down", "right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "|", "/", "\\", "-", "_", "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "=", "+", ":", ";", "?", ",", ".", "\"", "'"] as const;
 export type ToolbarKey = typeof toolbarKeys[number];
+export function toolbarKeyLabel(key: ToolbarKey): string { return key === "meta" ? "Alt" : key === "altgr" ? "AltGr" : key === "shift" ? "Shift" : key; }
+const legacyToolbar = ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"];
 export const gestureActions = ["none", "left", "right", "pageUp", "pageDown", "escape", "tab", "find", "compose", "paste", "keyboard", "hideKeyboard", "copy", "backspace", "interrupt", "nextSession", "previousSession", "nextZellijTab", "previousZellijTab", "nextZellijPane", "previousZellijPane", "custom"] as const;
 export const gestureDirections = ["left", "right", "up", "down"] as const;
 export const bodyGestureSlots = ["tap", "doubleTap", "tripleTap", "swipeLeft", "swipeRight"] as const;
@@ -51,7 +53,7 @@ export const defaults: Preferences = {
   cjkFallback: "'Noto Sans Mono CJK SC', 'PingFang SC', 'Microsoft YaHei', monospace",
   cursorStyle: "bar", cursorBlink: true, scrollback: 5000,
   optionAsMeta: false, screenReader: false,
-  toolbar: ["esc", "ctrl", "tab", "c", "d", "paste", "left", "up", "down", "right"], snippets: [],
+  toolbar: ["esc", "ctrl", "meta", "shift", "tab", "paste", "attach", "left", "up", "down", "right", "c", "d"], snippets: [],
   chords: [], pinchZoom: true, gestures: {left: "none", right: "none", up: "none", down: "none"}, autoHideToolbar: false,
   bodyGestures: {tap: "none", doubleTap: "none", tripleTap: "none", swipeLeft: "none", swipeRight: "none"}, gestureChords: {}, dpadCorners: {left: "interrupt", right: "backspace"},
 };
@@ -109,7 +111,7 @@ export function parsePreferences(value: unknown): Preferences {
       if (!chord || typeof chord !== "object" || typeof chord.label !== "string" || chord.label.length < 1 || chord.label.length > 32 || typeof chord.keys !== "string") return false;
       try { parseChord(chord.keys); return true; } catch { return false; }
     }).map(({label, keys}) => ({label, keys})) : [],
-    toolbar: Array.isArray(p.toolbar) ? [...new Set(p.toolbar.filter((item): item is ToolbarKey => toolbarKeys.includes(item as ToolbarKey)))].slice(0, toolbarKeys.length) : [...defaults.toolbar],
+    toolbar: Array.isArray(p.toolbar) && p.toolbar.length === legacyToolbar.length && p.toolbar.every((item, index) => item === legacyToolbar[index]) ? [...defaults.toolbar] : Array.isArray(p.toolbar) ? [...new Set(p.toolbar.filter((item): item is ToolbarKey => toolbarKeys.includes(item as ToolbarKey)))].slice(0, toolbarKeys.length) : [...defaults.toolbar],
     snippets: Array.isArray(p.snippets) ? p.snippets.filter((s): s is {label: string; text: string} => !!s && typeof s === "object" && typeof s.label === "string" && s.label.length > 0 && s.label.length <= 32 && typeof s.text === "string" && s.text.length > 0 && s.text.length <= 2048 && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(s.text)).map(({label, text}) => ({label, text})) : [],
   };
 }
