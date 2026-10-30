@@ -140,11 +140,11 @@ export class SshFixture {
         await writeFile(groupFile,groups.join('\n'),{mode:0o600,flag:'wx'});
         daemon=new OwnedProcess('/usr/bin/bwrap',['--die-with-parent','--unshare-user','--dev-bind','/','/',...(options.moshBinary?['--unshare-pid','--proc','/proc']:[]),'--ro-bind',groupFile,groupSource,'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
-      if(!await daemon.liveIdentity())throw new Error('Owned SSH root identity unavailable');
+      if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
       const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,options.privateTtyGroup);
       const deadline=performance.now()+3000;
       while(!await listening(port)) {
-        if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error('Owned sshd not ready');
+        if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error(`Owned sshd not ready; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
         await delay(10);
       }
       return fixture;

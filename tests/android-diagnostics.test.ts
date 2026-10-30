@@ -16,14 +16,23 @@ afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
-test('mandatory Linux namespaced SSH owner keeps private-TTY companion coverage outside Android runtime', () => {
+test('native fixture namespaces are admitted without privilege changes before Linux tests or Android boot', () => {
   const linux = workflow.jobs['native-linux'].steps;
   const admission = linux.findIndex(step => step.name === 'Verify native GUI namespace prerequisites');
   expect(linux[admission].run).toContain('bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid');
+  expect(linux[admission].run).toContain('--ro-bind /etc/group /etc/group');
+  expect(linux[admission].run).toContain('test "$(id -u)" -ne 0');
   const owner = linux.findIndex(step => step.run?.includes('LAZYSH_TEST_SSH_USER_NAMESPACE=1'));
   expect(owner).toBeGreaterThan(admission);
   expect(linux[owner].run).toContain("bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH'");
-  expect(workflow.jobs['native-android-runtime'].steps.some(step => step.name === 'Verify native SSH namespace prerequisites')).toBe(false);
+  const android=workflow.jobs['native-android-runtime'].steps;
+  const dependencies=android.findIndex(step=>step.name==='Install native Mosh fixture dependencies');
+  const namespace=android.findIndex(step=>step.name===linux[admission].name);
+  const emulator=android.findIndex(step=>step.name==='Run native Android instrumentation');
+  expect(android[dependencies].run).toContain('mosh bubblewrap');
+  expect(namespace).toBeGreaterThan(dependencies);
+  expect(emulator).toBeGreaterThan(namespace);
+  expect(android[namespace]).toEqual(linux[admission]);
   expect(decoded).toContain('test:android-ssh');
 });
 

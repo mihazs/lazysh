@@ -9,6 +9,7 @@ export class OwnedProcess {
   readonly child:ChildProcess;
   readonly done:Promise<number>;
   private readonly original:Promise<OwnedPid|undefined>;
+  private launchFailure:'missing-launcher'|'launch-denied'|'launch-failed'|undefined;
   stdout=''; stderr='';
   constructor(program:string,args:string[],cwd?:string,env=process.env,captureOutput=true) {
     this.child=spawn(program,args,{cwd,env,detached:true,stdio:['pipe','pipe','pipe']});
@@ -16,9 +17,25 @@ export class OwnedProcess {
     this.child.stdout!.on('data',data=>{if(captureOutput)this.stdout=(this.stdout+String(data)).slice(-OUTPUT_LIMIT);});
     this.child.stderr!.on('data',data=>{if(captureOutput)this.stderr=(this.stderr+String(data)).slice(-OUTPUT_LIMIT);});
     this.done=new Promise((resolve,reject)=>{
-      this.child.once('error',()=>reject(new Error('Owned fixture process could not start')));
+      this.child.once('error',(error:NodeJS.ErrnoException)=>{
+        this.launchFailure=error.code==='ENOENT'?'missing-launcher':['EACCES','EPERM'].includes(error.code??'')?'launch-denied':'launch-failed';
+        reject(new Error('Owned fixture process could not start'));
+      });
       this.child.once('close',code=>resolve(code??1));
     });
+  }
+  async startupDiagnostic() {
+    // Spawn errors arrive after the first missing-identity observation. Yield
+    // once for that metadata; never wait for process exit or retry admission.
+    if(!this.child.pid && this.launchFailure===undefined) {
+      // Keep the original rejection for its owner, while observing it during
+      // this diagnostic turn so it cannot become an unhandled rejection.
+      void this.done.catch(()=>{});
+      await new Promise<void>(resolve=>{setImmediate(resolve);});
+    }
+    const exit=this.child.exitCode;
+    return {state:this.launchFailure??(exit!==null?'early-exit':this.child.signalCode?'signaled':this.child.pid?'running':'launch-unavailable'),
+      exitCode:exit!==null && Number.isInteger(exit) && exit>=0 && exit<=255?exit:null};
   }
   async liveIdentity() {
     const original=await this.original;
