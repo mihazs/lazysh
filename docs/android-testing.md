@@ -267,3 +267,17 @@ lease replacement, malformed result, synchronous browser dispatch, and current/s
 read ownership are covered by the existing adapter/control/bootstrap owners.
 This preserves the gesture required by WebKit's full DOM-paste access contract; it
 is source-supported prevention, not a claim that a macOS runtime failure was seen.
+
+At `4102aa6e`, run40972168595/job123795156355 passed the complete Herdr case
+(61.591s), including literal clipboard text/no Enter, native Enter/output/prompt,
+persistent-board lifecycle and guarded Chat; its host verified exact receiver bytes
+and identity. Plain SSH reached first PNG setup only after its text assertions, then
+the standalone instrumentation-provider process failed with
+`NoClassDefFoundError: kotlin.jvm.internal.Intrinsics` at
+`OwnedClipboardProvider.getType`. Artifact12943245679 SHA256 is
+`fc8f378b56d7eb7c0488ab45181e005b855b425a8fa77b95d32cf0a7ee3a3f2a`.
+The provider is now framework-only Java to avoid depending on the target app's
+Kotlin runtime in its own process; URI/caller/content/size and file retirement checks
+are preserved. No image preview was qualified by that aborted run. Host cleanup
+reported no failure; the aborted SSH native finally remains unconfirmed. Manual
+Android upload remains unexecuted; the next packaged case must qualify image reads.
