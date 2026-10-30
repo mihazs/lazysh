@@ -169,3 +169,115 @@ objects, changes no event behavior, and removes only its own listeners. Capture
 and cleanup failures remain separate from the original assertion. Chromium's
 [phone popup contract](https://github.com/chromium/chromium/blob/49ec12cc413ffec766028509968b31d7d65fa0b7/content/public/android/java/src/org/chromium/content/browser/input/SelectPopup.java#L137)
 does not justify replacing the dialog matcher without an observed cause.
+
+
+## Foreground Android clipboard (#523)
+
+Explicit terminal Paste actions and attachment image Paste use app-private Android
+mobile commands behind the main-window ACL and original native access lease. The
+plugin explicitly rejects renderer plugin commands, preventing SDK mobile fallback. It reads only while its current Activity
+is resumed and its current WebView is attached, shown and focused. Pause, focus,
+document/Activity replacement, app locking and exact-owner cancellation invalidate
+the read. No startup reads or clipboard listeners are installed. Other platforms
+retain browser clipboard behavior; Android denial never falls back to browser reads.
+
+One supervised provider worker has no queue and a five-second operation budget.
+Cancellation signals the provider and closes its descriptor; an uncooperative provider
+keeps the slot occupied until it actually exits. This cannot force termination of
+arbitrary provider code. Errors contain closed categories, never clipboard contents,
+URI strings or provider exception messages. Text uses the existing 64 KiB UTF-8
+terminal input budget including bracketed-paste framing, without truncation or Enter.
+Images require content URIs, PNG/JPEG signatures, 10 MiB actual stream bounds, at most
+8192 pixels per dimension and eight megapixels.
+
+`NativeWorkspaceTest` seeds synthetic ClipData and pastes a literal comment suffix
+through the normal toolbar, retaining original native Enter and remote output checks.
+Its plain SSH case uses an instrumentation-only UID-restricted synthetic provider
+for PNG/JPEG preview, no automatic upload, non-content URI and oversize rejection.
+The production APK contains no fixture provider or automation command. Original
+deadlines and owned SSH shell lifetime are unchanged. The TS SSH fixture has no SFTP
+subsystem/dispatch option; the separate Rust OpenSSH owner supports internal SFTP but
+does not share that ForceCommand. This case does not add actual Android upload proof.
+Explicit upload remains covered by existing attachment UI and Rust SFTP owners;
+packaged Android upload and physical Samsung/SwiftKey behavior remain separate under
+#20. Packaged clipboard behavior remains unverified until its owning run completes.
+
+Clipboard admission uses the existing native-consent permit pattern rather than
+relying on dispatch FIFO. Tauri 2.12.5 queues mobile commands through the Android
+context; Wry 0.57.1 resolves its Activity/WebView when the JNI message is dequeued.
+A delayed command therefore cannot establish ownership from whichever context is
+current at that later point. Rust issues a private, single-use nonce bound to the
+original access lease, request kind and document. Immediately before primary-clip
+capture, Kotlin invokes one fixed JNI admission action; it cannot supply a renderer
+callback. Cancellation and current-owner lifecycle/rebind events revoke the permit
+synchronously. Provider work separately checks that original authority.
+
+A cancelled slot remains occupied until native retirement acknowledges no admitted
+worker or completed worker cleanup. Normal native completion retains the original
+authority until Rust consumes the response, so closing a watch sender cannot turn
+a successful response into cancellation. Late cancellation/retirement for A cannot
+affect private permit B. The selector checks cancellation before polling native
+dispatch. Regression owners cover cancel-before-admission, rebind before admission,
+one-shot replay, original access/deadline, and successful response retirement.
+Terminal reads also retire when their tab, connection or terminal context leaves,
+including leave-and-return transitions. Browser fallback requires exactly boolean
+false from the protected platform probe; malformed results never grant fallback.
+
+At source `e3d3cfa9`, run40956660183/job123742295599 passed actual native literal
+clipboard text, no-Enter and retained-focus checks in both owned SSH cases, then
+failed the unchanged output-plus-later-prompt assertion. Artifact12936585942 SHA256
+`03d5e00764ab93a75328078e94701aa533681824749f0003325b08c2ef336c97`
+records an IME window at failure and hide-before-read followed by a later IME show
+in both cases. Exact output-stage row geometry was not retained. The real-xterm
+browser owner holds the native read and demonstrates that early dismissal can be
+undone by delayed refocus; dismissing after completion restores the same visible
+output/prompt oracle. The first fixture repair moved its same ordinary
+dismissal after literal paste/focus acknowledgement and rechecked focus before its
+unchanged native Enter. This was a test-precondition repair, not a production IME
+policy change or proof of the precise failed row count. Image preview was not
+reached in that run and remains unverified until the next owning runtime result.
+
+At `3cf57504`, run40963042408/job123765068865 passed native text and the original
+submission/output/prompt oracle in plain SSH, then failed before image reads because
+the helper used `Attachments` while the real navigation caption is `Attach`. The
+caption is corrected from the existing App/i18n/browser contract. Herdr stopped at
+the earlier visible-literal acknowledgement with an IME window present; its data
+does not distinguish clipping from a read failure. Artifact12938407687 SHA256 is
+`20d771b4195ab8957d0cc972376d28d1b8a5c244d7f6dc3b0c9d74e8e3f6342b`.
+
+The real Paste button now exposes its existing single-read ownership as `aria-busy`
+and is disabled while pending. The native owner waits for client settlement and
+focus, dismisses ordinarily, then checks the exact visible literal/no-Enter and
+unchanged native Enter/output/prompt assertions. Idle cannot grant a pass, and no
+payload or test-only completion API is exposed. Image reads remain unverified until
+the case actually reaches them. Existing held-read tests cover current, stale/ABA
+and unmounted completions; the isolated real-xterm clipping owner remains intact.
+
+Source contracts: [Tauri mobile dispatch](https://docs.rs/crate/tauri/2.12.5/source/src/plugin/mobile.rs),
+[Wry Android main pipe](https://docs.rs/crate/wry/0.57.1/source/src/android/main_pipe.rs).
+
+Clipboard platform metadata is now preflighted after the existing native access
+readiness acknowledgement, without reading clipboard data or blocking workspace
+readiness. Only an exact boolean for the current access lease is cached. Unknown
+or failed metadata fails closed; both Paste controls show localized checking/retry
+labels. Retry checks metadata only and requires a new explicit Paste gesture. On
+known non-Android and browser routes, text/image browser reads start synchronously
+within that gesture, before any await. Android errors never fall back. Held probe,
+lease replacement, malformed result, synchronous browser dispatch, and current/stale
+read ownership are covered by the existing adapter/control/bootstrap owners.
+This preserves the gesture required by WebKit's full DOM-paste access contract; it
+is source-supported prevention, not a claim that a macOS runtime failure was seen.
+
+At `4102aa6e`, run40972168595/job123795156355 passed the complete Herdr case
+(61.591s), including literal clipboard text/no Enter, native Enter/output/prompt,
+persistent-board lifecycle and guarded Chat; its host verified exact receiver bytes
+and identity. Plain SSH reached first PNG setup only after its text assertions, then
+the standalone instrumentation-provider process failed with
+`NoClassDefFoundError: kotlin.jvm.internal.Intrinsics` at
+`OwnedClipboardProvider.getType`. Artifact12943245679 SHA256 is
+`fc8f378b56d7eb7c0488ab45181e005b855b425a8fa77b95d32cf0a7ee3a3f2a`.
+The provider is now framework-only Java to avoid depending on the target app's
+Kotlin runtime in its own process; URI/caller/content/size and file retirement checks
+are preserved. No image preview was qualified by that aborted run. Host cleanup
+reported no failure; the aborted SSH native finally remains unconfirmed. Manual
+Android upload remains unexecuted; the next packaged case must qualify image reads.

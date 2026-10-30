@@ -108,6 +108,7 @@ it('a clipboard read started earlier cannot replace the selection during an owne
   vi.mocked(api.uploadFile).mockImplementation(()=>new Promise<{path:string}>(resolve=>{finish=resolve;}));
   render(<AttachmentPanel sessionId="ssh-one"/>);
   fireEvent.click(screen.getByRole('button',{name:'Paste clipboard image'}));
+  await waitFor(()=>expect(paste).toBeTypeOf('function'));
   fireEvent.change(screen.getByLabelText('Choose attachment'),{target:{files:[file()]}});
   await screen.findByText(/report.txt · 5 bytes/);fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
   await waitFor(()=>expect(finish).toBeTypeOf('function'));
