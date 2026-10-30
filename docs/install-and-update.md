@@ -41,7 +41,7 @@ The app verifies a stable published executable,
 transfers it through the existing SSH connection and checks the installation.
 It prefers a valid managed executable without changing PATH; an absent managed
 installation keeps legacy PATH behavior. Installation never starts automatically
-or changes host permissions or hooks. See [companion setup](companion.md) for the
+or changes host permissions or hooks. See [companion setup](https://github.com/mihazs/lazysh/blob/main/docs/companion.md) for the
 explicit action and uncertain-result semantics.
 
 Mac companion signatures are ad hoc, not Developer ID signatures or notarization.
@@ -145,7 +145,7 @@ original verified saved host, keeps the Mosh terminal and attachment edits, and
 requires a separate manual Upload retry. It does not save credentials or restore
 other SSH tools. Recovery protocol and cancellation tests passed against owned
 Mosh/OpenSSH; physical Samsung/native UI recovery remains unexecuted, and the
-original Galaxy connection-loss cause is unproven. See [attachment recovery](attachments.md).
+original Galaxy connection-loss cause is unproven. See [attachment recovery](https://github.com/mihazs/lazysh/blob/main/docs/attachments.md).
 
 Versions 1.1.0 and 1.1.1 omitted the native permission grants for upload recovery
 and host companion settings, so their visible recovery action could be rejected
