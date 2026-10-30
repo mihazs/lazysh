@@ -1404,20 +1404,25 @@ class NativeWorkspaceTest {
     private fun pasteOwnedText(scenario: ActivityScenario<MainActivity>, selector: String, text: String, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).requestFocus() }
-        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
         val pasteDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        fun requireTime() = assertTrue("Owned native paste exceeded its input deadline", System.nanoTime() < pasteDeadline)
+        scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).requestFocus() }
+        requireTime()
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+        requireTime()
         val inputConstraints = typeTextIntoFocusedView("readiness-only").constraints
         while (true) {
+            requireTime()
             var ready = false
             scenario.onActivity { activity -> ready = inputConstraints.matches(requireNotNull(webView(activity.window.decorView))) }
+            requireTime()
             if (ready) break
-            assertTrue("Native key field input connection did not become ready", System.nanoTime() < pasteDeadline)
             Thread.sleep(25)
         }
         assertEquals("Key field must own DOM focus before paste", "true", evaluate(scenario,
             "document.activeElement===document.querySelector(${JSONObject.quote(selector)})",
             TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)))
+        requireTime()
         instrumentation.runOnMainSync {
             val clip = ClipData.newPlainText(label, text)
             clip.description.extras = android.os.PersistableBundle().apply {
@@ -1425,12 +1430,16 @@ class NativeWorkspaceTest {
             }
             clipboard.setPrimaryClip(clip)
         }
+        requireTime()
         onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_PASTE))
+        requireTime()
         // Boolean only: never retain a key value, DOM dump or screenshot in diagnostics.
         while (true) {
-            assertTrue("Native paste did not reach the controlled key field", System.nanoTime() < pasteDeadline)
+            requireTime()
             val remaining = TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)
-            if (evaluate(scenario, "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(text)}", remaining) == "true") break
+            val matched = evaluate(scenario, "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(text)}", remaining) == "true"
+            requireTime()
+            if (matched) break
             Thread.sleep(50)
         }
     }
@@ -1572,7 +1581,7 @@ class NativeWorkspaceTest {
             } == true).put("wakeLock", held)
     }
 
-    private fun verifyMoshBackground(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, name: String) {
+    private fun verifyMoshBackground(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, name: String, label: String) {
         val owned = fixture.getJSONObject("moshBackground")
         val directory = owned.getString("directory")
         val nonce = fixture.getString("nonce")
@@ -1598,7 +1607,7 @@ class NativeWorkspaceTest {
         fun send(command: String) {
             if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true")
                 onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Compose']")).perform(webClick())
-            typeInto(scenario, ".terminal-compose textarea", command)
+            pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
             closeSoftKeyboard()
             onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Paste draft']")).perform(webClick())
             closeSoftKeyboard()
@@ -1952,7 +1961,7 @@ class NativeWorkspaceTest {
             assertEquals("No terminal before explicit trust", "false", evaluate(scenario, present(".terminal-canvas .xterm-screen")))
             clickButton("Trust key and connect")
             if (requireMoshBackground) {
-                verifyMoshBackground(scenario, fixture, name)
+                verifyMoshBackground(scenario, fixture, name, label)
             } else {
                 awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             }
