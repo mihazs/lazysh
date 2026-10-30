@@ -58,7 +58,7 @@ pub async fn account_usage(
             let result = async {
                 let command = crate::companion::command(
                     &session,
-                    "lazysh-agent account-usage".into(),
+                    "lazysh-agent account-usage --watch-channel".into(),
                     &lease,
                 )
                 .await?;

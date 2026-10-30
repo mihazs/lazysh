@@ -29,7 +29,11 @@ enum Command {
         command: SettingsCommand,
     },
     /// Read live account quotas using the built-in collectors or compatible ai-usagebar.
-    AccountUsage,
+    AccountUsage {
+        /// Stop when this private command channel closes its input.
+        #[arg(long)]
+        watch_channel: bool,
+    },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
         #[arg(long, value_enum)]
@@ -193,16 +197,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             )?)
             .map_err(|_| Error::InvalidEvent)?,
         ),
-        Command::AccountUsage => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(Error::Io)?;
-            Some(
-                serde_json::to_value(runtime.block_on(lazysh_account_usage::read()))
-                    .map_err(|_| Error::InvalidEvent)?,
-            )
-        }
+        Command::AccountUsage { watch_channel } => Some(
+            serde_json::to_value(lazysh_agent::account_usage::run(watch_channel)?)
+                .map_err(|_| Error::InvalidEvent)?,
+        ),
         Command::Devices { command } => {
             if let lazysh_agent::devices::DeviceCommand::Android {
                 id,

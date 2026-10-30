@@ -8,7 +8,7 @@
 .account-usage-details header button { display:inline-flex; align-items:center; gap:6px; }
 .account-usage-details label { display:grid; gap:6px; }
 .account-usage-details select { width:100%; min-width:0; }
-.account-usage-details dl > div { padding:12px 0; border-bottom:1px solid var(--border); }
+.account-usage-details dl > div { padding:12px 0; border-bottom:1px solid var(--theme-border, var(--border)); }
 .account-usage-details dt { font-weight:600; }
 .account-usage-details dd { margin:4px 0 0; display:grid; gap:4px; }
 .account-usage-details meter { display:block; width:100%; }
@@ -19,3 +19,8 @@
   .workspace-footer:has(> .account-usage-chip) { padding-top:0; padding-bottom:0; min-height:44px; align-items:center; }
   .workspace-footer > .account-usage-chip { min-width:44px; min-height:44px; height:44px; }
 }
+
+:is(.account-usage-chip, .account-usage-details) meter { accent-color:var(--theme-accent); }
+:is(.account-usage-chip, .account-usage-details) meter::-webkit-meter-bar { background:var(--theme-control); border-color:var(--theme-border); }
+:is(.account-usage-chip, .account-usage-details) meter::-webkit-meter-optimum-value { background:var(--theme-accent); }
+:is(.account-usage-chip, .account-usage-details) meter::-moz-meter-bar { background:var(--theme-accent); }

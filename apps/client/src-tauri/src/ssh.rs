@@ -3223,6 +3223,9 @@ async fn attach_tmux_inner(
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
+    #[path = "account_usage_fixture.rs"]
+    mod account_usage_fixture;
+    #[cfg(unix)]
     #[path = "companion_fixture.rs"]
     mod companion_fixture;
     #[path = "host_clipboard_fixture.rs"]
@@ -5648,6 +5651,13 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH and a current-source companion binary"]
+    async fn openssh_account_usage_channel_cancellation_reaps_workers() {
+        openssh_interoperability(OpenSshCheck::AccountUsage).await;
+    }
+
+    #[cfg(unix)]
     enum OpenSshCheck {
         Files,
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -5658,6 +5668,7 @@ mod tests {
         Clipboard,
         TranscriptImages,
         CompanionInstall,
+        AccountUsage,
     }
 
     #[cfg(unix)]
@@ -5719,6 +5730,8 @@ mod tests {
                 .unwrap();
             assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
             openssh_tool_environment(dir.path(), binary, "mosh-server")
+        } else if matches!(check, OpenSshCheck::AccountUsage) {
+            account_usage_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::CompanionInstall) {
             companion_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::TranscriptImages) {
@@ -5809,6 +5822,10 @@ mod tests {
         }
         let connected = manual_session(&app.state(), &host, &user_key).await;
         let id = connected.session_id;
+        if matches!(check, OpenSshCheck::AccountUsage) {
+            account_usage_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
         if matches!(check, OpenSshCheck::CompanionInstall) {
             companion_fixture::verify(&app, &id, dir.path()).await;
             return;
