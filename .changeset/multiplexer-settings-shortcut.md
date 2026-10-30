@@ -1,9 +1,0 @@
----
-"@lazysh/client": minor
----
-
-Open the current host's Default multiplexer setting directly from More, with the selector focused. Saving keeps the running terminal and saved transport preference intact; the named default applies to future connections.
-
-Select Use saved credentials by default when the native vault confirms they are available. Preserve explicit manual authentication choices and credentials entered before the availability check finishes; connecting remains explicit and secrets stay in the native vault.
-
-Expand terminal keys with Shift, Alt/AltGr, attachment, function/navigation/symbol keys, modifier locking and repeat. Preserve custom layouts and migrate the old default row. Make Compose and terminal-key visibility branded icon buttons and reduce terminal side padding.
