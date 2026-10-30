@@ -1574,9 +1574,7 @@ class NativeWorkspaceTest {
 
     private fun verifyMoshBackground(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, name: String) {
         val owned = fixture.getJSONObject("moshBackground")
-        require(owned.getString("host") == "10.0.2.2") { "Owned Mosh requires the emulator host route" }
         val directory = owned.getString("directory")
-        require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+").matches(directory)) { "Owned Mosh directory invalid" }
         val nonce = fixture.getString("nonce")
         val key = JSONObject.quote("__lazyshOwnedBackground_$nonce")
         val token = JSONObject.quote(UUID.randomUUID().toString())
@@ -1681,6 +1679,23 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun moshTransportLabel(labels: List<String>): String {
+        require(labels.size == 1 && labels.single() in setOf("Mosh", "Mosh (forced)")) {
+            "Owned Mosh transport option is unavailable or ambiguous"
+        }
+        return labels.single()
+    }
+
+    @Test fun moshTransportChooserUsesItsOwnOptionLabelWithAutomaticTransportPresent() {
+        for (label in listOf("Mosh", "Mosh (forced)")) {
+            val options = listOf("auto" to "Auto", "ssh" to "SSH", "mosh" to label)
+            assertEquals(label, moshTransportLabel(options.filter { it.first == "mosh" }.map { it.second }))
+        }
+        for (labels in listOf(emptyList(), listOf("Unknown"), listOf("Mosh", "Mosh (forced)"))) {
+            assertTrue("Missing, unknown or ambiguous Mosh options must fail closed", runCatching { moshTransportLabel(labels) }.isFailure)
+        }
+    }
+
     private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false) {
         require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -1710,6 +1725,21 @@ class NativeWorkspaceTest {
         require(fixture.getString("name") == name && fixture.getInt("port") in 1..65535)
         val privateKey = fixture.getString("privateKey")
         require(privateKey.length in 1..8192) { "Invalid owned identity size" }
+        if (requireMoshBackground) {
+            val owned = fixture.getJSONObject("moshBackground")
+            require(owned.getString("host") == "10.0.2.2") { "Owned Mosh requires the emulator host route" }
+            require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+").matches(owned.getString("directory"))) {
+                "Owned Mosh directory invalid"
+            }
+            // This owned-install case proves the granted-permission notification record only.
+            val context = instrumentation.targetContext
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                    instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
+                assertEquals("Owned background notification permission must precede connection", PackageManager.PERMISSION_GRANTED,
+                    context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
+            }
+        }
         val scenario = NativeActivityFixture.scenario
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val label = "lazysh-ui-ssh-$nonce"
@@ -1767,8 +1797,11 @@ class NativeWorkspaceTest {
                     assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
                     floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
                 }, Press.FINGER))
-                val transportLabel = if (!requireMoshBackground) "SSH" else if (evaluate(scenario,
-                    "Boolean(document.querySelector(${JSONObject.quote(selector)})?.querySelector('option[value=auto]'))") == "true") "Mosh" else "Mosh (forced)"
+                val transportLabel = if (!requireMoshBackground) "SSH" else {
+                    val labels = JSONArray(evaluate(scenario,
+                        "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value=mosh]")})).map(x=>x.label)"))
+                    moshTransportLabel((0 until labels.length()).map { labels.getString(it) })
+                }
                 val option = onView(withText(transportLabel)).inRoot(isDialog())
                 option.check(matches(isDisplayed()))
                 println("lazysh SSH UI: native transport chooser ready")
