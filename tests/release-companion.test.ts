@@ -2,7 +2,7 @@ import { expect, spyOn, test } from 'bun:test';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidateCompanion, checkCompanionCopy, companionFormat } from '../.changeset/release-companion';
+import { candidateCompanion, checkCompanionCopy, companionFormat, companionNotices } from '../.changeset/release-companion';
 import { artifactName, companionMaximumBytes, companionTargets, digestFile, releaseTargets, validateReceipt,
   type CompanionTarget } from '../.changeset/release-artifacts';
 import * as platform from '../.changeset/release-platform';
@@ -109,6 +109,8 @@ test.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('source or s
     let revision = 0, events = 0;
     const mocked = spyOn(platform, 'native').mockImplementation(async (binary, args, env) => {
       if (args[0] === '--version') return `lazysh-agent ${identity.version}`;
+      if (args[0] === 'licenses') return JSON.stringify(await companionNotices());
+      if (args[0] === 'account-usage') return JSON.stringify({ schemaVersion: 1, state: 'ready', source: 'builtin', report: { entries: [] } });
       if (args[0] === 'settings') {
         if (args[1] === 'update') { if (Number(args[3]) !== revision) throw new Error('Owned stale revision'); revision++; }
         return JSON.stringify({ revision, transcriptDiscoveryEnabled: false, recordedUsageEnabled: false, deviceToolsEnabled: false });
@@ -125,6 +127,25 @@ test.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('source or s
       return '';
     });
     try { await expect(checkCompanionCopy('linux-agent-x64', source, identity.version)).rejects.toThrow('changed'); }
+    finally { mocked.mockRestore(); }
+  }
+}));
+test.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('packaged companion rejects altered legal bodies and missing built-in quota workers', () => owned(async root => {
+  const source = join(root, 'source'); await writeFile(source, header('linux-agent-x64')); await chmod(source, 0o700);
+  for (const failure of ['notice', 'worker']) {
+    const mocked = spyOn(platform, 'native').mockImplementation(async (_binary, args) => {
+      if (args[0] === '--version') return `lazysh-agent ${identity.version}`;
+      if (args[0] === 'settings') return JSON.stringify({ revision: 0 });
+      if (args[0] === 'licenses') {
+        const legal = await companionNotices();
+        if (failure === 'notice') legal.notices[0].text = legal.notices[0].text.slice(1);
+        return JSON.stringify(legal);
+      }
+      if (args[0] === 'account-usage') return JSON.stringify({ schemaVersion: 1, state: 'unavailable', source: 'builtin', report: null });
+      return '';
+    });
+    try { await expect(checkCompanionCopy('linux-agent-x64', source, identity.version)).rejects
+      .toThrow(failure === 'notice' ? 'embedded third-party notices differ' : 'packaged built-in account usage failed'); }
     finally { mocked.mockRestore(); }
   }
 }));

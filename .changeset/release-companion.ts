@@ -1,5 +1,6 @@
-import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, rm } from 'node:fs/promises';
+import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { tmpdir } from 'node:os';
 import { verifyRelease } from './bun-lock';
 import { buildIdentity, companionMaximumBytes, companionTargets, digestFile, stagePackages,
@@ -34,6 +35,17 @@ export function companionFormat(target: CompanionTarget, header: Uint8Array) {
       && (bytes.readUInt16LE(offset + 22) & 2) !== 0 && bytes.readUInt16LE(offset + 24) === 0x20b,
     'PE architecture mismatch');
   }
+}
+export async function companionNotices() {
+  const legalFiles = [
+    ['ai-usagebar', '../packages/ai-usagebar-vendor/LICENSE'],
+    ['account-usage-adapter', '../packages/account-usage/NOTICE'],
+    ['herdr-apache', '../packages/account-usage/licenses/HERDR-APACHE-2.0.txt'],
+  ];
+  const notices = await Promise.all(legalFiles.map(async ([id, path]) => ({
+    id, text: await Bun.file(new URL(path, import.meta.url)).text(),
+  })));
+  return { schemaVersion: 1, notices };
 }
 function privateEnvironment(directory: string): NodeJS.ProcessEnv {
   const home = join(directory, 'home'), temporary = join(directory, 'tmp');
@@ -88,6 +100,31 @@ export async function validateCompanion(target: CompanionTarget, binary: string,
     const state = env.LAZYSH_STATE_DIR!;
     requireCompanion(!await lstat(state).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; }),
       'settings read created state');
+    const licenses = await companionNotices();
+    requireCompanion(isDeepStrictEqual(JSON.parse(await native(binary, ['licenses'], env, 10_000)),
+      licenses), 'embedded third-party notices differ');
+    // Windows known folders ignore HOME/APPDATA overrides: never probe that real profile.
+    // An explicit owned disabled profile is isolated on Linux/macOS only.
+    if (spec.os !== 'win32') {
+      const example = Bun.TOML.parse(await Bun.file(new URL('../packages/ai-usagebar-vendor/config.example.toml', import.meta.url)).text());
+      const sections = Object.entries(example).filter(([, value]) => value && typeof value === 'object'
+        && 'enabled' in value && typeof value.enabled === 'boolean');
+      requireCompanion(sections.length === 32, 'pinned disabled provider fixture is incomplete');
+      const disabled = sections.map(([name]) => `[${name}]\nenabled = false\n`).join('\n')
+        + '\n[notifications]\nenabled = false\n';
+      const configuration = process.platform === 'darwin' ? join(env.HOME!, 'Library', 'Application Support', 'lazysh')
+        : join(env.XDG_CONFIG_HOME!, 'lazysh');
+      await mkdir(configuration, { recursive: true, mode: 0o700 });
+      const profile = join(configuration, 'account-usage.toml');
+      await writeFile(profile, disabled, { mode: 0o600 });
+      const profileDigest = await digestFile(profile);
+      const noTools = join(directory, 'empty-tools');
+      await mkdir(noTools, { mode: 0o700 });
+      const usage = JSON.parse(await native(binary, ['account-usage'], { ...env, PATH: noTools }, 10_000));
+      requireCompanion(usage?.schemaVersion === 1 && usage.state === 'ready' && usage.source === 'builtin'
+        && usage.report?.entries?.length === 0, 'packaged built-in account usage failed');
+      requireCompanion(isDeepStrictEqual(await digestFile(profile), profileDigest), 'account usage changed owned configuration');
+    }
     const update = ['settings', 'update', '--expected-revision', '0', '--transcript-discovery-enabled', 'false',
       '--recorded-usage-enabled', 'false', '--device-tools-enabled', 'false'];
     const first = JSON.parse(await native(binary, update, env, 10_000));

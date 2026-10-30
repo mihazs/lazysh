@@ -64,3 +64,18 @@ The selected terminal refreshes while the app is visible, normally every five mi
 Collection is bounded. An external CLI has six seconds; the built-in worker has eighteen seconds, including a sixteen-second collection budget, with at most four provider groups running concurrently and accounts within a provider serialized. A provider that exceeds the deadline remains visible as unavailable. Native access revocation or local session closure retires a read. Remote requests use a private channel mode: stdin EOF and HUP/TERM/INT stop the supervisor read and its owned worker/helper processes. A closed Mosh SSH control connection needs explicit host-tools recovery; account usage never silently reconnects.
 
 A percentage reported above 100 remains above 100 in text; only the meter fill is capped. Refill gauges retain their “left” meaning. Value headlines and balance-only providers remain amounts; no percentage or reset date is invented.
+
+## Retained notices and packaged validation
+
+Standalone companions retain the collector MIT license, adapter attribution and
+Herdr Apache 2.0 license in `lazysh-agent licenses` JSON output. Release validation
+compares those bodies exactly on all five companion targets.
+
+On Linux and macOS, packaged validation also executes `account-usage` with an
+owned explicit profile disabling every provider, isolated HOME/config paths and
+an empty tool search path; it requires a built-in empty report and unchanged
+configuration. This checks the real worker without provider authentication. That
+packaged worker check does not run on Windows: its known-folder API ignores
+HOME/APPDATA overrides. Windows process ownership is covered separately by the
+actual suspended-start/job-cancellation test; compilation and retained notices
+do not establish provider authentication or live quota acceptance.
