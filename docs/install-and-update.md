@@ -270,6 +270,12 @@ cover installation, same-version repair and uninstall; installed GUI acceptance
 (#457), version upgrade and data migration remain pending. Concurrent Windows
 companion startup has intermittently returned SQLite busy errors
 ([#552](https://github.com/mihazs/lazysh/issues/552)); this remains under investigation.
+Unpublished 1.3.0 candidate `f5186cf2` passed Windows companion binary validation,
+then its CLI/settings/WAL/installation acceptance owner exited 101 and blocked
+publication. Its finite SQLite phase records do not identify the failing testcase
+([retained result](https://github.com/mihazs/lazysh/issues/552#issuecomment-6535511340)).
+The diagnostic follow-up retains only source-known failed-test names; it changes
+neither storage behavior nor acceptance expectations and does not establish a cause.
 An earlier ntfy run rejected an event as before its issued time,
 before writing a receipt or posting a notification. Permissions were enabled;
 the relevant push source was unchanged. The underlying clock cause remains open
