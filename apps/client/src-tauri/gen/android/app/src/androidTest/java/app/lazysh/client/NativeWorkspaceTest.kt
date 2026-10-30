@@ -1634,7 +1634,7 @@ class NativeWorkspaceTest {
                 val part = if (after) "after" else "before"
                 val proof = "COMPANION_${nonce}_${part}_END"
                 val command = (if (after) "" else "LI='$nonce';") + "printf 'COMPANION_%s_${part}_END\\n' \"${'$'}LI\""
-                assertFalse("Owned shell proof must not appear literally in its input", command.contains(proof))
+                assertTrue("Owned shell proof must not appear literally in its input", !command.contains(proof))
                 if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
                 typeInto(scenario, ".terminal-compose textarea", command)
                 closeSoftKeyboard()
