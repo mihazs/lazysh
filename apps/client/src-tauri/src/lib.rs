@@ -4,6 +4,7 @@ mod apple_speech;
 mod apple_status;
 mod approvals;
 mod attachment_upload;
+mod clipboard;
 mod companion;
 mod companion_settings;
 mod desktop_launch;
@@ -59,6 +60,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_lazysh_apple_status::init())
         .plugin(tauri_plugin_lazysh_display_idle::init())
+        .plugin(clipboard::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -98,6 +100,9 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                clipboard::clipboard_read,
+                clipboard::clipboard_cancel,
+                clipboard::clipboard_is_android,
                 keep_awake::board_keep_awake_status,
                 keep_awake::board_keep_awake_acquire,
                 keep_awake::board_keep_awake_release,

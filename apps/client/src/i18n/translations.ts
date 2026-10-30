@@ -23,6 +23,8 @@ const translations = {
   companionInstallReused: ["O companion {{version}} já está instalado no servidor.", "El companion {{version}} ya está instalado en el servidor."],
   companionInstallUncertain: ["Não foi possível confirmar a instalação. Tente novamente para verificar.", "No se pudo confirmar la instalación. Reintenta para comprobarla."],
   companionInstallResidue: ["Alguns arquivos temporários da instalação permanecem no servidor.", "Quedan algunos archivos temporales de la instalación en el servidor."],
+  clipboardChecking: ["Verificando suporte à área de transferência…", "Comprobando compatibilidad del portapapeles…"],
+  clipboardRetry: ["Tentar verificar a área de transferência novamente", "Reintentar comprobación del portapapeles"],
   navigationAgents: ["Navegação de agentes", "Navegación de agentes"],
   navigationTitle: ["Navegação do espaço de trabalho", "Navegación del espacio de trabajo"],
   navigationConnections: ["Conexões", "Conexiones"],

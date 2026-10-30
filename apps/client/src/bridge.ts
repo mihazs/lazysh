@@ -77,6 +77,9 @@ export const api = {
     const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
     return remoteInvoke<unknown>('install_companion',{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
   },
+  clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),
+  clipboardRead: (request: {token: string; kind: 'text' | 'image'}) => invoke<unknown>('clipboard_read', {request}),
+  clipboardCancel: (token: string) => acknowledgeInvoke<void>('clipboard_cancel', {token}),
   connectLocal: (onEvent:(event:SshEvent)=>void, launchReceipt?:string) => createSession('local_connect',{cols:100,rows:30,...(launchReceipt ? {launchReceipt} : {})},onEvent),
   connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession("connect_et", {sessionId, options, cols:100, rows:30},onEvent);

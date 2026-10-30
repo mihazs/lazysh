@@ -13,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
+    ClipboardPlugin.onWebViewCreated(this, webView)
     VaultPlugin.onWebViewCreated(this, webView)
     DisplayIdlePlugin.onWebViewCreated(this, webView)
     super.onWebViewCreate(webView)

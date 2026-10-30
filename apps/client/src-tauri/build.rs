@@ -8,6 +8,9 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,--exclude-libs,libonnxruntime.a");
     }
     let app = tauri_build::AppManifest::new().commands(&[
+        "clipboard_read",
+        "clipboard_cancel",
+        "clipboard_is_android",
         "board_keep_awake_status",
         "board_keep_awake_acquire",
         "board_keep_awake_release",

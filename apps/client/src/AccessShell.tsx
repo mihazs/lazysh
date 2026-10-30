@@ -3,6 +3,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { accessControl, accessSnapshot, acknowledgeAccessReady, applyAccessStatus, useAccessSnapshot } from './access';
 import type { LiveSession } from './terminal';
+import { prepareClipboardPlatform } from './deviceClipboard';
 import { forgetSession } from './pendingSessions';
 
 /** Native owns sessions; retain xterm buffers while transient tools and drafts unmount. */
@@ -44,7 +45,7 @@ export default function AccessShell({ native, children }: {
     if (!native || !initialized || !status?.initialized || status.locked) return;
     // Effects run after React commits the fresh tree; the native cover remains until this acknowledgement.
     const current = epoch;
-    void accessControl.ready(status.generation).then(() => acknowledgeAccessReady(current)).catch(() => {
+    void accessControl.ready(status.generation).then(() => { acknowledgeAccessReady(current); if (accessSnapshot().epoch === current) void prepareClipboardPlatform(); }).catch(() => {
       if (accessSnapshot().epoch === current) setError("accessNativeAppUnlockCouldNotFinish");
     });
   }, [native, initialized, status?.initialized, status?.locked, status?.generation, epoch]);

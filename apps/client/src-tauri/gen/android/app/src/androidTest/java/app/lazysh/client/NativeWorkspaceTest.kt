@@ -1349,6 +1349,66 @@ class NativeWorkspaceTest {
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
 
+    // The target-UID-only synthetic provider exists only in the instrumentation APK.
+    // Reads use the normal foreground Attachments action; this never uploads.
+    private fun verifyOwnedClipboardImages(scenario: ActivityScenario<MainActivity>, label: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.context
+        val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
+            "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        fun view(text: String) = onWebView().withElement(findElement(Locator.XPATH,
+            "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='$text']]"))
+            .perform(webScrollIntoView()).perform(webClick())
+        run {
+            view("Attach")
+            awaitDocument(scenario, "owned clipboard attachment panel", "Boolean(document.querySelector('.attachment-panel'))")
+            for (extension in listOf("png", "jpg")) {
+                val uri = Uri.parse("content://app.lazysh.client.test.clipboardfixture/$extension")
+                instrumentation.runOnMainSync {
+                    clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, label, uri))
+                }
+                click("Paste clipboard image")
+                awaitDocument(scenario, "native $extension clipboard staged without upload", """
+                    (()=>{const panel=document.querySelector('.attachment-panel');
+                      const destination=Array.from(panel.querySelectorAll('label')).find(x=>x.firstChild?.textContent==='Destination path')?.querySelector('input');
+                      return Boolean(destination?.value.endsWith('.$extension')) &&
+                        panel.querySelectorAll('input[type=checkbox]').length===1 &&
+                        !panel.querySelector('input[readonly]') &&
+                        !Array.from(panel.querySelectorAll('[role=status]')).some(x=>x.textContent==='Uploaded to this host. Copy its path or edit the prompt below.');})()
+                """)
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".attachment-panel input[type=checkbox]"))
+                    .perform(webScrollIntoView()).perform(webClick())
+                awaitDocument(scenario, "native $extension clipboard image preview", """
+                    (()=>{const canvas=document.querySelector('.attachment-editor canvas');
+                      return canvas?.width===4 && canvas?.height===3 && !document.querySelector('.attachment-panel input[readonly]');})()
+                """)
+                click("Cancel attachment")
+                awaitDocument(scenario, "owned clipboard preview cancelled", "!document.querySelector('.attachment-editor') && !document.querySelector('.attachment-panel input[type=checkbox]')")
+            }
+            for ((stage, uri) in listOf("non-content" to "https://clipboard-fixture.invalid/owned.png",
+                "oversize" to "content://app.lazysh.client.test.clipboardfixture/oversize")) {
+                // A fresh normal panel prevents an earlier error from satisfying the next rejection.
+                view("Terminal")
+                awaitDocument(scenario, "clipboard panel retired", "!document.querySelector('.attachment-panel')")
+                view("Attach")
+                awaitDocument(scenario, "fresh clipboard rejection panel", "Boolean(document.querySelector('.attachment-panel')) && !document.querySelector('.attachment-panel [role=alert]')")
+                instrumentation.runOnMainSync {
+                    clipboard.setPrimaryClip(ClipData(label, arrayOf("image/png"), ClipData.Item(Uri.parse(uri))))
+                }
+                click("Paste clipboard image")
+                awaitDocument(scenario, "$stage clipboard image rejected without upload", """
+                    Boolean(document.querySelector('.attachment-panel [role=alert]')) &&
+                    !document.querySelector('.attachment-panel input[type=checkbox]') &&
+                    !document.querySelector('.attachment-panel input[readonly]')
+                """)
+            }
+            view("Terminal")
+            println("lazysh clipboard UI: PNG/JPEG preview without upload and non-content/oversize rejection verified")
+        }
+    }
+
     private fun ownedSshUi(requireHerdr: Boolean) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
@@ -1609,10 +1669,25 @@ class NativeWorkspaceTest {
             // Dismiss it ordinarily so the unchanged output-plus-later-prompt oracle can see both rows.
             closeSoftKeyboard()
             assertEquals("Keyboard dismissal must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+            val literalClipboard = " # CLIP_${nonce}_\$literal"
+            instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
+            clickButton("paste")
+            awaitDocument(scenario, "native clipboard client settled and focused", """
+                (()=>{const paste=document.querySelectorAll('.terminal-keys button[aria-busy]');
+                  return paste.length===1 && paste[0].getAttribute('aria-busy')==='false' && !paste[0].disabled && $terminalFocused;})()
+            """)
+            assertEquals("Clipboard paste must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+            // Native clipboard completion refocuses xterm asynchronously; dismiss
+            // after that acknowledgement so Enter/output use the expanded viewport.
+            closeSoftKeyboard()
+            assertEquals("Keyboard dismissal must preserve clipboard paste input focus", "true", evaluate(scenario, terminalFocused))
+            awaitDocument(scenario, "native clipboard text pasted literally without Enter",
+                screenContains(literalClipboard) + " && !(" + screenContains(fixture.getString("expected")) + ")")
             // Normal native Enter submits the real shell input.
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
             awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                 screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
+            if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
             verifyBoardKeepAwake(scenario)
             if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Disconnect $name']")).perform(webClick())

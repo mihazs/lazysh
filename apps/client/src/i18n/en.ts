@@ -156,6 +156,8 @@ export const english = {
   keepAwakeHeldOn: "Native display inhibition is still reported active, but this board has no confirmed ownership.",
   keepAwakeHeldOff: "Native display inhibition is still reported active although the preference is off.",
   keepAwakeOwnership: "Native display ownership could not be confirmed.",
+  clipboardChecking: "Checking clipboard support…",
+  clipboardRetry: "Retry clipboard check",
   keepAwakeChecking: "Checking native display ownership…",
   keepAwakePaused: "Keep awake is paused until this board is visible and focused.",
   keepAwakeInactive: "Native keep-awake is not active.",

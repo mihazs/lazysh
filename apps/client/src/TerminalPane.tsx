@@ -1,5 +1,6 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {LocalUiError,type UiErrorCause} from './i18n/localError';
+import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { useMountedAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
@@ -50,6 +51,12 @@ export default function TerminalPane({ session, active, reportError }: {
   const [meta, setMeta] = useState(false);
   const [clipboard, setClipboard] = useState<string | null>(null);
   const pendingClipboard = useRef(false);
+  const pasteRead = useRef<AbortController | null>(null);
+  const clipboardPlatform = useClipboardPlatform();
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const pasteView = useRef({active, connected: session.connected, id: session.id, terminal: session.terminal});
+  pasteView.current = {active, connected: session.connected, id: session.id, terminal: session.terminal};
+  useEffect(() => () => { pasteRead.current?.abort(); }, [session.id, session.terminal, session.connected, active]);
   const [link, setLink] = useState<string | null>(null);
   const [openingLink, setOpeningLink] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -215,14 +222,25 @@ export default function TerminalPane({ session, active, reportError }: {
     finally { setOpeningLink(false); }
   }
   async function paste() {
-    if (!session.connected || !mounted.current || !access.current()) return;
+    if (!active || !session.connected || !mounted.current || !access.current() || pasteRead.current) return;
+    const read = new AbortController(); pasteRead.current = read;
+    setPasteBusy(true);
+    const current = () => mounted.current && access.current() && !read.signal.aborted && pasteView.current.active && pasteView.current.connected
+      && pasteView.current.id === session.id && pasteView.current.terminal === session.terminal;
     try {
-      const text = await navigator.clipboard.readText();
+      const text = await readClipboardText(read.signal);
       // The retained terminal may now have a fresh onData handler after unlock.
-      if (!mounted.current || !access.current()) return;
+      if (!current()) return;
+      checkPasteSize(text, session.terminal.modes?.bracketedPasteMode);
       session.terminal.paste(text); session.terminal.focus();
     }
-    catch { if (mounted.current && access.current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
+    catch { if (current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
+    finally {
+      if (pasteRead.current === read) {
+        pasteRead.current = null;
+        if (mounted.current) setPasteBusy(false);
+      }
+    }
   }
   function search(direction: number) {
     if (!query) return;
@@ -386,13 +404,13 @@ export default function TerminalPane({ session, active, reportError }: {
       <button disabled={!session.connected} aria-label={t('terminalDpadLeft')} onClick={() => sendKey("\x1b[D")}>←</button><button disabled={!session.connected} aria-label={t('terminalDpadDown')} onClick={() => sendKey("\x1b[B")}>↓</button><button disabled={!session.connected} aria-label={t('terminalDpadRight')} onClick={() => sendKey("\x1b[C")}>→</button>
     </div>}
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')}>
-      {preferences.toolbar.map(key => <button key={key} disabled={!session.connected && key !== "dpad"} aria-pressed={key === "ctrl" ? ctrl : key === "meta" ? meta : key === "dpad" ? dpadOpen : undefined} aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined} title={key === "ctrl" ? ctrlLocked ? t("terminalControlRelease") : t("terminalControlLock") : undefined} onDoubleClick={() => {if (key === "ctrl") {setCtrl(true); setCtrlLocked(true);}}} onClick={() => {
+      {preferences.toolbar.map(key => <button key={key} disabled={(!session.connected && key !== "dpad") || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))} aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={key === "ctrl" ? ctrl : key === "meta" ? meta : key === "dpad" ? dpadOpen : undefined} aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined} title={key === "ctrl" ? ctrlLocked ? t("terminalControlRelease") : t("terminalControlLock") : undefined} onDoubleClick={() => {if (key === "ctrl") {setCtrl(true); setCtrlLocked(true);}}} onClick={() => {
         if (key === "ctrl") {if (ctrlLocked) {setCtrlLocked(false); setCtrl(false);} else setCtrl(!ctrl);}
         else if (key === "meta") setMeta(!meta);
-        else if (key === "paste") void paste();
+        else if (key === "paste") { if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry(); }
         else if (key === "dpad") setDpadOpen(!dpadOpen);
         else sendKey(sequences[key] ?? key);
-      }}>{labels[key] ?? (key === "paste" ? t("terminalPaste") : key === "dpad" ? t("terminalDpad") : key)}{key === "ctrl" && ctrlLocked ? ` · ${t("terminalLock")}` : ""}</button>)}
+      }}>{labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key)}{key === "ctrl" && ctrlLocked ? ` · ${t("terminalLock")}` : ""}</button>)}
       {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) session.terminal.focus();}}>{chord.label}</button>)}
       <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => searchInput.current?.focus());}}>{t('terminalFind')}</button>

@@ -6,6 +6,7 @@
     "main"
   ],
   "permissions": [
+    "allow-clipboard-read", "allow-clipboard-cancel", "allow-clipboard-is-android",
     "allow-board-keep-awake-status", "allow-board-keep-awake-acquire", "allow-board-keep-awake-release",
     "allow-ui-locale-status", "allow-ui-locale-set",
     "allow-theme-link-status", "allow-theme-link-read", "allow-theme-link-ack",
