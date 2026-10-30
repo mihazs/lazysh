@@ -24,6 +24,7 @@ export const english = {
   herdrAgentsTitle: "Live Herdr agents",
   herdrAgentsRefresh: "Refresh Herdr",
   herdrAgentsHint: "Detected by Herdr on this connected host. These are live pane statuses, separate from companion reports.",
+  herdrAgentsUnsupported: "This Herdr server did not return live agent metadata. Update Herdr on the host and check the selected server.",
   herdrAgentsInvalid: "Invalid Herdr agent response.",
   herdrAgentsUnavailable: "Herdr discovery is unavailable.",
   herdrAgentsNoServers: "No running Herdr servers found on this host.",

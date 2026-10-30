@@ -18,6 +18,7 @@ function servers(value:unknown):string[] {
 export function parseHerdrAgents(value:unknown):LiveAgent[] {
   if(!value || typeof value!=='object')throw invalid();
   const tree=value as {agents?:unknown;panes?:unknown};
+  if(tree.agents===undefined)throw new LocalUiError('herdrAgentsUnsupported');
   if(!Array.isArray(tree.panes) || tree.panes.length>4096 || (tree.agents!==undefined && (!Array.isArray(tree.agents) || tree.agents.length>4096)))throw invalid();
   const seen=new Set<string>();
   return ((tree.agents??[]) as unknown[]).map(item=>{

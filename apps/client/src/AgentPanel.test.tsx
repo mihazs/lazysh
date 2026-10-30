@@ -427,7 +427,8 @@ describe('live Herdr discovery',()=>{
   it('projects only live agent metadata and rejects malformed, duplicate or unmatched rows',()=>{
     const secret={...tree.agents[0],tokens:{secret:'must-not-leak'},agent_session:{transcript:'private'}};
     expect(parseHerdrAgents({...tree,agents:[secret]})[0]).toEqual({...tree.agents[0],cwd:'/work/codex'});
-    expect(parseHerdrAgents({...tree,agents:undefined})).toEqual([]);
+    expect(()=>parseHerdrAgents({...tree,agents:undefined})).toThrow(t('herdrAgentsUnsupported'));
+    expect(parseHerdrAgents({...tree,agents:[]})).toEqual([]);
     expect(parseHerdrAgents({...tree,panes:[{...tree.panes[0],cwd:null}]})[0].cwd).toBeNull();
     for(const value of [null,{...tree,agents:{}},{...tree,agents:[tree.agents[0],tree.agents[0]]},
       {...tree,agents:[{...tree.agents[0],agent_status:'approved'}]},
@@ -452,6 +453,14 @@ describe('live Herdr discovery',()=>{
     fireEvent.change(select,{target:{value:'first'}});
     await screen.findByText('builder-first');expect(screen.queryByText('builder-second')).toBeNull();
     expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree').map(([,args])=>(args as {name:string}).name)).toEqual(['second','first']);
+  });
+  it('distinguishes missing live metadata from a genuinely empty server',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:undefined}));
+    render(<HerdrAgentsPanel sessionId="legacy-host" visible/>);
+    await screen.findByText(`${t('herdrAgentsUnavailable')} ${t('herdrAgentsUnsupported')}`);
+    expect(screen.queryByText(/Showing .*detected agents/)).toBeNull();
+    expect(screen.queryByText('builder')).toBeNull();
   });
   it('suspends discovery when hidden and drops an old source before issuing its snapshot',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');

@@ -6129,6 +6129,18 @@ mod tests {
                     .unwrap()
             ));
             let sessions_before = state.sessions.lock().await.len();
+            // Upload-only recovery must not silently grant remote-command authority.
+            assert_eq!(
+                exec_for_access(
+                    &native_session,
+                    "printf command-control".into(),
+                    &access_lease()
+                )
+                .await
+                .unwrap_err()
+                .kind(),
+                "ssh_error"
+            );
             let restored = file_control::restore_with(
                 &state,
                 &mosh_id,
@@ -6177,6 +6189,20 @@ mod tests {
             .into_inner()
             .unwrap();
             assert_eq!(fs::read(uploaded.path).unwrap(), payload);
+            assert_eq!(
+                exec_for_access(
+                    &native_session,
+                    "printf command-control".into(),
+                    &access_lease()
+                )
+                .await
+                .unwrap_err()
+                .kind(),
+                "ssh_error"
+            );
+            assert!(native_session.handle.is_closed());
+            assert!(!restored_control.is_closed());
+
             assert!(upload_file(
                 access_lease(),
                 app.state(),

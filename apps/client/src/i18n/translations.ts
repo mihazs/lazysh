@@ -26,6 +26,7 @@ const translations = {
   herdrAgentsTitle: ["Agentes ativos do Herdr", "Agentes activos de Herdr"],
   herdrAgentsRefresh: ["Atualizar Herdr", "Actualizar Herdr"],
   herdrAgentsHint: ["Detectados pelo Herdr neste host conectado. São estados dos painéis, separados dos relatos do companion.", "Detectados por Herdr en este host conectado. Son estados de paneles, separados de los informes del companion."],
+  herdrAgentsUnsupported: ["Este servidor Herdr não retornou metadados de agentes ativos. Atualize o Herdr no host e confira o servidor selecionado.", "Este servidor Herdr no devolvió metadatos de agentes activos. Actualiza Herdr en el host y comprueba el servidor seleccionado."],
   herdrAgentsInvalid: ["Resposta de agentes Herdr inválida.", "Respuesta de agentes Herdr no válida."],
   herdrAgentsUnavailable: ["A descoberta do Herdr está indisponível.", "El descubrimiento de Herdr no está disponible."],
   herdrAgentsNoServers: ["Nenhum servidor Herdr em execução neste host.", "No se encontraron servidores Herdr en ejecución en este host."],

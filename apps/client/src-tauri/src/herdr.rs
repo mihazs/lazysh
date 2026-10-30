@@ -8,8 +8,8 @@ pub struct HerdrTree {
     pub workspaces: Vec<Workspace>,
     pub tabs: Vec<Tab>,
     pub panes: Vec<Pane>,
-    #[serde(default)]
-    pub agents: Vec<Agent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<Agent>>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Workspace {
@@ -100,7 +100,10 @@ fn parse(output: &str) -> Result<HerdrTree> {
     if tree.workspaces.len() > 1000
         || tree.tabs.len() > 2000
         || tree.panes.len() > 4096
-        || tree.agents.len() > 4096
+        || tree
+            .agents
+            .as_ref()
+            .is_some_and(|agents| agents.len() > 4096)
     {
         return Err(SshError::new(
             "output_too_large",
@@ -152,7 +155,7 @@ fn parse(output: &str) -> Result<HerdrTree> {
         }
     }
     let mut identities = std::collections::HashSet::new();
-    for a in &tree.agents {
+    for a in tree.agents.iter().flatten() {
         if !identities.insert((&a.terminal_id, &a.pane_id))
             || text(&a.terminal_id, 256).is_err()
             || !status(&a.agent_status)
@@ -342,8 +345,8 @@ mod tests {
                 agent[key] = serde_json::json!({"private":"not retained"});
             }
             let tree = parse(&source.to_string()).unwrap();
-            assert_eq!(tree.agents[0].agent_status, status);
-            let projected = serde_json::to_value(&tree.agents[0]).unwrap();
+            assert_eq!(tree.agents.as_ref().unwrap()[0].agent_status, status);
+            let projected = serde_json::to_value(&tree.agents.as_ref().unwrap()[0]).unwrap();
             assert_eq!(
                 projected,
                 serde_json::json!({"terminal_id":"terminal-3","workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","agent":"codex","name":null,"agent_status":status})
@@ -364,7 +367,13 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("terminal_id");
-        assert!(parse(&legacy.to_string()).unwrap().agents.is_empty());
+        let tree = parse(&legacy.to_string()).unwrap();
+        assert!(tree.agents.is_none());
+        assert!(serde_json::to_value(&tree).unwrap().get("agents").is_none());
+        let mut empty = reported_snapshot();
+        empty["result"]["snapshot"]["agents"] = serde_json::json!([]);
+        let projected = serde_json::to_value(parse(&empty.to_string()).unwrap()).unwrap();
+        assert_eq!(projected["agents"], serde_json::json!([]));
         for directory in [
             None,
             Some(serde_json::Value::Null),
@@ -547,8 +556,9 @@ mod tests {
         )
         .unwrap());
         let reported = snapshot();
-        assert_eq!(reported.agents.len(), 1);
-        let agent = &reported.agents[0];
+        let agents = reported.agents.as_ref().unwrap();
+        assert_eq!(agents.len(), 1);
+        let agent = &agents[0];
         assert_eq!(agent.agent.as_deref(), Some("codex"));
         assert_eq!(agent.agent_status, "blocked");
         assert_eq!(agent.terminal_id, terminal);
