@@ -216,7 +216,7 @@ path, stdout or stderr is retained. Driver actions and all budgets are unchanged
 
 The existing stage wrapper also emits finite entry and normal-return exit markers,
 without querying the UI or changing its actions. On command failure,
-`driverProgress` retains only the last complete allowlisted `{stage,event}` status
+`driverProgress` retains only the last complete allowlisted `{stage,event,depth}` status
 frame, separately from the original command outcome, UI failure and cleanup.
 A complete frame ends with its own `INSTRUMENTATION_STATUS_CODE: 0`; unfinished
 later data cannot replace an earlier complete marker. Missing or malformed data,
@@ -225,7 +225,16 @@ the unchanged 64KiB limit make progress unavailable. No partial output or raw
 exception is retained. Entry proves only that a wrapper was entered; exit proves
 its action returned normally. Neither identifies the currently blocked operation
 or the cause of a timeout, and even COMPLETE progress cannot grant a phase pass.
-The 45-second command and 240-second overall budgets remain unchanged. Refs #525.
+Depth is zero-based wrapper nesting, balanced in `finally` even after failure.
+The current deepest paths are FORM_SCROLL→SCROLL_OWNER→input and
+WORKSPACE→DRAWER→named, so only integer depths 0–2 are admitted; other values make
+progress unavailable. A READBACK exit at depth 1 can be a nested lookup before
+its text/equality check, while depth 0 identifies the outer three-field action's
+normal return. Legacy two-field records remain readable with explicit null
+(unknown) depth; no stack inference, clamping or fabricated zero is used.
+The 45-second command and 240-second overall budgets remain unchanged. Refs #525
+and #555. This diagnostic does not establish the current timeout cause or close
+public-package qualification.
 
 ## Verified qualification: public v1.0.0
 

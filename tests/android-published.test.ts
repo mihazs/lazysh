@@ -255,15 +255,15 @@ test('diagnostic metadata cannot satisfy or relax the original successful UI pha
   expect(publishedDriverObservation('INSTRUMENTATION_STATUS: lazyshPublishedObservation='+JSON.stringify(observedInput).slice(0,-1))).toEqual({state:'unavailable'});
 });
 
-const progressFrame=(stage='WORKSPACE_READINESS',event='entry')=>`INSTRUMENTATION_STATUS: lazyshPublishedProgress=${JSON.stringify({stage,event})}\nINSTRUMENTATION_STATUS_CODE: 0\n`;
+const progressFrame=(stage='WORKSPACE_READINESS',event='entry',depth:number|null=0)=>`INSTRUMENTATION_STATUS: lazyshPublishedProgress=${JSON.stringify({stage,event,...(depth===null?{}:{depth})})}\nINSTRUMENTATION_STATUS_CODE: 0\n`;
 test('progress retains only the last completely framed allowlisted wrapper boundary',()=>{
-  expect(publishedDriverProgress(progressFrame())).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'entry'});
+  expect(publishedDriverProgress(progressFrame())).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'entry',depth:0});
   const completed=progressFrame('WORKSPACE')+progressFrame()+progressFrame('WORKSPACE_READINESS','exit');
-  expect(publishedDriverProgress(completed)).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'exit'});
+  expect(publishedDriverProgress(completed)).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'exit',depth:0});
   expect(publishedDriverProgress(progressFrame().replaceAll('\n','\r\n'))).toMatchObject({state:'available'});
   for(let end=0;end<progressFrame().length;end++)expect(publishedDriverProgress(progressFrame().slice(0,end))).toEqual({state:'unavailable'});
   // A later unfinished frame cannot replace an earlier complete observation.
-  expect(publishedDriverProgress(completed+progressFrame('SAVE_HOST').slice(0,-2))).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'exit'});
+  expect(publishedDriverProgress(completed+progressFrame('SAVE_HOST').slice(0,-2))).toEqual({state:'available',stage:'WORKSPACE_READINESS',event:'exit',depth:0});
   expect(publishedDriverProgress(progressFrame().repeat(256))).toMatchObject({state:'available'});
   expect(publishedDriverProgress(progressFrame().repeat(257))).toEqual({state:'unavailable'});
 });
@@ -287,12 +287,12 @@ test.skipIf(process.platform!=='linux')('actual fragmented output preserves comp
   const script=`const marker=${JSON.stringify(marker)};process.stdout.write(marker.slice(0,31));setTimeout(()=>{process.stdout.write(marker.slice(31));process.stdout.write('private-stdout');process.stderr.write('private-stderr');process.exitCode=9;},10);`;
   const error=await publishedOutput(process.execPath,['-e',script],1000).catch(error=>error);
   expect(publishedCommandFailure(error)).toBe('nonzero');
-  expect(publishedCommandProgress(error)).toEqual({state:'available',stage:'SAVE_HOST',event:'exit'});
+  expect(publishedCommandProgress(error)).toEqual({state:'available',stage:'SAVE_HOST',event:'exit',depth:0});
   expect(JSON.stringify(error)+String(error)).not.toContain('private');
   expect(publishedCommandProgress(Object.create(Object.getPrototypeOf(error)))).toEqual({state:'unavailable'});
 });
 test.skipIf(process.platform!=='linux').each([false,true])('actual marker-then-hang keeps deadline and owned cleanup failure=%s',cleanupFails=>fixture(async asset=>{
-  const pidFile=join(dirname(asset.apk),'child.pid'),marker=progressFrame();
+  const pidFile=join(dirname(asset.apk),'child.pid'),marker=progressFrame('READBACK','exit',1);
   const script=`require('node:fs').writeFileSync(process.argv[1],String(process.pid));process.stdout.write(${JSON.stringify(marker)});process.stdout.write('private-stdout');process.stderr.write('private-stderr');setInterval(()=>{},1000);`;
   const f=fake();let calls=0;
   const run:PublishedCommand=async(program,args,milliseconds)=>{
@@ -308,7 +308,7 @@ test.skipIf(process.platform!=='linux').each([false,true])('actual marker-then-h
   expect(result.passed).toBe(false);expect(calls).toBe(1);
   expect(result.receipt).toMatchObject({failureStage:'create',created:false,relaunched:false,reinstalled:false,preserved:false,
     driverCommand:{outcome:'deadline'},driverStage:'unavailable',driverObservation:{state:'unavailable'},
-    driverProgress:{state:'available',stage:'WORKSPACE_READINESS',event:'entry'},cleanup:cleanupFails?'failed':'passed'});
+    driverProgress:{state:'available',stage:'READBACK',event:'exit',depth:1},cleanup:cleanupFails?'failed':'passed'});
   expect(f.calls.slice(-2).map(args=>args.at(-1))).toEqual(['app.lazysh.acceptance','app.lazysh.client']);
   const pid=Number(await readFile(pidFile,'utf8'));expect(Number.isInteger(pid)&&pid>0).toBe(true);
   expect(await identity(pid)).toBeUndefined();expect(JSON.stringify(result)).not.toContain('private');
@@ -318,6 +318,25 @@ test.each(['entry','exit'])('COMPLETE %s progress alone cannot grant success or 
   const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
   expect(result.passed).toBe(false);expect(result.receipt).toMatchObject({failureStage:'create',created:false,relaunched:false,reinstalled:false,preserved:false,
     driverCommand:{outcome:'completed'},driverStage:'unavailable',driverObservation:{state:'unavailable'},
-    driverProgress:{state:'available',stage:'COMPLETE',event},cleanup:'passed'});
+    driverProgress:{state:'available',stage:'COMPLETE',event,depth:0},cleanup:'passed'});
   expect(f.calls.filter(args=>args.includes('instrument'))).toHaveLength(1);
 }));
+
+test('same-name nested exits remain distinct from the outer readback return and legacy depth stays unknown',()=>{
+  const nested=progressFrame('READBACK','entry',0)+progressFrame('READBACK','entry',1)+progressFrame('READBACK','exit',1);
+  expect(publishedDriverProgress(nested)).toEqual({state:'available',stage:'READBACK',event:'exit',depth:1});
+  expect(publishedDriverProgress(nested+progressFrame('READBACK','exit',0))).toEqual({state:'available',stage:'READBACK',event:'exit',depth:0});
+  const legacy=progressFrame('READBACK','exit',null);
+  expect(publishedDriverProgress(legacy)).toEqual({state:'available',stage:'READBACK',event:'exit',depth:null});
+  expect(publishedDriverProgress(nested+legacy)).toEqual({state:'available',stage:'READBACK',event:'exit',depth:null});
+  expect(publishedDriverProgress(progressFrame('SCROLL_OWNER','entry',2))).toMatchObject({state:'available',depth:2});
+});
+test('invalid depth and extra fields invalidate progress without clamping or retaining private data',()=>{
+  const marker=(value:unknown)=>`INSTRUMENTATION_STATUS: lazyshPublishedProgress=${JSON.stringify(value)}\nINSTRUMENTATION_STATUS_CODE: 0\n`;
+  for(const depth of [-1,3,1.5,null,true,'private-depth',{},[],Number.MAX_SAFE_INTEGER]){
+    const result=publishedDriverProgress(progressFrame()+marker({stage:'READBACK',event:'exit',depth}));
+    expect(result).toEqual({state:'unavailable'});expect(JSON.stringify(result)).not.toContain('private');
+  }
+  expect(publishedDriverProgress(marker({stage:'READBACK',event:'exit',depth:0,private:'private-value'}))).toEqual({state:'unavailable'});
+  expect(publishedDriverProgress('INSTRUMENTATION_STATUS: lazyshPublishedProgress={"stage":"READBACK","event":"exit","depth":0,"depth":1}\nINSTRUMENTATION_STATUS_CODE: 0\n')).toEqual({state:'unavailable'});
+});
