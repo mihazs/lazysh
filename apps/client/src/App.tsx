@@ -605,7 +605,7 @@ export function ConnectDialog({
   connected: (session: LiveSession) => void;
   close: () => void;
   launch?: DesktopHostLaunch;
-  recovery?: {sessionId:string;restored:()=>void};
+  recovery?: {sessionId:string;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void};
 }) {
   useUi();
   const [lease] = useState(() => launch?.lease ?? captureAccess());
@@ -712,9 +712,12 @@ export function ConnectDialog({
           ? { password }
           : { privateKey, ...(passphrase ? { passphrase } : {}) };
       if(recovery) {
-        const result=await api.restoreFileTransfer(recovery.sessionId,credentials,{useSavedCredentials});
-        if(!result || typeof result!=='object' || result.schemaVersion!==1 || result.status!=='restored' || Object.keys(result).some(key=>!['schemaVersion','status'].includes(key)))throw new LocalUiError('attachmentRestoreInvalid');
-        if(alive.current && lease.current()) {setPassword('');setPrivateKey('');setPassphrase('');recovery.restored();}
+        if(recovery.current && !recovery.current())return;
+        const generation=exportGeneration.current;
+        const restore=recovery.purpose==='hostTools'?api.restoreHostTools:api.restoreFileTransfer;
+        const result=await restore(recovery.sessionId,credentials,{useSavedCredentials});
+        if(!result || typeof result!=='object' || result.schemaVersion!==1 || result.status!=='restored' || Object.keys(result).some(key=>!['schemaVersion','status'].includes(key)))throw new LocalUiError(recovery.purpose==='hostTools'?'hostToolsRestoreInvalid':'attachmentRestoreInvalid');
+        if(alive.current && lease.current() && generation===exportGeneration.current && !document.hidden && (!recovery.current || recovery.current())) {setPassword('');setPrivateKey('');setPassphrase('');recovery.restored();}
         return;
       }
       const pending = await prepareSession(
@@ -805,7 +808,7 @@ export function ConnectDialog({
   }
   return (
     <Dialog
-      title={recovery ? t("attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
+      title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
       {trust ? (
@@ -1054,7 +1057,7 @@ export function ConnectDialog({
           <div className="dialog-actions">
             <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
             <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
-              {busy ? t("appConnecting") : t(recovery ? "attachmentRestore" : "appConnect")}
+              {busy ? t("appConnecting") : t(recovery ? recovery.purpose==='hostTools'?"hostToolsRestore":"attachmentRestore" : "appConnect")}
               <ChevronRight size={16} />
             </button>
           </div>
@@ -1096,7 +1099,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [editorMux,setEditorMux]=useState(false);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
-  const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;restored:()=>void}|null>(null);
+  const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void}|null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
   const [muxLaunch, setMuxLaunch] = useState<DesktopMuxRequest>();
   const [deleting, setDeleting] = useState<Host | null>(null);
@@ -1759,7 +1762,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           }}/></Suspense>}
         </div>}
         {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
-          <AgentPanel key={active.id} sessionId={active.id} visible={agentsVisible} onUseReportedHistory={openReportedHistory}/>
+          <AgentPanel key={active.id} sessionId={active.id} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+            const source=active;
+            const current=()=>mounted.current && lease.current() && !document.hidden && currentView.current.activeId===source.id && !closingSessions.current.has(source.id) && sessionsRef.current.some(session=>session===source && session.connected);
+            const host=hosts.find(host=>host.id===source.hostId);
+            if(host && agentsVisible && current())setFileRecovery({sessionId:source.id,host,purpose:'hostTools',current,restored});
+          }:undefined}/>
         </div>}
         <div className="sidebar-bottom">
           <div>
@@ -2068,7 +2076,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           close={() => {setEditor(null);setEditorMux(false);}}
         />
       )}
-      {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
+      {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,purpose:fileRecovery.purpose,current:fileRecovery.current,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
       {connectingHost && (
         <ConnectDialog
           key={connectingHost.id}

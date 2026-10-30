@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {bindProtectedInvoke,captureAccess} from './access';
 import {t,useUi,formatNumber} from './i18n/core';
-import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
+import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
 
 type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab_id:string;agent_status:'idle'|'working'|'blocked'|'done'|'unknown';agent:string|null;name:string|null;cwd:string|null};
 const statusKeys={idle:'herdrAgentIdle',working:'herdrAgentWorking',blocked:'herdrAgentBlocked',done:'herdrAgentDone',unknown:'herdrAgentUnknown'} as const;
@@ -18,6 +18,7 @@ function servers(value:unknown):string[] {
 export function parseHerdrAgents(value:unknown):LiveAgent[] {
   if(!value || typeof value!=='object')throw invalid();
   const tree=value as {agents?:unknown;panes?:unknown};
+  if(tree.agents===undefined)throw new LocalUiError('herdrAgentsUnsupported');
   if(!Array.isArray(tree.panes) || tree.panes.length>4096 || (tree.agents!==undefined && (!Array.isArray(tree.agents) || tree.agents.length>4096)))throw invalid();
   const seen=new Set<string>();
   return ((tree.agents??[]) as unknown[]).map(item=>{
@@ -35,13 +36,13 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 }
 
 /** Live Herdr metadata is independent of companion lifecycle reports and grants no input authority. */
-export default function HerdrAgentsPanel({sessionId,visible}:{sessionId:string;visible:boolean}) {
+export default function HerdrAgentsPanel({sessionId,visible,onRestoreHostTools}:{sessionId:string;visible:boolean;onRestoreHostTools?:(restored:()=>void)=>void}) {
   useUi();
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const [choice,setChoice]=useState<{host:string;name:string}|null>(null);
   const selected=choice?.host===sessionId?choice.name:'';
-  const [result,setResult]=useState<{host:string;servers:string[];server:string;rows:LiveAgent[]}|null>(null);
+  const [result,setResult]=useState<{host:string;servers:string[];server:string;rows:LiveAgent[];loaded:boolean}|null>(null);
   const [failure,setFailure]=useState<{host:string;cause:UiErrorCause}|null>(null);
   const [busy,setBusy]=useState(false);
   const [query,setQuery]=useState('');
@@ -50,22 +51,23 @@ export default function HerdrAgentsPanel({sessionId,visible}:{sessionId:string;v
   const refresh=useRef<()=>Promise<void>>(async()=>{});
   useEffect(()=>{
     let current=true;
-    setResult(previous=>previous?.host===sessionId?{...previous,server:selected,rows:[]}:null);setFailure(null);setBusy(false);
+    setResult(previous=>previous?.host===sessionId?{...previous,server:selected,rows:[],loaded:false}:null);setFailure(null);setBusy(false);
     const read=async()=>{
       if(!current || !visible || document.hidden || !lease.current() || flight.current)return;
-      flight.current=true;setBusy(true);setFailure(null);
+      flight.current=true;setBusy(true);
       const owns=()=>current && visible && !document.hidden && lease.current();
       try {
         const names=servers(await invoke('multiplexer_sessions',{sessionId,kind:'herdr'}));
         if(!owns())return;
         // One server per refresh bounds fan-out; multiple servers require an explicit choice.
         const server=names.includes(selected)?selected:names.length===1?names[0]:'';
-        setResult(previous=>previous?.host===sessionId && previous.server===server?{...previous,servers:names}:{host:sessionId,servers:names,server,rows:[]});
+        setResult(previous=>previous?.host===sessionId && previous.server===server?{...previous,servers:names,loaded:previous.loaded || !server}:{host:sessionId,servers:names,server,rows:[],loaded:!server});
         if(server){
           const rows=parseHerdrAgents(await invoke('herdr_tree',{sessionId,name:server}));
-          if(owns())setResult({host:sessionId,servers:names,server,rows});
+          if(owns())setResult({host:sessionId,servers:names,server,rows,loaded:true});
         }
-      }catch(error){if(owns()){setResult(previous=>previous?.host===sessionId?{...previous,rows:[]}:null);setFailure({host:sessionId,cause:captureUiError(error)});}}
+        if(owns())setFailure(null);
+      }catch(error){if(owns()){setResult(previous=>previous?.host===sessionId?{...previous,rows:[],loaded:false}:null);setFailure({host:sessionId,cause:captureUiError(error)});}}
       finally{flight.current=false;if(current)setBusy(false);else void refresh.current();}
     };
     refresh.current=read;
@@ -75,11 +77,11 @@ export default function HerdrAgentsPanel({sessionId,visible}:{sessionId:string;v
   },[sessionId,selected,visible,invoke,lease]);
   const data=result?.host===sessionId?result:null;
   const rows=data?.rows.filter(row=>[row.name,row.agent,row.cwd,row.pane_id].some(text=>text?.toLowerCase().includes(query.trim().toLowerCase())))??[];
-  return <section className="herdr-agents" aria-label={t('herdrAgentsTitle')}>
+  return <section className="herdr-agents" aria-label={t('herdrAgentsTitle')} aria-busy={busy}>
     <div className="tool-bar"><h3>{t('herdrAgentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={()=>void refresh.current()}>{t('herdrAgentsRefresh')}</button></div>
     <p>{t('herdrAgentsHint')}</p>
-    {busy && <p role="status">{t('herdrReading')}</p>}
-    {failure?.host===sessionId && <p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>}
+    {busy && !data?.loaded && failure?.host!==sessionId && <p role="status">{t('herdrReading')}</p>}
+    {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={busy || !visible || !lease.current()} onClick={()=>onRestoreHostTools(()=>void refresh.current())}>{t('hostToolsRestore')}</button>}</div>}
     {data && <>
       {data.servers.length===0?<p>{t('herdrAgentsNoServers')}</p>:<>
         <label>{t('herdrAgentsServer')}<select value={data.server} disabled={busy} onChange={event=>setChoice({host:sessionId,name:event.target.value})}>
@@ -87,7 +89,7 @@ export default function HerdrAgentsPanel({sessionId,visible}:{sessionId:string;v
         </select></label>
         <p>{t('herdrAgentsScope',{servers:formatNumber(data.servers.length)})}</p>
         {data.server && <><label>{t('herdrAgentsSearch')}<input type="search" value={query} onChange={event=>setQuery(event.target.value)}/></label>
-          {!busy && <p role="status">{t('herdrAgentsCount',{shown:formatNumber(rows.length),total:formatNumber(data.rows.length)})}</p>}
+          {data.loaded && <p role="status">{t('herdrAgentsCount',{shown:formatNumber(rows.length),total:formatNumber(data.rows.length)})}</p>}
           <div className="live-agent-list">{rows.map(row=><article className="agent-card" key={JSON.stringify([sessionId,data.server,row.terminal_id,row.pane_id])}>
             <strong>{row.name??row.agent??row.pane_id}</strong>{row.name && row.agent && <p>{row.agent}</p>}
             <p>{t(statusKeys[row.agent_status])}</p>{row.cwd && <code>{row.cwd}</code>}
