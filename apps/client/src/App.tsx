@@ -620,7 +620,8 @@ export function ConnectDialog({
   const [storedCredentials, setStoredCredentials] = useState(
     host.credentialsStored === true,
   );
-  const [useSavedCredentials, setUseSavedCredentials] = useState(false);
+  const [savedCredentialChoice, setUseSavedCredentials] = useState<boolean|null>(null);
+  const useSavedCredentials=savedCredentialChoice ?? savedCredentials;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<UiErrorCause>("");
   const [trust, setTrust] = useState<string | null>(null);
@@ -906,12 +907,12 @@ export function ConnectDialog({
             <button
               type="button"
               aria-pressed={method === "password"}
-              onClick={() => setMethod("password")}
+              onClick={() => {setUseSavedCredentials(false);setMethod("password");}}
             >{t("appPassword")}</button>
             <button
               type="button"
               aria-pressed={method === "key"}
-              onClick={() => setMethod("key")}
+              onClick={() => {setUseSavedCredentials(false);setMethod("key");}}
             >{t("appPrivateKey")}</button>
           </div>
           {(savedCredentials || storedCredentials) && (
@@ -997,7 +998,7 @@ export function ConnectDialog({
             <label>{t("appPassword")}<input
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {setUseSavedCredentials(false);setPassword(e.target.value);}}
                 autoComplete="off"
                 required
               />

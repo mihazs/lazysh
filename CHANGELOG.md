@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Select Use saved credentials by default after confirming availability in the native vault. Explicit Password/Private key choices and credentials entered while the availability check is pending keep manual authentication selected. Connect still requires an explicit action and stored secrets stay in the native vault.
+
 - Open the current saved host’s Default multiplexer setting directly from More, with the selector focused. Save a named Herdr, tmux or Zellij default for future connections without changing the running terminal or its saved transport preference. Connection defaults are unchanged.
 
 - Update installation and release acceptance notes with the explicit in-app Unix companion path, current Android/Linux installer proof and published-APK qualification limits. Keep documentation links usable in the attached guide and release notes.
