@@ -144,8 +144,18 @@ after a confirmed closed upload connection. Explicit authentication reuses the
 original verified saved host, keeps the Mosh terminal and attachment edits, and
 requires a separate manual Upload retry. It does not save credentials or restore
 other SSH tools. Recovery protocol and cancellation tests passed against owned
-Mosh/OpenSSH; physical Samsung/native UI recovery remains unexecuted, and the
-original Galaxy connection-loss cause is unproven. See [attachment recovery](https://github.com/mihazs/lazysh/blob/main/docs/attachments.md).
+Mosh/OpenSSH. At source `2b27ad6f`, the actual Linux native GUI recovery case
+passed in 23.804s: explicit reauthentication and a separate upload transferred
+462,702 exact bytes, verified the file hash, preserved the existing file on a
+duplicate upload, and retained the original Mosh terminal and native identity
+([native GUI evidence](https://github.com/mihazs/lazysh/actions/runs/41122854261/job/124297329551)).
+This follows the retained `fc14fc82` failure where a shared error-code collision
+replaced file-transfer guidance with host-tools guidance; the distinct-purpose
+repair was reproduced and tested before this passing run
+([earlier failure](https://github.com/mihazs/lazysh/actions/runs/41109166988/job/124249758232)).
+Android manual upload
+and physical Samsung recovery remain unexecuted; the original Galaxy connection-loss
+cause is unproven. See [attachment recovery](https://github.com/mihazs/lazysh/blob/main/docs/attachments.md).
 
 Versions 1.1.0 and 1.1.1 omitted the native permission grants for upload recovery
 and host companion settings, so their visible recovery action could be rejected
@@ -182,6 +192,55 @@ READBACK exit could belong to a nested lookup, so it does not prove outer readba
 completion or a timeout cause. The later pass does not explain that failure;
 [issue #555](https://github.com/mihazs/lazysh/issues/555) remains open. Neither sample
 automatically qualifies later APKs, cross-version upgrades or native ARM64 hardware.
+
+Public [v1.2.0](https://github.com/mihazs/lazysh/releases/tag/v1.2.0), source
+`277a066a98fe356ff838f8c21e89f7ae3773d45e`, passed an independent audit of all
+14 published assets, their release manifests, applicable signatures, package identities and
+source-derived installation guide and notes
+([audit evidence](https://github.com/mihazs/lazysh/issues/497#issuecomment-6527133931)).
+Both exact public Google and FOSS ARM64 APKs then passed host save/readback,
+relaunch and identical-byte reinstall with preserved data and owned cleanup on
+admitted API35 x86_64 guests using ARM64 translation
+([qualification](https://github.com/mihazs/lazysh/actions/runs/41086094864)).
+This qualifies those public bytes and that bounded flow; it does not qualify
+physical Samsung hardware, native ARM64 execution, cross-version migration or
+all features. It does not explain the earlier failed qualification samples.
+
+Candidate `fc14fc82` passed final tested companion validation for Linux x64/ARM64,
+macOS x64/ARM64 and Windows x64, including exact source-pinned MIT, adapter notice
+and Apache license bodies from each executable's `licenses` command
+([companion jobs](https://github.com/mihazs/lazysh/actions/runs/41109166988)).
+Linux and macOS also executed the packaged built-in account-usage worker with all
+31 providers and context monitoring explicitly disabled in an isolated owned profile, verified an empty
+ready report and preserved that profile. Windows passed the process-ownership
+regression for suspended-process admission into an owned job and descendant cleanup
+([Windows source checks](https://github.com/mihazs/lazysh/actions/runs/41109166988/job/124247237456)).
+Windows packaged provider execution remains unqualified: its known-folder APIs
+ignore the profile overrides used by that isolated Linux/macOS check. These are
+candidate checks, not acceptance of future published binaries or live provider
+accounts. Android, Windows and macOS source checks passed at the same candidate
+([Android](https://github.com/mihazs/lazysh/actions/runs/41109166988/job/124247237281),
+[macOS](https://github.com/mihazs/lazysh/actions/runs/41109166988/job/124247237204));
+the overall run failed, including the earlier Linux attachment recovery case.
+
+Source `2b27ad6f` also passed the exact native SSH quota-cancellation case across
+channel close, EOF, HUP, TERM, INT and lease revocation. Its native GUI suite passed
+12 tests across three files. The overall Linux job later failed a separate
+published-companion check at public GitHub metadata admission; no network or API
+cause was established, and that failure remains recorded separately.
+
+Candidate `4184ff814bfb0c1e448a0aba639c5d68effd99d8` passed the owned packaged Android
+emulator Mosh background-session case with notification permission granted: initial
+notification publication within ten seconds, more than 35 seconds on Home, a
+fresh terminal response after returning, and service/notification/wake-lock cleanup
+while the Activity was stopped after the last worker
+([runtime evidence](https://github.com/mihazs/lazysh/actions/runs/41135414019/job/124339562337)).
+The case XML records one pass and no failures (89.679 seconds); the independent
+host witness retained the same shell birth and UDP session with one bootstrap.
+The whole runtime job was later cancelled at its 30-minute limit, so this is a
+passing named case, not a passing job; the later QR case retained no verdict and
+the agent inventory step was not reached. It does not qualify physical Samsung
+hardware, Doze, Activity recreation or denied-notification-permission behavior.
 
 An earlier qualification installed both public v1.1.0 APKs, but their
 host-creation driver commands reached the existing 45-second deadline
