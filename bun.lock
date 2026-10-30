@@ -15,6 +15,7 @@
       "name": "@lazysh/agent",
       "version": "1.2.0",
       "dependencies": {
+        "@lazysh/account-usage": "workspace:*",
         "@lazysh/common": "workspace:*",
         "@lazysh/notification-client": "workspace:*",
       },
@@ -26,6 +27,7 @@
       "name": "@lazysh/client",
       "version": "1.2.0",
       "dependencies": {
+        "@lazysh/account-usage": "workspace:*",
         "@lazysh/common": "workspace:*",
         "@lazysh/display-idle": "workspace:*",
         "@lazysh/et-transport": "workspace:*",
@@ -84,6 +86,10 @@
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
+    },
+    "packages/account-usage": {
+      "name": "@lazysh/account-usage",
+      "version": "1.2.0",
     },
     "packages/apple-speech": {
       "name": "@lazysh/apple-speech",
@@ -299,6 +305,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.6.0", "", {}, "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
+
+    "@lazysh/account-usage": ["@lazysh/account-usage@workspace:packages/account-usage"],
 
     "@lazysh/agent": ["@lazysh/agent@workspace:apps/agent"],
 

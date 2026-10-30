@@ -8,6 +8,7 @@ export const ownedWorkspaces = {
   'apps/notification-service': '@lazysh/notification-service',
   'apps/share-service': '@lazysh/share-service',
   'apps/transcription-service': '@lazysh/transcription-service',
+  'packages/account-usage': '@lazysh/account-usage',
   'packages/apple-speech': '@lazysh/apple-speech',
   'packages/apple-status': '@lazysh/apple-status',
   'packages/common': '@lazysh/common',

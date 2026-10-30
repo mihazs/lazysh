@@ -63,6 +63,8 @@ import {
 import type { LiveSession } from "./terminal";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import type { AppleUsageReport } from "./UsagePanel";
+import {useAccountUsage} from "./useAccountUsage";
+import {AccountUsageBar,AccountUsageDetails} from "./AccountUsage";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
@@ -1194,11 +1196,19 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       || !sessionsRef.current.includes(session))return;
     setView('attachments');setSidebar(false);
   }
+  function beginHostToolsRecovery(source: LiveSession, restored:()=>void) {
+    const current=()=>mounted.current && lease.current() && !document.hidden
+      && currentView.current.activeId===source.id && !closingSessions.current.has(source.id)
+      && sessionsRef.current.some(session=>session===source && session.connected && !session.disposed);
+    const host=hosts.find(host=>host.id===source.hostId);
+    if(source.mosh && host && current())setFileRecovery({sessionId:source.id,host,purpose:'hostTools',current,restored});
+  }
   const active = sessions.find((session) => session.id === activeId);
+  const accountUsage=useAccountUsage(active?.connected ? active.id : null);
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
-  const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice') : [];
+  const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice' || id==='usage') : [];
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
@@ -1249,7 +1259,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     else setLocalCapability({available:false,reason:t("appLocalTerminalsRequireTheNativeDesktopApp")});
     return()=>{alive=false;};
   },[]);
-  useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice')setView('terminal');},[active?.id,active?.local,view]);
+  useEffect(()=>{if(active?.local && view!=='terminal' && view!=='voice' && view!=='usage')setView('terminal');},[active?.id,active?.local,view]);
   const launchBusy=!!fileRecovery || openingLocal || !!connectingHost || !!editor || !!deleting || palette || switcher || pickerInFlight || (!wideSidebar && sidebar)
     || pushSettings || preferences || sync || sharing || mobileTools || about || inbox || restoring
     || (view==='sessions' && muxLaunch?.sessionId===activeId);
@@ -1763,10 +1773,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </div>}
         {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
           <AgentPanel key={active.id} sessionId={active.id} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
-            const source=active;
-            const current=()=>mounted.current && lease.current() && !document.hidden && currentView.current.activeId===source.id && !closingSessions.current.has(source.id) && sessionsRef.current.some(session=>session===source && session.connected);
-            const host=hosts.find(host=>host.id===source.hostId);
-            if(host && agentsVisible && current())setFileRecovery({sessionId:source.id,host,purpose:'hostTools',current,restored});
+            if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>
         </div>}
         <div className="sidebar-bottom">
@@ -1973,8 +1980,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
                 ))}
-                {active.connected && !active.local && view === "usage" && (
-                  <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />
+                {active.connected && view === "usage" && (
+                  <>
+                  <AccountUsageDetails model={accountUsage} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
+                  </>
                 )}
                 {active.connected && !active.local && view === "chat" && (
                   <ChatPanel
@@ -2024,6 +2034,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               </Suspense>
             </div>
             <footer className="workspace-footer">
+              {active.connected && <AccountUsageBar model={accountUsage} onOpen={()=>{setView('usage');setSidebar(false);}}/>}
               <span>
                 {active.local ? <TerminalSquare size={12}/> : <ShieldCheck size={12} />}
                 {active.destination}
