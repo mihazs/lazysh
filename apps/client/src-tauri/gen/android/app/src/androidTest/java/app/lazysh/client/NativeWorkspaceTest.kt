@@ -1392,19 +1392,38 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
         val screens = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0)"
         awaitDocument(scenario, "owned history newest row visible", "(() => {const screens=$screens; return screens.length===1 && screens[0].textContent.includes('NEW512');})()")
-        val geometry = JSONObject(evaluate(scenario, """
+        val geometryScript = """
             (()=>{
               const screens=$screens, viewport=window.visualViewport;
-              if(screens.length!==1 || !viewport) return {};
-              const r=screens[0].getBoundingClientRect();
-              const targets=[0.25,0.5,0.75].every(fraction=>{
+              const unavailable={ready:false,hits:['none','none','none']};
+              if(screens.length!==1 || !viewport || viewport.scale!==1) return unavailable;
+              const screen=screens[0],terminal=screen.parentElement,canvas=screen.closest('.terminal-canvas');
+              if(!terminal?.classList.contains('xterm') || !canvas || terminal.parentElement!==canvas) return unavailable;
+              const surfaces=terminal.querySelectorAll(':scope > .xterm-viewport');
+              if(surfaces.length!==1 || !surfaces[0].getClientRects().length ||
+                getComputedStyle(surfaces[0]).visibility==='hidden') return unavailable;
+              const surface=surfaces[0],r=screen.getBoundingClientRect(),s=surface.getBoundingClientRect();
+              const inside=b=>[b.left,b.top,b.right,b.bottom].every(Number.isFinite) && b.width>0 && b.height>0 &&
+                b.left>=viewport.offsetLeft && b.top>=viewport.offsetTop &&
+                b.right<=viewport.offsetLeft+viewport.width && b.bottom<=viewport.offsetTop+viewport.height;
+              const hits=[0.25,0.5,0.75].map(fraction=>{
                 const hit=document.elementFromPoint((r.left+r.right)/2,r.top+r.height*fraction);
-                return hit===screens[0] || screens[0].contains(hit);
+                return !hit?'none':hit===screen || screen.contains(hit)?'screen':hit===surface?'viewport':'other';
               });
-              return {targets,rect:[r.left,r.top,r.right,r.bottom],viewport:[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale],density:devicePixelRatio};
+              return {ready:inside(r) && inside(s) && hits.every(hit=>hit==='screen' || hit==='viewport'),hits,
+                rect:[r.left,r.top,r.right,r.bottom],viewport:[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale],density:devicePixelRatio};
             })()
-        """))
-        assertTrue("Native swipe path must hit only the visible terminal screen", geometry.getBoolean("targets"))
+        """
+        val geometryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        var geometry = JSONObject()
+        while (true) {
+            val remaining = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime())
+            assertTrue("Native swipe path did not settle inside its owned screen/viewport: hits=${geometry.optJSONArray("hits")}", remaining > 0)
+            geometry = JSONObject(evaluate(scenario, geometryScript, remaining))
+            if (geometry.getBoolean("ready") && System.nanoTime() < geometryDeadline) break
+            val pause = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime()).coerceAtMost(50)
+            if (pause > 0) Thread.sleep(pause)
+        }
         val rect = geometry.getJSONArray("rect")
         val viewport = geometry.getJSONArray("viewport")
         val bounds = (0..3).map { rect.getDouble(it) }
@@ -1582,6 +1601,8 @@ class NativeWorkspaceTest {
         }
     }
 
+    private enum class SshUiCleanupStage { DISMISS, SESSION_SELECT, DISCONNECT, HOST_DELETE }
+
     private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false) {
         require(!requireHerdr || !requireCompanion) { "Owned SSH fixture mode is ambiguous" }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -1604,7 +1625,7 @@ class NativeWorkspaceTest {
         }
         val fixture = try { JSONObject(String(bytes, Charsets.UTF_8)) }
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
-        if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name").isNotEmpty()) { "Owned Herdr fixture required" }
+        if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name") == "owned-guard") { "Owned Herdr fixture required" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
@@ -1974,12 +1995,20 @@ class NativeWorkspaceTest {
         } finally {
             android.util.Log.i("LazyshOwnedCase", "end:$nonce:pid:${android.os.Process.myPid()}")
             var cleanupFailure: Throwable? = null
-            fun retainCleanup(failure: Throwable, message: String) {
+            fun retainCleanup(message: String) {
+                val failure = AssertionError(message)
                 val first = primaryFailure ?: cleanupFailure
-                if (first != null) first.addSuppressed(AssertionError(message))
+                if (first != null) first.addSuppressed(failure)
                 else cleanupFailure = failure
             }
-            try {
+            var cleanupStage = SshUiCleanupStage.DISMISS
+            fun cleanupUi(action: () -> Unit) {
+                try { action() }
+                catch (cleanup: Throwable) {
+                    retainCleanup("Owned SSH UI cleanup failed: ${cleanupStage.name}:${cleanup.javaClass.simpleName}")
+                }
+            }
+            cleanupUi {
                 val authentication = "[role=dialog] textarea, [role=dialog] .fingerprint code, [role=dialog] .destination"
                 if (evaluate(scenario, present(authentication)) == "true") {
                     clickButton("Cancel")
@@ -1992,19 +2021,40 @@ class NativeWorkspaceTest {
                         Thread.sleep(50)
                     }
                 }
-                val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
-                for (ownedName in ownedNames) {
+                val menu = "[role=dialog][aria-label='Workspace tools']"
+                if (evaluate(scenario, workspaceElementVisible(menu)) == "true")
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$menu button[aria-label='Close Workspace tools']")).perform(webClick())
+            }
+            val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
+            for (ownedName in ownedNames) {
+                cleanupUi {
+                    cleanupStage = SshUiCleanupStage.SESSION_SELECT
                     val disconnect = "button[aria-label='Disconnect $ownedName']"
-                    if (evaluate(scenario, present(disconnect)) == "true")
-                        onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                    if (evaluate(scenario, present(disconnect)) == "true") {
+                        val selected = "Array.from(document.querySelectorAll('[role=tab][aria-selected=true]')).some(x=>x.textContent.trim()===${JSONObject.quote(ownedName)})"
+                        if (evaluate(scenario, selected) != "true") {
+                            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Switch terminal session']")).perform(webClick())
+                            val choice = "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[normalize-space(.)='$ownedName']]"
+                            onWebView().withElement(findElement(Locator.XPATH, choice)).perform(webScrollIntoView()).perform(webClick())
+                            awaitDocument(scenario, "owned cleanup session selected", selected)
+                        }
+                        cleanupStage = SshUiCleanupStage.DISCONNECT
+                        if (evaluate(scenario, workspaceElementVisible(disconnect, true)) == "true")
+                            onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                        else workspaceMenuAction(scenario, "End $ownedName connection")
+                        awaitDocument(scenario, "owned cleanup session ended", "!" + present(disconnect))
+                    }
                 }
+            }
+            cleanupStage = SshUiCleanupStage.HOST_DELETE
+            cleanupUi {
                 val delete = "button[aria-label='Delete $name']"
                 if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, delete)).perform(webClick())
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
                 }
-            } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH UI cleanup failed") }
+            }
             try {
                 instrumentation.runOnMainSync {
                     if (clipboard.primaryClipDescription?.label?.toString() == label) {
@@ -2012,7 +2062,7 @@ class NativeWorkspaceTest {
                         else clipboard.setPrimaryClip(ClipData.newPlainText(label, ""))
                     }
                 }
-            } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH clipboard cleanup failed") }
+            } catch (_: Throwable) { retainCleanup("Owned SSH clipboard cleanup failed") }
             cleanupFailure?.let { throw it }
         }
     }
