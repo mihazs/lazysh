@@ -2,6 +2,23 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  herdrAgentsTitle: ["Agentes ativos do Herdr", "Agentes activos de Herdr"],
+  herdrAgentsRefresh: ["Atualizar Herdr", "Actualizar Herdr"],
+  herdrAgentsHint: ["Detectados pelo Herdr neste host conectado. São estados dos painéis, separados dos relatos do companion.", "Detectados por Herdr en este host conectado. Son estados de paneles, separados de los informes del companion."],
+  herdrAgentsInvalid: ["Resposta de agentes Herdr inválida.", "Respuesta de agentes Herdr no válida."],
+  herdrAgentsUnavailable: ["A descoberta do Herdr está indisponível.", "El descubrimiento de Herdr no está disponible."],
+  herdrAgentsNoServers: ["Nenhum servidor Herdr em execução neste host.", "No se encontraron servidores Herdr en ejecución en este host."],
+  herdrAgentsServer: ["Servidor Herdr", "Servidor Herdr"],
+  herdrAgentsChoose: ["Escolha um servidor Herdr", "Elige un servidor Herdr"],
+  herdrAgentsScope: ["Escolha entre {{servers}} servidores em execução. Apenas o selecionado é consultado; os demais não estão incluídos.", "Elige entre {{servers}} servidores en ejecución. Solo se consulta el seleccionado; los demás no están incluidos."],
+  herdrAgentsSearch: ["Buscar agentes ativos do Herdr", "Buscar agentes activos de Herdr"],
+  herdrAgentsCount: ["Exibindo {{shown}} de {{total}} agentes detectados neste servidor.", "Mostrando {{shown}} de {{total}} agentes detectados en este servidor."],
+  herdrAgentIdle: ["Ocioso", "Inactivo"],
+  herdrAgentWorking: ["Trabalhando", "Trabajando"],
+  herdrAgentBlocked: ["Precisa de atenção", "Necesita atención"],
+  herdrAgentDone: ["Concluído", "Finalizado"],
+  herdrAgentUnknown: ["Estado desconhecido", "Estado desconocido"],
+
   clipboardChecking: ["Verificando suporte à área de transferência…", "Comprobando compatibilidad del portapapeles…"],
   clipboardRetry: ["Tentar verificar a área de transferência novamente", "Reintentar comprobación del portapapeles"],
   navigationAgents: ["Navegação de agentes", "Navegación de agentes"],

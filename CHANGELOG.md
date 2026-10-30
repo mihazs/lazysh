@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Discover live Codex and other agent panes reported by Herdr independently of companion lifecycle reports. A single running Herdr server is selected automatically; choose a server when several are running. Only that server is refreshed, and its Idle, Working, Needs attention, Done and Unknown statuses remain distinct from companion history. No input, approval or history authority is inferred from discovery.
+
 - Keep Mosh sessions alive when UDP readiness has drained instead of closing with “No packet received: Success”. Later authenticated traffic resumes on the same client; genuine socket/protocol errors, explicit shutdown, output bounds and connection defaults are unchanged.
 
 - Read Android primary clipboard text and PNG/JPEG images through protected foreground native operations when Paste is explicitly requested. Terminal Paste reports busy and temporarily disables repeated requests while its existing owned read settles. Paste stays literal without Enter; images open in attachment preview and still require a separate Upload action. Existing access locks and payload limits remain in place. Platform metadata is checked before Paste so other-platform browser reads start within the click; failed checks offer a metadata-only retry.
