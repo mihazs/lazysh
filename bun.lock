@@ -15,6 +15,7 @@
       "name": "@lazysh/agent",
       "version": "1.2.0",
       "dependencies": {
+        "@lazysh/account-usage": "workspace:*",
         "@lazysh/common": "workspace:*",
         "@lazysh/notification-client": "workspace:*",
       },
@@ -26,6 +27,7 @@
       "name": "@lazysh/client",
       "version": "1.2.0",
       "dependencies": {
+        "@lazysh/account-usage": "workspace:*",
         "@lazysh/common": "workspace:*",
         "@lazysh/display-idle": "workspace:*",
         "@lazysh/et-transport": "workspace:*",

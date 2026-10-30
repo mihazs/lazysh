@@ -63,6 +63,32 @@ test('native matrix is complete and candidates cannot upload publication receipt
   expect(release.jobs.companion.with.stage).toBe(true);
   expect(release.jobs.aggregate.needs).toContain('companion');
 });
+test('quota consumer graphs and native desktop CI select the existing Rust ownership suite', async () => {
+  async function plan(args: string[]) {
+    const child = Bun.spawn([process.execPath, 'node_modules/turbo/bin/turbo', ...args, '--dry=json'], {
+      cwd: new URL('../', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe', timeout: 10_000,
+    });
+    const [status, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (status !== 0) throw new Error(`Turbo routing failed: ${error}`);
+    return JSON.parse(output).tasks as {taskId: string; command: string}[];
+  }
+  for (const consumer of ['client', 'agent']) {
+    const tasks = await plan(['run', 'test:rust', `--filter=@lazysh/${consumer}...`]);
+    expect(tasks.some(task => task.taskId === '@lazysh/account-usage#test:rust')).toBe(true);
+  }
+  const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as any;
+  const desktop = workflow.jobs['native-desktop'];
+  expect(desktop.strategy.matrix.os).toContain('windows-latest');
+  const quota = desktop.steps.find((step: any) => step.run?.startsWith('bunx turbo run test:rust --filter=@lazysh/account-usage'));
+  const tasks = await plan(quota.run.trim().split(/\s+/).slice(2));
+  const owner = await Bun.file(new URL('../packages/account-usage/package.json', import.meta.url)).json();
+  expect(tasks.find(task => task.taskId === '@lazysh/account-usage#test:rust')?.command).toBe(owner.scripts['test:rust']);
+  const linux = workflow.jobs['native-linux'].steps.find((step: any) => step.name?.startsWith('Exercise owned companion transfer'));
+  expect(linux.env.LAZYSH_TEST_AGENT_BIN).toBe('${{ github.workspace }}/target/release/lazysh-agent');
+  const cases = linux.run.match(/cases=\(([^)]*)\)/)[1].trim().split(/\s+/);
+  expect(cases).toContain('ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers');
+  expect(linux.run).toContain('--list --ignored --exact');
+}, 30_000);
 test('candidate CLI refuses a publication directory and non-main staging fails before touching output', () => owned(async root => {
   for (const [mode, message] of [['check', 'candidate checks do not accept'], ['stage', 'trusted main build required']]) {
     const output = join(root, mode);
