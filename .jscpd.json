@@ -30,6 +30,7 @@
     "apps/notification-service/CHANGELOG.md",
     "apps/share-service/CHANGELOG.md",
     "apps/transcription-service/CHANGELOG.md",
+    "packages/account-usage/CHANGELOG.md",
     "packages/apple-speech/CHANGELOG.md",
     "packages/apple-status/CHANGELOG.md",
     "packages/common/CHANGELOG.md",

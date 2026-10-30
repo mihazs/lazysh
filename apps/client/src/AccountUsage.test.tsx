@@ -4,7 +4,7 @@ import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/reac
 import {invoke} from '@tauri-apps/api/core';
 import {useAccountUsage} from './useAccountUsage';
 import {AccountUsageBar,AccountUsageDetails} from './AccountUsage';
-import {accountUsageHeadline,type AccountUsageResponse} from './accountUsage';
+import {accountUsageHeadline,type AccountUsageResponse} from './accountUsageReport';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 afterEach(()=>{cleanup();vi.clearAllMocks();vi.useRealTimers();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 const report:AccountUsageResponse={schemaVersion:1,state:'ready',report:{primary:'codex',entries:[{id:'codex',name:'Codex personal',shortName:'OAI',plan:'Pro',status:'ready',stale:false,fetchedAt:new Date().toISOString(),resetCredits:null,rows:[{type:'metric',label:'Weekly',percent:112.5,value:'112.5%',detail:'Provider-reported quota',headline:'percent',reading:'used',resetAt:null,windowSeconds:null,regen:null,modelPool:false}]}]}};

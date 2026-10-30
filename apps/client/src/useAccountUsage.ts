@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {useAccessSnapshot,bindProtectedInvoke,captureAccess} from './access';
-import type {AccountUsageResponse} from './accountUsage';
+import type {AccountUsageResponse} from './accountUsageReport';
 const INTERVAL=300_000;
 export function useAccountUsage(sessionId:string|null,active=true) {
   const access=useAccessSnapshot();

@@ -26,7 +26,9 @@ locking, private-cache and refresh behavior remain traceable to upstream.
 - `src/config.rs`: make the original mutating convenience loader crate-private;
   expose only data validation, path expansion, and secret-variable registration
   inputs required by the first-party bounded read-only loader. The first-party
-  service never calls the original loader or its chmod helper.
+  service never calls the original loader or its chmod helper. Expose the pure
+  inline-secret predicate on every platform for reporting-profile admission;
+  filesystem ownership and permission mutation remain Unix-only.
 - `src/anthropic/cli_account.rs`: retain only read-only CLI identity helpers
   needed for named-account routing; remove credential switching/adoption.
 - `src/claude_desktop/mod.rs`: retain only paths and read-only profile/account

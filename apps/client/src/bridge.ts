@@ -72,7 +72,7 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   return createSession(command,args,onEvent);
 }
 export const api = {
-  accountUsage: (sessionId:string) => invoke<import("./accountUsage").AccountUsageResponse>("account_usage", {sessionId}),
+  accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
   installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => {
     if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
     const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);

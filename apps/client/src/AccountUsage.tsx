@@ -1,6 +1,6 @@
 import {Activity,RefreshCw} from 'lucide-react';
 import {t,useUi,formatDateTime} from './i18n/core';
-import {accountUsageHeadline,accountUsageMessages,accountUsagePercent,accountUsageStale} from './accountUsage';
+import {accountUsageHeadline,accountUsageMessages,accountUsagePercent,accountUsageStale} from './accountUsageReport';
 import type {AccountUsageModel} from './useAccountUsage';
 import './AccountUsage.css';
 export function AccountUsageBar({model,onOpen}:{model:AccountUsageModel;onOpen:()=>void}) {

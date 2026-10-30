@@ -2596,7 +2596,6 @@ impl Config {
     /// Explicitly enumerate every inline credential field. Adding a new
     /// credential vendor must add it here so its config receives the same
     /// protection.
-    #[cfg(unix)]
     pub fn has_inline_secrets(&self) -> bool {
         [
             self.zai.api_key.as_deref(),
@@ -6224,7 +6223,6 @@ url = "https://example.test/u"
         assert!(config.custom_by_id("nope").is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn has_inline_secrets_sees_a_custom_inline_key() {
         let without: Config = toml::from_str(CUSTOM_BLOCK).unwrap();

@@ -1,7 +1,7 @@
 # Versioning and milestone releases
 
 lazysh uses Changesets 3.0.3 under Bun 1.3.14 to prepare reviewed version PRs.
-All 15 owned private workspace packages form one fixed release group. Their
+All owned private workspace packages listed in `.changeset/bun-lock.ts` form one fixed release group. Their
 generated package changelogs describe each release. Version preparation itself
 does not publish packages or installers. Merging the reviewed version transition
 to main starts the [verified GitHub publication workflow](release-tag-gate.md).
@@ -154,10 +154,11 @@ package script because the action tokenizes its command without a shell. Any
 detected clone fails the job; no scope exception or threshold change
 is made for authored fragments, source or tests.
 
-The scanner's generated-artifact scope lists exactly the 15 owned package
+The scanner's generated-artifact scope lists exactly the owned package
 `CHANGELOG.md` paths in `.jscpd.json`. Changesets 3.0.3 produces these files;
-their history begins with the automated release PRs #220 and #239 and contains
-no handwritten entries. Shared fixed-train release notes and accumulated
+the original workspaces’ histories began with automated release PRs #220 and
+#239. New workspaces begin their generated history at their first release. These
+files contain no handwritten entries. Shared fixed-train release notes and accumulated
 dependency entries can legitimately repeat across that output. Keep manual
 release explanations in the root `CHANGELOG.md` or authored changeset fragments,
 which remain scanned along with documentation and source/tests. Do not broaden

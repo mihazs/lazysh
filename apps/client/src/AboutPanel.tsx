@@ -73,7 +73,8 @@ export default function AboutPanel() {
         ["Portable PTY", ptyLicense],
         ["quircs", quircsLicense],
         ["AI account collectors", accountCollectorsLicense],
-        ["Account usage process adapter", `${accountAdapterNotice}\n${herdrLicense}`],
+        ["Account usage process adapter attribution", accountAdapterNotice],
+        ["Account usage process adapter license", herdrLicense],
       ].map(([name, text]) => (
         <details key={name}>
           <summary>{t('aboutLicense', {component: name})}</summary>
