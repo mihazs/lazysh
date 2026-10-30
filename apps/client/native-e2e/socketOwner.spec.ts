@@ -1,11 +1,13 @@
-import {mkdir,mkdtemp,readlink,realpath,rm} from 'node:fs/promises';
+import {chmod,lstat,mkdir,mkdtemp,readFile,readlink,realpath,rm,symlink,writeFile} from 'node:fs/promises';
+import {randomInt} from 'node:crypto';
+import {userInfo} from 'node:os';
 import {join} from 'node:path';
 import {connect,createServer,type Server,type Socket} from 'node:net';
 import {afterEach,expect,it,vi} from 'vitest';
 import {OwnedProcess,descendants,identity,type OwnedPid} from '../../../tests/support/ownedProcess';
 import {acceptedConnectionOwner,listeningConnectionOwner} from './socketOwner';
 import {ClientTargetObserver} from './clientObserver';
-import {assertDirectDriverEnvironment,guiEnvironment} from './policy';
+import {assertDirectDriverEnvironment,guiEnvironment,namespaceArguments} from './policy';
 import {executable} from './tools';
 import {acceptedEndpointRoles,assertDistinctPorts,driverPorts,type OwnedPorts} from './ports';
 
@@ -170,3 +172,30 @@ it('isolates loopback from its parent namespace while retaining owned local conn
   expect(await client.finish('private loopback namespace contract',5000)).toBe('isolated');
   expect(sockets.size).toBe(0);
 },10000);
+
+it('retains only a nominated resolver file across the private runtime mask',async()=>{
+  directory=await mkdtemp('/tmp/lazysh-resolver-contract-');
+  const source=join(directory,'runtime-source'),runtime='/run/lazysh-owned-resolver';
+  for(const name of ['home','config','data','cache','runtime','runtime-source'])await mkdir(join(directory,name),{mode:0o700});
+  const marker='owned-resolver-fixture',regular=join(directory,'regular'),target=join(source,'resolver'),alias=join(directory,'alias');
+  await writeFile(regular,marker,{mode:0o600});await writeFile(target,marker,{mode:0o600});await writeFile(join(source,'private-sibling'),marker,{mode:0o600});
+  await symlink(`${runtime}/resolver`,alias);
+  let socket='';
+  for(let attempt=0;attempt<32;attempt++) {
+    const candidate=`/tmp/.X11-unix/X${randomInt(1000,10000)}`;
+    if(!await lstat(candidate).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;})){socket=candidate;break;}
+  }
+  expect(socket).not.toBe('');
+  const display=createServer(peer=>peer.destroy());servers.add(display);
+  await new Promise<void>((yes,no)=>{display.once('error',no);display.listen(socket,yes);});await chmod(socket,0o600);
+  const script=`for file in "$@"; do if [ -r "$file" ] && [ "$(cat "$file" 2>/dev/null)" = owned-resolver-fixture ]; then printf 'present '; else printf 'absent '; fi; done; if (printf 'changed' >> "$2") 2>/dev/null; then printf 'writable'; else printf 'readonly'; fi`;
+  const args=['-c',script,'owned-resolver-contract',regular,alias,`${runtime}/private-sibling`];
+  const outer=['--unshare-user','--die-with-parent','--dev-bind','/','/','--tmpfs','/run','--dir',runtime,'--ro-bind',source,runtime,'--'];
+  const env=guiEnvironment(directory,`unix:path=${directory}/runtime/bus`);
+  for(const [files,expected] of [[undefined,'present present present readonly'],[[],'present absent absent readonly'],[[`${runtime}/resolver`],'present present absent readonly']] as const) {
+    const command=files?['/usr/bin/bwrap',...namespaceArguments('/bin/sh',args,directory,userInfo().homedir,socket,[...files])]:['/bin/sh',...args];
+    client=new OwnedProcess('/usr/bin/bwrap',[...outer,...command],directory,env);
+    expect(await client.finish('owned resolver runtime visibility',5000)).toBe(expected);
+  }
+  expect(await readFile(target,'utf8')).toBe(marker);
+},20000);

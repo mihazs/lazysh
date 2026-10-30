@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["native-e2e", "vitest.native-gui.config.ts"]
+  "include": ["native-e2e", "published-native-e2e", "vitest.native-gui.config.ts", "vitest.published-native.config.ts"]
 }

@@ -1,4 +1,4 @@
-import { protectedInvoke as invoke, sessionOutput } from './access';
+import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
 import { registerSessionOutput } from './pendingSessions';
 
@@ -72,6 +72,11 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   return createSession(command,args,onEvent);
 }
 export const api = {
+  installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => {
+    if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
+    const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
+    return remoteInvoke<unknown>('install_companion',{sessionId,progress}).finally(()=>{progress.onmessage=()=>{};});
+  },
   clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),
   clipboardRead: (request: {token: string; kind: 'text' | 'image'}) => invoke<unknown>('clipboard_read', {request}),
   clipboardCancel: (token: string) => acknowledgeInvoke<void>('clipboard_cancel', {token}),

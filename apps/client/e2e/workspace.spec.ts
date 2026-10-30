@@ -86,8 +86,8 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(()=>{
-    const calls:string[]=[];const state={updated:false,missing:false};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
-    window.nativeFixtureInvoke=async(command)=>{
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
       if(command==='local_capability')return {available:false,reason:'Synthetic SSH UI fixture'};
@@ -97,7 +97,15 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
       if(command==='multiplexer_sessions')return [{name:'default'}];
       if(command==='herdr_tree')return {panes:[{pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:'codex-builder',agent:'codex',agent_status:'idle'}]};
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
-      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+      if(command==='install_companion'){
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
+        (args.progress as {onmessage:(value:unknown)=>void}).onmessage({stage:'uploading'});state.installed=true;
+        return {schemaVersion:1,status:'installed',version:'1.0.0',path:'/owned/lazysh/companion/lazysh-agent',cleanup:'complete'};
+      }
+      if(command==='agent_snapshot'){
+        if(!state.installed)throw {message:'Synthetic missing host companion'};
+        return {schemaVersion:1,sessions:[{sessionId:'reported-context',agent:'Claude Code',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
+      }
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:4,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
       if(command==='board_keep_awake_status')return {available:false,active:false,reason:'Synthetic keep-awake unavailable',epoch:'0/11111111-1111-4111-8111-111111111111',ticket:1};
@@ -140,6 +148,11 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.getByRole('button',{name:'Agents',exact:true}).click();
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await page.clock.runFor(200);
+  await expect(board.getByRole('button',{name:'Install companion',exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command==='install_companion'))).toEqual([]);
+  await board.getByRole('button',{name:'Install companion',exact:true}).click();
+  await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
+  await expect(board.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   const live=board.getByRole('region',{name:'Live Herdr agents',exact:true});
@@ -170,6 +183,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   if(phone){await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();await page.getByRole('button',{name:'Open hosts',exact:true}).click();}
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
   await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
+  await expect(board.locator('.companion-install button')).toBeHidden();
   expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
   expect((await commands()).filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
   await search.scrollIntoViewIfNeeded();

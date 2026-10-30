@@ -718,6 +718,7 @@ impl Drop for SshHandle {
 pub(crate) struct Session {
     pub(crate) handle: Arc<SshHandle>,
     pub(crate) clipboard: crate::host_clipboard::UploadSlot,
+    pub(crate) companion_install: Arc<Semaphore>,
     file_control: Option<file_control::Control>,
     pub(crate) access: AccessState,
     creation: AccessLease,
@@ -760,6 +761,7 @@ impl Session {
         Self {
             handle,
             clipboard: crate::host_clipboard::UploadSlot::default(),
+            companion_install: Arc::new(Semaphore::new(1)),
             file_control: None,
             input,
             cancel,
@@ -2264,6 +2266,44 @@ async fn sftp_channel_for(
     channel.request_subsystem(true, "sftp").await?;
     Ok(channel.into_stream())
 }
+pub(crate) async fn installer_sftp(
+    session: &Session,
+    lease: &AccessLease,
+    stop: watch::Receiver<bool>,
+    retained: Arc<dyn Send + Sync>,
+) -> Result<russh_sftp::client::RawSftpSession> {
+    let channel = open_owned_channel_retained(
+        &session.handle,
+        lease,
+        tokio::time::Instant::now() + OP_TIMEOUT,
+        retained.clone(),
+    )
+    .await?;
+    lease.check()?;
+    channel.request_subsystem(true, "sftp").await?;
+    let cancellation = || {
+        let access = lease.clone();
+        let mut disconnected = session.cancel.subscribe();
+        let mut stopped = stop.clone();
+        Box::pin(async move {
+            tokio::select! { biased;
+                _=access.cancelled()=>{},
+                _=async {if !*disconnected.borrow(){let _=disconnected.changed().await;}}=>{},
+                _=async {if !*stopped.borrow(){let _=stopped.changed().await;}}=>{},
+            }
+        }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+    };
+    let stream = crate::sftp_stream::SftpStream::with_cancellation(
+        channel.into_stream(),
+        cancellation(),
+        cancellation(),
+        retained,
+    );
+    let raw = russh_sftp::client::RawSftpSession::new(stream);
+    raw.set_timeout(15);
+    raw.init().await?;
+    Ok(raw)
+}
 pub(crate) async fn sftp(session: &Session, lease: &AccessLease) -> Result<SftpSession> {
     Ok(SftpSession::new(crate::sftp_stream::SftpStream::new(
         sftp_channel(session, lease).await?,
@@ -2501,6 +2541,24 @@ pub(crate) async fn exec_for_access(
     command: String,
     lease: &AccessLease,
 ) -> Result<String> {
+    exec_bounded(
+        session,
+        command,
+        lease,
+        OP_TIMEOUT,
+        FILE_LIMIT as usize,
+        None,
+    )
+    .await
+}
+pub(crate) async fn exec_bounded(
+    session: &Session,
+    command: String,
+    lease: &AccessLease,
+    duration: Duration,
+    limit: usize,
+    retained: Option<Arc<dyn Send + Sync>>,
+) -> Result<String> {
     lease.check()?;
     let mut cancellation = session.cancel.subscribe();
     if *cancellation.borrow() {
@@ -2510,17 +2568,25 @@ pub(crate) async fn exec_for_access(
         biased;
         _ = lease.cancelled() => Err(SshError::new("app_locked", "App access changed")),
         _ = cancellation.changed() => Err(SshError::new("disconnected", "Session closed")),
-        result = exec_inner(session, command, lease) => result,
+        result = exec_inner(session, command, lease, duration, limit, retained) => result,
     }
 }
-async fn exec_inner(session: &Session, command: String, lease: &AccessLease) -> Result<String> {
-    let mut channel = open_owned_channel(
-        &session.handle,
-        lease,
-        tokio::time::Instant::now() + OP_TIMEOUT,
-    )
-    .await?;
-    let result = timeout(OP_TIMEOUT, async {
+async fn exec_inner(
+    session: &Session,
+    command: String,
+    lease: &AccessLease,
+    duration: Duration,
+    limit: usize,
+    retained: Option<Arc<dyn Send + Sync>>,
+) -> Result<String> {
+    let deadline = tokio::time::Instant::now() + duration;
+    let mut channel = match retained {
+        Some(retained) => {
+            open_owned_channel_retained(&session.handle, lease, deadline, retained).await?
+        }
+        None => open_owned_channel(&session.handle, lease, deadline).await?,
+    };
+    let result = timeout(duration, async {
         lease.check()?;
         channel.exec(true, command).await?;
         let mut bytes = Vec::new();
@@ -2533,10 +2599,14 @@ async fn exec_inner(session: &Session, command: String, lease: &AccessLease) -> 
                 ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
                 _ => {}
             }
-            if bytes.len() + error.len() > FILE_LIMIT as usize {
+            if bytes.len() + error.len() > limit {
                 return Err(SshError::new(
                     "output_too_large",
-                    "Remote command output exceeds 1 MiB",
+                    if limit == FILE_LIMIT as usize {
+                        "Remote command output exceeds 1 MiB"
+                    } else {
+                        "Remote command output exceeds its bound"
+                    },
                 ));
             }
         }
@@ -2595,7 +2665,9 @@ pub async fn agent_snapshot(
     lease
         .run(async {
             let session = state.session(&session_id).await?;
-            let text = exec(&session, &lease, "lazysh-agent snapshot --limit 50".into()).await?;
+            let text =
+                crate::companion::exec(&session, "lazysh-agent snapshot --limit 50".into(), &lease)
+                    .await?;
             Ok(serde_json::from_str(&text)?)
         })
         .await
@@ -2767,7 +2839,7 @@ async fn transcript_result(
     }
     let session = state.session(session_id).await?;
     Ok(serde_json::from_str(
-        &exec(&session, lease, command).await?,
+        &crate::companion::exec(&session, command, lease).await?,
     )?)
 }
 
@@ -2858,7 +2930,7 @@ pub async fn agent_reported_history(
             let command = reported_history_command(&agent_session_id)?;
             let session = state.session(&session_id).await?;
             Ok(serde_json::from_str(
-                &exec(&session, &lease, command).await?,
+                &crate::companion::exec(&session, command, &lease).await?,
             )?)
         })
         .await
@@ -2906,10 +2978,10 @@ pub async fn agent_transcripts(
             }
             let session = state.session(&session_id).await?;
             Ok(serde_json::from_str(
-                &exec(
+                &crate::companion::exec(
                     &session,
-                    &lease,
                     format!("lazysh-agent discover --agent {agent} --limit 50"),
+                    &lease,
                 )
                 .await?,
             )?)
@@ -3120,6 +3192,9 @@ async fn attach_tmux_inner(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[path = "companion_fixture.rs"]
+    mod companion_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
     #[cfg(unix)]
@@ -3750,6 +3825,7 @@ mod tests {
     #[derive(Clone)]
     struct TestServer {
         clipboard_mode: Arc<AtomicUsize>,
+        legacy_exec: Arc<std::sync::atomic::AtomicBool>,
         clipboard_eof: Arc<tokio::sync::Notify>,
         auth_attempts: Arc<AtomicUsize>,
         sizes: Arc<StdMutex<Vec<(u32, u32)>>>,
@@ -3931,6 +4007,20 @@ mod tests {
                 .unwrap()
                 .push(String::from_utf8(command.to_vec()).unwrap());
             session.channel_success(channel)?;
+            if self.legacy_exec.load(Ordering::SeqCst) {
+                let probe = text.starts_with("sh -c ");
+                session.data(
+                    channel,
+                    if probe {
+                        b"sh is not recognized".to_vec()
+                    } else {
+                        b"owned-legacy-response".to_vec()
+                    },
+                )?;
+                session.exit_status_request(channel, if probe { 127 } else { 0 })?;
+                session.close(channel)?;
+                return Ok(());
+            }
             if self.clipboard_mode.load(Ordering::SeqCst) > 0
                 && text == crate::host_clipboard::COMMAND
             {
@@ -4222,6 +4312,7 @@ mod tests {
             forward_agent: false,
         };
         let test_server = TestServer {
+            legacy_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             clipboard_mode: Arc::new(AtomicUsize::new(0)),
             clipboard_eof: Arc::new(tokio::sync::Notify::new()),
             auth_attempts: Arc::new(AtomicUsize::new(0)),
@@ -4384,6 +4475,33 @@ mod tests {
             probe.is_ok(),
             "cleanup must preserve the verified parent SSH transport"
         );
+    }
+    #[tokio::test]
+    async fn failed_posix_probe_preserves_exec_only_legacy_command_bytes() {
+        let lease = access_lease();
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        fixture.server.legacy_exec.store(true, Ordering::SeqCst);
+        for original in [
+            "lazysh-agent snapshot --limit 50",
+            r"lazysh-agent transcript --path 'C:\Users\owned\opaque file.jsonl' --limit 50",
+            "lazysh-agent settings show",
+        ] {
+            let result = crate::companion::exec(&fixture.session, original.into(), &lease)
+                .await
+                .unwrap();
+            assert_eq!(result, "owned-legacy-response");
+            assert_eq!(
+                fixture
+                    .server
+                    .commands
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .as_bytes(),
+                original.as_bytes()
+            );
+        }
     }
     #[tokio::test]
     async fn cancelled_exec_closes_late_confirmation() {
@@ -5273,6 +5391,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut context = tauri::generate_context!(test = true);
         for command in [
+            "install_companion",
             "restore_file_transfer",
             "get_companion_settings",
             "update_companion_settings",
@@ -5306,7 +5425,8 @@ mod tests {
                 crate::attachment_upload::upload_reserve,
                 crate::host_clipboard::host_clipboard_copy,
                 crate::companion_settings::get_companion_settings,
-                crate::companion_settings::update_companion_settings
+                crate::companion_settings::update_companion_settings,
+                crate::companion::install_companion
             ])
             .build(context)
             .unwrap();
@@ -5375,6 +5495,21 @@ mod tests {
             error["kind"], "disconnected",
             "the real clipboard handler must be reached, not denied by ACL"
         );
+        let installer =
+            serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"});
+        let failure = tauri::test::get_ipc_response(
+            &main,
+            request(local_url, "install_companion", installer.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure["kind"], "disconnected",
+            "the real installer handler must accept the Channel/body and reach session preflight"
+        );
+        assert!(
+            failure.get("phase").is_some_and(serde_json::Value::is_null),
+            "preflight rejection must carry the companion-only structured failure phase"
+        );
         let clipboard_read = serde_json::json!({"request":{"token":"00000000-0000-4000-8000-000000000001","kind":"text"}});
         let clipboard_cancel = serde_json::json!({"token":"00000000-0000-4000-8000-000000000001"});
         assert!(
@@ -5409,6 +5544,7 @@ mod tests {
             );
         }
         for (command, body) in [
+            ("install_companion", installer),
             ("get_companion_settings", settings),
             ("update_companion_settings", update),
             ("list_hosts", serde_json::json!({})),
@@ -5474,6 +5610,13 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH and an explicit current-source release companion binary"]
+    async fn openssh_companion_install_and_managed_path() {
+        openssh_interoperability(OpenSshCheck::CompanionInstall).await;
+    }
+
+    #[cfg(unix)]
     enum OpenSshCheck {
         Files,
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -5483,6 +5626,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         Clipboard,
         TranscriptImages,
+        CompanionInstall,
     }
 
     #[cfg(unix)]
@@ -5544,6 +5688,8 @@ mod tests {
                 .unwrap();
             assert!(String::from_utf8_lossy(&version.stdout).contains("mosh 1.4.0"));
             openssh_tool_environment(dir.path(), binary, "mosh-server")
+        } else if matches!(check, OpenSshCheck::CompanionInstall) {
+            companion_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::TranscriptImages) {
             transcript_image_fixture::companion_path(dir.path())
         } else {
@@ -5632,6 +5778,10 @@ mod tests {
         }
         let connected = manual_session(&app.state(), &host, &user_key).await;
         let id = connected.session_id;
+        if matches!(check, OpenSshCheck::CompanionInstall) {
+            companion_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
         if matches!(check, OpenSshCheck::TranscriptImages) {
             transcript_image_fixture::verify(&app, &id, dir.path()).await;
             return;

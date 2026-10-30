@@ -5,6 +5,7 @@ mod apple_status;
 mod approvals;
 mod attachment_upload;
 mod clipboard;
+mod companion;
 mod companion_settings;
 mod desktop_launch;
 mod devices;
@@ -246,6 +247,7 @@ pub fn run() {
                 ssh::attach_tmux,
                 ssh::agent_snapshot,
                 ssh::agent_reported_history,
+                companion::install_companion,
                 companion_settings::get_companion_settings,
                 companion_settings::update_companion_settings,
                 ssh::agent_transcript,

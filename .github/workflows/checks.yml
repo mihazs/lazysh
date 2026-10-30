@@ -231,6 +231,7 @@ jobs:
       - name: Verify native GUI namespace prerequisites
         run: |
           test "$(id -u)" -ne 0
+          test -x /usr/bin/bwrap
           bwrap --version
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
@@ -275,6 +276,14 @@ jobs:
           prefix-key: v0-rust-ubuntu-22.04
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
+      - name: Exercise owned companion transfer and managed execution over SSH
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
+        run: |
+          cargo build --release --locked -p lazysh-agent --bin lazysh-agent
+          case_name=ssh::tests::openssh_companion_install_and_managed_path
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Check combined native voice startup and clean shutdown without models
@@ -301,6 +310,12 @@ jobs:
         run: |
           LAZYSH_TEST_SSH_USER_NAMESPACE=1 bwrap --unshare-user --unshare-net --dev-bind / / -- bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH'
           bun run test:native-gui
+      - name: Exercise actual native GUI installation from the public companion release
+        timeout-minutes: 12
+        env:
+          LAZYSH_NATIVE_GUI_DRIVER: ${{ runner.temp }}/lazysh-native-driver/bin/tauri-driver
+          LAZYSH_PUBLISHED_NATIVE_GUI: '1'
+        run: bun run --cwd apps/client test:published-native-gui
       - name: Retain only the owned synthetic native GUI image
         if: ${{ !cancelled() && (steps.native-gui.outcome == 'success' || steps.native-gui.outcome == 'failure') }}
         uses: actions/upload-artifact@v4
@@ -462,6 +477,7 @@ jobs:
     timeout-minutes: 30
     env:
       ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_UI_COMPANION: '1'
       VITE_LAZYSH_QR_CAMERA_TRACE: '1'
     steps:
       - uses: actions/checkout@v4

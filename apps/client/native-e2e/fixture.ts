@@ -34,6 +34,7 @@ export class NativeGui {
   private xSocket='';
   private driverFile='';
   private nativeDriverFile='';
+  private resolverFile:string|undefined;
   private readonly home=userInfo().homedir;
   private members:OwnedPid[]=[];
   private readonly ports:OwnedPorts={target:0,driver:0,native:0};
@@ -114,6 +115,18 @@ export class NativeGui {
       {id:'gui-first',name:'Primary GUI host',hostname:'127.0.0.1',port,username:'owned'},
       {id:'gui-selected',name:'Selected GUI host',hostname:'127.0.0.1',port,username:'owned'},
     ]),{mode:0o600});
+    if(process.env.LAZYSH_PUBLISHED_NATIVE_GUI==='1') {
+      let kind:'REGULAR'|'RUN_SYMLINK'|'OTHER'|'UNAVAILABLE'='UNAVAILABLE';
+      try {
+        const link=await lstat('/etc/resolv.conf'),file=await realpath('/etc/resolv.conf'),metadata=await lstat(file);
+        if(metadata.isFile() && metadata.size>0 && metadata.size<=65_536) {
+          kind=link.isFile()?'REGULAR':link.isSymbolicLink() && file.startsWith('/run/')?'RUN_SYMLINK':'OTHER';
+          this.resolverFile=file;
+        }
+      }catch { /* Emit only the finite classification, never resolver contents or filesystem errors. */ }
+      console.info(`Published native resolver kind=${kind}`);
+      if(!this.resolverFile)throw new Error('Published native GUI resolver file is unavailable');
+    }
     const [driverPort,nativePort]=await driverPorts();
     this.ports.driver=driverPort;this.ports.native=nativePort;assertDistinctPorts(this.ports);
     this.driver=this.namespaced(this.driverFile,['--port',String(driverPort),'--native-port',String(nativePort),'--native-host','127.0.0.1','--native-driver',this.nativeDriverFile]);
@@ -132,7 +145,7 @@ export class NativeGui {
     console.info(`Owned native GUI binary sha256=${digest.digest('hex')}`);
   }
   private namespaced(program:string,args:string[]) {
-    return new OwnedProcess('/usr/bin/bwrap',namespaceArguments(program,args,this.directory,this.home,this.xSocket,[this.binary,this.driverFile,this.nativeDriverFile]),this.directory,this.env);
+    return new OwnedProcess('/usr/bin/bwrap',namespaceArguments(program,args,this.directory,this.home,this.xSocket,[this.binary,this.driverFile,this.nativeDriverFile,...(this.resolverFile?[this.resolverFile]:[])]),this.directory,this.env);
   }
   private async connectionOrigin(socket:Socket) {
     const stage=this.stage;

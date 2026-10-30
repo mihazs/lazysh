@@ -155,6 +155,7 @@ fn main() {
         "attach_tmux",
         "agent_snapshot",
         "agent_reported_history",
+        "install_companion",
         "get_companion_settings",
         "update_companion_settings",
         "agent_transcript",

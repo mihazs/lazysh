@@ -36,6 +36,8 @@
 
 - Add verified companion executable builds to future complete release sets for Linux x64/ARM64, macOS Intel/ARM64 and Windows x64. Candidate checks create no publication receipts; trusted release builds retain exact source/version/hash and staged-byte CLI/storage gates. Existing companion/data defaults and deferred Apple application packages are unchanged; in-app installation remains separate work.
 
+- Add an explicit in-app Install/Update companion action for supported Linux and macOS hosts, including when agent loading fails. It verifies published release bytes, transfers through the current SSH connection, preserves uncertain outcomes and uses the managed executable for subsequent companion commands. Missing managed installations retain legacy PATH behavior. Installation never starts automatically or changes host permissions, agent hooks or PATH; Windows installation remains separate work.
+
 - Add reported-agent search, status filters and selected-report context while preserving explicit refresh, history and approval ownership. Reported pane IDs remain context; application defaults are unchanged.
 
 - The visible Agents board now refreshes reported activity every five seconds by default while the app is in the foreground. Hidden boards and background windows pause automatic reads; pending snapshots are not duplicated, and manual Refresh remains available. Transcript discovery and other host permissions are unchanged.

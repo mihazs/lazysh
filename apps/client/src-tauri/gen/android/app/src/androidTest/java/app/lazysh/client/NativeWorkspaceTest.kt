@@ -1449,6 +1449,7 @@ class NativeWorkspaceTest {
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
+    @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
 
     // The target-UID-only synthetic provider exists only in the instrumentation APK.
     // Reads use the normal foreground Attachments action; this never uploads.
@@ -1508,7 +1509,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false) {
+        require(!requireHerdr || !requireCompanion) { "Owned SSH fixture mode is ambiguous" }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
         require(path != null && Regex("/data/local/tmp/lazysh-ui-ssh-[a-f0-9]{32}/fixture[.]json").matches(path)) {
@@ -1621,6 +1623,86 @@ class NativeWorkspaceTest {
                 }
             }
         }
+        fun verifyCompanionInstallation() {
+            val companion = fixture.getJSONObject("companion")
+            val version = companion.getString("version")
+            val destination = companion.getString("path")
+            require(Regex("(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)").matches(version) && version.length <= 64)
+            require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/data/lazysh/companion/lazysh-agent").matches(destination))
+            val originalProcess = android.os.Process.myPid()
+            fun terminalProof(after: Boolean) {
+                val part = if (after) "after" else "before"
+                val proof = "COMPANION_${nonce}_${part}_END"
+                val command = (if (after) "" else "LI='$nonce';") + "printf 'COMPANION_%s_${part}_END\\n' \"${'$'}LI\""
+                assertTrue("Owned shell proof must not appear literally in its input", !command.contains(proof))
+                if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
+                typeInto(scenario, ".terminal-compose textarea", command)
+                closeSoftKeyboard()
+                clickButton("Paste draft")
+                closeSoftKeyboard()
+                onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+                awaitDocument(scenario, "owned companion terminal continuity $part", screenContains(proof) +
+                    " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(proof)}))")
+                assertEquals("Owned companion must keep exactly one session tab", "true", evaluate(scenario,
+                    "document.querySelectorAll('[role=tab]').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
+            }
+            terminalProof(false)
+            sessionView(scenario, "Agents")
+            val panel = "details.companion-install"
+            awaitDocument(scenario, "owned companion installation visible", present(panel))
+            val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
+            val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
+            for (reused in listOf(false, true)) {
+                if (evaluate(scenario, "document.querySelector('$panel')?.open===true") != "true")
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel summary")).perform(webScrollIntoView()).perform(webClick())
+                val action = if (reused) "Update companion" else "Install companion"
+                val button = onWebView().withElement(findElement(Locator.XPATH,
+                    "//details[contains(@class,'companion-install')]//button[normalize-space(.)='$action']"))
+                button.perform(webScrollIntoView())
+                awaitDocument(scenario, "owned companion action ready", workspaceButtonVisible(panel, action) +
+                    " && Array.from(document.querySelectorAll('$panel button')).some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled)")
+                button.perform(webClick())
+                val expected = if (reused) "reused" else "installed"
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(245)
+                var phase = "unavailable"; var failure = "unavailable"; var outcome = "unavailable"; var reason = "unavailable"
+                var completedWithinBudget = false
+                while (true) {
+                    val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+                    if (remaining <= 0) break
+                    val sample = runCatching { JSONObject(evaluate(scenario, """
+                        (()=>{const p=document.querySelector('$panel');return {
+                          phase:p?.getAttribute('data-install-phase'),failure:p?.getAttribute('data-install-failure'),
+                          state:p?.getAttribute('data-install-outcome'),reason:p?.getAttribute('data-install-reason')};})()
+                    """, remaining.coerceAtMost(1_000))) }.getOrNull()
+                    if (sample != null) {
+                        phase = sample.optString("phase").takeIf { it in phases } ?: "unavailable"
+                        failure = sample.optString("failure").takeIf { it in failures } ?: "other"
+                        outcome = sample.optString("state").takeIf { it in setOf("idle", "pending", "failed", "uncertain", "installed", "reused") } ?: "unavailable"
+                        reason = sample.optString("reason").takeIf { it in setOf("none", "committedDurabilityUnknown", "commitResponseLost", "verificationUnavailable") } ?: "unavailable"
+                        if (outcome == expected || outcome == "failed" || outcome == "uncertain") {
+                            completedWithinBudget = System.nanoTime() < deadline
+                            break
+                        }
+                    }
+                    Thread.sleep(200)
+                }
+                val observation = "Owned companion result phase=$phase kind=$failure outcome=$outcome reason=$reason"
+                assertTrue(observation, completedWithinBudget)
+                assertEquals(observation, expected, outcome)
+                val text = if (reused) "Host companion $version is already installed." else "Installed host companion $version."
+                assertEquals("Owned companion version/path and cleanup must match the public fixture", "true", evaluate(scenario,
+                    "document.querySelector('$panel [role=status]')?.textContent.includes(${JSONObject.quote(text)}) && document.querySelector('$panel code')?.textContent===${JSONObject.quote(destination)} && !document.querySelector('$panel')?.textContent.includes('Some temporary installation files remain')"))
+                assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
+            }
+            awaitDocument(scenario, "visible companion Connections navigation", workspaceButtonVisible(".workspace-navigation-modes", "Connections"))
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Connections']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario, "visible companion drawer close", workspaceElementVisible(".sidebar-close", true))
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".sidebar-close")).perform(webClick())
+            terminalProof(true)
+            println("lazysh packaged companion: actual Install and Update reused results, public version/path, original terminal shell and cleanup completed")
+        }
         var primaryFailure: Throwable? = null
         android.util.Log.i("LazyshOwnedCase", "start:$nonce:pid:${android.os.Process.myPid()}")
         try {
@@ -1641,7 +1723,15 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "SSH fixture host saved", present(connect))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, connect)).perform(webClick())
             awaitDocument(scenario, "SSH authentication dialog", present("[role=dialog] input[type=password]"))
-            selectSsh()
+            if (requireCompanion) {
+                closeSoftKeyboard()
+                // The real Add Host chooser saved this preference; do not invoke
+                // a redundant second native popup in this installer-only case.
+                val savedTransport = "[role=dialog] select:has(option[value='ssh'])"
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, savedTransport)).perform(webScrollIntoView())
+                assertEquals("Saved SSH transport must reach companion authentication", "true", evaluate(scenario,
+                    workspaceElementVisible(savedTransport, true) + " && (()=>{const choices=document.querySelectorAll(${JSONObject.quote(savedTransport)});return choices.length===1&&!choices[0].disabled&&choices[0].value==='ssh';})()"))
+            } else selectSsh()
             clickButton("Private key")
             val keySelector = "[role=dialog] textarea[placeholder='-----BEGIN OPENSSH PRIVATE KEY-----']"
             pasteOwnedText(scenario, keySelector, privateKey, label)
@@ -1655,140 +1745,142 @@ class NativeWorkspaceTest {
             assertEquals("No terminal before explicit trust", "false", evaluate(scenario, present(".terminal-canvas .xterm-screen")))
             clickButton("Trust key and connect")
             awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
-            clickButton("Compose")
-            typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
-            val keyboardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            var keyboardGeometry = JSONObject()
-            while (true) {
-                var fitsAboveKeyboard = false
-                scenario.onActivity { activity ->
-                    val decor = activity.window.decorView
-                    val insets = requireNotNull(ViewCompat.getRootWindowInsets(decor))
-                    val keyboardHeight = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-                    val web = requireNotNull(webView(decor))
-                    val position = IntArray(2)
-                    web.getLocationInWindow(position)
-                    val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
-                    fitsAboveKeyboard = imeVisible && keyboardHeight > 0 &&
-                        position[1] + web.height <= decor.height - keyboardHeight
-                    // Closed, bounded geometry only: never DOM content, paths,
-                    // input values, view descriptions or exception messages.
-                    keyboardGeometry = JSONObject().put("rootImeVisible", imeVisible)
-                        .put("rootImeBottom", keyboardHeight.coerceIn(0, 65535))
-                        .put("decorHeight", decor.height.coerceIn(0, 65535))
-                        .put("webWindowY", position[1].coerceIn(-65535, 65535))
-                        .put("webHeight", web.height.coerceIn(0, 65535))
-                        .put("keyboard", when (activity.resources.configuration.keyboard) {
-                            Configuration.KEYBOARD_NOKEYS -> "none"
-                            Configuration.KEYBOARD_QWERTY -> "qwerty"
-                            Configuration.KEYBOARD_12KEY -> "12key"
-                            Configuration.KEYBOARD_UNDEFINED -> "undefined"
-                            else -> "other"
-                        })
-                        .put("hardKeyboardHidden", when (activity.resources.configuration.hardKeyboardHidden) {
-                            Configuration.HARDKEYBOARDHIDDEN_YES -> "hidden"
-                            Configuration.HARDKEYBOARDHIDDEN_NO -> "visible"
-                            Configuration.HARDKEYBOARDHIDDEN_UNDEFINED -> "undefined"
-                            else -> "other"
-                        })
-                    runCatching {
-                        val content = activity.findViewById<View>(android.R.id.content)
-                        keyboardGeometry.put("contentHeight", content.height.coerceIn(0, 65535))
-                            .put("contentPaddingBottom", content.paddingBottom.coerceIn(0, 65535))
-                        web.getLocationOnScreen(position)
-                        keyboardGeometry.put("webScreenY", position[1].coerceIn(-65535, 65535))
-                        if (Build.VERSION.SDK_INT >= 30) {
-                            val metrics = activity.windowManager.currentWindowMetrics
-                            keyboardGeometry.put("metricsTop", metrics.bounds.top.coerceIn(-65535, 65535))
-                                .put("metricsBottom", metrics.bounds.bottom.coerceIn(-65535, 65535))
-                                .put("metricsImeBottom", metrics.windowInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom.coerceIn(0, 65535))
-                                .put("metricsImeVisible", metrics.windowInsets.isVisible(android.view.WindowInsets.Type.ime()))
-                        }
-                    }.onFailure { keyboardGeometry.put("supplementalUnavailable", true) }
+            if (requireCompanion) verifyCompanionInstallation() else {
+                clickButton("Compose")
+                typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
+                val keyboardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                var keyboardGeometry = JSONObject()
+                while (true) {
+                    var fitsAboveKeyboard = false
+                    scenario.onActivity { activity ->
+                        val decor = activity.window.decorView
+                        val insets = requireNotNull(ViewCompat.getRootWindowInsets(decor))
+                        val keyboardHeight = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                        val web = requireNotNull(webView(decor))
+                        val position = IntArray(2)
+                        web.getLocationInWindow(position)
+                        val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+                        fitsAboveKeyboard = imeVisible && keyboardHeight > 0 &&
+                            position[1] + web.height <= decor.height - keyboardHeight
+                        // Closed, bounded geometry only: never DOM content, paths,
+                        // input values, view descriptions or exception messages.
+                        keyboardGeometry = JSONObject().put("rootImeVisible", imeVisible)
+                            .put("rootImeBottom", keyboardHeight.coerceIn(0, 65535))
+                            .put("decorHeight", decor.height.coerceIn(0, 65535))
+                            .put("webWindowY", position[1].coerceIn(-65535, 65535))
+                            .put("webHeight", web.height.coerceIn(0, 65535))
+                            .put("keyboard", when (activity.resources.configuration.keyboard) {
+                                Configuration.KEYBOARD_NOKEYS -> "none"
+                                Configuration.KEYBOARD_QWERTY -> "qwerty"
+                                Configuration.KEYBOARD_12KEY -> "12key"
+                                Configuration.KEYBOARD_UNDEFINED -> "undefined"
+                                else -> "other"
+                            })
+                            .put("hardKeyboardHidden", when (activity.resources.configuration.hardKeyboardHidden) {
+                                Configuration.HARDKEYBOARDHIDDEN_YES -> "hidden"
+                                Configuration.HARDKEYBOARDHIDDEN_NO -> "visible"
+                                Configuration.HARDKEYBOARDHIDDEN_UNDEFINED -> "undefined"
+                                else -> "other"
+                            })
+                        runCatching {
+                            val content = activity.findViewById<View>(android.R.id.content)
+                            keyboardGeometry.put("contentHeight", content.height.coerceIn(0, 65535))
+                                .put("contentPaddingBottom", content.paddingBottom.coerceIn(0, 65535))
+                            web.getLocationOnScreen(position)
+                            keyboardGeometry.put("webScreenY", position[1].coerceIn(-65535, 65535))
+                            if (Build.VERSION.SDK_INT >= 30) {
+                                val metrics = activity.windowManager.currentWindowMetrics
+                                keyboardGeometry.put("metricsTop", metrics.bounds.top.coerceIn(-65535, 65535))
+                                    .put("metricsBottom", metrics.bounds.bottom.coerceIn(-65535, 65535))
+                                    .put("metricsImeBottom", metrics.windowInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom.coerceIn(0, 65535))
+                                    .put("metricsImeVisible", metrics.windowInsets.isVisible(android.view.WindowInsets.Type.ime()))
+                            }
+                        }.onFailure { keyboardGeometry.put("supplementalUnavailable", true) }
+                    }
+                    if (fitsAboveKeyboard) break
+                    assertTrue("Real docked IME must resize the native WebView; geometry=$keyboardGeometry", System.nanoTime() < keyboardDeadline)
+                    Thread.sleep(50)
                 }
-                if (fitsAboveKeyboard) break
-                assertTrue("Real docked IME must resize the native WebView; geometry=$keyboardGeometry", System.nanoTime() < keyboardDeadline)
-                Thread.sleep(50)
-            }
-            val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
-                .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
-                .also { require(it.size <= 2048) { "Keyboard viewport oracle bound" } }.toString(Charsets.UTF_8)
-            val canvasHeight = "document.querySelector('.terminal-canvas').getBoundingClientRect().height"
-            awaitDocument(scenario, "terminal and special keys inside the keyboard-resized WebView", """
-                (()=>{
-                  const canvas=document.querySelector('.terminal-canvas'), keys=document.querySelector('.terminal-keys');
-                  if(!canvas || !keys || canvas.getBoundingClientRect().height<=0) return false;
-                  const special=Array.from(keys.querySelectorAll('button')).filter(x=>['esc','tab'].includes(x.textContent));
-                  $viewportOracle
-                  return special.length===2 && ownedKeyboardViewportContains(window.visualViewport,
-                    [canvas,keys,...special].map(x=>x.getBoundingClientRect()));
-                })()
-            """, { remaining ->
-                val native = JSONObject()
-                scenario.onActivity { activity ->
-                    val decor = activity.window.decorView
-                    val web = requireNotNull(webView(decor))
-                    native.put("webHeight", web.height.coerceIn(0, 65535))
-                        .put("webWidth", web.width.coerceIn(0, 65535))
-                        .put("density", activity.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
-                        .put("imeBottom", ViewCompat.getRootWindowInsets(decor)?.getInsets(WindowInsetsCompat.Type.ime())?.bottom?.coerceIn(0, 65535) ?: JSONObject.NULL)
-                }
-                val dom = JSONObject(evaluate(scenario, """
+                val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
+                    .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
+                    .also { require(it.size <= 2048) { "Keyboard viewport oracle bound" } }.toString(Charsets.UTF_8)
+                val canvasHeight = "document.querySelector('.terminal-canvas').getBoundingClientRect().height"
+                awaitDocument(scenario, "terminal and special keys inside the keyboard-resized WebView", """
                     (()=>{
-                      const n=x=>Number.isFinite(x)&&Math.abs(x)<=65535?x:null;
-                      const rect=e=>e?['left','top','right','bottom','width','height'].map(k=>n(e.getBoundingClientRect()[k])):null;
-                      const canvas=document.querySelector('.terminal-canvas'),keys=document.querySelector('.terminal-keys');
-                      const composer=document.querySelector('.terminal-compose'),toggle=document.querySelector('.terminal-toolbar-toggle');
-                      const buttons=keys?Array.from(keys.querySelectorAll('button')):[];
-                      return {viewport:[n(innerWidth),n(innerHeight),n(document.documentElement.clientHeight),n(devicePixelRatio)],
-                        visualViewport:[n(window.visualViewport?.width),n(window.visualViewport?.height),
-                          n(window.visualViewport?.offsetLeft),n(window.visualViewport?.offsetTop),n(window.visualViewport?.scale)],
-                        canvas:rect(canvas),screenHeight:n(canvas?.querySelector('.xterm-screen')?.getBoundingClientRect().height),
-                        keys:rect(keys),esc:rect(buttons.find(x=>x.textContent==='esc')),tab:rect(buttons.find(x=>x.textContent==='tab')),
-                        composer:rect(composer),toggle:rect(toggle),header:rect(document.querySelector('.workspace-header')),
-                        sessions:rect(document.querySelector('.session-tabs')),navigation:rect(document.querySelector('.view-tabs')),
-                        footer:rect(document.querySelector('.workspace-footer')),
-                        canvasCount:n(document.querySelectorAll('.terminal-canvas').length),
-                        rowFloor:n(parseFloat(canvas?.style.minHeight)),
-                        composerFlexible:Boolean(composer&&getComputedStyle(composer).flexGrow==='1'&&getComputedStyle(composer).overflowY==='auto'),
-                        toggleFixed:Boolean(toggle&&getComputedStyle(toggle).flexShrink==='0')};
+                      const canvas=document.querySelector('.terminal-canvas'), keys=document.querySelector('.terminal-keys');
+                      if(!canvas || !keys || canvas.getBoundingClientRect().height<=0) return false;
+                      const special=Array.from(keys.querySelectorAll('button')).filter(x=>['esc','tab'].includes(x.textContent));
+                      $viewportOracle
+                      return special.length===2 && ownedKeyboardViewportContains(window.visualViewport,
+                        [canvas,keys,...special].map(x=>x.getBoundingClientRect()));
                     })()
-                """, remaining))
-                JSONObject().put("native", native).put("dom", dom).toString().also {
-                    require(it.length <= 4096) { "Keyboard geometry observation bound" }
-                }
-            })
-            val withKeyboard = evaluate(scenario, canvasHeight).toDouble()
-            closeSoftKeyboard()
-            awaitDocument(scenario, "terminal expands after native keyboard dismissal", "$canvasHeight > $withKeyboard")
-            clickButton("Paste draft")
-            val terminalFocused = "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"
-            assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario, terminalFocused))
-            // Refocusing xterm can reopen the docked IME and reduce the visible screen to one row.
-            // Dismiss it ordinarily so the unchanged output-plus-later-prompt oracle can see both rows.
-            closeSoftKeyboard()
-            assertEquals("Keyboard dismissal must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
-            val literalClipboard = " # CLIP_${nonce}_\$literal"
-            instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
-            clickButton("paste")
-            awaitDocument(scenario, "native clipboard client settled and focused", """
-                (()=>{const paste=document.querySelectorAll('.terminal-keys button[aria-busy]');
-                  return paste.length===1 && paste[0].getAttribute('aria-busy')==='false' && !paste[0].disabled && $terminalFocused;})()
-            """)
-            assertEquals("Clipboard paste must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
-            // Native clipboard completion refocuses xterm asynchronously; dismiss
-            // after that acknowledgement so Enter/output use the expanded viewport.
-            closeSoftKeyboard()
-            assertEquals("Keyboard dismissal must preserve clipboard paste input focus", "true", evaluate(scenario, terminalFocused))
-            awaitDocument(scenario, "native clipboard text pasted literally without Enter",
-                screenContains(literalClipboard) + " && !(" + screenContains(fixture.getString("expected")) + ")")
-            // Normal native Enter submits the real shell input.
-            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
-            awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
-                screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
-            if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
-            verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
-            if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
+                """, { remaining ->
+                    val native = JSONObject()
+                    scenario.onActivity { activity ->
+                        val decor = activity.window.decorView
+                        val web = requireNotNull(webView(decor))
+                        native.put("webHeight", web.height.coerceIn(0, 65535))
+                            .put("webWidth", web.width.coerceIn(0, 65535))
+                            .put("density", activity.resources.displayMetrics.density.toDouble().coerceIn(0.0, 100.0))
+                            .put("imeBottom", ViewCompat.getRootWindowInsets(decor)?.getInsets(WindowInsetsCompat.Type.ime())?.bottom?.coerceIn(0, 65535) ?: JSONObject.NULL)
+                    }
+                    val dom = JSONObject(evaluate(scenario, """
+                        (()=>{
+                          const n=x=>Number.isFinite(x)&&Math.abs(x)<=65535?x:null;
+                          const rect=e=>e?['left','top','right','bottom','width','height'].map(k=>n(e.getBoundingClientRect()[k])):null;
+                          const canvas=document.querySelector('.terminal-canvas'),keys=document.querySelector('.terminal-keys');
+                          const composer=document.querySelector('.terminal-compose'),toggle=document.querySelector('.terminal-toolbar-toggle');
+                          const buttons=keys?Array.from(keys.querySelectorAll('button')):[];
+                          return {viewport:[n(innerWidth),n(innerHeight),n(document.documentElement.clientHeight),n(devicePixelRatio)],
+                            visualViewport:[n(window.visualViewport?.width),n(window.visualViewport?.height),
+                              n(window.visualViewport?.offsetLeft),n(window.visualViewport?.offsetTop),n(window.visualViewport?.scale)],
+                            canvas:rect(canvas),screenHeight:n(canvas?.querySelector('.xterm-screen')?.getBoundingClientRect().height),
+                            keys:rect(keys),esc:rect(buttons.find(x=>x.textContent==='esc')),tab:rect(buttons.find(x=>x.textContent==='tab')),
+                            composer:rect(composer),toggle:rect(toggle),header:rect(document.querySelector('.workspace-header')),
+                            sessions:rect(document.querySelector('.session-tabs')),navigation:rect(document.querySelector('.view-tabs')),
+                            footer:rect(document.querySelector('.workspace-footer')),
+                            canvasCount:n(document.querySelectorAll('.terminal-canvas').length),
+                            rowFloor:n(parseFloat(canvas?.style.minHeight)),
+                            composerFlexible:Boolean(composer&&getComputedStyle(composer).flexGrow==='1'&&getComputedStyle(composer).overflowY==='auto'),
+                            toggleFixed:Boolean(toggle&&getComputedStyle(toggle).flexShrink==='0')};
+                        })()
+                    """, remaining))
+                    JSONObject().put("native", native).put("dom", dom).toString().also {
+                        require(it.length <= 4096) { "Keyboard geometry observation bound" }
+                    }
+                })
+                val withKeyboard = evaluate(scenario, canvasHeight).toDouble()
+                closeSoftKeyboard()
+                awaitDocument(scenario, "terminal expands after native keyboard dismissal", "$canvasHeight > $withKeyboard")
+                clickButton("Paste draft")
+                val terminalFocused = "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')"
+                assertEquals("Paste draft must leave the terminal input focused", "true", evaluate(scenario, terminalFocused))
+                // Refocusing xterm can reopen the docked IME and reduce the visible screen to one row.
+                // Dismiss it ordinarily so the unchanged output-plus-later-prompt oracle can see both rows.
+                closeSoftKeyboard()
+                assertEquals("Keyboard dismissal must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+                val literalClipboard = " # CLIP_${nonce}_\$literal"
+                instrumentation.runOnMainSync { clipboard.setPrimaryClip(ClipData.newPlainText(label, literalClipboard)) }
+                clickButton("paste")
+                awaitDocument(scenario, "native clipboard client settled and focused", """
+                    (()=>{const paste=document.querySelectorAll('.terminal-keys button[aria-busy]');
+                      return paste.length===1 && paste[0].getAttribute('aria-busy')==='false' && !paste[0].disabled && $terminalFocused;})()
+                """)
+                assertEquals("Clipboard paste must preserve terminal input focus", "true", evaluate(scenario, terminalFocused))
+                // Native clipboard completion refocuses xterm asynchronously; dismiss
+                // after that acknowledgement so Enter/output use the expanded viewport.
+                closeSoftKeyboard()
+                assertEquals("Keyboard dismissal must preserve clipboard paste input focus", "true", evaluate(scenario, terminalFocused))
+                awaitDocument(scenario, "native clipboard text pasted literally without Enter",
+                    screenContains(literalClipboard) + " && !(" + screenContains(fixture.getString("expected")) + ")")
+                // Normal native Enter submits the real shell input.
+                onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+                awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
+                    screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
+                if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
+                verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
+                if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
+            }
             val disconnect = "button[aria-label='Disconnect $name']"
             if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
                 val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
