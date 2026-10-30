@@ -1023,16 +1023,18 @@ public sealed class OwnedMediumGui : System.IDisposable {
     for(int i=0;i<ids.Length;i++){Need(!entries.ContainsKey(ids[i]),"ASUSER_UNVERIFIED");entries.Add(ids[i],attributes[i]);}
     var result=new byte[ids.Length*12];int offset=0;foreach(var entry in entries){Array.Copy(BitConverter.GetBytes(entry.Key),0,result,offset,8);Array.Copy(BitConverter.GetBytes(entry.Value),0,result,offset+8,4);offset+=12;}return result;
   }
+  static bool QuotaPresent(bool matching,uint attributes){return matching&&(attributes&4)==0;}
   static byte[] CallerPrivileges(IntPtr caller,Luid quota,out bool present){
     present=false;using(var data=new Data(caller,3)){Need(data.Length>=4,"ASUSER_UNVERIFIED");int count=Marshal.ReadInt32(data.Pointer);Need(count>=0&&count<=256&&4L+12L*count==data.Length,"ASUSER_UNVERIFIED");var ids=new ulong[count];var attributes=new uint[count];
-      for(int i=0;i<count;i++){int at=4+12*i;uint low=unchecked((uint)Marshal.ReadInt32(data.Pointer,at)),high=unchecked((uint)Marshal.ReadInt32(data.Pointer,at+4));ids[i]=((ulong)high<<32)|low;attributes[i]=unchecked((uint)Marshal.ReadInt32(data.Pointer,at+8));if(low==quota.Low&&high==unchecked((uint)quota.High))present=true;}return CanonicalPrivileges(ids,attributes);}
+      for(int i=0;i<count;i++){int at=4+12*i;uint low=unchecked((uint)Marshal.ReadInt32(data.Pointer,at)),high=unchecked((uint)Marshal.ReadInt32(data.Pointer,at+4));ids[i]=((ulong)high<<32)|low;attributes[i]=unchecked((uint)Marshal.ReadInt32(data.Pointer,at+8));if(QuotaPresent(low==quota.Low&&high==unchecked((uint)quota.High),attributes[i]))present=true;}return CanonicalPrivileges(ids,attributes);}
   }
   static string AsUserAdmission(string kind,string counter,long remaining){if(kind!="RESTRICTED"||counter!="DENIED:ACCESS_DENIED"||remaining>100000)return "NOT_ELIGIBLE";return remaining<30000?"NOT_RUN_BUDGET":"RUN";}
+  static string AsUserUnavailable(string code){switch(code){case "JOB_UNAVAILABLE":return "UNAVAILABLE_JOB";case "IDENTITY_UNVERIFIED":return "UNAVAILABLE_IDENTITY";case "TOKEN_UNAVAILABLE":return "UNAVAILABLE_TOKEN";case "ARGV_BOUND":case "ENVIRONMENT_BOUND":return "UNAVAILABLE_INPUT";default:return "UNVERIFIED";}}
   void CompareAsUser(string image,string[] arguments,string directory,string environment,long deadline){
     AsUserOutcome=AsUserAdmission(Kind,CounterprobeOutcome,deadline-Environment.TickCount64);if(AsUserOutcome!="RUN")return;
     var originalCall=launchCall;var originalError=launchError;var originalToken=tokenFailure;
     try{using(var retired=Launch(image,arguments,directory,environment,true,true)){AsUserOutcome="CREATED_RETIRED";}}
-    catch(System.InvalidOperationException failure){if(failure.Message=="CLEANUP_UNVERIFIED"){AsUserOutcome="CLEANUP_UNVERIFIED";throw;}AsUserOutcome=failure.Message=="ASUSER_QUOTA_ABSENT"?"NOT_RUN_QUOTA":failure.Message=="LAUNCH_UNAVAILABLE"&&launchCall==LaunchCall.CREATE_PROCESS_AS_USER?"DENIED:"+launchError:"UNVERIFIED";}
+    catch(System.InvalidOperationException failure){if(failure.Message=="CLEANUP_UNVERIFIED"){AsUserOutcome="CLEANUP_UNVERIFIED";throw;}AsUserOutcome=failure.Message=="ASUSER_QUOTA_ABSENT"?"NOT_RUN_QUOTA":failure.Message=="LAUNCH_UNAVAILABLE"&&launchCall==LaunchCall.CREATE_PROCESS_AS_USER?"DENIED:"+launchError:AsUserUnavailable(failure.Message);}
     catch{AsUserOutcome="CLEANUP_UNVERIFIED";throw new System.InvalidOperationException("CLEANUP_UNVERIFIED");}
     finally{launchCall=originalCall;launchError=originalError;tokenFailure=originalToken;}
   }

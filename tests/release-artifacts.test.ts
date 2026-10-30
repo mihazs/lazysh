@@ -20,9 +20,10 @@ const mediumAdmissionResult=(value:unknown)=>typeof value==='string'&&mediumAdmi
 const counterprobePrefix='LAZYSH_MEDIUM_COUNTERPROBE:';
 // Creation-only failures admit only the current Win32Failure mapping, independently of resume labels.
 const counterprobeDenied=['ACCESS_DENIED','INVALID_HANDLE','INVALID_PARAMETER','PRIVILEGE_NOT_HELD','FILE_NOT_FOUND','PATH_NOT_FOUND','BAD_EXE_FORMAT','DIRECTORY','OTHER'];
-const counterprobeResults=['NOT_RUN_BUDGET','CREATED_RETIRED','UNAVAILABLE_JOB','UNAVAILABLE_IDENTITY','UNAVAILABLE_TOKEN','UNAVAILABLE_INPUT','UNAVAILABLE_OTHER','CLEANUP_UNVERIFIED',...counterprobeDenied.map(error=>'DENIED:'+error)];
+const creationUnavailableResults=['UNAVAILABLE_JOB','UNAVAILABLE_IDENTITY','UNAVAILABLE_TOKEN','UNAVAILABLE_INPUT'];
+const counterprobeResults=['NOT_RUN_BUDGET','CREATED_RETIRED',...creationUnavailableResults,'UNAVAILABLE_OTHER','CLEANUP_UNVERIFIED',...counterprobeDenied.map(error=>'DENIED:'+error)];
 const asUserPrefix='LAZYSH_MEDIUM_ASUSER:';
-const asUserResults=['NOT_RUN_BUDGET','NOT_RUN_QUOTA','CREATED_RETIRED','UNVERIFIED','CLEANUP_UNVERIFIED',...counterprobeDenied.map(error=>'DENIED:'+error)];
+const asUserResults=['NOT_RUN_BUDGET','NOT_RUN_QUOTA','CREATED_RETIRED',...creationUnavailableResults,'UNVERIFIED','CLEANUP_UNVERIFIED',...counterprobeDenied.map(error=>'DENIED:'+error)];
 const daclPrefix='LAZYSH_MEDIUM_DACL:';
 const daclNames=['imageReadExecute','cwdTraverse','cwdCreateFile','stationReadAttributes','desktopCreateReadWrite'];
 const probeDenial='UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED';
@@ -660,7 +661,7 @@ test('restricted Windows admission reports only exact finite smoke results',()=>
 test('AsUser comparison never replaces the baseline denial and projects only restricted creation outcomes',()=>{
   const prefix=counterprobePrefix+'RESTRICTED:DENIED:ACCESS_DENIED\n';
   for(const outcome of asUserResults){const result=outcome==='CLEANUP_UNVERIFIED'?'CLEANUP_UNVERIFIED':probeDenial;expect(mediumAdmissionObservation(prefix+asUserPrefix+'RESTRICTED:'+outcome+'\n'+result)).toEqual({result,counterprobe:{kind:'RESTRICTED',outcome:'DENIED:ACCESS_DENIED'},asUser:{kind:'RESTRICTED',outcome}})}
-  for(const value of ['PRIVATE','DENIED:5','DENIED:RESUME_COUNT_UNEXPECTED','DENIED:UNVERIFIED','CREATED_RETIRED private','CLEANUP_UNVERIFIED'])expect(mediumAdmissionObservation(prefix+asUserPrefix+'RESTRICTED:'+value+'\n'+probeDenial)).toEqual({result:'UNVERIFIED',counterprobe:'UNVERIFIED'});
+  for(const value of ['PRIVATE','DENIED:5','DENIED:RESUME_COUNT_UNEXPECTED','DENIED:UNVERIFIED','UNAVAILABLE_OTHER','UNAVAILABLE_PRIVATE','CREATED_RETIRED private','CLEANUP_UNVERIFIED'])expect(mediumAdmissionObservation(prefix+asUserPrefix+'RESTRICTED:'+value+'\n'+probeDenial)).toEqual({result:'UNVERIFIED',counterprobe:'UNVERIFIED'});
   for(const value of [prefix.replaceAll('RESTRICTED','LINKED')+asUserPrefix+'LINKED:CREATED_RETIRED',prefix.replace('DENIED:ACCESS_DENIED','CREATED_RETIRED')+asUserPrefix+'RESTRICTED:CREATED_RETIRED',prefix+asUserPrefix+'RESTRICTED:CREATED_RETIRED\n'+asUserPrefix+'RESTRICTED:CREATED_RETIRED'])expect(mediumAdmissionObservation(value+'\n'+probeDenial)).toEqual({result:'UNVERIFIED',counterprobe:'UNVERIFIED'});
   expect(mediumAdmissionObservation(prefix+asUserPrefix+'RESTRICTED:PRIVATE\nCLEANUP_UNVERIFIED')).toEqual({result:'CLEANUP_UNVERIFIED',counterprobe:'UNVERIFIED'});
   expect(mediumAdmissionObservation(counterprobePrefix+'RESTRICTED:CLEANUP_UNVERIFIED\n'+asUserPrefix+'RESTRICTED:CLEANUP_UNVERIFIED\nCLEANUP_UNVERIFIED')).toEqual({result:'CLEANUP_UNVERIFIED',counterprobe:{kind:'RESTRICTED',outcome:'CLEANUP_UNVERIFIED'},asUser:{kind:'RESTRICTED',outcome:'CLEANUP_UNVERIFIED'}});
@@ -774,6 +775,10 @@ if($empty.AsUserOutcome -cne 'NOT_ELIGIBLE'){throw 'linked token reached AsUser 
 [OwnedMediumGui].GetProperty('Kind').SetValue($empty,'RESTRICTED')
 $compare.Invoke($empty,@('owned',[string[]]@(),'',[string]::new([char]0,2),[Environment]::TickCount64))
 if($empty.AsUserOutcome -cne 'NOT_RUN_BUDGET'){throw 'expired AsUser comparison launched'}
+$quotaPresent=[OwnedMediumGui].GetMethod('QuotaPresent',$flags)
+foreach($case in @(@($true,0,$true),@($true,2,$true),@($true,4,$false),@($true,6,$false),@($false,0,$false),@($false,2,$false),@($true,[uint32]::MaxValue,$false))){if($quotaPresent.Invoke($null,@([bool]$case[0],[uint32]$case[1])) -ne $case[2]){throw 'removed quota admitted'}}
+$asUnavailable=[OwnedMediumGui].GetMethod('AsUserUnavailable',$flags)
+foreach($case in @(@('JOB_UNAVAILABLE','UNAVAILABLE_JOB'),@('IDENTITY_UNVERIFIED','UNAVAILABLE_IDENTITY'),@('TOKEN_UNAVAILABLE','UNAVAILABLE_TOKEN'),@('ARGV_BOUND','UNAVAILABLE_INPUT'),@('ENVIRONMENT_BOUND','UNAVAILABLE_INPUT'),@('ASUSER_UNVERIFIED','UNVERIFIED'),@('private','UNVERIFIED'),@('','UNVERIFIED'))){if($asUnavailable.Invoke($null,@([string]$case[0])) -cne $case[1]){throw 'AsUser boundary classification changed'}}
 $canonical=[OwnedMediumGui].GetMethod('CanonicalPrivileges',$flags)
 $first=$canonical.Invoke($null,@([ulong[]]@(2,1),[uint[]]@(0,2)))
 $second=$canonical.Invoke($null,@([ulong[]]@(1,2),[uint[]]@(2,0)))
