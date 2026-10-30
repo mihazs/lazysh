@@ -457,10 +457,30 @@ describe('live Herdr discovery',()=>{
   it('distinguishes missing live metadata from a genuinely empty server',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:undefined}));
-    render(<HerdrAgentsPanel sessionId="legacy-host" visible/>);
+    render(<HerdrAgentsPanel sessionId="legacy-host" visible onRestoreHostTools={vi.fn()}/>);
     await screen.findByText(`${t('herdrAgentsUnavailable')} ${t('herdrAgentsUnsupported')}`);
     expect(screen.queryByText(/Showing .*detected agents/)).toBeNull();
     expect(screen.queryByText('builder')).toBeNull();
+    expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
+  });
+  it.each([
+    {name:'closed control',error:{kind:'ssh_control_closed',message:'same host error text'},recover:true},
+    {name:'remote command',error:{kind:'remote_command_failed',message:'same host error text'},recover:false},
+    {name:'text-only error',error:new Error('same host error text'),recover:false},
+  ])('offers explicit recovery only for $name',async({error,recover})=>{
+    const {invoke}=await import('@tauri-apps/api/core'),restore=vi.fn();
+    vi.mocked(invoke).mockImplementation(async command=>{if(command==='multiplexer_sessions')return [{name:'default'}];throw error;});
+    render(<HerdrAgentsPanel sessionId="control-owner" visible onRestoreHostTools={restore}/>);
+    await screen.findByText(`${t('herdrAgentsUnavailable')} ${recover?t('hostToolsClosed'):'same host error text'}`);
+    const button=screen.queryByRole('button',{name:t('hostToolsRestore')});
+    expect(!!button).toBe(recover);expect(restore).not.toHaveBeenCalled();
+    if(button){
+      fireEvent.click(button);expect(restore).toHaveBeenCalledOnce();
+      vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+      await act(async()=>restore.mock.calls[0][0]());
+      await screen.findByText('builder');
+      expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
+    }
   });
   it('suspends discovery when hidden and drops an old source before issuing its snapshot',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');

@@ -1,15 +1,16 @@
-//! Explicit reauthentication of a live Mosh session's attachment-only SSH control.
+//! Explicit, purpose-scoped reauthentication of a live Mosh session's SSH controls.
 use super::*;
 
 pub(crate) struct Control {
     original: Option<Host>,
     current: StdMutex<Arc<SshHandle>>,
+    commands: StdMutex<Arc<SshHandle>>,
     restoring: Arc<Semaphore>,
 }
 fn unavailable() -> SshError {
     SshError::new(
         "ssh_control_unavailable",
-        "File-transfer recovery requires the original verified direct Mosh connection",
+        "SSH control recovery requires the original verified direct Mosh connection",
     )
 }
 pub(super) fn same_host(original: &Host, current: &Host) -> Result<()> {
@@ -25,7 +26,8 @@ impl Control {
     pub(super) fn new(handle: Arc<SshHandle>) -> Self {
         Self {
             original: handle.origin.clone(),
-            current: StdMutex::new(handle),
+            current: StdMutex::new(handle.clone()),
+            commands: StdMutex::new(handle),
             restoring: Arc::new(Semaphore::new(1)),
         }
     }
@@ -35,34 +37,52 @@ impl Control {
             .map(|value| value.clone())
             .map_err(|_| unavailable())
     }
-    pub(super) fn for_shutdown(&self) -> Arc<SshHandle> {
-        self.current
+    pub(super) fn command_handle(&self) -> Result<Arc<SshHandle>> {
+        self.commands
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .map(|handle| handle.clone())
+            .map_err(|_| unavailable())
     }
-    fn begin(&self) -> Result<(tokio::sync::OwnedSemaphorePermit, Arc<SshHandle>, Host)> {
+    pub(super) fn for_shutdown(&self) -> Vec<Arc<SshHandle>> {
+        [&self.current, &self.commands]
+            .into_iter()
+            .map(|slot| {
+                slot.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+            .collect()
+    }
+    fn begin(
+        &self,
+        purpose: Purpose,
+    ) -> Result<(tokio::sync::OwnedSemaphorePermit, Arc<SshHandle>, Host)> {
         let permit = self.restoring.clone().try_acquire_owned().map_err(|_| {
             SshError::new(
                 "ssh_control_busy",
-                "File-transfer recovery is already running",
+                "SSH control recovery is already running",
             )
         })?;
         let original = self.original.clone().ok_or_else(unavailable)?;
         if original.jump_host_id.is_some() || original.forward_agent {
             return Err(unavailable());
         }
-        let current = self.current()?;
+        let current = match purpose {
+            Purpose::Files => self.current()?,
+            Purpose::Commands => self.command_handle()?,
+        };
         if !current.is_closed() {
             return Err(SshError::new(
                 "ssh_control_ready",
-                "The SSH file-transfer connection is already available",
+                "The selected SSH connection is already available",
             ));
         }
         Ok((permit, current, original))
     }
-    fn commit(
+    #[allow(clippy::too_many_arguments)]
+    fn commit_for(
         &self,
+        purpose: Purpose,
         expected: &Arc<SshHandle>,
         fresh: Arc<SshHandle>,
         session: &Arc<Session>,
@@ -78,7 +98,11 @@ impl Control {
             }
             let original = self.original.as_ref().ok_or_else(unavailable)?;
             same_host(original, configured.ok_or_else(unavailable)?)?;
-            let mut current = self.current.lock().map_err(|_| unavailable())?;
+            let slot = match purpose {
+                Purpose::Files => &self.current,
+                Purpose::Commands => &self.commands,
+            };
+            let mut current = slot.lock().map_err(|_| unavailable())?;
             if !Arc::ptr_eq(&current, expected) || !current.is_closed() || fresh.is_closed() {
                 return Err(unavailable());
             }
@@ -90,6 +114,11 @@ impl Control {
             Ok(())
         })?
     }
+}
+#[derive(Clone, Copy)]
+pub(super) enum Purpose {
+    Files,
+    Commands,
 }
 struct Fresh {
     handle: Option<Arc<SshHandle>>,
@@ -113,60 +142,68 @@ pub struct Restored {
     pub(super) status: &'static str,
 }
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn restore_file_transfer(
-    lease: AccessLease,
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    session_id: String,
-    password: Option<String>,
-    private_key: Option<String>,
-    passphrase: Option<String>,
-    use_saved_credentials: Option<bool>,
-) -> AccessResult<Restored> {
-    lease
-        .run(async {
-            let session = state.session(&session_id).await?;
-            let operation = app.vault().operation();
-            restore_with(
-                &state,
-                &session_id,
-                &session,
-                &lease,
-                &operation,
-                |original, permit| {
-                    let app = app.clone();
-                    let state = &*state;
-                    let operation = &operation;
-                    let lease = &lease;
-                    async move {
-                        authenticated_connection(
-                            app.clone(),
-                            state,
-                            original.id.clone(),
-                            crate::vault::Credentials {
-                                password,
-                                private_key,
-                                passphrase,
-                            },
-                            use_saved_credentials.unwrap_or(false),
-                            None,
-                            operation,
-                            lease,
-                            None,
-                            Some(&original),
-                            Some(permit),
-                        )
-                        .await
-                    }
-                },
-            )
-            .await
-        })
-        .await
+macro_rules! recovery_command {
+    ($name:ident, $purpose:expr) => {
+        #[tauri::command]
+        #[allow(clippy::too_many_arguments)]
+        pub async fn $name(
+            lease: AccessLease,
+            app: tauri::AppHandle,
+            state: State<'_, AppState>,
+            session_id: String,
+            password: Option<String>,
+            private_key: Option<String>,
+            passphrase: Option<String>,
+            use_saved_credentials: Option<bool>,
+        ) -> AccessResult<Restored> {
+            lease
+                .run(async {
+                    let session = state.session(&session_id).await?;
+                    let operation = app.vault().operation();
+                    restore_for(
+                        $purpose,
+                        &state,
+                        &session_id,
+                        &session,
+                        &lease,
+                        &operation,
+                        |original, permit| {
+                            let app = app.clone();
+                            let state = &*state;
+                            let operation = &operation;
+                            let lease = &lease;
+                            async move {
+                                authenticated_connection(
+                                    app.clone(),
+                                    state,
+                                    original.id.clone(),
+                                    crate::vault::Credentials {
+                                        password,
+                                        private_key,
+                                        passphrase,
+                                    },
+                                    use_saved_credentials.unwrap_or(false),
+                                    None,
+                                    operation,
+                                    lease,
+                                    None,
+                                    Some(&original),
+                                    Some(permit),
+                                )
+                                .await
+                            }
+                        },
+                    )
+                    .await
+                })
+                .await
+        }
+    };
 }
-pub(super) async fn restore_with<F, Fut>(
+recovery_command!(restore_file_transfer, Purpose::Files);
+recovery_command!(restore_host_tools, Purpose::Commands);
+pub(super) async fn restore_for<F, Fut>(
+    purpose: Purpose,
     state: &AppState,
     id: &str,
     session: &Arc<Session>,
@@ -183,7 +220,7 @@ where
         return Err(SshError::new("disconnected", "Session is disconnected"));
     }
     let control = session.file_control.as_ref().ok_or_else(unavailable)?;
-    let (permit, expected, original) = control.begin()?;
+    let (permit, expected, original) = control.begin(purpose)?;
     let permit = Arc::new(permit);
     same_host(&original, &state.host(&original.id)?)?;
     let mut cancelled = session.cancel.subscribe();
@@ -193,26 +230,46 @@ where
             handle: Some(auth.handle.clone()),
             retained: permit.clone(),
         };
-        timeout(OP_TIMEOUT, async {
-            let sftp = SftpSession::new(crate::sftp_stream::SftpStream::new(
-                sftp_channel_for(&auth.handle, lease).await?,
-            ))
-            .await?;
-            timeout(Duration::from_secs(2), sftp.close())
-                .await
-                .map_err(|_| {
-                    SshError::new("timeout", "Closing the recovery SFTP probe timed out")
-                })??;
-            Ok::<_, SshError>(())
-        })
-        .await
-        .map_err(|_| {
-            SshError::new("timeout", "Checking the restored SFTP connection timed out")
-        })??;
+        match purpose {
+            Purpose::Files => timeout(OP_TIMEOUT, async {
+                let sftp = SftpSession::new(crate::sftp_stream::SftpStream::new(
+                    sftp_channel_for(&auth.handle, lease).await?,
+                ))
+                .await?;
+                timeout(Duration::from_secs(2), sftp.close())
+                    .await
+                    .map_err(|_| {
+                        SshError::new("timeout", "Closing the recovery SFTP probe timed out")
+                    })??;
+                Ok::<_, SshError>(())
+            })
+            .await
+            .map_err(|_| {
+                SshError::new("timeout", "Checking the restored SFTP connection timed out")
+            })??,
+            Purpose::Commands => {
+                let value = exec_inner_with_handle(
+                    &auth.handle,
+                    "printf lazysh-host-tools".into(),
+                    lease,
+                    OP_TIMEOUT,
+                    64,
+                    Some(permit.clone()),
+                )
+                .await?;
+                if value != "lazysh-host-tools" {
+                    return Err(SshError::new(
+                        "invalid_output",
+                        "Invalid host-tools probe response",
+                    ));
+                }
+            }
+        };
         let active = state.sessions.lock().await;
         let config = state.config()?;
         operation.check().map_err(|_| connection_cancelled())?;
-        control.commit(
+        control.commit_for(
+            purpose,
             &expected,
             auth.handle,
             session,
@@ -345,52 +402,64 @@ mod tests {
     }
     #[tokio::test]
     async fn changed_identity_and_policy_are_rejected_before_authentication() {
-        let f = fixture().await;
-        let operations = tauri_plugin_lazysh_vault::CredentialOperations::default();
-        let operation = operations.begin();
-        for (field, changed) in crate::ssh::test_support::changed_host_bindings(&f.host) {
-            f.state.config().unwrap().hosts[0] = changed;
-            let error = restore_with(
-                &f.state,
-                "owned-mosh",
-                &f.session,
-                &f.lease,
-                &operation,
-                |_, _| async { panic!("changed host must not reach authentication") },
-            )
-            .await
-            .unwrap_err();
+        for purpose in [Purpose::Files, Purpose::Commands] {
+            let f = fixture().await;
+            let operations = tauri_plugin_lazysh_vault::CredentialOperations::default();
+            let operation = operations.begin();
+            for (field, changed) in crate::ssh::test_support::changed_host_bindings(&f.host) {
+                f.state.config().unwrap().hosts[0] = changed;
+                let error = restore_for(
+                    purpose,
+                    &f.state,
+                    "owned-mosh",
+                    &f.session,
+                    &f.lease,
+                    &operation,
+                    |_, _| async { panic!("changed host must not reach authentication") },
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(
+                    error.kind(),
+                    if field == "id" {
+                        "missing_host"
+                    } else {
+                        "ssh_control_host_changed"
+                    },
+                    "{field}"
+                );
+            }
+            f.state.config().unwrap().hosts[0] = f.host.clone();
+            let control = Control {
+                original: None,
+                current: StdMutex::new(f.session.handle.clone()),
+                commands: StdMutex::new(f.session.handle.clone()),
+                restoring: Arc::new(Semaphore::new(1)),
+            };
             assert_eq!(
-                error.kind(),
-                if field == "id" {
-                    "missing_host"
-                } else {
-                    "ssh_control_host_changed"
-                },
-                "{field}"
+                control.begin(purpose).err().unwrap().kind(),
+                "ssh_control_unavailable"
             );
         }
-        f.state.config().unwrap().hosts[0] = f.host.clone();
-        let control = Control {
-            original: None,
-            current: StdMutex::new(f.session.handle.clone()),
-            restoring: Arc::new(Semaphore::new(1)),
-        };
-        assert_eq!(
-            control.begin().err().unwrap().kind(),
-            "ssh_control_unavailable"
-        );
     }
     #[tokio::test]
     async fn cancellation_and_lost_caller_close_fresh_transport_and_retire_singleflight() {
-        for mode in ["lock", "disconnect", "credential-cancel", "drop"] {
+        for (purpose, mode) in [Purpose::Files, Purpose::Commands]
+            .into_iter()
+            .flat_map(|purpose| {
+                ["lock", "disconnect", "credential-cancel", "drop"]
+                    .into_iter()
+                    .map(move |mode| (purpose, mode))
+            })
+        {
             let f = fixture().await;
             let fresh = f.peer.reconnect().await;
             f.peer.hold();
             let auth = f.authenticated(fresh.clone()).await;
             let operations = tauri_plugin_lazysh_vault::CredentialOperations::default();
             let operation = operations.begin();
-            let mut pending = Box::pin(restore_with(
+            let mut pending = Box::pin(restore_for(
+                purpose,
                 &f.state,
                 "owned-mosh",
                 &f.session,
@@ -399,7 +468,11 @@ mod tests {
                 |_, _| std::future::ready(Ok(auth)),
             ));
             tokio::select! { _=f.peer.opened()=>{}, result=&mut pending=>panic!("probe ended before held opening: {result:?}") }
-            let duplicate = restore_with(
+            let duplicate = restore_for(
+                match purpose {
+                    Purpose::Files => Purpose::Commands,
+                    Purpose::Commands => Purpose::Files,
+                },
                 &f.state,
                 "owned-mosh",
                 &f.session,
@@ -436,6 +509,10 @@ mod tests {
             f.peer.release().await;
             let control = f.session.file_control.as_ref().unwrap();
             assert!(Arc::ptr_eq(&control.current().unwrap(), &f.session.handle));
+            assert!(Arc::ptr_eq(
+                &control.command_handle().unwrap(),
+                &f.session.handle
+            ));
             timeout(Duration::from_secs(3), async {
                 loop {
                     if control.restoring.clone().try_acquire_owned().is_ok() {
@@ -455,7 +532,8 @@ mod tests {
         let auth = f.authenticated(fresh.clone()).await;
         let operations = tauri_plugin_lazysh_vault::CredentialOperations::default();
         let operation = operations.begin();
-        assert!(restore_with(
+        assert!(restore_for(
+            Purpose::Files,
             &f.state,
             "owned-mosh",
             &f.session,
@@ -473,59 +551,64 @@ mod tests {
     }
     #[tokio::test]
     async fn stale_pointer_removed_session_and_renderer_retirement_preserve_control_ownership() {
-        let f = fixture().await;
-        let fresh = f.peer.reconnect().await;
-        let control = f.session.file_control.as_ref().unwrap();
-        let active = f.state.sessions.lock().await;
-        assert!(control
-            .commit(
-                &fresh,
-                fresh.clone(),
-                &f.session,
-                active.get("owned-mosh"),
-                Some(&f.host),
-                &f.lease
-            )
-            .is_err());
-        drop(active);
-        f.state.sessions.lock().await.remove("owned-mosh");
-        let active = f.state.sessions.lock().await;
-        assert_eq!(
-            control
-                .commit(
-                    &f.session.handle,
+        for purpose in [Purpose::Files, Purpose::Commands] {
+            let f = fixture().await;
+            let fresh = f.peer.reconnect().await;
+            let control = f.session.file_control.as_ref().unwrap();
+            let active = f.state.sessions.lock().await;
+            assert!(control
+                .commit_for(
+                    purpose,
+                    &fresh,
                     fresh.clone(),
                     &f.session,
                     active.get("owned-mosh"),
                     Some(&f.host),
                     &f.lease
                 )
-                .unwrap_err()
-                .kind(),
-            "disconnected"
-        );
-        drop(active);
-        f.state
-            .sessions
-            .lock()
-            .await
-            .insert("owned-mosh".into(), f.session.clone());
-        let active = f.state.sessions.lock().await;
-        control
-            .commit(
-                &f.session.handle,
-                fresh.clone(),
-                &f.session,
-                active.get("owned-mosh"),
-                Some(&f.host),
-                &f.lease,
-            )
-            .unwrap();
-        drop(active);
-        f.session.finished.send_replace(true);
-        f.state.cancel_for_renderer_rebind().await;
-        wait_closed(&fresh).await;
-        assert!(*f.session.cancel.borrow());
+                .is_err());
+            drop(active);
+            f.state.sessions.lock().await.remove("owned-mosh");
+            let active = f.state.sessions.lock().await;
+            assert_eq!(
+                control
+                    .commit_for(
+                        purpose,
+                        &f.session.handle,
+                        fresh.clone(),
+                        &f.session,
+                        active.get("owned-mosh"),
+                        Some(&f.host),
+                        &f.lease
+                    )
+                    .unwrap_err()
+                    .kind(),
+                "disconnected"
+            );
+            drop(active);
+            f.state
+                .sessions
+                .lock()
+                .await
+                .insert("owned-mosh".into(), f.session.clone());
+            let active = f.state.sessions.lock().await;
+            control
+                .commit_for(
+                    purpose,
+                    &f.session.handle,
+                    fresh.clone(),
+                    &f.session,
+                    active.get("owned-mosh"),
+                    Some(&f.host),
+                    &f.lease,
+                )
+                .unwrap();
+            drop(active);
+            f.session.finished.send_replace(true);
+            f.state.cancel_for_renderer_rebind().await;
+            wait_closed(&fresh).await;
+            assert!(*f.session.cancel.borrow());
+        }
     }
     #[tokio::test]
     async fn cancellation_during_explicit_cleanup_retains_handle_and_singleflight() {

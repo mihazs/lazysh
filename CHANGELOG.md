@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add explicit Reconnect host tools recovery for a Mosh session whose SSH command connection closed. Saved or manual credentials reauthenticate the original verified host without opening a terminal or changing upload-only recovery. Authentication remains user initiated.
+
 - Distinguish Herdr snapshots without live agent metadata from a confirmed empty agent list. Agents shows an explicit capability warning while Sessions keeps legacy tree compatibility; upload-only SSH recovery continues to leave host command access unchanged.
 
 - Keep live Herdr results, companion counts and empty states stable while Agents refreshes. Preserve a failed-read warning until its replacement completes, and remove failed live rows instead of presenting them as a successful empty discovery. Polling frequency, server selection and connection defaults are unchanged.

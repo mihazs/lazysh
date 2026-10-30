@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {bindProtectedInvoke,captureAccess} from './access';
 import {t,useUi,formatNumber} from './i18n/core';
-import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
+import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
 
 type LiveAgent={terminal_id:string;pane_id:string;workspace_id:string;tab_id:string;agent_status:'idle'|'working'|'blocked'|'done'|'unknown';agent:string|null;name:string|null;cwd:string|null};
 const statusKeys={idle:'herdrAgentIdle',working:'herdrAgentWorking',blocked:'herdrAgentBlocked',done:'herdrAgentDone',unknown:'herdrAgentUnknown'} as const;
@@ -36,7 +36,7 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 }
 
 /** Live Herdr metadata is independent of companion lifecycle reports and grants no input authority. */
-export default function HerdrAgentsPanel({sessionId,visible}:{sessionId:string;visible:boolean}) {
+export default function HerdrAgentsPanel({sessionId,visible,onRestoreHostTools}:{sessionId:string;visible:boolean;onRestoreHostTools?:(restored:()=>void)=>void}) {
   useUi();
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
@@ -81,7 +81,7 @@ export default function HerdrAgentsPanel({sessionId,visible}:{sessionId:string;v
     <div className="tool-bar"><h3>{t('herdrAgentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={()=>void refresh.current()}>{t('herdrAgentsRefresh')}</button></div>
     <p>{t('herdrAgentsHint')}</p>
     {busy && !data?.loaded && failure?.host!==sessionId && <p role="status">{t('herdrReading')}</p>}
-    {failure?.host===sessionId && <p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>}
+    {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={busy || !visible || !lease.current()} onClick={()=>onRestoreHostTools(()=>void refresh.current())}>{t('hostToolsRestore')}</button>}</div>}
     {data && <>
       {data.servers.length===0?<p>{t('herdrAgentsNoServers')}</p>:<>
         <label>{t('herdrAgentsServer')}<select value={data.server} disabled={busy} onChange={event=>setChoice({host:sessionId,name:event.target.value})}>

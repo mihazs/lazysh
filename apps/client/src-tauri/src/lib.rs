@@ -231,6 +231,7 @@ pub fn run() {
                 ssh::trust_host_key,
                 ssh::connect,
                 ssh::file_control::restore_file_transfer,
+                ssh::file_control::restore_host_tools,
                 ssh::adopt_session,
                 ssh::write_stdin,
                 ssh::ack_output,

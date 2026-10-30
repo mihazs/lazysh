@@ -139,6 +139,7 @@ fn main() {
         "trust_host_key",
         "connect",
         "restore_file_transfer",
+        "restore_host_tools",
         "adopt_session",
         "write_stdin",
         "ack_output",
