@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.2.0
+
+### Minor Changes
+
+- 87aca79: Install or update the published host companion from the existing SSH connection, including when it is missing, with verified transfer, explicit progress and conservative uncertain outcomes. Prefer a valid managed Unix executable while preserving legacy PATH behavior when absent; installation and host permission changes remain explicit.
+
+### Patch Changes
+
+- @lazysh/common@1.2.0
+  - @lazysh/display-idle@1.2.0
+  - @lazysh/et-transport@1.2.0
+  - @lazysh/mosh-transport@1.2.0
+
 ## 1.1.7
 
 ### Patch Changes
