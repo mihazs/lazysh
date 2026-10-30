@@ -229,8 +229,9 @@ jobs:
           components: rustfmt, clippy
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
       - name: Verify native GUI namespace prerequisites
-        run: |
+        run: &native-namespace-prerequisites |
           test "$(id -u)" -ne 0
+          test -x /usr/bin/bwrap
           bwrap --version
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
@@ -490,7 +491,9 @@ jobs:
         with:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
+        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl bubblewrap
+      - name: Verify native SSH namespace prerequisites
+        run: *native-namespace-prerequisites
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment
