@@ -57,7 +57,7 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
-        run: bunx turbo run build check check:rust test test:rust lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service --filter=@lazysh/notification-client
+        run: bunx turbo run build check check:rust test test:rust lint format:check --filter=@lazysh/agent --filter=@lazysh/account-usage --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service --filter=@lazysh/notification-client
       - name: Upload owned concurrent hook syscall excerpts
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
@@ -291,9 +291,11 @@ jobs:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
         run: |
           cargo build --release --locked -p lazysh-agent --bin lazysh-agent
-          case_name=ssh::tests::openssh_companion_install_and_managed_path
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          cases=(ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers)
+          for case_name in "${cases[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          done
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Check combined native voice startup and clean shutdown without models
@@ -394,6 +396,8 @@ jobs:
         env:
           LAZYSH_TEST_WINDOWS_HASH: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
+      - name: Exercise account quota collectors and process ownership
+        run: bunx turbo run test:rust --filter=@lazysh/account-usage
       - run: bun run build:native
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
       - name: Package and validate native macOS permission localizations

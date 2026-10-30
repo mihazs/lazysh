@@ -1,3 +1,4 @@
+mod account_usage;
 mod app_icons;
 mod app_lock;
 mod apple_speech;
@@ -39,6 +40,16 @@ mod ui_locale;
 mod vault;
 mod voice;
 mod zellij;
+
+/// Exact internal collection worker mode runs before any desktop UI is initialized.
+#[cfg(desktop)]
+pub fn account_usage_worker() -> Option<std::process::ExitCode> {
+    lazysh_account_usage::worker_main()
+}
+#[cfg(not(desktop))]
+pub fn account_usage_worker() -> Option<std::process::ExitCode> {
+    None
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -82,6 +93,7 @@ pub fn run() {
         .manage(voice::cloud::CloudState::default())
         .manage(sync::SyncState::default())
         .manage(local::LocalState::default())
+        .manage(account_usage::UsageState::default())
         .manage(desktop_launch::LaunchState::new(directory))
         .setup(|app| {
             use tauri::Manager;
@@ -106,6 +118,7 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                account_usage::account_usage,
                 clipboard::clipboard_read,
                 clipboard::clipboard_cancel,
                 clipboard::clipboard_is_android,

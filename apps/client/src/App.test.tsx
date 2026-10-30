@@ -40,6 +40,9 @@ const mocks = vi.hoisted(() => ({
   terminal: { write: vi.fn(), dispose: vi.fn() },
   createTerminal: vi.fn(),
   invoke: vi.fn(),
+  accountUsageSession: vi.fn(),
+  accountUsageRefresh: vi.fn(),
+  accountUsageDisconnected: false,
   terminalPaneProps: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
@@ -66,6 +69,7 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
   return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;if(mocks.launchEvent===callback)mocks.launchEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
+vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
 vi.mock("./TerminalPane", () => ({
   default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
@@ -100,7 +104,7 @@ const host: Host = {
 
 beforeEach(() => {
   generationBase+=10;
-  vi.clearAllMocks();mocks.realAgents=false;
+  vi.clearAllMocks();mocks.realAgents=false;mocks.accountUsageDisconnected=false;
   mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
@@ -128,6 +132,34 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it('opens AI account usage for the exact connected terminal from the existing footer',async()=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'usage-owner'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.accountUsageSession).toHaveBeenLastCalledWith('usage-owner');
+  const bar=screen.getByRole('button',{name:'Open AI account usage'});
+  expect(bar.closest('.workspace-footer')).not.toBeNull();await user.click(bar);
+  expect(await screen.findByRole('region',{name:'AI account usage'})).toBeTruthy();
+  expect(await screen.findByRole('button',{name:'Use latest report for Watch'})).toBeTruthy();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
+it('reauthenticates only host tools from disconnected Mosh account usage and refreshes after success',async()=>{
+  enableTransports();mocks.accountUsageDisconnected=true;
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'quota-mosh'});
+  mocks.api.restoreHostTools.mockResolvedValue({schemaVersion:1,status:'restored'});
+  const user=await connectAuto();await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  await user.click(await screen.findByRole('button',{name:t('accountUsageRestore')}));
+  const dialog=await screen.findByRole('dialog');
+  await user.type(within(dialog).getByLabelText('Password'),'explicit-quota-recovery');
+  expect(mocks.api.restoreHostTools).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByRole('button',{name:t('hostToolsRestore')}));
+  await waitFor(()=>expect(mocks.accountUsageRefresh).toHaveBeenCalledOnce());
+  expect(mocks.api.restoreHostTools).toHaveBeenCalledExactlyOnceWith('quota-mosh',{password:'explicit-quota-recovery'},{useSavedCredentials:false});
+  expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
 it('opens attachments from the live toolbar and retires held callbacks after navigation or unmount',async()=>{
@@ -1447,6 +1479,10 @@ it('opens an explicit local terminal without SSH authentication and hides remote
   expect(screen.queryByRole('button',{name:'Agents'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Apple status'})).toBeNull();
   expect(screen.queryByText('Apple controls for local:desktop')).toBeNull();
+  expect(mocks.accountUsageSession).toHaveBeenLastCalledWith('local:desktop');
+  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  expect(await screen.findByRole('region',{name:'AI account usage'})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Use latest report for Watch'})).toBeNull();
   expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.workspace.v1','[{"local":true}]');
   await user.click(screen.getByRole('button',{name:'Disconnect Local terminal'}));
   expect(mocks.api.disconnect).toHaveBeenCalledWith('local:desktop');

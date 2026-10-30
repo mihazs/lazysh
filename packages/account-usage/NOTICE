@@ -1,0 +1,5 @@
+Windows suspended-start/job-admission follows the implementation pattern in
+Herdr (https://github.com/herdrdev/herdr), src/platform/windows.rs, already
+retained in this repository under packages/herdr-upstream. The account-usage
+adapter is adapted for its fixed bounded collector processes. Herdr is licensed
+under the Apache License, Version 2.0; see licenses/HERDR-APACHE-2.0.txt.

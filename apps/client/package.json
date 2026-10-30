@@ -49,6 +49,7 @@
     "test:android-qr": "LAZYSH_ANDROID_UI_QR=1 bun test ../../tests/android-qr.test.ts"
   },
   "dependencies": {
+    "@lazysh/account-usage": "workspace:*",
     "@lazysh/display-idle": "workspace:*",
     "@lazysh/common": "workspace:*",
     "@lazysh/et-transport": "workspace:*",
