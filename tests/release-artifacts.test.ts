@@ -615,7 +615,9 @@ test('Windows restricted-context projection requires exact observed medium non-e
   expect(windowsGuiMediumOutcome(prefix+'gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY\n'+startupPrefix+JSON.stringify(startup))).toEqual({outcome:'REJECTED',rejection:'gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY',startup});
   expect(windowsGuiMediumOutcome(prefix+'gui:GUI_MEDIUM_UNAVAILABLE\n'+prefix+'gui:GUI_CLEANUP')).toEqual({outcome:'REJECTED',rejection:'gui:GUI_MEDIUM_UNAVAILABLE; gui:GUI_CLEANUP'});
 });
-test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint counterfactual gates cleanup, identity and budget while retaining primary failure',()=>fixture(async root=>{
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1').each([
+  ['passed','PASSED'],['cleanup','NOT_RUN_CLEANUP'],['budget','NOT_RUN_BUDGET'],['image','REJECTED'],['tool','REJECTED'],['rejected','REJECTED'],['treatment-cleanup','REJECTED'],['medium-unavailable','PASSED'],['medium-admitted','PASSED'],['medium-cleanup','PASSED'],
+])('actual Windows GUI endpoint counterfactual retains primary failure: %s',(name,outcome)=>fixture(async root=>{
   const image=join(root,'owned-image');await Bun.write(image,'fixed owned candidate');
   const expected=await digestFile(image),baseline='GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY';
   const script=windowsInstallerPathsScript+windowsInstalledGuiScript+String.raw`
@@ -656,17 +658,17 @@ GuiCounterfactual $baseline
 if ($script:failure -cne $baseline -or $script:called -ne $(if ($env:LAZYSH_COUNTER_CASE -like 'medium-*') {2} elseif ($env:LAZYSH_COUNTER_CASE -in @('passed','rejected','treatment-cleanup')) {1} else {0})) { throw 'baseline or admission changed' }
 exit 1
 `;
-  for(const [name,outcome] of [['passed','PASSED'],['cleanup','NOT_RUN_CLEANUP'],['budget','NOT_RUN_BUDGET'],['image','REJECTED'],['tool','REJECTED'],['rejected','REJECTED'],['treatment-cleanup','REJECTED'],['medium-unavailable','PASSED'],['medium-admitted','PASSED'],['medium-cleanup','PASSED']]){
-    const env={...process.env,LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE:'0',LAZYSH_COUNTER_CASE:name,LAZYSH_GUI_BINARY:image,LAZYSH_NSIS_BINARY_SHA256:expected.sha256,LAZYSH_GUI_DRIVER:image,LAZYSH_GUI_EDGE:image,LAZYSH_GUI_DRIVER_SHA256:expected.sha256,LAZYSH_GUI_EDGE_SHA256:expected.sha256};
-    const pending=native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],env,30000);
-    await expect(pending).rejects.toThrow(`Release validation failed: pwsh.exe (gui:${baseline})\nOwned Windows GUI counterfactual: {"outcome":"${outcome}"`);
-    if(name.startsWith('medium-'))await expect(pending).rejects.toThrow('Owned Windows GUI medium context: '+JSON.stringify(name==='medium-unavailable'?{outcome:'NOT_AVAILABLE'}:{outcome:'REJECTED',rejection:name==='medium-cleanup'?'gui:GUI_CLIENT; gui:GUI_CLEANUP':'gui:GUI_CLIENT'}));
-  }
-  for(const label of ['gui:GUI_CLIENT','gui:'+baseline+'\nLAZYSH_WINDOWS_INSTALLER:cleanup:LOCAL_DATA']){
-    const rejected=`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:${label}');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED');exit 1`;
-    await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',rejected],process.env,30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe ('+label.replace('\nLAZYSH_WINDOWS_INSTALLER:','; ')+')'});
-  }
+  const env={...process.env,LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE:'0',LAZYSH_COUNTER_CASE:name,LAZYSH_GUI_BINARY:image,LAZYSH_NSIS_BINARY_SHA256:expected.sha256,LAZYSH_GUI_DRIVER:image,LAZYSH_GUI_EDGE:image,LAZYSH_GUI_DRIVER_SHA256:expected.sha256,LAZYSH_GUI_EDGE_SHA256:expected.sha256};
+  const pending=native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],env,30000);
+  await expect(pending).rejects.toThrow(`Release validation failed: pwsh.exe (gui:${baseline})\nOwned Windows GUI counterfactual: {"outcome":"${outcome}"`);
+  if(name.startsWith('medium-'))await expect(pending).rejects.toThrow('Owned Windows GUI medium context: '+JSON.stringify(name==='medium-unavailable'?{outcome:'NOT_AVAILABLE'}:{outcome:'REJECTED',rejection:name==='medium-cleanup'?'gui:GUI_CLIENT; gui:GUI_CLEANUP':'gui:GUI_CLIENT'}));
 }));
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1').each([
+  'gui:GUI_CLIENT','gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY\nLAZYSH_WINDOWS_INSTALLER:cleanup:LOCAL_DATA',
+])('actual Windows GUI endpoint terminal projection retains rejection: %j',async label=>{
+  const rejected=`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:${label}');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED');exit 1`;
+  await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',rejected],process.env,30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe ('+label.replace('\nLAZYSH_WINDOWS_INSTALLER:','; ')+')'});
+});
 test('restricted Windows admission reports only exact finite smoke results',()=>{
   for(const result of mediumAdmissionResults)expect(mediumAdmissionResult(result)).toBe(result);
   for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_LAUNCH_UNAVAILABLE:PRIVATE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:RESUME_COUNT_UNEXPECTED','UNAVAILABLE_LAUNCH_UNAVAILABLE:DRIVER:RESUME_THREAD:5','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:OTHER private','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
