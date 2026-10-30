@@ -8,10 +8,11 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsGuiMediumOutcome, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiMediumSource, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const mediumAdmissionResults=['ADMITTED_LINKED','ADMITTED_RESTRICTED','PORTABLE_CONTRACT','UNVERIFIED','CLEANUP_UNVERIFIED',
+  ...windowsGuiTokenReasons.map(reason=>'UNAVAILABLE_TOKEN_UNAVAILABLE:'+reason),
   ...['TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','STDIO_UNAVAILABLE','LAUNCH_UNAVAILABLE','ARGV_BOUND','ENVIRONMENT_BOUND','IDENTITY_UNVERIFIED'].map(code=>'UNAVAILABLE_'+code)];
 const mediumAdmissionResult=(value:unknown)=>typeof value==='string'&&mediumAdmissionResults.includes(value)?value:'UNVERIFIED';
 const startupFixture=()=>({available:true,overflow:false,appElevation:'UNVERIFIED',appIntegrity:'UNVERIFIED',signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport:'EPHEMERAL_PORT'}],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
@@ -612,7 +613,7 @@ exit 1
 }));
 test('restricted Windows admission reports only exact finite smoke results',()=>{
   for(const result of mediumAdmissionResults)expect(mediumAdmissionResult(result)).toBe(result);
-  for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
+  for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
 });
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restricted launcher contracts and native admission',async()=>{
   const root=await mkdtemp(join(process.env.RUNNER_TEMP??tmpdir(),'lazysh-medium-admission-'));
@@ -628,6 +629,14 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restric
 $ErrorActionPreference='Stop'
 $guiMediumSource=[Console]::In.ReadToEnd()
 Add-Type -TypeDefinition $guiMediumSource -ErrorAction Stop
+# No native call or token exists: the real Start state guard must replace a prior rejection.
+$reasonType=[OwnedMediumGui].GetNestedType('TokenReason',[Reflection.BindingFlags]::NonPublic)
+$reject=[OwnedMediumGui].GetMethod('TokenReject',[Reflection.BindingFlags]'NonPublic,Static')
+$null=$reject.Invoke($null,@([Enum]::Parse($reasonType,'CANDIDATE_ELEVATED')))
+$empty=[Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject([OwnedMediumGui])
+$failed=$false
+try {$null=$empty.Start('owned',[string[]]@(),'',[string]::new([char]0,2))}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'TOKEN_UNAVAILABLE'}
+if(!$failed -or [OwnedMediumGui]::TokenFailure -cne 'LAUNCHER_STATE'){throw 'terminal token reason not preserved'}
 $quoted=[OwnedMediumGui]::Command('tool',[string[]]@('space value','quote"value','trailing\',''))
 foreach ($value in @([string]::new([char]'x',1020),('bad'+[char]0))) {
   $rejected=$false;try {$null=[OwnedMediumGui]::Command('tool',[string[]]@($value))}catch{$rejected=$true};if(!$rejected){throw 'native command bound admitted'}
@@ -681,7 +690,10 @@ try {
   $outcome='ADMITTED_'+$job.Kind
 } catch {
   $code=$_.Exception.GetBaseException().Message
-  $outcome=$(if($code -in @('TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','STDIO_UNAVAILABLE','LAUNCH_UNAVAILABLE','ARGV_BOUND','ENVIRONMENT_BOUND','IDENTITY_UNVERIFIED')) {'UNAVAILABLE_'+$code} else {'UNVERIFIED'})
+  if($code -ceq 'TOKEN_UNAVAILABLE'){
+    $reason=[OwnedMediumGui]::TokenFailure
+    $outcome=$(if($reason -cin @(${windowsGuiTokenReasons.map(reason=>"'"+reason+"'").join(',')})) {'UNAVAILABLE_TOKEN_UNAVAILABLE:'+$reason} else {'UNVERIFIED'})
+  }else{$outcome=$(if($code -in @('TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','STDIO_UNAVAILABLE','LAUNCH_UNAVAILABLE','ARGV_BOUND','ENVIRONMENT_BOUND','IDENTITY_UNVERIFIED')) {'UNAVAILABLE_'+$code} else {'UNVERIFIED'})}
 } finally {
   if($job){try{$job.Stop([DateTime]::UtcNow.AddSeconds(10).Ticks)}catch{$outcome='CLEANUP_UNVERIFIED'}}
   foreach($process in @($driver,$probe,$edge)){if($process){$process.Dispose()}}

@@ -875,8 +875,23 @@ function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
 }
 `;
 
+export const windowsGuiTokenReasons=[
+  'UNVERIFIED','ARCHITECTURE','OWN_TOKEN_OPEN','QUERY_SIZE_REJECTED',
+  'QUERY_READ_FAILED','QUERY_LENGTH_REJECTED','SID_LAYOUT','SCALAR_LAYOUT',
+  'GROUP_LAYOUT','PRIVILEGE_LOOKUP','PRIVILEGE_LAYOUT','PRIVILEGE_ABSENT',
+  'PRIVILEGE_NOT_ENABLED','DUPLICATE_FAILED','RESTRICTED_CREATE_FAILED','RESTRICTED_SET_INTEGRITY_FAILED',
+  'NO_ENABLED_ADMIN_GROUP','LINKED_LAYOUT','CANDIDATE_NOT_PRIMARY','CANDIDATE_ELEVATED',
+  'CANDIDATE_UIACCESS','CANDIDATE_SESSION_MISMATCH','CANDIDATE_USER_MISMATCH','CANDIDATE_INTEGRITY_UNVERIFIED',
+  'CANDIDATE_NOT_MEDIUM','CANDIDATE_ELEVATION_UNVERIFIED','CANDIDATE_ADMIN_NOT_DENY_ONLY','CANDIDATE_EXPECTED_GROUP_NOT_DENY_ONLY',
+  'LAUNCHER_STATE','CHILD_TOKEN_UNVERIFIED','CHILD_NOT_MEDIUM','CHILD_ELEVATED',
+] as const;
 export const windowsGuiMediumSource=windowsGuiIntegritySource+String.raw`
 public sealed class OwnedMediumGui : System.IDisposable {
+  enum TokenReason { ${windowsGuiTokenReasons.join(',')} }
+  static TokenReason tokenFailure;
+  public static string TokenFailure {get{return tokenFailure.ToString();}}
+  static bool TokenReject(TokenReason reason){tokenFailure=reason;return false;}
+  static void TokenNeed(bool condition,TokenReason reason){if(!condition){TokenReject(reason);throw new System.InvalidOperationException("TOKEN_UNAVAILABLE");}}
   [StructLayout(LayoutKind.Sequential)] struct SA { public int Length;public IntPtr Descriptor;public bool Inherit; }
   [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct SI { public int Size;public string Reserved,Desktop,Title;public int X,Y,XSize,YSize,XChars,YChars,Fill,Flags;public short Show,ReservedSize;public IntPtr ReservedData,Input,Output,Error; }
   [StructLayout(LayoutKind.Sequential)] struct PI { public IntPtr Process,Thread;public int Id,ThreadId; }
@@ -907,57 +922,65 @@ public sealed class OwnedMediumGui : System.IDisposable {
   [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformation(IntPtr handle,int index,System.Text.StringBuilder name,uint length,out uint needed);
-  sealed class Data : System.IDisposable { public IntPtr Pointer;public uint Length;public Data(IntPtr token,int kind) { uint length;bool queried=GetTokenInformation(token,kind,IntPtr.Zero,0,out length);if(queried||Marshal.GetLastWin32Error()!=122||length==0||length>65536)throw new System.InvalidOperationException("TOKEN_UNAVAILABLE");Pointer=Marshal.AllocHGlobal((int)length);Length=length;try {uint used;if(!GetTokenInformation(token,kind,Pointer,length,out used)||used>length)throw new System.InvalidOperationException("TOKEN_UNAVAILABLE");Length=used;}catch {Dispose();throw;} } public void Dispose(){if(Pointer!=IntPtr.Zero){Marshal.FreeHGlobal(Pointer);Pointer=IntPtr.Zero;}} }
+  sealed class Data : System.IDisposable { public IntPtr Pointer;public uint Length;public Data(IntPtr token,int kind) { uint length;bool queried=GetTokenInformation(token,kind,IntPtr.Zero,0,out length);TokenNeed(!queried&&Marshal.GetLastWin32Error()==122,TokenReason.QUERY_SIZE_REJECTED);TokenNeed(length>0&&length<=65536,TokenReason.QUERY_LENGTH_REJECTED);Pointer=Marshal.AllocHGlobal((int)length);Length=length;try {uint used;TokenNeed(GetTokenInformation(token,kind,Pointer,length,out used),TokenReason.QUERY_READ_FAILED);TokenNeed(used<=length,TokenReason.QUERY_LENGTH_REJECTED);Length=used;}catch {Dispose();throw;} } public void Dispose(){if(Pointer!=IntPtr.Zero){Marshal.FreeHGlobal(Pointer);Pointer=IntPtr.Zero;}} }
   sealed class Group { public byte[] Sid;public uint Attributes; }
   IntPtr job,token;
   readonly System.Collections.Generic.List<IntPtr> processes=new System.Collections.Generic.List<IntPtr>();
   public string Kind {get;private set;}
   static void Need(bool condition,string code){if(!condition)throw new System.InvalidOperationException(code);}
   static byte[] SidAt(Data data,int pointerOffset) {
-    Need(pointerOffset>=0&&pointerOffset+IntPtr.Size<=data.Length,"TOKEN_UNAVAILABLE");long offset=checked(Marshal.ReadIntPtr(data.Pointer,pointerOffset).ToInt64()-data.Pointer.ToInt64());
-    Need(offset>=0&&offset+8<=data.Length,"TOKEN_UNAVAILABLE");int count=Marshal.ReadByte(data.Pointer,(int)offset+1);int length=8+count*4;
-    Need(count<=15&&offset+length<=data.Length,"TOKEN_UNAVAILABLE");var sid=new byte[length];Marshal.Copy(IntPtr.Add(data.Pointer,(int)offset),sid,0,length);Need(sid[0]==1,"TOKEN_UNAVAILABLE");return sid;
+    TokenNeed(pointerOffset>=0&&pointerOffset+IntPtr.Size<=data.Length,TokenReason.SID_LAYOUT);long offset=checked(Marshal.ReadIntPtr(data.Pointer,pointerOffset).ToInt64()-data.Pointer.ToInt64());
+    TokenNeed(offset>=0&&offset+8<=data.Length,TokenReason.SID_LAYOUT);int count=Marshal.ReadByte(data.Pointer,(int)offset+1);int length=8+count*4;
+    TokenNeed(count<=15&&offset+length<=data.Length,TokenReason.SID_LAYOUT);var sid=new byte[length];Marshal.Copy(IntPtr.Add(data.Pointer,(int)offset),sid,0,length);TokenNeed(sid[0]==1,TokenReason.SID_LAYOUT);return sid;
   }
   static bool Equal(byte[] a,byte[] b){if(a.Length!=b.Length)return false;for(int i=0;i<a.Length;i++)if(a[i]!=b[i])return false;return true;}
-  static uint Word(IntPtr token,int kind){using(var data=new Data(token,kind)){Need(data.Length==4,"TOKEN_UNAVAILABLE");return unchecked((uint)Marshal.ReadInt32(data.Pointer));}}
+  static uint Word(IntPtr token,int kind){using(var data=new Data(token,kind)){TokenNeed(data.Length==4,TokenReason.SCALAR_LAYOUT);return unchecked((uint)Marshal.ReadInt32(data.Pointer));}}
   static byte[] User(IntPtr token){using(var data=new Data(token,1))return SidAt(data,0);}
-  static Group[] Groups(IntPtr token){using(var data=new Data(token,2)){Need(data.Length>=4,"TOKEN_UNAVAILABLE");int count=Marshal.ReadInt32(data.Pointer);int offset=IntPtr.Size,entry=IntPtr.Size*2;Need(count>=0&&count<=256&&offset+(long)count*entry<=data.Length,"TOKEN_UNAVAILABLE");var result=new Group[count];for(int i=0;i<count;i++)result[i]=new Group{Sid=SidAt(data,offset+i*entry),Attributes=unchecked((uint)Marshal.ReadInt32(data.Pointer,offset+i*entry+IntPtr.Size))};return result;}}
+  static Group[] Groups(IntPtr token){using(var data=new Data(token,2)){TokenNeed(data.Length>=4,TokenReason.GROUP_LAYOUT);int count=Marshal.ReadInt32(data.Pointer);int offset=IntPtr.Size,entry=IntPtr.Size*2;TokenNeed(count>=0&&count<=256&&offset+(long)count*entry<=data.Length,TokenReason.GROUP_LAYOUT);var result=new Group[count];for(int i=0;i<count;i++)result[i]=new Group{Sid=SidAt(data,offset+i*entry),Attributes=unchecked((uint)Marshal.ReadInt32(data.Pointer,offset+i*entry+IntPtr.Size))};return result;}}
   static bool Admin(Group group){var s=group.Sid;if((group.Attributes&8)!=0)return true;if(s.Length<16||s[7]!=5)return false;for(int i=2;i<7;i++)if(s[i]!=0)return false;uint first=BitConverter.ToUInt32(s,8),last=BitConverter.ToUInt32(s,s.Length-4);return first==32&&(last==544||(last>=547&&last<=552))||first==21&&(last==512||last==518||last==519||last==520);}
   static bool Candidate(IntPtr candidate,IntPtr caller,Group[] denied){
-    if(Word(candidate,8)!=1||Word(candidate,20)!=0||Word(candidate,26)!=0||Word(candidate,12)!=Word(caller,12)||!Equal(User(candidate),User(caller)))return false;
-    var fact=OwnedGuiIntegrity.ReadToken(candidate);if(fact[0]!="MEDIUM"||fact[1]!="NOT_ELEVATED")return false;
-    var groups=Groups(candidate);foreach(var group in groups)if(Admin(group)&&((group.Attributes&0x10)==0||(group.Attributes&4)!=0))return false;
-    foreach(var expected in denied){bool found=false;foreach(var actual in groups)if(Equal(expected.Sid,actual.Sid)){found=(actual.Attributes&0x10)!=0&&(actual.Attributes&4)==0;break;}if(!found)return false;}return true;
+    if(Word(candidate,8)!=1)return TokenReject(TokenReason.CANDIDATE_NOT_PRIMARY);
+    if(Word(candidate,20)!=0)return TokenReject(TokenReason.CANDIDATE_ELEVATED);
+    if(Word(candidate,26)!=0)return TokenReject(TokenReason.CANDIDATE_UIACCESS);
+    if(Word(candidate,12)!=Word(caller,12))return TokenReject(TokenReason.CANDIDATE_SESSION_MISMATCH);
+    if(!Equal(User(candidate),User(caller)))return TokenReject(TokenReason.CANDIDATE_USER_MISMATCH);
+    var fact=OwnedGuiIntegrity.ReadToken(candidate);
+    if(fact[0]=="UNVERIFIED")return TokenReject(TokenReason.CANDIDATE_INTEGRITY_UNVERIFIED);
+    if(fact[0]!="MEDIUM")return TokenReject(TokenReason.CANDIDATE_NOT_MEDIUM);
+    if(fact[1]=="UNVERIFIED")return TokenReject(TokenReason.CANDIDATE_ELEVATION_UNVERIFIED);
+    if(fact[1]!="NOT_ELEVATED")return TokenReject(TokenReason.CANDIDATE_ELEVATED);
+    var groups=Groups(candidate);foreach(var group in groups)if(Admin(group)&&((group.Attributes&0x10)==0||(group.Attributes&4)!=0))return TokenReject(TokenReason.CANDIDATE_ADMIN_NOT_DENY_ONLY);
+    foreach(var expected in denied){bool found=false;foreach(var actual in groups)if(Equal(expected.Sid,actual.Sid)){found=(actual.Attributes&0x10)!=0&&(actual.Attributes&4)==0;break;}if(!found)return TokenReject(TokenReason.CANDIDATE_EXPECTED_GROUP_NOT_DENY_ONLY);}return true;
   }
-  static bool CanImpersonate(IntPtr caller){Luid wanted;if(!LookupPrivilegeValue(null,"SeImpersonatePrivilege",out wanted))return false;using(var data=new Data(caller,3)){Need(data.Length>=4,"TOKEN_UNAVAILABLE");int count=Marshal.ReadInt32(data.Pointer);Need(count>=0&&count<=256&&4L+12L*count<=data.Length,"TOKEN_UNAVAILABLE");for(int i=0;i<count;i++){int at=4+i*12;if(unchecked((uint)Marshal.ReadInt32(data.Pointer,at))==wanted.Low&&Marshal.ReadInt32(data.Pointer,at+4)==wanted.High)return (Marshal.ReadInt32(data.Pointer,at+8)&6)==2;}return false;}}
-  static IntPtr Copy(IntPtr source){IntPtr result;Need(DuplicateTokenEx(source,0x8b,IntPtr.Zero,2,1,out result),"TOKEN_UNAVAILABLE");return result;}
+  static bool CanImpersonate(IntPtr caller){Luid wanted;if(!LookupPrivilegeValue(null,"SeImpersonatePrivilege",out wanted))return TokenReject(TokenReason.PRIVILEGE_LOOKUP);using(var data=new Data(caller,3)){TokenNeed(data.Length>=4,TokenReason.PRIVILEGE_LAYOUT);int count=Marshal.ReadInt32(data.Pointer);TokenNeed(count>=0&&count<=256&&4L+12L*count<=data.Length,TokenReason.PRIVILEGE_LAYOUT);for(int i=0;i<count;i++){int at=4+i*12;if(unchecked((uint)Marshal.ReadInt32(data.Pointer,at))==wanted.Low&&Marshal.ReadInt32(data.Pointer,at+4)==wanted.High)return (Marshal.ReadInt32(data.Pointer,at+8)&6)==2||TokenReject(TokenReason.PRIVILEGE_NOT_ENABLED);}return TokenReject(TokenReason.PRIVILEGE_ABSENT);}}
+  static IntPtr Copy(IntPtr source){IntPtr result;TokenNeed(DuplicateTokenEx(source,0x8b,IntPtr.Zero,2,1,out result),TokenReason.DUPLICATE_FAILED);return result;}
   static IntPtr Restricted(IntPtr caller,Group[] denied){
     IntPtr copy=IntPtr.Zero,result=IntPtr.Zero,array=IntPtr.Zero;var allocated=new System.Collections.Generic.List<IntPtr>();
     try {copy=Copy(caller);int entry=IntPtr.Size*2;array=Marshal.AllocHGlobal(entry*denied.Length);for(int i=0;i<denied.Length;i++){IntPtr sid=Marshal.AllocHGlobal(denied[i].Sid.Length);allocated.Add(sid);Marshal.Copy(denied[i].Sid,0,sid,denied[i].Sid.Length);Marshal.WriteIntPtr(array,i*entry,sid);Marshal.WriteInt32(array,i*entry+IntPtr.Size,0);}
-      Need(CreateRestrictedToken(copy,5,(uint)denied.Length,array,0,IntPtr.Zero,0,IntPtr.Zero,out result),"TOKEN_UNAVAILABLE");
+      TokenNeed(CreateRestrictedToken(copy,5,(uint)denied.Length,array,0,IntPtr.Zero,0,IntPtr.Zero,out result),TokenReason.RESTRICTED_CREATE_FAILED);
       byte[] medium={1,1,0,0,0,0,0,16,0,32,0,0};int header=IntPtr.Size*2;IntPtr label=Marshal.AllocHGlobal(header+12);
-      try {Marshal.Copy(new byte[header+12],0,label,header+12);Marshal.Copy(medium,0,IntPtr.Add(label,header),12);Marshal.WriteIntPtr(label,IntPtr.Add(label,header));Marshal.WriteInt32(label,IntPtr.Size,32);Need(SetTokenInformation(result,25,label,(uint)(header+12)),"TOKEN_UNAVAILABLE");}finally{Marshal.FreeHGlobal(label);}
+      try {Marshal.Copy(new byte[header+12],0,label,header+12);Marshal.Copy(medium,0,IntPtr.Add(label,header),12);Marshal.WriteIntPtr(label,IntPtr.Add(label,header));Marshal.WriteInt32(label,IntPtr.Size,32);TokenNeed(SetTokenInformation(result,25,label,(uint)(header+12)),TokenReason.RESTRICTED_SET_INTEGRITY_FAILED);}finally{Marshal.FreeHGlobal(label);}
       IntPtr owned=result;result=IntPtr.Zero;return owned;
     }finally{if(result!=IntPtr.Zero)CloseHandle(result);if(copy!=IntPtr.Zero)CloseHandle(copy);if(array!=IntPtr.Zero)Marshal.FreeHGlobal(array);foreach(var sid in allocated)Marshal.FreeHGlobal(sid);}
   }
   static string ObjectName(IntPtr handle){var text=new System.Text.StringBuilder(128);uint needed;Need(handle!=IntPtr.Zero&&GetUserObjectInformation(handle,2,text,256,out needed)&&needed<=256,"DESKTOP_UNAVAILABLE");return text.ToString();}
-  public OwnedMediumGui(){IntPtr caller=IntPtr.Zero,linked=IntPtr.Zero;try{
-    Need(Environment.Is64BitProcess,"TOKEN_UNAVAILABLE");Need(OpenProcessToken(GetCurrentProcess(),0xa,out caller)&&CanImpersonate(caller),"TOKEN_UNAVAILABLE");
+  public OwnedMediumGui(){tokenFailure=TokenReason.UNVERIFIED;IntPtr caller=IntPtr.Zero,linked=IntPtr.Zero;try{
+    TokenNeed(Environment.Is64BitProcess,TokenReason.ARCHITECTURE);TokenNeed(OpenProcessToken(GetCurrentProcess(),0xa,out caller),TokenReason.OWN_TOKEN_OPEN);Need(CanImpersonate(caller),"TOKEN_UNAVAILABLE");
     Need(ObjectName(GetProcessWindowStation())=="WinSta0"&&ObjectName(GetThreadDesktop(GetCurrentThreadId()))=="Default","DESKTOP_UNAVAILABLE");
-    var disabled=new System.Collections.Generic.List<Group>();foreach(var group in Groups(caller))if(Admin(group)&&(group.Attributes&4)!=0)disabled.Add(group);Need(disabled.Count>0,"TOKEN_UNAVAILABLE");
-    if(Word(caller,18)==2){try{using(var data=new Data(caller,19)){Need(data.Length==IntPtr.Size,"TOKEN_UNAVAILABLE");linked=Marshal.ReadIntPtr(data.Pointer);}IntPtr copy=Copy(linked);try{if(Candidate(copy,caller,disabled.ToArray())){token=copy;copy=IntPtr.Zero;Kind="LINKED";}}finally{if(copy!=IntPtr.Zero)CloseHandle(copy);}}catch{}finally{if(linked!=IntPtr.Zero){CloseHandle(linked);linked=IntPtr.Zero;}}}
-    if(token==IntPtr.Zero){token=Restricted(caller,disabled.ToArray());Need(Candidate(token,caller,disabled.ToArray()),"TOKEN_UNAVAILABLE");Kind="RESTRICTED";}
+    var disabled=new System.Collections.Generic.List<Group>();foreach(var group in Groups(caller))if(Admin(group)&&(group.Attributes&4)!=0)disabled.Add(group);TokenNeed(disabled.Count>0,TokenReason.NO_ENABLED_ADMIN_GROUP);
+    if(Word(caller,18)==2){try{using(var data=new Data(caller,19)){TokenNeed(data.Length==IntPtr.Size,TokenReason.LINKED_LAYOUT);linked=Marshal.ReadIntPtr(data.Pointer);}IntPtr copy=Copy(linked);try{if(Candidate(copy,caller,disabled.ToArray())){token=copy;copy=IntPtr.Zero;Kind="LINKED";}}finally{if(copy!=IntPtr.Zero)CloseHandle(copy);}}catch{}finally{if(linked!=IntPtr.Zero){CloseHandle(linked);linked=IntPtr.Zero;}}}
+    if(token==IntPtr.Zero){tokenFailure=TokenReason.UNVERIFIED;token=Restricted(caller,disabled.ToArray());Need(Candidate(token,caller,disabled.ToArray()),"TOKEN_UNAVAILABLE");Kind="RESTRICTED";}
     job=CreateJobObject(IntPtr.Zero,null);Need(job!=IntPtr.Zero,"JOB_UNAVAILABLE");var limits=new Limits();limits.Basic.Flags=0x2000;Need(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits))),"JOB_UNAVAILABLE");
   }catch{Dispose();throw;}finally{if(caller!=IntPtr.Zero)CloseHandle(caller);}}
   public static string Command(string image,string[] arguments){var output=new System.Text.StringBuilder();foreach(string value in new[]{image})output.Append(Quote(value));foreach(string value in arguments)output.Append(' ').Append(Quote(value));Need(output.Length+1<=1024,"ARGV_BOUND");return output.ToString();}
   static string Quote(string value){Need(value!=null&&value.IndexOf('\0')<0,"ARGV_BOUND");var output=new System.Text.StringBuilder("\"");int slashes=0;foreach(char c in value){if(c=='\\'){slashes++;continue;}if(c=='\"'){output.Append('\\',slashes*2+1).Append(c);slashes=0;continue;}output.Append('\\',slashes).Append(c);slashes=0;}output.Append('\\',slashes*2).Append('"');return output.ToString();}
   public System.Diagnostics.Process Start(string image,string[] arguments,string directory,string environment){
-    Need(job!=IntPtr.Zero&&token!=IntPtr.Zero,"TOKEN_UNAVAILABLE");string command=Command(image,arguments);Need(environment!=null&&environment.Length<=65536&&environment.EndsWith("\0\0",StringComparison.Ordinal),"ENVIRONMENT_BOUND");
+    tokenFailure=TokenReason.UNVERIFIED;TokenNeed(job!=IntPtr.Zero&&token!=IntPtr.Zero,TokenReason.LAUNCHER_STATE);string command=Command(image,arguments);Need(environment!=null&&environment.Length<=65536&&environment.EndsWith("\0\0",StringComparison.Ordinal),"ENVIRONMENT_BOUND");
     IntPtr block=IntPtr.Zero,nul=IntPtr.Zero;PI child=new PI();bool admitted=false;System.Diagnostics.Process managed=null;
     try {block=Marshal.StringToHGlobalUni(environment);var attributes=new SA{Length=Marshal.SizeOf(typeof(SA)),Inherit=true};nul=CreateFile("NUL",0xc0000000,3,ref attributes,3,0,IntPtr.Zero);Need(nul!=IntPtr.Zero&&nul!=new IntPtr(-1),"STDIO_UNAVAILABLE");var startup=new SI{Size=Marshal.SizeOf(typeof(SI)),Desktop="winsta0\\default",Flags=0x100,Input=nul,Output=nul,Error=nul};
       Need(CreateProcessWithTokenW(token,0,image,new System.Text.StringBuilder(command),0x08000404,block,directory,ref startup,out child),"LAUNCH_UNAVAILABLE");
       Need(AssignProcessToJobObject(job,child.Process),"JOB_UNAVAILABLE");long created,exited,kernel,user;Need(GetProcessTimes(child.Process,out created,out exited,out kernel,out user),"IDENTITY_UNVERIFIED");long start=DateTime.FromFileTimeUtc(created).Ticks;var path=new System.Text.StringBuilder(32768);uint length=32768;Need(QueryFullProcessImageName(child.Process,0,path,ref length)&&String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(path.ToString()),StringComparison.OrdinalIgnoreCase),"IDENTITY_UNVERIFIED");
-      var fact=OwnedGuiIntegrity.Query(child.Id,start.ToString(CultureInfo.InvariantCulture));Need(fact[0]=="MEDIUM"&&fact[1]=="NOT_ELEVATED","TOKEN_UNAVAILABLE");
+      var fact=OwnedGuiIntegrity.Query(child.Id,start.ToString(CultureInfo.InvariantCulture));TokenNeed(fact[0]!="UNVERIFIED"&&fact[0]!="IDENTITY_UNVERIFIED"&&fact[1]!="UNVERIFIED",TokenReason.CHILD_TOKEN_UNVERIFIED);TokenNeed(fact[0]=="MEDIUM",TokenReason.CHILD_NOT_MEDIUM);TokenNeed(fact[1]=="NOT_ELEVATED",TokenReason.CHILD_ELEVATED);
       managed=System.Diagnostics.Process.GetProcessById(child.Id);IntPtr retained=managed.SafeHandle.DangerousGetHandle();Need(managed.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");Need(ResumeThread(child.Thread)==1,"LAUNCH_UNAVAILABLE");processes.Add(child.Process);child.Process=IntPtr.Zero;admitted=true;return managed;
     }finally{bool closed=true;if(!admitted&&child.Process!=IntPtr.Zero){closed &= TerminateProcess(child.Process,1);closed &= WaitForSingleObject(child.Process,10000)==0;closed &= CloseHandle(child.Process);if(managed!=null)managed.Dispose();}if(child.Thread!=IntPtr.Zero)closed &= CloseHandle(child.Thread);if(nul!=IntPtr.Zero&&nul!=new IntPtr(-1))closed &= CloseHandle(nul);if(block!=IntPtr.Zero)Marshal.FreeHGlobal(block);Need(closed,"CLEANUP_UNVERIFIED");}
   }
