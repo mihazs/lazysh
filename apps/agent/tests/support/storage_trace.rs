@@ -133,21 +133,132 @@ fn failure_projection(stderr: &[u8]) -> Option<failure_record::Failure> {
     Some(first)
 }
 
-fn initialization_projection(bytes: &[u8]) -> Option<Vec<failure_record::Failure>> {
+const WORKER_PREFIX: &str = "lazysh-initialization-worker ";
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WorkerStage {
+    Open,
+    Ingest,
+    Complete,
+}
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum WorkerResult {
+    Success,
+    StorageError,
+    IoError,
+    OtherError,
+}
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InitializationWorker {
+    round: u8,
+    worker: u8,
+    started_after_us: u64,
+    open_elapsed_us: u64,
+    total_elapsed_us: u64,
+    stage: WorkerStage,
+    result: WorkerResult,
+    sqlite_code: Option<i32>,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum InitializationRecord {
+    Phase(failure_record::Failure),
+    Worker(InitializationWorker),
+}
+impl InitializationRecord {
+    fn line(&self) -> String {
+        match self {
+            Self::Phase(record) => record.line(),
+            Self::Worker(record) => format!(
+                "{WORKER_PREFIX}{}\n",
+                serde_json::to_string(record).expect("finite worker diagnostic")
+            ),
+        }
+    }
+}
+impl InitializationWorker {
+    fn observed(round: u8, worker: u8, observed: &super::ContendedWorker) -> Option<Self> {
+        let stage = match observed.stage {
+            "open" => WorkerStage::Open,
+            "ingest" => WorkerStage::Ingest,
+            "complete" => WorkerStage::Complete,
+            _ => unreachable!("unexpected initialization worker stage"),
+        };
+        let result = match &observed.result {
+            Ok(()) => WorkerResult::Success,
+            Err(lazysh_agent::Error::Storage(_)) => WorkerResult::StorageError,
+            Err(lazysh_agent::Error::Io(_)) => WorkerResult::IoError,
+            Err(_) => WorkerResult::OtherError,
+        };
+        let sqlite_code = match &observed.result {
+            Err(lazysh_agent::Error::Storage(rusqlite::Error::SqliteFailure(code, _))) => {
+                Some(code.extended_code)
+            }
+            _ => None,
+        };
+        let micros = |duration: std::time::Duration| u64::try_from(duration.as_micros()).ok();
+        Some(Self {
+            round,
+            worker,
+            started_after_us: micros(observed.started_after)?,
+            open_elapsed_us: micros(observed.open_elapsed)?,
+            total_elapsed_us: micros(observed.total_elapsed)?,
+            stage,
+            result,
+            sqlite_code,
+        })
+    }
+}
+pub(super) fn initialization_workers(round: u8, workers: &[super::ContendedWorker]) {
+    assert!(round < 4, "initialization round exceeds fixture bound");
+    assert_eq!(workers.len(), 16, "initialization worker count changed");
+    // Observe only after all workers join; do not add stderr contention inside Store::open.
+    for (worker, observed) in workers.iter().enumerate() {
+        if let Some(record) = InitializationWorker::observed(round, worker as u8, observed) {
+            let _ = io::stderr()
+                .lock()
+                .write_all(InitializationRecord::Worker(record).line().as_bytes());
+        }
+    }
+}
+
+fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> {
     if bytes.len() > EXCERPT_LIMIT {
         return None;
     }
     let mut records = Vec::new();
-    for line in std::str::from_utf8(bytes)
-        .ok()?
-        .lines()
-        .filter(|line| line.starts_with(failure_record::PREFIX))
-    {
-        // The unchanged owner has four rounds of sixteen Store openers.
-        if records.len() == 4 * 16 {
-            return None;
+    let mut phases = 0;
+    let mut workers = 0u64;
+    for line in std::str::from_utf8(bytes).ok()?.lines() {
+        if line.starts_with(failure_record::PREFIX) {
+            if phases == 4 * 16 {
+                return None;
+            }
+            phases += 1;
+            records.push(InitializationRecord::Phase(failure_projection(
+                line.as_bytes(),
+            )?));
+        } else if let Some(json) = line.strip_prefix(WORKER_PREFIX) {
+            if line.len() > 512 {
+                return None;
+            }
+            let record: InitializationWorker = serde_json::from_str(json).ok()?;
+            if record.round >= 4
+                || record.worker >= 16
+                || record.open_elapsed_us > record.total_elapsed_us
+                || (record.stage == WorkerStage::Complete)
+                    != (record.result == WorkerResult::Success)
+                || (record.sqlite_code.is_some() && record.result != WorkerResult::StorageError)
+            {
+                return None;
+            }
+            let bit = 1u64 << (record.round * 16 + record.worker);
+            if workers & bit != 0 {
+                return None;
+            }
+            workers |= bit;
+            records.push(InitializationRecord::Worker(record));
         }
-        records.push(failure_projection(line.as_bytes())?);
     }
     Some(records)
 }
@@ -188,9 +299,112 @@ fn initialization_projection_exports_only_bounded_closed_records() {
 }
 
 #[test]
+fn initialization_worker_projection_keeps_timing_without_raw_causes() {
+    let observed = super::ContendedWorker {
+        started_after: std::time::Duration::from_micros(17),
+        open_elapsed: std::time::Duration::from_micros(3_001_000),
+        total_elapsed: std::time::Duration::from_micros(3_001_009),
+        stage: "open",
+        result: Err(lazysh_agent::Error::Storage(
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(5),
+                Some("private path payload".into()),
+            ),
+        )),
+    };
+    let record = InitializationWorker::observed(0, 0, &observed).unwrap();
+    let line = InitializationRecord::Worker(record).line();
+    assert!(!line.contains("private"));
+    let projected =
+        initialization_projection(format!("private prelude\n{line}private tail\n").as_bytes())
+            .unwrap();
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0].line(), line);
+    let value: serde_json::Value =
+        serde_json::from_str(line.strip_prefix(WORKER_PREFIX).unwrap()).unwrap();
+    assert_eq!(value["startedAfterUs"], 17);
+    assert_eq!(value["openElapsedUs"], 3_001_000);
+    assert_eq!(value["totalElapsedUs"], 3_001_009);
+    assert_eq!(value["stage"], "open");
+    assert_eq!(value["result"], "StorageError");
+    assert_eq!(value["sqliteCode"], 5);
+    let mut complete = value.clone();
+    complete["worker"] = serde_json::json!(1);
+    complete["stage"] = serde_json::json!("complete");
+    complete["result"] = serde_json::json!("Success");
+    complete["sqliteCode"] = serde_json::Value::Null;
+    let mixed = format!(
+        "{}{line}{WORKER_PREFIX}{complete}\n",
+        journal_mode_busy_record().line()
+    );
+    assert_eq!(
+        initialization_projection(mixed.as_bytes()).unwrap().len(),
+        3
+    );
+    for (field, invalid) in [
+        ("round", serde_json::json!(4)),
+        ("worker", serde_json::json!(16)),
+        ("startedAfterUs", serde_json::json!(-1)),
+        ("openElapsedUs", serde_json::json!(3_001_010)),
+        ("totalElapsedUs", serde_json::json!(1.5)),
+        ("stage", serde_json::json!("private")),
+        ("stage", serde_json::json!("complete")),
+        ("result", serde_json::json!("Success")),
+        ("result", serde_json::json!("private")),
+        ("result", serde_json::json!("IoError")),
+        ("extra", serde_json::json!("private")),
+    ] {
+        let mut invalid_record = value.clone();
+        invalid_record[field] = invalid;
+        assert!(
+            initialization_projection(format!("{WORKER_PREFIX}{invalid_record}\n").as_bytes())
+                .is_none()
+        );
+    }
+    assert!(initialization_projection(format!("{line}{line}").as_bytes()).is_none());
+    let mut rows = String::new();
+    for round in 0..4 {
+        for worker in 0..16 {
+            rows.push_str(
+                &InitializationRecord::Worker(
+                    InitializationWorker::observed(round, worker, &observed).unwrap(),
+                )
+                .line(),
+            );
+        }
+    }
+    assert_eq!(
+        initialization_projection(rows.as_bytes()).unwrap().len(),
+        64
+    );
+    assert!(initialization_projection(format!("{rows}{line}").as_bytes()).is_none());
+    let opaque = super::ContendedWorker {
+        result: Err(lazysh_agent::Error::Device("private payload")),
+        ..observed
+    };
+    let line =
+        InitializationRecord::Worker(InitializationWorker::observed(0, 0, &opaque).unwrap()).line();
+    assert!(!line.contains("private"));
+    assert!(line.contains("OtherError"));
+}
+
+#[test]
+#[should_panic(expected = "unexpected initialization worker stage")]
+fn initialization_worker_stage_drift_still_fails() {
+    let observed = super::ContendedWorker {
+        started_after: std::time::Duration::ZERO,
+        open_elapsed: std::time::Duration::ZERO,
+        total_elapsed: std::time::Duration::ZERO,
+        stage: "unexpected",
+        result: Ok(()),
+    };
+    let _ = InitializationWorker::observed(0, 0, &observed);
+}
+
+#[test]
 #[ignore = "explicit owned CI spool projection; never exports raw test output"]
 fn project_owned_initialization_diagnostics() {
-    let observed = || -> io::Result<Vec<failure_record::Failure>> {
+    let observed = || -> io::Result<Vec<InitializationRecord>> {
         let path = std::env::var_os("LAZYSH_INITIALIZATION_DIAGNOSTICS")
             .ok_or_else(|| io::Error::other("Missing owned initialization spool"))?;
         let (file, metadata) = open_owned_file(Path::new(&path))?;
@@ -205,7 +419,20 @@ fn project_owned_initialization_diagnostics() {
     };
     match observed() {
         Ok(records) => {
-            eprintln!("initialization-phase-records={}", records.len());
+            eprintln!(
+                "initialization-phase-records={}",
+                records
+                    .iter()
+                    .filter(|record| matches!(record, InitializationRecord::Phase(_)))
+                    .count()
+            );
+            eprintln!(
+                "initialization-worker-records={}",
+                records
+                    .iter()
+                    .filter(|record| matches!(record, InitializationRecord::Worker(_)))
+                    .count()
+            );
             for record in records {
                 eprint!("{}", record.line());
             }
