@@ -243,6 +243,7 @@ impl Config {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub(crate) background: crate::session_background::Controller,
     pub(crate) uploads: crate::attachment_upload::Uploads,
     config: Arc<StdMutex<Config>>,
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
@@ -259,6 +260,7 @@ impl AppState {
             Err(e) => return Err(e),
         };
         Ok(Self {
+            background: Default::default(),
             uploads: Default::default(),
             config: Arc::new(StdMutex::new(Config {
                 path,
@@ -888,12 +890,17 @@ pub async fn adopt_session(
 }
 struct SessionCompletion {
     finished: watch::Sender<bool>,
+    _background: crate::session_background::Reservation,
     armed: bool,
 }
 impl SessionCompletion {
-    fn new(finished: watch::Sender<bool>) -> Self {
+    fn new(
+        finished: watch::Sender<bool>,
+        background: crate::session_background::Reservation,
+    ) -> Self {
         Self {
             finished,
+            _background: background,
             armed: true,
         }
     }
@@ -1737,6 +1744,7 @@ pub(crate) async fn deliver_output(
 ) -> std::result::Result<(), String> {
     let mut remaining = OP_TIMEOUT;
     let mut changes = access.subscribe();
+    let mut background = access.background_epoch().map_err(String::from)?;
     loop {
         if *cancellation.borrow() {
             return Err("Terminal closed".into());
@@ -1744,18 +1752,31 @@ pub(crate) async fn deliver_output(
         tokio::select! {
             biased;
             _ = cancellation.changed() => return Err("Terminal closed".into()),
-            result = access.wait_unlocked() => { result.map_err(String::from)?; }
+            result = access.wait_transport_output() => { result.map_err(String::from)?; }
+        }
+        let current_background = access.background_epoch().map_err(String::from)?;
+        // A background interval can begin and end before this worker is polled.
+        if current_background != background {
+            background = current_background;
+            remaining = OP_TIMEOUT;
         }
         let began = tokio::time::Instant::now();
         let permit = tokio::select! {
             biased;
             _ = cancellation.changed() => return Err("Terminal closed".into()),
             _ = changes.changed() => {
-                remaining = remaining.saturating_sub(began.elapsed());
+                if access.background_epoch().map_err(String::from)? == background {
+                    remaining = remaining.saturating_sub(began.elapsed());
+                }
                 continue;
             },
             permit = credits.acquire_many(data.len() as u32) => permit.map_err(|_| "Terminal closed")?,
-            _ = tokio::time::sleep(remaining) => return Err("Terminal stopped consuming output".into()),
+            _ = tokio::time::sleep(remaining) => {
+                if access.background_epoch().map_err(String::from)? != background {
+                    continue;
+                }
+                return Err("Terminal stopped consuming output".into());
+            },
         };
         remaining = remaining.saturating_sub(began.elapsed());
         // Same authority mutex as lock: no Channel index is created while locked.
@@ -1773,7 +1794,7 @@ pub(crate) async fn deliver_output(
         };
         let sent = match owner {
             Some((creation, adopted, _)) => creation.with_transport_output(adopted, send),
-            None => access.with_unlocked(send),
+            None => access.with_transport_output(send),
         };
         match sent {
             Ok(result) => {
@@ -1810,7 +1831,7 @@ pub(crate) async fn close_output(
         tokio::select! {
             biased;
             _ = async { if let Some(gone) = retired.as_mut() { let _ = gone.changed().await; } else { std::future::pending::<()>().await; } } => return,
-            result = access.wait_unlocked() => if result.is_err() { return; },
+            result = access.wait_transport_output() => if result.is_err() { return; },
         }
         let send = || {
             if owner.is_some_and(|(_, _, gone)| *gone.borrow()) {
@@ -1828,7 +1849,7 @@ pub(crate) async fn close_output(
                 if creation.check().is_err() && !adopted.load(std::sync::atomic::Ordering::SeqCst) {
                     // The renderer retained this id before an ACK that may have been lost.
                     // Retire the known tab after unlock without replaying an old private error.
-                    access.with_unlocked(|| {
+                    access.with_transport_output(|| {
                         if *gone.borrow() {
                             return Ok(());
                         }
@@ -1840,7 +1861,7 @@ pub(crate) async fn close_output(
                     creation.with_transport_output(adopted, send)
                 }
             }
-            None => access.with_unlocked(send),
+            None => access.with_transport_output(send),
         };
         if sent.is_ok() {
             return;
@@ -1875,6 +1896,11 @@ async fn spawn_terminal(
     events: Channel<SshEvent>,
 ) -> Result<Connected> {
     let mut channel = channel.into();
+    let background = state
+        .background
+        .acquire()
+        .await
+        .map_err(|error| SshError::new("background_execution", error))?;
     let (input, mut rx) = mpsc::channel(32);
     let (cancel, mut cancellation) = watch::channel(false);
     let session = Arc::new(Session::new(handle, input, cancel, creation, check_size));
@@ -1883,7 +1909,7 @@ async fn spawn_terminal(
     let retiring = state.retiring.clone();
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
-        let completion = SessionCompletion::new(session.finished.clone());
+        let completion = SessionCompletion::new(session.finished.clone(), background);
         let result:Result<()> = async {
             send_output(&session, &events, &initial).await?;
             let mut pending:Option<(crate::terminal_input::InputSequence,AccessLease)>=None;
@@ -2025,6 +2051,11 @@ where
         tokio::sync::oneshot::Sender<Result<()>>,
     ) -> tauri::async_runtime::JoinHandle<Result<()>>,
 {
+    let background = state
+        .background
+        .acquire()
+        .await
+        .map_err(|error| SshError::new("background_execution", error))?;
     let (input, input_rx) = mpsc::channel(32);
     let (cancel, cancellation) = watch::channel(false);
     let name = kind.name();
@@ -2060,7 +2091,7 @@ where
     let task_id = id.clone();
     let active = session.clone();
     tauri::async_runtime::spawn(async move {
-        let completion = SessionCompletion::new(active.finished.clone());
+        let completion = SessionCompletion::new(active.finished.clone(), background);
         let mut cancelled = active.cancel.subscribe();
         let delivery: Result<()> = async {
             loop {
@@ -6662,54 +6693,101 @@ mod tests {
         .unwrap();
     }
     #[tokio::test(start_paused = true)]
-    async fn locked_terminal_delivery_pauses_deadline_and_resumes_without_dropped_indices() {
-        let access = unlocked_access();
-        let credits = Semaphore::new(0);
-        let inflight = StdMutex::new(0);
-        let (cancel, mut cancellation) = watch::channel(false);
-        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let events = counting_events(&calls);
-        let delivery = deliver_output(
-            &access,
-            &credits,
-            &inflight,
-            &mut cancellation,
-            &events,
-            b"abc",
-            None,
-        );
-        tokio::pin!(delivery);
-        assert_pending(delivery.as_mut()).await;
-        access.lock().unwrap();
-        assert_pending(delivery.as_mut()).await;
-        tokio::time::advance(OP_TIMEOUT * 2).await;
-        credits.add_permits(3);
-        assert_pending(delivery.as_mut()).await;
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert_eq!(*inflight.lock().unwrap(), 0);
-        access.authorize(access.generation().unwrap()).unwrap();
-        // Native authentication alone does not resume delivery before UI reset ACK.
-        assert_pending(delivery.as_mut()).await;
-        access.ready(access.generation().unwrap()).unwrap();
-        delivery.await.unwrap();
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(*inflight.lock().unwrap(), 3);
-        access.lock().unwrap();
-        let mut cancellation = cancel.subscribe();
-        let pending = deliver_output(
-            &access,
-            &credits,
-            &inflight,
-            &mut cancellation,
-            &events,
-            b"x",
-            None,
-        );
-        tokio::pin!(pending);
-        assert_pending(pending.as_mut()).await;
-        cancel.send_replace(true);
-        assert!(pending.await.is_err());
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    async fn background_terminal_delivery_pauses_deadline_and_resumes_without_dropped_indices() {
+        for (protected, delayed_resume, direct_lock) in [
+            (true, false, false),
+            (false, false, false),
+            (false, true, false),
+            (true, false, true),
+        ] {
+            let access = if protected {
+                unlocked_access()
+            } else {
+                AccessState::disabled()
+            };
+            let credits = Semaphore::new(0);
+            let inflight = StdMutex::new(0);
+            let (cancel, mut cancellation) = watch::channel(false);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let events = counting_events(&calls);
+            let delivery = deliver_output(
+                &access,
+                &credits,
+                &inflight,
+                &mut cancellation,
+                &events,
+                b"abc",
+                None,
+            );
+            tokio::pin!(delivery);
+            assert_pending(delivery.as_mut()).await;
+            if direct_lock {
+                access.lock().unwrap();
+            } else {
+                access.background().unwrap();
+            }
+            if !delayed_resume {
+                assert_pending(delivery.as_mut()).await;
+            }
+            tokio::time::advance(OP_TIMEOUT * 2).await;
+            if delayed_resume {
+                access.foreground().unwrap();
+            }
+            let observed = timeout(Duration::ZERO, delivery.as_mut()).await;
+            assert!(
+                observed.is_err(),
+                "Background delivery retired while protected={protected}: {observed:?}"
+            );
+            credits.add_permits(3);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(*inflight.lock().unwrap(), 0);
+            if !delayed_resume {
+                assert_pending(delivery.as_mut()).await;
+                access.foreground().unwrap();
+            }
+            if protected {
+                access.authorize(access.generation().unwrap()).unwrap();
+                // Native authentication alone does not resume delivery before UI reset ACK.
+                assert_pending(delivery.as_mut()).await;
+                access.ready(access.generation().unwrap()).unwrap();
+            }
+            delivery.await.unwrap();
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(*inflight.lock().unwrap(), 3);
+            let mut foreground_cancel = cancel.subscribe();
+            let stalled = deliver_output(
+                &access,
+                &credits,
+                &inflight,
+                &mut foreground_cancel,
+                &events,
+                b"x",
+                None,
+            );
+            assert_eq!(
+                timeout(OP_TIMEOUT * 2, stalled)
+                    .await
+                    .expect("Foreground output must retain its deadline")
+                    .unwrap_err(),
+                "Terminal stopped consuming output"
+            );
+            access.background().unwrap();
+            let mut cancellation = cancel.subscribe();
+            let pending = deliver_output(
+                &access,
+                &credits,
+                &inflight,
+                &mut cancellation,
+                &events,
+                b"x",
+                None,
+            );
+            tokio::pin!(pending);
+            assert_pending(pending.as_mut()).await;
+            cancel.send_replace(true);
+            assert!(pending.await.is_err());
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
     }
     #[test]
     fn ssh_errors_keep_fingerprints_only_for_the_original_unlocked_generation() {
@@ -6739,7 +6817,12 @@ mod tests {
     #[tokio::test]
     async fn cancelled_native_start_reaps_unpublished_worker_and_preserves_parent() {
         let (host, _, server_task) = server(false).await;
-        let (_directory, state) = fixture_state();
+        let (_directory, mut state) = fixture_state();
+        let (background_updates, mut observed_background) = mpsc::unbounded_channel();
+        state.background = crate::session_background::Controller::start(move |revision, active| {
+            background_updates.send((revision, active)).unwrap();
+            async { Ok(()) }
+        });
         state.config().unwrap().hosts.push(host.clone());
         let connected = start_session(
             &state,
@@ -6756,11 +6839,13 @@ mod tests {
         let parent = state.session(&connected.session_id).await.unwrap();
         let (began, started) = tokio::sync::oneshot::channel();
         let (done, stopped) = tokio::sync::oneshot::channel();
+        let native_access = AccessState::disabled();
+        let creation = native_access.lease(None).unwrap();
         let worker_state = state.clone();
         let attempt = tokio::spawn(async move {
             spawn_native_terminal(
                 &worker_state,
-                access_lease(),
+                creation,
                 parent,
                 Channel::new(|_| Ok(())),
                 NativeTerminalKind::Fixture,
@@ -6787,6 +6872,7 @@ mod tests {
             !attempt.is_finished(),
             "native fixture ended before cancellation"
         );
+        native_access.background().unwrap();
         attempt.abort();
         match attempt.await {
             Err(error) => assert!(error.is_cancelled()),
@@ -6805,6 +6891,28 @@ mod tests {
         .await
         .unwrap();
         assert!(state.session(&connected.session_id).await.is_ok());
+        for expected in [(1, true), (2, true), (3, true)] {
+            assert_eq!(
+                timeout(Duration::from_secs(2), observed_background.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                expected,
+            );
+        }
+        // The worker hold ended even though its Closed event cannot reach the background UI.
+        assert_eq!(state.retiring.lock().await.len(), 1);
+        native_access.foreground().unwrap();
+        let parent = state.session(&connected.session_id).await.unwrap();
+        parent.cancel.send_replace(true);
+        parent.output_credits.close();
+        assert_eq!(
+            timeout(Duration::from_secs(2), observed_background.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            (4, false)
+        );
         server_task.abort();
     }
     #[tokio::test]

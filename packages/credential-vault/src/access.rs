@@ -41,6 +41,7 @@ struct Inner {
     enabled: bool,
     locked: bool,
     foreground: bool,
+    background_epoch: u64,
     generation: u64,
     nonce: Option<String>,
     ui_ready: bool,
@@ -48,6 +49,13 @@ struct Inner {
     replacing: bool,
 }
 impl Inner {
+    fn transport_output_ready(&self) -> bool {
+        self.initialized
+            && !self.replacing
+            && self.ui_ready
+            && self.foreground
+            && (!self.enabled || !self.locked)
+    }
     fn accepts_proof(&self, expected: u64) -> bool {
         self.initialized
             && !self.replacing
@@ -72,6 +80,7 @@ impl Default for AccessState {
                 enabled: false,
                 locked: true,
                 foreground: true,
+                background_epoch: 0,
                 generation: 0,
                 nonce: None,
                 ui_ready: false,
@@ -173,9 +182,14 @@ impl AccessState {
         let mut i = self.inner.lock().map_err(|_| AccessError)?;
         let protected = i.enabled;
         barrier(protected);
+        if i.foreground {
+            i.background_epoch = i.background_epoch.wrapping_add(1);
+        }
         i.foreground = false;
         if protected {
             self.lock_inner(&mut i);
+        } else {
+            self.changed.send_replace(i.generation);
         }
         Ok(protected)
     }
@@ -300,6 +314,25 @@ impl AccessState {
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
     }
+    pub fn background_epoch(&self) -> Result<u64, AccessError> {
+        Ok(self.inner.lock().map_err(|_| AccessError)?.background_epoch)
+    }
+    pub async fn wait_transport_output(&self) -> Result<(), AccessError> {
+        let mut changes = self.subscribe();
+        loop {
+            if self.with_transport_output(|| ()).is_ok() {
+                return Ok(());
+            }
+            changes.changed().await.map_err(|_| AccessError)?;
+        }
+    }
+    pub fn with_transport_output<T>(&self, action: impl FnOnce() -> T) -> Result<T, AccessError> {
+        let inner = self.inner.lock().map_err(|_| AccessError)?;
+        if !inner.transport_output_ready() {
+            return Err(AccessError);
+        }
+        Ok(action())
+    }
     pub async fn wait_unlocked(&self) -> Result<(), AccessError> {
         let mut changes = self.subscribe();
         loop {
@@ -373,10 +406,7 @@ impl AccessLease {
         action: impl FnOnce() -> T,
     ) -> Result<T, AccessError> {
         let inner = self.state.inner.lock().map_err(|_| AccessError)?;
-        if !inner.initialized
-            || inner.replacing
-            || !inner.ui_ready
-            || (inner.enabled && (inner.locked || !inner.foreground))
+        if !inner.transport_output_ready()
             || (!adopted.load(std::sync::atomic::Ordering::SeqCst) && !self.valid(&inner))
         {
             return Err(AccessError);
@@ -569,6 +599,34 @@ mod tests {
         assert_eq!(s.with_unlocked(|| 7).unwrap(), 7);
         s.background().unwrap();
         assert!(s.ready(gen).is_err());
+    }
+    #[tokio::test]
+    async fn background_output_pauses_without_replacing_disabled_lock_authority() {
+        let state = AccessState::disabled();
+        let lease = state.lease(None).unwrap();
+        let generation = state.generation().unwrap();
+        let background = state.background_epoch().unwrap();
+        state.background().unwrap();
+        assert!(!state.is_locked());
+        assert_eq!(state.generation().unwrap(), generation);
+        assert!(lease.check().is_ok());
+        assert_eq!(state.with_unlocked(|| 7).unwrap(), 7);
+        assert!(state.with_transport_output(|| 7).is_err());
+        let adopted = std::sync::atomic::AtomicBool::new(true);
+        assert!(lease.with_transport_output(&adopted, || 7).is_err());
+        assert_ne!(state.background_epoch().unwrap(), background);
+        let waiting = state.clone();
+        let output = tokio::spawn(async move { waiting.wait_transport_output().await });
+        tokio::task::yield_now().await;
+        assert!(!output.is_finished());
+        state.foreground().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), output)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.with_transport_output(|| 7).unwrap(), 7);
+        assert!(lease.check().is_ok());
     }
     #[tokio::test]
     async fn cancellation_interrupts_an_outstanding_read() {

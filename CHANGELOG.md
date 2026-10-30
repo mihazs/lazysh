@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep Android terminal connections active while switching apps using a private foreground service and a generic ongoing notification. Backgrounded renderer output pauses without expiring the connection; the last native connection releases the service and wake lock. Existing app-lock protections remain in place. Android system battery restrictions, Doze and force-stop can still interrupt connectivity.
+
 - Update installation and release acceptance notes with the explicit in-app Unix companion path, current Android/Linux installer proof and published-APK qualification limits. Keep documentation links usable in the attached guide and release notes.
 
 - Discover live Codex and other agent panes reported by Herdr independently of companion lifecycle reports. A single running Herdr server is selected automatically; choose a server when several are running. Only that server is refreshed, and its Idle, Working, Needs attention, Done and Unknown statuses remain distinct from companion history. No input, approval or history authority is inferred from discovery.
