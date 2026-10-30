@@ -284,6 +284,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
 
   function sendNamed(key: string, physical?: KeyboardEvent) {
     if (!activeRef.current || !session.connected || !mounted.current || !access.current()) return;
+    if (document.hidden) {clearModifiers(); repeated.current = true; return;}
     const state = modifierState.current;
     const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${(state.shift && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
     try {void api.write(session.id, key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(String(error)));}
@@ -521,7 +522,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
           aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={pressed}
           aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined}
           title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : undefined}
-          onPointerDown={event => {if (key !== "attach") event.preventDefault(); if (repeatable) {stopRepeat(); repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); repeat.current.delay = setTimeout(() => {repeated.current = true; action(); repeat.current.timer = setInterval(action, 80);}, 400);}}}
+          onPointerDown={event => {if (key !== "attach") event.preventDefault(); if (repeatable) {stopRepeat(); repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); repeat.current.delay = setTimeout(() => {repeated.current = true; action(); if (!document.hidden) repeat.current.timer = setInterval(action, 80);}, 400);}}}
           onPointerUp={stopRepeat} onPointerCancel={stopRepeat} onLostPointerCapture={stopRepeat} onBlur={stopRepeat}
           onClick={event => {if (!repeatable || !repeated.current || event.detail === 0) action();}}>
           {key === "attach" ? <><Paperclip size={16} aria-hidden="true" />{t("terminalAttach")}</> : labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key === "keyboard" ? <Keyboard size={16} aria-label={t("terminalKeyboardToggle")} /> : toolbarKeyLabel(key))}{locked ? ` · ${t("terminalLock")}` : ""}

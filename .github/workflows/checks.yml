@@ -228,15 +228,22 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
-      - &native-fixture-namespace
-        name: Verify native GUI namespace prerequisites
-        run: |
+      - name: Verify native GUI namespace prerequisites
+        env:
+          LAZYSH_NATIVE_NAMESPACE_NETWORK: private
+        run: &native-fixture-namespace |
+          namespace_command=(bwrap --unshare-user)
+          case "${LAZYSH_NATIVE_NAMESPACE_NETWORK:-}" in
+            private) namespace_command=(bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net) ;;
+            shared) ;;
+            *) printf '%s\n' 'Unsupported native fixture namespace mode' >&2; exit 1 ;;
+          esac
           test "$(id -u)" -ne 0
           test -x /usr/bin/bwrap
           bwrap --version
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
-          bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid --dev-bind / / --proc /proc --ro-bind /etc/group /etc/group -- /usr/bin/true
+          "${namespace_command[@]}" --unshare-pid --dev-bind / / --proc /proc --ro-bind /etc/group /etc/group -- /usr/bin/true
       - name: Build the pinned official tmux fixture outside the checkout
         timeout-minutes: 10
         run: |
@@ -494,7 +501,10 @@ jobs:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
         run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
-      - *native-fixture-namespace
+      - name: Verify native GUI namespace prerequisites
+        env:
+          LAZYSH_NATIVE_NAMESPACE_NETWORK: shared
+        run: *native-fixture-namespace
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment

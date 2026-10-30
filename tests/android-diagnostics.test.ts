@@ -6,7 +6,7 @@ import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { env?: Record<string,string>; steps: { name?: string; run?: string; with?: { script?: string } }[] }>;
+  jobs: Record<string, { env?: Record<string,string>; steps: { name?: string; env?: Record<string,string>; run?: string; with?: { script?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -19,7 +19,9 @@ afterEach(async () => {
 test('native fixture namespaces are admitted without privilege changes before Linux tests or Android boot', () => {
   const linux = workflow.jobs['native-linux'].steps;
   const admission = linux.findIndex(step => step.name === 'Verify native GUI namespace prerequisites');
-  expect(linux[admission].run).toContain('bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid');
+  expect(linux[admission].env?.LAZYSH_NATIVE_NAMESPACE_NETWORK).toBe('private');
+  expect(linux[admission].run).toContain('namespace_command=(bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net)');
+  expect(linux[admission].run).toContain('"${namespace_command[@]}" --unshare-pid --dev-bind / / --proc /proc');
   expect(linux[admission].run).toContain('--ro-bind /etc/group /etc/group');
   expect(linux[admission].run).toContain('test "$(id -u)" -ne 0');
   const owner = linux.findIndex(step => step.run?.includes('LAZYSH_TEST_SSH_USER_NAMESPACE=1'));
@@ -32,8 +34,20 @@ test('native fixture namespaces are admitted without privilege changes before Li
   expect(android[dependencies].run).toContain('mosh bubblewrap');
   expect(namespace).toBeGreaterThan(dependencies);
   expect(emulator).toBeGreaterThan(namespace);
-  expect(android[namespace]).toEqual(linux[admission]);
+  expect(android[namespace].env?.LAZYSH_NATIVE_NAMESPACE_NETWORK).toBe('shared');
+  expect(android[namespace].run).toBe(linux[admission].run);
   expect(decoded).toContain('test:android-ssh');
+});
+
+test.skipIf(process.platform!=='linux').each([undefined,'private-secret-mode'])('decoded namespace prerequisite rejects invalid mode %s without leaking its value',async mode=>{
+  const script=workflow.jobs['native-android-runtime'].steps.find(step=>step.name==='Verify native GUI namespace prerequisites')!.run!;
+  const environment={...process.env};
+  if(mode===undefined)delete environment.LAZYSH_NATIVE_NAMESPACE_NETWORK;
+  else environment.LAZYSH_NATIVE_NAMESPACE_NETWORK=mode;
+  const child=new OwnedProcess('/bin/bash',['-e','-o','pipefail','-c',script],undefined,environment);
+  await expect(child.finish('invalid namespace mode',5000)).rejects.toThrow('Owned fixture failed: invalid namespace mode; exit=1');
+  expect(child.stderr.trim()).toBe('Unsupported native fixture namespace mode');
+  expect(child.stdout).toBe('');
 });
 
 test('packaged companion UI acceptance has an explicit owned Android invocation',async()=>{
