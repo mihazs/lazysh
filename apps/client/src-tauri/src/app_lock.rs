@@ -650,6 +650,7 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "local_ack"
             | "disconnect"
             | "local_disconnect"
+            | "clipboard_cancel"
             | "board_keep_awake_release"
             | "stop_preview"
             | "device_stream_stop"
