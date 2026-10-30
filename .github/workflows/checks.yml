@@ -455,7 +455,9 @@ jobs:
         run: |
           cmake_identity=$(cmake --version)
           clang_identity=$("$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version)
-          toolchain_digest=$(printf '%s\n' "$NDK_HOME" "$cmake_identity" "$clang_identity" | sha256sum)
+          host_glibc=$(getconf GNU_LIBC_VERSION)
+          host_arch=$(uname -m)
+          toolchain_digest=$(printf '%s\n' "$NDK_HOME" "$cmake_identity" "$clang_identity" "$host_glibc" "$host_arch" | sha256sum)
           printf 'LAZYSH_ANDROID_TOOLCHAIN=%s\n' "${toolchain_digest%% *}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -481,7 +483,7 @@ jobs:
 
   native-android-runtime:
     needs: herdr-native
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
       ANDROID_SERIAL: emulator-5580

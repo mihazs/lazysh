@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { env?: Record<string,string>; steps: { name?: string; env?: Record<string,string>; run?: string; with?: { script?: string } }[] }>;
+  jobs: Record<string, { 'runs-on'?: string; env?: Record<string,string>; steps: { name?: string; env?: Record<string,string>; run?: string; with?: { script?: string; 'env-vars'?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -17,6 +17,8 @@ afterEach(async () => {
 });
 
 test('native fixture namespaces are admitted without privilege changes before Linux tests or Android boot', () => {
+  expect(workflow.jobs['native-linux']['runs-on']).toBe('ubuntu-22.04');
+  expect(workflow.jobs['native-android-runtime']['runs-on']).toBe(workflow.jobs['native-linux']['runs-on']);
   const linux = workflow.jobs['native-linux'].steps;
   const admission = linux.findIndex(step => step.name === 'Verify native GUI namespace prerequisites');
   expect(linux[admission].env?.LAZYSH_NATIVE_NAMESPACE_NETWORK).toBe('private');
@@ -37,6 +39,44 @@ test('native fixture namespaces are admitted without privilege changes before Li
   expect(android[namespace].env?.LAZYSH_NATIVE_NAMESPACE_NETWORK).toBe('shared');
   expect(android[namespace].run).toBe(linux[admission].run);
   expect(decoded).toContain('test:android-ssh');
+});
+
+test.skipIf(process.platform!=='linux')('decoded Android toolchain fingerprint separates host glibc and architecture for every cache caller',async()=>{
+  const name='Fingerprint Android native build tools';
+  const script=workflow.jobs['native-android'].steps.find(step=>step.name===name)!.run!;
+  for(const job of ['native-android','native-android-runtime','native-android-ntfy']) {
+    const steps=workflow.jobs[job].steps;
+    const fingerprint=steps.findIndex(step=>step.name===name);
+    const cache=steps.findIndex(step=>step.with?.['env-vars']==='LAZYSH_ANDROID_TOOLCHAIN');
+    expect(fingerprint).toBeGreaterThanOrEqual(0);
+    expect(cache).toBeGreaterThan(fingerprint);
+    expect(steps[fingerprint].run).toBe(script);
+  }
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-android-host-abi-'));temporary.push(directory);
+  const bin=join(directory,'bin'),ndk=join(directory,'ndk'),environmentFile=join(directory,'environment');
+  for(const [path,body] of [
+    [join(bin,'cmake'),'test "$1" = --version || exit 9; printf "same cmake\\n"'],
+    [join(ndk,'toolchains/llvm/prebuilt/linux-x86_64/bin/clang'),'test "$1" = --version || exit 9; printf "same clang\\n"'],
+    [join(bin,'getconf'),'test "$1" = GNU_LIBC_VERSION || exit 9; printf "%s\\n" "$LAZYSH_TEST_HOST_GLIBC"'],
+    [join(bin,'uname'),'test "$1" = -m || exit 9; printf "%s\\n" "$LAZYSH_TEST_HOST_ARCH"'],
+  ]) {
+    await mkdir(dirname(path),{recursive:true});
+    await writeFile(path,'#!/bin/sh\n'+body+'\n',{mode:0o700});
+  }
+  const fingerprint=async(glibc:string,architecture:string)=>{
+    await rm(environmentFile,{force:true});
+    const child=new OwnedProcess('/bin/bash',['-e','-o','pipefail','-c',script],directory,
+      {...process.env,PATH:bin+':'+process.env.PATH,NDK_HOME:ndk,GITHUB_ENV:environmentFile,
+        LAZYSH_TEST_HOST_GLIBC:glibc,LAZYSH_TEST_HOST_ARCH:architecture});
+    await child.finish('decoded Android toolchain fingerprint',5000);
+    const match=/^LAZYSH_ANDROID_TOOLCHAIN=([a-f0-9]{64})\n$/.exec(await readFile(environmentFile,'utf8'));
+    expect(match!==null).toBe(true);
+    return match![1];
+  };
+  const baseline=await fingerprint('glibc 2.35','x86_64');
+  expect(await fingerprint('glibc 2.39','x86_64')).not.toBe(baseline);
+  expect(await fingerprint('glibc 2.35','aarch64')).not.toBe(baseline);
+  expect(await fingerprint('glibc 2.35','x86_64')).toBe(baseline);
 });
 
 test.skipIf(process.platform!=='linux').each([undefined,'private-secret-mode'])('decoded namespace prerequisite rejects invalid mode %s without leaking its value',async mode=>{
