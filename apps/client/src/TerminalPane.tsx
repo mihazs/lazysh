@@ -95,6 +95,11 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   const toolbarVisible = toolbarOverride ?? !(preferences.autoHideToolbar && desktopPointer);
   const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || Object.values(preferences.bodyGestures).some(action => action !== "none"));
 
+  useEffect(() => {
+    const visibility = () => {if (document.hidden) {clearModifiers(); repeated.current = true;}};
+    document.addEventListener("visibilitychange", visibility);
+    return () => document.removeEventListener("visibilitychange", visibility);
+  }, []);
   useEffect(() => subscribeAccess(() => {if (!access.current()) clearModifiers();}), []);
   useEffect(() => {if (!active || !session.connected || !toolbarVisible) clearModifiers(); return stopRepeat;}, [active, session.connected, toolbarVisible, session.id]);
   useEffect(() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}, [customTouch]);

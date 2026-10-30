@@ -691,6 +691,30 @@ describe("extended touch toolbar", () => {
     view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
   });
+  it.each(["pending", "repeating"] as const)("cancels a %s held key and clears modifiers when the document hides", phase => {
+    vi.useFakeTimers(); mount();
+    for (const name of ['ctrl','Alt']) {
+      const modifier=screen.getByRole('button',{name}); fireEvent.click(modifier); fireEvent.click(modifier);
+    }
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+    const left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.pointerDown(left,{pointerId:9});
+    if (phase === 'repeating') act(()=>vi.advanceTimersByTime(560));
+    const sent=mocks.write.mock.calls.length;
+    expect(sent).toBe(phase === 'pending' ? 0 : 3);
+    const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);
+    try {
+      fireEvent(document,new Event('visibilitychange'));
+      for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name}).getAttribute('aria-pressed')).toBe('false');
+      act(()=>vi.advanceTimersByTime(2000)); expect(mocks.write).toHaveBeenCalledTimes(sent);
+      hidden.mockReturnValue(false); fireEvent(document,new Event('visibilitychange'));
+      act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(sent);
+      fireEvent.pointerUp(left,{pointerId:9}); fireEvent.click(left,{detail:1});
+      expect(mocks.write).toHaveBeenCalledTimes(sent);
+      fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));
+      expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
+    } finally {hidden.mockRestore();}
+  });
   it("opens the existing attachment flow only for an active connected remote terminal", () => {
     const onOpenAttachments=vi.fn();
     const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
