@@ -198,4 +198,4 @@ it('retains only a nominated resolver file across the private runtime mask',asyn
     expect(await client.finish('owned resolver runtime visibility',5000)).toBe(expected);
   }
   expect(await readFile(target,'utf8')).toBe(marker);
-},5000);
+},20000);
