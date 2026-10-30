@@ -95,6 +95,7 @@ impl ProcessTree {
             use windows_sys::Win32::{Foundation::CloseHandle, System::JobObjects::*};
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if job.is_null() {
+                admission_failure("create_job");
                 return None;
             }
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -105,10 +106,16 @@ impl ProcessTree {
                 &limits as *const _ as *const _,
                 std::mem::size_of_val(&limits) as u32,
             ) != 0;
+            if !configured {
+                admission_failure("configure_job");
+            }
             let attached = configured
                 && child
                     .raw_handle()
                     .is_some_and(|process| AssignProcessToJobObject(job, process.cast()) != 0);
+            if configured && !attached {
+                admission_failure("assign_job");
+            }
             if !attached || !resume_suspended(id) {
                 CloseHandle(job);
                 return None;
@@ -119,6 +126,15 @@ impl ProcessTree {
             })
         }
     }
+}
+#[cfg(windows)]
+fn admission_failure(stage: &'static str) {
+    #[cfg(test)]
+    eprintln!("owned quota admission stage={stage} error={}", unsafe {
+        windows_sys::Win32::Foundation::GetLastError()
+    });
+    #[cfg(not(test))]
+    let _ = stage;
 }
 // Follows the repository's Herdr suspended-start/job-admission pattern; resume only after ownership.
 #[cfg(windows)]
@@ -133,25 +149,34 @@ fn resume_suspended(pid: u32) -> bool {
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
         if snapshot == INVALID_HANDLE_VALUE {
+            admission_failure("thread_snapshot");
             return false;
         }
         let admitted = (|| {
             let mut entry: THREADENTRY32 = std::mem::zeroed();
             entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
             if Thread32First(snapshot, &mut entry) == 0 {
+                admission_failure("first_thread");
                 return false;
             }
             loop {
                 if entry.th32OwnerProcessID == pid {
                     let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
                     if thread.is_null() {
+                        admission_failure("open_thread");
                         return false;
                     }
                     let previous = ResumeThread(thread);
+                    if previous != 1 {
+                        admission_failure("resume_thread");
+                        #[cfg(test)]
+                        eprintln!("owned quota admission suspend_count={previous}");
+                    }
                     CloseHandle(thread);
                     return previous == 1;
                 }
                 if Thread32Next(snapshot, &mut entry) == 0 {
+                    admission_failure("next_thread");
                     return false;
                 }
             }
@@ -203,7 +228,18 @@ async fn bounded_output(
                 | windows_sys::Win32::System::Threading::CREATE_SUSPENDED,
         );
     }
-    let mut child = command.spawn().ok()?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            #[cfg(all(windows, test))]
+            eprintln!(
+                "owned quota admission stage=spawn error={:?}",
+                error.raw_os_error()
+            );
+            let _ = error;
+            return None;
+        }
+    };
     let _tree = match ProcessTree::own(&child) {
         Some(tree) => tree,
         None => {
@@ -225,6 +261,8 @@ async fn bounded_output(
         }
         let status = child.wait().await.ok()?;
         if !status.success() {
+            #[cfg(all(windows, test))]
+            eprintln!("owned quota fixture exit={}", status.code().unwrap_or(-1));
             return None;
         }
         Some(bytes)
@@ -243,6 +281,42 @@ async fn bounded_output(
 mod tests {
     use super::*;
     #[cfg(windows)]
+    const WINDOWS_HELPER_ARGS: &[&str] = &[
+        "--ignored",
+        "--exact",
+        "collect::tests::owned_windows_process_fixture",
+        "--nocapture",
+    ];
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "private child mode for the owned Windows process assertion"]
+    fn owned_windows_process_fixture() {
+        assert_eq!(
+            std::env::args().skip(1).collect::<Vec<_>>(),
+            WINDOWS_HELPER_ARGS
+        );
+        match std::env::var("OWNED_USAGE_MODE").as_deref() {
+            Ok("parent") => {
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(WINDOWS_HELPER_ARGS)
+                    .env("OWNED_USAGE_MODE", "descendant")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("owned Rust descendant starts");
+                std::fs::write(
+                    std::env::var_os("OWNED_USAGE_PID").expect("owned PID destination"),
+                    child.id().to_string(),
+                )
+                .expect("owned descendant PID publishes");
+                let _ = child.wait();
+            }
+            Ok("descendant") => std::thread::sleep(Duration::from_secs(120)),
+            _ => panic!("private owned fixture mode required"),
+        }
+    }
+    #[cfg(windows)]
     #[tokio::test]
     async fn suspended_job_admission_owns_descendants_before_the_collector_runs() {
         use windows_sys::Win32::{
@@ -253,8 +327,11 @@ mod tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("child.pid");
-        let mut command = Command::new("powershell.exe");
-        command.args(["-NoProfile","-NonInteractive","-Command",r#"$p=Start-Process powershell.exe -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 120' -PassThru; [IO.File]::WriteAllText($env:OWNED_USAGE_PID,[string]$p.Id); Start-Sleep -Seconds 120"#]).env("OWNED_USAGE_PID",&pid_file);
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(WINDOWS_HELPER_ARGS)
+            .env("OWNED_USAGE_MODE", "parent")
+            .env("OWNED_USAGE_PID", &pid_file);
         let query =
             tokio::spawn(
                 async move { bounded_output(command, &[], Duration::from_secs(10)).await },
@@ -266,7 +343,17 @@ mod tests {
                     break pid;
                 }
             }
-            assert!(std::time::Instant::now() < stop);
+            if query.is_finished() {
+                panic!(
+                    "owned collector terminated before fixture admission: ready={}",
+                    query.await.unwrap().is_some()
+                );
+            }
+            if std::time::Instant::now() >= stop {
+                query.abort();
+                let _ = query.await;
+                panic!("owned Rust fixture did not publish descendant within admission deadline");
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
         let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
