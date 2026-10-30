@@ -279,6 +279,18 @@ test('mobile terminal keeps one compact header and reaches every session control
     await expect(header).toBeVisible();await expect(strip).toBeVisible();await expect(tabs).toBeVisible();await expect(restore).toBeVisible();
     expect((await header.boundingBox())!.height).toBe(63);
   }
+  if(phone){
+    await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+    await page.getByRole('dialog',{name:'Workspace tools',exact:true}).getByRole('button',{name:'Default multiplexer',exact:true}).click();
+    const editor=page.getByRole('dialog',{name:'Edit host',exact:true});
+    const defaultMux=editor.getByRole('combobox',{name:'Default multiplexer',exact:true});
+    await expect(defaultMux).toBeFocused();await expect(defaultMux).toBeInViewport();
+    await defaultMux.selectOption('herdr');
+    await editor.getByLabel('Default multiplexer session',{exact:true}).fill('unsaved-work');
+    await editor.getByRole('button',{name:'Close Edit host',exact:true}).click();
+    expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
+    await expect(tabs.getByRole('tab',{includeHidden:true})).toHaveCount(1);
+  }
   await connectHost();
   await expect(page.getByRole('tab')).toHaveCount(2);await expect(tabs).toBeVisible();
   await page.getByRole('button',{name:'Switch terminal session',exact:true}).click();

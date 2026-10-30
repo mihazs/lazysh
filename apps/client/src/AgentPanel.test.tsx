@@ -14,6 +14,16 @@ let generation=0;
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,generation:String(++generation),...(locked?{}:{nonce:'a'.repeat(64)})});
 }
+function deferredRead() {
+  let resolve!:(value:unknown)=>void,reject!:(reason:Error)=>void;
+  const promise=new Promise<unknown>((yes,no)=>{resolve=yes;reject=no;});
+  return {promise,resolve,reject};
+}
+async function pollingClock(run:(invoke:typeof import('@tauri-apps/api/core').invoke)=>Promise<void>) {
+  vi.useFakeTimers();
+  try {await run((await import('@tauri-apps/api/core')).invoke);}
+  finally {cleanup();vi.useRealTimers();}
+}
 beforeEach(()=>{generation+=10;access();});
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -324,8 +334,81 @@ it('refreshes a newly installed companion before a held pre-install read can pub
   expect(screen.queryByText('Obsolete companion failure')).toBeNull();
 });
 
+it('keeps the companion empty state stable during polling and retains an error until a replacement read completes',()=>pollingClock(async invoke=>{
+    let pending!:ReturnType<typeof deferredRead>;
+    let reads=0;
+    vi.mocked(invoke).mockImplementation(command=>{
+      if(command==='agent_snapshot')return ++reads===1?Promise.resolve({schemaVersion:1,sessions:[]}):(pending=deferredRead()).promise;
+      if(command==='multiplexer_sessions')return Promise.resolve([]);
+      return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
+    });
+    render(<AgentPanel sessionId="stable-reports"/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const region=screen.getByRole('region',{name:t('agentsTitle')}),panel=within(region);
+    const empty=panel.getByRole('heading',{name:t('agentsEmpty')}),count=panel.getByText(t('agentsResultCount',{shown:'0',total:'0'}));
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(panel.getByRole('heading',{name:t('agentsEmpty')})).toBe(empty);
+    expect(panel.getByText(t('agentsResultCount',{shown:'0',total:'0'}))).toBe(count);
+    expect(panel.queryByText(t('agentsReading'))).toBeNull();
+    const refresh=panel.getByRole('button',{name:t('agentsRefresh')});
+    expect(refresh).toHaveProperty('disabled',true);expect(refresh.getAttribute('aria-busy')).toBe('true');
+    await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});expect(reads).toBe(2);
+    await act(async()=>pending.reject(new Error('Owned report read unavailable')));
+    const failure=panel.getByText('Owned report read unavailable');
+    expect(panel.queryByRole('heading',{name:t('agentsEmpty')})).toBeNull();
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(panel.getByText('Owned report read unavailable')).toBe(failure);
+    expect(panel.queryByRole('heading',{name:t('agentsEmpty')})).toBeNull();expect(panel.queryByText(t('agentsReading'))).toBeNull();
+    await act(async()=>pending.resolve({schemaVersion:1,sessions:[session]}));
+    expect(panel.queryByText('Owned report read unavailable')).toBeNull();expect(panel.getByText('Permission requested')).toBeTruthy();
+    expect(refresh.getAttribute('aria-busy')).toBe('false');
+}));
+
 describe('live Herdr discovery',()=>{
   const tree={workspaces:[{workspace_id:'w1',label:'Work',focused:true,agent_status:'working'}],tabs:[{tab_id:'w1:t1',workspace_id:'w1',label:'Code',number:1,focused:true,agent_status:'working'}],panes:[{pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',cwd:'/work/codex',focused:true,agent_status:'working'}],agents:[{terminal_id:'term-one',name:'builder',agent:'codex',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',agent_status:'working'}]};
+  it.each([{name:'no servers',servers:[]},{name:'server choice',servers:[{name:'first'},{name:'second'}]}])('keeps $name steady while its server list refreshes',({servers})=>pollingClock(async invoke=>{
+      let pending!:ReturnType<typeof deferredRead>,calls=0;
+      vi.mocked(invoke).mockImplementation(()=>++calls===1?Promise.resolve(servers):(pending=deferredRead()).promise);
+      render(<HerdrAgentsPanel sessionId="stable-servers" visible/>);
+      await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+      const live=within(screen.getByRole('region',{name:'Live Herdr agents'}));
+      const content=()=>servers.length?live.getByRole('combobox',{name:t('herdrAgentsServer')}):live.getByText(t('herdrAgentsNoServers'));
+      const settled=content();
+      await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+      expect(content()).toBe(settled);expect(live.queryByText(t('herdrReading'))).toBeNull();
+      await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(calls).toBe(2);
+      await act(async()=>pending.resolve(servers));expect(content()).toBe(settled);
+      expect(vi.mocked(invoke).mock.calls.every(([command])=>command==='multiplexer_sessions')).toBe(true);
+  }));
+  it('keeps live rows, counts and search stable while polling and retains a failed read until its replacement settles',()=>pollingClock(async invoke=>{
+      let pending!:ReturnType<typeof deferredRead>;
+      let reads=0;
+      vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):
+        ++reads===1?Promise.resolve(tree):(pending=deferredRead()).promise);
+      render(<HerdrAgentsPanel sessionId="stable-live" visible/>);
+      await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+      const region=screen.getByRole('region',{name:'Live Herdr agents'}),live=within(region);
+      const card=live.getByText('builder'),count=live.getByText(t('herdrAgentsCount',{shown:'1',total:'1'}));
+      const search=live.getByRole('searchbox');fireEvent.change(search,{target:{value:'codex'}});
+      await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+      expect(live.getByText('builder')).toBe(card);
+      expect(live.getByText(t('herdrAgentsCount',{shown:'1',total:'1'}))).toBe(count);
+      expect(region.getAttribute('aria-busy')).toBe('true');
+      expect(live.queryByText(t('herdrReading'))).toBeNull();expect(search).toHaveProperty('value','codex');
+      expect(live.getByRole('button',{name:t('herdrAgentsRefresh')})).toHaveProperty('disabled',true);
+      await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});expect(reads).toBe(2);
+      await act(async()=>pending.reject(new Error('Owned live read unavailable')));
+      const failure=live.getByText(/Owned live read unavailable/);
+      expect(live.queryByText('builder')).toBeNull();expect(live.queryByText(/Showing .*detected agents/)).toBeNull();
+      await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+      expect(live.getByText(/Owned live read unavailable/)).toBe(failure);
+      expect(live.queryByText(t('herdrReading'))).toBeNull();expect(live.queryByText(/Showing .*detected agents/)).toBeNull();
+      await act(async()=>pending.resolve({...tree,agents:[]}));
+      expect(live.queryByText(/Owned live read unavailable/)).toBeNull();
+      expect(live.getByText(t('herdrAgentsCount',{shown:'0',total:'0'}))).toBeTruthy();
+      expect(live.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','codex');
+      expect(region.getAttribute('aria-busy')).toBe('false');
+  }));
   it.each(['missing','empty'])('shows Herdr Codex when companion reports are %s',async companion=>{
     const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(async command=>{
@@ -344,7 +427,8 @@ describe('live Herdr discovery',()=>{
   it('projects only live agent metadata and rejects malformed, duplicate or unmatched rows',()=>{
     const secret={...tree.agents[0],tokens:{secret:'must-not-leak'},agent_session:{transcript:'private'}};
     expect(parseHerdrAgents({...tree,agents:[secret]})[0]).toEqual({...tree.agents[0],cwd:'/work/codex'});
-    expect(parseHerdrAgents({...tree,agents:undefined})).toEqual([]);
+    expect(()=>parseHerdrAgents({...tree,agents:undefined})).toThrow(t('herdrAgentsUnsupported'));
+    expect(parseHerdrAgents({...tree,agents:[]})).toEqual([]);
     expect(parseHerdrAgents({...tree,panes:[{...tree.panes[0],cwd:null}]})[0].cwd).toBeNull();
     for(const value of [null,{...tree,agents:{}},{...tree,agents:[tree.agents[0],tree.agents[0]]},
       {...tree,agents:[{...tree.agents[0],agent_status:'approved'}]},
@@ -369,6 +453,34 @@ describe('live Herdr discovery',()=>{
     fireEvent.change(select,{target:{value:'first'}});
     await screen.findByText('builder-first');expect(screen.queryByText('builder-second')).toBeNull();
     expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree').map(([,args])=>(args as {name:string}).name)).toEqual(['second','first']);
+  });
+  it('distinguishes missing live metadata from a genuinely empty server',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:undefined}));
+    render(<HerdrAgentsPanel sessionId="legacy-host" visible onRestoreHostTools={vi.fn()}/>);
+    await screen.findByText(`${t('herdrAgentsUnavailable')} ${t('herdrAgentsUnsupported')}`);
+    expect(screen.queryByText(/Showing .*detected agents/)).toBeNull();
+    expect(screen.queryByText('builder')).toBeNull();
+    expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
+  });
+  it.each([
+    {name:'closed control',error:{kind:'ssh_control_closed',message:'same host error text'},recover:true},
+    {name:'remote command',error:{kind:'remote_command_failed',message:'same host error text'},recover:false},
+    {name:'text-only error',error:new Error('same host error text'),recover:false},
+  ])('offers explicit recovery only for $name',async({error,recover})=>{
+    const {invoke}=await import('@tauri-apps/api/core'),restore=vi.fn();
+    vi.mocked(invoke).mockImplementation(async command=>{if(command==='multiplexer_sessions')return [{name:'default'}];throw error;});
+    render(<HerdrAgentsPanel sessionId="control-owner" visible onRestoreHostTools={restore}/>);
+    await screen.findByText(`${t('herdrAgentsUnavailable')} ${recover?t('hostToolsClosed'):'same host error text'}`);
+    const button=screen.queryByRole('button',{name:t('hostToolsRestore')});
+    expect(!!button).toBe(recover);expect(restore).not.toHaveBeenCalled();
+    if(button){
+      fireEvent.click(button);expect(restore).toHaveBeenCalledOnce();
+      vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+      await act(async()=>restore.mock.calls[0][0]());
+      await screen.findByText('builder');
+      expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
+    }
   });
   it('suspends discovery when hidden and drops an old source before issuing its snapshot',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');
