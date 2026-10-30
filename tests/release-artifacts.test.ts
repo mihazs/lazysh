@@ -17,6 +17,26 @@ const mediumAdmissionResults=['ADMITTED_LINKED','ADMITTED_RESTRICTED','PORTABLE_
   ...windowsGuiTokenReasons.map(reason=>'UNAVAILABLE_TOKEN_UNAVAILABLE:'+reason),
   ...['TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','STDIO_UNAVAILABLE','LAUNCH_UNAVAILABLE','ARGV_BOUND','ENVIRONMENT_BOUND','IDENTITY_UNVERIFIED'].map(code=>'UNAVAILABLE_'+code)];
 const mediumAdmissionResult=(value:unknown)=>typeof value==='string'&&mediumAdmissionResults.includes(value)?value:'UNVERIFIED';
+const counterprobePrefix='LAZYSH_MEDIUM_COUNTERPROBE:';
+// Creation-only failures admit only the current Win32Failure mapping, independently of resume labels.
+const counterprobeDenied=['ACCESS_DENIED','INVALID_HANDLE','INVALID_PARAMETER','PRIVILEGE_NOT_HELD','FILE_NOT_FOUND','PATH_NOT_FOUND','BAD_EXE_FORMAT','DIRECTORY','OTHER'];
+const counterprobeResults=['NOT_RUN_BUDGET','CREATED_RETIRED','UNAVAILABLE_JOB','UNAVAILABLE_IDENTITY','UNAVAILABLE_TOKEN','UNAVAILABLE_INPUT','UNAVAILABLE_OTHER','CLEANUP_UNVERIFIED',...counterprobeDenied.map(error=>'DENIED:'+error)];
+const probeDenial='UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED';
+function mediumAdmissionObservation(value:unknown){
+  const unknown={result:'UNVERIFIED',counterprobe:'UNVERIFIED'};
+  if(typeof value!=='string'||value.length>1024)return unknown;
+  const lines=value.split(/\r?\n/);
+  if(lines.length===1)return {result:mediumAdmissionResult(value)};
+  const result=mediumAdmissionResult(lines.at(-1));
+  const rejected=result==='CLEANUP_UNVERIFIED'?{result,counterprobe:'UNVERIFIED'}:unknown;
+  if(lines.length!==2||!lines[0].startsWith(counterprobePrefix))return rejected;
+  const detail=lines[0].slice(counterprobePrefix.length),separator=detail.indexOf(':');
+  const kind=detail.slice(0,separator),outcome=detail.slice(separator+1);
+  if(!['LINKED','RESTRICTED'].includes(kind)||!counterprobeResults.includes(outcome)||![probeDenial,'CLEANUP_UNVERIFIED'].includes(result)
+    ||(outcome==='CLEANUP_UNVERIFIED'&&result!=='CLEANUP_UNVERIFIED'))return rejected;
+  return {result,counterprobe:{kind,outcome}};
+}
+
 const startupFixture=()=>({available:true,overflow:false,appElevation:'UNVERIFIED',appIntegrity:'UNVERIFIED',signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport:'EPHEMERAL_PORT'}],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
 async function fixture(run: (root: string) => Promise<void>) {
@@ -617,6 +637,16 @@ test('restricted Windows admission reports only exact finite smoke results',()=>
   for(const result of mediumAdmissionResults)expect(mediumAdmissionResult(result)).toBe(result);
   for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_LAUNCH_UNAVAILABLE:PRIVATE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:RESUME_COUNT_UNEXPECTED','UNAVAILABLE_LAUNCH_UNAVAILABLE:DRIVER:RESUME_THREAD:5','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:OTHER private','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
 });
+test('creation-only counterprobe results cannot replace the original denial or conceal cleanup uncertainty',()=>{
+  for(const kind of ['LINKED','RESTRICTED'])for(const outcome of counterprobeResults){
+    const result=outcome==='CLEANUP_UNVERIFIED'?'CLEANUP_UNVERIFIED':probeDenial;
+    expect(mediumAdmissionObservation(counterprobePrefix+kind+':'+outcome+'\n'+result)).toEqual({result,counterprobe:{kind,outcome}});
+    expect(['ADMITTED_LINKED','ADMITTED_RESTRICTED']).not.toContain(result);
+  }
+  for(const value of [counterprobePrefix+'LINKED:CREATED_RETIRED\nADMITTED_RESTRICTED',counterprobePrefix+'LINKED:CLEANUP_UNVERIFIED\n'+probeDenial,counterprobePrefix+'LINKED:PRIVATE\n'+probeDenial,counterprobePrefix+'LINKED:DENIED:5\n'+probeDenial,counterprobePrefix+'LINKED:DENIED:RESUME_COUNT_UNEXPECTED\n'+probeDenial,counterprobePrefix+'LINKED:DENIED:UNVERIFIED\n'+probeDenial,counterprobePrefix+'LINKED:CREATED_RETIRED private\n'+probeDenial,counterprobePrefix+'LINKED:CREATED_RETIRED\n'+counterprobePrefix+'LINKED:CREATED_RETIRED\n'+probeDenial,counterprobePrefix+'PRIVATE:CREATED_RETIRED\n'+probeDenial,counterprobePrefix+'UNVERIFIED:DENIED:ACCESS_DENIED\n'+probeDenial,counterprobePrefix+'linked:CREATED_RETIRED\n'+probeDenial,'private\n'+probeDenial])expect(mediumAdmissionObservation(value)).toEqual({result:'UNVERIFIED',counterprobe:'UNVERIFIED'});
+  expect(mediumAdmissionObservation(probeDenial)).toEqual({result:probeDenial});
+  expect(mediumAdmissionObservation(counterprobePrefix+'LINKED:PRIVATE\nCLEANUP_UNVERIFIED')).toEqual({result:'CLEANUP_UNVERIFIED',counterprobe:'UNVERIFIED'});
+});
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restricted launcher contracts and native admission',async()=>{
   const root=await mkdtemp(join(process.env.RUNNER_TEMP??tmpdir(),'lazysh-medium-admission-'));
   try{
@@ -629,6 +659,7 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restric
     const probe=String.raw`$ErrorActionPreference='Stop';Add-Type 'using System;using System.Runtime.InteropServices;public class Q{[DllImport("kernel32")]public static extern IntPtr GetStdHandle(int n);[DllImport("kernel32")]public static extern uint GetFileType(IntPtr h);}';foreach($n in -10,-11,-12){if([Q]::GetFileType([Q]::GetStdHandle($n))-ne2){exit 4}};[Console]::OpenStandardOutput().WriteByte(88);[Console]::OpenStandardError().WriteByte(88);if([Console]::OpenStandardInput().ReadByte()-ne -1){exit 5};$w=[IO.File]::Open($env:LAZYSH_MEDIUM_PROOF,[IO.FileMode]::CreateNew);$w.WriteByte(89);$w.Dispose()`;
     const script=windowsInstallerPathsScript+windowsGuiMediumScript+windowsGuiEndpointsScript+windowsGuiHealthOwnershipScript+windowsGuiDebugTransportScript+String.raw`
 $ErrorActionPreference='Stop'
+$probeDeadline=[Environment]::TickCount64+100000
 $guiMediumSource=[Console]::In.ReadToEnd()
 Add-Type -TypeDefinition $guiMediumSource -ErrorAction Stop
 $flags=[Reflection.BindingFlags]'NonPublic,Static'
@@ -644,6 +675,17 @@ foreach($field in @('launchCall','launchError')){
   $member=[OwnedMediumGui].GetField($field,$flags)
   $member.SetValue($null,[Enum]::Parse($member.FieldType,$(if($field -ceq 'launchCall'){'CREATE_PROCESS_WITH_TOKEN'}else{'ACCESS_DENIED'})))
 }
+$admission=[OwnedMediumGui].GetMethod('CounterprobeAdmission',$flags)
+foreach($case in @(@('LAUNCH_UNAVAILABLE',30000L,'RUN'),@('LAUNCH_UNAVAILABLE',29999L,'NOT_RUN_BUDGET'),@('LAUNCH_UNAVAILABLE',100001L,'NOT_ELIGIBLE'),@('CLEANUP_UNVERIFIED',90000L,'NOT_ELIGIBLE'),@('TOKEN_UNAVAILABLE',90000L,'NOT_ELIGIBLE'))){
+  if($admission.Invoke($null,@([string]$case[0],[long]$case[1])) -cne $case[2]){throw 'counterprobe admission changed'}
+}
+$callField=[OwnedMediumGui].GetField('launchCall',$flags)
+$callField.SetValue($null,[Enum]::Parse($callField.FieldType,'RESUME_THREAD'))
+if($admission.Invoke($null,@('LAUNCH_UNAVAILABLE',90000L)) -cne 'NOT_ELIGIBLE'){throw 'resume failure admitted counterprobe'}
+$callField.SetValue($null,[Enum]::Parse($callField.FieldType,'CREATE_PROCESS_WITH_TOKEN'))
+$errorField=[OwnedMediumGui].GetField('launchError',$flags)
+$errorField.SetValue($null,[Enum]::Parse($errorField.FieldType,'INVALID_HANDLE'))
+if($admission.Invoke($null,@('LAUNCH_UNAVAILABLE',90000L)) -cne 'NOT_ELIGIBLE'){throw 'different creation failure admitted counterprobe'}
 # No native call or token exists: the real Start state guard must replace a prior rejection.
 $reasonType=[OwnedMediumGui].GetNestedType('TokenReason',[Reflection.BindingFlags]::NonPublic)
 $reject=[OwnedMediumGui].GetMethod('TokenReject',[Reflection.BindingFlags]'NonPublic,Static')
@@ -652,6 +694,12 @@ $empty=[Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject([OwnedM
 $failed=$false
 try {$null=$empty.Start('owned',[string[]]@(),'',[string]::new([char]0,2))}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'TOKEN_UNAVAILABLE'}
 if(!$failed -or [OwnedMediumGui]::TokenFailure -cne 'LAUNCHER_STATE' -or [OwnedMediumGui]::LaunchFailure -cne 'UNVERIFIED:UNVERIFIED'){throw 'terminal token reason not preserved'}
+$failed=$false
+try{$null=$empty.StartProbe('owned',[string[]]@(),'',[string]::new([char]0,2),[Environment]::TickCount64+100000)}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'TOKEN_UNAVAILABLE'}
+if(!$failed -or $empty.CounterprobeOutcome -cne 'NOT_ELIGIBLE'){throw 'ineligible probe changed primary failure'}
+$failed=$false
+try{$null=$empty.StartProbe('owned',[string[]]@(),'',[string]::new([char]0,2),[Environment]::TickCount64+100000)}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'PROBE_REPEATED'}
+if(!$failed){throw 'repeated probe admitted'}
 $word=[OwnedMediumGui].GetMethod('Word',[Reflection.BindingFlags]'NonPublic,Static')
 foreach($kind in @(-1,0,1,2,3,19,25,27,[int]::MaxValue)){
   $failed=$false
@@ -676,7 +724,7 @@ try {
   $info=[Diagnostics.ProcessStartInfo]::new($tool);$info.WorkingDirectory=$env:LAZYSH_MEDIUM_ROOT
   $info.Environment['LAZYSH_MEDIUM_PROOF']=Join-Path $env:LAZYSH_MEDIUM_ROOT 'write-proof'
   foreach ($arg in @('-NoProfile','-NonInteractive','-Command',$env:LAZYSH_MEDIUM_PROBE)) { $info.ArgumentList.Add($arg) }
-  $launchRole='PROBE';$probe=GuiMediumStart $job $info;$launchRole='UNVERIFIED'
+  $launchRole='PROBE';$probe=GuiMediumStart $job $info $probeDeadline;$launchRole='UNVERIFIED'
   Require ($probe.WaitForExit(10000) -and $probe.ExitCode -eq 0) 'GUI_MEDIUM_UNAVAILABLE'
   Require ((Get-Item -LiteralPath $info.Environment['LAZYSH_MEDIUM_PROOF']).Length -eq 1) 'GUI_MEDIUM_UNAVAILABLE'
   $ports=@();$listeners=@()
@@ -711,7 +759,7 @@ try {
   $outcome='ADMITTED_'+$job.Kind
 } catch {
   $code=$_.Exception.GetBaseException().Message
-  if($code -ceq 'TOKEN_UNAVAILABLE'){
+  if($code -ceq 'CLEANUP_UNVERIFIED'){$outcome='CLEANUP_UNVERIFIED'}elseif($code -ceq 'TOKEN_UNAVAILABLE'){
     $reason=[OwnedMediumGui]::TokenFailure
     $outcome=$(if($reason -cin @(${windowsGuiTokenReasons.map(reason=>"'"+reason+"'").join(',')})) {'UNAVAILABLE_TOKEN_UNAVAILABLE:'+$reason} else {'UNVERIFIED'})
   }elseif($code -ceq 'LAUNCH_UNAVAILABLE'){
@@ -722,10 +770,16 @@ try {
   if($job){try{$job.Stop([DateTime]::UtcNow.AddSeconds(10).Ticks)}catch{$outcome='CLEANUP_UNVERIFIED'}}
   foreach($process in @($driver,$probe,$edge)){if($process){$process.Dispose()}}
 }
+if($job -and $job.CounterprobeOutcome -and $job.CounterprobeOutcome -cne 'NOT_ELIGIBLE'){
+  $counterprobe=$(if($outcome -ceq 'CLEANUP_UNVERIFIED'){'CLEANUP_UNVERIFIED'}else{$job.CounterprobeOutcome})
+  [Console]::Out.WriteLine('LAZYSH_MEDIUM_COUNTERPROBE:'+$job.Kind+':'+$counterprobe)
+}
 [Console]::Out.Write($outcome)
 `;
     const result=await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,...tools,LAZYSH_MEDIUM_ROOT:root,LAZYSH_MEDIUM_PROBE:probe},100000,windowsGuiMediumSource);
-    expect(process.platform==='win32'?['ADMITTED_LINKED','ADMITTED_RESTRICTED']:['PORTABLE_CONTRACT']).toContain(mediumAdmissionResult(result));
+    const observed=mediumAdmissionObservation(result);
+    if(observed.counterprobe)console.info('Owned never-resumed creation-only counterprobe: '+JSON.stringify(observed.counterprobe));
+    expect(process.platform==='win32'?['ADMITTED_LINKED','ADMITTED_RESTRICTED']:['PORTABLE_CONTRACT']).toContain(observed.result);
   }finally{await rm(root,{recursive:true,force:true});}
 },110000);
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
