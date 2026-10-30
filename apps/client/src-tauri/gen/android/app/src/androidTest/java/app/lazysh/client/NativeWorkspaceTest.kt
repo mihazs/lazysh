@@ -1632,14 +1632,15 @@ class NativeWorkspaceTest {
             val originalProcess = android.os.Process.myPid()
             fun terminalProof(after: Boolean) {
                 val part = if (after) "after" else "before"
-                val guard = if (after) """test "${'$'}LAZYSH_OWNED_INSTALL" = '$nonce' && """ else "LAZYSH_OWNED_INSTALL='$nonce'; "
+                val proof = "COMPANION_${nonce}_${part}_END"
+                val command = (if (after) "" else "LI='$nonce';") + "printf 'COMPANION_%s_${part}_END\\n' \"${'$'}LI\""
+                assertFalse("Owned shell proof must not appear literally in its input", command.contains(proof))
                 if (evaluate(scenario, present(".terminal-compose textarea")) != "true") clickButton("Compose")
-                typeInto(scenario, ".terminal-compose textarea", guard + "printf 'COMPANION_%s_END\\n' '${nonce}_$part'")
+                typeInto(scenario, ".terminal-compose textarea", command)
                 closeSoftKeyboard()
                 clickButton("Paste draft")
                 closeSoftKeyboard()
                 onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
-                val proof = "COMPANION_${nonce}_${part}_END"
                 awaitDocument(scenario, "owned companion terminal continuity $part", screenContains(proof) +
                     " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(proof)}))")
                 assertEquals("Owned companion must keep exactly one session tab", "true", evaluate(scenario,
