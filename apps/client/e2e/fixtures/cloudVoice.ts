@@ -1,3 +1,4 @@
+import {workspaceControl} from './workspaceControl';
 import {installNativeBridge,installSyntheticAudio} from './nativeBridge';
 import {expect,type Page} from '@playwright/test';
 import {cloudSnapshot} from '../../src/test/cloudVoiceData';
@@ -33,7 +34,7 @@ export async function cloudVoiceFixture(page:Page) {
   await page.goto('/');
   if((page.viewportSize()?.width ?? 1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
-  await page.getByRole('button',{name:'Dictate',exact:true}).click();
+  await (await workspaceControl(page,'Dictate')).click();
 }
 export async function enrollCloud(page:Page) {
   await page.getByLabel('Speech engine').selectOption('cloud');

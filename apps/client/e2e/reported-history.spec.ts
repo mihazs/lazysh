@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 
@@ -28,7 +29,7 @@ test('reported Claude history prefills its exact SSH terminal and waits for expl
   if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Connect to History host',exact:true}).click();
   await page.getByLabel('Password',{exact:true}).fill('synthetic-entry');await page.getByRole('button',{name:'Connect',exact:true}).click();
-  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  await (await workspaceControl(page,'Agents')).click();
   await page.getByRole('button',{name:'Use reported history',exact:true}).click();
   await expect(page.getByLabel('Transcript path',{exact:true})).toHaveValue('/workspace/Claude 世界.jsonl ');
   await expect(page.getByRole('combobox',{name:'Agent',exact:true})).toHaveValue('claude');
