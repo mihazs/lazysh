@@ -22,7 +22,7 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
   expect(await listening(port)).toBe(false);
 },15_000);
 
-test.each([false,true]).skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools: private tty group=%s',async privateTtyGroup=>{
+async function verifyCompanionFixture(privateTtyGroup:boolean) {
   const fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup});
   try {
     const command=await fixture.client(true,'printf "%s\\n" "$HOME" "$XDG_DATA_HOME" "$LAZYSH_STATE_DIR"; if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
@@ -40,7 +40,9 @@ test.each([false,true]).skipIf(process.platform!=='linux')('companion fixture is
   } finally {await fixture.stop();}
   expect(await listening(fixture.port)).toBe(false);
   await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
-},15_000);
+}
+
+test.skipIf(process.platform!=='linux')('companion fixture isolates exec, SFTP and interactive shell without preinstalled tools',()=>verifyCompanionFixture(false),15_000);
 
 test.skipIf(process.platform!=='linux')('owned server teardown retires an admitted interactive shell and client',async()=>{
   const fixture=await SshFixture.start();
@@ -65,6 +67,7 @@ test.skipIf(process.platform!=='linux')('owned server teardown retires an admitt
 
 test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced SSH preserves host groups and rejects lost supervisor ownership',async()=>{
   const groups=await readFile('/etc/group');
+  await verifyCompanionFixture(true);
   const fixture=await SshFixture.start(undefined,{privateTtyGroup:true});
   try {
     const client=await fixture.client();

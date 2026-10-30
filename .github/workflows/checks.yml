@@ -491,16 +491,7 @@ jobs:
         with:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl bubblewrap
-      - name: Verify native SSH namespace prerequisites
-        run: |
-          test "$(id -u)" -ne 0
-          test -x /usr/bin/bwrap
-          namespace_group=$(mktemp "$RUNNER_TEMP/lazysh-ssh-group-XXXXXX")
-          trap 'rm -f "$namespace_group"' EXIT
-          cp /etc/group "$namespace_group"
-          test "$(stat -c%s "$namespace_group")" -le 65536
-          /usr/bin/bwrap --die-with-parent --unshare-user --dev-bind / / --ro-bind "$namespace_group" /etc/group -- /usr/bin/true
+        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment

@@ -15,17 +15,15 @@ afterEach(async () => {
   for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
-test('Android SSH admission requires its user namespace and private NSS bind without Linux GUI network isolation', () => {
-  const steps = workflow.jobs['native-android-runtime'].steps;
-  const admission = steps.findIndex(step => step.name === 'Verify native SSH namespace prerequisites');
-  expect(admission).toBeGreaterThan(0);
-  expect(steps[admission - 1].run).toContain('bubblewrap');
-  const run = steps[admission].run!;
-  expect(run).toContain('/usr/bin/bwrap --die-with-parent --unshare-user --dev-bind / / --ro-bind "$namespace_group" /etc/group -- /usr/bin/true');
-  expect(run).toContain('trap');
-  expect(run).not.toMatch(/--unshare-(?:net|pid)|sudo|sysctl/);
-  const linux = workflow.jobs['native-linux'].steps.find(step => step.name === 'Verify native GUI namespace prerequisites')!.run!;
-  expect(linux).toContain('bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid');
+test('mandatory Linux namespaced SSH owner keeps private-TTY companion coverage outside Android runtime', () => {
+  const linux = workflow.jobs['native-linux'].steps;
+  const admission = linux.findIndex(step => step.name === 'Verify native GUI namespace prerequisites');
+  expect(linux[admission].run).toContain('bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid');
+  const owner = linux.findIndex(step => step.run?.includes('LAZYSH_TEST_SSH_USER_NAMESPACE=1'));
+  expect(owner).toBeGreaterThan(admission);
+  expect(linux[owner].run).toContain("bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH'");
+  expect(workflow.jobs['native-android-runtime'].steps.some(step => step.name === 'Verify native SSH namespace prerequisites')).toBe(false);
+  expect(decoded).toContain('test:android-ssh');
 });
 
 test.each([
