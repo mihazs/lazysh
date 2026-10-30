@@ -1,6 +1,6 @@
 {
   "name": "lazysh",
-  "version": "1.0.0",
+  "version": "1.1.3",
   "private": true,
   "packageManager": "bun@1.3.14",
   "workspaces": [
@@ -18,7 +18,7 @@
     "duplicates:check": "jscpd --config .jscpd.json --threshold 0 --fail-on-empty .",
     "duplicates:staged": "lint-staged --hide-all --config lint-staged.config.mjs",
     "test:hooks": "bun test ./tests/pre-commit.test.ts",
-    "test:ci": "bun test ./tests/android-diagnostics.test.ts ./tests/ios-workspace-metadata.test.ts ./tests/android-ssh.test.ts ./tests/android-qr.test.ts ./tests/android-qr-ownership.test.ts ./tests/android-qr-frame.test.ts ./tests/android-ntfy.test.ts ./tests/herdr-source.test.ts",
+    "test:ci": "bun test ./tests/android-published.test.ts ./tests/android-published-assets.test.ts ./tests/android-diagnostics.test.ts ./tests/ios-workspace-metadata.test.ts ./tests/android-ssh.test.ts ./tests/android-qr.test.ts ./tests/android-qr-ownership.test.ts ./tests/android-qr-frame.test.ts ./tests/android-ntfy.test.ts ./tests/herdr-source.test.ts",
     "dev": "turbo run dev:native --filter=@lazysh/client",
     "build": "turbo run build",
     "build:native": "turbo run build:native --filter=@lazysh/client",

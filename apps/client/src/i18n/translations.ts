@@ -31,6 +31,7 @@ const translations = {
   agentsNoMatchesHint: ["Altere a busca ou o filtro de estado reportado para ver outros relatos.", "Cambia la búsqueda o el filtro de estado reportado para ver otros informes."],
   agentsClearFilters: ["Limpar filtros", "Borrar filtros"],
 
+  defaultMuxPreferencesHint: ["Escolha um multiplexador padrão para cada host salvo. Edite um host para selecionar Herdr, tmux ou Zellij e a sessão para anexar ou criar ao conectar.", "Elige un multiplexor predeterminado para cada host guardado. Edita un host para seleccionar Herdr, tmux o Zellij y la sesión para conectar o crear al conectarte."],
   defaultMuxLabel: ["Multiplexador padrão", "Multiplexor predeterminado"],
   defaultMuxNone: ["Nenhum — terminal normal", "Ninguno — terminal normal"],
   defaultMuxName: ["Sessão padrão do multiplexador", "Sesión predeterminada del multiplexor"],
@@ -1351,6 +1352,10 @@ const translations = {
   attachmentColor: ["Cor da anotação", "Color de la anotación"],
   attachmentUndo: ["Desfazer anotação", "Deshacer anotación"],
   attachmentCanvas: ["Desenhar anotações na imagem", "Dibujar anotaciones en la imagen"],
+  attachmentRestore: ["Reconectar envios", "Reconectar subidas"],
+  attachmentRestoreTitle: ["Reconectar envios a {{value1}}", "Reconectar subidas a {{value1}}"],
+  attachmentRestored: ["Envios reconectados. Selecione Enviar anexo para tentar novamente.", "Subidas reconectadas. Selecciona Enviar adjunto para reintentar."],
+  attachmentRestoreInvalid: ["Resposta inválida de recuperação da transferência.", "Respuesta de recuperación de transferencia no válida."],
   attachmentUploading: ["Enviando…", "Enviando…"],
   attachmentUpload: ["Enviar anexo", "Enviar adjunto"],
   attachmentCancel: ["Cancelar anexo", "Cancelar adjunto"],

@@ -1,5 +1,75 @@
 # @lazysh/client
 
+## 1.1.3
+
+### Patch Changes
+
+- 6e6c9cd: Fix mobile settings, checkbox and attachment layout and expose existing per-host multiplexer preferences.
+- @lazysh/common@1.1.3
+  - @lazysh/display-idle@1.1.3
+  - @lazysh/et-transport@1.1.3
+  - @lazysh/mosh-transport@1.1.3
+
+## 1.1.2
+
+### Patch Changes
+
+- 8e3b293: Grant the local native app access to the existing upload recovery and host companion settings commands, preserving unlock, verified-host, authentication and settings revision guards. Other windows and remote pages remain denied.
+- @lazysh/common@1.1.2
+  - @lazysh/display-idle@1.1.2
+  - @lazysh/et-transport@1.1.2
+  - @lazysh/mosh-transport@1.1.2
+
+## 1.1.1
+
+### Patch Changes
+
+- 81f0e63: Add bounded failure-only diagnostics for the already captured fresh-SSH tmux control client: fenced ancestry to the owned SSH daemon and closed descriptor-kind categories. Product behavior, acceptance predicates and retirement deadlines remain unchanged; the hosted teardown cause remains unproven until actual evidence is captured.
+- cafea79: Retain bounded driver stage entry/exit progress on failed published Android APK qualification commands without changing public APK bytes, UI operations, deadlines or success requirements.
+- 2739871: Observe the existing Windows concurrent Store initialization case with bounded, closed storage phases before the unchanged native host harness. Raw output is not published, the original failure remains primary, and storage behavior, write semantics and wait budgets remain unchanged pending actual phase evidence.
+- @lazysh/common@1.1.1
+  - @lazysh/display-idle@1.1.1
+  - @lazysh/et-transport@1.1.1
+  - @lazysh/mosh-transport@1.1.1
+
+## 1.1.0
+
+### Minor Changes
+
+- 0ad69a5: Add explicit same-tab upload recovery for direct Mosh sessions using the original verified host and existing saved/manual SSH authentication. Preserve attachment drafts, terminal/output identity, access leases, exclusive creation and upload limits; never save credentials, start a new terminal or automatically retry an upload. Other SSH tools retain their original connection.
+
+### Patch Changes
+
+- b63304b: Style native file-picker buttons with the active lazysh theme and minimum 44px touch targets.
+- @lazysh/common@1.1.0
+  - @lazysh/display-idle@1.1.0
+  - @lazysh/et-transport@1.1.0
+  - @lazysh/mosh-transport@1.1.0
+
+## 1.0.2
+
+### Patch Changes
+
+- 496025f: Prevent mobile session toolbar labels and icons from overlapping by keeping complete buttons in a horizontally scrollable row.
+- ea2426d: Explain a positively closed SSH attachment-transfer connection instead of showing a generic channel-send error. Direct users to the existing verified saved-host connection flow while preserving a live Mosh tab, partial-file warnings, upload limits and exclusive file creation. Automatic in-place SSH reauthentication remains separate work.
+- @lazysh/common@1.0.2
+  - @lazysh/display-idle@1.0.2
+  - @lazysh/et-transport@1.0.2
+  - @lazysh/mosh-transport@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- e1b0208: Require a published, verified GitHub version for every completed milestone, including internal milestones, and clarify version preparation versus publication.
+
+  Remove unused desktop browser archive tooling before Android source scans, and allow an exact-source retry of unpublished 1.0.0 with every build, scan, artifact and tag check preserved.
+- c02f548: Restore the owned tmux shutdown discriminator's receipt assertion so its stopped-client/resume proof runs to completion. Product retirement guards and deadlines remain unchanged; this does not resolve the separate hosted fresh-SSH teardown failure.
+- @lazysh/common@1.0.1
+  - @lazysh/display-idle@1.0.1
+  - @lazysh/et-transport@1.0.1
+  - @lazysh/mosh-transport@1.0.1
+
 ## 1.0.0
 
 ### Major Changes

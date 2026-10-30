@@ -165,13 +165,13 @@ async fn probe() {
     assert_eq!(observations.same_state(2), Some('T'));
     let receipt = observations.failure();
     let clients = receipt
-        .split("clients(index,control,written,discarded,state)=")
+        .split("clients(index,control,written,discarded,state,lifetime)=")
         .nth(1)
         .unwrap()
         .split("; children=")
         .next()
         .unwrap();
-    assert!(clients.starts_with("[(0, true,") && clients.ends_with("\"Same(T)\")]"),
+    assert!(clients.starts_with("[(0, true,") && clients.ends_with("\"Same(T)\", None)]"),
         "bounded receipt must identify only the stopped owned control client, excluding its observer");
     eprintln!("controlled remaining shutdown: {receipt}");
     eprintln!("controlled shutdown: wrapper_gone_task_pending=true kill_request_ok=true same_server_state={server_state:?} workload_absent=true client_stopped=true");

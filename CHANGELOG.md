@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- Keep mobile settings, attachment and tool-panel text inside consistent gutters, align wrapped form and transcript checkbox labels beside their controls, and separate workspace restore actions from their explanation. Expose per-host default multiplexer editing from Preferences, including Herdr. Connection and multiplexer defaults are unchanged.
+
+- Allow the local native app to reach the existing Reconnect uploads action and host companion settings. Keep other windows and remote pages denied, require current unlocked app access, and preserve host verification, authentication and settings revision checks.
+
+- Preserve only bounded, fully framed Android published-APK driver stage entry/exit observations when the original qualification command fails. Progress remains separate from success, failure cause and owned cleanup; application defaults and public APK bytes are unchanged.
+
+- Add explicit same-tab upload recovery for verified direct Mosh connections. Reuse saved or manually entered SSH authentication without starting another terminal or saving credentials; preserve attachment edits and require a separate Upload action afterward. Other SSH tools keep their existing connection, and existing upload limits, path guards and no-overwrite behavior are unchanged.
+
+- Style native file-picker buttons with the active lazysh theme and 44px touch targets, including attachment file and camera selection. Native pickers and upload behavior are unchanged.
+
+- Explain when an attachment upload loses its separate SSH file-transfer connection while a Mosh terminal remains open. Reconnect to the saved host from Connections and upload from the new connection; existing Mosh tabs, upload limits, exclusive file creation, and path checks are preserved. This does not automatically reauthenticate a disconnected side channel.
+
+- Keep session toolbar icons and labels inside their buttons on narrow screens and with enlarged text. Scroll horizontally to reach additional views without widening the workspace.
+
+- Add a manual smoke for public signed ARM64 Android APK installation, native UI startup and same-byte reinstall with preserved synthetic host data on an explicitly admitted ARM translation guest. Physical-device and cross-version acceptance remain separate; application defaults are unchanged.
+
 - Remove unused desktop browser archive tooling from the Android source-build input before scanning, and admit an exact-source retry for the unpublished 1.0.0 release. All source/binary scans and tag protections remain required.
 
 - Keep the Android workspace inside system bars and display cutouts, and resize the terminal and special-key row above docked software keyboards. Compose stays in the fixed controls so opening it does not scroll Esc/Tab out of view. The open composer scrolls within its available space and preserves a complete terminal row, including with larger terminal text. Showing and hiding the keyboard restores the available terminal space; terminal input and toolbar preferences are unchanged.

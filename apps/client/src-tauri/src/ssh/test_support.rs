@@ -89,3 +89,25 @@ pub(crate) fn prepared_host_offer(
     launch.prepare_host(state, &receipt, &lease).unwrap();
     (access, lease, launch, receipt)
 }
+
+/// Shared adversarial changes to every frozen credential-binding field.
+pub(crate) fn changed_host_bindings(original: &Host) -> Vec<(&'static str, Host)> {
+    let value = serde_json::to_value(original).unwrap();
+    [
+        ("id", serde_json::json!("another")),
+        ("hostname", serde_json::json!("other.invalid")),
+        ("port", serde_json::json!(23)),
+        ("username", serde_json::json!("another")),
+        ("fingerprint", serde_json::json!("SHA256:changed")),
+        ("jumpHostId", serde_json::json!("other-route")),
+        ("forwardAgent", serde_json::json!(true)),
+        ("biometricUnlock", serde_json::json!(true)),
+    ]
+    .into_iter()
+    .map(|(field, changed)| {
+        let mut host = value.clone();
+        host[field] = changed;
+        (field, serde_json::from_value(host).unwrap())
+    })
+    .collect()
+}

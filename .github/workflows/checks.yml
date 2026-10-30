@@ -252,6 +252,7 @@ jobs:
           test "$(command -v tmux)" = "$tmux_root/install/bin/tmux"
           test "$(tmux -V)" = 'tmux 3.4'
           echo "$tmux_root/install/bin" >> "$GITHUB_PATH"
+          echo "LAZYSH_TEST_TMUX=$tmux_root/install/bin/tmux" >> "$GITHUB_ENV"
       - name: Build the pinned official Mosh fixture outside the checkout
         timeout-minutes: 10
         run: |

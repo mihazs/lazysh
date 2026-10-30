@@ -171,7 +171,7 @@ pub async fn connect_et(
                 lease.clone(),
                 parent,
                 events,
-                "ET",
+                crate::ssh::NativeTerminalKind::EternalTerminal,
                 crate::ssh::check_size,
                 move |_access, input, cancelled, initial_cancel, output, ready| {
                     tauri::async_runtime::spawn(run(

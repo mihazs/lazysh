@@ -1,5 +1,9 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  attachmentRestore: "Reconnect uploads",
+  attachmentRestoreTitle: "Reconnect uploads to {{value1}}",
+  attachmentRestored: "Uploads reconnected. Select Upload attachment to retry.",
+  attachmentRestoreInvalid: "Invalid file-transfer recovery response.",
   navigationAgents: "Agents navigation",
   navigationTitle: "Workspace navigation",
   navigationConnections: "Connections",
@@ -29,6 +33,7 @@ export const english = {
   agentsNoMatchesHint: "Change the search or reported-status filter to see other reports.",
   agentsClearFilters: "Clear filters",
 
+  defaultMuxPreferencesHint: "Choose a default multiplexer for each saved host. Edit a host to select Herdr, tmux or Zellij and the session to attach to or create on connection.",
   defaultMuxLabel: "Default multiplexer",
   defaultMuxNone: "None — normal terminal",
   defaultMuxName: "Default multiplexer session",

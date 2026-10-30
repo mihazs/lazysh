@@ -48,6 +48,21 @@ button {
   border-radius: 8px;
   padding: 8px 12px;
 }
+input[type="file"]::file-selector-button {
+  font: inherit;
+  color: var(--theme-text);
+  background: var(--theme-control);
+  border: 1px solid var(--theme-border);
+  border-radius: 6px;
+  min-height: 44px;
+  padding: 8px 12px;
+  margin-inline-end: 8px;
+  cursor: pointer;
+}
+input[type="file"]:disabled::file-selector-button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -611,13 +626,22 @@ button svg {
   min-height: 46px;
   flex-shrink: 0;
 }
+.session-toolbar button {
+  min-height: 44px;
+}
+.session-toolbar > button {
+  flex-shrink: 0;
+}
 .view-tabs {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
   overflow-x: auto;
 }
 .view-tabs button {
+  flex: 0 0 auto;
   background: transparent;
   color: var(--theme-muted, #849779);
   display: flex;
@@ -1283,8 +1307,7 @@ button svg {
     min-height: 46px;
   }
   .view-tabs {
-    width: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
   }
   .view-tabs button {
     font-size: 10px;
@@ -1701,3 +1724,42 @@ button svg {
 
 .workspace-navigation-agents > .agent-panel:not([hidden]) { display: block; overflow: visible; }
 .workspace-navigation-agents .agent-board { overflow: visible; }
+
+/* Attachment panels already provide their own content padding. */
+.tool-panel:not(.attachment-panel) > :is(h2, h3, p) { margin-inline: 18px; }
+
+/* Keep settings sections on one shared gutter, including native app lock. */
+.preferences-content { padding: 0 24px 24px; overflow-wrap: anywhere; }
+.preferences-content > .preferences-panel { padding: 0; }
+.preferences-content > section { margin-block: 20px; }
+.preferences-content p { line-height: 1.5; }
+.preferences-content > section > button { margin: 4px; min-height: 44px; }
+
+/* Text is an anonymous grid item so long checkbox labels wrap beside the control. */
+.form-stack label:has(> input[type="checkbox"]),
+.preferences-panel label:has(> input[type="checkbox"]),
+.chat-panel label:has(> input[type="checkbox"]),
+.access-lock-toggle {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+.form-stack input[type="checkbox"], .chat-panel input[type="checkbox"] { width: 20px; height: 20px; min-width: 0; margin: 0; accent-color: var(--accent); }
+
+.workspace-restore { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.workspace-restore > span { flex: 1 1 240px; min-width: 0; }
+.workspace-restore > button { min-height: 44px; flex-shrink: 0; }
+
+.attachment-panel { padding: 18px; }
+.attachment-panel > .button-row { flex-wrap: wrap; align-items: end; }
+.attachment-panel > .button-row > label { flex: 1 1 240px; min-width: 0; display: grid; gap: 8px; }
+.attachment-panel input[type="file"] { width: 100%; min-width: 0; }
+.attachment-panel > .form-stack { padding-inline: 0; }
+
+@media (max-width: 600px) {
+  .preferences-content { padding-inline: 19px; }
+  .workspace-restore > span { flex-basis: 100%; order: 1; }
+  .workspace-restore > button:last-child { margin-left: auto; }
+}
