@@ -131,6 +131,16 @@ windows and remote origins; handler tests verify companion settings access and
 lock/reunlock guards. These checks do not qualify the full native upload recovery
 UI or explain why the original SSH upload connection closed.
 
+The 1.1.4 patch uses protected foreground Android clipboard reads for explicit
+terminal Paste and PNG/JPEG attachment preview. The owned packaged Android
+x86_64 emulator [runtime job](https://github.com/mihazs/lazysh/actions/runs/40977583196/job/123811760981)
+passed literal text without Enter, native Enter with exact remote output and a
+later prompt over SSH and Herdr. Its SSH case also passed PNG/JPEG preview without
+automatic upload and rejection of non-content URIs and oversized images, with
+normal native and host cleanup. Images still require a separate manual Upload
+action. This does not qualify manual Android upload, public ARM64 APK runtime,
+physical Samsung/SwiftKey behavior or the separate companion installation flow.
+
 Exact public v1.1.0 Google and FOSS signed ARM64 APKs passed native UI host save,
 relaunch and identical-byte reinstall with preserved data on admitted translated
 ARM64 guests ([qualification](https://github.com/mihazs/lazysh/actions/runs/40958281779)).

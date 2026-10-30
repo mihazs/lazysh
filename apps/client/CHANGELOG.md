@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 1.1.4
+
+### Patch Changes
+
+- 9fd91c6: Use protected foreground Android clipboard reads for explicit terminal text paste and PNG/JPEG attachment preview, preserving literal paste and separate manual upload.
+- @lazysh/common@1.1.4
+  - @lazysh/display-idle@1.1.4
+  - @lazysh/et-transport@1.1.4
+  - @lazysh/mosh-transport@1.1.4
+
 ## 1.1.3
 
 ### Patch Changes
