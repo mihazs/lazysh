@@ -60,6 +60,20 @@ struct Client {
         network->get_current_state().push_back(Parser::Resize(cols, rows));
     }
 };
+bool receive_packet(Transport& network) {
+    try { network.recv(); }
+    catch (const Crypto::CryptoException& e) { if (e.fatal) throw; }
+    catch (const Network::NetworkException& e) {
+        // Connection::recv uses errno zero when every socket has drained.
+        // Readiness is advisory: this ends the batch, not the session.
+        if (e.function == "No packet received" && e.the_errno == 0) return false;
+        if (e.function == "Received oversize datagram") return true;
+        const bool transient = e.the_errno == EAGAIN || e.the_errno == EWOULDBLOCK || e.the_errno == EINTR
+            || e.the_errno == ECONNREFUSED || e.the_errno == EHOSTUNREACH || e.the_errno == ENETUNREACH || e.the_errno == ENETDOWN;
+        if (!transient) throw;
+    }
+    return true;
+}
 void dimensions(unsigned cols, unsigned rows) {
     if (!cols || !rows || cols > 512 || rows > 256 || uint64_t(cols) * rows > 32768)
         throw std::runtime_error("Mosh screen exceeds 512 columns, 256 rows, or 32768 cells");
@@ -113,14 +127,7 @@ extern "C" int lazysh_mosh_step(void* pointer, size_t* length, int* finished, in
             const int ready = poll(polling.data(), polling.size(), 0);
             if (ready < 0) { if (errno == EINTR) break; throw std::runtime_error("Cannot poll Mosh socket"); }
             if (!ready) break;
-            try { network.recv(); }
-            catch (const Crypto::CryptoException& e) { if (e.fatal) throw; }
-            catch (const Network::NetworkException& e) {
-                if (e.function == "Received oversize datagram") continue;
-                const bool transient = e.the_errno == EAGAIN || e.the_errno == EWOULDBLOCK || e.the_errno == EINTR
-                    || e.the_errno == ECONNREFUSED || e.the_errno == EHOSTUNREACH || e.the_errno == ENETUNREACH || e.the_errno == ENETDOWN;
-                if (!transient) throw;
-            }
+            if (!receive_packet(network)) break;
         }
         freeze_timestamp();
         network.tick();
@@ -231,3 +238,11 @@ extern "C" int lazysh_mosh_test_ack(const unsigned char* bytes, size_t length, u
     }, error, capacity);
 }
 #endif
+
+// Exercise the production receive boundary after socket readiness has drained.
+extern "C" int lazysh_mosh_test_receive_empty(void* pointer, char* error, size_t capacity) noexcept {
+    return boundary([&] {
+        if (receive_packet(*static_cast<Client*>(pointer)->network))
+            throw std::runtime_error("Empty receive must end the current drain cycle");
+    }, error, capacity);
+}
