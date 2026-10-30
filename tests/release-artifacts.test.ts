@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
@@ -56,6 +56,13 @@ function mediumAdmissionObservation(value:unknown){
   }
   if(details.length)return rejected;
   return {...base,...(dacl?{dacl}:{}),...(asUser?{asUser}:{})};
+}
+
+function highGuiEvidenceEligible(value:unknown){
+  const observed=mediumAdmissionObservation(value);
+  return observed.result===probeDenial&&typeof observed.counterprobe==='object'&&observed.counterprobe.kind==='RESTRICTED'&&observed.counterprobe.outcome==='DENIED:ACCESS_DENIED'
+    &&'asUser' in observed&&observed.asUser?.kind==='RESTRICTED'&&observed.asUser.outcome==='DENIED:PRIVILEGE_NOT_HELD'
+    &&'dacl' in observed&&observed.dacl?.kind==='RESTRICTED'&&daclNames.every(name=>observed.dacl?.[name]==='ALLOWS');
 }
 
 const startupFixture=()=>({available:true,overflow:false,appElevation:'UNVERIFIED',appIntegrity:'UNVERIFIED',signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport:'EPHEMERAL_PORT'}],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
@@ -638,13 +645,19 @@ function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
 }
 if ($env:LAZYSH_COUNTER_CASE -eq 'image') { $env:LAZYSH_NSIS_BINARY_SHA256='0'*64 }
 if ($env:LAZYSH_COUNTER_CASE -eq 'tool') { $env:LAZYSH_GUI_EDGE_SHA256='0'*64 }
+if ($env:LAZYSH_COUNTER_CASE -ceq 'passed') {
+  $env:LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE='1'
+  GuiCounterfactual $baseline
+  if ($script:called -ne 0 -or $script:failure -cne $baseline) { throw 'HIGH evidence ran a counterfactual or changed the primary failure' }
+  $env:LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE='0'
+}
 [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:'+$baseline)
 GuiCounterfactual $baseline
 if ($script:failure -cne $baseline -or $script:called -ne $(if ($env:LAZYSH_COUNTER_CASE -like 'medium-*') {2} elseif ($env:LAZYSH_COUNTER_CASE -in @('passed','rejected','treatment-cleanup')) {1} else {0})) { throw 'baseline or admission changed' }
 exit 1
 `;
   for(const [name,outcome] of [['passed','PASSED'],['cleanup','NOT_RUN_CLEANUP'],['budget','NOT_RUN_BUDGET'],['image','REJECTED'],['tool','REJECTED'],['rejected','REJECTED'],['treatment-cleanup','REJECTED'],['medium-unavailable','PASSED'],['medium-admitted','PASSED'],['medium-cleanup','PASSED']]){
-    const env={...process.env,LAZYSH_COUNTER_CASE:name,LAZYSH_GUI_BINARY:image,LAZYSH_NSIS_BINARY_SHA256:expected.sha256,LAZYSH_GUI_DRIVER:image,LAZYSH_GUI_EDGE:image,LAZYSH_GUI_DRIVER_SHA256:expected.sha256,LAZYSH_GUI_EDGE_SHA256:expected.sha256};
+    const env={...process.env,LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE:'0',LAZYSH_COUNTER_CASE:name,LAZYSH_GUI_BINARY:image,LAZYSH_NSIS_BINARY_SHA256:expected.sha256,LAZYSH_GUI_DRIVER:image,LAZYSH_GUI_EDGE:image,LAZYSH_GUI_DRIVER_SHA256:expected.sha256,LAZYSH_GUI_EDGE_SHA256:expected.sha256};
     const pending=native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],env,30000);
     await expect(pending).rejects.toThrow(`Release validation failed: pwsh.exe (gui:${baseline})\nOwned Windows GUI counterfactual: {"outcome":"${outcome}"`);
     if(name.startsWith('medium-'))await expect(pending).rejects.toThrow('Owned Windows GUI medium context: '+JSON.stringify(name==='medium-unavailable'?{outcome:'NOT_AVAILABLE'}:{outcome:'REJECTED',rejection:name==='medium-cleanup'?'gui:GUI_CLIENT; gui:GUI_CLEANUP':'gui:GUI_CLIENT'}));
@@ -658,6 +671,33 @@ test('restricted Windows admission reports only exact finite smoke results',()=>
   for(const result of mediumAdmissionResults)expect(mediumAdmissionResult(result)).toBe(result);
   for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_LAUNCH_UNAVAILABLE:PRIVATE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:RESUME_COUNT_UNEXPECTED','UNAVAILABLE_LAUNCH_UNAVAILABLE:DRIVER:RESUME_THREAD:5','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:OTHER private','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
 });
+test('Windows evidence routing retains the failed admission and every required successful predecessor',async()=>{
+  const workflow=Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml',import.meta.url)).text()) as any;
+  const steps=workflow.jobs['native-desktop'].steps;
+  const early=steps.find((step:any)=>step.id==='windows_restricted');
+  expect(workflow.jobs['native-desktop']['continue-on-error']).toBeUndefined();expect(early['continue-on-error']).toBeUndefined();expect(early.if).toBe("runner.os == 'Windows'");expect(early['timeout-minutes']).toBe(2);
+  expect(early.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE).toBe('1');
+  const eligible="runner.os == 'Windows' && !cancelled() && steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial'";
+  const required:string[]=[];
+  for(const id of ['native_build','credential_check','windows_package','windows_installer','windows_gui']){
+    const step=steps.find((step:any)=>step.id===id),resume=[eligible,...required.map(prior=>`steps.${prior}.outcome == 'success'`)].join(' && ');
+    expect(step['continue-on-error']).toBeUndefined();
+    expect(step.if).toBe('${{ '+(id.startsWith('windows_')?"runner.os == 'Windows' && (success() || ("+resume+'))':'success() || ('+resume+')')+' }}');
+    required.push(id);
+  }
+  const gui=steps.find((step:any)=>step.id==='windows_gui');
+  expect(gui.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE).toBe("${{ steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial' && '1' || '0' }}");
+  expect(gui['timeout-minutes']).toBe(12);
+});
+
+test('HIGH evidence continuation requires the complete safe-denial wire record',()=>{
+  const lines=[counterprobePrefix+'RESTRICTED:DENIED:ACCESS_DENIED',daclPrefix+'RESTRICTED:'+Array(5).fill('ALLOWS').join(':'),asUserPrefix+'RESTRICTED:DENIED:PRIVILEGE_NOT_HELD',probeDenial];
+  const complete=lines.join('\n');expect(highGuiEvidenceEligible(complete)).toBe(true);
+  for(const index of lines.keys())expect(highGuiEvidenceEligible(lines.filter((_,i)=>i!==index).join('\n'))).toBe(false);
+  for(const invalid of [undefined,null,{},complete+'\nprivate',complete+'\n'+probeDenial,complete.replaceAll('RESTRICTED','LINKED'),complete.replace('DENIED:ACCESS_DENIED','CREATED_RETIRED'),complete.replace('DENIED:PRIVILEGE_NOT_HELD','CREATED_RETIRED'),complete.replace('DENIED:PRIVILEGE_NOT_HELD','UNVERIFIED'),complete.replace(probeDenial,'CLEANUP_UNVERIFIED'),complete.replace(probeDenial,'ADMITTED_RESTRICTED')])expect(highGuiEvidenceEligible(invalid)).toBe(false);
+  for(let index=0;index<5;index++)for(const value of ['DENIES','UNVERIFIED']){const changed=[...lines],values=Array(5).fill('ALLOWS');values[index]=value;changed[1]=daclPrefix+'RESTRICTED:'+values.join(':');expect(highGuiEvidenceEligible(changed.join('\n'))).toBe(false);}
+});
+
 test('AsUser comparison never replaces the baseline denial and projects only restricted creation outcomes',()=>{
   const prefix=counterprobePrefix+'RESTRICTED:DENIED:ACCESS_DENIED\n';
   for(const outcome of asUserResults){const result=outcome==='CLEANUP_UNVERIFIED'?'CLEANUP_UNVERIFIED':probeDenial;expect(mediumAdmissionObservation(prefix+asUserPrefix+'RESTRICTED:'+outcome+'\n'+result)).toEqual({result,counterprobe:{kind:'RESTRICTED',outcome:'DENIED:ACCESS_DENIED'},asUser:{kind:'RESTRICTED',outcome}})}
@@ -690,6 +730,7 @@ test('creation-only counterprobe results cannot replace the original denial or c
   expect(mediumAdmissionObservation(counterprobePrefix+'LINKED:PRIVATE\nCLEANUP_UNVERIFIED')).toEqual({result:'CLEANUP_UNVERIFIED',counterprobe:'UNVERIFIED'});
 });
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restricted launcher contracts and native admission',async()=>{
+  let wire:unknown,observed=mediumAdmissionObservation(undefined);
   const root=await mkdtemp(join(process.env.RUNNER_TEMP??tmpdir(),'lazysh-medium-admission-'));
   try{
     const tools=process.platform==='win32'?windowsGuiToolEnvironment(process.env.LAZYSH_GUI_DRIVER??'',process.env.LAZYSH_GUI_EDGE??''):{};
@@ -859,12 +900,18 @@ if($job -and $job.AsUserOutcome -and $job.AsUserOutcome -cne 'NOT_ELIGIBLE'){[Co
 [Console]::Out.Write($outcome)
 `;
     const result=await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,...tools,LAZYSH_MEDIUM_ROOT:root,LAZYSH_MEDIUM_PROBE:probe},100000,windowsGuiMediumSource);
-    const observed=mediumAdmissionObservation(result);
+    wire=result;observed=mediumAdmissionObservation(result);
     if(observed.counterprobe)console.info('Owned never-resumed creation-only counterprobe: '+JSON.stringify(observed.counterprobe));
     if('asUser' in observed)console.info('Owned never-resumed AsUser comparison: '+JSON.stringify(observed.asUser));
     if('dacl' in observed)console.info('Owned token fixed DACL-only observations: '+JSON.stringify(observed.dacl));
-    expect(process.platform==='win32'?['ADMITTED_LINKED','ADMITTED_RESTRICTED']:['PORTABLE_CONTRACT']).toContain(observed.result);
   }finally{await rm(root,{recursive:true,force:true});}
+  // This signal follows every native and Bun cleanup; it never makes this denial pass.
+  try {
+    if(process.platform==='win32'&&process.env.GITHUB_ACTIONS==='true'&&process.env.RUNNER_ENVIRONMENT==='github-hosted'&&process.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE==='1'&&process.env.GITHUB_OUTPUT&&highGuiEvidenceEligible(wire))
+      await appendFile(process.env.GITHUB_OUTPUT,'high_gui_evidence=safe-denial\n');
+  } finally {
+    expect(process.platform==='win32'?['ADMITTED_LINKED','ADMITTED_RESTRICTED']:['PORTABLE_CONTRACT']).toContain(observed.result);
+  }
 },110000);
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));

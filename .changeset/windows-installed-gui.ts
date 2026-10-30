@@ -860,6 +860,7 @@ function RemoveGuiDirectory($path) {
 }
 function GuiCounterfactual($baselineFailure) {
   try {
+    if ($env:LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE -ceq '1') { return }
     if ($baselineFailure -cnotmatch '\AGUI_SESSION_[A-Z_]+_WINDOW_VERIFIED:HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)\z') { return }
     if (!$guiCleanupVerified) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:NOT_RUN_CLEANUP');return }
     # Same 600-second parent: reserve 420 seconds for client/startup, owned cleanup and native uninstall.
