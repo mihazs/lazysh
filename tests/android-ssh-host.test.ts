@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {chmod,mkdir,readFile,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
+import {OwnedProcess,SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 
@@ -133,7 +133,7 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     const listing=await owned.ssh.client(true,'herdr session list --json');
     expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
     const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
-    const {agent}=owned.metadata();
+    const {agent,history}=owned.metadata();
     expect(snapshot.agents).toHaveLength(1);
     expect(snapshot.agents[0]).toMatchObject({agent:'codex',agent_status:'unknown',terminal_id:agent.terminalId,
       workspace_id:agent.workspaceId,tab_id:agent.tabId,pane_id:agent.paneId});
@@ -141,6 +141,31 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
       terminal_id:agent.terminalId,workspace_id:agent.workspaceId,tab_id:agent.tabId});
     const reports=await owned.ssh.client(true,'lazysh-agent snapshot --limit 50');
     expect(JSON.parse(await reports.finish('owned empty companion reports',5000))).toEqual({schemaVersion:1,sessions:[]});
+    expect(history?.paneId).not.toBe(agent.paneId);
+    expect(snapshot.focused_pane_id).toBe(agent.paneId);
+    expect(await owned.history()).toMatchObject({offset:0,newTail:true});
+    await expect(owned.expectHistoryScrolled()).rejects.toThrow('Owned remote history did not scroll and restore');
+    // This controls only the real host readback contract, never the native swipe oracle.
+    await owned.run(['tab','focus',history!.tabId]);
+    const client=new OwnedProcess('/usr/bin/script',['-q','-e','-f','-c',
+      `stty rows 24 cols 80; exec '${owned.ssh.directory}/bin/herdr' --session '${owned.name}'`,'/dev/null'],
+      owned.ssh.directory,owned.ssh.environment,false);
+    try {
+      const deadline=performance.now()+3000;
+      while((await owned.history()).rows!==23) {
+        expect(performance.now()).toBeLessThan(deadline);
+        if(!await client.liveIdentity())throw new Error('Owned Herdr attach client closed');
+        await Bun.sleep(10);
+      }
+      expect(await owned.history(8)).toMatchObject({offset:8,newTail:false});
+      await owned.run(['tab','focus',agent.tabId]);await owned.expectHistoryScrolled();
+      await owned.run(['tab','focus',history!.tabId]);
+      await expect(owned.expectHistoryScrolled()).rejects.toThrow('Owned remote history did not scroll and restore');
+      expect(await owned.history()).toMatchObject({offset:8,newTail:false});
+    } finally {await client.stop();}
+    expect(await owned.history()).toMatchObject({offset:8,newTail:false});
+    await owned.run(['tab','focus',agent.tabId]);await owned.expectHistoryScrolled();
+    await expect(owned.history(513)).rejects.toThrow('Owned history request invalid');
     await owned.expectBytes(Buffer.alloc(0));
   } finally {await owned.stop();}
 },15_000);

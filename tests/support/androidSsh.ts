@@ -343,7 +343,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
       console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
     }
-    if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
+    if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
     console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;

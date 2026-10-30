@@ -26,6 +26,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.webkit.WebView
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -38,6 +39,8 @@ import androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView
 import androidx.test.espresso.action.ViewActions.pressKey
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.GeneralClickAction
+import androidx.test.espresso.action.GeneralSwipeAction
+import androidx.test.espresso.action.Swipe
 import androidx.test.espresso.action.Press
 import androidx.test.espresso.action.Tap
 import androidx.test.espresso.action.EspressoKey
@@ -1366,6 +1369,76 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, "owned Herdr listed", hasButton("Attach herdr $name"))
         click("Attach herdr $name")
         awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
+        val history = herdr.getJSONObject("history")
+        val original = herdr.getJSONObject("agent")
+        val historyTab = history.getString("tabId")
+        val originalTab = original.getString("tabId")
+        require(historyTab.matches(Regex("w[0-9]+:t[0-9]+")) && historyTab.length <= 50 &&
+            originalTab.matches(Regex("w[0-9]+:t[0-9]+")) && originalTab.length <= 50 && historyTab != originalTab)
+        fun focusTab(tab: String) {
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "owned Herdr discovery controls", hasButton("List herdr sessions"))
+            click("List herdr sessions")
+            awaitDocument(scenario, "owned Herdr browse action", hasButton("Browse Herdr $name"))
+            click("Browse Herdr $name")
+            awaitDocument(scenario, "owned exact Herdr tab action", hasButton("Focus $tab"))
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='Focus $tab']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario, "owned Herdr tab focus acknowledged",
+                "Array.from(document.querySelectorAll('button')).find(x=>x.textContent.trim()==='Focus $tab')?.closest('details')?.querySelector('summary')?.textContent.endsWith(' · focused')===true")
+            sessionView(scenario, "Terminal")
+        }
+        focusTab(historyTab)
+        closeSoftKeyboard()
+        val screens = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0)"
+        awaitDocument(scenario, "owned history newest row visible", "(() => {const screens=$screens; return screens.length===1 && screens[0].textContent.includes('NEW512');})()")
+        val geometry = JSONObject(evaluate(scenario, """
+            (()=>{
+              const screens=$screens, viewport=window.visualViewport;
+              if(screens.length!==1 || !viewport) return {};
+              const r=screens[0].getBoundingClientRect();
+              const targets=[0.25,0.5,0.75].every(fraction=>{
+                const hit=document.elementFromPoint((r.left+r.right)/2,r.top+r.height*fraction);
+                return hit===screens[0] || screens[0].contains(hit);
+              });
+              return {targets,rect:[r.left,r.top,r.right,r.bottom],viewport:[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale],density:devicePixelRatio};
+            })()
+        """))
+        assertTrue("Native swipe path must hit only the visible terminal screen", geometry.getBoolean("targets"))
+        val rect = geometry.getJSONArray("rect")
+        val viewport = geometry.getJSONArray("viewport")
+        val bounds = (0..3).map { rect.getDouble(it) }
+        val visible = (0..4).map { viewport.getDouble(it) }
+        require((bounds + visible).all { it.isFinite() } && visible[2] > 0 && visible[3] > 0 && visible[4] == 1.0 &&
+            bounds[0] >= visible[0] && bounds[1] >= visible[1] && bounds[2] <= visible[0] + visible[2] &&
+            bounds[3] <= visible[1] + visible[3] && bounds[2] > bounds[0] && bounds[3] > bounds[1])
+        var startFrame: List<Int>? = null
+        fun fingerPoint(view: View, fraction: Double): FloatArray {
+            val origin = IntArray(2); view.getLocationOnScreen(origin)
+            val frame = listOf(origin[0], origin[1], view.width, view.height)
+            if (startFrame == null) startFrame = frame else assertEquals("Swipe WebView frame must remain stable", startFrame, frame)
+            val density = view.resources.displayMetrics.density.toDouble()
+            assertTrue("Owned swipe requires the focused, stable WebView without IME overlap",
+                view is WebView && view.isAttachedToWindow && view.isShown && view.hasWindowFocus() && !view.isLayoutRequested &&
+                    view.width > 0 && view.height > 0 && density.isFinite() && density > 0 && geometry.getDouble("density") == density &&
+                    ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime()) == false)
+            val scaleX = view.width / visible[2]
+            val scaleY = view.height / visible[3]
+            val travel = (bounds[3] - bounds[1]) * 0.5 * scaleY
+            assertTrue("Owned native swipe must exceed both DOM scroll admission and native touch slop",
+                travel > 10 * scaleY && travel > ViewConfiguration.get(view.context).scaledTouchSlop * 2 && travel > 10 * density)
+            val x = ((bounds[0] + bounds[2]) / 2 - visible[0]) * scaleX
+            val y = (bounds[1] + (bounds[3] - bounds[1]) * fraction - visible[1]) * scaleY
+            assertTrue("Swipe finger must stay inside the measured native WebView", x > 0 && y > 0 && x < view.width && y < view.height)
+            return floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+        }
+        onView(isAssignableFrom(WebView::class.java)).perform(GeneralSwipeAction(Swipe.FAST,
+            { view -> fingerPoint(view, 0.25) }, { view -> fingerPoint(view, 0.75) }, Press.FINGER))
+        awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
+            (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
+        """)
+        focusTab(originalTab)
+        println("lazysh Herdr finger scroll: one native swipe revealed older rows; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
