@@ -23,7 +23,7 @@ export class SshControlClosedError extends LocalUiError { constructor(){super('h
 export type UiErrorCause = string | LocalUiError;
 export function captureUiError(error: unknown): UiErrorCause {
   if(error instanceof LocalUiError)return error;
-  if(error && typeof error==='object' && 'kind' in error && error.kind==='ssh_control_closed' && 'message' in error && typeof error.message==='string')return new SshControlClosedError();
+  if(error && typeof error==='object' && 'kind' in error && error.kind==='ssh_host_tools_closed' && 'message' in error && typeof error.message==='string')return new SshControlClosedError();
   return errorMessage(error);
 }
 export function uiErrorText(error: UiErrorCause): string {

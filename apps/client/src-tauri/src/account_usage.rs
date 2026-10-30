@@ -69,7 +69,7 @@ pub async fn account_usage(
             Ok(match result {
                 Ok(output) => lazysh_account_usage::from_wire(output.as_bytes()),
                 Err(error) => Response::unavailable(match error.kind() {
-                    "disconnected" | "ssh_control_closed" => "disconnected",
+                    "disconnected" | "ssh_host_tools_closed" => "disconnected",
                     "timeout" => "timeout",
                     "output_too_large" => "invalid_report",
                     _ => "unavailable",

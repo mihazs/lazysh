@@ -464,7 +464,8 @@ describe('live Herdr discovery',()=>{
     expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
   });
   it.each([
-    {name:'closed control',error:{kind:'ssh_control_closed',message:'same host error text'},recover:true},
+    {name:'closed command control',error:{kind:'ssh_host_tools_closed',message:'same host error text'},recover:true},
+    {name:'closed upload control',error:{kind:'ssh_control_closed',message:'same host error text'},recover:false},
     {name:'remote command',error:{kind:'remote_command_failed',message:'same host error text'},recover:false},
     {name:'text-only error',error:new Error('same host error text'),recover:false},
   ])('offers explicit recovery only for $name',async({error,recover})=>{

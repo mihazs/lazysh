@@ -2622,7 +2622,7 @@ async fn exec_inner(
     };
     let closed = || {
         SshError::new(
-            "ssh_control_closed",
+            "ssh_host_tools_closed",
             "The host-tools SSH connection is closed. Reconnect host tools to continue.",
         )
     };
@@ -6216,6 +6216,21 @@ mod tests {
             ));
             let sessions_before = state.sessions.lock().await.len();
             // Upload-only recovery must not silently grant remote-command authority.
+            // Exercise the real closed-command-to-quota boundary without a provider read.
+            app.manage(crate::local::LocalState::default());
+            app.manage(crate::account_usage::UsageState::default());
+            let quota = crate::account_usage::account_usage(
+                access_lease(),
+                app.state(),
+                app.state(),
+                app.state(),
+                mosh_id.clone(),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            assert_eq!(quota.state, "disconnected");
             assert_eq!(
                 exec_for_access(
                     &native_session,
@@ -6225,7 +6240,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .kind(),
-                "ssh_control_closed"
+                "ssh_host_tools_closed"
             );
             let authenticate_control =
                 |original: Host, _permit: Arc<tokio::sync::OwnedSemaphorePermit>| {
@@ -6287,7 +6302,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .kind(),
-                "ssh_control_closed"
+                "ssh_host_tools_closed"
             );
             assert!(native_session.handle.is_closed());
             assert!(!restored_control.is_closed());
