@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {dictationFixture as fixture,recordDictation as record,completeDictation as complete} from './fixtures/directDictation';
 
@@ -15,7 +16,7 @@ test('review remains default; direct opt-in writes exactly one final payload wit
   await enter.check();await record(page);await complete(page,'pwd');
   await expect.poll(()=>page.evaluate(()=>window.dictationFixture.writes.map(write=>write.data))).toEqual(['echo 世界','pwd\r']);
   const ids=await page.evaluate(()=>window.dictationFixture.writes.map(write=>write.sessionId));expect(new Set(ids).size).toBe(1);
-  await page.getByRole('button',{name:'Terminal',exact:true}).click();await page.getByRole('button',{name:'Dictate',exact:true}).click();
+  await (await workspaceControl(page,'Terminal')).click();await (await workspaceControl(page,'Dictate')).click();
   await expect(direct).not.toBeChecked();await expect(enter).not.toBeChecked();
 });
 
@@ -54,7 +55,7 @@ for(const action of ['cancel','navigate','disconnect','disconnect intent','repla
   test(`late completion after ${action} cannot type or press Enter`,async({page})=>{
     await fixture(page);await page.getByLabel('Type final result directly into terminal').check();await page.getByLabel('Auto-send: press Enter').check();await record(page);
     if(action==='cancel')await page.getByRole('button',{name:'Cancel',exact:true}).click();
-    else if(action==='navigate')await page.getByRole('button',{name:'Terminal',exact:true}).click();
+    else if(action==='navigate')await (await workspaceControl(page,'Terminal')).click();
     else if(action==='disconnect intent'){
       await page.evaluate(()=>{window.dictationFixture.deferDisconnect=true;});
       await page.getByRole('button',{name:'Disconnect Local terminal',exact:true}).click();

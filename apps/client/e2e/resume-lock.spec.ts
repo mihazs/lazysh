@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import { expect, test } from '@playwright/test';
 
 declare global { interface Window { resumeLockFixture: {
@@ -61,7 +62,7 @@ test('the real App and indexed bridge retain one terminal, pause output, and cle
   await expect.poll(()=>page.evaluate(()=>window.resumeLockFixture.adopted.length)).toBe(1);
   await page.evaluate(()=>window.resumeLockFixture.send(0,'BEFORE\r\n'));
   await expect(page.locator('.xterm-accessibility-tree')).toContainText('BEFORE');
-  await page.getByRole('button',{name:'Dictate',exact:true}).click();
+  await (await workspaceControl(page,'Dictate')).click();
   await page.getByLabel('Dictation draft').fill('private unsent draft');
   await page.evaluate(()=>window.resumeLockFixture.lock());
   await expect(page.getByRole('heading',{name:'lazysh is locked'})).toBeVisible();
@@ -77,7 +78,7 @@ test('the real App and indexed bridge retain one terminal, pause output, and cle
   await page.evaluate(()=>window.resumeLockFixture.send(3,'AFTER 世界\r\n'));
   await expect(page.locator('.xterm-accessibility-tree')).toContainText('AFTER 世界');
   const text=await page.locator('.xterm-accessibility-tree').innerText();expect(text.indexOf('BEFORE')).toBeLessThan(text.indexOf('LOCKED-A'));expect(text.indexOf('LOCKED-B')).toBeLessThan(text.indexOf('AFTER'));
-  await page.getByRole('button',{name:'Dictate',exact:true}).click();
+  await (await workspaceControl(page,'Dictate')).click();
   await expect(page.getByLabel('Dictation draft')).toHaveValue('');
   const result=await page.evaluate(()=>window.resumeLockFixture);
   expect(result.connects).toBe(1);expect(result.adopted).toHaveLength(1);expect(result.disconnects).toEqual([]);expect(result.writes).toEqual([]);expect(result.readySawOldDraft).not.toContain(true);
