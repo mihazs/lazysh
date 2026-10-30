@@ -1136,6 +1136,54 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun workspaceElementVisible(selector: String, touchable: Boolean = false) = """
+        (()=>{const element=document.querySelector(${JSONObject.quote(selector)});
+          if(!element || !element.getClientRects().length || getComputedStyle(element).visibility==='hidden')return false;
+          if(!$touchable)return true;
+          const bounds=element.getBoundingClientRect(),hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+          return bounds.left>=0 && bounds.top>=0 && bounds.right<=innerWidth && bounds.bottom<=innerHeight && Boolean(hit && element.contains(hit));})()
+    """
+
+    private fun workspaceButtonVisible(scope: String, text: String) = """
+        (()=>{const buttons=Array.from(document.querySelectorAll(${JSONObject.quote("$scope button")}))
+          .filter(element=>element.textContent.trim()===${JSONObject.quote(text)});
+          if(buttons.length!==1)return false;
+          const button=buttons[0],bounds=button.getBoundingClientRect();
+          return bounds.width>0 && bounds.height>0 && bounds.left>=0 && bounds.top>=0 &&
+            bounds.right<=innerWidth && bounds.bottom<=innerHeight &&
+            document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2)?.closest('button')===button;})()
+    """
+
+    private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
+        val menu = "[role=dialog][aria-label='Workspace tools']"
+        if (evaluate(scenario, workspaceElementVisible(menu)) != "true") {
+            awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"))
+            val trigger = onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.mobile-tools"))
+            trigger.perform(webScrollIntoView())
+            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true))
+            trigger.perform(webClick())
+        }
+        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu))
+        val target = onWebView().withElement(findElement(Locator.XPATH,
+            "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))
+        target.perform(webScrollIntoView())
+        awaitDocument(scenario, "visible workspace menu action", workspaceButtonVisible(menu, text))
+        target.perform(webClick())
+    }
+
+    private fun sessionView(scenario: ActivityScenario<MainActivity>, text: String) {
+        val menuVisible = evaluate(scenario, workspaceElementVisible(".mobile-session-views")) == "true"
+        if (menuVisible || evaluate(scenario, workspaceElementVisible(".view-tabs")) != "true") {
+            workspaceMenuAction(scenario, text)
+            return
+        }
+        val target = onWebView().withElement(findElement(Locator.XPATH,
+            "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='$text']]"))
+        target.perform(webScrollIntoView())
+        awaitDocument(scenario, "visible session view", workspaceButtonVisible(".view-tabs", text))
+        target.perform(webClick())
+    }
+
     // Called only from the real, authenticated owned-SSH UI flow below. Native
     // Window reads observe the shipping plugin; no test fixture changes its flag.
     private fun verifyBoardKeepAwake(scenario: ActivityScenario<MainActivity>) {
@@ -1176,9 +1224,7 @@ class NativeWorkspaceTest {
         var primaryFailure: Throwable? = null
         try {
             awaitFlag(false, "connected terminal before opt-in")
-            onWebView().withElement(findElement(Locator.XPATH,
-                "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='Agents']]"))
-                .perform(webScrollIntoView()).perform(webClick())
+            sessionView(scenario, "Agents")
             awaitDocument(scenario, "board keep-awake available and off",
                 "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}")
             assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
@@ -1259,13 +1305,13 @@ class NativeWorkspaceTest {
             typeInto(scenario, selector, value)
             closeSoftKeyboard()
         }
-        click("Sessions")
+        sessionView(scenario, "Sessions")
         awaitDocument(scenario, "owned Herdr available", hasButton("List herdr sessions"))
         click("List herdr sessions")
         awaitDocument(scenario, "owned Herdr listed", hasButton("Attach herdr $name"))
         click("Attach herdr $name")
         awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
-        click("Transcript")
+        sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
         closeSoftKeyboard()
@@ -1358,9 +1404,7 @@ class NativeWorkspaceTest {
         fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
             "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
             .perform(webScrollIntoView()).perform(webClick())
-        fun view(text: String) = onWebView().withElement(findElement(Locator.XPATH,
-            "//nav[contains(@class,'view-tabs')]/button[span[normalize-space(text())='$text']]"))
-            .perform(webScrollIntoView()).perform(webClick())
+        fun view(text: String) = sessionView(scenario, text)
         run {
             view("Attach")
             awaitDocument(scenario, "owned clipboard attachment panel", "Boolean(document.querySelector('.attachment-panel'))")
@@ -1690,7 +1734,15 @@ class NativeWorkspaceTest {
             if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
             verifyBoardKeepAwake(scenario)
             if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Disconnect $name']")).perform(webClick())
+            val disconnect = "button[aria-label='Disconnect $name']"
+            if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
+                val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
+                close.perform(webScrollIntoView())
+                awaitDocument(scenario, "touchable exact session disconnect", workspaceElementVisible(disconnect, true))
+                close.perform(webClick())
+            } else {
+                workspaceMenuAction(scenario, "End $name connection")
+            }
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Delete $name']")).perform(webClick())

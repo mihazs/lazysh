@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -6,7 +7,7 @@ async function openSessions(page: Page) {
     if ((page.viewportSize()?.width ?? 1280) <= 600)
       await page.getByRole('button', {name: 'Open hosts', exact: true}).click();
     await page.getByRole('button', {name: 'Open local terminal', exact: true}).click();
-    await expect(page.getByRole('tab', {name: /Local terminal/})).toHaveCount(index + 1);
+    await expect(page.locator('.session-tabs [role="tab"]')).toHaveCount(index + 1);
   }
   await expect(page.locator('.terminal-canvas:visible .xterm-helper-textarea')).toHaveCount(1);
   const trigger = page.getByRole('button', {name: 'Switch terminal session', exact: true});
@@ -43,7 +44,7 @@ test('list remains default; cards persist across reload and select the exact exi
   const first = await choices.nth(0).boundingBox(), second = await choices.nth(1).boundingBox();
   expect(second!.y).toBeGreaterThanOrEqual(first!.y + first!.height);
   await page.keyboard.press('Escape');
-  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   await page.getByRole('combobox', {name: 'Session switcher layout', exact: true}).selectOption('cards');
   await page.keyboard.press('Escape');
   await page.reload();
@@ -76,7 +77,7 @@ test('invalid persisted layout falls back to list and reset clears the cards cho
   const dialog = await openSessions(page);
   await expect(dialog.locator('.session-switcher')).toHaveAttribute('data-layout', 'list');
   await page.keyboard.press('Escape');
-  await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
   const layout = page.getByRole('combobox', {name: 'Session switcher layout', exact: true});
   await layout.selectOption('cards');
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
@@ -144,7 +145,7 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
         await expect.poll(() => composer.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
         await page.getByRole('button', {name: 'Close composer', exact: true}).scrollIntoViewIfNeeded();
         await expect(page.getByRole('button', {name: 'Close composer', exact: true})).toBeInViewport();
-        await page.getByRole('button', {name: 'Preferences', exact: true}).click();
+        await (await workspaceControl(page,'Preferences')).click();
         await page.getByRole('spinbutton', {name: 'Font size', exact: true}).fill(fontSize === 14 ? '32' : '14');
         await page.keyboard.press('Escape');
         await expectFittedRows();

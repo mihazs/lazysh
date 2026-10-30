@@ -1,3 +1,4 @@
+import {workspaceControl} from './workspaceControl';
 import {installNativeBridge,installSyntheticAudio} from './nativeBridge';
 import {expect,type Page} from '@playwright/test';
 
@@ -45,7 +46,7 @@ export async function dictationFixture(page:Page, parakeet=false){
   await page.goto('/');
   const local=page.getByRole('button',{name:'Open local terminal',exact:true});
   if((page.viewportSize()?.width ?? 1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  await local.click();await page.getByRole('button',{name:'Dictate',exact:true}).click();
+  await local.click();await (await workspaceControl(page,'Dictate')).click();
   await expect(page.getByRole('combobox',{name:/^Model/})).toHaveValue('tiny.bin');
 }
 export async function recordDictation(page:Page){

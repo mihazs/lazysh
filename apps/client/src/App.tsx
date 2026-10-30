@@ -1181,6 +1181,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const active = sessions.find((session) => session.id === activeId);
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
+  const compactTerminal=!!active && !wideSidebar && view==='terminal';
+  const sessionViews=active ? views().filter(({id})=>!active.local || id==='terminal' || id==='voice') : [];
   const sidebarShown=wideSidebar || sidebar;
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
@@ -1606,6 +1608,22 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       .includes(search.toLowerCase()),
   );
 
+  const workspaceRestoreControls = <>
+    <button
+      disabled={restoring || !loaded}
+      onClick={() => {setMobileTools(false);void restoreWorkspace();}}
+    >
+      {restoring ? t("appRestoring") : t("appRestorePreviousWorkspace")}
+    </button>
+    <span>{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</span>
+    <button
+      disabled={restoring}
+      onClick={() => {
+        setPreviousWorkspace([]);
+        persistWorkspace(sessionsRef.current);
+      }}
+    >{t("appDismiss")}</button>
+  </>;
   return (
     <div className="app-shell">
       <aside
@@ -1750,7 +1768,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className="workspace" inert={!wideSidebar && sidebar}>
+      <main className={`workspace${compactTerminal ? " workspace-terminal-focus" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
         {native && <ThemeLinkPanel target={themeLinkTarget} />}
         <header className="workspace-header">
           <button
@@ -1766,7 +1784,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             {active && (
               <>
                 <ChevronRight size={13} />
-                <button className="session-switcher-trigger" aria-label={t("appSwitchTerminalSession")} onClick={() => setSwitcher(true)}>{active.name}</button>
+                <button className="session-switcher-trigger" title={active.name} aria-label={t("appSwitchTerminalSession")} onClick={() => setSwitcher(true)}>{active.name}</button>
               </>
             )}
           </div>
@@ -1835,22 +1853,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <code>bun run dev</code>{" "}{t("appToConnect")}</div>
         )}
         {native && previousWorkspace.length > 0 && (
-          <div className="browser-banner workspace-restore">
-            <button
-              disabled={restoring || !loaded}
-              onClick={() => void restoreWorkspace()}
-            >
-              {restoring ? t("appRestoring") : t("appRestorePreviousWorkspace")}
-            </button>
-            <span>{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</span>
-            <button
-              disabled={restoring}
-              onClick={() => {
-                setPreviousWorkspace([]);
-                persistWorkspace(sessionsRef.current);
-              }}
-            >{t("appDismiss")}</button>
-          </div>
+          <div className="browser-banner workspace-restore">{workspaceRestoreControls}</div>
         )}
         {error && (
           <div className="global-error" role="alert">
@@ -1909,7 +1912,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <>
             <div className="session-toolbar">
               <nav className="view-tabs" aria-label={t("appSessionViews")}>
-                {views().filter(({id})=>!active.local || id==='terminal' || id==='voice').map(({ id, label, Icon }) => (
+                {sessionViews.map(({ id, label, Icon }) => (
                   <button
                     key={id}
                     aria-current={(id==='agents'?agentsVisible:view===id) ? "page" : undefined}
@@ -2171,6 +2174,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {mobileTools && (
         <Dialog title={t("appWorkspaceTools")} close={() => setMobileTools(false)}>
           <div className="form-stack">
+            {active && <>
+              <nav className="mobile-session-views" aria-label={t('appSessionViews')}>
+                {sessionViews.map(({id,label,Icon})=><button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else setView(id);}}><Icon size={16}/><span>{label}</span></button>)}
+              </nav>
+              <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
+              {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+              <button type="button" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
+            </>}
+            {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
+            <button type="button" onClick={()=>{setMobileTools(false);setPreferences(true);}}>{t('appPreferences')}</button>
             <button onClick={()=>{setMobileTools(false);setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
             <button
               disabled={!native}

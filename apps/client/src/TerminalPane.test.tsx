@@ -348,7 +348,38 @@ describe("terminal interactions", () => {
     expect(terminal.paste).not.toHaveBeenCalled();
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
-  it("preserves system touch gestures in screen-reader mode and single-touch xterm scrolling otherwise", () => {
+  it("routes vertical touch through xterm wheel handling even with configurable gestures disabled", () => {
+    savePreferences({...defaults, pinchZoom: false, gestures: {left:'none',right:'none',up:'none',down:'none'}, bodyGestures: {...defaults.bodyGestures,tap:'none',doubleTap:'none',tripleTap:'none',swipeLeft:'none',swipeRight:'none'}});
+    const target = document.createElement('div');
+    Object.assign(terminal, {element: target});
+    const wheels: WheelEvent[] = [];
+    target.addEventListener('wheel', event => wheels.push(event));
+    const view = mount();
+    const canvas = screen.getByLabelText('Terminal for Host');
+    const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {bubbles:true,cancelable:true,touches:[{identifier:1,clientX:x,clientY:y}] as Touch[]}));
+    touch('touchstart',100,100);
+    expect(touch('touchmove',101,70)).toBe(false);
+    touch('touchmove',102,130);
+    expect(wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[30,101,70],[-60,102,130]]);
+    touch('touchend',102,130);
+    touch('touchmove',102,160);
+    expect(wheels).toHaveLength(2);
+    touch('touchstart',100,100); touch('touchmove',180,103);
+    expect(wheels).toHaveLength(2);
+    terminal.hasSelection.mockReturnValue(true);
+    touch('touchstart',100,100); touch('touchmove',100,160);
+    expect(wheels).toHaveLength(2);
+    terminal.hasSelection.mockReturnValue(false);
+    fireEvent.compositionStart(canvas);
+    touch('touchstart',100,100); touch('touchmove',100,160);
+    expect(wheels).toHaveLength(3);
+    fireEvent.compositionEnd(canvas);
+    view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
+    touch('touchstart',100,100); touch('touchmove',100,160);
+    expect(wheels).toHaveLength(3);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it("preserves system touch gestures in screen-reader mode and reserves configured multitouch", () => {
     savePreferences({...defaults, screenReader: true});
     const view = mount();
     let canvas = screen.getByLabelText("Terminal for Host");
