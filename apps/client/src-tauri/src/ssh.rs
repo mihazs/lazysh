@@ -891,17 +891,12 @@ pub async fn adopt_session(
 }
 struct SessionCompletion {
     finished: watch::Sender<bool>,
-    _background: crate::session_background::Reservation,
     armed: bool,
 }
 impl SessionCompletion {
-    fn new(
-        finished: watch::Sender<bool>,
-        background: crate::session_background::Reservation,
-    ) -> Self {
+    fn new(finished: watch::Sender<bool>) -> Self {
         Self {
             finished,
-            _background: background,
             armed: true,
         }
     }
@@ -1910,7 +1905,7 @@ async fn spawn_terminal(
     let retiring = state.retiring.clone();
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
-        let completion = SessionCompletion::new(session.finished.clone(), background);
+        let completion = SessionCompletion::new(session.finished.clone());
         let result:Result<()> = async {
             send_output(&session, &events, &initial).await?;
             let mut pending:Option<(crate::terminal_input::InputSequence,AccessLease)>=None;
@@ -1945,6 +1940,7 @@ async fn spawn_terminal(
         let _ = timeout(Duration::from_secs(2), channel.close()).await;
         retire_session(&sessions, &retiring, &task_id, &session).await;
         completion.finish();
+        drop(background);
         close_output(
             &session.access,
             Some((&session.creation, &session.adopted, &session.renderer_gone)),
@@ -2092,36 +2088,45 @@ where
     let task_id = id.clone();
     let active = session.clone();
     tauri::async_runtime::spawn(async move {
-        let completion = SessionCompletion::new(active.finished.clone(), background);
+        let completion = SessionCompletion::new(active.finished.clone());
         let mut cancelled = active.cancel.subscribe();
-        let delivery: Result<()> = async {
-            loop {
-                if *cancelled.borrow() {
-                    break;
-                }
-                tokio::select! {
-                    _ = cancelled.changed() => break,
-                    item = output_rx.recv() => match item {
-                        Some(bytes) => send_output(&active, &events, &bytes).await?,
-                        None => break,
+        let delivery = async {
+            let result: Result<()> = async {
+                loop {
+                    if *cancelled.borrow() {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = cancelled.changed() => break,
+                        item = output_rx.recv() => match item {
+                            Some(bytes) => send_output(&active, &events, &bytes).await?,
+                            None => break,
+                        }
                     }
                 }
+                Ok(())
             }
-            Ok(())
-        }
-        .await;
-        let _ = active.cancel.send(true);
-        active.output_credits.close();
-        drop(output_rx);
-        let native = worker
-            .await
-            .map_err(|_| {
-                SshError::new(
-                    "terminal_worker",
-                    format!("{name} worker ended unexpectedly"),
-                )
-            })
-            .and_then(|result| result);
+            .await;
+            let _ = active.cancel.send(true);
+            active.output_credits.close();
+            drop(output_rx);
+            result
+        };
+        let native = async move {
+            // The native transport may finish while final output waits for the UI.
+            // Its execution reservation must follow the driver, not renderer retirement.
+            let _background = background;
+            worker
+                .await
+                .map_err(|_| {
+                    SshError::new(
+                        "terminal_worker",
+                        format!("{name} worker ended unexpectedly"),
+                    )
+                })
+                .and_then(|result| result)
+        };
+        let (delivery, native) = tokio::join!(delivery, native);
         retire_session(&sessions, &retiring, &task_id, &active).await;
         completion.finish();
         close_output(
@@ -6914,6 +6919,105 @@ mod tests {
                 access.ready(access.generation().unwrap()).unwrap();
             }
         }
+    }
+    #[tokio::test]
+    async fn naturally_finished_native_worker_releases_background_hold_before_final_output_resumes()
+    {
+        let TerminalFixture {
+            mut state,
+            task,
+            connected: parent_id,
+            directory: _directory,
+            ..
+        } = json_terminal_fixture().await;
+        let (updates, mut background) = mpsc::unbounded_channel();
+        state.background = crate::session_background::Controller::start(move |revision, active| {
+            updates.send((revision, active)).unwrap();
+            async { Ok(()) }
+        });
+        let parent = state.session(&parent_id.session_id).await.unwrap();
+        let access = AccessState::disabled();
+        let (finish, finishing) = tokio::sync::oneshot::channel();
+        let (ended, worker_ended) = tokio::sync::oneshot::channel();
+        let (sent, mut received) = mpsc::unbounded_channel();
+        let events = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(body) = body {
+                sent.send(serde_json::from_str::<serde_json::Value>(&body).unwrap())
+                    .unwrap();
+            }
+            Ok(())
+        });
+        let connected = spawn_native_terminal(
+            &state,
+            access.lease(None).unwrap(),
+            parent.clone(),
+            events,
+            NativeTerminalKind::Fixture,
+            check_size,
+            move |_access, input, _cancel, _initial, output, ready| {
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    ready.send(Ok(())).unwrap();
+                    finishing.await.unwrap();
+                    output.send(b"FINAL_NATIVE_FRAME".to_vec()).await.unwrap();
+                    ended.send(()).unwrap();
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        let native = state.session(&connected.session_id).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(2), background.recv())
+                .await
+                .unwrap(),
+            Some((1, true))
+        );
+        access.background().unwrap();
+        finish.send(()).unwrap();
+        timeout(Duration::from_secs(2), worker_ended)
+            .await
+            .unwrap()
+            .unwrap();
+        let released_while_backgrounded =
+            timeout(Duration::from_millis(500), background.recv()).await;
+        assert!(
+            received.try_recv().is_err(),
+            "Private final output escaped into the background renderer"
+        );
+        assert!(
+            !*native.finished.borrow(),
+            "Renderer retirement must wait for the queued final frame"
+        );
+        access.foreground().unwrap();
+        let mut output = Vec::new();
+        let mut closed = 0;
+        timeout(Duration::from_secs(2), async {
+            while let Some(event) = received.recv().await {
+                if event["type"] == "data" {
+                    output.extend(
+                        event["data"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|byte| byte.as_u64().unwrap() as u8),
+                    );
+                } else if event["type"] == "closed" {
+                    closed += 1;
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(output, b"FINAL_NATIVE_FRAME");
+        assert_eq!(closed, 1);
+        assert!(*native.finished.borrow());
+        finish_session(&parent).await;
+        task.abort();
+        assert!(matches!(released_while_backgrounded, Ok(Some((2, false)))),
+            "Finished native worker retained its background hold until UI foreground: {released_while_backgrounded:?}");
     }
     #[tokio::test]
     async fn cancelled_native_start_reaps_unpublished_worker_and_preserves_parent() {
