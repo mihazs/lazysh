@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add compact AI account quota and credit reports for Android remote hosts and desktop remote/local terminals. Prefer a compatible ai-usagebar installation and use built-in companion collectors when it is absent or unsupported; existing provider sign-ins stay on the session machine. Account usage refreshes while the terminal is visible.
+
 - Update installation and release acceptance notes with the explicit in-app Unix companion path, current Android/Linux installer proof and published-APK qualification limits. Keep documentation links usable in the attached guide and release notes.
 
 - Discover live Codex and other agent panes reported by Herdr independently of companion lifecycle reports. A single running Herdr server is selected automatically; choose a server when several are running. Only that server is refreshed, and its Idle, Working, Needs attention, Done and Unknown statuses remain distinct from companion history. No input, approval or history authority is inferred from discovery.

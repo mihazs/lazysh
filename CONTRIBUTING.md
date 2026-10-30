@@ -94,3 +94,12 @@ The code scan retains the existing vendored/build exclusions and excludes
 The unchanged upstream deep-link `xdg_commands.rs` and `xdg_unregister.rs` tests
 are also explicitly excluded; authored deep-link code and regression tests remain
 in scope. Authored source and tests have no duplication baseline or allowance.
+
+The AI account collectors retain 201 unchanged MIT-licensed upstream files under
+`packages/ai-usagebar-vendor/`, pinned and hashed in `UPSTREAM_FILES.json`.
+Only those exact source/legal paths are excluded from duplication scanning.
+Adapted headless extraction files and all first-party quota collection,
+normalization, process ownership, tests and UI remain scanned without a baseline.
+The unchanged Apache 2.0 license at
+`packages/account-usage/licenses/HERDR-APACHE-2.0.txt` is also a legal-text
+exclusion; the adapted suspended-start process code remains scanned.

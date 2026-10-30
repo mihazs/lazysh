@@ -28,6 +28,8 @@ enum Command {
         #[command(subcommand)]
         command: SettingsCommand,
     },
+    /// Read live account quotas using the built-in collectors or compatible ai-usagebar.
+    AccountUsage,
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
         #[arg(long, value_enum)]
@@ -191,6 +193,16 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             )?)
             .map_err(|_| Error::InvalidEvent)?,
         ),
+        Command::AccountUsage => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(Error::Io)?;
+            Some(
+                serde_json::to_value(runtime.block_on(lazysh_account_usage::read()))
+                    .map_err(|_| Error::InvalidEvent)?,
+            )
+        }
         Command::Devices { command } => {
             if let lazysh_agent::devices::DeviceCommand::Android {
                 id,
@@ -394,6 +406,9 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     Ok(())
 }
 fn main() -> std::process::ExitCode {
+    if let Some(code) = lazysh_account_usage::worker_main() {
+        return code;
+    }
     match execute(Cli::parse()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

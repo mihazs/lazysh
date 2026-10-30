@@ -137,6 +137,7 @@
     "allow-agent-transcript",
     "allow-agent-transcripts",
     "allow-agent-usage",
+    "allow-account-usage",
     "allow-app-icon-status",
     "allow-set-app-icon",
     "allow-apple-status-capability",
