@@ -12,23 +12,12 @@ export async function typeText(browser:NonNullable<NativeGui['browser']>,text:st
   await action.perform();
 }
 
-export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture) {
-  const browser=gui.browser!,owner=await gui.appOwner();
-  gui.stage='owned SSH host editor';
-  const add=await browser.$('button[aria-label="Add host"]');await add.waitForDisplayed({timeout:30_000});await add.click();
-  const editor=await browser.$('[role="dialog"][aria-label="Add a host"]');await editor.waitForDisplayed();
-  await (await editor.$('input[placeholder="Home workstation"]')).setValue('Owned SSH GUI host');
-  await (await editor.$('input[placeholder="workstation.local"]')).setValue('127.0.0.1');
-  await (await editor.$('label.port-field input')).setValue(String(ssh.port));
-  await (await editor.$('input[placeholder="Your SSH username"]')).setValue(ssh.username);
-  await (await (await editor.$('label*=Preferred transport')).$('select')).selectByAttribute('value','ssh');
-  await (await editor.$('button=Save host')).click();await editor.waitForDisplayed({reverse:true});
-  gui.stage='owned SSH manual key';
-  await (await browser.$('button[aria-label="Connect to Owned SSH GUI host"]')).click();
-  const connect=await browser.$('[role="dialog"][aria-label="Connect to Owned SSH GUI host"]');await connect.waitForDisplayed();
-  expect(await (await connect.$('select')).getValue()).toBe('ssh');
+export async function enterOwnedKey(gui:NativeGui,ssh:SshFixture,connect:Terminal,recovery=false) {
+  const browser=gui.browser!;
   await (await connect.$('button=Private key')).click();
-  expect(await (await connect.$('input[type="checkbox"]')).isSelected()).toBe(false);
+  const remember=await connect.$('input[type="checkbox"]');
+  if(recovery)expect(await remember.isExisting()).toBe(false);
+  else expect(await remember.isSelected()).toBe(false);
   const keyInput=await connect.$('textarea');
   expect(await keyInput.getValue()==='').toBe(true);
   // Enter key events keep multiline input on the native keyboard path.
@@ -36,7 +25,25 @@ export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture) {
   catch{throw new Error('Owned SSH private-key input failed');}
   const entered=await keyInput.getValue();
   if(entered!==ssh.privateKey)throw new Error(`Owned SSH private-key input mismatch (${entered===''?'empty':entered.replace(/\s/g,'')===ssh.privateKey.replace(/\s/g,'')?'whitespace':'content'})`);
-  await (await connect.$('button=Connect')).click();
+  await (await connect.$(`button=${recovery?'Reconnect uploads':'Connect'}`)).click();
+}
+
+export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh'='ssh',port=ssh.port) {
+  const browser=gui.browser!,owner=await gui.appOwner();
+  gui.stage='owned SSH host editor';
+  const add=await browser.$('button[aria-label="Add host"]');await add.waitForDisplayed({timeout:30_000});await add.click();
+  const editor=await browser.$('[role="dialog"][aria-label="Add a host"]');await editor.waitForDisplayed();
+  await (await editor.$('input[placeholder="Home workstation"]')).setValue('Owned SSH GUI host');
+  await (await editor.$('input[placeholder="workstation.local"]')).setValue('127.0.0.1');
+  await (await editor.$('label.port-field input')).setValue(String(port));
+  await (await editor.$('input[placeholder="Your SSH username"]')).setValue(ssh.username);
+  await (await (await editor.$('label*=Preferred transport')).$('select')).selectByAttribute('value',transport);
+  await (await editor.$('button=Save host')).click();await editor.waitForDisplayed({reverse:true});
+  gui.stage='owned SSH manual key';
+  await (await browser.$('button[aria-label="Connect to Owned SSH GUI host"]')).click();
+  const connect=await browser.$('[role="dialog"][aria-label="Connect to Owned SSH GUI host"]');await connect.waitForDisplayed();
+  expect(await (await connect.$('select')).getValue()).toBe(transport);
+  await enterOwnedKey(gui,ssh,connect);
   gui.stage='owned SSH explicit fingerprint review';
   const trust=await browser.$('[role="dialog"][aria-label="Verify this host"]');await trust.waitForDisplayed({timeout:20_000});
   expect(await trust.getText()).toContain(ssh.fingerprint);
@@ -52,16 +59,18 @@ export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture) {
     }
     return terminal.isDisplayed();
   },{timeout:20_000,timeoutMsg:'Owned SSH terminal was not displayed'});
-  await browser.waitUntil(async()=>(await terminal.getText()).includes(ssh!.prompt),{timeout:20_000,timeoutMsg:'Owned SSH prompt was not observed'});
+  // Mosh starts the login shell; its caller proves readiness with the fresh challenge.
+  if(transport==='ssh')await browser.waitUntil(async()=>(await terminal.getText()).includes(ssh!.prompt),{timeout:20_000,timeoutMsg:'Owned SSH prompt was not observed'});
   expect(await gui.appOwner()).toEqual(owner);
   expect(ssh.challenge).not.toContain(ssh.expected);
   return {browser,terminal,owner};
 }
 
-export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,afterInstall=false) {
+export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,checkpoint:boolean|'AFTER_CLOSURE'|'AFTER_RECOVERY'=false) {
   const browser=gui.browser!;
-  const expected=ssh.expected+(afterInstall?'_AFTER_INSTALL':'');
-  const challenge=afterInstall?`printf 'SSH_%s_END_AFTER_INSTALL\\n' '${ssh.nonce}'`:ssh.challenge;
+  const suffix=typeof checkpoint==='string'?`_${checkpoint}`:checkpoint?'_AFTER_INSTALL':'';
+  const expected=ssh.expected+suffix;
+  const challenge=suffix?`printf 'SSH_%s_END${suffix}\\n' '${ssh.nonce}'`:ssh.challenge;
   expect(challenge).not.toContain(expected);
   gui.stage='owned SSH typed challenge';
   await terminal.click();await typeText(browser,`${challenge}\n`);

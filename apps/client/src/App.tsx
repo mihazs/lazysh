@@ -375,13 +375,17 @@ function HostEditor({
   hosts,
   save,
   close,
+  focusMultiplexer = false,
 }: {
   initial: Host | null;
   hosts: Host[];
   save: (host: Host) => Promise<void>;
   close: () => void;
+  focusMultiplexer?: boolean;
 }) {
   useUi();
+  const multiplexerControl=useRef<HTMLSelectElement>(null);
+  useEffect(()=>{if(focusMultiplexer)multiplexerControl.current?.focus();},[focusMultiplexer]);
   const invoke = useProtectedInvoke();
   const [editorLease] = useState(captureAccess);
   const [idCopy, setIdCopy] = useState<'copied'|'failed'|null>(null);
@@ -510,7 +514,7 @@ function HostEditor({
             spellCheck={false}
           />
         </label>
-        <label>{t('defaultMuxLabel')}<select value={host.defaultMultiplexer?.kind ?? ''} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:event.target.value ? {kind:event.target.value as 'tmux'|'herdr'|'zellij',name:host.defaultMultiplexer?.name ?? ''} : undefined})}>
+        <label>{t('defaultMuxLabel')}<select ref={multiplexerControl} value={host.defaultMultiplexer?.kind ?? ''} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:event.target.value ? {kind:event.target.value as 'tmux'|'herdr'|'zellij',name:host.defaultMultiplexer?.name ?? ''} : undefined})}>
           <option value="">{t('defaultMuxNone')}</option><option value="tmux">tmux</option><option value="herdr">Herdr</option><option value="zellij">Zellij</option>
         </select></label>
         {host.defaultMultiplexer && <>
@@ -603,7 +607,7 @@ export function ConnectDialog({
   connected: (session: LiveSession) => void;
   close: () => void;
   launch?: DesktopHostLaunch;
-  recovery?: {sessionId:string;restored:()=>void};
+  recovery?: {sessionId:string;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void};
 }) {
   useUi();
   const [lease] = useState(() => launch?.lease ?? captureAccess());
@@ -618,7 +622,8 @@ export function ConnectDialog({
   const [storedCredentials, setStoredCredentials] = useState(
     host.credentialsStored === true,
   );
-  const [useSavedCredentials, setUseSavedCredentials] = useState(false);
+  const [savedCredentialChoice, setUseSavedCredentials] = useState<boolean|null>(null);
+  const useSavedCredentials=savedCredentialChoice ?? savedCredentials;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<UiErrorCause>("");
   const [trust, setTrust] = useState<string | null>(null);
@@ -709,9 +714,12 @@ export function ConnectDialog({
           ? { password }
           : { privateKey, ...(passphrase ? { passphrase } : {}) };
       if(recovery) {
-        const result=await api.restoreFileTransfer(recovery.sessionId,credentials,{useSavedCredentials});
-        if(!result || typeof result!=='object' || result.schemaVersion!==1 || result.status!=='restored' || Object.keys(result).some(key=>!['schemaVersion','status'].includes(key)))throw new LocalUiError('attachmentRestoreInvalid');
-        if(alive.current && lease.current()) {setPassword('');setPrivateKey('');setPassphrase('');recovery.restored();}
+        if(recovery.current && !recovery.current())return;
+        const generation=exportGeneration.current;
+        const restore=recovery.purpose==='hostTools'?api.restoreHostTools:api.restoreFileTransfer;
+        const result=await restore(recovery.sessionId,credentials,{useSavedCredentials});
+        if(!result || typeof result!=='object' || result.schemaVersion!==1 || result.status!=='restored' || Object.keys(result).some(key=>!['schemaVersion','status'].includes(key)))throw new LocalUiError(recovery.purpose==='hostTools'?'hostToolsRestoreInvalid':'attachmentRestoreInvalid');
+        if(alive.current && lease.current() && generation===exportGeneration.current && !document.hidden && (!recovery.current || recovery.current())) {setPassword('');setPrivateKey('');setPassphrase('');recovery.restored();}
         return;
       }
       const pending = await prepareSession(
@@ -802,7 +810,7 @@ export function ConnectDialog({
   }
   return (
     <Dialog
-      title={recovery ? t("attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
+      title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
       {trust ? (
@@ -904,12 +912,12 @@ export function ConnectDialog({
             <button
               type="button"
               aria-pressed={method === "password"}
-              onClick={() => setMethod("password")}
+              onClick={() => {setUseSavedCredentials(false);setMethod("password");}}
             >{t("appPassword")}</button>
             <button
               type="button"
               aria-pressed={method === "key"}
-              onClick={() => setMethod("key")}
+              onClick={() => {setUseSavedCredentials(false);setMethod("key");}}
             >{t("appPrivateKey")}</button>
           </div>
           {(savedCredentials || storedCredentials) && (
@@ -995,7 +1003,7 @@ export function ConnectDialog({
             <label>{t("appPassword")}<input
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {setUseSavedCredentials(false);setPassword(e.target.value);}}
                 autoComplete="off"
                 required
               />
@@ -1051,7 +1059,7 @@ export function ConnectDialog({
           <div className="dialog-actions">
             <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
             <button className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
-              {busy ? t("appConnecting") : t(recovery ? "attachmentRestore" : "appConnect")}
+              {busy ? t("appConnecting") : t(recovery ? recovery.purpose==='hostTools'?"hostToolsRestore":"attachmentRestore" : "appConnect")}
               <ChevronRight size={16} />
             </button>
           </div>
@@ -1091,8 +1099,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function setActiveId(value: string | null) { registry.activeId = value; updateActiveId(value); }
   const [view, setView] = useState<View>("terminal");
   const [editor, setEditor] = useState<Host | "new" | null>(null);
+  const [editorMux,setEditorMux]=useState(false);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
-  const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;restored:()=>void}|null>(null);
+  const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void}|null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
   const [muxLaunch, setMuxLaunch] = useState<DesktopMuxRequest>();
   const [deleting, setDeleting] = useState<Host | null>(null);
@@ -1179,6 +1188,20 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     const data=attachmentTerminalInput(request.path,live.terminal.modes.bracketedPasteMode,live.terminal.options.ignoreBracketedPasteMode);
     if(!request.claim())return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
     return api.write(live.id,data);
+  }
+  function openTerminalAttachments(session: LiveSession) {
+    if(!mounted.current || !lease.current() || currentView.current.activeId!==session.id
+      || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
+      || session.local || !session.connected || session.disposed || closingSessions.current.has(session.id)
+      || !sessionsRef.current.includes(session))return;
+    setView('attachments');setSidebar(false);
+  }
+  function beginHostToolsRecovery(source: LiveSession, restored:()=>void) {
+    const current=()=>mounted.current && lease.current() && !document.hidden
+      && currentView.current.activeId===source.id && !closingSessions.current.has(source.id)
+      && sessionsRef.current.some(session=>session===source && session.connected && !session.disposed);
+    const host=hosts.find(host=>host.id===source.hostId);
+    if(source.mosh && host && current())setFileRecovery({sessionId:source.id,host,purpose:'hostTools',current,restored});
   }
   const active = sessions.find((session) => session.id === activeId);
   const accountUsage=useAccountUsage(active?.connected ? active.id : null);
@@ -1509,6 +1532,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     await api.saveHost(host);
     await loadHosts();
     setEditor(null);
+    setEditorMux(false);
   }
   async function deleteHost() {
     if (!deleting) return;
@@ -1748,7 +1772,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           }}/></Suspense>}
         </div>}
         {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
-          <AgentPanel key={active.id} sessionId={active.id} visible={agentsVisible} onUseReportedHistory={openReportedHistory}/>
+          <AgentPanel key={active.id} sessionId={active.id} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+            if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
+          }:undefined}/>
         </div>}
         <div className="sidebar-bottom">
           <div>
@@ -1951,11 +1977,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal"}
                     reportError={setError}
+                    onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
                 ))}
                 {active.connected && view === "usage" && (
                   <>
-                  <AccountUsageDetails model={accountUsage}/>
+                  <AccountUsageDetails model={accountUsage} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}
@@ -2056,10 +2083,11 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           hosts={hosts}
           initial={editor === "new" ? null : editor}
           save={saveHost}
-          close={() => setEditor(null)}
+          focusMultiplexer={editorMux}
+          close={() => {setEditor(null);setEditorMux(false);}}
         />
       )}
-      {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
+      {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,purpose:fileRecovery.purpose,current:fileRecovery.current,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
       {connectingHost && (
         <ConnectDialog
           key={connectingHost.id}
@@ -2186,6 +2214,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {sessionViews.map(({id,label,Icon})=><button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else setView(id);}}><Icon size={16}/><span>{label}</span></button>)}
               </nav>
               <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
+              {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
               {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
               <button type="button" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
             </>}

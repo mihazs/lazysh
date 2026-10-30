@@ -739,9 +739,10 @@ impl Session {
     fn ssh_handles(&self) -> Vec<Arc<SshHandle>> {
         let mut handles = vec![self.handle.clone()];
         if let Some(control) = &self.file_control {
-            let current = control.for_shutdown();
-            if !Arc::ptr_eq(&current, &self.handle) {
-                handles.push(current);
+            for current in control.for_shutdown() {
+                if !handles.iter().any(|handle| Arc::ptr_eq(&current, handle)) {
+                    handles.push(current);
+                }
             }
         }
         handles
@@ -2579,12 +2580,41 @@ async fn exec_inner(
     limit: usize,
     retained: Option<Arc<dyn Send + Sync>>,
 ) -> Result<String> {
+    let handle = match &session.file_control {
+        Some(control) => control.command_handle()?,
+        None => session.handle.clone(),
+    };
+    let closed = || {
+        SshError::new(
+            "ssh_control_closed",
+            "The host-tools SSH connection is closed. Reconnect host tools to continue.",
+        )
+    };
+    if handle.is_closed() {
+        return Err(closed());
+    }
+    exec_inner_with_handle(&handle, command, lease, duration, limit, retained)
+        .await
+        .map_err(|error| {
+            if error.kind() == "ssh_error" && handle.is_closed() {
+                closed()
+            } else {
+                error
+            }
+        })
+}
+async fn exec_inner_with_handle(
+    handle: &SshHandle,
+    command: String,
+    lease: &AccessLease,
+    duration: Duration,
+    limit: usize,
+    retained: Option<Arc<dyn Send + Sync>>,
+) -> Result<String> {
     let deadline = tokio::time::Instant::now() + duration;
     let mut channel = match retained {
-        Some(retained) => {
-            open_owned_channel_retained(&session.handle, lease, deadline, retained).await?
-        }
-        None => open_owned_channel(&session.handle, lease, deadline).await?,
+        Some(retained) => open_owned_channel_retained(handle, lease, deadline, retained).await?,
+        None => open_owned_channel(handle, lease, deadline).await?,
     };
     let result = timeout(duration, async {
         lease.check()?;
@@ -5393,6 +5423,7 @@ mod tests {
         for command in [
             "install_companion",
             "restore_file_transfer",
+            "restore_host_tools",
             "get_companion_settings",
             "update_companion_settings",
         ] {
@@ -6074,7 +6105,8 @@ mod tests {
                 .unwrap();
             // Immutable identity is checked before any authentication callback.
             state.config().unwrap().hosts[0].fingerprint = Some("SHA256:changed-by-import".into());
-            let mismatch = file_control::restore_with(
+            let mismatch = file_control::restore_for(
+                file_control::Purpose::Files,
                 &state,
                 &mosh_id,
                 &native_session,
@@ -6088,7 +6120,8 @@ mod tests {
             state.config().unwrap().hosts[0] = host.clone();
             // A pin change that bypasses credential_guard during auth cannot commit.
             let rejected = StdMutex::new(None);
-            let late = file_control::restore_with(
+            let late = file_control::restore_for(
+                file_control::Purpose::Files,
                 &state,
                 &mosh_id,
                 &native_session,
@@ -6129,17 +6162,32 @@ mod tests {
                     .unwrap()
             ));
             let sessions_before = state.sessions.lock().await.len();
-            let restored = file_control::restore_with(
+            // Upload-only recovery must not silently grant remote-command authority.
+            assert_eq!(
+                exec_for_access(
+                    &native_session,
+                    "printf command-control".into(),
+                    &access_lease()
+                )
+                .await
+                .unwrap_err()
+                .kind(),
+                "ssh_control_closed"
+            );
+            let authenticate_control =
+                |original: Host, _permit: Arc<tokio::sync::OwnedSemaphorePermit>| {
+                    let state = &state;
+                    let key = &user_key;
+                    async move { manual_control(state, &original, key).await }
+                };
+            let restored = file_control::restore_for(
+                file_control::Purpose::Files,
                 &state,
                 &mosh_id,
                 &native_session,
                 &access_lease(),
                 &operation,
-                |original, _permit| {
-                    let state = &state;
-                    let key = &user_key;
-                    async move { manual_control(state, &original, key).await }
-                },
+                authenticate_control,
             )
             .await
             .unwrap();
@@ -6177,6 +6225,59 @@ mod tests {
             .into_inner()
             .unwrap();
             assert_eq!(fs::read(uploaded.path).unwrap(), payload);
+            assert_eq!(
+                exec_for_access(
+                    &native_session,
+                    "printf command-control".into(),
+                    &access_lease()
+                )
+                .await
+                .unwrap_err()
+                .kind(),
+                "ssh_control_closed"
+            );
+            assert!(native_session.handle.is_closed());
+            assert!(!restored_control.is_closed());
+
+            file_control::restore_for(
+                file_control::Purpose::Commands,
+                &state,
+                &mosh_id,
+                &native_session,
+                &access_lease(),
+                &operation,
+                authenticate_control,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                exec_for_access(
+                    &native_session,
+                    "printf command-control".into(),
+                    &access_lease()
+                )
+                .await
+                .unwrap(),
+                "command-control"
+            );
+            let commands = native_session
+                .file_control
+                .as_ref()
+                .unwrap()
+                .command_handle()
+                .unwrap();
+            assert!(!commands.is_closed());
+            assert!(!Arc::ptr_eq(&commands, &restored_control));
+            assert!(Arc::ptr_eq(
+                &restored_control,
+                &native_session
+                    .file_control
+                    .as_ref()
+                    .unwrap()
+                    .current()
+                    .unwrap()
+            ));
+            assert_eq!(state.sessions.lock().await.len(), sessions_before);
             assert!(upload_file(
                 access_lease(),
                 app.state(),
@@ -6211,7 +6312,7 @@ mod tests {
             );
             disconnect(app.state(), mosh_id.clone()).await.unwrap();
             timeout(Duration::from_secs(2), async {
-                while !restored_control.is_closed() {
+                while !restored_control.is_closed() || !commands.is_closed() {
                     tokio::task::yield_now().await;
                 }
             })

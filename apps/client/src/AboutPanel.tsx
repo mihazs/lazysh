@@ -3,6 +3,9 @@ import {appVersion} from './version';
 import { useProtectedApi } from './access';
 import { useState } from "react";
 import license from "../../../LICENSE?raw";
+import accountCollectorsLicense from "../../../packages/ai-usagebar-vendor/LICENSE?raw";
+import accountAdapterNotice from "../../../packages/account-usage/NOTICE?raw";
+import herdrLicense from "../../../packages/account-usage/licenses/HERDR-APACHE-2.0.txt?raw";
 import ptyLicense from "../../../packages/portable-pty-vendor/LICENSE.md?raw";
 import opensslLicense from "../../../packages/mosh-transport/OPENSSL-LICENSE.txt?raw";
 import protobufLicense from "../../../packages/mosh-transport/vendor-android/protobuf/LICENSE?raw";
@@ -69,6 +72,8 @@ export default function AboutPanel() {
         ["Eternal Terminal adapter", etLicense],
         ["Portable PTY", ptyLicense],
         ["quircs", quircsLicense],
+        ["AI account collectors", accountCollectorsLicense],
+        ["Account usage process adapter", `${accountAdapterNotice}\n${herdrLicense}`],
       ].map(([name, text]) => (
         <details key={name}>
           <summary>{t('aboutLicense', {component: name})}</summary>
