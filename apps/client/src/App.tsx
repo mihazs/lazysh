@@ -373,13 +373,17 @@ function HostEditor({
   hosts,
   save,
   close,
+  focusMultiplexer = false,
 }: {
   initial: Host | null;
   hosts: Host[];
   save: (host: Host) => Promise<void>;
   close: () => void;
+  focusMultiplexer?: boolean;
 }) {
   useUi();
+  const multiplexerControl=useRef<HTMLSelectElement>(null);
+  useEffect(()=>{if(focusMultiplexer)multiplexerControl.current?.focus();},[focusMultiplexer]);
   const invoke = useProtectedInvoke();
   const [editorLease] = useState(captureAccess);
   const [idCopy, setIdCopy] = useState<'copied'|'failed'|null>(null);
@@ -508,7 +512,7 @@ function HostEditor({
             spellCheck={false}
           />
         </label>
-        <label>{t('defaultMuxLabel')}<select value={host.defaultMultiplexer?.kind ?? ''} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:event.target.value ? {kind:event.target.value as 'tmux'|'herdr'|'zellij',name:host.defaultMultiplexer?.name ?? ''} : undefined})}>
+        <label>{t('defaultMuxLabel')}<select ref={multiplexerControl} value={host.defaultMultiplexer?.kind ?? ''} disabled={busy} onChange={event=>setHost({...host,defaultMultiplexer:event.target.value ? {kind:event.target.value as 'tmux'|'herdr'|'zellij',name:host.defaultMultiplexer?.name ?? ''} : undefined})}>
           <option value="">{t('defaultMuxNone')}</option><option value="tmux">tmux</option><option value="herdr">Herdr</option><option value="zellij">Zellij</option>
         </select></label>
         {host.defaultMultiplexer && <>
@@ -1089,6 +1093,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   function setActiveId(value: string | null) { registry.activeId = value; updateActiveId(value); }
   const [view, setView] = useState<View>("terminal");
   const [editor, setEditor] = useState<Host | "new" | null>(null);
+  const [editorMux,setEditorMux]=useState(false);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
   const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;restored:()=>void}|null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
@@ -1506,6 +1511,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     await api.saveHost(host);
     await loadHosts();
     setEditor(null);
+    setEditorMux(false);
   }
   async function deleteHost() {
     if (!deleting) return;
@@ -2049,7 +2055,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           hosts={hosts}
           initial={editor === "new" ? null : editor}
           save={saveHost}
-          close={() => setEditor(null)}
+          focusMultiplexer={editorMux}
+          close={() => {setEditor(null);setEditorMux(false);}}
         />
       )}
       {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
@@ -2179,6 +2186,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {sessionViews.map(({id,label,Icon})=><button type="button" key={id} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{setMobileTools(false);if(id==='agents')showNavigation('agents');else setView(id);}}><Icon size={16}/><span>{label}</span></button>)}
               </nav>
               <button type="button" onClick={()=>{setMobileTools(false);setPalette(true);}}>{t('appNewConnection')}</button>
+              {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){setMobileTools(false);setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
               {active.connected && !active.local && active.attached?.kind==='tmux' && <button type="button" onClick={()=>{setMobileTools(false);showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
               <button type="button" disabled={closingIds.includes(active.id)} onClick={()=>{setMobileTools(false);void closeSession(active);}}>{t('appEndValue1Connection',{value1:active.name})}</button>
             </>}

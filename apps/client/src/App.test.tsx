@@ -1586,6 +1586,32 @@ it('persists and removes the host default without changing the saved transport',
   await waitFor(()=>expect(mocks.api.saveHost).toHaveBeenCalledTimes(2));
   expect(mocks.api.saveHost.mock.calls[1][0]).toMatchObject({transport:'et',defaultMultiplexer:undefined});
 });
+it('opens the active host multiplexer setting directly from workspace tools without changing its running session',async()=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,id:'other-host',name:'Other'},{...host,transport:'mosh'}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'settings-current'});
+  mocks.api.saveHost.mockResolvedValue(undefined);
+  const user=await openConnection();
+  await user.selectOptions(screen.getByLabelText('Transport'),'ssh');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  const terminal=await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(screen.getByRole('button',{name:'Default multiplexer'}));
+  const editor=await screen.findByRole('dialog',{name:'Edit host'});
+  const setting=within(editor).getByLabelText('Default multiplexer');
+  expect(document.activeElement).toBe(setting);
+  expect(within(editor).getByLabelText('Name')).toHaveProperty('value','Home');
+  await user.selectOptions(setting,'herdr');
+  await user.type(within(editor).getByLabelText('Default multiplexer session'),'named-work');
+  await user.click(within(editor).getByRole('button',{name:'Save host'}));
+  await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Edit host'})).toBeNull());
+  expect(mocks.api.saveHost).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({id:host.id,transport:'mosh',defaultMultiplexer:{kind:'herdr',name:'named-work'}}));
+  expect(screen.getByText('Live SSH terminal')).toBe(terminal);
+  expect(mocks.api.connect).toHaveBeenCalledOnce();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'Edit Home'}));
+  expect(document.activeElement).not.toBe(screen.getByLabelText('Default multiplexer'));
+});
 it.each([{kind:'tmux',name:'bad.name'},{kind:'tmux',name:'bad:name'},{kind:'herdr',name:' '},{kind:'herdr',name:'bad name'},{kind:'herdr',name:'..'},{kind:'herdr',name:'a'.repeat(65)},{kind:'zellij',name:'--option'},{kind:'herdr',name:'é'.repeat(101)},{kind:'other',name:'work'}])('rejects invalid saved default %j before native save',target=>{
   expect(validateHost({...host,defaultMultiplexer:target as Host['defaultMultiplexer']})).toBeTruthy();
 });

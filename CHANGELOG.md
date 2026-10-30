@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Open the current saved host’s Default multiplexer setting directly from More, with the selector focused. Save a named Herdr, tmux or Zellij default for future connections without changing the running terminal or its saved transport preference. Connection defaults are unchanged.
+
 - Update installation and release acceptance notes with the explicit in-app Unix companion path, current Android/Linux installer proof and published-APK qualification limits. Keep documentation links usable in the attached guide and release notes.
 
 - Discover live Codex and other agent panes reported by Herdr independently of companion lifecycle reports. A single running Herdr server is selected automatically; choose a server when several are running. Only that server is refreshed, and its Idle, Working, Needs attention, Done and Unknown statuses remain distinct from companion history. No input, approval or history authority is inferred from discovery.
