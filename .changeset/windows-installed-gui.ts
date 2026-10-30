@@ -46,7 +46,7 @@ type GuiDebugTransport=typeof windowsGuiDebugTransports[number];
 export const windowsGuiRootRoles=['BROWSER_CANDIDATE','TYPED_CHILD','AMBIGUOUS','UNVERIFIED'] as const;
 type GuiRootDebug={role:typeof windowsGuiRootRoles[number];transport:GuiDebugTransport};
 export const windowsGuiIntegrityLevels=['LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED'] as const;
-type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];appElevation:'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED';observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>};
 function guiNumericVersion(value:unknown):value is string {
   return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
 }
@@ -55,10 +55,11 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!value||typeof value!=='object')return fail();
   const row=value as Record<string,unknown>;
   if(row.available===false&&typeof row.overflow==='boolean'&&row.signature==='UNVERIFIED'&&Object.keys(row).sort().join(',')==='available,overflow,signature')return {available:false,overflow:row.overflow,signature:'UNVERIFIED'};
-  if(Object.keys(row).sort().join(',')!=='appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
+  if(Object.keys(row).sort().join(',')!=='appElevation,appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
   const {observedProcesses,observedRootGroups}=row;
   if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
   if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
+  if(!['ELEVATED','NOT_ELEVATED','UNVERIFIED'].includes(row.appElevation as string))return fail();
   if(!windowsGuiIntegrityLevels.includes(row.appIntegrity as typeof windowsGuiIntegrityLevels[number]))return fail();
   if(!Array.isArray(row.rootDebugTransports)||row.rootDebugTransports.length!==observedRootGroups||!row.rootDebugTransports.every(value=>value&&typeof value==='object'&&Object.keys(value).sort().join(',')==='role,transport'&&windowsGuiRootRoles.includes(value.role)&&windowsGuiDebugTransports.includes(value.transport)))return fail();
   if(observedProcesses===0 ? observedRootGroups!==0||row.rootImageVersions.length!==0||row.signature!=='NONE_OBSERVED' : observedRootGroups===0||row.rootImageVersions.length===0||row.signature!=='MICROSOFT')return fail();
@@ -66,7 +67,7 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
   const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
   for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
-  return {available:true,overflow:false,appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence};
+  return {available:true,overflow:false,appElevation:row.appElevation as 'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED',appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence};
 }
 export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
   if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
@@ -313,12 +314,7 @@ public static class OwnedGuiArguments {
 `;
 
 // Query only the retained installed application's mandatory token label, never account/group data.
-export const windowsGuiIntegrityScript=String.raw`
-function GuiAppIntegrity($appId, $start) {
-  try {
-    if (!('OwnedGuiIntegrity' -as [type])) {
-      Add-Type -TypeDefinition @'
-using System;
+export const windowsGuiIntegritySource=String.raw`using System;
 using System.Globalization;
 using System.Runtime.InteropServices;
 public static class OwnedGuiIntegrity {
@@ -326,6 +322,7 @@ public static class OwnedGuiIntegrity {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long created,out long exited,out long kernel,out long user);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr buffer,uint length,out uint required);
+  [DllImport("advapi32.dll",EntryPoint="GetTokenInformation",SetLastError=true)] static extern bool GetTokenUInt(IntPtr token,int kind,out uint value,uint length,out uint used);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
   public static string Classify(byte[] sid,int queryError) {
     if(queryError!=0 || sid==null || sid.Length!=12 || sid[0]!=1 || sid[1]!=1) return "UNVERIFIED";
@@ -340,42 +337,57 @@ public static class OwnedGuiIntegrity {
       default:return "UNVERIFIED";
     }
   }
-  public static string Query(int processId,string expectedStart) {
-    IntPtr process=IntPtr.Zero,token=IntPtr.Zero,memory=IntPtr.Zero;
+  public static string[] ReadToken(IntPtr token) {
+    IntPtr memory=IntPtr.Zero;
     try {
-      long expected;
-      if(processId<=0 || !long.TryParse(expectedStart,NumberStyles.None,CultureInfo.InvariantCulture,out expected) || expected<=0) return "UNVERIFIED";
-      process=OpenProcess(0x1000,false,processId); // PROCESS_QUERY_LIMITED_INFORMATION only.
-      if(process==IntPtr.Zero) return Classify(null,Marshal.GetLastWin32Error());
-      long created,exited,kernel,user;
-      if(!GetProcessTimes(process,out created,out exited,out kernel,out user)) return Classify(null,Marshal.GetLastWin32Error());
-      if(DateTime.FromFileTimeUtc(created).Ticks!=expected) return "IDENTITY_UNVERIFIED";
-      if(!OpenProcessToken(process,0x0008,out token)) return Classify(null,Marshal.GetLastWin32Error()); // TOKEN_QUERY only.
+      uint elevated,used;
+      string elevation=GetTokenUInt(token,20,out elevated,4,out used)&&used==4&&elevated<=1?(elevated==0?"NOT_ELEVATED":"ELEVATED"):"UNVERIFIED";
       uint required;
-      if(GetTokenInformation(token,25,IntPtr.Zero,0,out required) || Marshal.GetLastWin32Error()!=122 || required<(uint)(IntPtr.Size+4) || required>4096) return "UNVERIFIED";
+      if(GetTokenInformation(token,25,IntPtr.Zero,0,out required) || Marshal.GetLastWin32Error()!=122 || required<(uint)(IntPtr.Size+4) || required>4096) return new[]{"UNVERIFIED","UNVERIFIED"};
       uint allocated=required;
       memory=Marshal.AllocHGlobal((int)allocated);
-      if(!GetTokenInformation(token,25,memory,allocated,out required)) return Classify(null,Marshal.GetLastWin32Error()); // TokenIntegrityLevel.
-      if(required>allocated || required<(uint)(IntPtr.Size+4)) return "UNVERIFIED";
+      if(!GetTokenInformation(token,25,memory,allocated,out required)) return new[]{"UNVERIFIED","UNVERIFIED"}; // TokenIntegrityLevel.
+      if(required>allocated || required<(uint)(IntPtr.Size+4)) return new[]{"UNVERIFIED","UNVERIFIED"};
       long offset=checked(Marshal.ReadIntPtr(memory).ToInt64()-memory.ToInt64());
-      if(offset<0 || offset>(long)required-12) return "UNVERIFIED";
+      if(offset<0 || offset>(long)required-12) return new[]{"UNVERIFIED","UNVERIFIED"};
       var sid=new byte[12];Marshal.Copy(IntPtr.Add(memory,(int)offset),sid,0,12);
-      return Classify(sid,0);
-    } catch { return "UNVERIFIED"; }
+      return new[]{Classify(sid,0),elevation};
+    } catch {return new[]{"UNVERIFIED","UNVERIFIED"};}
+    finally {if(memory!=IntPtr.Zero)Marshal.FreeHGlobal(memory);}
+  }
+  public static string[] Query(int processId,string expectedStart) {
+    IntPtr process=IntPtr.Zero,token=IntPtr.Zero;
+    try {
+      long expected;
+      if(processId<=0 || !long.TryParse(expectedStart,NumberStyles.None,CultureInfo.InvariantCulture,out expected) || expected<=0) return new[]{"UNVERIFIED","UNVERIFIED"};
+      process=OpenProcess(0x1000,false,processId); // PROCESS_QUERY_LIMITED_INFORMATION only.
+      if(process==IntPtr.Zero) return new[]{"UNVERIFIED","UNVERIFIED"};
+      long created,exited,kernel,user;
+      if(!GetProcessTimes(process,out created,out exited,out kernel,out user)) return new[]{"UNVERIFIED","UNVERIFIED"};
+      if(DateTime.FromFileTimeUtc(created).Ticks!=expected) return new[]{"IDENTITY_UNVERIFIED","UNVERIFIED"};
+      if(!OpenProcessToken(process,0x0008,out token)) return new[]{"UNVERIFIED","UNVERIFIED"}; // TOKEN_QUERY only.
+      return ReadToken(token);
+    } catch { return new[]{"UNVERIFIED","UNVERIFIED"}; }
     finally {
-      if(memory!=IntPtr.Zero) Marshal.FreeHGlobal(memory);
       bool closed=true;
       if(token!=IntPtr.Zero) closed &= CloseHandle(token);
       if(process!=IntPtr.Zero) closed &= CloseHandle(process);
       if(!closed) throw new InvalidOperationException();
     }
   }
-}
+}`;
+export const windowsGuiIntegrityScript=String.raw`
+function GuiAppToken($appId, $start) {
+  try {
+    if (!('OwnedGuiIntegrity' -as [type])) {
+      Add-Type -TypeDefinition @'
+${windowsGuiIntegritySource}
 '@ -ErrorAction Stop
     }
     return [OwnedGuiIntegrity]::Query([int]$appId,[string]$start)
-  } catch { return 'UNVERIFIED' }
+  } catch { return @('UNVERIFIED','UNVERIFIED') }
 }
+function GuiAppIntegrity($appId,$start) { return (GuiAppToken $appId $start)[0] }
 `;
 
 export const windowsGuiStartupScript=String.raw`
@@ -463,12 +475,14 @@ function GuiStartupSnapshot {
     $registered=$env:LAZYSH_GUI_RUNTIME_VERSION
     $edgeVersion=(Get-Item -LiteralPath $env:LAZYSH_GUI_EDGE -ErrorAction Stop).VersionInfo.ProductVersion
     if (!(GuiNumericVersion $registered) -or !(GuiNumericVersion $edgeVersion)) { return $unverified }
-    $integrity=GuiAppIntegrity $script:metadataAppId $script:metadataStart
+    $tokenFact=GuiAppToken $script:metadataAppId $script:metadataStart
+    $integrity=$tokenFact[0];$elevation=$tokenFact[1]
     if ($integrity -ceq 'IDENTITY_UNVERIFIED') { return $unverified }
     if ($integrity -cnotin @('LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED')) { $integrity='UNVERIFIED' }
+    if ($elevation -cnotin @('ELEVATED','NOT_ELEVATED','UNVERIFIED')) { $elevation='UNVERIFIED' }
     foreach ($fence in $fences) { if (!(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified } }
     # Snapshot groups only: no observed owned runtime does not prove it never started or crashed.
-    return @{available=$true;overflow=$false;appIntegrity=$integrity;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
+    return @{available=$true;overflow=$false;appIntegrity=$integrity;appElevation=$elevation;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
   } catch { return $unverified }
 }
 `;
@@ -628,9 +642,23 @@ $ErrorActionPreference='Stop'
 try { GuiHealthOwnership; [Console]::Out.Write('VERIFIED') } catch { exit 1 }
 `;
 
+export const windowsGuiMediumScript=String.raw`
+function NewGuiMediumJob {
+  Require ($guiMediumSource -is [string] -and $guiMediumSource.Length -gt 0 -and $guiMediumSource.Length -le 65536) 'GUI_MEDIUM_UNAVAILABLE'
+  if (!('OwnedMediumGui' -as [type])) { Add-Type -TypeDefinition $guiMediumSource -ErrorAction Stop }
+  return [OwnedMediumGui]::new()
+}
+function GuiMediumStart($job,$info) {
+  $entries=@($info.Environment.Keys | Sort-Object | ForEach-Object { $_+'='+$info.Environment[$_] })
+  $block=[string]::Join([char]0,$entries)+[char]0+[char]0
+  return $job.Start($info.FileName,[string[]]@($info.ArgumentList),$info.WorkingDirectory,$block)
+}
+`;
+
 export const windowsInstalledGuiScript = String.raw`
 ${windowsGuiEndpointsScript}
-function GuiProcess($file, $arguments, $counterfactual = $false) {
+${windowsGuiMediumScript}
+function GuiProcess($file, $arguments, $counterfactual = $false, $medium = $false) {
   Plain $file
   $info = [Diagnostics.ProcessStartInfo]::new($file)
   $info.UseShellExecute = $false
@@ -638,8 +666,13 @@ function GuiProcess($file, $arguments, $counterfactual = $false) {
   $info.WorkingDirectory = $env:LAZYSH_GUI_CLIENT_ROOT
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
-  if ($file -eq $env:LAZYSH_GUI_NODE) { $info.Environment['LAZYSH_GUI_COUNTERFACTUAL'] = $(if ($counterfactual) {'1'} else {'0'}) }
+  if ($file -eq $env:LAZYSH_GUI_NODE) {
+    $info.Environment['LAZYSH_GUI_COUNTERFACTUAL'] = $(if ($counterfactual -and !$medium) {'1'} else {'0'})
+    $info.Environment['LAZYSH_GUI_MEDIUM_ARM'] = $(if ($medium) {'1'} else {'0'})
+    if ($medium) { $info.Environment['LAZYSH_GUI_MEDIUM_ROOTS']=(@($roaming,$local,$directory) | ConvertTo-Json -Compress) }
+  }
   foreach ($argument in $arguments) { $info.ArgumentList.Add($argument) }
+  if ($medium) { return GuiMediumStart $mediumJob $info }
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $info
   Require ($process.Start()) 'GUI_START'
@@ -676,11 +709,22 @@ function GuiCounterfactual($baselineFailure) {
       Plain $tool.Path
       Require ((Get-FileHash -LiteralPath $tool.Path -Algorithm SHA256).Hash -eq $tool.Hash) 'GUI_TOOLS'
     }
-    ExerciseInstalledGui -counterfactual
+    $script:capCleanupVerified=$false
+    try { ExerciseInstalledGui -counterfactual } catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:gui:' + $script:failure) }
+    if ($script:capCleanupVerified) { GuiMediumCounterfactual }
   } catch { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:gui:' + $script:failure) }
   finally { $script:failure=$baselineFailure }
 }
-function ExerciseInstalledGui([switch]$counterfactual) {
+function GuiMediumCounterfactual {
+  if ([Environment]::TickCount64-$guiParentStarted -gt 180000) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM:NOT_RUN_BUDGET');return }
+  $script:mediumAdmitted=$false
+  try { Installed;ExerciseInstalledGui -counterfactual -medium }
+  catch {
+    if (!$script:mediumAdmitted -and $script:failure -eq 'GUI_MEDIUM_UNAVAILABLE') { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM:NOT_AVAILABLE');return }
+    [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM:gui:'+$script:failure)
+  }
+}
+function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
   $script:stage = 'gui'
   Require ([Environment]::UserInteractive -and (Get-Process -Id $PID).SessionId -ne 0) 'GUI_INTERACTIVE'
   foreach ($file in @($env:LAZYSH_GUI_DRIVER, $env:LAZYSH_GUI_EDGE, $env:LAZYSH_GUI_NODE, $env:LAZYSH_GUI_VITEST)) { Plain $file; Require (Test-Path -LiteralPath $file -PathType Leaf) 'GUI_TOOLS' }
@@ -693,8 +737,10 @@ function ExerciseInstalledGui([switch]$counterfactual) {
   $driver = $null
   $client = $null
   $primaryFailure = $null
+  $mediumJob = $null
   $guiCleanupVerified = $false
   try {
+    if ($medium) { $script:failure='GUI_MEDIUM_UNAVAILABLE';$mediumJob=NewGuiMediumJob }
     GuiDirectory $roaming
     GuiDirectory $local
     $ports = @()
@@ -706,13 +752,14 @@ function ExerciseInstalledGui([switch]$counterfactual) {
         $ports += $listener.LocalEndpoint.Port
       }
     } finally { foreach ($listener in $listeners) { $listener.Stop() } }
-    $env:LAZYSH_GUI_RECEIPT = Join-Path $directory $(if ($counterfactual) {'gui-counterfactual-receipt.json'} else {'gui-receipt.json'})
+    $env:LAZYSH_GUI_RECEIPT = Join-Path $directory $(if ($medium) {'gui-medium-receipt.json'} elseif ($counterfactual) {'gui-counterfactual-receipt.json'} else {'gui-receipt.json'})
     Require (!(OptionalItem $env:LAZYSH_GUI_RECEIPT)) 'EXISTING_PATH'
     $env:LAZYSH_GUI_BINARY = $installed
     $env:LAZYSH_GUI_PORT = [string]$ports[0]
     $env:LAZYSH_GUI_NATIVE_PORT = [string]$ports[1]
     $env:LAZYSH_GUI_RUNTIME_VERSION = [string]$runtime
-    $driver = GuiProcess $env:LAZYSH_GUI_DRIVER @('--port', [string]$ports[0], '--native-port', [string]$ports[1], '--native-host', '127.0.0.1', '--native-driver', $env:LAZYSH_GUI_EDGE)
+    if ($medium) { $script:failure='GUI_MEDIUM_UNAVAILABLE' }
+    $driver = GuiProcess $env:LAZYSH_GUI_DRIVER @('--port', [string]$ports[0], '--native-port', [string]$ports[1], '--native-host', '127.0.0.1', '--native-driver', $env:LAZYSH_GUI_EDGE) $false $medium
     $env:LAZYSH_GUI_DRIVER_PID = [string]$driver.Id
     $env:LAZYSH_GUI_DRIVER_START = $driver.StartTime.ToUniversalTime().Ticks.ToString()
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -731,7 +778,9 @@ function ExerciseInstalledGui([switch]$counterfactual) {
     $env:LAZYSH_GUI_EDGE_START = $edgeProcess.StartTime.ToUniversalTime().Ticks.ToString()
     $env:LAZYSH_GUI_EDGE_SHA256 = (Get-FileHash -LiteralPath $env:LAZYSH_GUI_EDGE -Algorithm SHA256).Hash
     $env:LAZYSH_GUI_DRIVER_SHA256 = (Get-FileHash -LiteralPath $env:LAZYSH_GUI_DRIVER -Algorithm SHA256).Hash
-    $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts') $counterfactual
+    if ($medium) { $script:failure='GUI_MEDIUM_UNAVAILABLE' }
+    $client = GuiProcess $env:LAZYSH_GUI_NODE @($env:LAZYSH_GUI_VITEST, 'run', '--config', 'vitest.native-gui.config.ts', 'native-e2e/windows/installed.spec.ts') $counterfactual $medium
+    if ($medium) { $script:mediumAdmitted=$true }
     Require ($client.WaitForExit(120000)) 'GUI_TIMEOUT'
     if ($client.ExitCode -ne 0) {
       Plain $env:LAZYSH_GUI_RECEIPT
@@ -750,25 +799,33 @@ function ExerciseInstalledGui([switch]$counterfactual) {
           }
           Require ($rejected.proxyHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED') -and $rejected.nativeHealth -in @('READY','NOT_READY','NO_RESPONSE','UNVERIFIED')) 'GUI_CLIENT'
           $sessionCode += ':HEALTH_' + $rejected.proxyHealth + '_NATIVE_' + $rejected.nativeHealth
-          if ($null -ne $rejected.metadata) { [Console]::Out.WriteLine($(if ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:'} else {'LAZYSH_WINDOWS_GUI_METADATA:'}) + ($rejected.metadata | ConvertTo-Json -Depth 4 -Compress)) }
-          if ($null -ne $rejected.startup) { [Console]::Out.WriteLine($(if ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:'} else {'LAZYSH_WINDOWS_GUI_STARTUP:'}) + ($rejected.startup | ConvertTo-Json -Depth 4 -Compress)) }
+          if ($null -ne $rejected.metadata) { [Console]::Out.WriteLine($(if ($medium) {'LAZYSH_WINDOWS_GUI_MEDIUM_METADATA:'} elseif ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:'} else {'LAZYSH_WINDOWS_GUI_METADATA:'}) + ($rejected.metadata | ConvertTo-Json -Depth 4 -Compress)) }
+          if ($null -ne $rejected.startup) { [Console]::Out.WriteLine($(if ($medium) {'LAZYSH_WINDOWS_GUI_MEDIUM_STARTUP:'} elseif ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:'} else {'LAZYSH_WINDOWS_GUI_STARTUP:'}) + ($rejected.startup | ConvertTo-Json -Depth 4 -Compress)) }
           Require $false $sessionCode
         }
-        if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER')) { Require $false $rejected.failure }
+        if ($medium -and $null -ne $rejected.startup) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM_STARTUP:' + ($rejected.startup | ConvertTo-Json -Depth 4 -Compress)) }
+        if ($rejected.failure -in @('GUI_FRONTEND', 'GUI_VERSION', 'GUI_OWNER', 'GUI_MEDIUM_UNAVAILABLE')) { Require $false $rejected.failure }
       }
       Require $false 'GUI_CLIENT'
     }
     Plain $env:LAZYSH_GUI_RECEIPT
-    Require ((Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le 1024) 'GUI_CLIENT'
+    Require ((Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le $(if ($medium) {8192} else {1024})) 'GUI_CLIENT'
     $receipt = Get-Content -Raw -LiteralPath $env:LAZYSH_GUI_RECEIPT | ConvertFrom-Json
     Require ($receipt.source -eq $env:GITHUB_SHA -and $receipt.version -eq $env:LAZYSH_VERSION -and $receipt.sha256 -eq $env:LAZYSH_NSIS_BINARY_SHA256 -and $receipt.pid -gt 0 -and $receipt.start -match '^[1-9][0-9]{0,19}$' -and $receipt.window -match '^[1-9][0-9]{0,19}$') 'GUI_CLIENT'
     if (!$counterfactual) { [Console]::Out.WriteLine((@{source=$receipt.source;version=$receipt.version;sha256=$receipt.sha256;pid=$receipt.pid;start=$receipt.start;window=$receipt.window;webview=$runtime;edgeDriver=$edgeVersion} | ConvertTo-Json -Compress)) }
+    if ($medium) {
+      Require ($receipt.startup.available -eq $true -and $receipt.startup.appIntegrity -ceq 'MEDIUM' -and $receipt.startup.appElevation -ceq 'NOT_ELEVATED') 'GUI_MEDIUM_UNAVAILABLE'
+      [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM_STARTUP:' + ($receipt.startup | ConvertTo-Json -Depth 4 -Compress))
+    }
     Installed
   } catch {
+    if ($medium -and $_.Exception.GetBaseException().Message -ceq 'CLEANUP_UNVERIFIED') { $script:failure='GUI_CLEANUP' }
     $primaryFailure = $script:failure
   } finally {
     $script:failure = 'GUI_CLEANUP'
     $cleanupFailed = $false
+    $mediumDeadline=[DateTime]::UtcNow.AddSeconds(10)
+    if ($mediumJob) { try { $mediumJob.Stop($mediumDeadline.Ticks) } catch { $cleanupFailed=$true } }
     try { if ($client) { if (!$client.HasExited) { $client.Kill($true); Require ($client.WaitForExit(10000)) 'GUI_CLEANUP' }; $client.Dispose() } } catch { $cleanupFailed = $true }
     try { if ($driver) {
       # Pinned tauri-driver owns its descendants with its kill-on-close Job Object.
@@ -785,7 +842,7 @@ function ExerciseInstalledGui([switch]$counterfactual) {
         if (!$driver.HasExited) { $driver.Kill(); Require ($driver.WaitForExit(10000)) 'GUI_CLEANUP' }
         $driver.Dispose()
       }
-      $deadline = [DateTime]::UtcNow.AddSeconds(10)
+      $deadline = $(if ($medium) {$mediumDeadline} else {[DateTime]::UtcNow.AddSeconds(10)})
       do {
         $remaining = @(Get-CimInstance Win32_Process -OperationTimeoutSec 5 | Where-Object { $candidate=$_; @($identities | Where-Object { $_.ProcessId -eq $candidate.ProcessId -and $_.CreationDate -eq $candidate.CreationDate }).Count -gt 0 })
         if (!$remaining.Count) { break }; Start-Sleep -Milliseconds 100
@@ -796,10 +853,11 @@ function ExerciseInstalledGui([switch]$counterfactual) {
     if ($env:LAZYSH_GUI_RECEIPT -and (OptionalItem $env:LAZYSH_GUI_RECEIPT)) { try { Plain $env:LAZYSH_GUI_RECEIPT; Remove-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT } catch { $cleanupFailed = $true } }
     if (!$cleanupFailed) { foreach ($path in $script:guiRoots) { try { RemoveGuiDirectory $path } catch { $cleanupFailed = $true } } }
     if ($cleanupFailed) {
-      if ($primaryFailure) { [Console]::Out.WriteLine($(if ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:gui:'} else {'LAZYSH_WINDOWS_INSTALLER:gui:'}) + $primaryFailure) }
+      if ($primaryFailure) { [Console]::Out.WriteLine($(if ($medium) {'LAZYSH_WINDOWS_GUI_MEDIUM:gui:'} elseif ($counterfactual) {'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:gui:'} else {'LAZYSH_WINDOWS_INSTALLER:gui:'}) + $primaryFailure) }
       Require $false 'GUI_CLEANUP'
     }
     $guiCleanupVerified = $true
+    if ($counterfactual -and !$medium) { $script:capCleanupVerified=$true }
   }
   if ($primaryFailure) {
     if (!$counterfactual) {
@@ -810,8 +868,100 @@ function ExerciseInstalledGui([switch]$counterfactual) {
     # The original automatic-launch failure remains primary even if the treatment passes.
     Require $false $primaryFailure
   }
+  if ($medium) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM:PASSED');return }
   if ($counterfactual) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED');return }
   $script:failure = 'UNEXPECTED'
   [Console]::Out.WriteLine('Windows installed GUI bundled version, source, image and owned window passed')
+}
+`;
+
+export const windowsGuiMediumSource=windowsGuiIntegritySource+String.raw`
+public sealed class OwnedMediumGui : System.IDisposable {
+  [StructLayout(LayoutKind.Sequential)] struct SA { public int Length;public IntPtr Descriptor;public bool Inherit; }
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct SI { public int Size;public string Reserved,Desktop,Title;public int X,Y,XSize,YSize,XChars,YChars,Fill,Flags;public short Show,ReservedSize;public IntPtr ReservedData,Input,Output,Error; }
+  [StructLayout(LayoutKind.Sequential)] struct PI { public IntPtr Process,Thread;public int Id,ThreadId; }
+  [StructLayout(LayoutKind.Sequential)] struct BasicLimit { public long ProcessTime,JobTime;public uint Flags;public UIntPtr Min,Max;public uint Active;public UIntPtr Affinity;public uint Priority,Scheduling; }
+  [StructLayout(LayoutKind.Sequential)] struct Limits { public BasicLimit Basic;public ulong ReadOps,WriteOps,OtherOps,ReadBytes,WriteBytes,OtherBytes;public UIntPtr ProcessMemory,JobMemory,PeakProcessMemory,PeakJobMemory; }
+  [StructLayout(LayoutKind.Sequential)] struct Luid { public uint Low;public int High; }
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr data,uint length,out uint needed);
+  [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool LookupPrivilegeValue(string host,string name,out Luid id);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool DuplicateTokenEx(IntPtr source,uint access,IntPtr attributes,int level,int type,out IntPtr token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool CreateRestrictedToken(IntPtr source,uint flags,uint count,IntPtr disabled,uint deletes,IntPtr privileges,uint restricts,IntPtr sids,out IntPtr token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool SetTokenInformation(IntPtr token,int kind,IntPtr data,uint length);
+  [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool CreateProcessWithTokenW(IntPtr token,uint logon,string image,System.Text.StringBuilder command,uint flags,IntPtr environment,string directory,ref SI startup,out PI process);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateJobObject(IntPtr attributes,string name);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int kind,ref Limits limits,uint length);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job,IntPtr process);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateJobObject(IntPtr job,uint code);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int kind,IntPtr data,uint length,out uint returned);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long created,out long exited,out long kernel,out long user);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process,uint flags,System.Text.StringBuilder image,ref uint length);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateProcess(IntPtr process,uint code);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint milliseconds);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string file,uint access,uint share,ref SA attributes,uint disposition,uint flags,IntPtr template);
+  [DllImport("user32.dll",SetLastError=true)] static extern IntPtr GetProcessWindowStation();
+  [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformation(IntPtr handle,int index,System.Text.StringBuilder name,uint length,out uint needed);
+  sealed class Data : System.IDisposable { public IntPtr Pointer;public uint Length;public Data(IntPtr token,int kind) { uint length;bool queried=GetTokenInformation(token,kind,IntPtr.Zero,0,out length);if(queried||Marshal.GetLastWin32Error()!=122||length==0||length>65536)throw new System.InvalidOperationException("TOKEN_UNAVAILABLE");Pointer=Marshal.AllocHGlobal((int)length);Length=length;try {uint used;if(!GetTokenInformation(token,kind,Pointer,length,out used)||used>length)throw new System.InvalidOperationException("TOKEN_UNAVAILABLE");Length=used;}catch {Dispose();throw;} } public void Dispose(){if(Pointer!=IntPtr.Zero){Marshal.FreeHGlobal(Pointer);Pointer=IntPtr.Zero;}} }
+  sealed class Group { public byte[] Sid;public uint Attributes; }
+  IntPtr job,token;
+  readonly System.Collections.Generic.List<IntPtr> processes=new System.Collections.Generic.List<IntPtr>();
+  public string Kind {get;private set;}
+  static void Need(bool condition,string code){if(!condition)throw new System.InvalidOperationException(code);}
+  static byte[] SidAt(Data data,int pointerOffset) {
+    Need(pointerOffset>=0&&pointerOffset+IntPtr.Size<=data.Length,"TOKEN_UNAVAILABLE");long offset=checked(Marshal.ReadIntPtr(data.Pointer,pointerOffset).ToInt64()-data.Pointer.ToInt64());
+    Need(offset>=0&&offset+8<=data.Length,"TOKEN_UNAVAILABLE");int count=Marshal.ReadByte(data.Pointer,(int)offset+1);int length=8+count*4;
+    Need(count<=15&&offset+length<=data.Length,"TOKEN_UNAVAILABLE");var sid=new byte[length];Marshal.Copy(IntPtr.Add(data.Pointer,(int)offset),sid,0,length);Need(sid[0]==1,"TOKEN_UNAVAILABLE");return sid;
+  }
+  static bool Equal(byte[] a,byte[] b){if(a.Length!=b.Length)return false;for(int i=0;i<a.Length;i++)if(a[i]!=b[i])return false;return true;}
+  static uint Word(IntPtr token,int kind){using(var data=new Data(token,kind)){Need(data.Length==4,"TOKEN_UNAVAILABLE");return unchecked((uint)Marshal.ReadInt32(data.Pointer));}}
+  static byte[] User(IntPtr token){using(var data=new Data(token,1))return SidAt(data,0);}
+  static Group[] Groups(IntPtr token){using(var data=new Data(token,2)){Need(data.Length>=4,"TOKEN_UNAVAILABLE");int count=Marshal.ReadInt32(data.Pointer);int offset=IntPtr.Size,entry=IntPtr.Size*2;Need(count>=0&&count<=256&&offset+(long)count*entry<=data.Length,"TOKEN_UNAVAILABLE");var result=new Group[count];for(int i=0;i<count;i++)result[i]=new Group{Sid=SidAt(data,offset+i*entry),Attributes=unchecked((uint)Marshal.ReadInt32(data.Pointer,offset+i*entry+IntPtr.Size))};return result;}}
+  static bool Admin(Group group){var s=group.Sid;if((group.Attributes&8)!=0)return true;if(s.Length<16||s[7]!=5)return false;for(int i=2;i<7;i++)if(s[i]!=0)return false;uint first=BitConverter.ToUInt32(s,8),last=BitConverter.ToUInt32(s,s.Length-4);return first==32&&(last==544||(last>=547&&last<=552))||first==21&&(last==512||last==518||last==519||last==520);}
+  static bool Candidate(IntPtr candidate,IntPtr caller,Group[] denied){
+    if(Word(candidate,8)!=1||Word(candidate,20)!=0||Word(candidate,26)!=0||Word(candidate,12)!=Word(caller,12)||!Equal(User(candidate),User(caller)))return false;
+    var fact=OwnedGuiIntegrity.ReadToken(candidate);if(fact[0]!="MEDIUM"||fact[1]!="NOT_ELEVATED")return false;
+    var groups=Groups(candidate);foreach(var group in groups)if(Admin(group)&&((group.Attributes&0x10)==0||(group.Attributes&4)!=0))return false;
+    foreach(var expected in denied){bool found=false;foreach(var actual in groups)if(Equal(expected.Sid,actual.Sid)){found=(actual.Attributes&0x10)!=0&&(actual.Attributes&4)==0;break;}if(!found)return false;}return true;
+  }
+  static bool CanImpersonate(IntPtr caller){Luid wanted;if(!LookupPrivilegeValue(null,"SeImpersonatePrivilege",out wanted))return false;using(var data=new Data(caller,3)){Need(data.Length>=4,"TOKEN_UNAVAILABLE");int count=Marshal.ReadInt32(data.Pointer);Need(count>=0&&count<=256&&4L+12L*count<=data.Length,"TOKEN_UNAVAILABLE");for(int i=0;i<count;i++){int at=4+i*12;if(unchecked((uint)Marshal.ReadInt32(data.Pointer,at))==wanted.Low&&Marshal.ReadInt32(data.Pointer,at+4)==wanted.High)return (Marshal.ReadInt32(data.Pointer,at+8)&6)==2;}return false;}}
+  static IntPtr Copy(IntPtr source){IntPtr result;Need(DuplicateTokenEx(source,0x8b,IntPtr.Zero,2,1,out result),"TOKEN_UNAVAILABLE");return result;}
+  static IntPtr Restricted(IntPtr caller,Group[] denied){
+    IntPtr copy=IntPtr.Zero,result=IntPtr.Zero,array=IntPtr.Zero;var allocated=new System.Collections.Generic.List<IntPtr>();
+    try {copy=Copy(caller);int entry=IntPtr.Size*2;array=Marshal.AllocHGlobal(entry*denied.Length);for(int i=0;i<denied.Length;i++){IntPtr sid=Marshal.AllocHGlobal(denied[i].Sid.Length);allocated.Add(sid);Marshal.Copy(denied[i].Sid,0,sid,denied[i].Sid.Length);Marshal.WriteIntPtr(array,i*entry,sid);Marshal.WriteInt32(array,i*entry+IntPtr.Size,0);}
+      Need(CreateRestrictedToken(copy,5,(uint)denied.Length,array,0,IntPtr.Zero,0,IntPtr.Zero,out result),"TOKEN_UNAVAILABLE");
+      byte[] medium={1,1,0,0,0,0,0,16,0,32,0,0};int header=IntPtr.Size*2;IntPtr label=Marshal.AllocHGlobal(header+12);
+      try {Marshal.Copy(new byte[header+12],0,label,header+12);Marshal.Copy(medium,0,IntPtr.Add(label,header),12);Marshal.WriteIntPtr(label,IntPtr.Add(label,header));Marshal.WriteInt32(label,IntPtr.Size,32);Need(SetTokenInformation(result,25,label,(uint)(header+12)),"TOKEN_UNAVAILABLE");}finally{Marshal.FreeHGlobal(label);}
+      IntPtr owned=result;result=IntPtr.Zero;return owned;
+    }finally{if(result!=IntPtr.Zero)CloseHandle(result);if(copy!=IntPtr.Zero)CloseHandle(copy);if(array!=IntPtr.Zero)Marshal.FreeHGlobal(array);foreach(var sid in allocated)Marshal.FreeHGlobal(sid);}
+  }
+  static string ObjectName(IntPtr handle){var text=new System.Text.StringBuilder(128);uint needed;Need(handle!=IntPtr.Zero&&GetUserObjectInformation(handle,2,text,256,out needed)&&needed<=256,"DESKTOP_UNAVAILABLE");return text.ToString();}
+  public OwnedMediumGui(){IntPtr caller=IntPtr.Zero,linked=IntPtr.Zero;try{
+    Need(Environment.Is64BitProcess,"TOKEN_UNAVAILABLE");Need(OpenProcessToken(GetCurrentProcess(),0xa,out caller)&&CanImpersonate(caller),"TOKEN_UNAVAILABLE");
+    Need(ObjectName(GetProcessWindowStation())=="WinSta0"&&ObjectName(GetThreadDesktop(GetCurrentThreadId()))=="Default","DESKTOP_UNAVAILABLE");
+    var disabled=new System.Collections.Generic.List<Group>();foreach(var group in Groups(caller))if(Admin(group)&&(group.Attributes&4)!=0)disabled.Add(group);Need(disabled.Count>0,"TOKEN_UNAVAILABLE");
+    if(Word(caller,18)==2){try{using(var data=new Data(caller,19)){Need(data.Length==IntPtr.Size,"TOKEN_UNAVAILABLE");linked=Marshal.ReadIntPtr(data.Pointer);}IntPtr copy=Copy(linked);try{if(Candidate(copy,caller,disabled.ToArray())){token=copy;copy=IntPtr.Zero;Kind="LINKED";}}finally{if(copy!=IntPtr.Zero)CloseHandle(copy);}}catch{}finally{if(linked!=IntPtr.Zero){CloseHandle(linked);linked=IntPtr.Zero;}}}
+    if(token==IntPtr.Zero){token=Restricted(caller,disabled.ToArray());Need(Candidate(token,caller,disabled.ToArray()),"TOKEN_UNAVAILABLE");Kind="RESTRICTED";}
+    job=CreateJobObject(IntPtr.Zero,null);Need(job!=IntPtr.Zero,"JOB_UNAVAILABLE");var limits=new Limits();limits.Basic.Flags=0x2000;Need(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits))),"JOB_UNAVAILABLE");
+  }catch{Dispose();throw;}finally{if(caller!=IntPtr.Zero)CloseHandle(caller);}}
+  public static string Command(string image,string[] arguments){var output=new System.Text.StringBuilder();foreach(string value in new[]{image})output.Append(Quote(value));foreach(string value in arguments)output.Append(' ').Append(Quote(value));Need(output.Length+1<=1024,"ARGV_BOUND");return output.ToString();}
+  static string Quote(string value){Need(value!=null&&value.IndexOf('\0')<0,"ARGV_BOUND");var output=new System.Text.StringBuilder("\"");int slashes=0;foreach(char c in value){if(c=='\\'){slashes++;continue;}if(c=='\"'){output.Append('\\',slashes*2+1).Append(c);slashes=0;continue;}output.Append('\\',slashes).Append(c);slashes=0;}output.Append('\\',slashes*2).Append('"');return output.ToString();}
+  public System.Diagnostics.Process Start(string image,string[] arguments,string directory,string environment){
+    Need(job!=IntPtr.Zero&&token!=IntPtr.Zero,"TOKEN_UNAVAILABLE");string command=Command(image,arguments);Need(environment!=null&&environment.Length<=65536&&environment.EndsWith("\0\0",StringComparison.Ordinal),"ENVIRONMENT_BOUND");
+    IntPtr block=IntPtr.Zero,nul=IntPtr.Zero;PI child=new PI();bool admitted=false;System.Diagnostics.Process managed=null;
+    try {block=Marshal.StringToHGlobalUni(environment);var attributes=new SA{Length=Marshal.SizeOf(typeof(SA)),Inherit=true};nul=CreateFile("NUL",0xc0000000,3,ref attributes,3,0,IntPtr.Zero);Need(nul!=IntPtr.Zero&&nul!=new IntPtr(-1),"STDIO_UNAVAILABLE");var startup=new SI{Size=Marshal.SizeOf(typeof(SI)),Desktop="winsta0\\default",Flags=0x100,Input=nul,Output=nul,Error=nul};
+      Need(CreateProcessWithTokenW(token,0,image,new System.Text.StringBuilder(command),0x08000404,block,directory,ref startup,out child),"LAUNCH_UNAVAILABLE");
+      Need(AssignProcessToJobObject(job,child.Process),"JOB_UNAVAILABLE");long created,exited,kernel,user;Need(GetProcessTimes(child.Process,out created,out exited,out kernel,out user),"IDENTITY_UNVERIFIED");long start=DateTime.FromFileTimeUtc(created).Ticks;var path=new System.Text.StringBuilder(32768);uint length=32768;Need(QueryFullProcessImageName(child.Process,0,path,ref length)&&String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(path.ToString()),StringComparison.OrdinalIgnoreCase),"IDENTITY_UNVERIFIED");
+      var fact=OwnedGuiIntegrity.Query(child.Id,start.ToString(CultureInfo.InvariantCulture));Need(fact[0]=="MEDIUM"&&fact[1]=="NOT_ELEVATED","TOKEN_UNAVAILABLE");
+      managed=System.Diagnostics.Process.GetProcessById(child.Id);IntPtr retained=managed.SafeHandle.DangerousGetHandle();Need(managed.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");Need(ResumeThread(child.Thread)==1,"LAUNCH_UNAVAILABLE");processes.Add(child.Process);child.Process=IntPtr.Zero;admitted=true;return managed;
+    }finally{bool closed=true;if(!admitted&&child.Process!=IntPtr.Zero){closed &= TerminateProcess(child.Process,1);closed &= WaitForSingleObject(child.Process,10000)==0;closed &= CloseHandle(child.Process);if(managed!=null)managed.Dispose();}if(child.Thread!=IntPtr.Zero)closed &= CloseHandle(child.Thread);if(nul!=IntPtr.Zero&&nul!=new IntPtr(-1))closed &= CloseHandle(nul);if(block!=IntPtr.Zero)Marshal.FreeHGlobal(block);Need(closed,"CLEANUP_UNVERIFIED");}
+  }
+  public void Stop(long deadline){if(job==IntPtr.Zero)return;try{Need(TerminateJobObject(job,1),"CLEANUP_UNVERIFIED");IntPtr data=Marshal.AllocHGlobal(48);try{uint length;while(true){Need(QueryInformationJobObject(job,1,data,48,out length)&&length>=44,"CLEANUP_UNVERIFIED");if(Marshal.ReadInt32(data,40)==0)break;Need(DateTime.UtcNow.Ticks<deadline,"CLEANUP_UNVERIFIED");System.Threading.Thread.Sleep(10);}}finally{Marshal.FreeHGlobal(data);}}finally{Dispose();}}
+  public void Dispose(){bool closed=true;if(job!=IntPtr.Zero){closed &= CloseHandle(job);job=IntPtr.Zero;}foreach(var process in processes)closed &= CloseHandle(process);processes.Clear();if(token!=IntPtr.Zero){closed &= CloseHandle(token);token=IntPtr.Zero;}Need(closed,"CLEANUP_UNVERIFIED");}
 }
 `;

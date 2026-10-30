@@ -369,22 +369,6 @@ jobs:
         env:
           LAZYSH_TEST_WINDOWS_HASH: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
-      - run: bun run build:native
-      - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
-      - name: Package and validate native macOS permission localizations
-        if: runner.os == 'macOS'
-        run: |
-          bun run --cwd apps/client tauri build --bundles app
-          plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
-      - name: Package the actual Windows NSIS installer
-        if: runner.os == 'Windows'
-        run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
-      - name: Exercise actual Windows install, same-version repair and uninstall
-        if: runner.os == 'Windows'
-        timeout-minutes: 10
-        env:
-          LAZYSH_TEST_WINDOWS_INSTALLER: '1'
-        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows NSIS'
       - uses: actions/setup-node@v4
         if: runner.os == 'Windows'
         with:
@@ -408,6 +392,30 @@ jobs:
           Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$runtime/edgedriver_win64.zip" -OutFile $archive -TimeoutSec 60
           if ((Get-Item -LiteralPath $archive).Length -gt 52428800) { throw 'EdgeDriver archive exceeds its bound' }
           Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $tools 'edge')
+      - name: Admit the owned restricted Windows launch before app compilation
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        env:
+          LAZYSH_TEST_WINDOWS_GUI: '1'
+          LAZYSH_GUI_DRIVER: ${{ runner.temp }}/lazysh-installed-gui-tools/bin/tauri-driver.exe
+          LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows restricted launcher contracts'
+      - run: bun run build:native
+      - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+      - name: Package and validate native macOS permission localizations
+        if: runner.os == 'macOS'
+        run: |
+          bun run --cwd apps/client tauri build --bundles app
+          plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
+      - name: Package the actual Windows NSIS installer
+        if: runner.os == 'Windows'
+        run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
+      - name: Exercise actual Windows install, same-version repair and uninstall
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        env:
+          LAZYSH_TEST_WINDOWS_INSTALLER: '1'
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows NSIS'
       - name: Exercise the actual installed Windows GUI and owned uninstall
         if: runner.os == 'Windows'
         timeout-minutes: 12

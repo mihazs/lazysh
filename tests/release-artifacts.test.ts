@@ -7,11 +7,11 @@ import { aggregatePackages, artifactName, artifactTargets, releaseTargets, diges
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
-import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsGuiMediumOutcome, windowsNsisBinaryDigest } from '../.changeset/release-platform';
+import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiMediumSource, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
-const startupFixture=()=>({available:true,overflow:false,appIntegrity:'UNVERIFIED',signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport:'EPHEMERAL_PORT'}],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
+const startupFixture=()=>({available:true,overflow:false,appElevation:'UNVERIFIED',appIntegrity:'UNVERIFIED',signature:'MICROSOFT',observedProcesses:3,observedRootGroups:1,registeredRuntimeVersion:'154.0.1000.1',edgeDriverVersion:'154.0.1000.1',rootImageVersions:['155.0.1001.2'],rootDebugTransports:[{role:'BROWSER_CANDIDATE',transport:'EPHEMERAL_PORT'}],observerEnvPresence:Object.fromEntries(Object.keys(windowsGuiOverrideNames).map(key=>[key,false]))});
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
 async function fixture(run: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'lazysh-release-artifacts-'));
@@ -550,6 +550,17 @@ test('Windows counterfactual changes only the documented browser argument and pr
     expect(windowsGuiCounterfactual(primary+'\n'+prefix+invalid)).toEqual({outcome:'UNVERIFIED'});
   }
 });
+test('Windows restricted-context projection requires exact observed medium non-elevated application evidence',()=>{
+  const prefix='LAZYSH_WINDOWS_GUI_MEDIUM:',startupPrefix='LAZYSH_WINDOWS_GUI_MEDIUM_STARTUP:';
+  const startup={...startupFixture(),appIntegrity:'MEDIUM',appElevation:'NOT_ELEVATED'};
+  const passed=prefix+'PASSED\n'+startupPrefix+JSON.stringify(startup);
+  expect(windowsGuiMediumOutcome(passed)).toEqual({outcome:'PASSED',startup});
+  for(const value of [prefix+'PASSED',passed+'\n'+prefix+'PASSED',passed+'\nLAZYSH_WINDOWS_GUI_MEDIUM_METADATA:{}',passed.replace('NOT_ELEVATED','ELEVATED'),passed.replace('MEDIUM"','HIGH"'),passed.replace('NOT_ELEVATED','private')])expect(windowsGuiMediumOutcome(value)).toEqual({outcome:'UNVERIFIED'});
+  expect(windowsGuiMediumOutcome(prefix+'NOT_AVAILABLE')).toEqual({outcome:'NOT_AVAILABLE'});
+  expect(windowsGuiMediumOutcome(prefix+'NOT_AVAILABLE\n'+startupPrefix+JSON.stringify(startup))).toEqual({outcome:'UNVERIFIED'});
+  expect(windowsGuiMediumOutcome(prefix+'gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY\n'+startupPrefix+JSON.stringify(startup))).toEqual({outcome:'REJECTED',rejection:'gui:GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY',startup});
+  expect(windowsGuiMediumOutcome(prefix+'gui:GUI_MEDIUM_UNAVAILABLE\n'+prefix+'gui:GUI_CLEANUP')).toEqual({outcome:'REJECTED',rejection:'gui:GUI_MEDIUM_UNAVAILABLE; gui:GUI_CLEANUP'});
+});
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows GUI endpoint counterfactual gates cleanup, identity and budget while retaining primary failure',()=>fixture(async root=>{
   const image=join(root,'owned-image');await Bun.write(image,'fixed owned candidate');
   const expected=await digestFile(image),baseline='GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY';
@@ -563,9 +574,17 @@ function Installed {
   Plain $env:LAZYSH_GUI_BINARY
   Require ((Get-FileHash -LiteralPath $env:LAZYSH_GUI_BINARY).Hash -eq $env:LAZYSH_NSIS_BINARY_SHA256) 'BINARY_MISMATCH'
 }
-function ExerciseInstalledGui([switch]$counterfactual) {
+function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
   if (!$counterfactual) { throw 'treatment not explicitly selected' }
   $script:called++
+  if ($medium) {
+    $script:failure='GUI_MEDIUM_UNAVAILABLE'
+    if ($env:LAZYSH_COUNTER_CASE -eq 'medium-unavailable') { Require $false 'GUI_MEDIUM_UNAVAILABLE' }
+    $script:mediumAdmitted=$true
+    if ($env:LAZYSH_COUNTER_CASE -eq 'medium-cleanup') { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM:gui:GUI_CLIENT');Require $false 'GUI_CLEANUP' }
+    Require $false 'GUI_CLIENT'
+  }
+  if ($env:LAZYSH_COUNTER_CASE.StartsWith('medium-')) { $script:capCleanupVerified=$true }
   if ($env:LAZYSH_COUNTER_CASE -eq 'rejected') { Require $false 'GUI_SESSION_CLIENT_TIMEOUT_WINDOW_VERIFIED:HEALTH_READY_NATIVE_READY' }
   if ($env:LAZYSH_COUNTER_CASE -eq 'treatment-cleanup') { Require $false 'GUI_CLEANUP' }
   [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED')
@@ -574,18 +593,98 @@ if ($env:LAZYSH_COUNTER_CASE -eq 'image') { $env:LAZYSH_NSIS_BINARY_SHA256='0'*6
 if ($env:LAZYSH_COUNTER_CASE -eq 'tool') { $env:LAZYSH_GUI_EDGE_SHA256='0'*64 }
 [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:gui:'+$baseline)
 GuiCounterfactual $baseline
-if ($script:failure -cne $baseline -or $script:called -ne $(if ($env:LAZYSH_COUNTER_CASE -in @('passed','rejected','treatment-cleanup')) {1} else {0})) { throw 'baseline or admission changed' }
+if ($script:failure -cne $baseline -or $script:called -ne $(if ($env:LAZYSH_COUNTER_CASE -like 'medium-*') {2} elseif ($env:LAZYSH_COUNTER_CASE -in @('passed','rejected','treatment-cleanup')) {1} else {0})) { throw 'baseline or admission changed' }
 exit 1
 `;
-  for(const [name,outcome] of [['passed','PASSED'],['cleanup','NOT_RUN_CLEANUP'],['budget','NOT_RUN_BUDGET'],['image','REJECTED'],['tool','REJECTED'],['rejected','REJECTED'],['treatment-cleanup','REJECTED']]){
+  for(const [name,outcome] of [['passed','PASSED'],['cleanup','NOT_RUN_CLEANUP'],['budget','NOT_RUN_BUDGET'],['image','REJECTED'],['tool','REJECTED'],['rejected','REJECTED'],['treatment-cleanup','REJECTED'],['medium-unavailable','PASSED'],['medium-admitted','PASSED'],['medium-cleanup','PASSED']]){
     const env={...process.env,LAZYSH_COUNTER_CASE:name,LAZYSH_GUI_BINARY:image,LAZYSH_NSIS_BINARY_SHA256:expected.sha256,LAZYSH_GUI_DRIVER:image,LAZYSH_GUI_EDGE:image,LAZYSH_GUI_DRIVER_SHA256:expected.sha256,LAZYSH_GUI_EDGE_SHA256:expected.sha256};
-    await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],env,30000)).rejects.toThrow(`Release validation failed: pwsh.exe (gui:${baseline})\nOwned Windows GUI counterfactual: {"outcome":"${outcome}"`);
+    const pending=native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],env,30000);
+    await expect(pending).rejects.toThrow(`Release validation failed: pwsh.exe (gui:${baseline})\nOwned Windows GUI counterfactual: {"outcome":"${outcome}"`);
+    if(name.startsWith('medium-'))await expect(pending).rejects.toThrow('Owned Windows GUI medium context: '+JSON.stringify(name==='medium-unavailable'?{outcome:'NOT_AVAILABLE'}:{outcome:'REJECTED',rejection:name==='medium-cleanup'?'gui:GUI_CLIENT; gui:GUI_CLEANUP':'gui:GUI_CLIENT'}));
   }
   for(const label of ['gui:GUI_CLIENT','gui:'+baseline+'\nLAZYSH_WINDOWS_INSTALLER:cleanup:LOCAL_DATA']){
     const rejected=`[Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:${label}');[Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:PASSED');exit 1`;
     await expect(native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',rejected],process.env,30000)).rejects.toMatchObject({message:'Release validation failed: pwsh.exe ('+label.replace('\nLAZYSH_WINDOWS_INSTALLER:','; ')+')'});
   }
 }));
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restricted launcher contracts and native admission',async()=>{
+  const root=await mkdtemp(join(process.env.RUNNER_TEMP??tmpdir(),'lazysh-medium-admission-'));
+  try{
+    const tools=process.platform==='win32'?windowsGuiToolEnvironment(process.env.LAZYSH_GUI_DRIVER??'',process.env.LAZYSH_GUI_EDGE??''):{};
+    if(process.platform==='win32'){
+      if(process.env.GITHUB_ACTIONS!=='true'||process.env.RUNNER_ENVIRONMENT!=='github-hosted')throw new Error('Restricted context requires owned Windows CI');
+      const receipt=Bun.file(join(tools.LAZYSH_GUI_DRIVER!,'../../.crates2.json'));
+      if(receipt.size>65536||!isWindowsGuiDriverReceipt(await receipt.json()))throw new Error('Unverified native driver receipt');
+    }
+    const probe=String.raw`$ErrorActionPreference='Stop';Add-Type 'using System;using System.Runtime.InteropServices;public class Q{[DllImport("kernel32")]public static extern IntPtr GetStdHandle(int n);[DllImport("kernel32")]public static extern uint GetFileType(IntPtr h);}';foreach($n in -10,-11,-12){if([Q]::GetFileType([Q]::GetStdHandle($n))-ne2){exit 4}};[Console]::OpenStandardOutput().WriteByte(88);[Console]::OpenStandardError().WriteByte(88);if([Console]::OpenStandardInput().ReadByte()-ne -1){exit 5};$w=[IO.File]::Open($env:LAZYSH_MEDIUM_PROOF,[IO.FileMode]::CreateNew);$w.WriteByte(89);$w.Dispose()`;
+    const script=windowsInstallerPathsScript+windowsGuiMediumScript+windowsGuiEndpointsScript+windowsGuiHealthOwnershipScript+windowsGuiDebugTransportScript+String.raw`
+$ErrorActionPreference='Stop'
+$guiMediumSource=[Console]::In.ReadToEnd()
+Add-Type -TypeDefinition $guiMediumSource -ErrorAction Stop
+$quoted=[OwnedMediumGui]::Command('tool',[string[]]@('space value','quote"value','trailing\',''))
+foreach ($value in @([string]::new([char]'x',1020),('bad'+[char]0))) {
+  $rejected=$false;try {$null=[OwnedMediumGui]::Command('tool',[string[]]@($value))}catch{$rejected=$true};if(!$rejected){throw 'native command bound admitted'}
+}
+if (!$IsWindows) { [Console]::Out.Write('PORTABLE_CONTRACT');exit 0 }
+if ((GuiDebugTransport 'tool').transport -cne 'ABSENT') { throw 'native tokenizer unavailable' }
+$parsed=[OwnedGuiArguments]::Parse($quoted)
+if ($parsed.Count -ne 5 -or $parsed[1] -cne 'space value' -or $parsed[2] -cne 'quote"value' -or $parsed[3] -cne 'trailing\' -or $parsed[4] -cne '') { throw 'native quoting mismatch' }
+$job=$null;$driver=$null;$probe=$null;$edge=$null;$outcome='UNVERIFIED'
+try {
+  foreach ($path in @($env:LAZYSH_MEDIUM_ROOT,$env:LAZYSH_GUI_DRIVER,$env:LAZYSH_GUI_EDGE)) { Plain $path }
+  $signature=Get-AuthenticodeSignature -LiteralPath $env:LAZYSH_GUI_EDGE
+  Require ($signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -match '(?:^|, )O=Microsoft Corporation(?:,|$)') 'GUI_TOOLS'
+  $job=NewGuiMediumJob
+  $tool=[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+  $info=[Diagnostics.ProcessStartInfo]::new($tool);$info.WorkingDirectory=$env:LAZYSH_MEDIUM_ROOT
+  $info.Environment['LAZYSH_MEDIUM_PROOF']=Join-Path $env:LAZYSH_MEDIUM_ROOT 'write-proof'
+  foreach ($arg in @('-NoProfile','-NonInteractive','-Command',$env:LAZYSH_MEDIUM_PROBE)) { $info.ArgumentList.Add($arg) }
+  $probe=GuiMediumStart $job $info
+  Require ($probe.WaitForExit(10000) -and $probe.ExitCode -eq 0) 'GUI_MEDIUM_UNAVAILABLE'
+  Require ((Get-Item -LiteralPath $info.Environment['LAZYSH_MEDIUM_PROOF']).Length -eq 1) 'GUI_MEDIUM_UNAVAILABLE'
+  $ports=@();$listeners=@()
+  try {foreach($n in 1..2){$listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);$listener.Start();$listeners+=$listener;$ports+=$listener.LocalEndpoint.Port}}
+  finally{foreach($listener in $listeners){$listener.Stop()}}
+  $info=[Diagnostics.ProcessStartInfo]::new($env:LAZYSH_GUI_DRIVER);$info.WorkingDirectory=$env:LAZYSH_MEDIUM_ROOT
+  foreach($arg in @('--port',[string]$ports[0],'--native-port',[string]$ports[1],'--native-host','127.0.0.1','--native-driver',$env:LAZYSH_GUI_EDGE)){$info.ArgumentList.Add($arg)}
+  $driver=GuiMediumStart $job $info
+  $deadline=[DateTime]::UtcNow.AddSeconds(30)
+  do {
+    Require (!$driver.HasExited) 'GUI_START'
+    $sockets=@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {$_.LocalPort -in $ports})
+    if(@($ports|Where-Object {$port=$_;@($sockets|Where-Object {$_.LocalPort -eq $port -and $_.LocalAddress -eq '127.0.0.1'}).Count -ne 1}).Count -eq 0){break}
+    Start-Sleep -Milliseconds 100
+  }while([DateTime]::UtcNow -lt $deadline)
+  $rows=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5 | Where-Object {$_.ParentProcessId -eq $driver.Id -and $_.ExecutablePath -eq $env:LAZYSH_GUI_EDGE})
+  Require ($rows.Count -eq 1) 'GUI_NATIVE_DRIVER'
+  $edge=Get-Process -Id $rows[0].ProcessId;$retained=$edge.SafeHandle
+  GuiEndpoints $sockets $ports $driver.Id $edge.Id
+  foreach($pair in @(@{Role='DRIVER';Process=$driver},@{Role='EDGE';Process=$edge})){
+    $name='LAZYSH_GUI_'+$pair.Role
+    [Environment]::SetEnvironmentVariable($name+'_PID',[string]$pair.Process.Id)
+    [Environment]::SetEnvironmentVariable($name+'_START',$pair.Process.StartTime.ToUniversalTime().Ticks.ToString())
+    [Environment]::SetEnvironmentVariable($name+'_SHA256',(Get-FileHash -LiteralPath ([Environment]::GetEnvironmentVariable($name))).Hash)
+    $fact=[OwnedGuiIntegrity]::Query($pair.Process.Id,$pair.Process.StartTime.ToUniversalTime().Ticks.ToString())
+    Require ($fact[0] -ceq 'MEDIUM' -and $fact[1] -ceq 'NOT_ELEVATED') 'GUI_MEDIUM_UNAVAILABLE'
+  }
+  $env:LAZYSH_GUI_PORT=[string]$ports[0];$env:LAZYSH_GUI_NATIVE_PORT=[string]$ports[1]
+  GuiHealthOwnership
+  $job.Stop([DateTime]::UtcNow.AddSeconds(10).Ticks)
+  Require ($driver.WaitForExit(1000) -and $edge.WaitForExit(1000)) 'GUI_CLEANUP'
+  $outcome='ADMITTED_'+$job.Kind
+} catch {
+  $code=$_.Exception.GetBaseException().Message
+  $outcome=$(if($code -in @('TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','STDIO_UNAVAILABLE','LAUNCH_UNAVAILABLE','ARGV_BOUND','ENVIRONMENT_BOUND','IDENTITY_UNVERIFIED')) {'UNAVAILABLE_'+$code} else {'UNVERIFIED'})
+} finally {
+  if($job){try{$job.Stop([DateTime]::UtcNow.AddSeconds(10).Ticks)}catch{$outcome='CLEANUP_UNVERIFIED'}}
+  foreach($process in @($driver,$probe,$edge)){if($process){$process.Dispose()}}
+}
+[Console]::Out.Write($outcome)
+`;
+    const result=await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,...tools,LAZYSH_MEDIUM_ROOT:root,LAZYSH_MEDIUM_PROBE:probe},100000,windowsGuiMediumSource);
+    expect(process.platform==='win32'?['ADMITTED_LINKED','ADMITTED_RESTRICTED'].includes(result):result==='PORTABLE_CONTRACT').toBe(true);
+  }finally{await rm(root,{recursive:true,force:true});}
+},110000);
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows installed GUI owns its bundled image and native window, then uninstalls', async () => {
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
   const binary = join(import.meta.dir, '../target/release/lazysh.exe');
@@ -923,6 +1022,8 @@ test('native failures never expose raw output or exception details from other to
 test.skipIf(process.platform === 'win32')('owned PowerShell failure decoding redacts native output and rejects unknown markers', () => fixture(async root => {
   const tool = join(root, 'pwsh.exe');
   await symlink(process.execPath, tool);
+  // Both commands execute successfully without the pre-spawn UTF-16 bound on this host.
+  for(const command of ["console.log('must-not-execute');"+' '.repeat(32768),"console.log('must-not-execute');/*"+'"'.repeat(17000)+'*/'])await expect(native(tool,['-e',command])).rejects.toThrow('Release validation failed: pwsh.exe');
   for (const [marker, label] of [
     ['LAZYSH_WINDOWS_INSTALLER:preflight:EXISTING_PATH', ' (preflight:EXISTING_PATH)'],
     ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', ''],

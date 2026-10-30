@@ -4,12 +4,17 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { windowsInstalledGuiScript, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleSubset, windowsGuiMetadataProjection, windowsGuiStartupProbe } from './windows-installed-gui';
+import { windowsInstalledGuiScript, windowsGuiMediumSource, windowsInstallerPathsScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleSubset, windowsGuiMetadataProjection, windowsGuiStartupProbe } from './windows-installed-gui';
 import { artifactTargets, buildIdentity, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 
 const execute = promisify(execFile);
 export async function native(command: string, args: string[], env = process.env, timeout = 180_000, input?: string) {
   try {
+    if (command.split(/[\\/]/).at(-1)==='pwsh.exe') {
+      // execFile/libuv quotes argv for CreateProcessW; bound the full UTF-16 command, including NUL.
+      const quoted=[command,...args].map(value=>'"'+value.replace(/(\\*)"/g,'$1$1\\"').replace(/(\\+)$/,'$1$1')+'"').join(' ');
+      if(quoted.length+1>32767)throw new Error('Native PowerShell command exceeds its bound');
+    }
     if (input !== undefined && Buffer.byteLength(input) > 65_536) throw new Error('Native fixture input exceeds its bound');
     const pending = execute(command, args, { env, timeout, maxBuffer: 2_097_152 });
     const supplied = input === undefined ? Promise.resolve() : new Promise<void>((resolve, reject) => {
@@ -28,7 +33,8 @@ export async function native(command: string, args: string[], env = process.env,
       ? windowsGuiMetadataProjection((error as {stdout?:unknown}).stdout):undefined;
     const startup=label&&windowsGuiSessionGuards.some(code=>label.startsWith('gui:'+code))?windowsGuiStartupProbe((error as {stdout?:unknown}).stdout).startup:undefined;
     const counterfactual=label&&/^gui:GUI_SESSION_[A-Z_]+_WINDOW_VERIFIED:HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)$/.test(label)?windowsGuiCounterfactual((error as {stdout?:unknown}).stdout):undefined;
-    throw new Error(`Release validation failed: ${tool}${label ? ` (${label})` : ''}${metadata ? '\nOwned Windows GUI metadata: '+metadata : ''}${startup ? '\nOwned Windows GUI startup: '+JSON.stringify(startup) : ''}${counterfactual ? '\nOwned Windows GUI counterfactual: '+JSON.stringify(counterfactual) : ''}`);
+    const medium=counterfactual?windowsGuiMediumOutcome((error as {stdout?:unknown}).stdout):undefined;
+    throw new Error(`Release validation failed: ${tool}${label ? ` (${label})` : ''}${metadata ? '\nOwned Windows GUI metadata: '+metadata : ''}${startup ? '\nOwned Windows GUI startup: '+JSON.stringify(startup) : ''}${counterfactual ? '\nOwned Windows GUI counterfactual: '+JSON.stringify(counterfactual) : ''}${medium ? '\nOwned Windows GUI medium context: '+JSON.stringify(medium) : ''}`);
   }
 }
 function requirePlatform(condition: unknown, message: string): asserts condition {
@@ -57,7 +63,7 @@ const windowsInstallerGuards = new Set([
   'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
   'UNSUPPORTED_SIGNING', 'GUI_OWNER', 'GUI_START', 'GUI_INTERACTIVE', 'GUI_TOOLS', 'GUI_RUNTIME',
   'GUI_IPV4_REQUIRED', 'GUI_LISTENER_ADDRESS', 'GUI_NATIVE_DRIVER',
-  'GUI_DATA', 'GUI_SESSION', 'GUI_FRONTEND', 'GUI_VERSION', 'GUI_ENDPOINT', 'GUI_TIMEOUT', 'GUI_CLIENT', 'GUI_CLEANUP',
+  'GUI_MEDIUM_UNAVAILABLE', 'GUI_DATA', 'GUI_SESSION', 'GUI_FRONTEND', 'GUI_VERSION', 'GUI_ENDPOINT', 'GUI_TIMEOUT', 'GUI_CLIENT', 'GUI_CLEANUP',
 ]);
 export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (typeof stdout !== 'string' || stdout.length > 2_097_152) return;
@@ -90,6 +96,20 @@ export function windowsGuiCounterfactual(stdout:unknown) {
   const startup=windowsGuiStartupProbe(stdout.split(/\r?\n/).filter(line=>line.startsWith('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:')).map(line=>line.replace('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_STARTUP:','LAZYSH_WINDOWS_GUI_STARTUP:')).join('\n')).startup;
   const metadata=rejection.includes('_WINDOW_UNVERIFIED')?windowsGuiMetadataProjection(stdout.split(/\r?\n/).filter(line=>line.startsWith('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:')).map(line=>line.replace('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL_METADATA:','LAZYSH_WINDOWS_GUI_METADATA:')).join('\n')):undefined;
   return {outcome:'REJECTED',rejection,...(startup?{startup}:{}),...(metadata?{metadata:JSON.parse(metadata)}:{})} as const;
+}
+export function windowsGuiMediumOutcome(stdout:unknown) {
+  if(typeof stdout!=='string'||stdout.length>2_097_152)return;
+  const prefix='LAZYSH_WINDOWS_GUI_MEDIUM',lines=stdout.split(/\r?\n/).filter(line=>line.startsWith(prefix+':')||line.startsWith(prefix+'_STARTUP:')||line.startsWith(prefix+'_METADATA:'));
+  if(!lines.length)return;
+  const status=lines.filter(line=>line.startsWith(prefix+':'));
+  if(lines.length===1&&status[0]===prefix+':NOT_AVAILABLE')return {outcome:'NOT_AVAILABLE'} as const;
+  const source=lines.map(line=>line.replace(prefix,'LAZYSH_WINDOWS_GUI_COUNTERFACTUAL')).join('\n');
+  if(status.length===1&&status[0]===prefix+':PASSED'){
+    if(lines.length!==2||lines.filter(line=>line.startsWith(prefix+'_STARTUP:')).length!==1)return {outcome:'UNVERIFIED'} as const;
+    const probe=windowsGuiStartupProbe(lines.filter(line=>line.startsWith(prefix+'_STARTUP:')).map(line=>line.replace(prefix+'_STARTUP:','LAZYSH_WINDOWS_GUI_STARTUP:')).join('\n')).startup;
+    return probe?.available&&probe.appIntegrity==='MEDIUM'&&probe.appElevation==='NOT_ELEVATED'?{outcome:'PASSED',startup:probe} as const:{outcome:'UNVERIFIED'} as const;
+  }
+  return windowsGuiCounterfactual(source)??{outcome:'UNVERIFIED'} as const;
 }
 export async function windowsNsisBinaryDigest(path: string, source: { bytes: number; sha256: string }) {
   requirePlatform(Number.isSafeInteger(source.bytes) && source.bytes > 0 && source.bytes <= 2_147_483_648
@@ -146,6 +166,7 @@ export async function windowsInstallation(installer: string, binary: string, ver
 $ErrorActionPreference = 'Stop'
 $guiParentStarted=[Environment]::TickCount64
 $guiBaselineEmitted=$false
+$guiMediumSource=$(if ($env:LAZYSH_TEST_WINDOWS_GUI -eq '1') {[Console]::In.ReadToEnd()} else {''})
 ${windowsInstallerPathsScript}
 function RunInstaller($file, $arguments) {
   Plain $file
@@ -291,7 +312,7 @@ if ($primaryFailed) { exit 1 }
     LAZYSH_GUI_NODE: gui ? await native('node', ['-p', 'process.execPath']) : '',
     LAZYSH_GUI_VITEST: join(root, 'node_modules/vitest/vitest.mjs'),
     LAZYSH_GUI_CLIENT_ROOT: join(root, 'apps/client'),
-  }, gui ? 600_000 : 450_000);
+  }, gui ? 600_000 : 450_000, gui ? windowsGuiMediumSource : undefined);
 }
 async function desktop(target: ArtifactTarget, root: string, output: string) {
   const identity = await buildIdentity(root);
