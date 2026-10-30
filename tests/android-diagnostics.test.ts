@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
@@ -35,6 +36,27 @@ test('packaged companion UI acceptance has an explicit owned Android invocation'
   expect(gradle).toContain('lazyshCompanionAcceptance');
   expect(gradle).toContain('outputs/androidTest-results/companion-ui');
 });
+
+test('actual Turbo task forwards companion opt-in and hosted metadata while filtering unrelated environment',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-android-turbo-'));temporary.push(directory);
+  const client=join(directory,'apps/client');await mkdir(client,{recursive:true});
+  const config=await Bun.file(new URL('../turbo.json',import.meta.url)).json();
+  const pkg=await Bun.file(new URL('../package.json',import.meta.url)).json();
+  await writeFile(join(directory,'package.json'),JSON.stringify({name:'owned-android-env',private:true,packageManager:pkg.packageManager,workspaces:['apps/*']}));
+  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{'test:android-ssh':'bun env-probe.ts'}}));
+  const keys=['LAZYSH_ANDROID_UI_COMPANION','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'];
+  await writeFile(join(client,'env-probe.ts'),`await Bun.write('../../observed.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),unrelatedFiltered:process.env.LAZYSH_UNRELATED_SENTINEL===undefined}));`);
+  for(const admitted of [true,false]) {
+    const task={...config.tasks['test:android-ssh']};
+    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>key!=='LAZYSH_ANDROID_UI_COMPANION');
+    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,'test:android-ssh':task}}));
+    await rm(join(directory,'observed.json'),{force:true});
+    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run','test:android-ssh','--filter=@lazysh/client','--only'],directory,
+      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',LAZYSH_ANDROID_UI_COMPANION:'1',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
+    await child.finish('actual Turbo task environment',10_000);
+    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:[admitted?'1':null,'true','github-hosted'],unrelatedFiltered:true});
+  }
+},25_000);
 
 test.each([
   { mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: false, overflow: false },
