@@ -101,23 +101,53 @@ export default function TerminalPane({ session, active, reportError }: {
 
   useEffect(() => {
     const element = container.current;
-    if (!element || !customTouch) return;
+    if (!element || preferences.screenReader) return;
+    let scroll: {x: number; y: number; lastY: number; active: boolean} | null = null;
+    const start = (event: TouchEvent) => {
+      const point = event.touches.length === 1 ? event.touches[0] : undefined;
+      scroll = point ? {x: point.clientX, y: point.clientY, lastY: point.clientY, active: false} : null;
+    };
+    const end = () => {scroll = null;};
     const multitouch = (event: TouchEvent) => {
-      if (imeComposing.current || session.terminal.hasSelection()) return;
+      if (!activeRef.current || session.terminal.hasSelection()) {end(); return;}
       if (event.touches.length === 1) {
+        const point = event.touches[0];
+        if (scroll) {
+          const dx = point.clientX - scroll.x, dy = point.clientY - scroll.y;
+          if (scroll.active || (Math.abs(dy) >= 10 && Math.abs(dy) > Math.abs(dx) * 1.5)) {
+            const deltaY = scroll.lastY - point.clientY;
+            scroll.active = true; scroll.lastY = point.clientY;
+            press.current = null; cancelTaps();
+            // xterm's wheel path also reports mouse scrolling to Herdr/other full-screen apps.
+            session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
+              bubbles: true, cancelable: true, clientX: point.clientX, clientY: point.clientY, deltaY,
+            }));
+            event.stopPropagation();
+            if (event.cancelable) event.preventDefault();
+            return;
+          }
+        }
+        if (imeComposing.current) {end(); return;}
         const start = press.current;
         if (!start) return;
         const dx = event.touches[0].clientX - start.x, dy = event.touches[0].clientY - start.y;
         const action = preferences.bodyGestures[dx < 0 ? "swipeLeft" : "swipeRight"];
         if (action === "none" || Math.abs(dx) < 16 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      } else if (event.touches.length !== 2) return;
-      // Keep xterm's native vertical scrolling; reserve only configured gestures.
+      } else {end(); if (imeComposing.current || event.touches.length !== 2 || !customTouch) return;}
       event.stopPropagation();
       if (event.cancelable) event.preventDefault();
     };
+    element.addEventListener('touchstart', start, {capture: true, passive: true});
     element.addEventListener("touchmove", multitouch, {capture: true, passive: false});
-    return () => element.removeEventListener("touchmove", multitouch, {capture: true});
-  }, [customTouch, session.id, preferences.bodyGestures]);
+    element.addEventListener('touchend', end, {capture: true});
+    element.addEventListener('touchcancel', end, {capture: true});
+    return () => {
+      element.removeEventListener('touchstart', start, {capture: true});
+      element.removeEventListener('touchmove', multitouch, {capture: true});
+      element.removeEventListener('touchend', end, {capture: true});
+      element.removeEventListener('touchcancel', end, {capture: true});
+    };
+  }, [customTouch, preferences.screenReader, session.id, preferences.bodyGestures]);
 
   useEffect(() => {
     const query = window.matchMedia?.("(hover: hover) and (pointer: fine)");
@@ -391,7 +421,7 @@ export default function TerminalPane({ session, active, reportError }: {
       <button>{t('terminalNext')}</button><button type="button" onClick={() => search(-1)}>{t('terminalPrevious')}</button><button type="button" onClick={() => {setSearching(false); session.terminal.focus();}}>{t('terminalCloseSearch')}</button>
       <span role="status">{typeof searchStatus === "number" ? t("terminalMatch",{line:formatNumber(searchStatus)}) : searchStatus === "none" ? t("terminalNoMatch") : ""}</span>
     </form>}
-    <div ref={container} className="terminal-canvas" style={{touchAction: customTouch ? "none" : "auto"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
+    <div ref={container} className="terminal-canvas" style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
       <button disabled={!session.connected || !draft} onClick={() => {session.terminal.paste(draft); setDraft(""); session.terminal.focus();}}>{t('terminalPasteDraft')}</button><button onClick={() => setComposing(false)}>{t('terminalCloseComposer')}</button>
     </div>}

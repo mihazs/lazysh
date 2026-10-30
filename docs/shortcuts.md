@@ -1,5 +1,17 @@
 # Terminal shortcuts
 
+On a phone, drag one finger vertically directly on the terminal to scroll. This
+uses the same handling as a mouse wheel: local history for an ordinary terminal,
+or the application's mouse/alternate-screen behavior for Herdr and similar tools.
+It does not require enabling a custom gesture. Screen-reader gestures and text
+selection retain their existing handling.
+
+An active phone terminal uses a compact header. Open **More** (Workspace tools)
+for session views, connection actions, Preferences and workspace restoration.
+The session switcher stays in the header; multiple connections retain their tabs.
+The terminal keys stay available above the keyboard. Desktop and nonterminal
+views keep their expanded navigation.
+
 Custom keyboard chords and text snippets have no purchased slots or fixed entry-count
 cap. Valid entries beyond twelve survive save and reload. Individual name/text/binding
 validation still applies; device storage can refuse a save, which leaves the saved

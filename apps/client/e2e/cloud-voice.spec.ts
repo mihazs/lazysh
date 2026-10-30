@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {cloudVoiceFixture as fixture,enrollCloud as enroll,recordCloud as record,completeCloud as complete} from './fixtures/cloudVoice';
 
@@ -32,6 +33,6 @@ test('cancelled begin and late final results never upload or type',async({page})
   await page.evaluate(()=>{window.cloudVoiceFixture.deferBegin=false;});
   await page.getByLabel('Type final result directly into terminal').check();
   await page.getByLabel('Auto-send: press Enter').check();
-  await record(page);await page.getByRole('button',{name:'Terminal',exact:true}).click();await complete(page,'stale command');
+  await record(page);await (await workspaceControl(page,'Terminal')).click();await complete(page,'stale command');
   expect(await page.evaluate(()=>window.cloudVoiceFixture.writes)).toEqual([]);
 });

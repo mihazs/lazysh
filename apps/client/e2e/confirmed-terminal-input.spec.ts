@@ -1,3 +1,4 @@
+import {workspaceControl} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {herdrPrepared,herdrBound,herdrTarget} from '../src/test/herdrChat';
@@ -39,8 +40,8 @@ for(const mode of ['single','multiline','uncertain','herdr','herdr-uncertain','h
   await page.goto('/');
   if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Connect to Fixture',exact:true}).click();await page.getByLabel('Password',{exact:true}).fill('synthetic-entry');await page.getByRole('button',{name:'Connect',exact:true}).click();
-  await page.getByRole('button',{name:'Sessions',exact:true}).click();if(herdr)await page.getByRole('button',{name:'List herdr sessions',exact:true}).click();await page.getByRole('button',{name:herdr?'Attach herdr work':'Attach work',exact:true}).click();await expect(page.getByRole('tab')).toHaveCount(2);
-  await page.getByRole('button',{name:'Transcript',exact:true}).click();await page.getByLabel('Transcript path',{exact:true}).fill(tmuxChatSource.path);await page.getByRole('button',{name:'Open transcript',exact:true}).click();
+  await (await workspaceControl(page,'Sessions')).click();if(herdr)await page.getByRole('button',{name:'List herdr sessions',exact:true}).click();await page.getByRole('button',{name:herdr?'Attach herdr work':'Attach work',exact:true}).click();await expect(page.getByRole('tab')).toHaveCount(2);
+  await (await workspaceControl(page,'Transcript')).click();await page.getByLabel('Transcript path',{exact:true}).fill(tmuxChatSource.path);await page.getByRole('button',{name:'Open transcript',exact:true}).click();
   const region=page.getByRole('region',{name:'Terminal input',exact:true});await expect(region).toBeVisible();
   const composer=page.getByRole('textbox',{name:'Draft for this terminal',exact:true});
   await composer.fill(draft);

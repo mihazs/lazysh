@@ -1,5 +1,15 @@
 # @lazysh/client
 
+## 1.1.6
+
+### Patch Changes
+
+- efa13fd: Enable terminal touch scrolling in Herdr and other full-screen apps, and give active phone terminals one compact header with secondary controls in More.
+- @lazysh/common@1.1.6
+  - @lazysh/display-idle@1.1.6
+  - @lazysh/et-transport@1.1.6
+  - @lazysh/mosh-transport@1.1.6
+
 ## 1.1.5
 
 ### Patch Changes

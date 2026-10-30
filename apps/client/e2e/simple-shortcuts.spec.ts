@@ -1,7 +1,7 @@
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutWrites:string[];simpleShortcutSteps:string[][]}}
+declare global {interface Window {simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutOutput:(text:string)=>void}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
     window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
@@ -14,7 +14,10 @@ async function fixture(page:Page) {
       if (command==='list_hosts') return [];
       if (command === 'app_icon_status') return {available: false, current: 'unknown', reason: 'Alternate Home Screen icons require iOS; synthetic fixture.'};
       if (command==='local_capability') return {available:true,reason:'Synthetic shortcut fixture; no shell runs.'};
-      if (command==='local_connect') return {sessionId:'local:shortcut-fixture'};
+      if (command==='local_connect') {
+        window.simpleShortcutOutput=text=>(args.events as {onmessage:(event:unknown)=>void}).onmessage({type:'data',data:Array.from(new TextEncoder().encode(text))});
+        return {sessionId:'local:shortcut-fixture'};
+      }
       if (command==='local_write') {const steps=args.steps as string[]|undefined; if(steps)window.simpleShortcutSteps.push(steps);window.simpleShortcutWrites.push(steps?steps.join(''):args.data as string);return;}
       if (['local_resize','local_ack','local_disconnect'].includes(command))return;
       if (command.startsWith('plugin:event|'))return 1;
@@ -233,4 +236,52 @@ test('named key pickers persist toolbar and gesture bindings and deliver exact s
   await terminal.dispatchEvent('pointerdown',{pointerId:8,pointerType:'touch',clientX:160,clientY:120});
   await terminal.dispatchEvent('pointerup',{pointerId:8,pointerType:'touch',clientX:160,clientY:120});
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutSteps)).toEqual([['\x1b[24;3~'],['\x1b[Z']]);
+});
+
+
+test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page})=>{
+  await fixture(page);
+  await page.keyboard.press('Escape');
+  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  const screen=page.locator('.terminal-canvas:visible .xterm-screen');
+  await expect(screen).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,i)=>`history ${i}\r\n`).join('')));
+  const viewport=page.locator('.terminal-canvas:visible .xterm-viewport');
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeGreaterThan(500);
+  const before=await viewport.evaluate(node=>node.scrollTop);
+  const box=(await screen.boundingBox())!;
+  const x=box.x+60,y=box.y+80;
+  const input=await page.context().newCDPSession(page);
+  const swipe=async(from:number,to:number)=>{
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y:from}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:to}]});
+    await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  };
+  await swipe(y,y+60);
+  await expect.poll(()=>viewport.evaluate(node=>node.scrollTop)).toBeLessThan(before);
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1049h\x1b[?1000h\x1b[?1006h'));
+  await expect(page.locator('.terminal-canvas:visible .xterm')).toHaveClass(/enable-mouse-events/);
+  for(const delta of [60,-60]){
+    await page.mouse.move(x,y);
+    await page.mouse.wheel(0,delta);
+    await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites.length)).toBe(1);
+    const wheel=await page.evaluate(()=>window.simpleShortcutWrites[0]);
+    expect(wheel).toMatch(/^\x1b\[<6[45];\d+;\d+M$/);
+    await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+    await swipe(y+delta,y);
+    await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([wheel]);
+    await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  }
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000l\x1b[?1006l'));
+  await expect(page.locator('.terminal-canvas:visible .xterm')).not.toHaveClass(/enable-mouse-events/);
+  await page.mouse.wheel(0,60);
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites.length)).toBe(1);
+  const arrows=await page.evaluate(()=>window.simpleShortcutWrites[0]);
+  expect(arrows).toMatch(/^(\x1b\[B)+$/);
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  await swipe(y+60,y);
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([arrows]);
+  await input.detach();
 });
