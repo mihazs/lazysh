@@ -63,6 +63,7 @@ import androidx.test.uiautomator.Configurator
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -1510,6 +1511,39 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun ownedWakeLockHeld(power: String, uid: Int, pid: Int): Boolean {
+        val start = Regex("(?m)^Wake Locks: size=[0-9]+\\r?$").find(power)
+        val end = power.indexOf("\nSuspend Blockers:", start?.range?.last ?: 0)
+        require(start != null && end > start.range.last) { "Owned power observation unavailable" }
+        val locks = power.substring(start.range.last + 1, end).lineSequence()
+            .filter { it.contains("'lazysh:terminal-connections'") }.toList()
+        require(locks.size <= 1) { "Owned wake-lock observation ambiguous" }
+        val held = locks.singleOrNull()?.let {
+            it.contains("PARTIAL_WAKE_LOCK") && it.contains("ACQ=") && !it.contains("DISABLED") &&
+                Regex("\\(uid=$uid(?: [^\\r\\n()]*)? pid=$pid\\)").containsMatchIn(it)
+        } ?: false
+        require(locks.isEmpty() || held) { "Owned wake-lock identity or state unverified" }
+        return held
+    }
+
+    @Test fun wakeLockObservationRequiresExactOwnedAcquiredPartialLock() {
+        val row = "  PARTIAL_WAKE_LOCK 'lazysh:terminal-connections' ACQ=-1s (uid=10123 isFrozen=false pid=456)"
+        fun dump(vararg rows: String) = "Wake Locks: size=${rows.size}\n${rows.joinToString("\n")}\nSuspend Blockers:\n"
+        assertTrue("AOSP single-quoted acquired owned lock must be observed", ownedWakeLockHeld(dump(row), 10123, 456))
+        assertFalse(ownedWakeLockHeld(dump(), 10123, 456))
+        assertFalse(ownedWakeLockHeld(dump(row.replace("terminal-connections'", "terminal-connections-other'")), 10123, 456))
+        for (invalid in listOf(
+            dump(row.replace("uid=10123", "uid=10124")),
+            dump(row.replace("pid=456", "pid=457")),
+            dump(row.replace(" ACQ=", " DISABLED ACQ=")),
+            dump(row.replace(" ACQ=-1s", "")),
+            dump(row.replace("PARTIAL_WAKE_LOCK", "FULL_WAKE_LOCK")),
+            dump(row, row),
+        )) {
+            assertTrue("Unowned, inactive or ambiguous locks must fail closed", runCatching { ownedWakeLockHeld(invalid, 10123, 456) }.isFailure)
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun connectionExecutionObservation(): JSONObject {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -1528,17 +1562,7 @@ class NativeWorkspaceTest {
         }
         require(bytes.size <= 262144) { "Owned power observation exceeds bound" }
         val power = String(bytes, Charsets.UTF_8)
-        val start = Regex("(?m)^Wake Locks: size=[0-9]+\\r?$").find(power)
-        val end = power.indexOf("\nSuspend Blockers:", start?.range?.last ?: 0)
-        require(start != null && end > start.range.last) { "Owned power observation unavailable" }
-        val locks = power.substring(start.range.last + 1, end).lineSequence()
-            .filter { it.contains("\"lazysh:terminal-connections\"") }.toList()
-        require(locks.size <= 1) { "Owned wake-lock observation ambiguous" }
-        val held = locks.singleOrNull()?.let {
-            it.contains("PARTIAL_WAKE_LOCK") && it.contains("ACQ=") && !it.contains("DISABLED") &&
-                Regex("\\(uid=$uid(?: [^\\r\\n()]*)? pid=$pid\\)").containsMatchIn(it)
-        } ?: false
-        require(locks.isEmpty() || held) { "Owned wake-lock identity or state unverified" }
+        val held = ownedWakeLockHeld(power, uid, pid)
         return JSONObject().put("serviceCount", services.size)
             .put("foreground", services.singleOrNull()?.let { it.pid == pid && it.uid == uid && it.foreground } == true)
             .put("notificationCount", notifications.size)
