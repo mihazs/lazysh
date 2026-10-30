@@ -81,6 +81,7 @@ it('installs the published verified companion through the actual native GUI and 
           reason=detail && ['committedDurabilityUnknown','commitResponseLost','verificationUnavailable','none'].includes(detail)?detail:'unavailable';
         }catch { /* A retired diagnostic observer must not replace the assertion. */ }
         if(outcome==='failed' || outcome==='uncertain')return true;
+        if(outcome!==(index===0?'installed':'reused'))return false;
         const result=await panel.$('[role="status"]');
         if(!await result.isDisplayed())return false;
         const text=await result.getText();
