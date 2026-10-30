@@ -8,10 +8,12 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsGuiMediumOutcome, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
+const launchFailureDetails=['CREATE_PROCESS_WITH_TOKEN','RESUME_THREAD'].flatMap(call=>windowsGuiLaunchErrors.map(error=>call+':'+error)).concat('RESUME_THREAD:RESUME_COUNT_UNEXPECTED');
 const mediumAdmissionResults=['ADMITTED_LINKED','ADMITTED_RESTRICTED','PORTABLE_CONTRACT','UNVERIFIED','CLEANUP_UNVERIFIED',
+  ...['PROBE','DRIVER'].flatMap(role=>launchFailureDetails.map(detail=>'UNAVAILABLE_LAUNCH_UNAVAILABLE:'+role+':'+detail)),
   ...windowsGuiTokenReasons.map(reason=>'UNAVAILABLE_TOKEN_UNAVAILABLE:'+reason),
   ...['TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','STDIO_UNAVAILABLE','LAUNCH_UNAVAILABLE','ARGV_BOUND','ENVIRONMENT_BOUND','IDENTITY_UNVERIFIED'].map(code=>'UNAVAILABLE_'+code)];
 const mediumAdmissionResult=(value:unknown)=>typeof value==='string'&&mediumAdmissionResults.includes(value)?value:'UNVERIFIED';
@@ -613,7 +615,7 @@ exit 1
 }));
 test('restricted Windows admission reports only exact finite smoke results',()=>{
   for(const result of mediumAdmissionResults)expect(mediumAdmissionResult(result)).toBe(result);
-  for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
+  for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_LAUNCH_UNAVAILABLE:PRIVATE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:RESUME_COUNT_UNEXPECTED','UNAVAILABLE_LAUNCH_UNAVAILABLE:DRIVER:RESUME_THREAD:5','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:OTHER private','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
 });
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restricted launcher contracts and native admission',async()=>{
   const root=await mkdtemp(join(process.env.RUNNER_TEMP??tmpdir(),'lazysh-medium-admission-'));
@@ -629,6 +631,19 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restric
 $ErrorActionPreference='Stop'
 $guiMediumSource=[Console]::In.ReadToEnd()
 Add-Type -TypeDefinition $guiMediumSource -ErrorAction Stop
+$flags=[Reflection.BindingFlags]'NonPublic,Static'
+$classify=[OwnedMediumGui].GetMethod('Win32Failure',$flags)
+foreach($case in @(@(5,'ACCESS_DENIED'),@(6,'INVALID_HANDLE'),@(87,'INVALID_PARAMETER'),@(1314,'PRIVILEGE_NOT_HELD'),@(2,'FILE_NOT_FOUND'),@(3,'PATH_NOT_FOUND'),@(193,'BAD_EXE_FORMAT'),@(267,'DIRECTORY'),@(0,'OTHER'),@(-1,'OTHER'),@([int]::MaxValue,'OTHER'))){
+  if($classify.Invoke($null,@([int]$case[0])).ToString() -cne $case[1]){throw 'launch category not closed'}
+}
+$resume=[OwnedMediumGui].GetMethod('ResumeFailure',$flags)
+foreach($case in @(@([uint32]::MaxValue,5,'ACCESS_DENIED'),@(0,5,'RESUME_COUNT_UNEXPECTED'),@(2,6,'RESUME_COUNT_UNEXPECTED'),@(1,87,'UNVERIFIED'))){
+  if($resume.Invoke($null,@([uint32]$case[0],[int]$case[1])).ToString() -cne $case[2]){throw 'stale resume last-error used'}
+}
+foreach($field in @('launchCall','launchError')){
+  $member=[OwnedMediumGui].GetField($field,$flags)
+  $member.SetValue($null,[Enum]::Parse($member.FieldType,$(if($field -ceq 'launchCall'){'CREATE_PROCESS_WITH_TOKEN'}else{'ACCESS_DENIED'})))
+}
 # No native call or token exists: the real Start state guard must replace a prior rejection.
 $reasonType=[OwnedMediumGui].GetNestedType('TokenReason',[Reflection.BindingFlags]::NonPublic)
 $reject=[OwnedMediumGui].GetMethod('TokenReject',[Reflection.BindingFlags]'NonPublic,Static')
@@ -636,7 +651,7 @@ $null=$reject.Invoke($null,@([Enum]::Parse($reasonType,'CANDIDATE_ELEVATED')))
 $empty=[Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject([OwnedMediumGui])
 $failed=$false
 try {$null=$empty.Start('owned',[string[]]@(),'',[string]::new([char]0,2))}catch{$failed=$_.Exception.GetBaseException().Message -ceq 'TOKEN_UNAVAILABLE'}
-if(!$failed -or [OwnedMediumGui]::TokenFailure -cne 'LAUNCHER_STATE'){throw 'terminal token reason not preserved'}
+if(!$failed -or [OwnedMediumGui]::TokenFailure -cne 'LAUNCHER_STATE' -or [OwnedMediumGui]::LaunchFailure -cne 'UNVERIFIED:UNVERIFIED'){throw 'terminal token reason not preserved'}
 $word=[OwnedMediumGui].GetMethod('Word',[Reflection.BindingFlags]'NonPublic,Static')
 foreach($kind in @(-1,0,1,2,3,19,25,27,[int]::MaxValue)){
   $failed=$false
@@ -651,7 +666,7 @@ if (!$IsWindows) { [Console]::Out.Write('PORTABLE_CONTRACT');exit 0 }
 if ((GuiDebugTransport 'tool').transport -cne 'ABSENT') { throw 'native tokenizer unavailable' }
 $parsed=[OwnedGuiArguments]::Parse($quoted)
 if ($parsed.Count -ne 5 -or $parsed[1] -cne 'space value' -or $parsed[2] -cne 'quote"value' -or $parsed[3] -cne 'trailing\' -or $parsed[4] -cne '') { throw 'native quoting mismatch' }
-$job=$null;$driver=$null;$probe=$null;$edge=$null;$outcome='UNVERIFIED'
+$job=$null;$driver=$null;$probe=$null;$edge=$null;$outcome='UNVERIFIED';$launchRole='UNVERIFIED'
 try {
   foreach ($path in @($env:LAZYSH_MEDIUM_ROOT,$env:LAZYSH_GUI_DRIVER,$env:LAZYSH_GUI_EDGE)) { Plain $path }
   $signature=Get-AuthenticodeSignature -LiteralPath $env:LAZYSH_GUI_EDGE
@@ -661,7 +676,7 @@ try {
   $info=[Diagnostics.ProcessStartInfo]::new($tool);$info.WorkingDirectory=$env:LAZYSH_MEDIUM_ROOT
   $info.Environment['LAZYSH_MEDIUM_PROOF']=Join-Path $env:LAZYSH_MEDIUM_ROOT 'write-proof'
   foreach ($arg in @('-NoProfile','-NonInteractive','-Command',$env:LAZYSH_MEDIUM_PROBE)) { $info.ArgumentList.Add($arg) }
-  $probe=GuiMediumStart $job $info
+  $launchRole='PROBE';$probe=GuiMediumStart $job $info;$launchRole='UNVERIFIED'
   Require ($probe.WaitForExit(10000) -and $probe.ExitCode -eq 0) 'GUI_MEDIUM_UNAVAILABLE'
   Require ((Get-Item -LiteralPath $info.Environment['LAZYSH_MEDIUM_PROOF']).Length -eq 1) 'GUI_MEDIUM_UNAVAILABLE'
   $ports=@();$listeners=@()
@@ -669,7 +684,7 @@ try {
   finally{foreach($listener in $listeners){$listener.Stop()}}
   $info=[Diagnostics.ProcessStartInfo]::new($env:LAZYSH_GUI_DRIVER);$info.WorkingDirectory=$env:LAZYSH_MEDIUM_ROOT
   foreach($arg in @('--port',[string]$ports[0],'--native-port',[string]$ports[1],'--native-host','127.0.0.1','--native-driver',$env:LAZYSH_GUI_EDGE)){$info.ArgumentList.Add($arg)}
-  $driver=GuiMediumStart $job $info
+  $launchRole='DRIVER';$driver=GuiMediumStart $job $info;$launchRole='UNVERIFIED'
   $deadline=[DateTime]::UtcNow.AddSeconds(30)
   do {
     Require (!$driver.HasExited) 'GUI_START'
@@ -699,6 +714,9 @@ try {
   if($code -ceq 'TOKEN_UNAVAILABLE'){
     $reason=[OwnedMediumGui]::TokenFailure
     $outcome=$(if($reason -cin @(${windowsGuiTokenReasons.map(reason=>"'"+reason+"'").join(',')})) {'UNAVAILABLE_TOKEN_UNAVAILABLE:'+$reason} else {'UNVERIFIED'})
+  }elseif($code -ceq 'LAUNCH_UNAVAILABLE'){
+    $detail=[OwnedMediumGui]::LaunchFailure
+    $outcome=$(if($launchRole -cin @('PROBE','DRIVER') -and $detail -cin @(${launchFailureDetails.map(detail=>"'"+detail+"'").join(',')})) {'UNAVAILABLE_LAUNCH_UNAVAILABLE:'+$launchRole+':'+$detail} else {'UNVERIFIED'})
   }else{$outcome=$(if($code -in @('TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','STDIO_UNAVAILABLE','LAUNCH_UNAVAILABLE','ARGV_BOUND','ENVIRONMENT_BOUND','IDENTITY_UNVERIFIED')) {'UNAVAILABLE_'+$code} else {'UNVERIFIED'})}
 } finally {
   if($job){try{$job.Stop([DateTime]::UtcNow.AddSeconds(10).Ticks)}catch{$outcome='CLEANUP_UNVERIFIED'}}

@@ -885,9 +885,17 @@ export const windowsGuiTokenReasons=[
   'CANDIDATE_NOT_MEDIUM','CANDIDATE_ELEVATION_UNVERIFIED','CANDIDATE_ADMIN_NOT_DENY_ONLY','CANDIDATE_EXPECTED_GROUP_NOT_DENY_ONLY',
   'LAUNCHER_STATE','CHILD_TOKEN_UNVERIFIED','CHILD_NOT_MEDIUM','CHILD_ELEVATED',
 ] as const;
+export const windowsGuiLaunchErrors=['ACCESS_DENIED','INVALID_HANDLE','INVALID_PARAMETER','PRIVILEGE_NOT_HELD','FILE_NOT_FOUND','PATH_NOT_FOUND','BAD_EXE_FORMAT','DIRECTORY','OTHER'] as const;
 export const windowsGuiMediumSource=windowsGuiIntegritySource+String.raw`
 public sealed class OwnedMediumGui : System.IDisposable {
   enum TokenReason { ${windowsGuiTokenReasons.join(',')} }
+  enum LaunchCall { UNVERIFIED,CREATE_PROCESS_WITH_TOKEN,RESUME_THREAD }
+  enum LaunchError { UNVERIFIED,RESUME_COUNT_UNEXPECTED,${windowsGuiLaunchErrors.join(',')} }
+  static LaunchCall launchCall;
+  static LaunchError launchError;
+  public static string LaunchFailure {get{return launchCall+":"+launchError;}}
+  static LaunchError Win32Failure(int error){switch(error){case 5:return LaunchError.ACCESS_DENIED;case 6:return LaunchError.INVALID_HANDLE;case 87:return LaunchError.INVALID_PARAMETER;case 1314:return LaunchError.PRIVILEGE_NOT_HELD;case 2:return LaunchError.FILE_NOT_FOUND;case 3:return LaunchError.PATH_NOT_FOUND;case 193:return LaunchError.BAD_EXE_FORMAT;case 267:return LaunchError.DIRECTORY;default:return LaunchError.OTHER;}}
+  static LaunchError ResumeFailure(uint count,int error){return count==uint.MaxValue?Win32Failure(error):count==1?LaunchError.UNVERIFIED:LaunchError.RESUME_COUNT_UNEXPECTED;}
   static TokenReason tokenFailure;
   public static string TokenFailure {get{return tokenFailure.ToString();}}
   static bool TokenReject(TokenReason reason){tokenFailure=reason;return false;}
@@ -978,13 +986,14 @@ public sealed class OwnedMediumGui : System.IDisposable {
   public static string Command(string image,string[] arguments){var output=new System.Text.StringBuilder();foreach(string value in new[]{image})output.Append(Quote(value));foreach(string value in arguments)output.Append(' ').Append(Quote(value));Need(output.Length+1<=1024,"ARGV_BOUND");return output.ToString();}
   static string Quote(string value){Need(value!=null&&value.IndexOf('\0')<0,"ARGV_BOUND");var output=new System.Text.StringBuilder("\"");int slashes=0;foreach(char c in value){if(c=='\\'){slashes++;continue;}if(c=='\"'){output.Append('\\',slashes*2+1).Append(c);slashes=0;continue;}output.Append('\\',slashes).Append(c);slashes=0;}output.Append('\\',slashes*2).Append('"');return output.ToString();}
   public System.Diagnostics.Process Start(string image,string[] arguments,string directory,string environment){
-    tokenFailure=TokenReason.UNVERIFIED;TokenNeed(job!=IntPtr.Zero&&token!=IntPtr.Zero,TokenReason.LAUNCHER_STATE);string command=Command(image,arguments);Need(environment!=null&&environment.Length<=65536&&environment.EndsWith("\0\0",StringComparison.Ordinal),"ENVIRONMENT_BOUND");
+    launchCall=LaunchCall.UNVERIFIED;launchError=LaunchError.UNVERIFIED;tokenFailure=TokenReason.UNVERIFIED;TokenNeed(job!=IntPtr.Zero&&token!=IntPtr.Zero,TokenReason.LAUNCHER_STATE);string command=Command(image,arguments);Need(environment!=null&&environment.Length<=65536&&environment.EndsWith("\0\0",StringComparison.Ordinal),"ENVIRONMENT_BOUND");
     IntPtr block=IntPtr.Zero,nul=IntPtr.Zero;PI child=new PI();bool admitted=false;System.Diagnostics.Process managed=null;
     try {block=Marshal.StringToHGlobalUni(environment);var attributes=new SA{Length=Marshal.SizeOf(typeof(SA)),Inherit=true};nul=CreateFile("NUL",0xc0000000,3,ref attributes,3,0,IntPtr.Zero);Need(nul!=IntPtr.Zero&&nul!=new IntPtr(-1),"STDIO_UNAVAILABLE");var startup=new SI{Size=Marshal.SizeOf(typeof(SI)),Desktop="winsta0\\default",Flags=0x100,Input=nul,Output=nul,Error=nul};
-      Need(CreateProcessWithTokenW(token,0,image,new System.Text.StringBuilder(command),0x08000404,block,directory,ref startup,out child),"LAUNCH_UNAVAILABLE");
+      bool createdChild=CreateProcessWithTokenW(token,0,image,new System.Text.StringBuilder(command),0x08000404,block,directory,ref startup,out child);
+      if(!createdChild){int error=Marshal.GetLastWin32Error();launchCall=LaunchCall.CREATE_PROCESS_WITH_TOKEN;launchError=Win32Failure(error);}Need(createdChild,"LAUNCH_UNAVAILABLE");
       Need(AssignProcessToJobObject(job,child.Process),"JOB_UNAVAILABLE");long created,exited,kernel,user;Need(GetProcessTimes(child.Process,out created,out exited,out kernel,out user),"IDENTITY_UNVERIFIED");long start=DateTime.FromFileTimeUtc(created).Ticks;var path=new System.Text.StringBuilder(32768);uint length=32768;Need(QueryFullProcessImageName(child.Process,0,path,ref length)&&String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(path.ToString()),StringComparison.OrdinalIgnoreCase),"IDENTITY_UNVERIFIED");
       var fact=OwnedGuiIntegrity.Query(child.Id,start.ToString(CultureInfo.InvariantCulture));TokenNeed(fact[0]!="UNVERIFIED"&&fact[0]!="IDENTITY_UNVERIFIED"&&fact[1]!="UNVERIFIED",TokenReason.CHILD_TOKEN_UNVERIFIED);TokenNeed(fact[0]=="MEDIUM",TokenReason.CHILD_NOT_MEDIUM);TokenNeed(fact[1]=="NOT_ELEVATED",TokenReason.CHILD_ELEVATED);
-      managed=System.Diagnostics.Process.GetProcessById(child.Id);IntPtr retained=managed.SafeHandle.DangerousGetHandle();Need(managed.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");Need(ResumeThread(child.Thread)==1,"LAUNCH_UNAVAILABLE");processes.Add(child.Process);child.Process=IntPtr.Zero;admitted=true;return managed;
+      managed=System.Diagnostics.Process.GetProcessById(child.Id);IntPtr retained=managed.SafeHandle.DangerousGetHandle();Need(managed.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");uint count=ResumeThread(child.Thread);if(count!=1){int error=count==uint.MaxValue?Marshal.GetLastWin32Error():0;launchCall=LaunchCall.RESUME_THREAD;launchError=ResumeFailure(count,error);}Need(count==1,"LAUNCH_UNAVAILABLE");processes.Add(child.Process);child.Process=IntPtr.Zero;admitted=true;return managed;
     }finally{bool closed=true;if(!admitted&&child.Process!=IntPtr.Zero){closed &= TerminateProcess(child.Process,1);closed &= WaitForSingleObject(child.Process,10000)==0;closed &= CloseHandle(child.Process);if(managed!=null)managed.Dispose();}if(child.Thread!=IntPtr.Zero)closed &= CloseHandle(child.Thread);if(nul!=IntPtr.Zero&&nul!=new IntPtr(-1))closed &= CloseHandle(nul);if(block!=IntPtr.Zero)Marshal.FreeHGlobal(block);Need(closed,"CLEANUP_UNVERIFIED");}
   }
   public void Stop(long deadline){if(job==IntPtr.Zero)return;try{Need(TerminateJobObject(job,1),"CLEANUP_UNVERIFIED");IntPtr data=Marshal.AllocHGlobal(48);try{uint length;while(true){Need(QueryInformationJobObject(job,1,data,48,out length)&&length>=44,"CLEANUP_UNVERIFIED");if(Marshal.ReadInt32(data,40)==0)break;Need(DateTime.UtcNow.Ticks<deadline,"CLEANUP_UNVERIFIED");System.Threading.Thread.Sleep(10);}}finally{Marshal.FreeHGlobal(data);}}finally{Dispose();}}
