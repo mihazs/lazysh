@@ -116,6 +116,25 @@ The original window identity or closed rejection is written before this snapshot
 
 This is a foundation gate; its first actual Windows execution remains required before merge. It does not establish warm singleton argv, ConPTY terminal behavior or authenticated SSH, which remain under #457. Published 0.23.0 assets are untouched; CI evidence belongs to its exact candidate source/binary.
 
+The passive UIA snapshot can additionally retain `englishControlCounts` with exactly
+`about`, `checking`, `locked`, `error` and `workspace`, each 0–2; 2 means two or
+more eligible controls. The existing single own-HWND query uses a finite allowlist
+from the English source: the versioned About button, access-check/locked headings,
+three fixed access-error messages, Add a host and Preferences. Only enabled,
+on-offscreen controls from retained owned providers within the unchanged physical
+client rectangle contribute. At most 16 matching candidates are processed. Counts
+are published only after the existing worker join and COM/DPI cleanup, then the
+original process/image lifetime fences are checked again.
+
+These are English-label observations, not an OS-locale assertion, DOM inventory,
+paint/performance measurement or GUI acceptance. No locale is forced. A zero or
+ambiguous count, an unknown locale or absent accessibility exposure cannot show
+that the document, JavaScript or React is absent. Unknown text is never mapped to
+an error state or retained. Positive counts cannot turn the original failed
+NewSession into success; the normal frontend/About/source checks remain required.
+No input, focus action, app IPC, script injection, browser flags or retries are
+added, and the existing session/probe/worker budgets remain unchanged.
+
 ## Owned SSH connection
 
 The Linux suite also creates a fresh loopback OpenSSH server using the same `SshFixture` as Android acceptance. Its portable process/SSH owner lives in `tests/support/sshFixture.ts`; Android keeps its existing re-exports. The test adds a host through the bundled UI, chooses SSH explicitly, enters only the ephemeral private key without saving it, reviews the exact generated host fingerprint and confirms trust. Ordinary terminal keyboard input must produce the fixture's non-echoable challenge output while the original GUI owner remains unchanged. The singleton cases retain their separate zero-connection target.

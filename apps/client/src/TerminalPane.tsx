@@ -9,6 +9,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Keyboard, KeyboardOff, Paperclip, ClipboardPaste, SquarePen, X } from "lucide-react";
 import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
+import type {UnappliedTerminalEdit} from "./terminalIme";
 import { modifiedTerminalText, observeTerminalInput, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
@@ -60,7 +61,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   modifierState.current = {ctrl, ctrlLocked, meta, metaLocked, shift};
   const inputLane = useRef<"keyboard" | "literal" | null>(null);
   const literalPaste = useRef(false);
-  const imeInput = useRef<{reset(): void; flush(): void; resume(): void} | null>(null);
+  const imeInput = useRef<{reset(): void; flush(): boolean; resume(): void; dismiss(): void} | null>(null);
   const pointerInputEvent = useRef<Event | null>(null);
   const keyboardInputEvent = useRef<Event | null>(null);
   const repeated = useRef(false);
@@ -68,8 +69,9 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   function stopRepeat() {clearTimeout(repeat.current.delay); clearInterval(repeat.current.timer); repeat.current = {};}
   function clearModifiers() {setCtrl(false); setCtrlLocked(false); setMeta(false); setMetaLocked(false); setShift(false); modifierState.current = {ctrl:false, ctrlLocked:false, meta:false, metaLocked:false, shift:false}; inputLane.current = null; pointerInputEvent.current = null; keyboardInputEvent.current = null; stopRepeat();}
   function consumeModifiers() {const state = modifierState.current; if (!state.ctrlLocked) {state.ctrl = false; setCtrl(false);} if (!state.metaLocked) {state.meta = false; setMeta(false);}}
-  function pasteLiteral(text: string) {imeInput.current?.flush(); literalPaste.current = true; try {session.terminal.paste(text);} finally {literalPaste.current = false;}}
+  function pasteLiteral(text: string) {if (imeInput.current?.flush() === false) return false; literalPaste.current = true; try {session.terminal.paste(text); return true;} finally {literalPaste.current = false;}}
   const sendNamedRef = useRef<(key: string, physical?: KeyboardEvent) => void>(() => {});
+  const [unappliedEdit, setUnappliedEdit] = useState<UnappliedTerminalEdit | null>(null);
   const [clipboard, setClipboard] = useState<string | null>(null);
   const pendingClipboard = useRef(false);
   const pasteRead = useRef<AbortController | null>(null);
@@ -256,7 +258,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         if (!pointerInput) inputLane.current = null;
       }
       if (session.connected) void api.write(session.id, value).catch(error => reportError(String(error)));
-    }, acceptsInput);
+    }, acceptsInput, setUnappliedEdit);
     imeInput.current = output;
     setModifierInput(output.available);
     const size = terminal.onResize(({ cols, rows }) => {
@@ -303,7 +305,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   function sendNamed(key: string, physical?: KeyboardEvent) {
     if (!activeRef.current || !session.connected || !mounted.current || !access.current()) return;
     if (document.hidden) {clearModifiers(); repeated.current = true; return;}
-    imeInput.current?.flush();
+    if (imeInput.current?.flush() === false) return;
     const state = modifierState.current;
     const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${(state.shift && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
     try {void api.write(session.id, key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(String(error)));}
@@ -347,7 +349,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
       // The retained terminal may now have a fresh onData handler after unlock.
       if (!current()) return;
       checkPasteSize(text, session.terminal.modes?.bracketedPasteMode);
-      pasteLiteral(text); focusTerminal();
+      if (pasteLiteral(text)) focusTerminal();
     }
     catch { if (current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
     finally {
@@ -381,7 +383,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (!keys) {reportError(new LocalUiError('terminalChordRequired')); return false;}
     try {
       const steps = parseChordSteps(keys);
-      imeInput.current?.flush();
+      if (imeInput.current?.flush() === false) return false;
       void api.writeSequence(session.id, steps).catch(error => {if (current()) reportError(errorMessage(error));});
       return true;
     } catch (error) {if (current()) reportError(error instanceof LocalUiError?error:errorMessage(error)); return false;}
@@ -391,7 +393,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (Object.hasOwn(zellijActions, action)) {
       if (!mounted.current || !access.current() || !activeRef.current || !session.connected || zellijBusy.current || imeComposing.current || session.terminal.hasSelection()) return;
       if (session.local || session.attached?.kind !== 'zellij') {reportError(new LocalUiError('terminalZellijRequired')); return;}
-      imeInput.current?.flush();
+      if (imeInput.current?.flush() === false) return;
       zellijBusy.current = true;
       void api.zellijNavigate(session.id, session.attached.name, zellijActions[action as keyof typeof zellijActions])
         .catch(error => {if (mounted.current && access.current() && activeRef.current && session.connected) reportError(errorMessage(error));})
@@ -410,7 +412,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     }
     else {
       const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
-      if (keys && session.connected) {imeInput.current?.flush(); void api.write(session.id, keys).catch(error => reportError(String(error)));}
+      if (keys && session.connected && imeInput.current?.flush() !== false) {void api.write(session.id, keys).catch(error => reportError(String(error)));}
     }
   }
   function cancelTaps() {
@@ -499,6 +501,17 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
   return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>}
+    <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>
+    {unappliedEdit && <details className="terminal-edit-review">
+      <summary>{t('terminalEditNotSent')}</summary>
+      <p>{t('terminalEditContext')}</p>
+      <pre>{unappliedEdit.text}</pre>
+      {unappliedEdit.truncated && <p role="status">{t('terminalEditTruncated')}</p>}
+      <button type="button" disabled={unappliedEdit.truncated} onClick={() => {
+        if (activeRef.current && session.connected && !document.hidden && document.hasFocus()) void copy(unappliedEdit.text);
+      }}>{t('terminalEditCopy')}</button>
+      <button type="button" onClick={() => {imeInput.current?.dismiss(); focusTerminal();}}>{t('terminalEditDismiss')}</button>
+    </details>}
     {clipboard !== null && <div className="terminal-consent" role="region" aria-label={t('terminalClipboardRegion')}>
       <p>{t("terminalClipboardPrompt",{count:clipboard.length,characters:formatNumber(clipboard.length)})}</p>
       <pre>{clipboard.slice(0, 500)}{clipboard.length > 500 ? "…" : ""}</pre>
@@ -515,7 +528,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     </form>}
     <div ref={container} className="terminal-canvas" style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
-      <div className="terminal-compose-actions"><button type="button" className="icon-button" title={t('terminalPasteDraft')} aria-label={t('terminalPasteDraft')} disabled={!session.connected || !draft} onClick={() => {pasteLiteral(draft); setDraft(""); focusTerminal();}}><ClipboardPaste size={18} aria-hidden="true" /></button><button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={() => setComposing(false)}><X size={18} aria-hidden="true" /></button></div>
+      <div className="terminal-compose-actions"><button type="button" className="icon-button" title={t('terminalPasteDraft')} aria-label={t('terminalPasteDraft')} disabled={!session.connected || !draft || !!unappliedEdit} onClick={() => {if (pasteLiteral(draft)) {setDraft(""); focusTerminal();}}}><ClipboardPaste size={18} aria-hidden="true" /></button><button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={() => setComposing(false)}><X size={18} aria-hidden="true" /></button></div>
     </div>}
     {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
@@ -533,7 +546,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         const action = () => {
           if (modifier) {
             if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
-            imeInput.current?.flush(); imeInput.current?.reset(); imeComposing.current = false;
+            if (imeInput.current?.flush() === false) return;
+            imeInput.current?.reset(); imeComposing.current = false;
           }
           if (key === "ctrl" || key === "meta") cycleModifier(key);
           else if (key === "altgr") {const both = modifierState.current.ctrl && modifierState.current.meta; if (both || !modifierState.current.ctrl) cycleModifier("ctrl"); if (both || !modifierState.current.meta) cycleModifier("meta");}

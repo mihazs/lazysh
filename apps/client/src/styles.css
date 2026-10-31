@@ -1522,8 +1522,8 @@ button svg {
 .preferences-panel summary { cursor: pointer; padding: 8px 0; }
 .preferences-panel li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .preferences-panel li > span { min-width: 80px; }
-.preferences-panel button, .terminal-consent button, .terminal-search button, .terminal-compose button { padding: 9px 12px; background: var(--theme-control, #26331e); border: 1px solid var(--theme-border, #46573c); color: var(--theme-text, #e0e8da); border-radius: 5px; margin: 3px; }
-.preferences-panel button:disabled, .terminal-compose button:disabled { opacity: .5; }
+.preferences-panel button, .terminal-edit-review button, .terminal-consent button, .terminal-search button, .terminal-compose button { padding: 9px 12px; background: var(--theme-control, #26331e); border: 1px solid var(--theme-border, #46573c); color: var(--theme-text, #e0e8da); border-radius: 5px; margin: 3px; }
+.preferences-panel button:disabled, .terminal-edit-review button:disabled, .terminal-compose button:disabled { opacity: .5; }
 .terminal-consent { background: var(--theme-control, #27331f); padding: 12px; max-height: 220px; overflow: auto; overflow-wrap: anywhere; }
 .terminal-consent pre { white-space: pre-wrap; max-height: 100px; overflow: auto; }
 .terminal-search { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 7px 12px; }
@@ -1806,3 +1806,9 @@ button svg {
   [data-mobile-presentation="page"] .dialog-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .terminal-compose { padding-inline: 8px; }
 }
+
+.terminal-edit-review { flex: 0 0 auto; padding: 6px 12px; background: var(--theme-control); overflow: auto; max-height: min(180px, 30%); }
+.terminal-edit-review summary { cursor: pointer; }
+.terminal-edit-review p { margin: 6px 0; }
+.terminal-edit-review pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 80px; overflow: auto; }
+.terminal-edit-review button { margin-inline-end: 8px; }

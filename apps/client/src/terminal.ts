@@ -1,5 +1,5 @@
 import { Terminal } from "@xterm/xterm";
-import { observeTerminalIme } from "./terminalIme";
+import { observeTerminalIme, type UnappliedTerminalEdit } from "./terminalIme";
 import { getPreferences, terminalOptions } from "./preferences";
 import { fontFamilyFor } from "./fonts";
 export { applyTerminalTheme } from "./terminalBold";
@@ -32,7 +32,7 @@ export type LiveSession = {
 /** xterm 5.5 fires this private event synchronously before user-originated onData.
  * This marker is read-only; the IME adapter below is separately version-pinned.
  */
-export function observeTerminalInput(terminal: Terminal, listener: (data: string, userInput: boolean) => void, acceptsInput: () => boolean = () => true) {
+export function observeTerminalInput(terminal: Terminal, listener: (data: string, userInput: boolean) => void, acceptsInput: () => boolean = () => true, onUnappliedEdit: (edit: UnappliedTerminalEdit | null) => void = () => {}) {
   const completionArea = terminal.textarea && /Android/i.test(navigator.userAgent) ? terminal.textarea : undefined;
   const previousAutocomplete = completionArea?.getAttribute('autocomplete');
   completionArea?.setAttribute('autocomplete', 'off');
@@ -42,9 +42,9 @@ export function observeTerminalInput(terminal: Terminal, listener: (data: string
   try {if (typeof core?.onUserInput === "function") marker = core.onUserInput(() => {userInput = true;});}
   catch { /* Unknown internals disable only virtual modifiers. */ }
   const available = !!marker && typeof marker.dispose === "function";
-  const ime = available ? observeTerminalIme(terminal, () => userInput, acceptsInput) : undefined;
-  const output = terminal.onData(data => {const user = userInput; userInput = false; listener(data, available && user);});
-  return {available, reset: () => ime?.reset(), clear: () => ime?.clear(), resume: () => ime?.resume(), flush: () => ime?.flush(), dispose() {
+  const ime = available ? observeTerminalIme(terminal, () => userInput, acceptsInput, onUnappliedEdit) : undefined;
+  const output = terminal.onData(data => {const user = userInput; userInput = false; if (!(available && user && ime?.blocked)) listener(data, available && user);});
+  return {available, reset: () => ime?.reset(), clear: () => ime?.clear(), resume: () => ime?.resume(), flush: () => ime?.flush() ?? true, dismiss: () => ime?.dismiss(), dispose() {
     ime?.dispose(); output.dispose(); if (available) marker!.dispose();
     if (completionArea) {
       if (previousAutocomplete == null) completionArea.removeAttribute('autocomplete');

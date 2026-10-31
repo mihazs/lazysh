@@ -1,6 +1,7 @@
 //! Native lifecycle adapters observe status; they never answer approvals.
 use crate::{field, Event, Result, SessionState};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 pub(crate) fn command_config(agent: &str, events: &[&str], timeout: u16) -> Value {
     let mut hooks = serde_json::Map::new();
@@ -174,6 +175,44 @@ pub(crate) fn amp_event(payload: &Value, pane: Option<&str>) -> Result<Option<Ev
     Ok(Some(Event {
         session_id: field(payload, "threadId", 256)?,
         agent: "Amp".into(),
+        project: field(payload, "directory", 4096)?,
+        state,
+        summary: summary.into(),
+        pane_id: pane.map(str::to_owned),
+    }))
+}
+
+pub fn cline_plugin() -> Value {
+    json!({"schemaVersion":1,"filename":"lazysh.js","scope":"root-only","content":include_str!("../hooks/cline.js")})
+}
+
+pub(crate) fn cline_event(payload: &Value, pane: Option<&str>) -> Result<Option<Event>> {
+    if payload.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+        return Err(crate::Error::InvalidEvent);
+    }
+    match payload.get("parentAgentId") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(parent)) if parent.is_empty() => {}
+        Some(Value::String(_)) => return Ok(None),
+        _ => return Err(crate::Error::InvalidEvent),
+    }
+    let agent = field(payload, "agentId", 256)?;
+    let conversation = field(payload, "conversationId", 256)?;
+    field(payload, "runId", 256)?;
+    let (state, summary) = match payload.get("status").and_then(Value::as_str) {
+        Some("start") => (SessionState::Working, "Working"),
+        Some("completed") => (SessionState::Done, "Turn finished"),
+        Some("aborted") => (SessionState::Done, "Turn stopped"),
+        Some("failed") => (SessionState::NeedsAttention, "Turn failed"),
+        _ => return Ok(None),
+    };
+    Ok(Some(Event {
+        // Validated identities exclude NUL, making this native pair unambiguous.
+        session_id: format!(
+            "cline:{:x}",
+            Sha256::digest(format!("cline-v1\0{agent}\0{conversation}").as_bytes())
+        ),
+        agent: "Cline CLI".into(),
         project: field(payload, "directory", 4096)?,
         state,
         summary: summary.into(),

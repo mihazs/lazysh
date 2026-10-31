@@ -1,3 +1,4 @@
+import {english} from '../apps/client/src/i18n/en';
 import { expect, test } from 'bun:test';
 import { appendFile, mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1130,6 +1131,23 @@ test('owned frontend evidence remains finite and requires the already observed e
   expect(()=>parseWindowsGuiStartup({available:false,overflow:false,signature:'UNVERIFIED',frontendReason:'SOURCE_REJECTED'})).toThrow();
 });
 
+test('Windows English control counts stay finite, source-bound and separate from GUI acceptance',()=>{
+  const counts={about:0,checking:1,locked:0,error:2,workspace:0};
+  const value={...startupFixture(),appIntegrity:'HIGH',appElevation:'ELEVATED',frontend:'UNVERIFIED',frontendReason:'NO_ABOUT',englishControlCounts:counts};
+  expect(parseWindowsGuiStartup(value)).toEqual(value);
+  expect(windowsGuiStartupProbe('owned-core\nLAZYSH_WINDOWS_GUI_STARTUP:'+JSON.stringify(value))).toEqual({core:'owned-core',startup:value});
+  const labels=windowsGuiAccessibilitySource.replace(/\\u([a-fA-F0-9]{4})/g,(_,code:string)=>String.fromCharCode(parseInt(code,16)));
+  for(const key of ['accessCheckingDeviceAccess','accessLazyshIsLocked','accessNativeAppLockStatusIsUnavailable','accessNativeAppLockStatusIsUnavailableRestartLazyshTo','accessNativeAppUnlockCouldNotFinish','appAddAHost','appPreferences'] as const)
+    expect(labels).toContain(JSON.stringify(english[key]));
+  for(const englishControlCounts of [null,[],{},'private text',{...counts,path:'private'}, {...counts,checking:-1},{...counts,error:3},{...counts,workspace:0.5},{...counts,locked:true},{...counts,about:1}])
+    expect(()=>parseWindowsGuiStartup({...value,englishControlCounts})).toThrow();
+  for(const change of [{frontend:undefined},{frontendReason:'TIMEOUT'},{frontendReason:'NOT_ADMITTED'},{appIntegrity:'MEDIUM'},{appElevation:'UNVERIFIED'}])
+    expect(()=>parseWindowsGuiStartup({...value,...change})).toThrow();
+  expect(()=>parseWindowsGuiStartup({...value,frontend:'EXACT_ABOUT_ACTION_OBSERVED',frontendReason:'OBSERVED'})).toThrow();
+  expect(parseWindowsGuiStartup({...value,frontend:'EXACT_ABOUT_ACTION_OBSERVED',frontendReason:'OBSERVED',englishControlCounts:{...counts,about:1}})).toMatchObject({englishControlCounts:{about:1}});
+  expect(()=>parseWindowsGuiStartup({available:false,overflow:false,signature:'UNVERIFIED',englishControlCounts:counts})).toThrow();
+});
+
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('owned UIA candidate contract rejects unknown providers, hidden controls and invalid physical rectangles',async()=>{
   const script=windowsGuiStartupScript+String.raw`
 $ErrorActionPreference='Stop'
@@ -1141,10 +1159,22 @@ if(!$about.Invoke($null,$base)){throw 'exact bounded candidate rejected'}
 foreach($case in @(@(1,'About lazysh · 1.1.5'),@(1,'about lazysh · 1.1.4'),@(2,50001),@(3,$false),@(4,$true),@(5,99),@(6,[int[]]@()),@(6,[int[]](1..34)),@(7,[double[]]@(9,12,20,10)),@(7,[double[]]@(11,12,0,10)),@(7,[double[]]@(11,12,20,-1)),@(7,[double[]]@(11,12,40,10)),@(7,[double[]]@(11,12,20,40)),@(7,[double[]]@([double]::NaN,12,20,10)),@(7,[double[]]@(11,[double]::PositiveInfinity,20,10)),@(7,[double[]]@(11,12,20)),@(8,[double[]]@(10,10,9,50)))){
   $changed=$base.Clone();$changed[$case[0]]=$case[1];if($about.Invoke($null,$changed)){throw 'unverified UIA candidate admitted'}
 }
+$category=[OwnedGuiAccessibility].GetMethod('Category',$flags)
+$labels=[OwnedGuiAccessibility].GetMethod('Labels',$flags).Invoke($null,@('1.1.4'))
+for($index=0;$index -lt $labels.Length;$index++){
+  $type=if($index -eq 0 -or $index -ge 6){50000}else{50020}
+  $expected=if($index -eq 0){0}elseif($index -le 2){$index}elseif($index -le 5){3}else{4}
+  if($category.Invoke($null,@('1.1.4',$labels[$index],$type)) -ne $expected){throw 'exact English control rejected'}
+  foreach($bad in @($labels[$index]+' private',$labels[$index].ToUpperInvariant(),'/private/path')){
+    if($category.Invoke($null,@('1.1.4',$bad,$type)) -ne -1){throw 'unknown label mapped to a product state'}
+  }
+  if($category.Invoke($null,@('1.1.4',$labels[$index],50001)) -ne -1){throw 'unknown control role admitted'}
+}
+foreach($index in 1..2){if($category.Invoke($null,@('1.1.4',$labels[$index],50034)) -ne $index){throw 'heading label rejected'}}
 $countFailure=[OwnedGuiAccessibility].GetMethod('CountFailure',$flags)
 foreach($case in @(@(1,$null),@(0,'NO_ABOUT'),@(2,'AMBIGUOUS_ABOUT'),@(2147483647,'AMBIGUOUS_ABOUT'),@(-1,'COM_OR_CACHE_UNAVAILABLE'))){if($countFailure.Invoke($null,@($case[0])) -cne $case[1]){throw 'query count changed observation meaning'}}
 foreach($case in @(@(0L,7,'1.1.4',[int[]]@(7)),@(1L,0,'1.1.4',[int[]]@(7)),@(1L,7,'private',[int[]]@(7)),@(1L,7,'1.1.4',[int[]]@()),@(4294967296L,7,'1.1.4',[int[]]@(7)))){
-  [string]$reason='';if([OwnedGuiAccessibility]::Observe($case[0],$case[1],$case[2],$case[3],[ref]$reason) -ne 0 -or $reason -cne 'INPUT_REJECTED'){throw 'invalid root reached UIA'}
+  [string]$reason='';[int[]]$counts=$null;if([OwnedGuiAccessibility]::Observe($case[0],$case[1],$case[2],$case[3],[ref]$reason,[ref]$counts) -ne 0 -or $reason -cne 'INPUT_REJECTED' -or $null -ne $counts){throw 'invalid root reached UIA'}
 }
 $env:LAZYSH_GUI_ACCESSIBILITY_PROBE='0';$notAdmitted=GuiAccessibility @(7)
 if($notAdmitted.Count -ne 2 -or $notAdmitted[0] -cne 'UNVERIFIED' -or $notAdmitted[1] -cne 'NOT_ADMITTED'){throw 'unselected observation reached UIA'}
@@ -1160,13 +1190,14 @@ $complete=$true;$script:metadataEligible=$true;$script:metadataAppId=3;$script:m
 function GuiImageIdentity { return !$script:retired }
 function Get-Item { [PSCustomObject]@{VersionInfo=[PSCustomObject]@{ProductVersion='1.2.3.4'}} }
 function GuiAppToken { return @($script:testIntegrity,$script:testElevation) }
-function GuiAccessibility { $script:observations++;if($script:retireAfter){$script:retired=$true};return @('EXACT_ABOUT_ACTION_OBSERVED','OBSERVED') }
+function GuiAccessibility { $script:observations++;if($script:retireAfter){$script:retired=$true};return @('EXACT_ABOUT_ACTION_OBSERVED','OBSERVED',@{about=1;checking=0;locked=0;error=0;workspace=2}) }
 foreach($case in @(@('0','HIGH','ELEVATED',$false,$null,0),@('1','HIGH','ELEVATED',$false,'EXACT_ABOUT_ACTION_OBSERVED',1),@('1','MEDIUM','NOT_ELEVATED',$false,'UNVERIFIED',0),@('1','HIGH','UNVERIFIED',$false,'UNVERIFIED',0),@('1','HIGH','ELEVATED',$true,$null,1))){
   $env:LAZYSH_GUI_ACCESSIBILITY_PROBE=$case[0];$script:testIntegrity=$case[1];$script:testElevation=$case[2];$script:retireAfter=$case[3];$script:retired=$false;$script:observations=0
   $snapshot=GuiStartupSnapshot
   if($script:observations -ne $case[5]){throw 'UIA observation escaped failure/high gate'}
   $expectedReason=if($null -eq $case[4]){$null}elseif($case[4] -ceq 'EXACT_ABOUT_ACTION_OBSERVED'){'OBSERVED'}else{'NOT_ADMITTED'}
-  if($case[3]){if($snapshot.available -or $snapshot.frontend -or $snapshot.frontendReason){throw 'retired lifetime published UIA positive'}}elseif(!$snapshot.available -or $snapshot.frontend -cne $case[4] -or $snapshot.frontendReason -cne $expectedReason){throw 'optional UIA changed snapshot/core semantics'}
+  if($case[3]){if($snapshot.available -or $snapshot.frontend -or $snapshot.frontendReason -or $snapshot.englishControlCounts){throw 'retired lifetime published UIA positive'}}elseif(!$snapshot.available -or $snapshot.frontend -cne $case[4] -or $snapshot.frontendReason -cne $expectedReason){throw 'optional UIA changed snapshot/core semantics'}
+  if(!$case[3] -and $case[4] -ceq 'EXACT_ABOUT_ACTION_OBSERVED'){if($snapshot.englishControlCounts.workspace -ne 2){throw 'bounded control counts not retained'}}elseif($snapshot.englishControlCounts){throw 'unadmitted control counts retained'}
 }
 [Console]::Out.Write('PORTABLE_UIA_CONTRACT')
 `;
