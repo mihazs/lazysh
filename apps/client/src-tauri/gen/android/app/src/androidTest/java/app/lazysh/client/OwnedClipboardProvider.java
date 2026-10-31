@@ -20,8 +20,7 @@ import java.util.Objects;
 public final class OwnedClipboardProvider extends ContentProvider {
     @Override public boolean onCreate() { return true; }
 
-    private String kind(Uri uri) {
-        Context context = Objects.requireNonNull(getContext());
+    static void requireTargetCaller(Context context) {
         int target;
         try {
             target = context.getPackageManager().getApplicationInfo("app.lazysh.client", 0).uid;
@@ -30,6 +29,10 @@ public final class OwnedClipboardProvider extends ContentProvider {
         }
         if (Binder.getCallingUid() != target && Binder.getCallingUid() != Process.myUid())
             throw new IllegalStateException("Clipboard fixture caller rejected");
+    }
+
+    private String kind(Uri uri) {
+        requireTargetCaller(Objects.requireNonNull(getContext()));
         String path = uri.getPath();
         if (!"content".equals(uri.getScheme()) || !"app.lazysh.client.test.clipboardfixture".equals(uri.getAuthority())
                 || uri.getQuery() != null || uri.getFragment() != null

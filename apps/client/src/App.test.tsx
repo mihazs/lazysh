@@ -1657,15 +1657,75 @@ it('retains only class-branded global failures across locales and preserves ever
   }finally{await act(async()=>{await uiI18n.changeLanguage('en');});}
 });
 
+it.each(['tmux','herdr','zellij'] as const)('enters the saved Mosh default %s directly without creating an SSH display',async kind=>{
+  enableTransports();
+  const target={kind,name:'named-work'};
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'mosh',defaultMultiplexer:target}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'entry-control'});
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'entry-mosh'});
+  const user=await openConnection();
+  expect(screen.getByLabelText('Transport')).toHaveProperty('value','mosh');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.connectMosh).toHaveBeenCalledExactlyOnceWith('entry-control',
+    {serverPath:'mosh-server',portMin:60000,portMax:61000},expect.any(Function),{...target,createIfMissing:true});
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+  expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  expect(mocks.api.adoptSession).toHaveBeenCalledWith('entry-mosh');
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'entry-control'});
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.saveHost).not.toHaveBeenCalled();
+  const saved=vi.mocked(localStorage.setItem).mock.calls.filter(([key])=>key==='lazysh.workspace.v1').at(-1);
+  expect(JSON.parse(saved![1])).toEqual([{hostId:host.id,mosh:{serverPath:'mosh-server',portMin:60000,portMax:61000},attached:target}]);
+});
+it.each(['mosh_entry_startup_failed','herdr_guard_startup_unsupported','mosh_entry_unsupported_host'])('does not retry an Auto multiplexer admission failure %s as another display',async kind=>{
+  enableTransports();
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'auto',defaultMultiplexer:{kind:'herdr',name:'work'}}]);
+  mocks.api.connectMosh.mockRejectedValue({kind,message:'Owned entry admission failed'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  expect((await screen.findByRole('alert')).textContent).toContain('Owned entry admission failed');
+  expect(mocks.api.connectMosh).toHaveBeenCalledOnce();
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  expect(mocks.api.adoptSession).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'verified-control'});
+});
+it('uses SSH for default entry Auto only after a safe pre-dispatch Mosh fallback',async()=>{
+  enableTransports();
+  const target={kind:'herdr' as const,name:'work'};
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'auto',defaultMultiplexer:target}]);
+  mocks.api.connectMosh.mockRejectedValue({kind:'mosh_unsupported',message:'Unsupported platform before bootstrap'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'auto-entry-ssh'});
+  const user=await openConnection();
+  expect(screen.getByRole('option',{name:'Auto (Mosh, then SSH)'})).toBeTruthy();
+  await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  expect(mocks.api.attachDefaultMultiplexer).toHaveBeenCalledExactlyOnceWith('verified-control',target,expect.any(Function));
+  expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  const saved=vi.mocked(localStorage.setItem).mock.calls.filter(([key])=>key==='lazysh.workspace.v1').at(-1);
+  expect(JSON.parse(saved![1])).toEqual([{hostId:host.id,auto:autoOptions,attached:target}]);
+});
+it.each(['mosh','auto'] as const)('restores an exact %s attachment and tmux server instead of the saved host default',async mode=>{
+  enableTransports();
+  const attached={kind:'tmux' as const,name:'actual-work',tmuxServer:'agents'};
+  const intent={hostId:host.id,attached,...(mode==='auto'?{auto:autoOptions}:{mosh:autoOptions.mosh})};
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([intent]):null);
+  mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'different'}}]);
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'restored-mosh-entry'});
+  const user=userEvent.setup();render(<App/>);await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));await screen.findByText('Live SSH terminal');
+  expect(mocks.api.connectMosh).toHaveBeenCalledExactlyOnceWith('verified-control',autoOptions.mosh,expect.any(Function),attached);
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();expect(mocks.api.attachTmux).not.toHaveBeenCalled();
+  expect(mocks.api.adoptSession).toHaveBeenCalledWith('restored-mosh-entry');
+  const saved=vi.mocked(localStorage.setItem).mock.calls.filter(([key])=>key==='lazysh.workspace.v1').at(-1);
+  expect(JSON.parse(saved![1])).toEqual([intent]);
+});
 it.each(['tmux','herdr','zellij'] as const)('enters the saved named %s directly through SSH and retires only its bootstrap',async kind=>{
   const target={kind,name:kind==='herdr' ? 'named-work' : "work 'literal;"};
-  mocks.api.listHosts.mockResolvedValue([{...host,transport:'mosh',defaultMultiplexer:target}]);
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'ssh',defaultMultiplexer:target}]);
   mocks.api.connect.mockResolvedValue({sessionId:'default-parent'});
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'default-child'});
   const user=await openConnection();
   expect(screen.getByLabelText('Transport')).toHaveProperty('value','ssh');
-  expect(screen.getByLabelText('Transport')).toHaveProperty('disabled',true);
-  expect(screen.getByText(/Direct multiplexer entry uses SSH. The saved transport preference is unchanged./)).toBeTruthy();
+  expect(screen.getByLabelText('Transport')).toHaveProperty('disabled',false);
+  expect(screen.getByText(/Direct multiplexer entry supports SSH or Mosh./)).toBeTruthy();
   await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
   expect(mocks.api.attachDefaultMultiplexer).toHaveBeenCalledExactlyOnceWith('default-parent',target,expect.any(Function));

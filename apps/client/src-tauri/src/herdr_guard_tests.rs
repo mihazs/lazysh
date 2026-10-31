@@ -1,6 +1,28 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn mosh_guard_startup_requires_the_exact_positive_fd_capability() {
+    assert!(startup_fd_capability(
+        r#"{"schemaVersion":1,"startupFd":true}"#
+    ));
+    for rejected in [
+        "",
+        "guard_invalid",
+        r#"{"schemaVersion":1,"startupFd":false}"#,
+        r#"{"schemaVersion":2,"startupFd":true}"#,
+        r#"{"schemaVersion":1,"startupFd":1}"#,
+        r#"{"schemaVersion":1,"startupFd":true,"ticket":"private"}"#,
+        r#"{"schemaVersion":1,"startupFd":true,"startupFd":false}"#,
+    ] {
+        assert!(!startup_fd_capability(rejected));
+    }
+    assert_eq!(
+        attach_receipt("owned"),
+        "herdr --session 'owned' --guarded-attach --startup-fd 3"
+    );
+}
+
 fn private_frame() -> Vec<u8> {
     encode_frame(json!({"boot":"ab".repeat(32),"ticket":"cd".repeat(32)}))
 }

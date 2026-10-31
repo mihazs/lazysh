@@ -175,8 +175,9 @@ fn run_client_with_mode(
     attach_request: Option<(String, bool)>,
     attach_escape: Option<AttachEscapeState>,
     log_message: &'static str,
-    guarded_attach: bool,
+    ticket_output: Option<crate::guarded_input::startup::TicketOutput>,
 ) -> io::Result<()> {
+    let guarded_attach = ticket_output.is_some();
     if !guarded_attach {
         init_logging();
     }
@@ -316,8 +317,8 @@ fn run_client_with_mode(
             if guarded_attach {
                 let registered = handshake.guarded.take().ok_or_else(|| io::Error::other("guard_unavailable"))?;
                 loop_config.guarded_boot = Some(registered.boot.clone());
-                crate::guarded_input::startup::AttachTicket { boot: registered.boot, ticket: registered.ticket }
-                    .write_private_frame(&mut io::stdout().lock())?;
+                ticket_output.ok_or_else(|| io::Error::other("guard_unavailable"))?
+                    .write(crate::guarded_input::startup::AttachTicket { boot: registered.boot, ticket: registered.ticket })?;
                 init_logging();
                 crate::logging::startup("client");
                 #[cfg(not(windows))]

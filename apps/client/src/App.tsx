@@ -60,6 +60,7 @@ import {
   type SshEvent,
   type TransportMode,
   type AutoOptions,
+  type MultiplexerEntry,
   type HerdrNavigationTarget,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
@@ -169,31 +170,40 @@ async function selectTransport(
   alive: () => boolean,
   track: (id: string) => void = () => {},
   untrack: (id: string) => void = () => {},
+  entry?: MultiplexerEntry,
 ): Promise<Prepared> {
   const api = bindProtectedApi(nativeApi, lease);
   const pending = new PendingSessions(); pending.add(shell.session.id);
   const reasons: string[] = [];
   const ensureAlive = () => { if (!alive()) throw {kind:'cancelled', message:t("appConnectionCancelled")}; };
-  for (const kind of mode === 'auto' ? ['mosh', 'et'] as const : mode === 'ssh' ? [] : [mode]) {
+  const attempts=mode==='auto'?(entry?['mosh','ssh'] as const:['mosh','et'] as const):mode==='ssh'?(entry?['ssh'] as const:[]):[mode];
+  for (const kind of attempts) {
     ensureAlive();
-    const name = kind === 'mosh' ? 'Mosh' : 'Eternal Terminal';
-    if (mode === 'auto') {
+    const name = kind === 'mosh' ? 'Mosh' : kind==='et'?'Eternal Terminal':'SSH';
+    if (mode === 'auto' && kind!=='ssh') {
       const skip = host.jumpHostId ? t("appBastionRoutesUseSSH") : host.forwardAgent ? t("appSelectedIdentityForwardingRequiresSSH") : !capabilities[kind] ? capabilities.reason || t("appUnavailableInThisAppBuild") : '';
       if (skip) { reasons.push(`${name}: ${skip}`); continue; }
     }
-    const child = await prepareSession(host.id, host.name, `${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
+    const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
     try {
       ensureAlive();
-      const result = kind === 'mosh'
-        ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent)
-        : await api.connectEt(shell.session.id, options.et, child.onEvent);
+      const result = kind==='ssh' && entry
+        ? entry.createIfMissing
+          ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
+          : entry.kind==='tmux'
+            ? await api.attachTmux(shell.session.id,entry.name,child.onEvent,entry.tmuxServer)
+            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent)
+        : kind === 'mosh'
+          ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent,...(entry?[entry] as const:[]))
+          : await api.connectEt(shell.session.id, options.et, child.onEvent);
       child.establish(result.sessionId);
       pending.add(result.sessionId);
       track(result.sessionId);
       ensureAlive();
       if (!child.session.connected) throw {kind:'disconnected', message:t("appClosedBeforeConnection", {name})};
       if (kind === 'mosh') child.session.mosh = options.mosh;
-      else child.session.et = options.et;
+      else if(kind==='et') child.session.et = options.et;
+      if(entry)child.session.attached={kind:entry.kind,name:entry.name,...(entry.tmuxServer===undefined?{}:{tmuxServer:entry.tmuxServer})};
       if (mode === 'auto') {
         child.session.auto = options;
         child.session.transportNotice = t('appAutoSelected', {name, details: reasons.length ? ` ${reasons.join('; ')}.` : ''});
@@ -640,7 +650,7 @@ export function ConnectDialog({
   const [exportedIdentity, setExportedIdentity] = useState("");
   // Explicit launch receipts keep their original directory/multiplexer semantics.
   const defaultMultiplexer=launch || recovery ? undefined : host.defaultMultiplexer;
-  const [transport, setTransport] = useState<TransportMode>(recovery || launch?.mux || defaultMultiplexer ? "ssh" : host.transport ?? "ssh");
+  const [transport, setTransport] = useState<TransportMode>(recovery || launch?.mux || (defaultMultiplexer && host.transport==='et') ? "ssh" : host.transport ?? "ssh");
   const [moshAvailable, setMoshAvailable] = useState(false);
   const [etAvailable, setEtAvailable] = useState(false);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
@@ -708,7 +718,6 @@ export function ConnectDialog({
     setBusy(true);
     setError("");
     let session: LiveSession | undefined;
-    let bootstrap: LiveSession | undefined;
     try {
       if (accept && trust) {
         await (launch ? api.trustHostKey(trustHostId, trust, launch.receipt).catch(error=>{throw ownedLaunchError(error) ?? error;})
@@ -755,24 +764,12 @@ export function ConnectDialog({
         disposeTerminal(session);
         return;
       }
-      let selected: Prepared;
-      if(defaultMultiplexer) {
-        bootstrap=pending.session;
-        const child=await prepareSession(host.id,`${host.name} / ${defaultMultiplexer.name}`,pending.session.destination,lease);
-        session=child.session;
-        const result=await api.attachDefaultMultiplexer(pending.session.id,defaultMultiplexer,child.onEvent);
-        child.establish(result.sessionId);connectingSessions.current.add(result.sessionId);
-        if(!alive.current || !lease.current() || !child.session.connected)throw {kind:'disconnected',message:t('defaultMuxClosed')};
-        child.session.attached={...defaultMultiplexer};
-        await connectingSessions.current.close(pending.session.id);
-        disposeTerminal(pending.session);bootstrap=undefined;
-        selected=child;
-      } else selected = await selectTransport(pending, host, transport, {
+      const selected = await selectTransport(pending, host, transport, {
         mosh: {serverPath: moshServer, portMin: moshPortMin, portMax: moshPortMax},
         et: {serverPath: etServer, port: etPort},
       }, {mosh: moshAvailable, et: etAvailable, reason:capabilityReason}, lease, () => alive.current && lease.current(),
       (id) => connectingSessions.current.add(id),
-      (id) => connectingSessions.current.delete(id));
+      (id) => connectingSessions.current.delete(id),defaultMultiplexer?{...defaultMultiplexer,createIfMissing:true}:undefined);
       session = selected.session;
       if (!alive.current || !lease.current()) {
         await connectingSessions.current.close(session.id);
@@ -787,7 +784,6 @@ export function ConnectDialog({
     } catch (e) {
       await connectingSessions.current.closeAll().catch(() => {});
       disposeTerminal(session);
-      disposeTerminal(bootstrap);
       if (!alive.current || !lease.current()) return;
       const detail = e as SshError;
       if (!recovery && detail?.kind === "unknown_host_key" && detail.fingerprint) {
@@ -865,19 +861,19 @@ export function ConnectDialog({
           </p>
           {!recovery && <label>{t("appTransport")}<select
               value={transport}
-              disabled={busy || !!launch?.mux || !!defaultMultiplexer}
+              disabled={busy || !!launch?.mux}
               onChange={(event) =>
                 setTransport(event.target.value as TransportMode)
               }
             >
-              <option value="auto">{t("appAutoMoshThenETThenSSH")}</option>
+              <option value="auto">{t(defaultMultiplexer?'defaultMuxAuto':'appAutoMoshThenETThenSSH')}</option>
               <option value="ssh">SSH</option>
               <option value="mosh" disabled={!moshAvailable}>
                 Mosh{!moshAvailable ? t("appUnavailableForThisConnection") : ""}
               </option>
-              <option value="et" disabled={!etAvailable}>
+              <option value="et" disabled={!etAvailable || !!defaultMultiplexer}>
                 Eternal Terminal
-                {!etAvailable ? t("appUnavailableForThisConnection") : ""}
+                {!etAvailable || defaultMultiplexer ? t("appUnavailableForThisConnection") : ""}
               </option>
             </select>
           </label>}
@@ -1361,7 +1357,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
           child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
             intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, lease, ()=>mounted.current && lease.current(),
-            id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id));
+            id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id),intent.attached);
           restored.push(child.session);
         } else if (intent.attached) {
           child = await prepareSession(

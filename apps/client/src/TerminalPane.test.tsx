@@ -16,7 +16,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: () => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -42,6 +42,18 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+function mountInputOwner() {
+  const element=document.createElement('div'), textarea=document.createElement('textarea');
+  element.append(textarea); Object.assign(terminal,{element,textarea});
+  let mark!:()=>void, receive!:(data:string)=>void;
+  terminal._core.coreService.onUserInput=(listener:()=>void)=>{mark=listener;return{dispose(){}};};
+  terminal.onData=listener=>{receive=listener;return{dispose(){}};};
+  terminal.focus.mockImplementation(()=>textarea.focus());
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const view=render(<TerminalPane session={session} active reportError={vi.fn()} />);
+  const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
+  return {textarea,session,view,emit};
+}
 function touchScrollFixture() {
   const target = document.createElement('div');
   Object.assign(terminal, {element: target});
@@ -55,6 +67,32 @@ function touchScrollFixture() {
   return {view, canvas, wheels, touch};
 }
 describe("terminal interactions", () => {
+  it.each(['hidden','inactive','unfocused window','unfocused editor'] as const)('rejects user input for an %s context while preserving protocol replies',boundary=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(false);
+    try {
+      const owner=mountInputOwner();
+      owner.emit('foreground');expect(mocks.write).toHaveBeenLastCalledWith('ssh','foreground');mocks.write.mockClear();
+      if(boundary==='hidden'){hidden.mockReturnValue(true);fireEvent(document,new Event('visibilitychange'));}
+      else if(boundary==='inactive')owner.view.rerender(<TerminalPane session={owner.session} active={false} reportError={vi.fn()} />);
+      else if(boundary==='unfocused window')windowFocus.mockReturnValue(false);
+      else owner.textarea.blur();
+      owner.emit('late IME commit');expect(mocks.write).not.toHaveBeenCalled();
+      owner.emit('\x1b[1;1R',false);expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[1;1R');
+    } finally {windowFocus.mockRestore();hidden.mockRestore();}
+  });
+  it('preserves guarded composer paste with a focused composer instead of the terminal editor',()=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    try {
+      const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(text));
+      fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+      const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'owned draft'}});composer.focus();
+      expect(document.activeElement).toBe(composer);
+      fireEvent.click(screen.getByRole('button',{name:'Paste draft'}));
+      expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','owned draft');
+    } finally {windowFocus.mockRestore();}
+  });
+
   it('offers a metadata-only retry, reports loading, and requires a new Paste gesture after readiness', async () => {
     vi.stubGlobal('isTauri', true);
     mocks.clipboardIsAndroid.mockRejectedValueOnce(new Error('private metadata failure'));

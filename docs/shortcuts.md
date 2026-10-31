@@ -12,6 +12,17 @@ The session switcher stays in the header; multiple connections retain their tabs
 The terminal keys stay available above the keyboard. Desktop and nonterminal
 views keep their expanded navigation.
 
+Android terminal input requests autocomplete off alongside its existing autocorrect-off
+policy. This requests no dictionary suggestions from Android WebView without private
+keyboard mode; Compose keeps its existing normal text-editor hints. Keyboard providers
+can interpret these requests differently. The shared pinned xterm
+adapter owns Android and desktop composition completion and defers Enter until the final DOM commit;
+leaving the input context revokes its editor until a fresh gesture or app focus.
+Background and inactive user input is ignored. Trailing corrections that erase
+only printable ASCII use terminal Backspace edits. Complex non-ASCII erasures
+keep upstream handling because remote line editors disagree about erasing
+combining marks and emoji; this compatibility gap is tracked in [#602](https://github.com/mihazs/lazysh/issues/602).
+
 Custom keyboard chords and text snippets have no purchased slots or fixed entry-count
 cap. Valid entries beyond twelve survive save and reload. Individual name/text/binding
 validation still applies; device storage can refuse a save, which leaves the saved
