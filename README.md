@@ -9,13 +9,13 @@
 
 **SSH from your phone. Keep long-running sessions on your server. Check in on your coding agents.**
 
-lazysh is a **free, open-source SSH client and remote development workspace** designed for developers who want to work from anywhere—even from bed. It combines a native terminal, persistent remote sessions, and optional visibility into AI coding agents in one app being developed for **Android, iPhone/iPad (iOS), macOS, Linux, and Windows**.
+lazysh is a **free, open-source SSH client and remote development workspace** for connecting to your own development machines from mobile and desktop. Persistent work stays in host-side sessions; coding-agent visibility is optional.
 
 Connect directly to servers you control, pick up a **tmux, Herdr, or Zellij** session, and inspect supported **Claude Code, Codex, and OpenCode** records. Your remote processes and agents run on your own host, not on a lazysh server.
 
 > **Development preview.** GitHub releases include Android, Linux and Windows packages, but feature coverage and real-device acceptance vary. Apple app distribution and F-Droid inclusion remain pending. Check the [installation guide](docs/install-and-update.md), release notes and [public roadmap](docs/roadmap.md) before trying a build.
 
-[**Download**](https://github.com/mihazs/lazysh/releases) · [Installation guide](docs/install-and-update.md) · [Explore the workflows](#what-you-can-do) · [Contribute](CONTRIBUTING.md)
+[**Download Preview**](https://github.com/mihazs/lazysh/releases) · [Documentation](#documentation) · [Explore the workflows](#what-you-can-do) · [Contribute](CONTRIBUTING.md)
 
 ## Why lazysh?
 
@@ -23,6 +23,15 @@ Connect directly to servers you control, pick up a **tmux, Herdr, or Zellij** se
 - **Let remote work keep running.** Reconnect to host-side tmux, Herdr, or Zellij sessions instead of relying on a phone or laptop to keep a shell alive.
 - **Keep an eye on AI coding work.** Read supported agent events and transcripts through an optional companion, without moving the agent runtime to a hosted lazysh service.
 - **Use your own infrastructure.** Ordinary SSH requires no lazysh account, subscription, or proprietary connection relay. Extra sync, sharing, voice, and notification services are optional and have their own setup requirements.
+
+## Android: install with Obtainium (preferred)
+
+Use [Obtainium](https://github.com/ImranR98/Obtainium) to install and track updates
+from `https://github.com/mihazs/lazysh`. Select one Android ARM64 APK flavor and
+keep that signing channel. Follow the [Obtainium setup, APK filters and verification
+steps](docs/install-and-update.md#android). Manual APK download remains available.
+This is a development preview; installation through Obtainium still needs
+native device verification.
 
 ## Get started
 
