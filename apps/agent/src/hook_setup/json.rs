@@ -257,3 +257,25 @@ pub(super) fn counts(input: &str, entries: &[Entry]) -> Result<Vec<usize>> {
         })
         .collect()
 }
+
+/// Cursor requires its existing integer version 1, or explicit initialization on install.
+/// Preserve the field on uninstall; it is shared provider schema, not an owned hook.
+pub(super) fn cursor_document(input: &str, insert_missing: bool) -> Result<String> {
+    let root = document(input)?;
+    let fields: Object<'_> = decode(root.get())?;
+    if let Some((_, version)) = fields.0.iter().find(|(key, _)| key == "version") {
+        return if decode::<Value>(version.get())?.as_u64() == Some(1) {
+            Ok(input.into())
+        } else {
+            Err(Fault::Invalid)
+        };
+    }
+    if !insert_missing {
+        return Err(Fault::Invalid);
+    }
+    let (range, text) = append_member(input, root, vec![("version".into(), Value::from(1))])?;
+    let mut output = input.to_owned();
+    output.replace_range(range, &text);
+    document(&output)?;
+    Ok(output)
+}
