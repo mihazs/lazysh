@@ -330,6 +330,185 @@ fn native_hook_assets_are_print_only_and_never_change_profiles_or_trust() {
 }
 
 #[test]
+fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
+    for (agent, name, events, unsupported, attention_type) in [
+        (
+            "gemini",
+            "Gemini CLI",
+            vec![
+                ("BeforeAgent", "working"),
+                ("BeforeTool", "working"),
+                ("AfterTool", "working"),
+                ("Notification", "needs_attention"),
+                ("AfterAgent", "done"),
+                ("SessionEnd", "done"),
+            ],
+            vec![
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "Stop",
+                "PermissionRequest",
+                "StopFailure",
+            ],
+            "ToolPermission",
+        ),
+        (
+            "droid",
+            "Droid",
+            vec![
+                ("UserPromptSubmit", "working"),
+                ("PreToolUse", "working"),
+                ("PostToolUse", "working"),
+                ("Notification", "needs_attention"),
+                ("Stop", "done"),
+                ("SessionEnd", "done"),
+            ],
+            vec![
+                "BeforeAgent",
+                "BeforeTool",
+                "AfterTool",
+                "AfterAgent",
+                "PermissionRequest",
+                "PostToolUseFailure",
+                "StopFailure",
+            ],
+            "permission_prompt",
+        ),
+        (
+            "kimi",
+            "Kimi CLI",
+            vec![
+                ("UserPromptSubmit", "working"),
+                ("PreToolUse", "working"),
+                ("PostToolUse", "working"),
+                ("PostToolUseFailure", "working"),
+                ("Notification", "needs_attention"),
+                ("StopFailure", "needs_attention"),
+                ("Stop", "done"),
+                ("SessionEnd", "done"),
+            ],
+            vec![
+                "BeforeAgent",
+                "BeforeTool",
+                "AfterTool",
+                "AfterAgent",
+                "PermissionRequest",
+            ],
+            "permission_prompt",
+        ),
+        (
+            "copilot",
+            "GitHub Copilot CLI",
+            vec![
+                ("UserPromptSubmit", "working"),
+                ("PostToolUse", "working"),
+                ("PostToolUseFailure", "working"),
+                ("Notification", "needs_attention"),
+                ("Stop", "done"),
+                ("SessionEnd", "done"),
+            ],
+            vec![
+                "BeforeAgent",
+                "BeforeTool",
+                "AfterTool",
+                "AfterAgent",
+                "PreToolUse",
+                "PermissionRequest",
+                "StopFailure",
+            ],
+            "permission_prompt",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        for (index, (kind, state)) in events.iter().enumerate() {
+            let mut payload = json!({"hook_event_name":kind,"session_id":"owned-main","cwd":"/owned/project","notification_type":attention_type,"prompt":"PRIVATE-PROMPT","prompt_response":"PRIVATE-PROMPT","body":"PRIVATE-PROMPT","tool_input":{"token":"SECRET-TOKEN"},"error_message":"SECRET-TOKEN"});
+            if agent == "copilot" && *kind == "Notification" {
+                payload.as_object_mut().unwrap().remove("session_id");
+                payload["sessionId"] = json!("owned-main");
+            }
+            let output = ingest(dir.path(), agent, &payload);
+            assert!(output.status.success(), "{agent}/{kind}");
+            assert!(output.stdout.is_empty() && output.stderr.is_empty());
+            let row = &snapshot(dir.path(), "1")["sessions"][0];
+            assert_eq!(row["sessionId"], "owned-main");
+            assert_eq!(row["agent"], name);
+            assert_eq!(row["project"], "/owned/project");
+            assert_eq!(row["paneId"], "%7");
+            assert_eq!(row["state"], *state);
+            assert_eq!(row["eventCount"], index + 1);
+            let before = snapshot(dir.path(), "1");
+            for ignored in unsupported.iter().copied().chain([
+                "SessionStart",
+                "SubagentStart",
+                "SubagentStop",
+                "PreCompact",
+                "Unknown",
+            ]) {
+                let output = ingest(
+                    dir.path(),
+                    agent,
+                    &json!({"hook_event_name":ignored,"session_id":"owned-main","agent_id":"owned-child","cwd":"/owned/project","response":"PRIVATE-PROMPT"}),
+                );
+                assert!(output.status.success());
+                assert_eq!(snapshot(dir.path(), "1"), before);
+            }
+            let output = ingest(
+                dir.path(),
+                agent,
+                &json!({"hook_event_name":"Notification","session_id":"owned-main","cwd":"/owned/project","notification_type":"auth_success","message":"PRIVATE-PROMPT"}),
+            );
+            assert!(output.status.success());
+            assert_eq!(snapshot(dir.path(), "1"), before);
+        }
+        if agent == "copilot" {
+            let before = snapshot(dir.path(), "1");
+            for kind in ["Stop", "SessionEnd"] {
+                assert!(ingest(dir.path(), agent, &json!({"hook_event_name":kind,"session_id":"owned-main","agent_id":"owned-child","parent_agent_id":"owned-parent","cwd":"/owned/project"})).status.success());
+                assert_eq!(snapshot(dir.path(), "1"), before);
+            }
+            for kind in [
+                "agent_completed",
+                "agent_idle",
+                "shell_completed",
+                "shell_detached_completed",
+            ] {
+                assert!(ingest(dir.path(), agent, &json!({"hook_event_name":"Notification","sessionId":"owned-main","cwd":"/owned/project","notification_type":kind})).status.success());
+                assert_eq!(snapshot(dir.path(), "1"), before);
+            }
+            assert!(!ingest(dir.path(), agent, &json!({"hook_event_name":"Notification","session_id":"wrong-snake-field","cwd":"/owned/project","notification_type":"permission_prompt"})).status.success());
+            assert_eq!(snapshot(dir.path(), "1"), before);
+            assert!(ingest(dir.path(), agent, &json!({"hook_event_name":"Notification","sessionId":"owned-main","session_id":"ignored-wrong-field","cwd":"/owned/project","notification_type":"elicitation_dialog"})).status.success());
+            let row = &snapshot(dir.path(), "1")["sessions"][0];
+            assert_eq!(row["sessionId"], "owned-main");
+            assert_eq!(row["state"], "needs_attention");
+        }
+        for entry in fs::read_dir(dir.path()).unwrap() {
+            let bytes = fs::read(entry.unwrap().path()).unwrap();
+            for secret in [b"SECRET-TOKEN".as_slice(), b"PRIVATE-PROMPT"] {
+                assert!(!bytes.windows(secret.len()).any(|window| window == secret));
+            }
+        }
+        let before = snapshot(dir.path(), "1");
+        let kind = events[0].0;
+        for invalid in [
+            json!(""),
+            json!(12),
+            json!("id\ncontrol"),
+            json!("s".repeat(257)),
+        ] {
+            let output = ingest(
+                dir.path(),
+                agent,
+                &json!({"hook_event_name":kind,"session_id":invalid,"cwd":"/owned/project"}),
+            );
+            assert!(!output.status.success());
+            assert_eq!(snapshot(dir.path(), "1"), before);
+        }
+    }
+}
+
+#[test]
 fn config_is_print_only_and_contains_supported_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let output = run(dir.path(), &["claude-config"], b"");
