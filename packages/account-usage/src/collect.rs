@@ -204,7 +204,12 @@ impl Drop for ProcessTree {
 async fn external(command: Command, deadline: Duration) -> Option<Response> {
     let bytes = bounded_output(command, &["usage", "--json"], deadline).await?;
     let response = normalize(&bytes, "external_cli");
-    (response.state == "ready").then_some(response)
+    (response.state == "ready"
+        && response
+            .report
+            .as_ref()
+            .is_some_and(|report| !report.entries.is_empty()))
+    .then_some(response)
 }
 async fn bounded_output(
     mut command: Command,
@@ -431,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn external_adapter_is_bounded_and_passes_only_fixed_usage_arguments() {
         let mut valid = Command::new("sh");
-        valid.args(["-c",r#"test "$0" = usage && test "$1" = --json && printf '%s' '{"schema_version":1,"entries":[]}'"#]);
+        valid.args(["-c",r#"test "$0" = usage && test "$1" = --json && printf '%s' '{"schema_version":1,"entries":[{"id":"owned","name":"Owned","status":"ready","stale":false,"sections":[]}]}'"#]);
         let result = external(valid, Duration::from_secs(1)).await.unwrap();
         assert_eq!(result.source.as_deref(), Some("external_cli"));
         let mut unsupported = Command::new("sh");
