@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="lazysh_starting">Iniciando lazysh</string>
     <string name="lazysh_resume_title">lazysh está bloqueado</string>
     <string name="lazysh_resume_detail">Usa la biometría de este dispositivo para continuar.</string>
     <string name="lazysh_resume_failure">El desbloqueo falló o se canceló. lazysh sigue bloqueado. Comprueba la biometría del dispositivo e inténtalo de nuevo.</string>

@@ -9,6 +9,7 @@ internal class ResumeGate {
     private var locked = true
     private var privacy = false
     private var foreground = true
+    val awaitingPolicy get() = enabled == null
     val covered get() = enabled != false && (locked || privacy || !foreground)
     val protectsContent get() = enabled != false
     fun rebind(resumed: Boolean) { nativeGeneration++; enabled = null; locked = true; foreground = resumed; privacy = !resumed }

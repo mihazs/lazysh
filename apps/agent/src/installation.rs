@@ -39,10 +39,10 @@ mod unix {
         fs::{self, File},
         io::{Read, Write},
         os::{
-            fd::{AsRawFd, FromRawFd},
-            unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+            fd::AsRawFd,
+            unix::fs::{MetadataExt, PermissionsExt},
         },
-        path::{Path, PathBuf},
+        path::PathBuf,
     };
     const MAXIMUM: u64 = 64 * 1024 * 1024;
     const NAME: &str = "lazysh-agent";
@@ -131,53 +131,8 @@ mod unix {
         }
         Ok(destination)
     }
-    struct Directory {
-        file: File,
-        path: PathBuf,
-    }
+    use crate::managed_directory::Directory;
     impl Directory {
-        fn open(path: &Path) -> Result<Self> {
-            let file = fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                .open(path)?;
-            if !private::owner_only(&file.metadata()?, true) {
-                return Err(rejected("InstallUnsafeNamespace"));
-            }
-            Ok(Self {
-                file,
-                path: path.to_owned(),
-            })
-        }
-        fn check(&self) -> Result<()> {
-            storage_namespace::resolve(&self.path)?;
-            let path = fs::symlink_metadata(&self.path)?;
-            let retained = self.file.metadata()?;
-            if !private::owner_only(&path, true)
-                || path.dev() != retained.dev()
-                || path.ino() != retained.ino()
-            {
-                return Err(rejected("InstallChangedNamespace"));
-            }
-            Ok(())
-        }
-        fn open_file(&self, name: &str, flags: i32) -> std::io::Result<File> {
-            let name = CString::new(name).map_err(std::io::Error::other)?;
-            // SAFETY: retained directory descriptor and NUL-terminated fixed/owned basename.
-            let fd = unsafe {
-                libc::openat(
-                    self.file.as_raw_fd(),
-                    name.as_ptr(),
-                    flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-                    0o600,
-                )
-            };
-            if fd < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            // SAFETY: successful openat returns a newly owned descriptor.
-            Ok(unsafe { File::from_raw_fd(fd) })
-        }
         fn existing(&self) -> Result<Existing> {
             match self.open_file(NAME, libc::O_RDONLY) {
                 Ok(mut file) => {
@@ -336,19 +291,7 @@ mod unix {
         if directory.existing()? != plan.existing {
             return Err(rejected("InstallStalePlan"));
         }
-        let name = CString::new(NAME).unwrap();
-        // SAFETY: both names are within the same retained directory; no path or symlink traversal.
-        if unsafe {
-            libc::renameat(
-                directory.file.as_raw_fd(),
-                temporary.name.as_ptr(),
-                directory.file.as_raw_fd(),
-                name.as_ptr(),
-            )
-        } != 0
-        {
-            return Err(std::io::Error::last_os_error().into());
-        }
+        directory.rename(temporary.name.to_str().unwrap(), NAME, false)?;
         temporary.committed = true;
         let durable = directory.file.sync_all().is_ok()
             && fault(2).is_ok()

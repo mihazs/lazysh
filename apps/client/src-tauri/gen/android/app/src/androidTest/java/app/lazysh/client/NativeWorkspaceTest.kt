@@ -1641,10 +1641,10 @@ class NativeWorkspaceTest {
         }
         fun send(command: String) {
             if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true")
-                onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Compose']")).perform(webClick())
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Compose']")).perform(webClick())
             pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
             closeSoftKeyboard()
-            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Paste draft']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Paste draft']")).perform(webClick())
             closeSoftKeyboard()
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
         }
@@ -1797,7 +1797,8 @@ class NativeWorkspaceTest {
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val label = "lazysh-ui-ssh-$nonce"
         fun clickButton(text: String) {
-            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$text']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
         }
         fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"

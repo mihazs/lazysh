@@ -8,8 +8,8 @@ import {accountUsageHeadline,type AccountUsageResponse} from './accountUsageRepo
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 afterEach(()=>{cleanup();vi.clearAllMocks();vi.useRealTimers();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 const report:AccountUsageResponse={schemaVersion:1,state:'ready',report:{primary:'codex',entries:[{id:'codex',name:'Codex personal',shortName:'OAI',plan:'Pro',status:'ready',stale:false,fetchedAt:new Date().toISOString(),resetCredits:null,rows:[{type:'metric',label:'Weekly',percent:112.5,value:'112.5%',detail:'Provider-reported quota',headline:'percent',reading:'used',resetAt:null,windowSeconds:null,regen:null,modelPool:false}]}]}};
-function Surface({sessionId='ssh1',active=true,onRestoreHostTools}:{sessionId?:string;active?:boolean;onRestoreHostTools?:(restored:()=>void)=>void}) {
- const model=useAccountUsage(sessionId,active);return <><AccountUsageBar model={model} onOpen={()=>{}}/><AccountUsageDetails model={model} onRestoreHostTools={onRestoreHostTools}/></>;
+function Surface({sessionId='ssh1',active=true,onRestoreHostTools,onOpenCompanion}:{sessionId?:string;active?:boolean;onOpenCompanion?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void}) {
+ const model=useAccountUsage(sessionId,active);return <><AccountUsageBar model={model} onOpen={()=>{}}/><AccountUsageDetails model={model} onOpenCompanion={onOpenCompanion} onRestoreHostTools={onRestoreHostTools}/></>;
 }
 it('renders real quota precision above 100 and clamps only its meter',async()=>{
  vi.mocked(invoke).mockResolvedValue(report);render(<Surface/>);
@@ -41,7 +41,7 @@ it('does not query hidden documents or inactive sessions and refreshes on return
 });
 it('shows unavailable provider guidance without requiring an external tool or fabricated percentage',async()=>{
  vi.mocked(invoke).mockResolvedValue({schemaVersion:1,state:'unavailable',source:'builtin',report:null});render(<Surface/>);
- await screen.findByText(/Check provider configuration and existing sign-ins/);expect(screen.queryByRole('meter')).toBeNull();expect(screen.queryByText('0% used')).toBeNull();
+ await screen.findByText(/Check provider sign-ins/);expect(screen.queryByRole('meter')).toBeNull();expect(screen.queryByText('0% used')).toBeNull();
 });
 it('renders upstream text as text, never markup',async()=>{
  const entry={...report.report!.entries[0],plan:'<img src=x onerror=alert(1)>',rows:[{type:'text' as const,label:'Credits',value:'<script>secret</script>',usedCents:null,limitCents:null,percent:null}]};
@@ -58,4 +58,10 @@ it('requests explicit host-tools recovery and refreshes only after the guarded r
  let restored!:(()=>void);const recover=vi.fn((callback:()=>void)=>{restored=callback;});render(<Surface onRestoreHostTools={recover}/>);
  fireEvent.click(await screen.findByRole('button',{name:'Reconnect host tools'}));expect(recover).toHaveBeenCalledTimes(1);expect(invoke).toHaveBeenCalledTimes(1);
  act(()=>restored());await screen.findByText('112.5% used');expect(invoke).toHaveBeenCalledTimes(2);expect(screen.queryByRole('button',{name:'Reconnect host tools'})).toBeNull();
+});
+
+it('offers the existing installer only for missing or incompatible companions and distinguishes empty accounts',async()=>{
+ const install=vi.fn();vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:1,state:'companion_required',report:null}).mockResolvedValueOnce({schemaVersion:1,state:'ready',source:'builtin',report:{primary:null,entries:[]}});
+ render(<Surface onOpenCompanion={install}/>);fireEvent.click(await screen.findByRole('button',{name:'Install or update companion'}));expect(install).toHaveBeenCalledTimes(1);expect(screen.getByText('AI usage: setup')).toBeTruthy();expect(screen.queryByRole('meter')).toBeNull();
+ fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByText('No AI accounts');expect(screen.queryByRole('button',{name:'Install or update companion'})).toBeNull();expect(screen.getByText(/No enabled accounts were reported/)).toBeTruthy();
 });

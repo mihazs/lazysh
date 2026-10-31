@@ -29,6 +29,7 @@ import {
   GitCompareArrows,
   KeyRound,
   Layers,
+  Info,
   Menu,
   MessageSquare,
   Settings,
@@ -1124,6 +1125,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [inbox, setInbox] = useState(false);
   const [previousWorkspace, setPreviousWorkspace] = useState(() => registry.sessions.length ? [] : readWorkspace());
   const [restoring, setRestoring] = useState(false);
+  const [restoreDetails, setRestoreDetails] = useState(false);
   const restoringRef = useRef(false);
   const mounted = useRef(true);
   const restoringSessions = useRef(new PendingSessions());
@@ -1641,20 +1643,23 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   );
 
   const workspaceRestoreControls = <>
-    <button
+    <div className="workspace-restore-row">
+    <button type="button"
       disabled={restoring || !loaded}
       onClick={() => {setMobileTools(false);void restoreWorkspace();}}
     >
       {restoring ? t("appRestoring") : t("appRestorePreviousWorkspace")}
     </button>
-    <span>{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</span>
-    <button
+    <button type="button" className="icon-button" aria-label={t("muxDetails")} title={t("muxDetails")} aria-expanded={restoreDetails} onClick={() => setRestoreDetails(!restoreDetails)}><Info size={18} aria-hidden="true" /></button>
+    <button type="button" className="icon-button" aria-label={t("appDismiss")} title={t("appDismiss")}
       disabled={restoring}
       onClick={() => {
         setPreviousWorkspace([]);
         persistWorkspace(sessionsRef.current);
       }}
-    >{t("appDismiss")}</button>
+    ><X size={18} aria-hidden="true" /></button>
+    </div>
+    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
   </>;
   return (
     <div className="app-shell">
@@ -1989,7 +1994,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {active.connected && view === "usage" && (
                   <>
-                  <AccountUsageDetails model={accountUsage} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showNavigation("agents"):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}

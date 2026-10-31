@@ -698,7 +698,8 @@ button svg {
   padding: 8px 12px;
   background: var(--theme-panel, #151c12);
 }
-.terminal-keys button {
+.terminal-keys button,
+.terminal-keys button:hover {
   background: var(--theme-control, #202a1a);
   border: 1px solid var(--theme-border, #303e27);
   color: var(--theme-text, #b2c3a4);
@@ -709,10 +710,16 @@ button svg {
   font-family: monospace;
   font-size: 11px;
 }
-.terminal-keys button:hover,
+.terminal-keys button:active,
 .terminal-keys button[aria-pressed="true"] {
   background: var(--theme-hover, #435c2d);
   color: var(--theme-accent, #e0f6ca);
+}
+@media (hover: hover) and (pointer: fine) {
+  .terminal-keys button:hover:not(:disabled) {
+    background: var(--theme-hover, #435c2d);
+    color: var(--theme-accent, #e0f6ca);
+  }
 }
 .terminal-keys > span {
   flex: 1;
@@ -1757,9 +1764,10 @@ button svg {
 }
 .form-stack input[type="checkbox"], .chat-panel input[type="checkbox"] { width: 20px; height: 20px; min-width: 0; margin: 0; accent-color: var(--accent); }
 
-.workspace-restore { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
-.workspace-restore > span { flex: 1 1 240px; min-width: 0; }
-.workspace-restore > button { min-height: 44px; flex-shrink: 0; }
+.workspace-restore-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.workspace-restore-row > button:first-child { flex: 1; min-width: 0; min-height: 44px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.workspace-restore-row > .icon-button { flex: 0 0 44px; width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; }
+.workspace-restore-help { margin: 4px 0 0; overflow-wrap: anywhere; }
 
 .attachment-panel { padding: 18px; }
 .attachment-panel > .button-row { flex-wrap: wrap; align-items: end; }
@@ -1769,8 +1777,6 @@ button svg {
 
 @media (max-width: 600px) {
   .preferences-content { padding-inline: 19px; }
-  .workspace-restore > span { flex-basis: 100%; order: 1; }
-  .workspace-restore > button:last-child { margin-left: auto; }
 }
 
 .mobile-session-views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

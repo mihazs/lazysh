@@ -213,6 +213,123 @@ fn snapshot_expires_old_rows_even_without_new_events() {
 }
 
 #[test]
+fn codex_hooks_preserve_main_turn_while_subagents_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    for (kind, state) in [
+        ("UserPromptSubmit", "working"),
+        ("PermissionRequest", "needs_attention"),
+        ("PostToolUse", "working"),
+        ("Interrupt", "done"),
+        ("Stop", "done"),
+        ("SessionEnd", "done"),
+    ] {
+        let payload = json!({"hook_event_name":kind,"session_id":"parent","cwd":"/work","prompt":"PRIVATE-PROMPT","tool_input":{"token":"SECRET-TOKEN"}});
+        let output = ingest(dir.path(), "codex", &payload);
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+        let before = snapshot(dir.path(), "1");
+        assert_eq!(before["sessions"][0]["state"], state);
+        assert_eq!(before["sessions"][0]["agent"], "Codex");
+        for ignored in [
+            "SessionStart",
+            "SubagentStart",
+            "SubagentStop",
+            "Notification",
+            "PostToolUseFailure",
+            "Unknown",
+        ] {
+            let output = ingest(
+                dir.path(),
+                "codex",
+                &json!({"hook_event_name":ignored,"session_id":"parent","agent_id":"child","cwd":"/work"}),
+            );
+            assert!(output.status.success());
+            assert_eq!(snapshot(dir.path(), "1"), before);
+        }
+    }
+}
+
+#[test]
+fn opencode_native_events_keep_exact_sessions_and_bounded_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    for (kind, status, state) in [
+        ("session.status", "busy", "working"),
+        ("session.status", "retry", "working"),
+        ("permission.asked", "", "needs_attention"),
+        ("question.asked", "", "needs_attention"),
+        ("session.error", "", "needs_attention"),
+        ("session.status", "idle", "done"),
+        ("session.deleted", "", "done"),
+    ] {
+        let output = ingest(
+            dir.path(),
+            "opencode",
+            &json!({"type":kind,"directory":"/work","properties":{"sessionID":"ses_owned","status":{"type":status},"metadata":{"secret":"SECRET-TOKEN"},"error":{"message":"PRIVATE-PROMPT"}}}),
+        );
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+        let snapshot = snapshot(dir.path(), "1");
+        assert_eq!(snapshot["sessions"][0]["sessionId"], "ses_owned");
+        assert_eq!(snapshot["sessions"][0]["state"], state);
+        assert_eq!(snapshot["sessions"][0]["agent"], "OpenCode");
+        assert_eq!(snapshot["sessions"][0]["paneId"], "%7");
+        assert!(!snapshot.to_string().contains("SECRET-TOKEN"));
+        assert!(!snapshot.to_string().contains("PRIVATE-PROMPT"));
+    }
+    let before = snapshot(dir.path(), "1");
+    for payload in [
+        json!({"type":"session.error","properties":{}}),
+        json!({"type":"permission.replied"}),
+        json!({"type":"session.idle"}),
+        json!({"type":"session.status","properties":{"status":{"type":"future"}}}),
+    ] {
+        assert!(ingest(dir.path(), "opencode", &payload).status.success());
+        assert_eq!(snapshot(dir.path(), "1"), before);
+    }
+    for bad in [
+        json!(""),
+        json!("bad\nsession"),
+        json!("s".repeat(257)),
+        json!(12),
+    ] {
+        assert!(!ingest(
+            dir.path(),
+            "opencode",
+            &json!({"type":"permission.asked","directory":"/work","properties":{"sessionID":bad}})
+        )
+        .status
+        .success());
+        assert_eq!(snapshot(dir.path(), "1"), before);
+    }
+}
+
+#[test]
+fn native_hook_assets_are_print_only_and_never_change_profiles_or_trust() {
+    let dir = tempfile::tempdir().unwrap();
+    for command in ["codex-config", "opencode-plugin"] {
+        let output = run(dir.path(), &[command], b"");
+        assert!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        if command == "codex-config" {
+            let hooks = value["hooks"].as_object().unwrap();
+            assert_eq!(hooks.len(), 7);
+            for (kind, value) in hooks {
+                assert!(!kind.starts_with("Subagent") && kind != "SessionStart");
+                assert_eq!(
+                    value[0]["hooks"][0]["command"],
+                    "lazysh-agent ingest --agent codex"
+                );
+                assert_eq!(value[0]["hooks"][0]["timeout"], 3);
+            }
+        } else {
+            assert_eq!(value["filename"], "lazysh.js");
+            assert_eq!(value["content"], include_str!("../hooks/opencode.js"));
+        }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn config_is_print_only_and_contains_supported_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let output = run(dir.path(), &["claude-config"], b"");

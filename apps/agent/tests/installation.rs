@@ -1,5 +1,4 @@
 //! Real process contract; release candidates supply the exact prepared executable.
-use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -7,6 +6,9 @@ use std::{
 };
 #[path = "support/binary.rs"]
 mod binary;
+#[path = "support/json_output.rs"]
+mod json_output;
+use json_output::decode as json;
 struct Fixture {
     root: tempfile::TempDir,
     binary: PathBuf,
@@ -53,14 +55,6 @@ impl Fixture {
             );
         }
     }
-}
-fn json(output: Output) -> Value {
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).unwrap()
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
