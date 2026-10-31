@@ -147,8 +147,8 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, stage, """Boolean(window.__TAURI_INTERNALS__?.invoke) && Boolean(document.querySelector("button[aria-label='Add host']"))""")
 
     private fun awaitDocument(scenario: ActivityScenario<MainActivity>, stage: String, expression: String,
+        deadline: Long = System.nanoTime() + TimeUnit.SECONDS.toNanos(120),
         observe: ((Long) -> String)? = null) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         var firstObservation: String? = null
         var lastObservation: String? = null
         while (true) {
@@ -1145,7 +1145,7 @@ class NativeWorkspaceTest {
                 capture = observe()
                 button("Scan QR with camera")
             }
-            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", qrVideoObservation(scenario, frame))
+            awaitDocument(scenario, "actual Rust-decoded QR preview", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'", observe = qrVideoObservation(scenario, frame))
             assertEquals("QR preview must preserve the manual draft", "true", evaluate(scenario,
                 "document.querySelector(${JSONObject.quote(draftSelector)})?.value===${JSONObject.quote(draft)}"))
             assertTrue("QR preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
@@ -1287,9 +1287,10 @@ class NativeWorkspaceTest {
         try {
             awaitFlag(false, "connected terminal before opt-in")
             sessionView(scenario, "Agents")
+            val boardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
             val keepAwakeReady = "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}"
             awaitDocument(scenario, "board keep-awake off and owned live Herdr navigation",
-                "($keepAwakeReady) && ($liveHerdr)", observe = { remaining ->
+                "($keepAwakeReady) && ($liveHerdr)", deadline = boardDeadline, observe = { remaining ->
                     evaluateIfPresent(scenario, "JSON.stringify({keepAwakeReady:Boolean($keepAwakeReady),liveHerdrReady:Boolean($liveHerdr)})", remaining) ?: "unavailable"
                 })
             if (herdr != null) {
@@ -1298,7 +1299,7 @@ class NativeWorkspaceTest {
                 val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
                     .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
                     .also { require(it.size <= 2048) { "Viewport oracle bound" } }.toString(Charsets.UTF_8)
-                assertEquals("Owned live Herdr report must be visible over empty companion reports", "true", evaluate(scenario, """
+                awaitDocument(scenario, "owned live Herdr report visually ready over empty companion reports", """
                     (()=>{
                       if(!($liveHerdr)) return false;
                       const card=document.querySelector('.herdr-navigation:not([hidden]) .herdr-navigation-row');
@@ -1315,7 +1316,8 @@ class NativeWorkspaceTest {
                           return hit===labels[index] || labels[index].contains(hit);
                         }));
                     })()
-                """))
+                """, deadline = boardDeadline)
+                assertTrue("Owned live Herdr visual admission exceeded the original board deadline", System.nanoTime() < boardDeadline)
                 println("lazysh live Herdr navigation: owned Codex row visible with exact server and host-readback context over empty companion reports")
             }
             assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
@@ -1451,7 +1453,7 @@ class NativeWorkspaceTest {
             "document.querySelector('form.chat-composer textarea')?.value===${JSONObject.quote(draft)}"))
         click("Choose terminal destination")
         awaitDocument(scenario, "owned Herdr confirmation", hasButton("Confirm this destination"),
-            herdrConfirmationObservation(scenario, "$parent / $name", draft))
+            observe = herdrConfirmationObservation(scenario, "$parent / $name", draft))
         assertEquals("Preparation alone must not enable Send", "false", evaluate(scenario, hasButton("Send to terminal")))
         click("Confirm this destination")
         awaitDocument(scenario, "explicit owned Herdr binding", hasButton("Send to terminal"))
@@ -2298,7 +2300,7 @@ class NativeWorkspaceTest {
                       return special.length===2 && ownedKeyboardViewportContains(window.visualViewport,
                         [canvas,keys,...special].map(x=>x.getBoundingClientRect()));
                     })()
-                """, { remaining ->
+                """, observe = { remaining ->
                     val native = JSONObject()
                     scenario.onActivity { activity ->
                         val decor = activity.window.decorView
