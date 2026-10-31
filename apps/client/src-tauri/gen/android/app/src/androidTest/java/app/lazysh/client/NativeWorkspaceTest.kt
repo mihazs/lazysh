@@ -2196,6 +2196,15 @@ class NativeWorkspaceTest {
             if (requireSwiftkey) {
                 attachOwnedHerdr(scenario, fixture.getJSONObject("herdr").getString("name"))
                 sessionView(scenario, "Terminal")
+                instrumentation.runOnMainSync {
+                    val clip = clipboard.primaryClipDescription
+                    require(clip == null || clip.label?.toString() == label) { "Foreign clipboard blocks vendor discovery" }
+                    if (clip != null) {
+                        if (Build.VERSION.SDK_INT >= 28) clipboard.clearPrimaryClip()
+                        else throw AssertionError("Owned clipboard clearing unavailable")
+                    }
+                    assertFalse("Vendor discovery cannot receive fixture credentials", clipboard.hasPrimaryClip())
+                }
                 discoverFreshSwiftkey(scenario, fixture)
             } else if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
                 awaitDocument(scenario, "saved default Herdr entered through Mosh", """
