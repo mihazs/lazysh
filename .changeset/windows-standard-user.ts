@@ -94,13 +94,13 @@ public sealed partial class OwnedMediumGui {
   // Preserve every foreign ACE byte and its order. Never restore an old whole DACL.
   static byte[] LogonAcl(byte[] acl,byte[] sid,uint mask,bool remove){
     Need(acl!=null&&acl.Length>=8&&acl.Length<=65535&&(acl[0]==2||acl[0]==4)&&acl[1]==0&&acl[6]==0&&acl[7]==0&&BitConverter.ToUInt16(acl,2)==acl.Length,"FIXTURE_ACCESS");
-    var entries=new System.Collections.Generic.List<byte[]>();byte[] own=LogonAce(sid,mask);int offset=8,found=0,insert=-1,count=BitConverter.ToUInt16(acl,4);
+    var entries=new System.Collections.Generic.List<byte[]>();byte[] own=LogonAce(sid,mask);int offset=8,found=0,count=BitConverter.ToUInt16(acl,4);
     for(int i=0;i<count;i++){Need(offset+4<=acl.Length,"FIXTURE_ACCESS");int size=BitConverter.ToUInt16(acl,offset+2);Need(size>=4&&size%4==0&&offset+size<=acl.Length,"FIXTURE_ACCESS");var entry=new byte[size];Array.Copy(acl,offset,entry,0,size);bool references=false;for(int j=4;j+sid.Length<=size;j++){bool match=true;for(int k=0;k<sid.Length;k++)match&=entry[j+k]==sid[k];references|=match;}
-      if(references){Need(Equal(entry,own)&&++found==1&&remove,"FIXTURE_ACCESS");}else{if(insert<0&&(entry[1]&16)!=0)insert=entries.Count;entries.Add(entry);}offset+=size;
+      if(references){Need(Equal(entry,own)&&++found==1&&remove,"FIXTURE_ACCESS");}else entries.Add(entry);offset+=size;
     }
     // Refuse unknown nonzero slack rather than silently discard descriptor payload.
     for(int i=offset;i<acl.Length;i++)Need(acl[i]==0,"FIXTURE_ACCESS");
-    if(!remove)entries.Insert(insert<0?entries.Count:insert,own);
+    if(!remove)entries.Add(own);
     int length=8;foreach(var entry in entries)length+=entry.Length;Need(length<=65535&&entries.Count<=65535,"FIXTURE_ACCESS");var output=new byte[length];output[0]=acl[0];Array.Copy(BitConverter.GetBytes((ushort)length),0,output,2,2);Array.Copy(BitConverter.GetBytes((ushort)entries.Count),0,output,4,2);offset=8;foreach(var entry in entries){Array.Copy(entry,0,output,offset,entry.Length);offset+=entry.Length;}return output;
   }
   static byte[] UserObjectAcl(IntPtr handle){IntPtr owner,group,dacl,sacl,descriptor=IntPtr.Zero;try{Need(GetSecurityInfo(handle,7,4,out owner,out group,out dacl,out sacl,out descriptor)==0&&descriptor!=IntPtr.Zero&&IsValidSecurityDescriptor(descriptor)&&GetSecurityDescriptorLength(descriptor)<=65536&&dacl!=IntPtr.Zero,"FIXTURE_ACCESS");int length=unchecked((ushort)Marshal.ReadInt16(dacl,2));Need(length>=8&&length<=65535,"FIXTURE_ACCESS");byte[] bytes=new byte[length];Marshal.Copy(dacl,bytes,0,length);return bytes;}finally{if(descriptor!=IntPtr.Zero)Need(LocalFree(descriptor)==IntPtr.Zero,"CLEANUP_UNVERIFIED");}}

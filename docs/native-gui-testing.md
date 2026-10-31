@@ -159,7 +159,9 @@ concurrent station/desktop ACL writer. SetSecurityInfo has no compare-and-swap:
 read/check/write/readback detects changes around the write, but cannot guarantee
 preservation of an update racing between the last read and setter. The owner
 must not run this provisioning on a shared desktop. It preserves foreign ACE
-bytes and order in its observed snapshot, rejects preexisting/ambiguous own-SID
+bytes and order in its observed snapshot. The new allow is appended after all
+foreign ACEs, including inherited denies, so it cannot bypass an existing deny
+by moving ahead of it. The owner rejects preexisting/ambiguous own-SID
 entries, and never restores a stale whole DACL.
 
 A bounded `desktop.owner` journal records only synthetic source, caller/account,
