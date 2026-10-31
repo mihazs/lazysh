@@ -12,7 +12,7 @@ struct Observed {
 #[derive(Clone)]
 struct Peer {
     state: Arc<Mutex<Observed>>,
-    fault: &'static str,
+    fault: Arc<Mutex<&'static str>>,
 }
 fn ok(id: u32) -> Status {
     Status {
@@ -50,7 +50,7 @@ impl russh_sftp::server::Handler for Peer {
         attrs: FileAttributes,
     ) -> std::result::Result<Status, StatusCode> {
         assert_eq!(attrs.permissions, Some(0o700));
-        if self.fault == "collision" {
+        if *self.fault.lock().unwrap() == "collision" {
             return Err(StatusCode::Failure);
         }
         self.state.lock().unwrap().directory = Some(path);
@@ -58,6 +58,13 @@ impl russh_sftp::server::Handler for Peer {
     }
     async fn lstat(&mut self, id: u32, path: String) -> std::result::Result<Attrs, StatusCode> {
         let state = self.state.lock().unwrap();
+        let fault = *self.fault.lock().unwrap();
+        if fault == "request" {
+            return Err(StatusCode::ConnectionLost);
+        }
+        if fault == "missing" && state.file.as_deref() == Some(&path) {
+            return Err(StatusCode::NoSuchFile);
+        }
         let mut attrs = if path == "/owned" {
             metadata(true, 0, 0o755)
         } else if state.directory.as_deref() == Some(&path) {
@@ -67,10 +74,10 @@ impl russh_sftp::server::Handler for Peer {
         } else {
             return Err(StatusCode::NoSuchFile);
         };
-        if self.fault == "missing-uid" && path != "/owned" {
+        if fault == "missing-uid" && path != "/owned" {
             attrs.uid = None;
         }
-        if self.fault == "link" && path != "/owned" {
+        if fault == "link" && path != "/owned" {
             attrs.permissions = Some(0o120700);
         }
         Ok(Attrs { id, attrs })
@@ -117,7 +124,7 @@ impl russh_sftp::server::Handler for Peer {
         let mut state = self.state.lock().unwrap();
         assert_eq!(offset as usize, state.body.len());
         state.body.extend_from_slice(&data);
-        if self.fault == "partial" {
+        if *self.fault.lock().unwrap() == "partial" {
             state.body.pop();
             return Err(StatusCode::Failure);
         }
@@ -130,9 +137,13 @@ impl russh_sftp::server::Handler for Peer {
         offset: u64,
         length: u32,
     ) -> std::result::Result<Data, StatusCode> {
+        let fault = *self.fault.lock().unwrap();
+        if fault == "slow" {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+        }
         let state = self.state.lock().unwrap();
         let mut bytes = state.body.clone();
-        match self.fault {
+        match fault {
             "corrupt" => bytes[0] ^= 1,
             "short" => {
                 bytes.pop();
@@ -162,6 +173,9 @@ impl russh_sftp::server::Handler for Peer {
         Ok(ok(id))
     }
     async fn remove(&mut self, id: u32, path: String) -> std::result::Result<Status, StatusCode> {
+        if *self.fault.lock().unwrap() == "remove" {
+            return Err(StatusCode::PermissionDenied);
+        }
         let mut state = self.state.lock().unwrap();
         assert_eq!(Some(path), state.file);
         state.file = None;
@@ -169,6 +183,9 @@ impl russh_sftp::server::Handler for Peer {
         Ok(ok(id))
     }
     async fn rmdir(&mut self, id: u32, path: String) -> std::result::Result<Status, StatusCode> {
+        if *self.fault.lock().unwrap() == "rmdir" {
+            return Err(StatusCode::PermissionDenied);
+        }
         let mut state = self.state.lock().unwrap();
         assert_eq!(Some(path), state.directory);
         if state.file.is_some() {
@@ -177,6 +194,30 @@ impl russh_sftp::server::Handler for Peer {
         state.directory = None;
         Ok(ok(id))
     }
+}
+const EXECUTABLE: &[u8] = b"owned verified executable";
+async fn fixture(fault: &'static str) -> (Staging, Peer, tokio::task::JoinHandle<()>) {
+    let peer = Peer {
+        state: Arc::new(Mutex::new(Observed::default())),
+        fault: Arc::new(Mutex::new(fault)),
+    };
+    let (client, server) = tokio::io::duplex(262_144);
+    let task = tokio::spawn(russh_sftp::server::run(server, peer.clone()));
+    let raw = RawSftpSession::new(crate::sftp_stream::SftpStream::new(client));
+    raw.set_timeout(2);
+    raw.init().await.unwrap();
+    let selection = release::Publisher::owned(EXECUTABLE.to_vec(), "0.24.0".into())
+        .select("linux-agent-x64")
+        .await
+        .unwrap();
+    let unix = resolve::Unix {
+        os: "linux",
+        arch: "x64",
+        uid: 1000,
+        home: "/owned".into(),
+        data: "/owned/data".into(),
+    };
+    (Staging::new(raw, &unix, &selection), peer, task)
 }
 #[tokio::test]
 async fn exclusive_private_staging_verifies_bytes_and_never_removes_unknown_routes() {
@@ -190,40 +231,52 @@ async fn exclusive_private_staging_verifies_bytes_and_never_removes_unknown_rout
         "short",
         "extra",
     ] {
-        let observed = Arc::new(Mutex::new(Observed::default()));
-        let (client, server) = tokio::io::duplex(262_144);
-        let peer = Peer {
-            state: observed.clone(),
-            fault,
-        };
-        let task = tokio::spawn(russh_sftp::server::run(server, peer));
-        let raw = RawSftpSession::new(crate::sftp_stream::SftpStream::new(client));
-        raw.set_timeout(2);
-        raw.init().await.unwrap();
-        let data = b"owned verified executable";
-        let publisher = release::Publisher::owned(data.to_vec(), "0.24.0".into());
-        let selection = publisher.select("linux-agent-x64").await.unwrap();
-        let unix = resolve::Unix {
-            os: "linux",
-            arch: "x64",
-            uid: 1000,
-            home: "/owned".into(),
-            data: "/owned/data".into(),
-        };
-        let mut staged = Staging::new(raw, &unix, &selection);
+        let (mut staged, peer, task) = fixture(fault).await;
         let result = async {
-            staged.upload(&unix.home, data).await?;
+            staged.upload("/owned", EXECUTABLE).await?;
             staged.verify(&staged.path, 0o600).await?;
             staged.executable().await
         }
         .await;
         assert_eq!(result.is_ok(), fault == "none", "{fault}");
         let cleaned = staged.cleanup().await;
-        assert_eq!(cleaned, fault == "none", "{fault}");
+        assert_eq!(cleaned.is_ok(), fault == "none", "{fault}");
         assert_eq!(
-            observed.lock().unwrap().removes,
+            peer.state.lock().unwrap().removes,
             usize::from(fault == "none")
         );
+        drop(staged);
+        task.abort();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn cleanup_failures_identify_the_exact_owned_stage_without_changing_deletion() {
+    use CleanupReason as R;
+    use CleanupStage as S;
+    for (fault, stage, reason, removed) in [
+        ("corrupt", S::VerifyFile, R::Hash, 0),
+        ("missing", S::VerifyFile, R::Missing, 0),
+        ("request", S::Directory, R::Request, 0),
+        ("link", S::Directory, R::Identity, 0),
+        ("remove", S::RemoveFile, R::Request, 0),
+        ("rmdir", S::RemoveDirectory, R::Request, 1),
+        ("slow", S::VerifyFile, R::Timeout, 0),
+    ] {
+        let (mut staged, peer, task) = fixture("none").await;
+        staged.raw.set_timeout(15);
+        staged.upload("/owned", EXECUTABLE).await.unwrap();
+        staged.executable().await.unwrap();
+        *peer.fault.lock().unwrap() = fault;
+        let result = match tokio::time::timeout(Duration::from_secs(5), staged.cleanup()).await {
+            Ok(result) => result,
+            Err(_) => Err(staged.cleanup_timeout()),
+        };
+        assert_eq!(result, Err(CleanupFailure { stage, reason }), "{fault}");
+        let state = peer.state.lock().unwrap();
+        assert_eq!(state.removes, removed, "{fault}");
+        assert!(state.directory.is_some(), "no recursive removal on {fault}");
+        drop(state);
         drop(staged);
         task.abort();
     }
