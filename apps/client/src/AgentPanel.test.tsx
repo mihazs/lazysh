@@ -365,7 +365,7 @@ it('keeps the companion empty state stable during polling and retains an error u
 }));
 
 describe('live Herdr discovery',()=>{
-  const tree={workspaces:[{workspace_id:'w1',label:'Work',focused:true,agent_status:'working'}],tabs:[{tab_id:'w1:t1',workspace_id:'w1',label:'Code',number:1,focused:true,agent_status:'working'}],panes:[{pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',cwd:'/work/codex',focused:true,agent_status:'working'}],agents:[{terminal_id:'term-one',name:'builder',agent:'codex',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',agent_status:'working'}]};
+  const tree={workspaces:[{workspace_id:'w2E',label:'Work',focused:true,agent_status:'working'}],tabs:[{tab_id:'w2E:tC',workspace_id:'w2E',label:'Code',number:1,focused:true,agent_status:'working'}],panes:[{pane_id:'w2E:pF',workspace_id:'w2E',tab_id:'w2E:tC',cwd:'/work/codex',focused:true,agent_status:'working'}],agents:[{terminal_id:'term-one',name:'builder',agent:'codex',workspace_id:'w2E',tab_id:'w2E:tC',pane_id:'w2E:pF',agent_status:'working'}]};
   it.each([{name:'no servers',servers:[]},{name:'server choice',servers:[{name:'first'},{name:'second'}]}])('keeps $name steady while its server list refreshes',({servers})=>pollingClock(async invoke=>{
       let pending!:ReturnType<typeof deferredRead>,calls=0;
       vi.mocked(invoke).mockImplementation(()=>++calls===1?Promise.resolve(servers):(pending=deferredRead()).promise);
