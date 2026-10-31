@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prevent Android and desktop terminal IME composition from replaying after Enter or a canceled input context, and apply owned trailing ASCII corrections as edits. Keep ordinary Unicode composition, hardware keys, paste and virtual modifiers; complex non-ASCII erasures retain upstream behavior pending remote-editor compatibility. Flush current preedit before toolbar modifier changes. Android terminals now request browser autocomplete off alongside their existing autocorrect-off policy; Compose hints are unchanged and no private keyboard mode is requested.
+
 - Detect live Herdr agents and accept exact workspace, tab and pane actions when their public IDs contain Herdr’s encoded letters, such as `wZ` and `w2E:pF`. Preserve target bounds, relationships and command quoting; connection and server-selection defaults are unchanged.
 
 - Retain bounded last-poll selector counts and timing when public Android APK workspace readiness fails. Reuse existing accessibility queries without changing actions, readiness checks or deadlines; no cold-start cause or Google runtime qualification is inferred.

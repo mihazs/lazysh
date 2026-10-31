@@ -287,11 +287,17 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
 });
 
 
-test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and protocol input', async ({page,context}) => {
+async function openShortcutTerminal(page:Page) {
   await fixture(page);
   await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
   if ((page.viewportSize()?.width??1280)<=600) await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+}
+
+for(const android of [false,true])test.describe(android ? 'Android IME' : 'ordinary keyboard',()=>{
+  if(android)test.use({userAgent:'Mozilla/5.0 (Linux; Android 14; Owned IME fixture) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'});
+test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and protocol input', async ({page,context}) => {
+  await openShortcutTerminal(page);
   const keys=page.getByLabel('Terminal keys',{exact:true});
   const input=page.locator('.xterm-helper-textarea');
   const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
@@ -350,4 +356,43 @@ test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and pr
     await expect.poll(()=>keys.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
     expect(await writes()).toEqual([]);
   }
+});
+
+for(const [label,expected] of [['ctrl','\x03'],['Alt','\x1bc']] as const)test(`current preedit stays literal when ${label} latches before a fresh native key and release`,async({page,context})=>{
+  await openShortcutTerminal(page);
+  const input=page.locator('.xterm-helper-textarea'),keys=page.getByLabel('Terminal keys',{exact:true});
+  const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  const modifier=()=>keys.getByRole('button',{name:label,exact:true}).click();
+  const cdp=await context.newCDPSession(page);
+  await input.focus();
+  await cdp.send('Input.imeSetComposition',{text:'a',selectionStart:1,selectionEnd:1});
+  expect(await writes()).toEqual([]);
+  await modifier();const afterLatch=await writes();
+  await modifier();
+  await expect(keys.getByRole('button',{name:`${label} · lock`,exact:true})).toHaveAttribute('aria-pressed','true');
+  await cdp.send('Input.insertText',{text:'c'});
+  await expect.poll(async()=>(await writes()).at(-1)).toBe(expected);
+  await keys.getByRole('button',{name:`${label} · lock`,exact:true}).click();
+  await expect(keys.getByRole('button',{name:label,exact:true})).toHaveAttribute('aria-pressed','false');
+  await cdp.send('Input.insertText',{text:'plain'});
+  await expect.poll(async()=>(await writes()).at(-1)).toBe('plain');
+  expect(afterLatch).toEqual(['a']);
+  expect(await writes()).toEqual(['a',expected,'plain']);
+  await cdp.detach();
+});
+
+test('terminal completion hints stay distinct from the normal Compose editor',async({page})=>{
+  await openShortcutTerminal(page);
+  const input=page.locator('.xterm-helper-textarea');
+  expect(await input.getAttribute('autocomplete')).toBe(android?'off':null);
+  await expect(input).toHaveAttribute('autocorrect','off');
+  await expect(input).toHaveAttribute('autocapitalize','off');
+  await expect(input).toHaveAttribute('spellcheck','false');
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  const composer=page.getByLabel('Compose text',{exact:true});
+  expect(await composer.getAttribute('autocomplete')).toBeNull();
+  expect(await composer.getAttribute('autocorrect')).toBeNull();
+  expect(await composer.evaluate(element=>element.tagName)).toBe('TEXTAREA');
+});
+
 });
