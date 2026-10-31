@@ -65,8 +65,6 @@ pub fn kimi_config() -> Value {
         "PostToolUse",
         "PostToolUseFailure",
         "Notification",
-        "Stop",
-        "StopFailure",
         "SessionEnd",
     ];
     let content = events.iter().map(|event| format!("[[hooks]]\nevent = \"{event}\"\ncommand = \"lazysh-agent ingest --agent kimi\"\ntimeout = 5\n")).collect::<Vec<_>>().join("\n");

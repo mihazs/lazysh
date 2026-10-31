@@ -16,7 +16,7 @@ test('actual CLI prints distinct Gemini, Droid, Kimi and Copilot formats without
     for (const [agent, events] of [
       ['gemini', ['BeforeAgent', 'BeforeTool', 'AfterTool', 'Notification', 'AfterAgent', 'SessionEnd']],
       ['droid', ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd']],
-      ['kimi', ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'Stop', 'StopFailure', 'SessionEnd']],
+      ['kimi', ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SessionEnd']],
       ['copilot', ['UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionEnd', 'notification']],
     ] as const) {
       const output = Bun.spawnSync([binary, `${agent}-config`], { cwd: directory, env: { ...process.env, LAZYSH_STATE_DIR: join(directory, 'state'), GEMINI_CONFIG_DIR: join(directory, 'gemini'), FACTORY_CONFIG_DIR: join(directory, 'factory'), KIMI_CONFIG_FILE: join(directory, 'kimi.toml') }, stdout: 'pipe', stderr: 'pipe' });

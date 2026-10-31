@@ -76,7 +76,12 @@ class NativeUiLocaleTest {
                 coverType.getMethod("load", WebView::class.java, android.app.Activity::class.java).invoke(cover, blank, activity)
                 val gate = coverType.getDeclaredField("gate").apply { isAccessible = true }.get(cover)
                 val generation = gate.javaClass.getMethod("getNativeGeneration").invoke(gate)
+                coverType.getMethod("relabel", Context::class.java).invoke(cover, strings)
+                val overlay = coverType.getDeclaredField("overlay").apply { isAccessible = true }.get(cover) as View
+                assertEquals("Iniciando o lazysh", overlay.contentDescription.toString())
                 coverType.getMethod("failure").invoke(cover)
+                val unlock = coverType.getDeclaredField("unlock").apply { isAccessible = true }.get(cover) as View
+                assertEquals("Initialization failures retain a visible recovery action", View.VISIBLE, unlock.visibility)
                 coverType.getMethod("relabel", Context::class.java).invoke(cover, strings)
                 val detail = coverType.getDeclaredField("status").apply { isAccessible = true }.get(cover) as TextView
                 val title = coverType.getDeclaredField("title").apply { isAccessible = true }.get(cover) as TextView

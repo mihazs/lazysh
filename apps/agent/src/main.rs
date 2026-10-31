@@ -20,6 +20,11 @@ enum Command {
         #[command(subcommand)]
         command: lazysh_agent::installation::Command,
     },
+    /// Preview and explicitly manage packaged product skills for an existing agent profile.
+    Skills {
+        #[command(subcommand)]
+        command: lazysh_agent::skills::Command,
+    },
     /// Explicit opt-in relay setup and bounded drain; never installs hooks or schedules.
     Relay {
         #[command(subcommand)]
@@ -182,6 +187,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             ],
         })),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
+        Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
         Command::Relay { command } => Some(lazysh_agent::relay::run(
             command,
             &lazysh_agent::state_directory()?,

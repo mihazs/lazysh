@@ -330,6 +330,37 @@ fn native_hook_assets_are_print_only_and_never_change_profiles_or_trust() {
 }
 
 #[test]
+fn unscoped_kimi_terminal_hooks_do_not_finish_or_fault_the_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut observed = Vec::new();
+    // Kimi 1.52.0 shares parent session/engine with child souls and omits role from these events.
+    for terminal in [
+        json!({"hook_event_name":"Stop","session_id":"owned-parent","cwd":"/owned/project","stop_hook_active":false}),
+        json!({"hook_event_name":"StopFailure","session_id":"owned-parent","cwd":"/owned/project","error_type":"OwnedChildError","error_message":"PRIVATE-PROMPT"}),
+    ] {
+        for payload in [
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-parent","cwd":"/owned/project","prompt":"parent prompt"}),
+            json!({"hook_event_name":"PreToolUse","session_id":"owned-parent","cwd":"/owned/project","tool_name":"Agent"}),
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-parent","cwd":"/owned/project","prompt":"child prompt"}),
+        ] {
+            assert!(ingest(dir.path(), "kimi", &payload).status.success());
+        }
+        let before = snapshot(dir.path(), "1");
+        let output = ingest(dir.path(), "kimi", &terminal);
+        assert!(output.status.success() && output.stdout.is_empty() && output.stderr.is_empty());
+        let after = snapshot(dir.path(), "1");
+        observed.push((
+            after["sessions"][0]["state"].as_str().unwrap().to_owned(),
+            before == after,
+        ));
+    }
+    assert_eq!(
+        observed,
+        vec![("working".into(), true), ("working".into(), true)]
+    );
+}
+
+#[test]
 fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
     for (agent, name, events, unsupported, attention_type) in [
         (
@@ -384,8 +415,6 @@ fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
                 ("PostToolUse", "working"),
                 ("PostToolUseFailure", "working"),
                 ("Notification", "needs_attention"),
-                ("StopFailure", "needs_attention"),
-                ("Stop", "done"),
                 ("SessionEnd", "done"),
             ],
             vec![
@@ -394,6 +423,8 @@ fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
                 "AfterTool",
                 "AfterAgent",
                 "PermissionRequest",
+                "Stop",
+                "StopFailure",
             ],
             "permission_prompt",
         ),

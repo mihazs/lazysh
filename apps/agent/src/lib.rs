@@ -4,9 +4,12 @@ pub mod approvals;
 pub mod devices;
 pub mod hooks;
 pub mod installation;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod managed_directory;
 pub mod relay;
 pub mod reported_history;
 pub mod settings;
+pub mod skills;
 mod storage_filesystem;
 mod storage_namespace;
 pub mod transcript;
@@ -247,13 +250,12 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                 "PermissionRequest" if matches!(agent, Agent::Claude | Agent::Codex) => {
                     (SessionState::NeedsAttention, "Permission requested")
                 }
-                "StopFailure" if matches!(agent, Agent::Kimi) => {
-                    (SessionState::NeedsAttention, "Turn failed")
-                }
                 "Interrupt" if matches!(agent, Agent::Codex) => {
                     (SessionState::Done, "Turn interrupted")
                 }
-                "Stop" if !matches!(agent, Agent::Gemini) => (SessionState::Done, "Turn finished"),
+                "Stop" if !matches!(agent, Agent::Gemini | Agent::Kimi) => {
+                    (SessionState::Done, "Turn finished")
+                }
                 "AfterAgent" if matches!(agent, Agent::Gemini) => {
                     (SessionState::Done, "Turn finished")
                 }

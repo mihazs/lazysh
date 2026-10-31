@@ -64,10 +64,17 @@ canceled turn is not reported as a successful final response.
 
 `lazysh-agent kimi-config` prints JSON containing a TOML fragment in `content`
 for Kimi's `[[hooks]]` entries. Kimi prompt/tool activity indicates work, including
-failed tools while the agent continues; StopFailure indicates attention and
-Stop/SessionEnd indicate completion. Only the documented permission_prompt
-notification is treated as a permission wait. Child lifecycle notifications and
-SessionStart do not finish a parent or create a fictitious working turn.
+failed tools while the agent continues. Only the documented permission_prompt
+notification is treated as a permission wait. SessionStart and child lifecycle
+notifications do not finish a parent or create a fictitious working turn.
+
+Kimi 1.52.0 shares the parent's session and hook engine with child souls. Both
+root and child turns emit identical unscoped Stop/StopFailure payloads, so those
+events are deliberately omitted and ignored. This avoids finishing or faulting
+a parent when only a child stopped. Per-turn completion is unavailable through
+this hook contract; the last observed working state can remain during idle time.
+SessionEnd reports the root CLI-instance/session-owner boundary, including a
+reload, rather than completion of each turn. This capability gap remains open.
 
 These commands only print configuration and require a companion executable
 available in the hook environment. Factory recommends absolute command paths;
@@ -78,10 +85,17 @@ bounds and privacy projection as other lifecycle adapters.
 
 Gemini contracts were checked against release
 [v0.66.0 hook types](https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/hooks/types.ts)
-and [runner](https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/hooks/hookRunner.ts),
-Droid against its [hook reference](https://docs.factory.com/harness/hooks), and
+and [runner](https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/hooks/hookRunner.ts).
+Gemini's [outermost client completion guard](https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/core/client.ts)
+and [direct child chat executor](https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/agents/local-executor.ts)
+qualify AfterAgent as the outer client boundary rather than child completion in
+that release. Droid was checked against its [hook reference](https://docs.factory.com/harness/hooks), and
 Kimi against release [1.52.0 event constructors](https://github.com/MoonshotAI/kimi-cli/blob/1.52.0/src/kimi_cli/hooks/events.py)
 and [configuration model](https://github.com/MoonshotAI/kimi-cli/blob/1.52.0/src/kimi_cli/hooks/config.py).
+Kimi's attribution limit follows the [shared child runtime](https://github.com/MoonshotAI/kimi-cli/blob/1.52.0/src/kimi_cli/soul/agent.py),
+[propagated child hook engine](https://github.com/MoonshotAI/kimi-cli/blob/1.52.0/src/kimi_cli/subagents/runner.py),
+[unscoped terminal events](https://github.com/MoonshotAI/kimi-cli/blob/1.52.0/src/kimi_cli/soul/kimisoul.py)
+and [root CLI SessionEnd owner](https://github.com/MoonshotAI/kimi-cli/blob/1.52.0/src/kimi_cli/cli/__init__.py).
 Tests invoke the actual companion CLI with synthetic native payloads and parse
 the printed TOML with Bun. Real authenticated agent sessions remain unverified.
 
@@ -128,8 +142,8 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Pending native adapter; pre-tool invocation alone does not prove a waiting human prompt |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter and print-only standalone hook map; contract fixtures |
 | [Amp](https://ampcode.com/docs/customize/plugins) | agent.start/tool.call; plugin UI confirmations; agent.end | Pending native plugin; no documented general waiting-for-permission event or session.end in this reference |
-| [Aider](https://aider.chat/docs/usage/notifications.html) | Custom notification command when response finishes | Completion-only native notification surface identified; full turn/attention integration still needs a separate supported contract |
-| [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/customization/hooks.html) | UserPromptSubmit/tool events; Notification; Stop/StopFailure/SessionEnd | Native adapter and print-only TOML fragment; contract fixtures; hooks are beta |
+| [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Pending adapter; callback provides no state or session identity and does not prove turn completion or a waiting human |
+| [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/customization/hooks.html) | Prompt/tool activity; permission notification; root CLI SessionEnd | Native observable callbacks and TOML fragment; unscoped per-turn completion remains unavailable; hooks are beta |
 
 Generic schema-1 ingestion remains available for explicit integrations, but a
 generic wrapper is not evidence that these pending native adapters work. This
