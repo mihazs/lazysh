@@ -1,5 +1,38 @@
 # @lazysh/agent
 
+## 1.4.0
+
+### Minor Changes
+
+- 0be60d8: Package original host-setup and lifecycle-reporting skills with explicit preview,
+  profile status, owned installation/update and removal commands. Preserve agent
+  configuration and reject foreign or edited skills; no automatic installation.
+- 564f7f9: Add a print-only Cline root lifecycle plugin with exact native run identities, bounded companion writes and disposal cleanup. Child runs, permission waits and managed installation remain unsupported; profiles and approval policy are unchanged.
+- 54796e0: Browse Herdr spaces and live agent panes from workspace navigation. Reuse or explicitly attach the exact server display, then use stock shared workspace/tab focus or the companion's exact shell/agent pane focus. Disclose shared focus and require fresh Chat confirmation after navigation.
+- 672b24b: Add native Codex lifecycle ingestion and a bounded OpenCode lifecycle plugin with print-only configuration assets.
+- 730cb2a: Add explicit inspected-plan lifecycle hook setup for Claude Code, Codex and OpenCode, with an SSH-connected Agents setup flow and companion CLI.
+  
+  Preserve foreign profile values and ordinary file mode/group metadata, refuse unhandled ACLs or ownership conflicts, and keep configured state distinct from trust and live reporting. Managed writes initially support qualified Linux filesystems; other platforms retain preview-only capability.
+- 3674b0e: Add native Gemini CLI, Droid, Kimi CLI and GitHub Copilot CLI lifecycle reporting with print-only agent-specific configuration fragments.
+  
+  Kimi ignores unscoped Stop/StopFailure events to preserve parent state; its hook contract cannot identify per-turn completion.
+- 7477209: Extend explicit inspected-profile lifecycle hook setup to Gemini CLI and Cursor CLI, including the SSH-connected Agents setup selector.
+  
+  Preserve Gemini millisecond deadlines and disable flags, Cursor version-1/fail-open observer semantics, foreign policy and the existing retained filesystem transaction. Other managed providers, macOS writes and actual provider-trusted reporting remain separate gaps.
+- e542d41: Add native Cursor activity/completion reporting, an Amp thread-state observer
+  plugin and truthful host-wide Aider notification health. Print reviewed assets
+  and arguments without changing profiles or permission policy. Aider callbacks
+  have no session attribution or lifecycle states and never create session rows.
+
+### Patch Changes
+
+- 1cddb34: Support native OpenCode 2.2 and 1.19.5 loading from one reviewed lifecycle plugin asset, with bounded ordered delivery and cleanup on unload. Hook installation and trust remain explicit.
+- bc6c84d: Recover built-in account quotas from empty external reports and offer companion setup when a remote usage command is missing or outdated.
+- Updated dependencies [bc6c84d]
+  - @lazysh/account-usage@1.4.0
+  - @lazysh/common@1.4.0
+  - @lazysh/notification-client@1.4.0
+
 ## 1.3.3
 
 ### Patch Changes
