@@ -1207,6 +1207,50 @@ class NativeWorkspaceTest {
         target.perform(webClick())
     }
 
+    private fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
+
+    private fun selectOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
+        val switcher = "[role=dialog][aria-label='Switch terminal session']"
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.session-switcher-trigger")).perform(webClick())
+        awaitDocument(scenario, "exact owned session choice", """
+            (()=>{const choices=Array.from(document.querySelectorAll("$switcher .session-choice"));
+              return choices.filter(choice=>choice.querySelector('.session-choice-name')?.textContent===${JSONObject.quote(name)}).length===1;})()
+        """)
+        val choice = onWebView().withElement(findElement(Locator.XPATH,
+            "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[@class='session-choice-name' and text()='$name']]"))
+        choice.perform(webScrollIntoView())
+        choice.perform(webClick())
+        awaitDocument(scenario, "exact owned session selected before End", """
+            (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
+              return !document.querySelector("$switcher") && selected.length===1 &&
+                selected[0].textContent.trim()===${JSONObject.quote(name)} &&
+                document.querySelector('.session-switcher-trigger')?.textContent===${JSONObject.quote(name)} &&
+                document.querySelectorAll(${JSONObject.quote("button[aria-label='Disconnect $name']")}).length===1 &&
+                ${if (requireMosh) "document.querySelector('.workspace-footer')?.textContent.includes('Mosh')" else "true"};})()
+        """)
+    }
+
+    private fun endOwnedConnection(scenario: ActivityScenario<MainActivity>, name: String, requireMosh: Boolean = false) {
+        val closeHosts = "button[aria-label='Close hosts']"
+        if (evaluate(scenario, workspaceElementVisible(closeHosts)) == "true") {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, closeHosts)).perform(webClick())
+            awaitDocument(scenario, "hosts closed before owned disconnect", "!" + workspaceElementVisible(closeHosts))
+        }
+        val disconnect = "button[aria-label='Disconnect $name']"
+        if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
+            selectOwnedConnection(scenario, name, requireMosh)
+            workspaceMenuAction(scenario, "End $name connection")
+        } else if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
+            val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
+            close.perform(webScrollIntoView())
+            awaitDocument(scenario, "touchable exact session disconnect", workspaceElementVisible(disconnect, true))
+            close.perform(webClick())
+        } else {
+            workspaceMenuAction(scenario, "End $name connection")
+        }
+        awaitDocument(scenario, "exact owned connection ended", "!" + present(disconnect))
+    }
+
     private fun sessionView(scenario: ActivityScenario<MainActivity>, text: String) {
         val menuVisible = evaluate(scenario, workspaceElementVisible(".mobile-session-views")) == "true"
         if (menuVisible || evaluate(scenario, workspaceElementVisible(".view-tabs")) != "true") {
@@ -1507,14 +1551,15 @@ class NativeWorkspaceTest {
         var capture = 0
         fun screenshot(name: String) {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
-            val directory = java.io.File(instrumentation.context.getExternalFilesDir(null), "herdr-navigation")
+            val directory = java.io.File(requireNotNull(instrumentation.targetContext.getExternalFilesDir(null)), "herdr-navigation")
             require(directory.mkdirs() || directory.isDirectory)
             val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
             try { java.io.File(directory, "${++capture}-$name.png").outputStream().use { assertTrue("Owned screenshot write", bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } }
             finally { bitmap.recycle() }
         }
         fun select(display: Int, target: JSONObject) {
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(${display + 1}) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
+            if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") selectOwnedConnection(scenario, labels[display])
+            else onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(${display + 1}) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
             visible(display, target)
             screenshot("display-$display-${target.getString("marker").substringBeforeLast('_')}")
         }
@@ -1578,8 +1623,7 @@ class NativeWorkspaceTest {
             try {
             for (child in listOf(second, first)) {
                 val selector = "button[aria-label='Disconnect $child']"
-                if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(selector)}))") == "true")
-                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+                if (evaluate(scenario, present(selector)) == "true") endOwnedConnection(scenario, child)
             }
             awaitDocument(scenario, "owned navigation children closed", "document.querySelectorAll('.session-tabs [role=tab]').length===1")
             } catch (cleanup: Throwable) {
@@ -1994,7 +2038,6 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.XPATH,
                 "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
         }
-        fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
         fun selectOwnedOption(selector: String, value: String) {
             closeSoftKeyboard()
@@ -2370,35 +2413,7 @@ class NativeWorkspaceTest {
                 if (requireSharedHerdr) verifySharedHerdrNavigation(scenario, fixture.getJSONObject("herdr"), name, label)
                 else if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             }
-            val disconnect = "button[aria-label='Disconnect $connectedName']"
-            if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
-                val switcher = "[role=dialog][aria-label='Switch terminal session']"
-                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.session-switcher-trigger")).perform(webClick())
-                awaitDocument(scenario, "exact owned session choice", """
-                    (()=>{const choices=Array.from(document.querySelectorAll("$switcher .session-choice"));
-                      return choices.filter(choice=>choice.querySelector('.session-choice-name')?.textContent===${JSONObject.quote(connectedName)}).length===1;})()
-                """)
-                val choice = onWebView().withElement(findElement(Locator.XPATH,
-                    "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[@class='session-choice-name' and text()='$connectedName']]"))
-                choice.perform(webScrollIntoView())
-                choice.perform(webClick())
-                awaitDocument(scenario, "exact owned session selected before End", """
-                    (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
-                      return !document.querySelector("$switcher") && selected.length===1 &&
-                        selected[0].textContent.trim()===${JSONObject.quote(connectedName)} &&
-                        document.querySelector('.session-switcher-trigger')?.textContent===${JSONObject.quote(connectedName)} &&
-                        document.querySelectorAll(${JSONObject.quote(disconnect)}).length===1 &&
-                        ${if (requireHerdrMosh) "document.querySelector('.workspace-footer')?.textContent.includes('Mosh')" else "true"};})()
-                """)
-                workspaceMenuAction(scenario, "End $connectedName connection")
-            } else if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
-                val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
-                close.perform(webScrollIntoView())
-                awaitDocument(scenario, "touchable exact session disconnect", workspaceElementVisible(disconnect, true))
-                close.perform(webClick())
-            } else {
-                workspaceMenuAction(scenario, "End $connectedName connection")
-            }
+            endOwnedConnection(scenario, connectedName, requireHerdrMosh)
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Delete $name']")).perform(webClick())
@@ -2431,8 +2446,7 @@ class NativeWorkspaceTest {
                 val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
                 for (ownedName in ownedNames) {
                     val disconnect = "button[aria-label='Disconnect $ownedName']"
-                    if (evaluate(scenario, present(disconnect)) == "true")
-                        onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                    if (evaluate(scenario, present(disconnect)) == "true") endOwnedConnection(scenario, ownedName)
                 }
                 val delete = "button[aria-label='Delete $name']"
                 if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {

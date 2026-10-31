@@ -367,7 +367,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const navigationScreenshots=async()=>{
     const destination=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/herdr-navigation');
     await mkdir(destination,{recursive:true});
-    await shell(['pull','/sdcard/Android/data/app.lazysh.client.test/files/herdr-navigation',destination]);
+    await shell(['pull','/sdcard/Android/data/app.lazysh.client/files/herdr-navigation',destination]);
   };
   try {
     if(moshBackground || herdrMosh) {
