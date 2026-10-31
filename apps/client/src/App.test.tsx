@@ -1049,6 +1049,39 @@ it("focuses host search when opened with the command palette shortcut", async ()
   ).toBeTruthy();
 });
 
+it('keeps restore gated on host loading and explicit action while exposing its limitations on demand',async()=>{
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'home'}]):null);
+  let loaded!:(value:Host[])=>void; mocks.api.listHosts.mockImplementationOnce(()=>new Promise(resolve=>{loaded=resolve;}));
+  let connected!:(value:{sessionId:string})=>void; mocks.api.connect.mockImplementationOnce(()=>new Promise(resolve=>{connected=resolve;}));
+  const user=userEvent.setup(); render(<App/>);
+  const restore=await screen.findByRole('button',{name:'Restore previous workspace'});
+  expect(restore).toHaveProperty('disabled',true);
+  const details=screen.getByRole('button',{name:'Workspace details'});
+  expect(details.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeNull();
+  await user.click(details);
+  expect(screen.getByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeTruthy();
+  expect(mocks.api.connect).not.toHaveBeenCalled();
+  await act(async()=>loaded([host])); await waitFor(()=>expect(restore).toHaveProperty('disabled',false));
+  await user.click(restore);
+  expect(screen.getByRole('button',{name:'Restoring…'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Dismiss'})).toHaveProperty('disabled',true);
+  expect(mocks.api.connect).toHaveBeenCalledWith('home',{},expect.any(Function),{useSavedCredentials:true});
+  await act(async()=>connected({sessionId:'restored-explicit'})); await screen.findByText('Live SSH terminal');
+});
+it('dismisses saved restoration without disconnecting or replacing the current workspace',async()=>{
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'previous-host'}]):null);
+  mocks.api.connect.mockResolvedValue({sessionId:'keep-current-session'});
+  const user=await openConnection(); await user.click(screen.getByRole('button',{name:'Connect'})); await screen.findByText('Live SSH terminal');
+  const dismiss=screen.getByRole('button',{name:'Dismiss'});
+  expect(dismiss.textContent).toBe(''); expect(dismiss.querySelector('svg')).not.toBeNull();
+  await user.click(dismiss);
+  expect(screen.queryByRole('button',{name:'Restore previous workspace'})).toBeNull();
+  expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home'}]));
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1); expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  expect(screen.getByText('Live SSH terminal')).toBeTruthy();
+});
+
 it.each([undefined, "agents"])("restores the exact tmux workspace on server %s without sending shell text", async tmuxServer => {
   vi.mocked(localStorage.getItem).mockReturnValue(
     JSON.stringify([

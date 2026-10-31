@@ -4,6 +4,10 @@
 
 - Fall back to the built-in account-usage collectors when an optional external ai-usagebar returns no accounts, while preserving explicit provider disabling and cached error reports. Show a contextual companion install/update action for missing or outdated Unix companions instead of generic unavailability, and distinguish empty accounts in the compact usage button.
 
+- Add native Codex lifecycle ingestion and an OpenCode lifecycle plugin alongside Claude Code hooks. Print configuration/assets without changing agent settings or trust; report working, attention and completed states without recording prompts, tool arguments or approval decisions.
+
+- Align the workspace restore action with accessible 44px details and dismiss icons in one compact row. Keep the saved-credential and multiplexer restoration explanation available on demand; restore, dismissal and connection defaults are unchanged.
+
 - Return momentary terminal keys to their resting appearance after touch release. Preserve intentional modifier locks, held-key feedback, mouse hover, keyboard focus outlines and custom theme colors; key dispatch and repeat behavior are unchanged.
 
 - Shorten common attachment, transcript and preferences guidance while keeping safety limits visible. Show a compact capability notice for unavailable Apple status features; preserve sharing controls and privacy guidance after any sharing request.
