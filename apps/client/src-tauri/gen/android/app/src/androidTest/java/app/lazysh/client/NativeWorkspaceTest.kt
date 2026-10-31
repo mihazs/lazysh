@@ -2434,6 +2434,7 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
+            val recheckPattern = Regex("lazysh-tag-recheck-v1:(transport:(timeout|connect|redirect|body|decode|request|other)|status:([1-5][0-9]{2}|other)|body|json|ref|type|sha)")
             for (reused in listOf(false, true)) {
                 if (evaluate(scenario, "document.querySelector('$panel')?.open===true") != "true")
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel summary")).perform(webScrollIntoView()).perform(webClick())
@@ -2449,6 +2450,7 @@ class NativeWorkspaceTest {
                 button.perform(webClick())
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(245)
                 var phase = "unavailable"; var failure = "unavailable"; var outcome = "unavailable"; var reason = "unavailable"
+                var recheck = "none"
                 var completedWithinBudget = false
                 while (true) {
                     val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
@@ -2456,13 +2458,15 @@ class NativeWorkspaceTest {
                     val sample = runCatching { JSONObject(evaluate(scenario, """
                         (()=>{const p=document.querySelector('$panel');return {
                           phase:p?.getAttribute('data-install-phase'),failure:p?.getAttribute('data-install-failure'),
-                          state:p?.getAttribute('data-install-outcome'),reason:p?.getAttribute('data-install-reason')};})()
+                          state:p?.getAttribute('data-install-outcome'),reason:p?.getAttribute('data-install-reason'),
+                          recheck:p?.getAttribute('data-install-recheck')};})()
                     """, remaining.coerceAtMost(1_000))) }.getOrNull()
                     if (sample != null) {
                         phase = sample.optString("phase").takeIf { it in phases } ?: "unavailable"
                         failure = sample.optString("failure").takeIf { it in failures } ?: "other"
                         outcome = sample.optString("state").takeIf { it in setOf("idle", "pending", "failed", "uncertain", "installed", "reused") } ?: "unavailable"
                         reason = sample.optString("reason").takeIf { it in setOf("none", "committedDurabilityUnknown", "commitResponseLost", "verificationUnavailable") } ?: "unavailable"
+                        recheck = sample.optString("recheck").takeIf { phase == "verifying" && failure == "companion_release_unavailable" && recheckPattern.matches(it) } ?: "none"
                         if (outcome == expected || outcome == "failed" || outcome == "uncertain") {
                             completedWithinBudget = System.nanoTime() < deadline
                             break
@@ -2470,7 +2474,7 @@ class NativeWorkspaceTest {
                     }
                     Thread.sleep(200)
                 }
-                val observation = "Owned companion result phase=$phase kind=$failure outcome=$outcome reason=$reason"
+                val observation = "Owned companion result phase=$phase kind=$failure outcome=$outcome reason=$reason recheck=$recheck"
                 assertTrue(observation, completedWithinBudget)
                 assertEquals(observation, expected, outcome)
                 val text = if (reused) "Host companion $version is already installed." else "Installed host companion $version."
