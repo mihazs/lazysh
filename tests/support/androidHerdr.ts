@@ -40,7 +40,7 @@ export class HerdrFixture {
         await writeFile(join(directory,'config.toml'),"onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n",{mode:0o600});
       }
       await writeFile(owned.transcript,JSON.stringify({type:'user',uuid:'owned-'+ssh.nonce,message:{role:'user',content:owned.record}})+'\n',{mode:0o600});
-      owned.server=new OwnedProcess(join(ssh.directory,'bin/herdr'),['--session',owned.name,'server'],ssh.directory,ssh.environment);
+      owned.server=ssh.herdrServer(['--session',owned.name,'server']);
       const until=performance.now()+3000;
       while(true) {
         const ready=await owned.run(['api','snapshot']).then(()=>true,()=>false);
@@ -127,7 +127,7 @@ export class HerdrFixture {
     if(this.stopped)return;
     let failure:unknown;
     try {
-      if(this.server)await stopOwnedTree(this.server,'Herdr');
+      if(this.server)await stopOwnedTree(this.server,'Herdr',true);
       if(await this.receiverAlive())throw new Error('Owned Herdr receiver survived teardown');
     } catch(error){failure=error;}
     try{await this.ssh.stop();}catch(error){failure??=error;}

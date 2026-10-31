@@ -169,6 +169,22 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
     const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
     const {agent}=owned.metadata();
+    const remote=await owned.ssh.client(true,`herdr --session '${owned.name}' api snapshot`);
+    const remoteSnapshot=JSON.parse(await remote.finish('owned SSH-visible Herdr snapshot',5000)).result?.snapshot;
+    expect(remoteSnapshot?.focused_pane_id===agent.paneId
+      && remoteSnapshot?.agents?.length===1 && remoteSnapshot?.panes?.some((pane:Record<string,unknown>)=>
+        pane.pane_id===agent.paneId && pane.terminal_id===agent.terminalId
+        && pane.workspace_id===agent.workspaceId && pane.tab_id===agent.tabId)
+      && remoteSnapshot.agents[0].terminal_id===agent.terminalId).toBe(true);
+    const probe=await owned.ssh.client(true,`herdr --session '${owned.name}' api guarded`);
+    probe.child.stdin!.end(JSON.stringify({id:'guard',method:'lazysh.guard.cancel_preparation',
+      params:{boot:'0'.repeat(64),ownership:'0'.repeat(64),preparation:0}}));
+    await expect(probe.finish('owned SSH-visible guard preflight',3000))
+      .rejects.toThrow('Owned fixture failed: owned SSH-visible guard preflight; exit=1');
+    let invalid=false;
+    try {const response=JSON.parse(probe.stderr);invalid=response.id==='guard' && response.error?.code==='guard_invalid';}catch{/* Closed unavailable, never retain peer output. */}
+    expect(probe.stdout==='').toBe(true);
+    expect(invalid).toBe(true);
     expect(snapshot.agents).toHaveLength(1);
     expect(snapshot.agents[0]).toMatchObject({agent:'codex',agent_status:'unknown',terminal_id:agent.terminalId,
       workspace_id:agent.workspaceId,tab_id:agent.tabId,pane_id:agent.paneId});
@@ -178,6 +194,8 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(JSON.parse(await reports.finish('owned empty companion reports',5000))).toEqual({schemaVersion:1,sessions:[]});
     await owned.expectBytes(Buffer.alloc(0));
   } finally {await owned.stop();}
+  expect(await listening(owned.ssh.port)).toBe(false);
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
 }
 
