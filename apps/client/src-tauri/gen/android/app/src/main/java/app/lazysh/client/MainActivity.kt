@@ -9,6 +9,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import app.lazysh.vault.VaultPlugin
 import app.lazysh.displayidle.DisplayIdlePlugin
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
@@ -20,7 +21,9 @@ class MainActivity : TauriActivity() {
   }
   override fun onCreate(savedInstanceState: Bundle?) {
     if (BuildConfig.DEBUG) Log.i("LazyshActivityCreate", "onCreate:enter")
-    enableEdgeToEdge()
+    // Insets expose the fixed native window background, independent of WebView themes.
+    val nativeBars = SystemBarStyle.dark(getColor(R.color.ic_launcher_background))
+    enableEdgeToEdge(statusBarStyle = nativeBars, navigationBarStyle = nativeBars)
     if (BuildConfig.DEBUG) Log.i("LazyshActivityCreate", "onCreate:afterEdgeToEdge")
     super.onCreate(savedInstanceState)
     if (BuildConfig.DEBUG) Log.i("LazyshActivityCreate", "onCreate:afterSuper")
