@@ -9,9 +9,9 @@ export type AccountUsageEntry = {
   rows:(AccountUsageMetric|AccountUsageText)[];
   resetCredits:{available:number;credits:{title:string|null;expiresAt:string|null}[]}|null;
 };
-export type AccountUsageResponse = {schemaVersion:1;source?:'builtin'|'external_cli'|null;state:'ready'|'invalid_report'|'busy'|'disconnected'|'timeout'|'unavailable';report:{primary:string|null;entries:AccountUsageEntry[]}|null};
+export type AccountUsageResponse = {schemaVersion:1;source?:'builtin'|'external_cli'|null;state:'ready'|'companion_required'|'invalid_report'|'busy'|'disconnected'|'timeout'|'unavailable';report:{primary:string|null;entries:AccountUsageEntry[]}|null};
 export const accountUsageMessages = {
-  invalid_report:'accountUsageInvalid',busy:'accountUsageBusy',disconnected:'accountUsageDisconnected',timeout:'accountUsageTimeout',unavailable:'accountUsageUnavailable',
+  companion_required:'accountUsageCompanionRequired',invalid_report:'accountUsageInvalid',busy:'accountUsageBusy',disconnected:'accountUsageDisconnected',timeout:'accountUsageTimeout',unavailable:'accountUsageUnavailable',
 } as const satisfies Record<Exclude<AccountUsageResponse['state'],'ready'>,UiKey>;
 export function accountUsagePercent(percent:number,reading:'used'|'left') {return t('accountUsagePercent',{percent:formatNumber(percent),reading:t(reading==='used'?'accountUsageUsed':'accountUsageLeft')});}
 

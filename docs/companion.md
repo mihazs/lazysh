@@ -40,6 +40,10 @@ The Agents panel's [host companion settings](companion-settings.md) control new 
 
 ## Claude Code
 
+The companion also packages optional [installable product skills](product-skills.md)
+for host setup and lifecycle reporting. Previewing or installing this guidance
+does not install the lifecycle hooks described below.
+
 Run `lazysh-agent claude-config` and merge the printed `hooks` entries into your Claude settings, preserving existing entries. This command only prints JSON. Run Claude in tmux to include its `TMUX_PANE` identity. The [official hook reference](https://code.claude.com/docs/en/hooks) defines the inputs this adapter handles. Lifecycle summaries include tool names but omit prompts, tool arguments, transcripts, and credentials. An informational notification does not imply a pending approval.
 
 ### Optional Claude reported-history shortcut
