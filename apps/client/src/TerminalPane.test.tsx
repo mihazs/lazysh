@@ -589,7 +589,7 @@ describe("terminal interactions", () => {
     fireEvent.change(screen.getByLabelText("Search terminal history"), {target: {value: "world"}});
     fireEvent.click(screen.getByRole("button", {name: "Next"}));
     expect(terminal.scrollToLine).toHaveBeenCalledWith(1);
-    expect(screen.getByRole("status").textContent).toBe("Match on line 2");
+    expect(within(screen.getByLabelText("Search terminal history").closest("form")!).getByRole("status").textContent).toBe("Match on line 2");
   });
 });
 
