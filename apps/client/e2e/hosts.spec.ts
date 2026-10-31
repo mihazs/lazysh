@@ -147,18 +147,30 @@ test('preferences expose host multiplexer editing and keep mobile checkbox text 
   expect(await editor.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
 });
 
-test('workspace restore explanation wraps below reachable actions on phones',async({page},testInfo)=>{
+test('workspace restore details disclose without connecting and leave Dismiss reachable',async({page},testInfo)=>{
   await page.addInitScript(()=>localStorage.setItem('lazysh.workspace.v1',JSON.stringify([{hostId:'fixture-host'}])));
   await page.goto('/');
   const restore=page.getByRole('button',{name:'Restore previous workspace',exact:true});
   const dismiss=page.getByRole('button',{name:'Dismiss',exact:true});
   await expect(restore).toBeVisible();
-  const banner=restore.locator('..');
+  await page.evaluate(()=>{
+    const invoke=window.nativeFixtureInvoke;
+    Object.assign(window,{restoreCommands:[] as string[]});
+    window.nativeFixtureInvoke=async(command,args,options)=>{
+      (window as Window & {restoreCommands:string[]}).restoreCommands.push(command);
+      return invoke(command,args,options);
+    };
+  });
+  const banner=page.locator('.workspace > .workspace-restore');
+  const details=banner.getByRole('button',{name:'Workspace details',exact:true});
+  await expect(details).toHaveAttribute('aria-expanded','false');
+  await expect(banner.locator('.workspace-restore-help')).toHaveCount(0);
   expect(await banner.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
-  if(testInfo.project.name==='phone'){
-    const actions=await dismiss.boundingBox(), text=await banner.locator('span').boundingBox();
-    expect(text!.y).toBeGreaterThanOrEqual(actions!.y+actions!.height);
-  }
+  await details.click();
+  await expect(details).toHaveAttribute('aria-expanded','true');
+  await expect(banner.getByText('Uses saved credentials; tmux and Herdr reattach. Open Zellij sessions from Sessions.',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as Window & {restoreCommands:string[]}).restoreCommands)).toEqual([]);
+  await expect(dismiss).toBeInViewport();
   await banner.screenshot({path:testInfo.outputPath('workspace-restore.png')});
   await dismiss.click();
   await expect(restore).toHaveCount(0);
