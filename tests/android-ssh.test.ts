@@ -1012,3 +1012,38 @@ test('Herdr confirmation observation caps duplicates and retains only owned DOM 
   expect(serialized.length).toBeLessThan(250);
   expect(observe({regions:[{buttons:[...buttons,{textContent:'Choose terminal destination',disabled:false}]}],tabs:[{textContent:child+'-other',idle:true}],footer:['Mosh-private'],value:draft+'-other'})).toMatchObject({chooseDisabled:false,ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
 });
+
+
+test('native continuous finger observation rejects restarts, identity changes, untrusted events and early release',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const match=source.match(/val fingerObservation = """([\s\S]*?)"""[.]trimIndent\(\)/)!;
+  expect(match).not.toBeNull();
+  const key='owned-finger-probe';
+  const expression=match[1].replaceAll('$fingerKey',JSON.stringify(key)).replaceAll('$screens','ownedScreens');
+  function setup() {
+    const callbacks=new Map<string,(event:Record<string,unknown>)=>void>();
+    const canvas={contains:(target:unknown)=>target===screen,addEventListener:(name:string,fn:(event:Record<string,unknown>)=>void)=>callbacks.set(name,fn),
+      removeEventListener:(name:string)=>callbacks.delete(name)};
+    const screen={isConnected:true,textContent:'OLD490OLD491NEW512',closest:()=>canvas};
+    const window={} as Record<string,{sample:()=>{row:number;newest:boolean;active:boolean;held:boolean;moves:number};dispose:()=>void}>;
+    const install=new Function('window','ownedScreens',`return (${expression.trim()});`);
+    expect(install(window,[screen])).toBe(true);expect(install(window,[screen])).toBe(false);
+    const event=(type:string,identifier=3,trusted=true)=>callbacks.get(type)!({type,isTrusted:trusted,target:screen,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier}]});
+    return {screen,window,event,sample:()=>window[key].sample(),dispose:()=>window[key].dispose(),callbacks};
+  }
+  const good=setup();expect(good.sample()).toEqual({row:490,newest:true,active:true,held:false,moves:0});
+  good.event('touchstart');good.event('touchmove');good.screen.textContent='OLD480OLD481';
+  expect(good.sample()).toEqual({row:480,newest:false,active:true,held:true,moves:1});
+  good.event('touchmove');good.screen.textContent='OLD470OLD471';expect(good.sample().row).toBeLessThan(480);expect(good.sample().moves).toBe(2);
+  good.event('touchend');expect(good.sample().active).toBe(false);
+  good.dispose();expect(good.callbacks.size).toBe(0);
+  for(const bad of ['restart','identity','untrusted','cancel','detached']) {
+    const fixture=setup();fixture.event('touchstart');
+    if(bad==='restart')fixture.event('touchstart');
+    if(bad==='identity')fixture.event('touchmove',4);
+    if(bad==='untrusted')fixture.event('touchmove',3,false);
+    if(bad==='cancel')fixture.event('touchcancel');
+    if(bad==='detached')fixture.screen.isConnected=false;
+    expect(fixture.sample().active).toBe(false);fixture.dispose();expect(fixture.callbacks.size).toBe(0);
+  }
+});

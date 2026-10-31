@@ -39,8 +39,6 @@ import androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView
 import androidx.test.espresso.action.ViewActions.pressKey
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.GeneralClickAction
-import androidx.test.espresso.action.GeneralSwipeAction
-import androidx.test.espresso.action.Swipe
 import androidx.test.espresso.action.Press
 import androidx.test.espresso.action.Tap
 import androidx.test.espresso.action.EspressoKey
@@ -1545,13 +1543,97 @@ class NativeWorkspaceTest {
             assertTrue("Swipe finger must stay inside the measured native WebView", x > 0 && y > 0 && x < view.width && y < view.height)
             return floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
         }
-        onView(isAssignableFrom(WebView::class.java)).perform(GeneralSwipeAction(Swipe.FAST,
-            { view -> fingerPoint(view, 0.25) }, { view -> fingerPoint(view, 0.75) }, Press.FINGER))
+        val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
+        val fingerObservation = """
+            (()=>{
+              const key=$fingerKey, screens=$screens;
+              if(Object.hasOwn(window,key) || screens.length!==1) return false;
+              const screen=screens[0],canvas=screen.closest('.terminal-canvas');
+              if(!canvas) return false;
+              let starts=0,moves=0,ends=0,cancels=0,identifier=null,valid=true;
+              const record=event=>{
+                valid=valid && event.isTrusted && canvas.contains(event.target);
+                if(event.type==='touchstart') {
+                  starts++;valid=valid && starts===1 && event.touches.length===1;
+                  identifier=event.touches[0]?.identifier;
+                } else if(event.type==='touchmove') {
+                  moves++;valid=valid && event.touches.length===1 && event.touches[0].identifier===identifier;
+                } else if(event.type==='touchend')ends++;else cancels++;
+              };
+              const events=['touchstart','touchmove','touchend','touchcancel'];
+              events.forEach(type=>canvas.addEventListener(type,record,{capture:true,passive:true}));
+              Object.defineProperty(window,key,{configurable:true,value:{
+                sample:()=>{
+                  const match=screen.textContent.match(/OLD([0-9]{3})/);
+                  return {row:match?Number(match[1]):-1,newest:screen.textContent.includes('NEW512'),
+                    active:screen.isConnected && valid && starts<=1 && ends===0 && cancels===0,
+                    held:starts===1 && moves>0,moves:Math.min(2,moves)};
+                },dispose:()=>events.forEach(type=>canvas.removeEventListener(type,record,true))}});
+              return true;
+            })()
+        """.trimIndent()
+        assertEquals("Owned continuous finger observation installed", "true", evaluate(scenario, fingerObservation))
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val downTime = android.os.SystemClock.uptimeMillis()
+        val pointer = android.view.MotionEvent.PointerProperties().apply {
+            id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
+        }
+        var fingerDown = false
+        var lastPoint = floatArrayOf()
+        var fingerFailure: Throwable? = null
+        fun sendFinger(action: Int, point: FloatArray) {
+            val coordinate = android.view.MotionEvent.PointerCoords().apply {
+                x = point[0]; y = point[1]; pressure = 1f; size = 1f
+            }
+            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
+                1, arrayOf(pointer), arrayOf(coordinate), 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+            try {
+                assertEquals("One native finger identity throughout drag", 0, event.getPointerId(0))
+                assertEquals("One native DOWN epoch throughout drag", downTime, event.downTime)
+                instrumentation.sendPointerSync(event)
+            } finally {event.recycle()}
+        }
+        fun injectFinger(action: Int, fraction: Double) {
+            scenario.onActivity {activity -> lastPoint = fingerPoint(checkNotNull(webView(activity.window.decorView)), fraction)}
+            sendFinger(action, lastPoint)
+        }
+        val fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        fun progress(before: Int, moves: Int): Int {
+            while (true) {
+                val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                assertTrue("Owned continuous drag did not advance before UP", remaining > 0)
+                val sample = JSONObject(evaluate(scenario, "window[$fingerKey].sample()", remaining.coerceAtMost(1_000)))
+                assertTrue("Trusted finger stream must not restart, end or cancel before progress", sample.getBoolean("active"))
+                val row = sample.getInt("row")
+                if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
+                Thread.sleep(10)
+            }
+        }
+        try {
+            fingerDown = true
+            injectFinger(android.view.MotionEvent.ACTION_DOWN, 0.25)
+            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.5)
+            val firstRow = progress(512, 1)
+            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.75)
+            val secondRow = progress(firstRow, 2)
+            assertTrue("Second MOVE must reveal further history before the same finger lifts", secondRow < firstRow)
+            injectFinger(android.view.MotionEvent.ACTION_UP, 0.75)
+            fingerDown = false
+        } catch (failure: Throwable) {fingerFailure = failure; throw failure}
+        finally {
+            var cleanup: Throwable? = null
+            try {
+                if (fingerDown && lastPoint.size == 2) sendFinger(android.view.MotionEvent.ACTION_CANCEL, lastPoint)
+            } catch (failure: Throwable) {cleanup = failure}
+            try {evaluate(scenario, "window[$fingerKey]?.dispose();delete window[$fingerKey];true")}
+            catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+            if(cleanup!=null) {if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!) else throw cleanup!!}
+        }
         awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
             (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
         """)
         focusTab(originalTab)
-        println("lazysh Herdr finger scroll: one native swipe revealed older rows; original tab restored before guarded Chat")
+        println("lazysh Herdr finger scroll: two native MOVE phases advanced history before one UP; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
@@ -3060,4 +3142,155 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
+    @Test fun ownedImeRetiresActualRemoteConnectionWithoutPrivateKeyboardFlags() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val arguments=InstrumentationRegistry.getArguments()
+        org.junit.Assume.assumeTrue("Owned IME acceptance only",arguments.getString("lazyshImeAcceptance")=="true")
+        assertTrue("Dedicated cached emulator required",Build.VERSION.SDK_INT==36 && Build.MODEL=="sdk_gphone64_x86_64")
+        val nonce=checkNotNull(arguments.getString("lazyshImeNonce"))
+        assertTrue("Exact owned IME nonce required",Regex("[0-9a-f]{32}").matches(nonce))
+        val port=checkNotNull(arguments.getString("lazyshImePort")).toInt()
+        assertTrue("Owned loopback fixture port required",port in 1024..65535)
+        fun shell(command:String):String {
+            val descriptor=instrumentation.uiAutomation.executeShellCommand(command)
+            return android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
+                val bytes=it.readNBytes(4097)
+                check(bytes.size<=4096) {"Owned IME shell response exceeded bound"}
+                String(bytes,Charsets.UTF_8).trim()
+            }
+        }
+        val component="${instrumentation.context.packageName}/app.lazysh.client.OwnedImeService"
+        val original=shell("settings get secure default_input_method")
+        assertTrue("Original IME must be restorable",Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+").matches(original) && original!=component)
+        val enabled=shell("settings get secure enabled_input_methods")
+        assertTrue("Fixture IME must start disabled",enabled.split(':').none {it.substringBefore(';')==component})
+        val resolver=instrumentation.targetContext.contentResolver
+        val control=Uri.parse("content://app.lazysh.client.test.imefixture")
+        fun call(method:String)=checkNotNull(resolver.call(control,method,nonce,null))
+        fun awaitIme(label:String,predicate:(android.os.Bundle)->Boolean):android.os.Bundle {
+            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(120)
+            do {
+                val state=call("state")
+                if(predicate(state))return state
+                Thread.sleep(50)
+            }while(System.nanoTime()<deadline)
+            throw AssertionError(label)
+        }
+        fun editor(state:android.os.Bundle) {
+            assertTrue("Actual IME remote proxy required",state.getBoolean("remoteProxy"))
+            assertTrue("Normal text editor required",state.getBoolean("normalText"))
+            assertTrue("Autocomplete hint must reach native NO_SUGGESTIONS",state.getBoolean("noSuggestions"))
+            assertFalse("Native AUTO_CORRECT must stay off",state.getBoolean("autoCorrect"))
+            assertFalse("Private learning flag must remain absent",state.getBoolean("privateLearning"))
+        }
+        val scenario=NativeActivityFixture.scenario
+        val clientBefore=AtomicReference<android.webkit.WebViewClient>()
+        val documentBefore=AtomicReference<String>()
+        val documentDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30)
+        do {
+            scenario.onActivity {activity->
+                val web=webView(activity.window.decorView)
+                val location=web?.url
+                if(web!=null && location!=null) {clientBefore.set(web.webViewClient);documentBefore.set(location)}
+            }
+            if(documentBefore.get()!=null)break
+            Thread.sleep(50)
+        }while(System.nanoTime()<documentDeadline)
+        val originalClient=checkNotNull(clientBefore.get()) {"Original native WebView client unavailable"}
+        val originalDocument=checkNotNull(documentBefore.get()) {"Original document not observed within native readiness bound"}
+        val location=Uri.parse(originalDocument)
+        assertTrue("Owned packaged root document required",location.scheme in listOf("http","https") &&
+            location.host=="tauri.localhost" && location.port== -1 && location.userInfo==null &&
+            location.path in listOf("","/") && location.query==null && location.fragment==null)
+        var navigated=false
+        fun navigate(phase:String,url:String,html:String?=null) {
+            val finished=CountDownLatch(1)
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView))
+                val previous=web.webViewClient
+                web.webViewClient=object:android.webkit.WebViewClient() {
+                    override fun shouldInterceptRequest(view:WebView,request:android.webkit.WebResourceRequest)=
+                        previous.shouldInterceptRequest(view,request)
+                    override fun onPageStarted(view:WebView,url:String?,icon:android.graphics.Bitmap?) {
+                        previous.onPageStarted(view,url,icon)
+                    }
+                    override fun onPageFinished(view:WebView,completedUrl:String?) {
+                        previous.onPageFinished(view,completedUrl)
+                        if(completedUrl==url) {
+                            android.util.Log.i("lazysh-ime-owned","phase=$phase finished=true expectedUrl=true progress=${view.progress}")
+                            finished.countDown()
+                        }
+                    }
+                }
+                android.util.Log.i("lazysh-ime-owned","phase=$phase navigation=true progress=${web.progress}")
+                navigated=true
+                if(html==null)web.loadUrl(url)else web.loadDataWithBaseURL(url,html,"text/html","UTF-8",null)
+            }
+            assertTrue("Owned $phase native page completion required",finished.await(30,TimeUnit.SECONDS))
+        }
+        var primary:Throwable?=null
+        var armed=false
+        try {
+            call("arm");armed=true
+            navigate("blank","about:blank")
+            assertEquals("Owned trivial JavaScript callback required","4",evaluate(scenario,"2+2"))
+            android.util.Log.i("lazysh-ime-owned","phase=blank callback=true")
+            val html="""<!doctype html><meta charset="utf-8"><script type="module">
+              import {mountTerminalImeHarness} from '/e2e/fixtures/TerminalImeHarness.ts';
+              window.ownedIme=mountTerminalImeHarness();window.__lazyshImeOwner='$nonce';
+            </script>"""
+            navigate("harness","http://127.0.0.1:$port/owned-ime-harness/",html)
+            awaitDocument(scenario,"current-source owned IME fixture","window.__lazyshImeOwner==='$nonce' && !!window.ownedIme?.textarea")
+            shell("ime enable $component")
+            shell("ime set $component")
+            assertEquals("Only owned IME selected",component,shell("settings get secure default_input_method"))
+            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView));web.requestFocus()
+                activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .showSoftInput(web,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+            val first=awaitIme("Actual first IME editor required") {it.getBoolean("connected") && it.getBoolean("normalText")}
+            editor(first);call("capture")
+            assertTrue("Real IME preedit queued",call("preedit").getBoolean("accepted"))
+            awaitDocument(scenario,"real IME preedit in current xterm","window.ownedIme.textarea.value==='owned-preedit-$nonce'")
+            assertEquals("Preedit has not committed", "true",evaluate(scenario,"window.ownedIme.writes.length===0"))
+            evaluate(scenario,"window.ownedIme.observation.reset();true")
+            assertEquals("Renderer editor revoked", "true",evaluate(scenario,"window.ownedIme.textarea.readOnly"))
+            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            val second=awaitIme("Remote epoch inconclusive: distinct later framework proxy was not observed") {
+                it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("distinct") && it.getLong("generation")>first.getLong("generation")
+            }
+            editor(second)
+            val old=call("old")
+            assertFalse("Retired remote connection cannot read new editor",old.getBoolean("readReturned"))
+            val current=call("current")
+            assertTrue("Current remote connection accepted fixed text",current.getBoolean("accepted"))
+            assertTrue("Current remote read confirms fixed text",current.getBoolean("readMatched"))
+            awaitDocument(scenario,"current generation commits once without old preedit or old command",
+                "JSON.stringify(window.ownedIme.writes)===JSON.stringify(['owned-current-$nonce'])")
+            android.util.Log.i("lazysh-ime-owned","remoteEpoch=true noSuggestions=true privateLearning=false oldRead=false currentRead=true exactWrites=true")
+        } catch(failure:Throwable) {primary=failure;throw failure}
+        finally {
+            var cleanup:Throwable?=null
+            for(action in listOf<()->Unit>(
+                {if(armed)call("release")},
+                {shell("ime set $original");assertEquals("Original IME restored",original,shell("settings get secure default_input_method"))},
+                {shell("ime disable $component");assertEquals("Original enabled IMEs preserved",enabled,shell("settings get secure enabled_input_methods"))},
+                {
+                    try {if(navigated)navigate("restore",originalDocument)}
+                    finally {
+                        scenario.onActivity {activity->
+                            val web=checkNotNull(webView(activity.window.decorView))
+                            web.webViewClient=originalClient
+                            assertSame("Original native WebView client restored",originalClient,web.webViewClient)
+                        }
+                    }
+                    assertEquals("Original document restored","true",evaluate(scenario,"location.href===${JSONObject.quote(originalDocument)}"))
+                    android.util.Log.i("lazysh-ime-owned","originalClientRestored=true originalDocumentRestored=true")
+                }
+            ))try {action()}catch(failure:Throwable){if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+            if(cleanup!=null){if(primary!=null)primary!!.addSuppressed(cleanup!!)else throw cleanup!!}
+        }
+    }
 }
