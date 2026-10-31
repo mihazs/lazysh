@@ -131,6 +131,15 @@ async function connectPasswordHost(page:Page,name='Navigation host'){
   await page.getByRole('button',{name:'Connect',exact:true}).click();
 }
 
+function nativeHerdrNavigationRow(label:string,context?:string){
+  const source=readFileSync(new URL('../src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',import.meta.url),'utf8');
+  const condition=/val match = if \(context == null\) "([^"]+)" else "([^"]+)"/.exec(source);
+  const row=/val row = "([^"\n]+herdr-navigation-row[^"\n]+)"/.exec(source);
+  if(!condition||!row)throw new Error('Native Herdr row selector contract changed');
+  const match=condition[context===undefined?1:2].replaceAll('$targetLabel',()=>label).replaceAll('$context',()=>context??'');
+  return 'xpath='+row[1].replace('$match',()=>match);
+}
+
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
   await page.clock.install();
   await installWorkspaceNavigation(page);
@@ -176,6 +185,8 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
   await expect(live.getByRole('heading',{name:'Idle · 1',exact:true})).toBeVisible();
+  await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Development / Codex tasks / /nav/codex'))).toHaveCount(1);
+  await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Idle'))).toHaveCount(0);
   const steadyRow=live.getByRole('button',{name:/^codex-builder/}),originalRow=await steadyRow.elementHandle();
   const opacity=await steadyRow.evaluate(node=>getComputedStyle(node).opacity);
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdTree:boolean}}).workspaceNavigationState.holdTree=true;});
@@ -221,6 +232,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
   await expect(live.getByRole('heading',{name:'Spaces',exact:true})).toBeVisible();
+  await expect(page.locator(nativeHerdrNavigationRow('Development'))).toHaveCount(1);
   const collapse=live.getByRole('button',{name:'Expand or collapse Development',exact:true});
   await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeHidden();
   await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
@@ -229,7 +241,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(live.getByText('Codex tasks',{exact:true})).toBeVisible();
   await page.screenshot({path:testInfo.outputPath('herdr-spaces.png')});
   expect(await live.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
-  await live.getByRole('button',{name:/^codex-builder/}).click();
+  await page.locator(nativeHerdrNavigationRow('codex-builder')).click();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);

@@ -1532,7 +1532,7 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
             awaitDocument(scenario, "shared Herdr navigation scope", "Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) p')).some(x=>x.textContent==='Shared focus changes focus for other connections to this server.')")
-            val match = if (context == null) "strong[normalize-space(.)='$targetLabel']" else "strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]"
+            val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
             val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]"
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webScrollIntoView())
             screenshot(if (mode == "Agents") "agents" else "spaces")
@@ -2412,7 +2412,7 @@ class NativeWorkspaceTest {
             var cleanupFailure: Throwable? = null
             fun retainCleanup(failure: Throwable, message: String) {
                 val first = primaryFailure ?: cleanupFailure
-                if (first != null) first.addSuppressed(AssertionError(message))
+                if (first != null) first.addSuppressed(AssertionError(message, failure))
                 else cleanupFailure = failure
             }
             try {
