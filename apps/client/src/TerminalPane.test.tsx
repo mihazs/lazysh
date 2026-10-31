@@ -42,6 +42,18 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+function touchScrollFixture() {
+  const target = document.createElement('div');
+  Object.assign(terminal, {element: target});
+  const wheels: WheelEvent[] = [];
+  target.addEventListener('wheel', event => wheels.push(event));
+  const view = mount();
+  const canvas = screen.getByLabelText('Terminal for Host');
+  const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
+    bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
+  }));
+  return {view, canvas, wheels, touch};
+}
 describe("terminal interactions", () => {
   it('offers a metadata-only retry, reports loading, and requires a new Paste gesture after readiness', async () => {
     vi.stubGlobal('isTauri', true);
@@ -351,17 +363,11 @@ describe("terminal interactions", () => {
   });
   it("routes vertical touch through xterm wheel handling even with configurable gestures disabled", () => {
     savePreferences({...defaults, pinchZoom: false, gestures: {left:'none',right:'none',up:'none',down:'none'}, bodyGestures: {...defaults.bodyGestures,tap:'none',doubleTap:'none',tripleTap:'none',swipeLeft:'none',swipeRight:'none'}});
-    const target = document.createElement('div');
-    Object.assign(terminal, {element: target});
-    const wheels: WheelEvent[] = [];
-    target.addEventListener('wheel', event => wheels.push(event));
-    const view = mount();
-    const canvas = screen.getByLabelText('Terminal for Host');
-    const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {bubbles:true,cancelable:true,touches:[{identifier:1,clientX:x,clientY:y}] as Touch[]}));
+    const {view, canvas, wheels, touch} = touchScrollFixture();
     touch('touchstart',100,100);
     expect(touch('touchmove',101,70)).toBe(false);
     touch('touchmove',102,130);
-    expect(wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[30,101,70],[-60,102,130]]);
+    expect(wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[30,100,100],[-60,100,100]]);
     touch('touchend',102,130);
     touch('touchmove',102,160);
     expect(wheels).toHaveLength(2);
@@ -378,6 +384,24 @@ describe("terminal interactions", () => {
     view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('keeps one continuous drag routed to its original pane across boundaries and reversal until end or cancel', () => {
+    const {wheels, touch} = touchScrollFixture();
+    touch('touchstart',140,180);
+    const trace=[[142,168],[144,145],[245,100],[280,55],[281,12],[280,90],[141,190]];
+    for (const [x,y] of trace) expect(touch('touchmove',x,y)).toBe(false);
+    // Herdr dispatches each wheel to the pane under that report's coordinates.
+    const originalPane = wheels.filter(event=>event.clientX>=80&&event.clientX<200&&event.clientY>=120&&event.clientY<300);
+    expect(originalPane).toHaveLength(trace.length);
+    expect(wheels.map(event=>[event.clientX,event.clientY])).toEqual(trace.map(()=>[140,180]));
+    expect(wheels.map(event=>event.deltaY)).toEqual([12,23,45,45,43,-78,-100]);
+    touch('touchend',141,190); touch('touchmove',141,210);
+    expect(wheels).toHaveLength(trace.length);
+    touch('touchstart',310,240); touch('touchmove',315,200);
+    expect([wheels.at(-1)!.clientX,wheels.at(-1)!.clientY,wheels.at(-1)!.deltaY]).toEqual([310,240,40]);
+    touch('touchcancel',315,200); touch('touchmove',315,100);
+    expect(wheels).toHaveLength(trace.length+1);
     expect(mocks.write).not.toHaveBeenCalled();
   });
   it("preserves system touch gestures in screen-reader mode and reserves configured multitouch", () => {

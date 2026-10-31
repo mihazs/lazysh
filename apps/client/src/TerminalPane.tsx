@@ -145,7 +145,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             press.current = null; cancelTaps();
             // xterm's wheel path also reports mouse scrolling to Herdr/other full-screen apps.
             session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
-              bubbles: true, cancelable: true, clientX: point.clientX, clientY: point.clientY, deltaY,
+              // Keep the whole drag in its original pane, as with a stationary mouse wheel.
+              bubbles: true, cancelable: true, clientX: scroll.x, clientY: scroll.y, deltaY,
             }));
             event.stopPropagation();
             if (event.cancelable) event.preventDefault();
