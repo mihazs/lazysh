@@ -153,9 +153,14 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app i
 },610_000);
 
 // Real tools are explicit; ordinary host checks never download or guess a binary.
-test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr SSH exec reads its real companion transcript in the private namespace',async()=>{
-  const owned=await HerdrFixture.start(herdrTools());
+for(const mosh of [false,true]) {
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN || (mosh && !process.env.LAZYSH_NATIVE_MOSH_SERVER))(`owned Herdr ${mosh?'Mosh':'SSH'} exec reads its real companion transcript in the private namespace`,async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),mosh?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined);
   try {
+    if(mosh) {
+      const server=await owned.ssh.client(true,'mosh-server --version');
+      expect(await server.finish('owned copied Mosh executable',5000)).toContain('mosh-server (mosh 1.4.0)');
+    }
     const companion=await owned.ssh.client(true,'lazysh-agent transcript --agent claude --path='+owned.transcript+' --offset 0');
     const value=JSON.parse(await companion.finish('owned real companion transcript',5000));
     expect(value.schemaVersion).toBe(1);expect(value.agent).toBe('claude');expect(value.messages).toHaveLength(1);
@@ -174,11 +179,14 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     await owned.expectBytes(Buffer.alloc(0));
   } finally {await owned.stop();}
 },15_000);
+}
 
-test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1')('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver',async()=>{
-  const owned=await HerdrFixture.start(herdrTools());
+test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1').each(['ssh','mosh'] as const)('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver over %s',async transport=>{
+  const moshBinary=transport==='mosh'?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined;
+  if(transport==='mosh' && !moshBinary)throw new Error('Explicit pinned Mosh server required for Android Herdr entry');
+  const owned=await HerdrFixture.start(herdrTools(),moshBinary);
   let primary=false;
-  try {await androidSshAcceptance(undefined,owned);}
+  try {await androidSshAcceptance(undefined,owned,false,false,transport==='mosh');}
   catch(error){primary=true;throw error;}
   finally {await androidSshCleanup(primary,[['Herdr',()=>owned.stop()]]);}
 },610_000);

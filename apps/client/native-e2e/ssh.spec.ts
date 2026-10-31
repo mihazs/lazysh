@@ -6,6 +6,7 @@ import {identity,descendants,type OwnedPid} from '../../../tests/support/ownedPr
 import {OwnedSshRelay} from './sshRelay';
 import {NativeGui} from './fixture';
 import {SshFixture,listening,sshCommand} from '../../../tests/support/sshFixture';
+import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
 import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey} from './sshUi';
 
 const fixture=ownedSshGui();
@@ -28,6 +29,43 @@ it('trusts the exact ephemeral server and types a non-echoable challenge through
   fixture.captureSafe=true;
   await challengeOwnedSsh(gui,ssh,terminal,owner);
   await disconnectOwnedSsh(gui,terminal);
+});
+
+it('enters the saved Herdr default through Mosh in the actual GUI and queues only confirmed input to its original receiver',async()=>{
+  fixture.captureSafe=false;
+  const binary=process.env.LAZYSH_NATIVE_MOSH_SERVER;
+  if(!binary)throw new Error('Explicit pinned Mosh binary required');
+  const herdr=await HerdrFixture.start(herdrTools(),binary);
+  fixture.ssh=herdr;
+  const gui=fixture.gui=await NativeGui.start();
+  const {browser,terminal,owner}=await openOwnedSsh(gui,herdr.ssh,'mosh',undefined,{kind:'herdr',name:herdr.name});
+  expect(await (await browser.$('.workspace-footer')).getText()).toContain('Mosh');
+  expect(await browser.$$('[role="tab"]')).toHaveLength(1);
+  expect(await terminal.getText()).not.toMatch(/MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:/);
+  fixture.captureSafe=true;
+  gui.stage='owned Mosh Herdr transcript';
+  await (await browser.$('button=Transcript')).click();
+  await (await browser.$('input[placeholder="Absolute host path to session.jsonl"]')).setValue(herdr.transcript);
+  await (await browser.$('button=Open transcript')).click();
+  const messages=await browser.$('.chat-messages');
+  await browser.waitUntil(async()=>(await messages.getText()).includes(herdr.record),{timeout:20_000});
+  const draft=await browser.$('form.chat-composer textarea');
+  await draft.setValue(herdr.draft);
+  expect(await draft.getValue()).toBe(herdr.draft);
+  await herdr.expectBytes(Buffer.alloc(0));
+  gui.stage='owned Mosh Herdr explicit confirmation';
+  await (await browser.$('button=Choose terminal destination')).click();
+  const confirm=await browser.$('button=Confirm this destination');await confirm.waitForDisplayed();
+  await confirm.click();
+  const send=await browser.$('button=Send to terminal');await send.waitForDisplayed();
+  await herdr.expectBytes(Buffer.alloc(0));
+  await send.click();
+  await browser.waitUntil(async()=>await draft.getValue()==='',{timeout:20_000});
+  const stop=await browser.$('button=Request stop');await stop.click();
+  await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
+  expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+  expect(await readFile(join(herdr.ssh.directory,'mosh-bootstraps'),'utf8')).toBe('bootstrap\n');
+  await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${herdr.name}`);
 });
 
 it('keeps the owned Mosh UDP daemon alive after only its attributed SSH stream closes and retires the entire namespace',async()=>{

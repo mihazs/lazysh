@@ -63,7 +63,7 @@ export class SshFixture {
   static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean}={}) {
     if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
-    if(options.moshBinary && (tools || options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
+    if(options.moshBinary && (options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
     if(tools && options.companion)throw new Error('Companion installation requires a fixture without preinstalled tools');
     const directory=await mkdtemp(join(tools||options.companion?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
@@ -90,17 +90,12 @@ export class SshFixture {
           if(await stat(candidate).then(value=>value.isFile()).catch(()=>false)){subsystem=candidate;break;}
         }
         if(!subsystem)throw new Error('Owned file-transfer fixture requires installed OpenSSH SFTP server');
-        environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:'/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
-        for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]) {
-          const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
+        if(!tools) {
+          environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:'/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
+          for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]) {
+            const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
+          }
         }
-      }
-      if(options.moshBinary) {
-        const binary=options.moshBinary;
-        if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit owned Mosh binary required');
-        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700});
-        await copyFile(binary,join(bin,'mosh-server'));await chmod(join(bin,'mosh-server'),0o700);
-        environment!.PATH=bin+':/usr/bin:/bin';
       }
       if(tools) {
         const bin=join(directory,'bin');await mkdir(bin,{mode:0o700});
@@ -113,7 +108,14 @@ export class SshFixture {
           const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
         }
       }
-      const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
+      if(options.moshBinary) {
+        const binary=options.moshBinary;
+        if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit owned Mosh binary required');
+        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700,recursive:true});
+        await copyFile(binary,join(bin,'mosh-server'));await chmod(join(bin,'mosh-server'),0o700);
+        environment!.PATH=bin+':/usr/bin:/bin';
+      }
+      const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
       const commandSeconds=options.companion?companionFixtureBudget/1000:90;
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
@@ -138,7 +140,18 @@ export class SshFixture {
         fields[2]=String(userInfo().gid);groups[tty[0]]=fields.join(':');
         const groupFile=join(directory,'namespace-group');
         await writeFile(groupFile,groups.join('\n'),{mode:0o600,flag:'wx'});
-        daemon=new OwnedProcess('/usr/bin/bwrap',['--die-with-parent','--unshare-user','--dev-bind','/','/',...(options.moshBinary?['--unshare-pid','--proc','/proc']:[]),'--ro-bind',groupFile,groupSource,'--',sshd,...arguments_]);
+        let mounts=['--dev-bind','/','/'];
+        if(tools && options.moshBinary) {
+          // Host root is unmapped in this user namespace; give the companion
+          // an owned root rather than weakening its state-ancestor checks.
+          const root=join(directory,'namespace-root');await mkdir(root,{mode:0o700});
+          mounts=['--bind',root,'/','--dev-bind','/dev','/dev','--dir','/tmp','--bind',directory,directory];
+          for(const system of ['/usr','/etc','/bin','/sbin','/lib','/lib64']) {
+            if(await stat(system).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))
+              mounts.push('--ro-bind',system,system);
+          }
+        }
+        daemon=new OwnedProcess('/usr/bin/bwrap',['--die-with-parent','--unshare-user',...mounts,...(options.moshBinary?['--unshare-pid','--proc','/proc']:[]),'--ro-bind',groupFile,groupSource,'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
       if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
       const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,options.privateTtyGroup);
