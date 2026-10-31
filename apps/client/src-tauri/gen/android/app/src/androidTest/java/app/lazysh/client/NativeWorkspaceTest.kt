@@ -2206,7 +2206,27 @@ class NativeWorkspaceTest {
                 if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             }
             val disconnect = "button[aria-label='Disconnect $connectedName']"
-            if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
+            if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
+                val switcher = "[role=dialog][aria-label='Switch terminal session']"
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.session-switcher-trigger")).perform(webClick())
+                awaitDocument(scenario, "exact owned session choice", """
+                    (()=>{const choices=Array.from(document.querySelectorAll("$switcher .session-choice"));
+                      return choices.filter(choice=>choice.querySelector('.session-choice-name')?.textContent===${JSONObject.quote(connectedName)}).length===1;})()
+                """)
+                val choice = onWebView().withElement(findElement(Locator.XPATH,
+                    "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[@class='session-choice-name' and text()='$connectedName']]"))
+                choice.perform(webScrollIntoView())
+                choice.perform(webClick())
+                awaitDocument(scenario, "exact owned session selected before End", """
+                    (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
+                      return !document.querySelector("$switcher") && selected.length===1 &&
+                        selected[0].textContent.trim()===${JSONObject.quote(connectedName)} &&
+                        document.querySelector('.session-switcher-trigger')?.textContent===${JSONObject.quote(connectedName)} &&
+                        document.querySelectorAll(${JSONObject.quote(disconnect)}).length===1 &&
+                        ${if (requireHerdrMosh) "document.querySelector('.workspace-footer')?.textContent.includes('Mosh')" else "true"};})()
+                """)
+                workspaceMenuAction(scenario, "End $connectedName connection")
+            } else if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
                 val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
                 close.perform(webScrollIntoView())
                 awaitDocument(scenario, "touchable exact session disconnect", workspaceElementVisible(disconnect, true))
