@@ -2,13 +2,51 @@ import {OwnedProcess, OUTPUT_LIMIT, identity} from './ownedProcess';
 import {SshFixture, sshCommand} from './sshFixture';
 export {SshFixture, listening, stopOwnedTree, type HerdrTools} from './sshFixture';
 export {OwnedProcess, identity, type OwnedPid} from './ownedProcess';
-import {lstat, mkdir, readFile, readlink, realpath, stat, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, open, readdir, readFile, readlink, realpath, stat, writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import type {HerdrFixture} from './androidHerdr';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './androidMoshBackground';
+
+// Fixed native case names only; this is the existing ntfy tag scanner, not a general XML parser.
+export function nativeReportCases(text:string) {
+  const xml=text.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,'');
+  const cases=[...xml.matchAll(/<testcase\b[^>]*>/g)].map(([tag])=>({name:/\sname="([^"]*)"/.exec(tag)?.[1],className:/\sclassname="([^"]*)"/.exec(tag)?.[1]}));
+  return {cases,failed:/<(?:failure|error|skipped)\b/.test(xml)};
+}
+export function validateSharedHerdrReport(text:string) {
+  const {cases,failed}=nativeReportCases(text),suite=/<testsuites\b[^>]*>/.exec(text)?.[0]??'';
+  if(cases.length!==1 || cases[0].className!=='app.lazysh.client.NativeWorkspaceTest' || cases[0].name!=='ownedSharedHerdrNavigationThroughRealUi' || failed
+    || !['tests="1"','failures="0"','errors="0"','skipped="0"'].every(value=>suite.includes(' '+value)) || !/<\/testsuites>\s*$/.test(text))
+    throw new Error('Actual shared Herdr native case did not pass exactly once without skips');
+  return {nativeCase:'ownedSharedHerdrNavigationThroughRealUi',passed:1,failed:0,skipped:0};
+}
+const reportIdentity=(value:{dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint})=>[value.dev,value.ino,value.size,value.mtimeNs].join(':');
+async function sharedHerdrReportFile(directory:string,optional=false) {
+  const entries=await readdir(directory,{recursive:true}).catch(error=>{if(optional && error.code==='ENOENT')return [];throw error;});
+  const files=entries.filter(name=>name.endsWith('.xml'));
+  if(optional && files.length===0)return;
+  if(files.length!==1)throw new Error('Expected one owned shared Herdr native report');
+  const path=join(directory,files[0]),metadata=await lstat(path,{bigint:true});
+  if(!metadata.isFile() || metadata.size<1n || metadata.size>262144n)throw new Error('Invalid owned shared Herdr report file');
+  return {path,identity:reportIdentity(metadata)};
+}
+export async function sharedHerdrReportIdentity(directory:string) {return (await sharedHerdrReportFile(directory,true))?.identity;}
+export async function verifySharedHerdrResult(directory:string,previous?:string) {
+  const report=(await sharedHerdrReportFile(directory))!;
+  if(report.identity===previous)throw new Error('Shared Herdr native report was not refreshed');
+  const file=await open(report.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  try {
+    const metadata=await file.stat({bigint:true});
+    if(!metadata.isFile() || reportIdentity(metadata)!==report.identity)throw new Error('Shared Herdr report identity changed');
+    const bytes=Buffer.alloc(Number(metadata.size)+1),read=await file.read(bytes,0,bytes.length,0);
+    if(read.bytesRead!==Number(metadata.size) || reportIdentity(await file.stat({bigint:true}))!==report.identity)throw new Error('Shared Herdr report changed while reading');
+    return validateSharedHerdrReport(bytes.subarray(0,read.bytesRead).toString('utf8'));
+  } finally {await file.close();}
+}
 
 // Android 16 ApplicationExitInfo.dump fields; free-form descriptions/traces never leave memory.
 // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
@@ -300,8 +338,9 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
   return {observation:{ime:profile,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false) {
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(sharedHerdr && (!herdr || herdrMosh || companion || moshBackground))throw new Error('Owned shared navigation requires its SSH Herdr fixture');
   if(herdrMosh && (!herdr || companion || moshBackground))throw new Error('Owned Mosh Herdr requires its separate guarded fixture');
   if(moshBackground && (herdr || companion))throw new Error('Owned Android Mosh background mode must be isolated');
   if(companion && (herdr || process.arch!=='x64' || process.env.GITHUB_ACTIONS!=='true' || process.env.RUNNER_ENVIRONMENT!=='github-hosted'))throw new Error('Published Android companion acceptance requires its explicit disposable hosted runner');
@@ -325,6 +364,11 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const timing:{gradleStartMs:number|null,gradleEndMs:number|null}={gradleStartMs:null,gradleEndMs:null};
   let primary=false;
   const shell=(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args]);
+  const navigationScreenshots=async()=>{
+    const destination=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/herdr-navigation');
+    await mkdir(destination,{recursive:true});
+    await shell(['pull','/sdcard/Android/data/app.lazysh.client/files/herdr-navigation',destination]);
+  };
   try {
     if(moshBackground || herdrMosh) {
       const server=join(fixture.directory,'bin/mosh-server');
@@ -361,16 +405,36 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {[before,hostServerBefore]=await Promise.all([emulatorContinuity(adb,serial,reverse,fixture.port),hostAdbServerIdentity(adb)]);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
     try {crashes=captureOwnedCaseCrashes(adb,serial,fixture.nonce);} catch {/* Never change test admission for unavailable diagnostics. */}
     const android=join(root,'apps/client/src-tauri/gen/android');
+    const sharedReportDirectory=join(android,'app/build/outputs/androidTest-results/herdr-ui');
+    const previousSharedReport=sharedHerdr?await sharedHerdrReportIdentity(sharedReportDirectory):undefined;
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
       herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):companion?'-PlazyshCompanionAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
       ...(herdr?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr;
+    let monitoring=sharedHerdr,byteFailure:unknown;
+    const byteWitness=(async()=>{while(monitoring){
+      try{await herdr!.expectNavigationBytes();}catch(error){
+        byteFailure=error;
+        try{await gradle!.stop();}catch{console.error('Owned navigation instrumentation stop failed after receiver failure');}
+        return;
+      }
+      await Bun.sleep(25);
+    }})();
+    let instrumentationFailure:unknown;
     try {await gradle.finish('actual Android SSH UI instrumentation',600_000);}
-    finally {timing.gradleEndMs=crashes?.elapsedMs()??null;}
+    catch(error){instrumentationFailure=error;}
+    finally {monitoring=false;await byteWitness;timing.gradleEndMs=crashes?.elapsedMs()??null;}
+    if(byteFailure)throw byteFailure;
+    if(instrumentationFailure)throw instrumentationFailure;
+    if(sharedHerdr){
+      const receipt=await verifySharedHerdrResult(sharedReportDirectory,previousSharedReport);
+      console.log('Owned shared Herdr native result '+JSON.stringify(receipt));
+      await navigationScreenshots();
+    }
     await crashes?.stop();
     await moshWitness?.assertVerified();
     if(evidence) {
@@ -378,11 +442,13 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
       console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
     }
-    if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
+    if(sharedHerdr)await herdr!.expectNavigationBytes();
+    else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
     if(herdrMosh && await readFile(join(fixture.directory,'mosh-bootstraps'),'utf8')!=='bootstrap\n')throw new Error('Owned Mosh Herdr entry must bootstrap exactly once');
-    console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
+    console.log(sharedHerdr?'Owned stock Herdr shared navigation: all three receiver identities alive and zero bytes verified':herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;
+    if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):companion?'companion-ui':moshBackground?'mosh-background-ui':'ssh-ui');
       const crash=await crashes?.stop();

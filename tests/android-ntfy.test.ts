@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,eventObservation} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test.skipIf(!process.env.LAZYSH_NTFY_TRUST_CA)('actual fixture APK contains only its explicitly selected debug CA',async()=>{
@@ -24,6 +24,30 @@ test('first-launch failures retain only enumerated package state and finite flag
   expect(firstLaunchObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:'permission',allow:true,deny:true,toolbar:false,ownedPrompt:true,attempted:false});
   expect(firstLaunchObservation(diagnostic.replace('foreground=permission','foreground=private.application'))).toBeUndefined();
   expect(firstLaunchObservation(diagnostic.replace('allow=true','allow=private-data'))).toBeUndefined();
+});
+
+test('one permission action retains closed stage budgets without changing legacy observations',()=>{
+  const legacy='Distributor menu; foreground=permission allow=true deny=true toolbar=false ownedPrompt=true attempted=true';
+  const trace='Ntfy first-launch action[stage=click before=positive after=expired action=returned snapshot=beforeAction permission=granted]';
+  expect(permissionActionObservation(legacy)).toBeUndefined();
+  expect(firstLaunchObservation(legacy+' '+trace)).toEqual(firstLaunchObservation(legacy));
+  expect(permissionActionObservation('private-prefix '+trace+' private-suffix')).toEqual({stage:'click',before:'positive',after:'expired',action:'returned',snapshot:'beforeAction',permission:'granted'});
+  for(const permission of ['granted','denied','unavailable'])expect(permissionActionObservation(trace.replace('permission=granted',`permission=${permission}`))?.permission).toBe(permission);
+  for(const [stage,before,after,action,snapshot] of [
+    ['none','unavailable','unavailable','none','unavailable'],
+    ['menu','expired','expired','none','beforeAction'],
+    ['prompt','positive','expired','returned','afterAction'],
+    ['click','positive','unavailable','calling','beforeAction'],
+    ['click','positive','unavailable','threw','beforeAction'],
+  ])expect(permissionActionObservation(`Ntfy first-launch action[stage=${stage} before=${before} after=${after} action=${action} snapshot=${snapshot} permission=unavailable]`)).toEqual({stage,before,after,action,snapshot,permission:'unavailable'});
+  for(const bad of [trace+trace,trace.replace('stage=click','stage=private'),trace.replace('before=positive','before=1000'),
+    trace.replace('permission=granted','permission=unknown'),trace.replace('action=returned','action=threw'),
+    trace.replace('action=returned','action=none'),trace.replace('after=expired','after=unavailable'),
+    trace.replace('before=positive','before=unavailable'),
+    trace.replace('after=expired','after=unavailable').replace('action=returned','action=calling').replace('snapshot=beforeAction','snapshot=afterAction'),
+    trace.replace('snapshot=beforeAction','snapshot=private'),trace.replace('permission=granted]','permission=granted elapsed=1000]'),
+    trace.replace('stage=click','stage=none'),trace.replace(' before=positive',''),trace.repeat(2048),' '.repeat(256*1024)+trace])expect(permissionActionObservation(bad)).toBeUndefined();
+  expect(JSON.stringify(permissionActionObservation(trace))).not.toMatch(/private|elapsed|[0-9]/);
 });
 
 test('settings observation admits only finite flags and the two-scroll limit',()=>{
@@ -277,3 +301,18 @@ test.skipIf(process.env.LAZYSH_ANDROID_NTFY!=='1')('actual official ntfy encrypt
 test.skipIf(!process.env.LAZYSH_NTFY_SERVER_ARCHIVE)('official owned ntfy starts HTTPS with the actual native relay configuration',async()=>{
   await realNtfyStartup(process.env.LAZYSH_NTFY_SERVER_ARCHIVE!);
 },150_000);
+
+test('clock bookends retain only closed progress and window relations without raw timestamps',()=>{
+  const text=clockDiagnostic.replace('clock=beforeIssued]','clock=beforeIssued hostProgress=consistentWithinSecond issuedInHandler=within postProgress=consistentWithinSecond callbackProgress=wallBehind postClock=beforeIssued]');
+  expect(eventObservation(text)).toMatchObject({hostProgress:'consistentWithinSecond',issuedInHandler:'within',postProgress:'consistentWithinSecond',callbackProgress:'wallBehind',postClock:'beforeIssued'});
+  expect(JSON.stringify(eventObservation(text))).not.toMatch(/[0-9]|issuedAt|elapsedRealtime|private/);
+  for(const key of ['hostProgress','postProgress','callbackProgress']) {
+    for(const category of ['consistentWithinSecond','wallAhead','wallBehind','unavailable']) {
+      const changed=text.replace(new RegExp(`${key}=[a-zA-Z]+`),`${key}=${category}`);
+      expect(eventObservation(changed)?.[key as keyof NonNullable<ReturnType<typeof eventObservation>>]).toBe(category);
+    }
+  }
+  for(const category of ['within','outside','unavailable'])expect(eventObservation(text.replace('issuedInHandler=within',`issuedInHandler=${category}`))?.issuedInHandler).toBe(category);
+  for(const category of ['unavailable','beforeIssued','withinWindow','expired'])expect(eventObservation(text.replace('postClock=beforeIssued',`postClock=${category}`))?.postClock).toBe(category);
+  for(const bad of [text.replace('hostProgress=consistentWithinSecond','hostProgress=private'),text.replace('postProgress=consistentWithinSecond','postProgress=1000'),text.replace('issuedInHandler=within','issuedInHandler=within issuedAt=1000'),text.replace(' postClock=beforeIssued',''),text.replace('postClock=beforeIssued]','postClock=beforeIssued elapsedRealtime=1000]'),text+text])expect(eventObservation(bad)).toBeUndefined();
+});

@@ -1,12 +1,12 @@
 import {expect,test,spyOn} from 'bun:test';
-import {chmod,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1078,4 +1078,28 @@ test('native continuous finger observation rejects restarts, identity changes, u
     if(bad==='detached')fixture.screen.isConnected=false;
     expect(fixture.sample().active).toBe(false);fixture.dispose();expect(fixture.callbacks.size).toBe(0);
   }
+});
+test('shared Herdr native report requires the completed exact single case, not a skipped or substituted owner',()=>{
+  const row='<testcase name="ownedSharedHerdrNavigationThroughRealUi" classname="app.lazysh.client.NativeWorkspaceTest" />';
+  const report=`<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite>${row}</testsuite></testsuites>`;
+  expect(validateSharedHerdrReport(report)).toEqual({nativeCase:'ownedSharedHerdrNavigationThroughRealUi',passed:1,failed:0,skipped:0});
+  for(const invalid of ['',report.replace(row,''),report.replace(row,row+row),report.replace('ownedSharedHerdrNavigationThroughRealUi','otherOwner'),report.replace('app.lazysh.client.NativeWorkspaceTest','foreign.Case'),report.replace('</testsuite>','<skipped /></testsuite>'),report.replace('</testsuite>','<failure /></testsuite>'),report.replace('</testsuite>','<error /></testsuite>'),report.replace('failures="0"','failures="1"'),report.replace('</testsuites>',''),report.replace(row,`<!--${row}-->`),report.replace(row,`<![CDATA[${row}]]>`)])
+    expect(()=>validateSharedHerdrReport(invalid)).toThrow('did not pass exactly once');
+});
+test('shared Herdr result rejects stale, duplicate, oversized and symlink report files',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-herdr-report-')),path=join(directory,'TEST-owned.xml');
+  const report='<testsuites tests="1" failures="0" errors="0" skipped="0"><testsuite><testcase name="ownedSharedHerdrNavigationThroughRealUi" classname="app.lazysh.client.NativeWorkspaceTest" /></testsuite></testsuites>';
+  try {
+    expect(await sharedHerdrReportIdentity(directory)).toBeUndefined();
+    await writeFile(path,report);
+    expect((await verifySharedHerdrResult(directory)).passed).toBe(1);
+    await expect(verifySharedHerdrResult(directory,await sharedHerdrReportIdentity(directory))).rejects.toThrow('not refreshed');
+    await writeFile(join(directory,'TEST-extra.xml'),report);
+    await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Expected one');
+    await rm(join(directory,'TEST-extra.xml'));
+    await writeFile(path,'x'.repeat(262145));
+    await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Invalid owned');
+    await rm(path);await writeFile(join(directory,'private-target'),report);await symlink('private-target',path);
+    await expect(verifySharedHerdrResult(directory)).rejects.toThrow('Invalid owned');
+  } finally {await rm(directory,{recursive:true,force:true});}
 });
