@@ -36,12 +36,12 @@ export function parseHerdrAgents(value:unknown):LiveAgent[] {
 }
 
 /** Live Herdr metadata is independent of companion lifecycle reports and grants no input authority. */
-export default function HerdrAgentsPanel({sessionId,visible,onRestoreHostTools}:{sessionId:string;visible:boolean;onRestoreHostTools?:(restored:()=>void)=>void}) {
+export default function HerdrAgentsPanel({sessionId,herdrSession,visible,onRestoreHostTools}:{sessionId:string;herdrSession?:string;visible:boolean;onRestoreHostTools?:(restored:()=>void)=>void}) {
   useUi();
   const [lease]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(lease),[lease]);
   const [choice,setChoice]=useState<{host:string;name:string}|null>(null);
-  const selected=choice?.host===sessionId?choice.name:'';
+  const selected=choice?.host===sessionId?choice.name:herdrSession??'';
   const [result,setResult]=useState<{host:string;servers:string[];server:string;rows:LiveAgent[];loaded:boolean}|null>(null);
   const [failure,setFailure]=useState<{host:string;cause:UiErrorCause}|null>(null);
   const [busy,setBusy]=useState(false);
@@ -59,8 +59,8 @@ export default function HerdrAgentsPanel({sessionId,visible,onRestoreHostTools}:
       try {
         const names=servers(await invoke('multiplexer_sessions',{sessionId,kind:'herdr'}));
         if(!owns())return;
-        // One server per refresh bounds fan-out; multiple servers require an explicit choice.
-        const server=names.includes(selected)?selected:names.length===1?names[0]:'';
+        // An attached target is a read hint, never input authority or permission to substitute another server.
+        const server=names.includes(selected)?selected:!selected && names.length===1?names[0]:'';
         setResult(previous=>previous?.host===sessionId && previous.server===server?{...previous,servers:names,loaded:previous.loaded || !server}:{host:sessionId,servers:names,server,rows:[],loaded:!server});
         if(server){
           const rows=parseHerdrAgents(await invoke('herdr_tree',{sessionId,name:server}));

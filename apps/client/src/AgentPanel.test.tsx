@@ -454,6 +454,36 @@ describe('live Herdr discovery',()=>{
     await screen.findByText('builder-first');expect(screen.queryByText('builder-second')).toBeNull();
     expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree').map(([,args])=>(args as {name:string}).name)).toEqual(['second','first']);
   });
+  it('starts with the attached Herdr session and preserves an explicit alternate choice',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      if(command==='multiplexer_sessions')return [{name:'first'},{name:'attached'}];
+      if(command==='herdr_tree')return {...tree,agents:[{...tree.agents[0],name:`builder-${(args as {name:string}).name}`}]};
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[]};
+      return {schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+    });
+    const view=render(<AgentPanel sessionId="attached-host" herdrSession="attached"/>);
+    await screen.findByText('builder-attached');
+    const live=within(screen.getByRole('region',{name:t('herdrAgentsTitle')}));
+    const select=live.getByRole('combobox',{name:t('herdrAgentsServer')});
+    expect(select).toHaveProperty('value','attached');
+    fireEvent.change(select,{target:{value:'first'}});
+    await screen.findByText('builder-first');
+    view.rerender(<AgentPanel sessionId="attached-host" herdrSession="attached" visible={false}/>);
+    view.rerender(<AgentPanel sessionId="attached-host" herdrSession="attached"/>);
+    await waitFor(()=>expect(select).toHaveProperty('disabled',false));
+    expect(select).toHaveProperty('value','first');
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree').map(([,args])=>(args as {name:string}).name)).toEqual(['attached','first','first']);
+  });
+  it('does not substitute another server when the attached Herdr session is absent',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockResolvedValue([{name:'other'}]);
+    render(<HerdrAgentsPanel sessionId="missing-attached-host" herdrSession="absent" visible/>);
+    const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});
+    await waitFor(()=>expect(select).toHaveProperty('disabled',false));
+    expect(select).toHaveProperty('value','');
+    expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree')).toHaveLength(0);
+  });
   it('distinguishes missing live metadata from a genuinely empty server',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:undefined}));
