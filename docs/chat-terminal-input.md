@@ -229,3 +229,47 @@ captured tool binaries; it never uses the operator's session catalogs or service
 This acceptance is not an agent/provider integration or physical-device proof.
 Execution results must be recorded separately: preparing or compiling this case is
 not a passing packaged-app acceptance receipt.
+
+
+The separate `LAZYSH_ANDROID_UI_HERDR_NAVIGATION=1` owner runs
+`NativeWorkspaceTest#ownedSharedHerdrNavigationThroughRealUi` against the supplied
+unchanged stock Herdr binary. It creates two app displays of one owned server,
+checks selected connection ownership and only the single visible terminal's
+positive/negative markers, and expects public focus to move both clients. Three
+raw receivers must remain empty throughout navigation. Stock private Chat input
+must remain unavailable, including after reopening the original transcript and
+destination; this case does not fabricate a guarded receipt. Its closed fixture
+mode uses the existing 600-second outer SSH budget; other ordinary SSH/Herdr
+fixtures retain 90 seconds. View controls, command calls and byte checks keep
+their existing bounds. Screenshots and exact selected-binary hashes accompany the
+case. A compiled test APK or host fixture pass alone is not Android acceptance;
+#591 remains open until actual packaged-device evidence and its remaining scope
+are qualified.
+
+### Stock Herdr Android CI owner
+
+`bun run test:android-herdr-navigation` builds the emulator APK and selects only
+`ownedSharedHerdrNavigationThroughRealUi` through the existing owned SSH fixture.
+The client task sets its own opt-in; it does not run guarded SSH/Mosh owners against
+stock. The selected native case must produce one fresh, bounded JUnit report with
+its exact class/method and no failure, error or skip. Existing receiver identity,
+zero-input monitoring and native/host cleanup remain required.
+
+The separate `native-android-herdr-navigation` CI job retains the existing 30-minute
+job and 600-second fixture limits. It consumes only the same-run stock artifact,
+whose official commit/archive and original-file manifest are verified before and
+after compilation. The guarded artifact is sealed first and remains separate.
+Stock uses a separate Cargo target; compiled crates and guarded outputs are not
+copied. Its additional compile cost is unmeasured within the unchanged job cap.
+Binary hashes are build-specific; the job verifies its producer's hash and source
+receipt, then retains its own runtime results. A configured job or local
+contract pass is not Android acceptance: inspect the fresh native case and cleanup
+results before claiming parity or merging the acceptance milestone.
+
+The independent F-Droid distribution, QR camera and final device CLI owners run in
+`native-android-auxiliary`, with their own 30-minute job, source checkout, admitted
+KVM emulator, diagnostics and result artifact. The guarded runtime job retains its
+full official Mosh and SSH owners. Neither job can substitute for the other. This
+separates the previous sequential workload without extending any native deadline
+or skipping an owner; the auxiliary job's cold build cost still needs hosted CI
+qualification.

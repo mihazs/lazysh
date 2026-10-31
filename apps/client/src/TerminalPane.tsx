@@ -1,5 +1,5 @@
 import {t,useUi,formatNumber} from './i18n/core';
-import {LocalUiError,type UiErrorCause} from './i18n/localError';
+import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { subscribeAccess, useMountedAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
@@ -257,12 +257,12 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
         }
         if (!pointerInput) inputLane.current = null;
       }
-      if (session.connected) void api.write(session.id, value).catch(error => reportError(String(error)));
+      if (session.connected) void api.write(session.id, value).catch(error => reportError(captureUiError(error)));
     }, acceptsInput, setUnappliedEdit);
     imeInput.current = output;
     setModifierInput(output.available);
     const size = terminal.onResize(({ cols, rows }) => {
-      if (session.connected) void api.resize(session.id, cols, rows).catch(error => reportError(String(error)));
+      if (session.connected) void api.resize(session.id, cols, rows).catch(error => reportError(captureUiError(error)));
     });
     const screen = element.querySelector<HTMLElement>(".xterm-screen");
     const fitTerminal = () => {
@@ -308,7 +308,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     if (imeInput.current?.flush() === false) return;
     const state = modifierState.current;
     const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${(state.shift && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
-    try {void api.write(session.id, key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(String(error)));}
+    try {void api.write(session.id, key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(captureUiError(error)));}
     catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return;}
     consumeModifiers();
     if (key === "Tab") {modifierState.current.shift = false; setShift(false);}
@@ -412,7 +412,7 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     }
     else {
       const keys = ({left: "\x1b[D", right: "\x1b[C", pageUp: "\x1b[5~", pageDown: "\x1b[6~", escape: "\x1b", tab: "\t", backspace: "\x7f", interrupt: "\x03", none: ""} as Partial<Record<GestureAction,string>>)[action];
-      if (keys && session.connected && imeInput.current?.flush() !== false) {void api.write(session.id, keys).catch(error => reportError(String(error)));}
+      if (keys && session.connected && imeInput.current?.flush() !== false) {void api.write(session.id, keys).catch(error => reportError(captureUiError(error)));}
     }
   }
   function cancelTaps() {

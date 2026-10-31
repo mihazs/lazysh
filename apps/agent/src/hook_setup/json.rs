@@ -117,8 +117,38 @@ fn entry<'a>(entries: &'a [Entry], event: &str) -> Option<&'a Value> {
         .map(|entry| &entry.group)
 }
 pub(super) fn rewrite(input: &str, previous: &[Entry], desired: &[Entry]) -> Result<String> {
+    rewrite_map(input, previous, desired, false)
+}
+pub(super) fn rewrite_standalone(
+    input: &str,
+    previous: &[Entry],
+    desired: &[Entry],
+) -> Result<String> {
+    rewrite_map(input, previous, desired, true)
+}
+fn event_map(root: &RawValue, standalone: bool) -> Result<Option<&RawValue>> {
+    let fields: Object<'_> = decode(root.get())?;
+    if standalone {
+        // A settings envelope must never be mistaken for a standalone event map.
+        for (_, value) in &fields.0 {
+            let _: Vec<&RawValue> = decode(value.get())?;
+        }
+        Ok(Some(root))
+    } else {
+        Ok(fields
+            .0
+            .into_iter()
+            .find(|(key, _)| key == "hooks")
+            .map(|(_, value)| value))
+    }
+}
+fn rewrite_map(
+    input: &str,
+    previous: &[Entry],
+    desired: &[Entry],
+    standalone: bool,
+) -> Result<String> {
     let root = document(input)?;
-    let root_fields: Object<'_> = decode(root.get())?;
     for entries in [previous, desired] {
         let mut seen = BTreeSet::new();
         if entries
@@ -128,11 +158,7 @@ pub(super) fn rewrite(input: &str, previous: &[Entry], desired: &[Entry]) -> Res
             return Err(Fault::Invalid);
         }
     }
-    let hooks = root_fields
-        .0
-        .iter()
-        .find(|(key, _)| key == "hooks")
-        .map(|(_, value)| *value);
+    let hooks = event_map(root, standalone)?;
     let Some(hooks) = hooks else {
         if !previous.is_empty() {
             return Err(Fault::Stale);
@@ -235,10 +261,9 @@ pub(super) fn rewrite(input: &str, previous: &[Entry], desired: &[Entry]) -> Res
     Ok(output)
 }
 
-pub(super) fn counts(input: &str, entries: &[Entry]) -> Result<Vec<usize>> {
+pub(super) fn counts(input: &str, entries: &[Entry], standalone: bool) -> Result<Vec<usize>> {
     let root = document(input)?;
-    let root: Object<'_> = decode(root.get())?;
-    let Some((_, hooks)) = root.0.iter().find(|(key, _)| key == "hooks") else {
+    let Some(hooks) = event_map(root, standalone)? else {
         return Ok(vec![0; entries.len()]);
     };
     let hooks: Object<'_> = decode(hooks.get())?;

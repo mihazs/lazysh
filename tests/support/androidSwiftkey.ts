@@ -199,7 +199,7 @@ export async function swiftkeyNamespaceChild() {
     receipt.stage='public-product';
     herdr=await HerdrFixture.start({herdrBinary:work+'/bundle/herdr',agentBinary:work+'/bundle/lazysh-agent',receiverBinary:work+'/bundle/owned-terminal-receiver'});
     await herdr.expectBytes(Buffer.alloc(0));receipt.receiverZero=true;
-    await androidSshAcceptance(work+'/closure',herdr,false,false,false,{product:work+'/bundle/product.apk',test:work+'/bundle/test.apk',vendor:work+'/vendor'});
+    await androidSshAcceptance(work+'/closure',herdr,false,false,false,false,{product:work+'/bundle/product.apk',test:work+'/bundle/test.apk',vendor:work+'/vendor'});
     // This intermediate owner deliberately cannot report typing acceptance.
     throw new Error('UNQUALIFIED: vendor replacement owner is not yet admitted');
   } finally {
