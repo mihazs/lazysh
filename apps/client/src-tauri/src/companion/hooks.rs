@@ -5,6 +5,7 @@ use super::*;
 pub enum Agent {
     Claude,
     Codex,
+    Droid,
     Gemini,
     Cursor,
     Opencode,
@@ -40,6 +41,7 @@ impl Request {
         let agent = match self.agent {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
+            Agent::Droid => "droid",
             Agent::Gemini => "gemini",
             Agent::Cursor => "cursor",
             Agent::Opencode => "opencode",
@@ -107,7 +109,11 @@ mod tests {
             request.command().unwrap(),
             "lazysh-agent hooks status --agent codex --profile-root '/owned/profile'\\''s $HOME'"
         );
-        for (agent, name) in [(Agent::Gemini, "gemini"), (Agent::Cursor, "cursor")] {
+        for (agent, name) in [
+            (Agent::Gemini, "gemini"),
+            (Agent::Cursor, "cursor"),
+            (Agent::Droid, "droid"),
+        ] {
             request.agent = agent;
             assert!(request.command().unwrap().starts_with(&format!(
                 "lazysh-agent hooks status --agent {name} --profile-root "

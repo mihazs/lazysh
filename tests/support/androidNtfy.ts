@@ -5,7 +5,7 @@ import {join,resolve} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import type {Writable} from 'node:stream';
 import {finished} from 'node:stream/promises';
-import {OwnedProcess} from './androidSsh';
+import {OwnedProcess,nativeReportCases} from './androidSsh';
 import {attestQrCamera} from './androidQrOwnership';
 
 const packages=['io.heckel.ntfy','app.lazysh.client.test','app.lazysh.client'] as const;
@@ -163,11 +163,10 @@ export async function realNtfyStartup(archive:string,root=resolve(import.meta.di
   }
 }
 export function validateNtfyReport(text:string) {
-  const xml=text.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,'');
-  const cases=[...xml.matchAll(/<testcase\b[^>]*>/g)].map(([tag])=>({name:/\sname="([^"]*)"/.exec(tag)?.[1],className:/\sclassname="([^"]*)"/.exec(tag)?.[1]}));
+  const {cases,failed}=nativeReportCases(text);
   if(cases.length!==fixtureCases.length||new Set(cases.map(row=>row.name)).size!==fixtureCases.length||
       cases.some(row=>row.className!=='app.lazysh.client.NativeWorkspaceTest'||!fixtureCases.includes(row.name??''))||
-      /<(?:failure|error|skipped)\b/.test(xml))throw new Error('Actual native ntfy cases did not pass without skips');
+      failed)throw new Error('Actual native ntfy cases did not pass without skips');
   return {nativeCase:fixtureCase,nativeCases:fixtureCases,passed:fixtureCases.length,failed:0,skipped:0};
 }
 async function receipt(directory:string) {
