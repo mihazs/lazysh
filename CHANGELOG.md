@@ -4,6 +4,12 @@
 
 - Fall back to the built-in account-usage collectors when an optional external ai-usagebar returns no accounts, while preserving explicit provider disabling and cached error reports. Show a contextual companion install/update action for missing or outdated Unix companions instead of generic unavailability, and distinguish empty accounts in the compact usage button.
 
+- Return momentary terminal keys to their resting appearance after touch release. Preserve intentional modifier locks, held-key feedback, mouse hover, keyboard focus outlines and custom theme colors; key dispatch and repeat behavior are unchanged.
+
+- Shorten common attachment, transcript and preferences guidance while keeping safety limits visible. Show a compact capability notice for unavailable Apple status features; preserve sharing controls and privacy guidance after any sharing request.
+
+- Detect live Herdr agents and accept exact workspace, tab and pane actions when their public IDs contain Herdr’s encoded letters, such as `wZ` and `w2E:pF`. Preserve target bounds, relationships and command quoting; connection and server-selection defaults are unchanged.
+
 - Retain bounded last-poll selector counts and timing when public Android APK workspace readiness fails. Reuse existing accessibility queries without changing actions, readiness checks or deadlines; no cold-start cause or Google runtime qualification is inferred.
 
 - Open live Agents on the current terminal's attached Herdr session when it is present in discovery, including hosts with several running sessions. An explicit server choice takes precedence; a missing attached session requires choosing a server instead of silently showing another one. Plain terminals retain their existing selection behavior.
