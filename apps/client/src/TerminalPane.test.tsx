@@ -660,6 +660,19 @@ it.each(['key','chord'] as const)('preserves the original raw formatting of the 
 
 
 describe("extended touch toolbar", () => {
+  it("keeps Tab, arrows and Attach momentary and dispatches only once after a touch release", () => {
+    vi.useFakeTimers(); const onOpenAttachments=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    for (const name of ['tab','Arrow right','Attach']) {
+      const button=screen.getByRole('button',{name});
+      fireEvent.pointerDown(button,{pointerId:11,pointerType:'touch'});
+      fireEvent.pointerUp(button,{pointerId:11,pointerType:'touch'}); fireEvent.click(button,{detail:1});
+      expect(button.getAttribute('aria-pressed')).toBeNull();
+      act(()=>vi.advanceTimersByTime(1200));
+    }
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\t','\x1b[C']);
+    expect(onOpenAttachments).toHaveBeenCalledOnce();
+  });
   it("cycles one-shot and locked modifiers, latches navigation Shift, and sends named keys", () => {
     savePreferences({...defaults, toolbar:[...defaults.toolbar,"altgr","F12","PageUp",","]}); mount();
     const key=(name:string)=>screen.getByRole('button',{name});
