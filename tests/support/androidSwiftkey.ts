@@ -33,11 +33,26 @@ export function admitSwiftkeySet(rows:Split[]) {
   return true;
 }
 const quietEnvironment=(home:string)=>({PATH:'/usr/bin:/bin',HOME:home,LANG:'C.UTF-8',LC_ALL:'C.UTF-8',TMPDIR:home});
-async function privateTool(program:string,args:string[],directory:string,environment:NodeJS.ProcessEnv,milliseconds=120_000) {
-  // Output may include anonymous auth material or signed delivery URLs. Drain,
-  // never print/retain it; errors from OwnedProcess contain only the fixed stage.
-  return new OwnedProcess(program,args,directory,environment,false).finish('private SwiftKey preparation',milliseconds);
+type SwiftkeyPreparationPhase='venv'|'pinned-dependencies'|'anonymous-exact-download';
+export type SwiftkeyPreparation={phase:SwiftkeyPreparationPhase|'not-started';state:'not-started'|'running'|'succeeded'|'failed';exitCode:number|null;reason:'none'|'auth-unavailable'|'unknown'};
+export async function swiftkeyPrivateTool(phase:SwiftkeyPreparationPhase,program:string,args:string[],directory:string,environment:NodeJS.ProcessEnv,observation:SwiftkeyPreparation,milliseconds=120_000) {
+  // Output can contain anonymous auth material or signed delivery URLs. Drain
+  // both streams without retaining it; the receipt holds only this finite phase.
+  Object.assign(observation,{phase,state:'running',exitCode:null,reason:'none'});
+  const owned=new OwnedProcess(program,args,directory,environment,false);
+  try {
+    const result=await owned.finish('private SwiftKey preparation',milliseconds);
+    Object.assign(observation,{state:'succeeded',exitCode:0,reason:'none'});return result;
+  } catch(error) {
+    const code=owned.child.exitCode;
+    const exitCode=Number.isInteger(code)&&code!==null&&code>=0&&code<=255?code:null;
+    // Pinned goopdl1.3.1's exit3 is auth-unavailable. The same code from
+    // Python/venv/pip has no such meaning and must remain unknown.
+    Object.assign(observation,{state:'failed',exitCode,reason:phase==='anonymous-exact-download'&&exitCode===3?'auth-unavailable':'unknown'});
+    throw error;
+  }
 }
+
 export async function readSwiftkeyResponse(response:Response,limit:number) {
   const reject=async(message:string)=>{await response.body?.cancel().catch(()=>{});throw new Error(message);};
   if(response.status!==200||response.redirected)return reject('SwiftKey response unavailable');
@@ -59,7 +74,7 @@ export async function boundedSwiftkeyFetch(url:string,limit:number) {
 }
 async function timedJson(url:string) {return JSON.parse(new TextDecoder().decode(await boundedSwiftkeyFetch(url,1_000_000)));}
 
-async function acquireSwiftkey(directory:string,sdk:string,java:string) {
+async function acquireSwiftkey(directory:string,sdk:string,java:string,preparation:SwiftkeyPreparation) {
   const home=join(directory,'fetch-home');await mkdir(home,{mode:0o700});const env=quietEnvironment(home);
   const metadata=await timedJson('https://pypi.org/pypi/goopdl/1.3.1/json');
   const wheel=metadata.urls?.find((x:{filename:string;digests:{sha256:string}})=>x.filename==='goopdl-1.3.1-py3-none-any.whl'&&x.digests.sha256===pins.goopdlWheelSha256);
@@ -68,13 +83,13 @@ async function acquireSwiftkey(directory:string,sdk:string,java:string) {
   const bytes=await boundedSwiftkeyFetch(wheel.url,2_000_000);
   if(digest(bytes)!==pins.goopdlWheelSha256)throw new Error('Pinned goopdl wheel differs');
   const file=join(home,'goopdl-1.3.1-py3-none-any.whl');await writeFile(file,bytes,{mode:0o600});
-  await privateTool('/usr/bin/python3',['-m','venv',join(home,'venv')],home,env);
+  await swiftkeyPrivateTool('venv','/usr/bin/python3',['-m','venv',join(home,'venv')],home,env,preparation);
   const python=join(home,'venv/bin/python');
-  await privateTool(python,['-I','-m','pip','install','--disable-pip-version-check','--no-cache-dir',file,...Object.entries(pins.dependencies).filter(([name])=>name!=='goopdl').map(([name,version])=>`${name}==${version}`)],home,env);
+  await swiftkeyPrivateTool('pinned-dependencies',python,['-I','-m','pip','install','--disable-pip-version-check','--no-cache-dir',file,...Object.entries(pins.dependencies).filter(([name])=>name!=='goopdl').map(([name,version])=>`${name}==${version}`)],home,env,preparation);
   const launch=join(home,'fetch.py');
   await writeFile(launch,`import os,sys,importlib.metadata as m,csv,hashlib,base64\nfrom pathlib import Path\nos.umask(0o077)\nexpected=${JSON.stringify(pins.dependencies)}\nfor name,version in expected.items():\n d=m.distribution(name);assert d.version==version\n for f in d.files or []:\n  if f.hash:\n   assert f.hash.mode=='sha256' and base64.urlsafe_b64encode(hashlib.sha256(d.locate_file(f).read_bytes()).digest()).decode().rstrip('=')==f.hash.value\nimport goopdl.auth\ngoopdl.auth._CONFIG_DIR=Path(${JSON.stringify(join(home,'auth'))})\nfrom goopdl.cli import app\napp()\n`,{mode:0o600});
   const downloads=join(directory,'vendor');await mkdir(downloads,{mode:0o700});
-  await privateTool(python,['-I',launch,'download',pins.package,'-v',pins.versionCode,'--arch','x86_64','--profile','x8','--splits','--locale','en','--no-extras','-o',downloads],home,env);
+  await swiftkeyPrivateTool('anonymous-exact-download',python,['-I',launch,'download',pins.package,'-v',pins.versionCode,'--arch','x86_64','--profile','x8','--splits','--locale','en','--no-extras','-o',downloads],home,env,preparation);
   // No retry/latest fallback. The pinned tool's own bounded compatibility/token
   // behavior remains possible; only these six exact results are admitted.
   await verifySwiftkeyFiles(downloads,sdk,java);
@@ -209,11 +224,12 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
   const home=userInfo().homedir;
   if(!/^\/home\/[A-Za-z0-9_-]+$/.test(home))throw new Error('Private canonical home mount unavailable');
   let child:OwnedProcess|undefined;let membership:ReturnType<typeof setInterval>|undefined;let inventoryOverflow=false;
+  const preparation:SwiftkeyPreparation={phase:'not-started',state:'not-started',exitCode:null,reason:'none'};
   const immutablePaths:Record<string,string>={};let inputHashes:Record<string,string>={};
   const seen=new Map<string,{pid:number;start:string}>();const canaries:Awaited<ReturnType<typeof ownedSwiftkeyCanary>>[]=[];let parentCanariesProven=false;
   try {
     for(const name of ['home','android','emulator','avd','keys','config','cache','data','runtime','tmp','bundle','closure/tests','closure/apps/client/published-native-e2e','closure/apps/client/native-e2e'])await mkdir(join(directory,name),{recursive:true,mode:0o700});
-    await acquireSwiftkey(directory,sdk,java);
+    await acquireSwiftkey(directory,sdk,java,preparation);
     const provenance:Record<string,string>={};
     for(const [name,source] of [['product.apk',process.env.LAZYSH_SWIFTKEY_PRODUCT_APK],['test.apk',process.env.LAZYSH_SWIFTKEY_TEST_APK],['herdr',process.env.LAZYSH_TEST_HERDR],['lazysh-agent',process.env.LAZYSH_TEST_AGENT_BIN],['owned-terminal-receiver',process.env.LAZYSH_TEST_RECEIVER_BIN],['bun',process.execPath]]) {
       if(!source)throw new Error('Immutable SwiftKey source input missing');await copyFile(await realpath(source),join(directory,'bundle',name));await chmod(join(directory,'bundle',name),0o700);provenance[name]=await fileDigest(join(directory,'bundle',name));
@@ -267,6 +283,7 @@ export async function hostedSwiftkeyAdmission(root=resolve(import.meta.dir,'../.
       // Partial writes after an outer kill are inconclusive, not a success.
       const load=async(name:string)=>{try{return JSON.parse(await readFile(join(directory,name),'utf8'));}catch{return {state:'unavailable'};}};
       const receipt=await load('receipt.json');
+      receipt.preparation=preparation;
       receipt.nativeFailure=await load('native-failure.json');
       receipt.parentCanariesProven=parentCanariesProven;
       receipt.qualified=false;receipt.scope='intermediate vendor discovery, not typing acceptance';

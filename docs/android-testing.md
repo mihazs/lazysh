@@ -365,3 +365,10 @@ unknown methods, excessive output or ambiguous blocks cannot supply source
 frames. These hints localize an unqualified run; they are untrusted runner
 observations and never qualify runtime correctness. The fresh vendor AX artifact
 remains separate.
+
+Preparation receipts identify the fixed `venv`, `pinned-dependencies`, or
+`anonymous-exact-download` phase, process exit code and a closed reason without
+retaining output or arguments. Only pinned goopdl download exit3 is classified
+`auth-unavailable`; exit3 in another preparation phase remains `unknown`. The
+first hosted run lacked this phase marker, so its generic preparation exit3
+alone did not establish the exact failing subprocess.

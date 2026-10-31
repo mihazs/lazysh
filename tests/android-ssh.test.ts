@@ -1119,3 +1119,18 @@ test('SwiftKey native failure summary rejects forged frames and closes oversized
   const frames=Array.from({length:20},(_,i)=>`  at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:${i+1})`).join('\n');
   expect(swiftkeyNativeFailure(start+frames+end).frames).toHaveLength(8);
 });
+
+test.each(['venv','pinned-dependencies','anonymous-exact-download'] as const)('SwiftKey preparation phase %s retains only finite exit identity',async phase=>{
+  const {swiftkeyPrivateTool}=await import('./support/androidSwiftkey');
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-swiftkey-preparation-'));
+  const observation:import('./support/androidSwiftkey').SwiftkeyPreparation={phase:'not-started',state:'not-started',exitCode:null,reason:'none'};
+  const privateValue='private-token-url-and-tool-arguments';
+  try {
+    const error=await swiftkeyPrivateTool(phase,process.execPath,['-e',`process.stdout.write('${privateValue}');process.stderr.write('${privateValue}');process.exit(3)`],directory,
+      {PATH:'/usr/bin:/bin',HOME:directory},observation,3000).catch(error=>error as Error);
+    expect((error as Error).message).toBe('Owned fixture failed: private SwiftKey preparation; exit=3');
+    expect(observation).toEqual({phase,state:'failed',exitCode:3,reason:phase==='anonymous-exact-download'?'auth-unavailable':'unknown'});
+    expect(JSON.stringify(observation)).not.toContain(privateValue);
+    expect((error as Error).message).not.toContain(privateValue);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
