@@ -896,3 +896,36 @@ test('partial passive tap setup failure attempts listener cleanup without exposi
   expect(()=>create({getBoundingClientRect:()=>({})})).toThrow('Owned native tap observation unavailable');
   expect(attached.size).toBe(0);
 });
+
+test('Herdr discovery observation retains only closed state and capped counts',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const script=source.match(/val discoveryObservation = """([\s\S]*?)"""[.]trimIndent\(\)/)![1]
+    .replaceAll("${'$'}",'$').replace('$childDisconnect',JSON.stringify("button[aria-label='Disconnect owned child']"));
+  const observe=new Function('document',`return (${script.trim()});`);
+  let panels:unknown[]=[],buttons=[{textContent:'List herdr sessions',disabled:false}];
+  let capability='tmux available · Herdr detected · Zellij missing';
+  const document={querySelector:()=>({private:'never retain this'}),querySelectorAll:(selector:string)=>{
+    if(selector==='.multiplexer-panel')return panels;
+    if(selector.includes('aria-current=page'))return [{textContent:'Sessions'}];
+    return Array(17).fill({private:'never retain this'});
+  }};
+  const absent=observe(document);
+  expect(absent).toEqual({panelCount:0,loading:false,inlineError:false,herdrCapability:'unknown',listCount:0,listEnabled:false,
+    sessionsSelected:true,terminalSelected:false,menuCount:8,tabsCount:8,terminalCount:8,childDisconnect:true});
+  const panel={querySelectorAll:()=>buttons,querySelector:(selector:string)=>selector==='p.muted'?{textContent:capability}: {private:'never retain this'}};
+  panels=[panel];
+  const present=observe(document);
+  expect(present).toMatchObject({panelCount:1,loading:true,inlineError:true,herdrCapability:'detected',listCount:1,listEnabled:true});
+  for(const value of ['missing','private path/error and host']){
+    capability=value==='missing'?'Herdr not installed':value;
+    expect(observe(document).herdrCapability).toBe(value==='missing'?'missing':'unknown');
+  }
+  buttons=[{textContent:'List herdr sessions',disabled:true}];
+  expect(observe(document)).toMatchObject({listCount:1,listEnabled:false});
+  buttons=Array(17).fill({textContent:'List herdr sessions',disabled:false});
+  expect(observe(document)).toMatchObject({listCount:8,listEnabled:false});
+  panels=[panel,panel];
+  expect(observe(document)).toMatchObject({panelCount:2,herdrCapability:'unknown',listCount:0});
+  expect(JSON.stringify(observe(document))).not.toContain('private');
+  expect(Object.values(present).every(value=>typeof value==='boolean'||Number.isInteger(value)||['detected','missing','unknown'].includes(value as string))).toBe(true);
+});

@@ -1399,9 +1399,28 @@ class NativeWorkspaceTest {
         val originalTab = original.getString("tabId")
         require(historyTab.matches(Regex("w[0-9]+:t[0-9]+")) && historyTab.length <= 50 &&
             originalTab.matches(Regex("w[0-9]+:t[0-9]+")) && originalTab.length <= 50 && historyTab != originalTab)
+        val childDisconnect = JSONObject.quote("button[aria-label='Disconnect $parent / $name']")
+        val discoveryObservation = """
+            (()=>{
+              const panels=Array.from(document.querySelectorAll('.multiplexer-panel'));
+              const panel=panels.length===1?panels[0]:null;
+              const list=Array.from(panel?.querySelectorAll('button')??[]).filter(x=>x.textContent.trim()==='List herdr sessions');
+              const capabilityText=panel?.querySelector('p.muted')?.textContent.match(/(?:^| · )Herdr (detected|not installed)(?: · |${'$'})/)?.[1];
+              const capability=capabilityText==='detected'?'detected':capabilityText==='not installed'?'missing':'unknown';
+              const selected=label=>Array.from(document.querySelectorAll('.view-tabs button[aria-current=page], .mobile-session-views button[aria-current=page]')).some(x=>x.textContent.trim()===label);
+              const count=selector=>Math.min(8,document.querySelectorAll(selector).length);
+              return {panelCount:Math.min(8,panels.length),loading:Boolean(panel?.querySelector('.loading')),
+                inlineError:Boolean(panel?.querySelector('.inline-error[role=alert]')),herdrCapability:capability,
+                listCount:Math.min(8,list.length),listEnabled:list.length===1&&!list[0].disabled,
+                sessionsSelected:selected('Sessions'),terminalSelected:selected('Terminal'),
+                menuCount:count('.mobile-session-views'),tabsCount:count('[role=tab]'),
+                terminalCount:count('.terminal-canvas'),childDisconnect:Boolean(document.querySelector($childDisconnect))};
+            })()
+        """.trimIndent()
         fun focusTab(tab: String) {
             sessionView(scenario, "Sessions")
-            awaitDocument(scenario, "owned Herdr discovery controls", hasButton("List herdr sessions"))
+            awaitDocument(scenario, "owned Herdr discovery controls", hasButton("List herdr sessions"),
+                observe = { remaining -> evaluate(scenario, discoveryObservation, remaining) })
             click("List herdr sessions")
             awaitDocument(scenario, "owned Herdr browse action", hasButton("Browse Herdr $name"))
             click("Browse Herdr $name")
