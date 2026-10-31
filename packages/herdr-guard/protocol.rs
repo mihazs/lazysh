@@ -291,38 +291,6 @@ guard_parameters! { RevokeParams {
     pub(crate) ownership: Secret,
 }}
 
-#[path = "navigation.rs"]
-mod navigation;
-navigation::navigation_target! {
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-}
-
-guard_parameters! { NavigateParams {
-    pub(crate) boot: Secret,
-    pub(crate) ownership: Secret,
-    pub(crate) operation: u64,
-    pub(crate) target: NavigationTarget,
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub(crate) cancellation: Cancellation,
-}}
-
-impl NavigateParams {
-    pub(crate) fn valid(&self) -> bool {
-        valid_operation(self.operation) && self.target.valid()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct NavigationSelection {
-    pub(crate) workspace: String,
-    pub(crate) tab: String,
-    pub(crate) pane: String,
-    pub(crate) terminal: String,
-}
-
 pub(crate) fn valid_operation(operation: u64) -> bool {
     operation > 0 && operation <= MAX_OPERATION
 }
@@ -342,24 +310,18 @@ redacted_debug!(
     ClaimParams,
     OwnershipReply,
     CancelPreparationParams,
-    RevokeParams,
-    NavigateParams
+    RevokeParams
 );
 
-macro_rules! guard_method {
-    () => {
-        $crate::api::schema::Method::GuardClaim(_)
-            | $crate::api::schema::Method::GuardNavigationCapabilities(_)
-            | $crate::api::schema::Method::GuardNavigate(_)
-            | $crate::api::schema::Method::GuardPrepare(_)
-            | $crate::api::schema::Method::GuardInput(_)
-            | $crate::api::schema::Method::GuardRelease(_)
-            | $crate::api::schema::Method::GuardCancelPreparation(_)
-            | $crate::api::schema::Method::GuardRevoke(_)
-    };
-}
-pub(crate) use guard_method;
-
 pub(crate) fn is_guard_method(method: &crate::api::schema::Method) -> bool {
-    matches!(method, guard_method!())
+    use crate::api::schema::Method;
+    matches!(
+        method,
+        Method::GuardClaim(_)
+            | Method::GuardPrepare(_)
+            | Method::GuardInput(_)
+            | Method::GuardRelease(_)
+            | Method::GuardCancelPreparation(_)
+            | Method::GuardRevoke(_)
+    )
 }

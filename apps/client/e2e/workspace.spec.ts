@@ -95,7 +95,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
       if(command==='has_credentials')return false;
       if(command==='connect')return {sessionId:'owned-navigation-ssh'};
       if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
-      if(command==='herdr_chat'){if(args.sessionId!=='owned-navigation-herdr')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return {kind:'navigated'};}
+      if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
       if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:'Development',focused:true,agent_status:'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:'Codex tasks',number:1,focused:true,agent_status:'idle'}],panes:[{focused:true,agent_status:'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:'codex-builder',agent:'codex',agent_status:'idle'}]};if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
@@ -214,8 +214,8 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect(await live.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await live.getByRole('button',{name:/^codex-builder/}).click();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
-  await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{kind:'navigate',name:'default',target:{kind:'pane',workspace:'w1',tab:'w1:t1',pane:'w1:p1',terminal:'codex-terminal'}}]);
-  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_action','write_stdin'].includes(command)))).toEqual([]);
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
 });
 
 test('mobile terminal keeps one compact header and reaches every session control through More',async({page},testInfo)=>{
@@ -275,12 +275,30 @@ test('mobile terminal keeps one compact header and reaches every session control
   const strip=page.locator('.session-toolbar');
   const tabs=page.locator('.session-tabs');
   const restore=page.locator('.workspace > .workspace-restore');
+  const actions=header.locator('.terminal-actions');
+  await expect(actions.getByRole('button')).toHaveCount(2);
+  expect(await page.locator('.terminal-toolbar-toggle').count()).toBe(0);
+  await actions.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.getByLabel('Compose text',{exact:true}).fill('Review this draft');
+  const composer=page.locator('.terminal-compose');
+  for(const name of ['Paste draft','Close composer']) {
+    const button=composer.getByRole('button',{name,exact:true});
+    expect(await button.textContent()).toBe(''); await expect(button.locator('svg')).toHaveCount(1);
+  }
   if(phone){
     for(const width of [393,412]) for(const height of [844,420]){
       await page.setViewportSize({width,height});
       await expect(strip).toBeHidden();await expect(tabs).toBeHidden();await expect(restore).toBeHidden();
       expect((await header.boundingBox())!.height).toBe(44);
       expect((await page.locator('.session-body').boundingBox())!.y).toBe(44);
+      const text=(await composer.getByRole('textbox',{name:'Compose text',exact:true}).boundingBox())!;
+      const buttons=(await composer.locator('.terminal-compose-actions').boundingBox())!;
+      expect(text.x+text.width).toBeLessThanOrEqual(buttons.x);
+      expect(buttons.y+buttons.height).toBeLessThanOrEqual(height);
+      const withKeys=(await page.locator('.terminal-canvas:visible').boundingBox())!.height;
+      await actions.getByRole('button',{name:'Hide terminal keys',exact:true}).click();
+      expect((await page.locator('.terminal-canvas:visible').boundingBox())!.height).toBeGreaterThan(withKeys);
+      await actions.getByRole('button',{name:'Show terminal keys',exact:true}).click();
       for(const name of ['Open hosts','Switch terminal session','Workspace tools']){
         const bounds=(await page.getByRole('button',{name,exact:true}).boundingBox())!;
         expect(bounds.height).toBeGreaterThanOrEqual(44);expect(bounds.width).toBeGreaterThanOrEqual(44);
@@ -294,6 +312,8 @@ test('mobile terminal keeps one compact header and reaches every session control
       }
     }
     await page.setViewportSize({width:393,height:844});
+    await page.screenshot({path:testInfo.outputPath('compact-composer.png')});
+    await composer.getByRole('button',{name:'Close composer',exact:true}).click();
     const protocol=await page.context().newCDPSession(page);
     await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:62}});
     await expect(header).toHaveCSS('padding-top','62px');
@@ -328,6 +348,8 @@ test('mobile terminal keeps one compact header and reaches every session control
     await expect(strip).toBeHidden();expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
     await page.screenshot({path:testInfo.outputPath('compact-terminal.png')});
   }else{
+    await page.screenshot({path:testInfo.outputPath('desktop-composer.png')});
+    await composer.getByRole('button',{name:'Close composer',exact:true}).click();
     await expect(header).toBeVisible();await expect(strip).toBeVisible();await expect(tabs).toBeVisible();await expect(restore).toBeVisible();
     expect((await header.boundingBox())!.height).toBe(63);
   }

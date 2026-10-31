@@ -1,40 +1,4 @@
 use super::*;
-
-#[test]
-fn isolated_navigation_requires_positive_capability_and_exact_selection() {
-    for bytes in [
-        &b"guard_invalid\n"[..],
-        &br#"{"id":"guard","result":{"type":"guard_navigation_capabilities","schema_version":1,"isolated":true,"extra":true}}"#[..],
-    ] {
-        let status = if bytes.starts_with(b"{") { Some(0) } else { Some(2) };
-        let result = if status == Some(0) { response(status, bytes, b"") } else { response(status, b"", bytes) };
-        assert_eq!(navigation_capability(result), Ok(false));
-    }
-    let capable = br#"{"id":"guard","result":{"type":"guard_navigation_capabilities","schema_version":1,"isolated":true}}"#;
-    assert_eq!(
-        navigation_capability(response(Some(0), capable, b"")),
-        Ok(true)
-    );
-    assert_eq!(
-        navigation_capability(Err(Fault::Unavailable)),
-        Err(Fault::Unavailable)
-    );
-    let target = NavigationTarget::Pane {
-        workspace: "w1".into(),
-        tab: "w1:t2".into(),
-        pane: "w1:p3".into(),
-        terminal: "original".into(),
-    };
-    let mut selection = NavigationSelection {
-        workspace: "w1".into(),
-        tab: "w1:t2".into(),
-        pane: "w1:p3".into(),
-        terminal: "other".into(),
-    };
-    assert!(!target.matches(&selection));
-    selection.terminal = "original".into();
-    assert!(target.matches(&selection));
-}
 use serde_json::json;
 
 fn private_frame() -> Vec<u8> {
@@ -146,14 +110,7 @@ fn shared_source_preserves_selector_and_literal_data_without_public_credentials(
 
 #[tokio::test]
 async fn dropped_waiter_does_not_release_an_owned_queued_permit() {
-    let (requests, mut queue) = mpsc::channel(1);
-    let binding = Binding {
-        requests,
-        busy: Arc::default(),
-    };
-    let lease = crate::app_lock::AccessState::disabled()
-        .lease(None)
-        .unwrap();
+    let (binding, mut queue, lease) = queued_binding();
     let (cancel, mut cancellation) = watch::channel(false);
     let worker = binding.clone();
     let original = lease.clone();
@@ -215,7 +172,6 @@ async fn revoked_original_binding_lease_cannot_dispatch_through_a_fresh_call_lea
     let token = uuid::Uuid::new_v4().to_string();
     let secret = Secret::try_from("ab".repeat(32)).unwrap();
     let mut control = Control {
-        navigation: 0,
         startup: Startup {
             boot: secret.clone(),
             ownership: secret.clone(),
@@ -338,4 +294,55 @@ async fn a_held_ready_response_at_the_absolute_deadline_is_uncertain_without_rep
     .await;
     assert!(matches!(result, Err(Fault::Uncertain)));
     assert_eq!(polls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn view_retirement_keeps_input_reserved_after_actor_reply_until_view_finishes() {
+    for body in [
+        json!({"kind":"retire_for_view"}),
+        json!({"kind":"retireForView"}),
+    ] {
+        assert!(serde_json::from_value::<Action>(body).is_err());
+    }
+    let (binding, mut queue, lease) = queued_binding();
+    let (cancel, mut cancellation) = watch::channel(false);
+    let permit = binding.reserve().unwrap();
+    let owner = permit.clone();
+    let caller = binding.clone();
+    let original = lease.clone();
+    let retirement = tokio::spawn(async move {
+        caller
+            .call_reserved(&original, &mut cancellation, Action::RetireForView, owner)
+            .await
+    });
+    let work = queue.recv().await.unwrap();
+    assert!(matches!(work.action, Action::RetireForView));
+    work.reply
+        .send(Ok(Reply::Released))
+        .unwrap_or_else(|_| panic!("owned waiter disappeared"));
+    drop(work._permit);
+    retirement.await.unwrap().unwrap();
+    assert_eq!(
+        binding
+            .call(&lease, &mut cancel.subscribe(), Action::Status)
+            .await
+            .err()
+            .unwrap()
+            .kind(),
+        "herdr_chat_busy"
+    );
+    drop(permit);
+    assert!(!binding.busy.load(Ordering::SeqCst));
+}
+
+fn queued_binding() -> (Binding, mpsc::Receiver<Work>, AccessLease) {
+    let (requests, queue) = mpsc::channel(1);
+    let binding = Binding {
+        requests,
+        busy: Arc::default(),
+    };
+    let lease = crate::app_lock::AccessState::disabled()
+        .lease(None)
+        .unwrap();
+    (binding, queue, lease)
 }

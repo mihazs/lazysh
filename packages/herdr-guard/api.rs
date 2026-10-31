@@ -44,11 +44,7 @@ pub(super) fn serve(
 ) -> io::Result<()> {
     let valid = envelope_len <= MAX_ENVELOPE
         && match &request.method {
-            Method::GuardClaim(_)
-            | Method::GuardRelease(_)
-            | Method::GuardRevoke(_)
-            | Method::GuardNavigationCapabilities(_) => true,
-            Method::GuardNavigate(params) => params.valid(),
+            Method::GuardClaim(_) | Method::GuardRelease(_) | Method::GuardRevoke(_) => true,
             Method::GuardCancelPreparation(params) => valid_operation(params.preparation),
             Method::GuardPrepare(params) => params.valid(),
             Method::GuardInput(params) => params.valid(),
@@ -64,7 +60,6 @@ pub(super) fn serve(
     let method = api_method_name(&request.method);
     let (cancellation, cleanup) = match &request.method {
         Method::GuardClaim(params) => (params.cancellation.clone(), None),
-        Method::GuardNavigate(params) => (params.cancellation.clone(), None),
         Method::GuardPrepare(params) => (
             params.cancellation.clone(),
             Some(Method::GuardCancelPreparation(CancelPreparationParams {

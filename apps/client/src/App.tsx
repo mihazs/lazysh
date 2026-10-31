@@ -282,10 +282,12 @@ function Dialog({
   title,
   children,
   close,
+  mobilePresentation = "sheet",
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
+  mobilePresentation?: "page" | "sheet";
 }) {
   useUi();
   const ref = useRef<HTMLDivElement>(null);
@@ -314,7 +316,7 @@ function Dialog({
     };
   }, []);
   return (
-    <div className="dialog-backdrop">
+    <div className="dialog-backdrop" data-mobile-presentation={mobilePresentation}>
       <div
         ref={ref}
         className="dialog"
@@ -332,7 +334,7 @@ function Dialog({
             <X size={19} />
           </button>
         </div>
-        {children}
+        {mobilePresentation === "page" ? <div className="dialog-content">{children}</div> : children}
       </div>
     </div>
   );
@@ -467,6 +469,7 @@ function HostEditor({
   }
   return (
     <Dialog
+      mobilePresentation="page"
       title={initial ? t("appEditHost") : t("appAddAHost")}
       close={() => {
         if (!busy) close();
@@ -814,6 +817,7 @@ export function ConnectDialog({
   }
   return (
     <Dialog
+      mobilePresentation={trust ? "sheet" : "page"}
       title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
@@ -1115,6 +1119,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [switcher, setSwitcher] = useState(false);
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
+  const [terminalControlsTarget,setTerminalControlsTarget] = useState<HTMLDivElement|null>(null);
   const [themeLinkTarget,setThemeLinkTarget] = useState<HTMLDivElement|null>(null);
   const [sync, setSync] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -1674,13 +1679,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         const tab=target.kind==='workspace'?undefined:snapshot.tabs.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab);
         const pane=target.kind!=='pane'?undefined:snapshot.panes.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab && row.pane_id===target.pane && row.terminal_id===target.terminal);
         if(!workspace || (target.kind!=='workspace' && !tab) || (target.kind==='pane' && !pane))throw new LocalUiError('herdrNavigationChanged');
-        const reply=await ownedInvoke<{kind:string}>('herdr_chat',{sessionId:destination.id,action:{kind:'navigate',name,target}});
+        const action=target.kind==='workspace'?{type:'focusWorkspace',target:target.workspace}:target.kind==='tab'?{type:'focusTab',target:target.tab}:{type:'focusPane',target:target.pane};
+        await ownedInvoke('herdr_action',{sessionId:destination.id,name,action});
         assertCurrent();
-        if(reply.kind!=='navigated')throw new LocalUiError('herdrNavigationChanged');
       }
       setActiveId(destination.id);setView('terminal');setSidebar(false);
     } catch(error) {
-      const cause=error && typeof error==='object' && 'kind' in error && error.kind==='herdr_navigation_unsupported'?new LocalUiError('herdrNavigationUnsupported'):captureUiError(error);
+      const cause=error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error);
       if(adopted && current()) {setView('terminal');setSidebar(false);setError(cause);}
       throw cause;
     } finally {if(herdrNavigationIntent.current===intent)herdrNavigationIntent.current=null;}
@@ -1815,7 +1820,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
         </div>
-        {remoteActive && active && <HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/> }
+        {remoteActive && active && <HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/> }
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
           <h3>{t('navigationLiveSessions')}</h3>
           <div className="workspace-live-sessions" role="group" aria-label={t('navigationLiveSessions')}>
@@ -1878,6 +1883,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             )}
           </div>
           <div className="header-right">
+            <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
               className="icon-button mobile-tools"
               aria-label={t("appWorkspaceTools")}
@@ -2037,12 +2043,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal"}
                     reportError={setError}
+                    controlsTarget={terminalControlsTarget}
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
                 ))}
                 {active.connected && view === "usage" && (
                   <>
-                  <AccountUsageDetails model={accountUsage} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showNavigation("agents"):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}
@@ -2227,7 +2234,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {preferences && (
-        <Dialog title={t("appPreferences")} close={() => setPreferences(false)}>
+        <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
           {native && <section aria-label={t('defaultMuxLabel')}>
@@ -2242,7 +2249,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
         </Dialog>
       )}
-      {pushSettings && <Dialog title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
+      {pushSettings && <Dialog mobilePresentation="page" title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
         <Suspense fallback={<p>{t("appLoadingPushSettings")}</p>}><PushSettingsPanel /></Suspense>
       </Dialog>}
 
@@ -2255,12 +2262,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       </Dialog>}
       {native && <NotificationMonitor sessions={sessions.filter(session=>!session.local)} />}
       {inbox && (
-        <Dialog title={t("appNotificationInbox")} close={() => setInbox(false)}>
+        <Dialog mobilePresentation="page" title={t("appNotificationInbox")} close={() => setInbox(false)}>
           <NotificationPanel sessions={sessions.filter(session=>!session.local)} />
         </Dialog>
       )}
       {about && (
-        <Dialog title={t("appAboutLazysh")} close={() => setAbout(false)}>
+        <Dialog mobilePresentation="page" title={t("appAboutLazysh")} close={() => setAbout(false)}>
           <Suspense fallback={<p>{t("appLoadingLicense")}</p>}>
             <AboutPanel />
           </Suspense>
@@ -2312,14 +2319,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {sharing && (
-        <Dialog title={t("appShareableUploads")} close={() => setSharing(false)}>
+        <Dialog mobilePresentation="page" title={t("appShareableUploads")} close={() => setSharing(false)}>
           <Suspense fallback={<p>{t("appLoadingSharing")}</p>}>
             <SharePanel />
           </Suspense>
         </Dialog>
       )}
       {sync && (
-        <Dialog title={t("appEncryptedSync")} close={() => setSync(false)}>
+        <Dialog mobilePresentation="page" title={t("appEncryptedSync")} close={() => setSync(false)}>
           <Suspense fallback={<p>{t("appOpeningSync")}</p>}>
             <SyncPanel onHostsChanged={() => void loadHosts()} />
           </Suspense>

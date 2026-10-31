@@ -7,11 +7,11 @@ import {herdrStatusKeys,useHerdrNavigation,type HerdrTree,type LiveAgent} from '
 import './HerdrNavigation.css';
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,onServerChange,onNavigate,onAttach,onClose,onRestoreHostTools}:{
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,onOpenCompanion,onServerChange,onNavigate,onAttach,onClose,onRestoreHostTools}:{
   sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
-  onClose:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
+  onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
 }) {
   useUi();
   const model=useHerdrNavigation({sessionId,herdrSession,visible});
@@ -36,7 +36,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     try {
       if(target)await onNavigate(server,target,lease,owns);else await onAttach(server,lease,owns);
       if(owns()) {await refresh();onClose();}
-    } catch(error) {if(owns())setActionError(error && typeof error==='object' && 'kind' in error && error.kind==='herdr_navigation_unsupported'?new LocalUiError('herdrNavigationUnsupported'):captureUiError(error));}
+    } catch(error) {if(owns())setActionError(error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error));}
     finally {action.current=false;if(current.current.sessionId===sessionId)setActionBusy(false);}
   }
   function row(target:HerdrNavigationTarget,label:string,status:LiveAgent['agent_status'],context?:string) {
@@ -60,11 +60,13 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     <div className="tool-bar"><button className="subtle-button" disabled={busy||actionBusy} onClick={()=>void refresh()}>{t('herdrRefresh')}</button></div>
     {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={working} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
     {actionError && <p className="inline-error" role="alert">{uiErrorText(actionError)}</p>}
+    {actionError instanceof LocalUiError && actionError.key==='herdrNavigationCompanion' && onOpenCompanion && <button className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}
     {data?.servers.length===0 && <p>{t('herdrAgentsNoServers')}</p>}
     {!!data?.servers.length && <>
       <label>{t('herdrAgentsServer')}<select value={data.server} disabled={working} onChange={event=>{onServerChange?.();selectServer(event.target.value);}}><option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}</select></label>
       {data.server && <>
+        <p className="muted">{t('herdrNavigationShared')}</p>
         <h3>{t(mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3>
         <label>{t('herdrNavigationSearch')}<input type="search" value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}

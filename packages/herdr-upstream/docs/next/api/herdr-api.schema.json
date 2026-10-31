@@ -2456,103 +2456,6 @@
           ],
           "type": "object"
         },
-        "NavigateParams": {
-          "additionalProperties": false,
-          "properties": {
-            "boot": {
-              "$ref": "#/schemas/request/$defs/Secret"
-            },
-            "operation": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "ownership": {
-              "$ref": "#/schemas/request/$defs/Secret"
-            },
-            "target": {
-              "$ref": "#/schemas/request/$defs/NavigationTarget"
-            }
-          },
-          "required": [
-            "boot",
-            "ownership",
-            "operation",
-            "target"
-          ],
-          "type": "object"
-        },
-        "NavigationTarget": {
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "workspace",
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "workspace"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "tab",
-                  "type": "string"
-                },
-                "tab": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "workspace",
-                "tab"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "const": "pane",
-                  "type": "string"
-                },
-                "pane": {
-                  "type": "string"
-                },
-                "tab": {
-                  "type": "string"
-                },
-                "terminal": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "workspace",
-                "tab",
-                "pane",
-                "terminal"
-              ],
-              "type": "object"
-            }
-          ]
-        },
         "NotificationShowParams": {
           "properties": {
             "body": {
@@ -4941,38 +4844,6 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "oneOf": [
-        {
-          "properties": {
-            "method": {
-              "const": "lazysh.guard.navigation_capabilities",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/RevokeParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "lazysh.guard.navigate",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/NavigateParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
         {
           "properties": {
             "method": {
@@ -8162,30 +8033,6 @@
             }
           ]
         },
-        "NavigationSelection": {
-          "additionalProperties": false,
-          "properties": {
-            "pane": {
-              "type": "string"
-            },
-            "tab": {
-              "type": "string"
-            },
-            "terminal": {
-              "type": "string"
-            },
-            "workspace": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "workspace",
-            "tab",
-            "pane",
-            "terminal"
-          ],
-          "type": "object"
-        },
         "NotificationShowReason": {
           "enum": [
             "shown",
@@ -9631,44 +9478,6 @@
         },
         "ResponseResult": {
           "oneOf": [
-            {
-              "properties": {
-                "isolated": {
-                  "type": "boolean"
-                },
-                "schema_version": {
-                  "format": "uint32",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "type": {
-                  "const": "guard_navigation_capabilities",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "schema_version",
-                "isolated"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "selection": {
-                  "$ref": "#/schemas/success_response/$defs/NavigationSelection"
-                },
-                "type": {
-                  "const": "guard_navigated",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "selection"
-              ],
-              "type": "object"
-            },
             {
               "properties": {
                 "owner": {

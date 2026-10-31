@@ -339,7 +339,7 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1049h\x1b[?1000h\x1b[?1006h'));
   await expect(page.locator('.terminal-canvas:visible .xterm')).toHaveClass(/enable-mouse-events/);
   for(const delta of [60,-60]){
-    await page.mouse.move(x,y);
+    await page.mouse.move(x,y+delta);
     await page.mouse.wheel(0,delta);
     await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites.length)).toBe(1);
     const wheel=await page.evaluate(()=>window.simpleShortcutWrites[0]);
@@ -349,6 +349,32 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
     await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([wheel]);
     await page.evaluate(()=>{window.simpleShortcutWrites=[];});
   }
+  const origin={x,y:y+160};
+  const reports=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  await page.mouse.move(origin.x,origin.y);
+  await page.mouse.wheel(0,48);
+  await page.mouse.wheel(0,-48);
+  await expect.poll(async()=>(await reports()).length).toBe(2);
+  const [down,up]=await reports();
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+  const trace=[{x:x+2,y:origin.y-48},{x:x+110,y:origin.y-96},{x:x+130,y:origin.y-144},{x:x+3,y:origin.y-96}];
+  for(const [index,point] of trace.entries()){
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[point]});
+    await expect.poll(reports).toEqual(Array.from({length:index+1},(_,i)=>i===3?up:down));
+  }
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  const next={x:x+80,y:origin.y};
+  await page.mouse.move(next.x,next.y);await page.mouse.wheel(0,48);
+  await expect.poll(async()=>(await reports()).length).toBe(1);
+  const second=(await reports())[0];expect(second).not.toBe(down);
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[next]});
+  await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:next.x+3,y:next.y-48}]});
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await expect.poll(reports).toEqual([second]);
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
   await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000l\x1b[?1006l'));
   await expect(page.locator('.terminal-canvas:visible .xterm')).not.toHaveClass(/enable-mouse-events/);
   await page.mouse.wheel(0,60);

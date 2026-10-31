@@ -103,55 +103,6 @@ fn admitted(registry: &mut Registry, binding: &Prepared, source: &str, now: Inst
 }
 
 #[test]
-fn navigation_owns_original_client_spends_numbers_and_retires_input() {
-    let now = Instant::now();
-    let cancellation = Cancellation::default();
-    let (mut registry, owner, _) = claimed(now, cancellation.clone());
-    let source = "ab".repeat(32);
-    let binding = prepare(
-        &mut registry,
-        &owner,
-        1,
-        &source,
-        target(),
-        Cancellation::default(),
-        now,
-    );
-    let _pending = admitted(&mut registry, &binding, &source, now);
-    assert_eq!(
-        registry.navigate(&owner.boot, &owner.ownership, 1, now),
-        Ok(7)
-    );
-    assert!(registry
-        .admit(
-            &binding.boot,
-            &binding.receipt,
-            &source,
-            2,
-            Input::RequestStop,
-            now
-        )
-        .is_err());
-    assert!(registry
-        .navigate(&owner.boot, &owner.ownership, 1, now)
-        .is_err());
-    assert!(registry
-        .navigate(&Secret::generate().unwrap(), &owner.ownership, 2, now)
-        .is_err());
-    assert_eq!(
-        registry.navigate(&owner.boot, &owner.ownership, 3, now),
-        Ok(7)
-    );
-    cancellation.cancel();
-    assert!(registry
-        .current_owner_id(&owner.boot, &owner.ownership, now)
-        .is_none());
-    assert!(registry
-        .navigate(&owner.boot, &owner.ownership, 4, now)
-        .is_err());
-}
-
-#[test]
 fn claim_ticket_is_once_and_wrong_reader_cannot_commit() {
     let now = Instant::now();
     let (mut registry, owner, ticket) = claimed(now, Cancellation::default());

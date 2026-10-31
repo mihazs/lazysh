@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   accountUsageSession: vi.fn(),
   accountUsageRefresh: vi.fn(),
   accountUsageDisconnected: false,
+  accountUsageCompanionRequired: false,
   terminalPaneProps: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
@@ -70,7 +71,7 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
   return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;if(mocks.launchEvent===callback)mocks.launchEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
-vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
+vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageCompanionRequired?'companion_required':mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
 vi.mock("./TerminalPane", () => ({
   default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
@@ -105,7 +106,7 @@ const host: Host = {
 
 beforeEach(() => {
   generationBase+=10;
-  vi.clearAllMocks();mocks.realAgents=false;mocks.accountUsageDisconnected=false;
+  vi.clearAllMocks();mocks.realAgents=false;mocks.accountUsageDisconnected=false;mocks.accountUsageCompanionRequired=false;
   mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
@@ -145,6 +146,18 @@ it('opens AI account usage for the exact connected terminal from the existing fo
   expect(await screen.findByRole('region',{name:'AI account usage'})).toBeTruthy();
   expect(await screen.findByRole('button',{name:'Use latest report for Watch'})).toBeTruthy();
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
+it('opens the existing Agents sidebar installer from account usage setup without starting installation',async()=>{
+  mocks.accountUsageCompanionRequired=true;mocks.realAgents=true;
+  mocks.api.connect.mockResolvedValue({sessionId:'usage-needs-companion'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  await user.click(await screen.findByRole('button',{name:'Install or update companion'}));
+  expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
+  expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page');
+  expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
 it('reauthenticates only host tools from disconnected Mosh account usage and refreshes after success',async()=>{
@@ -1684,6 +1697,7 @@ it('opens Agents on the attached default Herdr session among several running ser
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
 it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
+  if(outcome==='unsupported')mocks.realAgents=true;
   const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported';
   mocks.api.listHosts.mockResolvedValue([{...host,...(existing?{defaultMultiplexer:{kind:'herdr',name:'named-work'}}:{})}]);
   mocks.api.connect.mockResolvedValue({sessionId:'navigation-source'});
@@ -1700,7 +1714,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
       if(reads===2 && (outcome==='stale'||outcome==='adopt-held-tree'||outcome==='cancel-after-publication'||outcome==='cancel-server'||outcome==='hidden-then-visible'))return new Promise(resolve=>{complete=resolve;});
       return Promise.resolve(outcome==='missing'?{...herdrNavigationTree,panes:[]}:herdrNavigationTree);
     }
-    if(command==='herdr_chat'){if(outcome==='adopt-held-reply'||outcome==='cancel-pending-reply')return new Promise(resolve=>{complete=resolve;});return outcome==='unsupported'?Promise.reject({kind:'herdr_navigation_unsupported'}):Promise.resolve({kind:'navigated'});}
+    if(command==='herdr_action'){if(outcome==='adopt-held-reply'||outcome==='cancel-pending-reply')return new Promise(resolve=>{complete=resolve;});return outcome==='unsupported'?Promise.reject({kind:'herdr_focus_companion_required'}):Promise.resolve(undefined);}
     return original(command,args);
   });
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
@@ -1712,6 +1726,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
   }
   await user.click(screen.getByRole('button',{name:'Workspaces'}));
   const browser=within(await screen.findByRole('region',{name:t('herdrNavigationTitle')}));
+  expect(browser.getByText(t('herdrNavigationShared'))).toBeTruthy();
   await user.click(await browser.findByRole('button',{name:/^builder/}));
   const cancelled=outcome.startsWith('cancel-')||outcome==='hidden-then-visible';
   if(cancelled){
@@ -1725,7 +1740,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
       const server=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});await waitFor(()=>expect(server).toHaveProperty('disabled',false));await user.selectOptions(server,'');
     }else await user.click(screen.getByRole('button',{name:t('herdrNavigationBack')}));
     if(outcome==='cancel-pending-reply')await user.click(screen.getByRole('tab',{name:'Home'}));
-    await act(async()=>complete(outcome==='cancel-before-publication'?{sessionId:'navigation-adopted'}:outcome==='cancel-pending-reply'?{kind:'navigated'}:herdrNavigationTree));
+    await act(async()=>complete(outcome==='cancel-before-publication'?{sessionId:'navigation-adopted'}:outcome==='cancel-pending-reply'?undefined:herdrNavigationTree));
     if(outcome==='cancel-pending-reply')expect(screen.getByRole('tab',{name:'Home'}).getAttribute('aria-selected')).toBe('true');
     if(outcome==='cancel-before-publication')expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'navigation-adopted'});
     else expect(mocks.invoke).not.toHaveBeenCalledWith('disconnect',{sessionId:'navigation-adopted'});
@@ -1733,7 +1748,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
   if(outcome==='adopt-held-tree'||outcome==='adopt-held-reply'){
     await waitFor(()=>expect(complete).toBeTypeOf('function'));
     await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work'}).getAttribute('aria-selected')).toBe('true'));
-    await act(async()=>complete(outcome==='adopt-held-tree'?herdrNavigationTree:{kind:'navigated'}));
+    await act(async()=>complete(outcome==='adopt-held-tree'?herdrNavigationTree:undefined));
     await waitFor(()=>expect(screen.getByRole('button',{name:'Workspaces'}).closest('aside')!.classList.contains('sidebar-open')).toBe(false));
   }
   if(cancelled){}else if(outcome==='stale'){
@@ -1741,10 +1756,15 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
     await user.click(screen.getByRole('button',{name:'Connections'}));
     await act(async()=>complete(herdrNavigationTree));
     expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
-  } else if(outcome==='unsupported')expect(await browser.findByRole('alert')).toHaveProperty('textContent',t('herdrNavigationUnsupported'));
+  } else if(outcome==='unsupported'){
+    expect(await browser.findByRole('alert')).toHaveProperty('textContent',t('herdrNavigationCompanion'));
+    await user.click(browser.getByRole('button',{name:t('companionInstallTitle')}));
+    expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
+    expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
+  }
   else if(outcome==='missing')expect((await screen.findByRole('alert')).textContent).toContain(t('herdrNavigationChanged'));
-  else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_chat',{sessionId:existing&&outcome!=='current-second-display'?'navigation-existing':'navigation-adopted',action:{kind:'navigate',name:'named-work',target:{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'}}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
-  const sent=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_chat');
+  else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_action',{sessionId:existing&&outcome!=='current-second-display'?'navigation-existing':'navigation-adopted',name:'named-work',action:{type:'focusPane',target:'w2E:pF'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
+  const sent=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_action');
   expect(sent).toHaveLength(outcome==='missing'||outcome==='stale'||(cancelled&&outcome!=='cancel-pending-reply')?0:1);
   if(outcome==='current-second-display'){expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-existing','herdr','named-work',expect.any(Function));expect(sent.every(([,args])=>(args as {sessionId:string}).sessionId==='navigation-adopted')).toBe(true);expect(mocks.api.adoptSession.mock.calls.map(([id])=>id)).toEqual(['navigation-existing','navigation-adopted']);expect(screen.getByRole('tab',{name:'Home / named-work / named-work'}).getAttribute('aria-selected')).toBe('true');}
   else if(existing)expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
@@ -1946,4 +1966,21 @@ it.each(['lock','hidden','closed-source','unmount'] as const)('does not publish 
   else view.unmount();
   await act(async()=>complete({schemaVersion:1,status:'restored'}));
   expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();
+});
+
+it('uses the existing guarded dialog shell for long mobile tasks and keeps choices separate', async () => {
+  const user=userEvent.setup(); render(<App />);
+  const preferences=await screen.findByRole('button',{name:'Preferences'});
+  await user.click(preferences);
+  const dialog=screen.getByRole('dialog',{name:'Preferences'});
+  expect(dialog.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
+  expect(dialog.querySelector('.dialog-content')).not.toBeNull();
+  within(dialog).getByRole('button',{name:'Close Preferences'}).focus();
+  await user.keyboard('{Escape}'); expect(screen.queryByRole('dialog')).toBeNull();
+  expect(document.activeElement).toBe(preferences);
+  await user.click(screen.getByRole('button',{name:'Connect to Home'}));
+  const connection=screen.getByRole('dialog',{name:'Connect to Home'});
+  expect(connection.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
+  await user.click(within(connection).getByRole('button',{name:'Close Connect to Home'}));
+  expect(screen.queryByRole('dialog')).toBeNull();
 });

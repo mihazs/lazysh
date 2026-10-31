@@ -43,13 +43,6 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
-    GuardNavigationCapabilities {
-        schema_version: u32,
-        isolated: bool,
-    },
-    GuardNavigated {
-        selection: crate::guarded_input::protocol::NavigationSelection,
-    },
     GuardClaimed {
         owner: crate::guarded_input::protocol::OwnershipReply,
     },

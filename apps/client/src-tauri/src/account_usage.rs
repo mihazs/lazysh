@@ -56,17 +56,15 @@ pub async fn account_usage(
                 Err(_) => return Ok(Response::unavailable("disconnected")),
             };
             let result = async {
-                let command = crate::companion::command(
-                    &session,
-                    "lazysh-agent account-usage --watch-channel".into(),
-                    &lease,
-                )
-                .await?;
+                let command = crate::companion::account_usage_command(&session, &lease).await?;
                 ssh::exec_bounded(&session, command, &lease, DEADLINE, LIMIT, None).await
             }
             .await;
             drop(permit);
             Ok(match result {
+                Ok(output) if output.trim() == crate::companion::USAGE_COMPANION_REQUIRED => {
+                    Response::unavailable("companion_required")
+                }
                 Ok(output) => lazysh_account_usage::from_wire(output.as_bytes()),
                 Err(error) => Response::unavailable(match error.kind() {
                     "disconnected" | "ssh_host_tools_closed" => "disconnected",

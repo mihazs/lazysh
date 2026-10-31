@@ -571,8 +571,6 @@ fn handle_request(
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
-        Method::GuardNavigationCapabilities(_) => "lazysh.guard.navigation_capabilities",
-        Method::GuardNavigate(_) => "lazysh.guard.navigate",
         Method::GuardClaim(_) => "lazysh.guard.claim",
         Method::GuardCancelPreparation(_) => "lazysh.guard.cancel_preparation",
         Method::GuardRevoke(_) => "lazysh.guard.revoke",
