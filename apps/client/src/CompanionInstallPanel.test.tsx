@@ -26,6 +26,28 @@ function pendingInstall() {
   install.mockImplementation((_source:string,progress:(value:unknown)=>void)=>new Promise((finish,fail)=>requests.push({progress,finish,fail})));
   return requests;
 }
+it('keeps a stable action while the installed result precedes asynchronous snapshot readiness',async()=>{
+  const requests=pendingInstall(),refreshed=vi.fn();
+  const view=render(<CompanionInstallPanel sessionId="owned" ready={false} onInstalled={refreshed}/>);
+  const selector='details.companion-install > .tool-bar > button';
+  const button=document.querySelector(selector)!;
+  fireEvent.click(button);
+  await act(async()=>{requests[0].finish(result);});
+  expect(refreshed).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('details')?.getAttribute('data-install-outcome')).toBe('installed');
+  expect(document.evaluate("//details[contains(@class,'companion-install')]//button[normalize-space(.)='Update companion']",document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue).toBeNull();
+  expect(document.querySelector(selector)).toBe(button);
+  expect(button.textContent).toBe('Install companion');
+  expect(install).toHaveBeenCalledTimes(1);
+  view.rerender(<CompanionInstallPanel sessionId="owned" ready onInstalled={refreshed}/>);
+  expect(document.querySelector(selector)).toBe(button);
+  expect(button.textContent).toBe('Update companion');
+  expect(button).not.toHaveProperty('disabled',true);
+  expect(install).toHaveBeenCalledTimes(1);
+  fireEvent.click(button);
+  await act(async()=>{requests[1].finish({...result,status:'reused'});});
+  expect(document.querySelector('details')?.getAttribute('data-install-outcome')).toBe('reused');
+});
 it('accepts only closed cleanup failure pairs on residue and retires their observation with the result',async()=>{
   const cleanupFailure={stage:'verifyFile',reason:'timeout'};
   const residue={...result,cleanup:'residue',cleanupFailure};

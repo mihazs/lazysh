@@ -1916,13 +1916,15 @@ class NativeWorkspaceTest {
                 if (evaluate(scenario, "document.querySelector('$panel')?.open===true") != "true")
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel summary")).perform(webScrollIntoView()).perform(webClick())
                 val action = if (reused) "Update companion" else "Install companion"
-                val button = onWebView().withElement(findElement(Locator.XPATH,
-                    "//details[contains(@class,'companion-install')]//button[normalize-space(.)='$action']"))
-                button.perform(webScrollIntoView())
-                awaitDocument(scenario, "owned companion action ready", workspaceButtonVisible(panel, action) +
-                    " && Array.from(document.querySelectorAll('$panel button')).some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled)")
-                button.perform(webClick())
                 val expected = if (reused) "reused" else "installed"
+                println("lazysh companion action: iteration=$expected boundary=beforeAction")
+                val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
+                    "$panel > .tool-bar > button"))
+                button.perform(webScrollIntoView())
+                awaitDocument(scenario, "owned companion $expected action ready", workspaceButtonVisible(panel, action) +
+                    " && Array.from(document.querySelectorAll('$panel > .tool-bar > button')).some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled)" +
+                    " && document.querySelector('$panel')?.getAttribute('data-install-outcome')===${JSONObject.quote(if(reused) "installed" else "idle")}")
+                button.perform(webClick())
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(245)
                 var phase = "unavailable"; var failure = "unavailable"; var outcome = "unavailable"; var reason = "unavailable"
                 var completedWithinBudget = false
