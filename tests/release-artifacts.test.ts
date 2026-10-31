@@ -10,7 +10,7 @@ import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsGuiCounterfactual, windowsGuiMediumOutcome, windowsNsisBinaryDigest } from '../.changeset/release-platform';
-import { windowsGuiDaclFailures, windowsGuiSessionNonzero, parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiFrontendReasons, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiAccessibilitySource, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
+import { windowsGuiDaclFailures, windowsGuiSessionNonzero, parseWindowsGuiOwner, windowsGuiCapabilities, windowsInstallerPathsScript, windowsInstalledGuiScript, isWindowsGuiDriverReceipt, windowsGuiToolEnvironment, windowsGuiSessionResponse, windowsGuiSessionNoResponse, windowsGuiSessionGuards, windowsGuiProbePhases, windowsGuiRoleReasons, windowsGuiRoleSubset, windowsGuiProbeDiagnostic, windowsGuiWindowRoleScript, windowsGuiHealthOwnershipScript, windowsGuiEndpointsScript, windowsGuiMetadataScript, parseWindowsGuiMetadata, windowsGuiMetadataProjection, windowsGuiOverrideNames, windowsGuiFrontendReasons, windowsGuiStartupScript, windowsGuiDebugTransportScript, windowsGuiIntegrityScript, windowsGuiAccessibilitySource, windowsGuiMediumCommonSource, windowsGuiMediumSource, windowsGuiTokenReasons, windowsGuiLaunchErrors, windowsGuiMediumScript, parseWindowsGuiStartup, windowsGuiStartupProbe } from '../.changeset/windows-installed-gui';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const launchFailureDetails=['CREATE_PROCESS_WITH_TOKEN','RESUME_THREAD'].flatMap(call=>windowsGuiLaunchErrors.map(error=>call+':'+error)).concat('RESUME_THREAD:RESUME_COUNT_UNEXPECTED');
@@ -1495,6 +1495,13 @@ test('NSIS image prediction preserves the runtime bundle-comparison constants by
 }));
 
 test('Windows standard owner keeps output closed and staging inside its public dependency closure',async()=>{
+  expect(windowsStandardUserSource.startsWith(windowsGuiMediumCommonSource)).toBe(true);
+  for(const signature of ['enum LaunchCall {','static bool Candidate(IntPtr','public OwnedMediumGui(){','public System.Diagnostics.Process StartProbe(']){
+    expect(windowsGuiMediumSource).toContain(signature);
+    expect(windowsGuiMediumCommonSource).not.toContain(signature);
+    expect(windowsStandardUserSource).not.toContain(signature);
+  }
+  for(const source of [windowsGuiMediumSource,windowsStandardUserSource])expect(Buffer.byteLength(source)).toBeLessThanOrEqual(65536);
   for(const code of ['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','CLEANUP_UNVERIFIED','ACCOUNT_COLLISION','DESKTOP_UNAVAILABLE','DESKTOP_SESSION_UNAVAILABLE','DESKTOP_ACCESS_UNAVAILABLE',...windowsGuiDaclFailures,...windowsGuiTokenReasons.map(reason=>'TOKEN_UNAVAILABLE_'+reason)])expect(standardOwnerCode('LAZYSH_STANDARD_OWNER:'+code)).toBe(code);
   expect(standardOwnerCode('LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:STANDARD_LOGON_UNAVAILABLE')).toBe('CLEANUP_UNVERIFIED');
   for(const code of ['DESKTOP_SESSION_UNAVAILABLE','DESKTOP_ACCESS_UNAVAILABLE'])expect(standardOwnerCode('LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:'+code)).toBe('CLEANUP_UNVERIFIED');

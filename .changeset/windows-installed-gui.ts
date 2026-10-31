@@ -1134,10 +1134,11 @@ export const windowsGuiTokenReasons=[
   'STANDARD_TOKEN_OPEN','STANDARD_TOKEN_IDENTITY','STANDARD_ADMIN_GROUP_ENABLED','STANDARD_USERS_GROUP_MISSING','STANDARD_TOKEN_INTEGRITY','STANDARD_TOKEN_CONTEXT',
 ] as const;
 export const windowsGuiLaunchErrors=['ACCESS_DENIED','INVALID_HANDLE','INVALID_PARAMETER','PRIVILEGE_NOT_HELD','FILE_NOT_FOUND','PATH_NOT_FOUND','BAD_EXE_FORMAT','DIRECTORY','OTHER'] as const;
-export const windowsGuiMediumSource=windowsGuiIntegritySource+String.raw`
+const mediumCommon0=String.raw`
 public sealed partial class OwnedMediumGui : System.IDisposable {
   enum TokenReason { ${windowsGuiTokenReasons.join(',')} }
-  enum LaunchCall { UNVERIFIED,CREATE_PROCESS_WITH_TOKEN,CREATE_PROCESS_AS_USER,RESUME_THREAD }
+`;
+const mediumLegacy0=String.raw`  enum LaunchCall { UNVERIFIED,CREATE_PROCESS_WITH_TOKEN,CREATE_PROCESS_AS_USER,RESUME_THREAD }
   enum LaunchError { UNVERIFIED,RESUME_COUNT_UNEXPECTED,${windowsGuiLaunchErrors.join(',')} }
   static LaunchCall launchCall;
   static LaunchError launchError;
@@ -1152,7 +1153,8 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
     if(code!="LAUNCH_UNAVAILABLE"||launchCall!=LaunchCall.CREATE_PROCESS_WITH_TOKEN||launchError!=LaunchError.ACCESS_DENIED||remaining>100000)return "NOT_ELIGIBLE";
     return remaining<30000?"NOT_RUN_BUDGET":"RUN";
   }
-  static TokenReason tokenFailure;
+`;
+const mediumCommon1=String.raw`  static TokenReason tokenFailure;
   public static string TokenFailure {get{return tokenFailure.ToString();}}
   static bool TokenReject(TokenReason reason){tokenFailure=reason;return false;}
   static void TokenNeed(bool condition,TokenReason reason){if(!condition){TokenReject(reason);throw new System.InvalidOperationException("TOKEN_UNAVAILABLE");}}
@@ -1254,7 +1256,8 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
   static byte[] User(IntPtr token){using(var data=new Data(token,1))return SidAt(data,0);}
   static Group[] Groups(IntPtr token){using(var data=new Data(token,2)){TokenNeed(data.Length>=4,TokenReason.GROUP_LAYOUT);int count=Marshal.ReadInt32(data.Pointer);int offset=IntPtr.Size,entry=IntPtr.Size*2;TokenNeed(count>=0&&count<=256&&offset+(long)count*entry<=data.Length,TokenReason.GROUP_LAYOUT);var result=new Group[count];for(int i=0;i<count;i++)result[i]=new Group{Sid=SidAt(data,offset+i*entry),Attributes=unchecked((uint)Marshal.ReadInt32(data.Pointer,offset+i*entry+IntPtr.Size))};return result;}}
   static bool Admin(Group group){var s=group.Sid;if((group.Attributes&8)!=0)return true;if(s.Length<16||s[7]!=5)return false;for(int i=2;i<7;i++)if(s[i]!=0)return false;uint first=BitConverter.ToUInt32(s,8),last=BitConverter.ToUInt32(s,s.Length-4);return first==32&&(last==544||(last>=547&&last<=552))||first==21&&(last==512||last==518||last==519||last==520);}
-  static bool Candidate(IntPtr candidate,IntPtr caller,Group[] denied){
+`;
+const mediumLegacy1=String.raw`  static bool Candidate(IntPtr candidate,IntPtr caller,Group[] denied){
     if(Word(candidate,8)!=1)return TokenReject(TokenReason.CANDIDATE_NOT_PRIMARY);
     if(Word(candidate,20)!=0)return TokenReject(TokenReason.CANDIDATE_ELEVATED);
     if(Word(candidate,26)!=0)return TokenReject(TokenReason.CANDIDATE_UIACCESS);
@@ -1300,8 +1303,10 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
       IntPtr owned=result;result=IntPtr.Zero;return owned;
     }finally{if(result!=IntPtr.Zero)CloseHandle(result);if(copy!=IntPtr.Zero)CloseHandle(copy);if(array!=IntPtr.Zero)Marshal.FreeHGlobal(array);foreach(var sid in allocated)Marshal.FreeHGlobal(sid);}
   }
-  static string ObjectName(IntPtr handle){var text=new System.Text.StringBuilder(128);uint needed;Need(handle!=IntPtr.Zero&&GetUserObjectInformation(handle,2,text,256,out needed)&&needed<=256,"DESKTOP_UNAVAILABLE");return text.ToString();}
-  public OwnedMediumGui(){tokenFailure=TokenReason.UNVERIFIED;IntPtr caller=IntPtr.Zero,linked=IntPtr.Zero;try{
+`;
+const mediumCommon2=String.raw`  static string ObjectName(IntPtr handle){var text=new System.Text.StringBuilder(128);uint needed;Need(handle!=IntPtr.Zero&&GetUserObjectInformation(handle,2,text,256,out needed)&&needed<=256,"DESKTOP_UNAVAILABLE");return text.ToString();}
+`;
+const mediumLegacy2=String.raw`  public OwnedMediumGui(){tokenFailure=TokenReason.UNVERIFIED;IntPtr caller=IntPtr.Zero,linked=IntPtr.Zero;try{
     TokenNeed(Environment.Is64BitProcess,TokenReason.ARCHITECTURE);TokenNeed(OpenProcessToken(GetCurrentProcess(),0xa,out caller),TokenReason.OWN_TOKEN_OPEN);Need(CanImpersonate(caller),"TOKEN_UNAVAILABLE");
     Need(ObjectName(GetProcessWindowStation())=="WinSta0"&&ObjectName(GetThreadDesktop(GetCurrentThreadId()))=="Default","DESKTOP_UNAVAILABLE");
     var disabled=new System.Collections.Generic.List<Group>();foreach(var group in Groups(caller))if(Admin(group)&&(group.Attributes&4)!=0)disabled.Add(group);TokenNeed(disabled.Count>0,TokenReason.NO_ENABLED_ADMIN_GROUP);
@@ -1309,10 +1314,12 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
     if(token==IntPtr.Zero){tokenFailure=TokenReason.UNVERIFIED;token=Restricted(caller,disabled.ToArray());Need(Candidate(token,caller,disabled.ToArray()),"TOKEN_UNAVAILABLE");Kind="RESTRICTED";}
     CreateOwnedJob();
   }catch{Dispose();throw;}finally{if(caller!=IntPtr.Zero)CloseHandle(caller);}}
-  void CreateOwnedJob(){job=CreateJobObject(IntPtr.Zero,null);Need(job!=IntPtr.Zero,"JOB_UNAVAILABLE");var limits=new Limits();limits.Basic.Flags=0x2000;Need(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits))),"JOB_UNAVAILABLE");}
+`;
+const mediumCommon3=String.raw`  void CreateOwnedJob(){job=CreateJobObject(IntPtr.Zero,null);Need(job!=IntPtr.Zero,"JOB_UNAVAILABLE");var limits=new Limits();limits.Basic.Flags=0x2000;Need(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits))),"JOB_UNAVAILABLE");}
   public static string Command(string image,string[] arguments){var output=new System.Text.StringBuilder();foreach(string value in new[]{image})output.Append(Quote(value));foreach(string value in arguments)output.Append(' ').Append(Quote(value));Need(output.Length+1<=1024,"ARGV_BOUND");return output.ToString();}
   static string Quote(string value){Need(value!=null&&value.IndexOf('\0')<0,"ARGV_BOUND");var output=new System.Text.StringBuilder("\"");int slashes=0;foreach(char c in value){if(c=='\\'){slashes++;continue;}if(c=='\"'){output.Append('\\',slashes*2+1).Append(c);slashes=0;continue;}output.Append('\\',slashes).Append(c);slashes=0;}output.Append('\\',slashes*2).Append('"');return output.ToString();}
-  public System.Diagnostics.Process StartProbe(string image,string[] arguments,string directory,string environment,long deadline){
+`;
+const mediumLegacy3=String.raw`  public System.Diagnostics.Process StartProbe(string image,string[] arguments,string directory,string environment,long deadline){
     Need(!probeStarted,"PROBE_REPEATED");probeStarted=true;CounterprobeOutcome="NOT_ELIGIBLE";
     try{return Start(image,arguments,directory,environment);}
     catch(System.InvalidOperationException original){
@@ -1362,7 +1369,8 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
       processes.Add(child.Process);child.Process=IntPtr.Zero;admitted=true;return managed;
     }finally{bool closed=true;if(!admitted&&child.Process!=IntPtr.Zero){closed &= TerminateProcess(child.Process,1);closed &= WaitForSingleObject(child.Process,10000)==0;closed &= CloseHandle(child.Process);if(managed!=null)managed.Dispose();}if(child.Thread!=IntPtr.Zero)closed &= CloseHandle(child.Thread);if(childToken!=IntPtr.Zero)closed &= CloseHandle(childToken);if(caller!=IntPtr.Zero)closed &= CloseHandle(caller);if(nul!=IntPtr.Zero&&nul!=new IntPtr(-1))closed &= CloseHandle(nul);if(block!=IntPtr.Zero)Marshal.FreeHGlobal(block);Need(closed,"CLEANUP_UNVERIFIED");}
   }
-  static void RequireReverted(bool reverted){if(!reverted)Environment.Exit(1);}
+`;
+const mediumCommon4=String.raw`  static void RequireReverted(bool reverted){if(!reverted)Environment.Exit(1);}
   static void InspectAs(IntPtr credential,Action inspect){if(credential==IntPtr.Zero){inspect();return;}TokenNeed(ImpersonateLoggedOnUser(credential),TokenReason.STANDARD_TOKEN_CONTEXT);try{inspect();}finally{RequireReverted(RevertToSelf());}}
   static void WithDesktopToken(IntPtr credential,IntPtr process,Action<IntPtr> observe){IntPtr duplicate=IntPtr.Zero;try{InspectAs(credential,()=>{IntPtr client=IntPtr.Zero;try{TokenNeed(OpenProcessToken(process,10,out client),TokenReason.STANDARD_TOKEN_OPEN);TokenNeed(DuplicateTokenEx(client,8,IntPtr.Zero,2,2,out duplicate),TokenReason.DUPLICATE_FAILED);}finally{if(client!=IntPtr.Zero)Need(CloseHandle(client),"CLEANUP_UNVERIFIED");}});observe(duplicate);}finally{if(duplicate!=IntPtr.Zero)Need(CloseHandle(duplicate),"CLEANUP_UNVERIFIED");}}
   long VerifyCreated(PI child,string image,IntPtr credential=default(IntPtr)){
@@ -1374,3 +1382,6 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
   public void Dispose(){bool closed=true;if(job!=IntPtr.Zero){closed &= CloseHandle(job);job=IntPtr.Zero;}foreach(var process in processes)closed &= CloseHandle(process);processes.Clear();if(token!=IntPtr.Zero){closed &= CloseHandle(token);token=IntPtr.Zero;}Need(closed,"CLEANUP_UNVERIFIED");}
 }
 `;
+
+export const windowsGuiMediumCommonSource=windowsGuiIntegritySource+mediumCommon0+mediumCommon1+mediumCommon2+mediumCommon3+mediumCommon4;
+export const windowsGuiMediumSource=windowsGuiIntegritySource+mediumCommon0+mediumLegacy0+mediumCommon1+mediumLegacy1+mediumCommon2+mediumLegacy2+mediumCommon3+mediumLegacy3+mediumCommon4;

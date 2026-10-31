@@ -1,4 +1,4 @@
-import {windowsGuiMediumSource,windowsGuiTokenReasons,windowsGuiDaclFailures} from './windows-installed-gui';
+import {windowsGuiMediumCommonSource,windowsGuiTokenReasons,windowsGuiDaclFailures} from './windows-installed-gui';
 import {digestFile} from './release-artifacts';
 import {native,windowsInstallerFailure} from './release-platform';
 import {copyFile,lstat,mkdir,readdir,realpath,readFile,writeFile,appendFile,rm} from 'node:fs/promises';
@@ -9,7 +9,7 @@ export const standardWritableDirectories=['work','node_modules/.vite','node_modu
 
 const standardCodes=['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','STANDARD_OWNER_TIMEOUT','HOSTED_ONLY','ACCOUNT_BUDGET','ACCOUNT_COLLISION','ACCOUNT_CREATE_UNAVAILABLE','ACCOUNT_IDENTITY','PROFILE_IDENTITY','PROFILE_COLLISION','FIXTURE_IDENTITY','FIXTURE_ACCESS','STANDARD_LOGON_UNAVAILABLE','TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','DESKTOP_SESSION_UNAVAILABLE','DESKTOP_ACCESS_UNAVAILABLE','JOB_UNAVAILABLE','IDENTITY_UNVERIFIED','LAUNCH_UNAVAILABLE','CLEANUP_UNVERIFIED',...windowsGuiDaclFailures,...windowsGuiTokenReasons.map(reason=>'TOKEN_UNAVAILABLE_'+reason)] as const;
 // Test-only broker. Native account methods are reached only by the explicit hosted owner.
-export const windowsStandardUserSource=windowsGuiMediumSource+String.raw`
+export const windowsStandardUserSource=windowsGuiMediumCommonSource+String.raw`
 public sealed partial class OwnedMediumGui {
   [StructLayout(LayoutKind.Sequential)] struct AccountInfo {public IntPtr Name,Password;public uint Age,Privilege;public IntPtr Home,Comment;public uint Flags;public IntPtr Script;}
   [StructLayout(LayoutKind.Sequential)] struct AccountIdentity {public IntPtr Name,FullName,Comment;public uint Flags;public IntPtr Sid;}
