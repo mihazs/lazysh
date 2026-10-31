@@ -4,9 +4,12 @@ pub mod approvals;
 pub mod devices;
 pub mod hooks;
 pub mod installation;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod managed_directory;
 pub mod relay;
 pub mod reported_history;
 pub mod settings;
+pub mod skills;
 mod storage_filesystem;
 mod storage_namespace;
 pub mod transcript;
