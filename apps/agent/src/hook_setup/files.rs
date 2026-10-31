@@ -205,8 +205,8 @@ pub(super) struct Inspection {
 impl Inspection {
     pub(super) fn provider_name(&self) -> &'static str {
         match self.target.agent {
-            Agent::Claude => "settings.json",
-            Agent::Codex => "hooks.json",
+            Agent::Claude | Agent::Gemini => "settings.json",
+            Agent::Codex | Agent::Cursor => "hooks.json",
             Agent::Opencode => "lazysh.js",
         }
     }
@@ -305,7 +305,8 @@ impl Inspection {
         let next = next
             .map(|owned| owned.entries.as_slice())
             .unwrap_or_default();
-        json::rewrite(
+        render::configuration(
+            self.target.agent,
             self.provider.contents.as_deref().unwrap_or("{}\n"),
             previous,
             next,
@@ -334,8 +335,8 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
         directory_admission(directory)?;
     }
     let provider_name = match target.agent {
-        Agent::Claude => "settings.json",
-        Agent::Codex => "hooks.json",
+        Agent::Claude | Agent::Gemini => "settings.json",
+        Agent::Codex | Agent::Cursor => "hooks.json",
         Agent::Opencode => "lazysh.js",
     };
     let provider = if target.agent == Agent::Opencode && plugins.is_none() {

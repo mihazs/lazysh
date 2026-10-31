@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Extend explicit managed hook setup to Gemini CLI and Cursor CLI through the companion and SSH-connected Agents view. Preserve Gemini's 5000 ms deadline and existing disable settings; retain Cursor's version-1 envelope, five-second fail-open observers and permission-hook exclusions. Existing foreign values/policy, filesystem checks and trust defaults remain unchanged; incompatible Cursor versions are refused.
+
 - Add explicit managed Claude Code, Codex and OpenCode hook setup from the Agents view or companion CLI on supported Linux filesystems. Inspect a selected existing profile before installing/updating or removing only lazysh-owned entries; preserve foreign values and ordinary permission/group metadata. Persisted executable paths require retained, non-writable, non-symlink namespaces, including support for read-only root-owned binary directories. No hooks or trust settings change automatically. macOS/Windows retain preview-only capability pending filesystem qualification.
 
 - Add a dedicated Herdr Spaces hierarchy and live agent groups to workspace navigation, with one selected-server reader and search. Reuse a matching display or attach the selected server before validating the destination. Workspace and tab jumps use stock Herdr; exact shell and agent pane jumps use the updated companion. Focus is shared with other connections to that server. Navigation retires prior Chat confirmation, and server focus metadata is not presented as this client’s current selection. Connection defaults are unchanged.

@@ -1,6 +1,6 @@
 # Agent lifecycle hooks
 
-## Managed setup for Claude Code, Codex and OpenCode
+## Managed lifecycle hook setup
 
 In **Agents → Agent hook setup**, select the provider and its existing absolute
 profile directory on the connected SSH host, then choose **Inspect setup**.
@@ -13,6 +13,21 @@ and protected from replacement through writable or symlink ancestors. Root-owned
 standard binary directories are supported; shared writable source directories
 are refused.
 
+Managed setup supports Claude Code, Codex, Gemini CLI, Cursor CLI and OpenCode
+on the qualified Linux filesystems described below. Gemini uses the selected
+`.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
+existing profile directory explicitly, including any alternate configuration
+layer; setup does not discover or enable the provider's active layer.
+
+Gemini's six native groups retain their 5000 **millisecond** deadline and preserve
+`hooksConfig.enabled` and `hooksConfig.disabled` exactly. Cursor retains its
+version-1 root envelope and five-second flat command groups. Explicit installation
+can add a missing version-1 header; incompatible existing versions are refused.
+Removal leaves the shared version header. Cursor observers retain default
+fail-open behavior, without adding `failClosed` or permission-capable pre-hooks;
+foreign policy and hooks are preserved. Configured entries do not establish that
+global hooks are enabled, trusted, or reporting in the running provider.
+
 The equivalent local commands are:
 
 ```sh
@@ -23,8 +38,8 @@ lazysh-agent hooks remove --agent codex --profile-root /home/user/.codex --expec
 ```
 
 `install` also updates existing owned entries. Every changed profile needs a
-fresh inspection. Claude uses `settings.json`, Codex uses `hooks.json`, and
-OpenCode uses `plugins/lazysh.js` under the selected profile. JSON must be strict,
+fresh inspection. Claude and Gemini use `settings.json`, Codex and Cursor use `hooks.json`,
+and OpenCode uses `plugins/lazysh.js` under the selected profile. JSON must be strict,
 without comments or duplicate keys. Existing foreign JSON value bytes remain
 intact; owned entry separators and whitespace may change. A foreign same-name
 OpenCode plugin is never overwritten. The private prepared receipt records own
@@ -55,7 +70,8 @@ provide an atomic compare-and-swap against a noncooperating editor changing a
 path after the final check, or a physical power-loss durability guarantee.
 
 Other native providers retain their agent-specific print-only setup commands.
-Managed installation for them is not implemented by this first milestone.
+Managed installation for them remains unimplemented; this extension adds only
+Gemini and Cursor to the initial three providers.
 
 Companion lifecycle reports describe observed activity. They do not grant terminal
 input access, answer permission prompts, install an agent or discover processes
@@ -243,9 +259,9 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Claude Code](https://code.claude.com/docs/en/hooks) | UserPromptSubmit/tool events; PermissionRequest and attention notifications; Stop/SessionEnd | Existing native adapter; lifecycle fixture coverage |
 | [Codex](https://learn.chatgpt.com/docs/hooks) | UserPromptSubmit/tool events; PermissionRequest; Stop/Interrupt/SessionEnd | Native adapter and print-only configuration; contract fixtures |
 | [OpenCode](https://opencode.ai/docs/plugins/) | session.status busy/retry; permission.asked/question.asked; status idle/session.deleted | Native plugin and adapter; contract fixtures |
-| [Gemini CLI](https://geminicli.com/docs/hooks/reference/) | BeforeAgent/BeforeTool; Notification ToolPermission; AfterAgent/SessionEnd | Native adapter and print-only settings fragment; contract fixtures |
+| [Gemini CLI](https://geminicli.com/docs/hooks/reference/) | BeforeAgent/BeforeTool; Notification ToolPermission; AfterAgent/SessionEnd | Native adapter, print-only fragment and explicit Linux managed setup; contract fixtures |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Native observer adapter and shell-free print-only fragment; CLI contract fixtures |
-| [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter and print-only hook fragment; actual permission-wait detection unavailable |
+| [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter, print-only fragment and explicit Linux managed setup; actual permission-wait detection unavailable |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter and print-only standalone hook map; contract fixtures |
 | [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Native state-observer plugin and bounded adapter; actual asset fixtures, authenticated runtime unverified |
 | [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Native callback health only; no session attribution or lifecycle states; creates no session rows |
