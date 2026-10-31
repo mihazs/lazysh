@@ -29,6 +29,7 @@ import {
   GitCompareArrows,
   KeyRound,
   Layers,
+  Info,
   Menu,
   MessageSquare,
   Settings,
@@ -59,6 +60,8 @@ import {
   type SshEvent,
   type TransportMode,
   type AutoOptions,
+  type MultiplexerEntry,
+  type HerdrNavigationTarget,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
@@ -66,6 +69,8 @@ import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
 import {AccountUsageBar,AccountUsageDetails} from "./AccountUsage";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
+import HerdrNavigation from "./HerdrNavigation";
+import type {HerdrTree} from "./useHerdrNavigation";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
@@ -165,31 +170,40 @@ async function selectTransport(
   alive: () => boolean,
   track: (id: string) => void = () => {},
   untrack: (id: string) => void = () => {},
+  entry?: MultiplexerEntry,
 ): Promise<Prepared> {
   const api = bindProtectedApi(nativeApi, lease);
   const pending = new PendingSessions(); pending.add(shell.session.id);
   const reasons: string[] = [];
   const ensureAlive = () => { if (!alive()) throw {kind:'cancelled', message:t("appConnectionCancelled")}; };
-  for (const kind of mode === 'auto' ? ['mosh', 'et'] as const : mode === 'ssh' ? [] : [mode]) {
+  const attempts=mode==='auto'?(entry?['mosh','ssh'] as const:['mosh','et'] as const):mode==='ssh'?(entry?['ssh'] as const:[]):[mode];
+  for (const kind of attempts) {
     ensureAlive();
-    const name = kind === 'mosh' ? 'Mosh' : 'Eternal Terminal';
-    if (mode === 'auto') {
+    const name = kind === 'mosh' ? 'Mosh' : kind==='et'?'Eternal Terminal':'SSH';
+    if (mode === 'auto' && kind!=='ssh') {
       const skip = host.jumpHostId ? t("appBastionRoutesUseSSH") : host.forwardAgent ? t("appSelectedIdentityForwardingRequiresSSH") : !capabilities[kind] ? capabilities.reason || t("appUnavailableInThisAppBuild") : '';
       if (skip) { reasons.push(`${name}: ${skip}`); continue; }
     }
-    const child = await prepareSession(host.id, host.name, `${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
+    const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
     try {
       ensureAlive();
-      const result = kind === 'mosh'
-        ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent)
-        : await api.connectEt(shell.session.id, options.et, child.onEvent);
+      const result = kind==='ssh' && entry
+        ? entry.createIfMissing
+          ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
+          : entry.kind==='tmux'
+            ? await api.attachTmux(shell.session.id,entry.name,child.onEvent,entry.tmuxServer)
+            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent)
+        : kind === 'mosh'
+          ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent,...(entry?[entry] as const:[]))
+          : await api.connectEt(shell.session.id, options.et, child.onEvent);
       child.establish(result.sessionId);
       pending.add(result.sessionId);
       track(result.sessionId);
       ensureAlive();
       if (!child.session.connected) throw {kind:'disconnected', message:t("appClosedBeforeConnection", {name})};
       if (kind === 'mosh') child.session.mosh = options.mosh;
-      else child.session.et = options.et;
+      else if(kind==='et') child.session.et = options.et;
+      if(entry)child.session.attached={kind:entry.kind,name:entry.name,...(entry.tmuxServer===undefined?{}:{tmuxServer:entry.tmuxServer})};
       if (mode === 'auto') {
         child.session.auto = options;
         child.session.transportNotice = t('appAutoSelected', {name, details: reasons.length ? ` ${reasons.join('; ')}.` : ''});
@@ -278,10 +292,12 @@ function Dialog({
   title,
   children,
   close,
+  mobilePresentation = "sheet",
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
+  mobilePresentation?: "page" | "sheet";
 }) {
   useUi();
   const ref = useRef<HTMLDivElement>(null);
@@ -310,7 +326,7 @@ function Dialog({
     };
   }, []);
   return (
-    <div className="dialog-backdrop">
+    <div className="dialog-backdrop" data-mobile-presentation={mobilePresentation}>
       <div
         ref={ref}
         className="dialog"
@@ -328,7 +344,7 @@ function Dialog({
             <X size={19} />
           </button>
         </div>
-        {children}
+        {mobilePresentation === "page" ? <div className="dialog-content">{children}</div> : children}
       </div>
     </div>
   );
@@ -463,6 +479,7 @@ function HostEditor({
   }
   return (
     <Dialog
+      mobilePresentation="page"
       title={initial ? t("appEditHost") : t("appAddAHost")}
       close={() => {
         if (!busy) close();
@@ -633,7 +650,7 @@ export function ConnectDialog({
   const [exportedIdentity, setExportedIdentity] = useState("");
   // Explicit launch receipts keep their original directory/multiplexer semantics.
   const defaultMultiplexer=launch || recovery ? undefined : host.defaultMultiplexer;
-  const [transport, setTransport] = useState<TransportMode>(recovery || launch?.mux || defaultMultiplexer ? "ssh" : host.transport ?? "ssh");
+  const [transport, setTransport] = useState<TransportMode>(recovery || launch?.mux || (defaultMultiplexer && host.transport==='et') ? "ssh" : host.transport ?? "ssh");
   const [moshAvailable, setMoshAvailable] = useState(false);
   const [etAvailable, setEtAvailable] = useState(false);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
@@ -701,7 +718,6 @@ export function ConnectDialog({
     setBusy(true);
     setError("");
     let session: LiveSession | undefined;
-    let bootstrap: LiveSession | undefined;
     try {
       if (accept && trust) {
         await (launch ? api.trustHostKey(trustHostId, trust, launch.receipt).catch(error=>{throw ownedLaunchError(error) ?? error;})
@@ -748,24 +764,12 @@ export function ConnectDialog({
         disposeTerminal(session);
         return;
       }
-      let selected: Prepared;
-      if(defaultMultiplexer) {
-        bootstrap=pending.session;
-        const child=await prepareSession(host.id,`${host.name} / ${defaultMultiplexer.name}`,pending.session.destination,lease);
-        session=child.session;
-        const result=await api.attachDefaultMultiplexer(pending.session.id,defaultMultiplexer,child.onEvent);
-        child.establish(result.sessionId);connectingSessions.current.add(result.sessionId);
-        if(!alive.current || !lease.current() || !child.session.connected)throw {kind:'disconnected',message:t('defaultMuxClosed')};
-        child.session.attached={...defaultMultiplexer};
-        await connectingSessions.current.close(pending.session.id);
-        disposeTerminal(pending.session);bootstrap=undefined;
-        selected=child;
-      } else selected = await selectTransport(pending, host, transport, {
+      const selected = await selectTransport(pending, host, transport, {
         mosh: {serverPath: moshServer, portMin: moshPortMin, portMax: moshPortMax},
         et: {serverPath: etServer, port: etPort},
       }, {mosh: moshAvailable, et: etAvailable, reason:capabilityReason}, lease, () => alive.current && lease.current(),
       (id) => connectingSessions.current.add(id),
-      (id) => connectingSessions.current.delete(id));
+      (id) => connectingSessions.current.delete(id),defaultMultiplexer?{...defaultMultiplexer,createIfMissing:true}:undefined);
       session = selected.session;
       if (!alive.current || !lease.current()) {
         await connectingSessions.current.close(session.id);
@@ -780,7 +784,6 @@ export function ConnectDialog({
     } catch (e) {
       await connectingSessions.current.closeAll().catch(() => {});
       disposeTerminal(session);
-      disposeTerminal(bootstrap);
       if (!alive.current || !lease.current()) return;
       const detail = e as SshError;
       if (!recovery && detail?.kind === "unknown_host_key" && detail.fingerprint) {
@@ -810,6 +813,7 @@ export function ConnectDialog({
   }
   return (
     <Dialog
+      mobilePresentation={trust ? "sheet" : "page"}
       title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
@@ -857,19 +861,19 @@ export function ConnectDialog({
           </p>
           {!recovery && <label>{t("appTransport")}<select
               value={transport}
-              disabled={busy || !!launch?.mux || !!defaultMultiplexer}
+              disabled={busy || !!launch?.mux}
               onChange={(event) =>
                 setTransport(event.target.value as TransportMode)
               }
             >
-              <option value="auto">{t("appAutoMoshThenETThenSSH")}</option>
+              <option value="auto">{t(defaultMultiplexer?'defaultMuxAuto':'appAutoMoshThenETThenSSH')}</option>
               <option value="ssh">SSH</option>
               <option value="mosh" disabled={!moshAvailable}>
                 Mosh{!moshAvailable ? t("appUnavailableForThisConnection") : ""}
               </option>
-              <option value="et" disabled={!etAvailable}>
+              <option value="et" disabled={!etAvailable || !!defaultMultiplexer}>
                 Eternal Terminal
-                {!etAvailable ? t("appUnavailableForThisConnection") : ""}
+                {!etAvailable || defaultMultiplexer ? t("appUnavailableForThisConnection") : ""}
               </option>
             </select>
           </label>}
@@ -1111,6 +1115,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [switcher, setSwitcher] = useState(false);
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
+  const [terminalControlsTarget,setTerminalControlsTarget] = useState<HTMLDivElement|null>(null);
   const [themeLinkTarget,setThemeLinkTarget] = useState<HTMLDivElement|null>(null);
   const [sync, setSync] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -1119,6 +1124,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [inbox, setInbox] = useState(false);
   const [previousWorkspace, setPreviousWorkspace] = useState(() => registry.sessions.length ? [] : readWorkspace());
   const [restoring, setRestoring] = useState(false);
+  const [restoreDetails, setRestoreDetails] = useState(false);
   const restoringRef = useRef(false);
   const mounted = useRef(true);
   const restoringSessions = useRef(new PendingSessions());
@@ -1126,6 +1132,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [wideSidebar,setWideSidebar]=useState(()=>typeof window.matchMedia==='function'?!window.matchMedia('(max-width: 600px)').matches:true);
   const [navigation,setNavigation]=useState<Record<string,{mode:NavigationMode;agents:boolean}>>({});
   const navigationOwner=useRef({sessionId:null as string|null,agents:false});
+  const herdrNavigationIntent=useRef<{source:string;destination?:string;navigation:{mode:NavigationMode;agents:boolean}|undefined}|null>(null);
+  useEffect(()=>{const changed=()=>{if(document.hidden)herdrNavigationIntent.current=null;};document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed);},[]);
   const pickerOwner=useRef({source:'',visible:false,revision:0});
   const [pickerState,setPickerState]=useState<{owner:object;busy:boolean}>();
   const navigationRef=useRef<HTMLElement>(null),navigationTrigger=useRef<HTMLButtonElement>(null);
@@ -1205,6 +1213,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   const active = sessions.find((session) => session.id === activeId);
   const accountUsage=useAccountUsage(active?.connected ? active.id : null);
+  const navigationState=useRef(navigation);navigationState.current=navigation;
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
@@ -1213,6 +1222,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
+  const herdrNavigationVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode!=='connections' && !pendingMuxRequest;
+  const herdrIntent=herdrNavigationIntent.current;
+  if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible};
   const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
@@ -1345,7 +1357,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           const capabilities = await invoke<{mosh:boolean;et:boolean}>('transport_capabilities').catch(()=>({mosh:false,et:false,reason:t("appTransportCapabilityCheckFailed")}));
           child = await selectTransport(shell, host, intent.auto ? 'auto' : intent.et ? 'et' : 'mosh',
             intent.auto ?? {mosh:intent.mosh ?? defaultMosh,et:intent.et ?? defaultEt}, capabilities, lease, ()=>mounted.current && lease.current(),
-            id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id));
+            id=>restoringSessions.current.add(id),id=>restoringSessions.current.delete(id),intent.attached);
           restored.push(child.session);
         } else if (intent.attached) {
           child = await prepareSession(
@@ -1603,6 +1615,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     kind: "tmux" | "herdr" | "zellij" = "tmux",
     tmuxServer?: string,
     owner:AccessLease=lease,
+    beforePublish?:()=>void,
+    attached?:(session:LiveSession)=>void,
   ) {
     const sourceApi=bindProtectedApi(nativeApi,owner);
     const pending = await prepareSession(
@@ -1621,13 +1635,56 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       ownership.add(result.sessionId);
       pending.session.attached = { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) };
       owner.assert();
+      beforePublish?.();
       sessionConnected(pending.session);
+      attached?.(pending.session);
       ownership.delete(result.sessionId);
     } catch (error) {
       await ownership.closeAll().catch(()=>{});
       disposeTerminal(pending.session);
       throw error;
     }
+  }
+  async function openHerdrTarget(source:LiveSession,name:string,target:HerdrNavigationTarget|undefined,owner:AccessLease,visible:()=>boolean) {
+    const selectedNavigation=navigationState.current[source.id];
+    if(!selectedNavigation)throw new LocalUiError('herdrNavigationChanged');
+    const matchingDisplay=(session:LiveSession)=>session.connected && !session.disposed && !closingSessions.current.has(session.id)
+      && session.hostId===source.hostId && session.destination===source.destination && session.attached?.kind==='herdr' && session.attached.name===name;
+    let destination=matchingDisplay(source)?source:sessionsRef.current.find(matchingDisplay);
+    let adopted=false;
+    const intent={source:source.id,destination:undefined as string|undefined,navigation:selectedNavigation};
+    herdrNavigationIntent.current=intent;
+    const current=()=>mounted.current && herdrNavigationIntent.current===intent && owner.current() && !document.hidden && source.connected && !source.disposed
+      && !closingSessions.current.has(source.id) && currentView.current.view==='terminal'
+      && (currentView.current.activeId===source.id ? visible() && navigationState.current[source.id]===selectedNavigation
+        : adopted && currentView.current.activeId===destination?.id && navigationState.current[destination.id]===selectedNavigation);
+    const assertCurrent=()=>{if(!current())throw new LocalUiError('herdrNavigationChanged');};
+    assertCurrent();
+    try {
+      if(!destination)await attachTmux(source,name,'herdr',undefined,owner,assertCurrent,session=>{
+        destination=session;adopted=true;intent.destination=session.id;
+        setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));
+      });
+      assertCurrent();
+      if(!destination?.connected || destination.disposed || closingSessions.current.has(destination.id))throw new LocalUiError('herdrNavigationChanged');
+      if(target) {
+        const ownedInvoke=bindProtectedInvoke(owner);
+        const snapshot=await ownedInvoke<HerdrTree>('herdr_tree',{sessionId:destination.id,name});
+        assertCurrent();
+        const workspace=snapshot.workspaces.find(row=>row.workspace_id===target.workspace);
+        const tab=target.kind==='workspace'?undefined:snapshot.tabs.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab);
+        const pane=target.kind!=='pane'?undefined:snapshot.panes.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab && row.pane_id===target.pane && row.terminal_id===target.terminal);
+        if(!workspace || (target.kind!=='workspace' && !tab) || (target.kind==='pane' && !pane))throw new LocalUiError('herdrNavigationChanged');
+        const action=target.kind==='workspace'?{type:'focusWorkspace',target:target.workspace}:target.kind==='tab'?{type:'focusTab',target:target.tab}:{type:'focusPane',target:target.pane};
+        await ownedInvoke('herdr_action',{sessionId:destination.id,name,action});
+        assertCurrent();
+      }
+      setActiveId(destination.id);setView('terminal');setSidebar(false);
+    } catch(error) {
+      const cause=error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error);
+      if(adopted && current()) {setView('terminal');setSidebar(false);setError(cause);}
+      throw cause;
+    } finally {if(herdrNavigationIntent.current===intent)herdrNavigationIntent.current=null;}
   }
   const shownHosts = hosts.filter((host) =>
     `${host.name} ${host.hostname} ${host.username}`
@@ -1636,20 +1693,23 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   );
 
   const workspaceRestoreControls = <>
-    <button
+    <div className="workspace-restore-row">
+    <button type="button"
       disabled={restoring || !loaded}
       onClick={() => {setMobileTools(false);void restoreWorkspace();}}
     >
       {restoring ? t("appRestoring") : t("appRestorePreviousWorkspace")}
     </button>
-    <span>{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</span>
-    <button
+    <button type="button" className="icon-button" aria-label={t("muxDetails")} title={t("muxDetails")} aria-expanded={restoreDetails} onClick={() => setRestoreDetails(!restoreDetails)}><Info size={18} aria-hidden="true" /></button>
+    <button type="button" className="icon-button" aria-label={t("appDismiss")} title={t("appDismiss")}
       disabled={restoring}
       onClick={() => {
         setPreviousWorkspace([]);
         persistWorkspace(sessionsRef.current);
       }}
-    >{t("appDismiss")}</button>
+    ><X size={18} aria-hidden="true" /></button>
+    </div>
+    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
   </>;
   return (
     <div className="app-shell">
@@ -1756,6 +1816,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
         </div>
+        {remoteActive && active && <HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/> }
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
           <h3>{t('navigationLiveSessions')}</h3>
           <div className="workspace-live-sessions" role="group" aria-label={t('navigationLiveSessions')}>
@@ -1772,7 +1833,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           }}/></Suspense>}
         </div>}
         {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
-          <AgentPanel key={active.id} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+          <AgentPanel key={active.id} showHerdr={false} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>
         </div>}
@@ -1818,6 +1879,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             )}
           </div>
           <div className="header-right">
+            <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
               className="icon-button mobile-tools"
               aria-label={t("appWorkspaceTools")}
@@ -1977,12 +2039,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal"}
                     reportError={setError}
+                    controlsTarget={terminalControlsTarget}
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
                 ))}
                 {active.connected && view === "usage" && (
                   <>
-                  <AccountUsageDetails model={accountUsage} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  <AccountUsageDetails model={accountUsage} onOpenCompanion={!active.local ? ()=>showNavigation("agents"):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
                   {!active.local && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </>
                 )}
@@ -2167,7 +2230,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {preferences && (
-        <Dialog title={t("appPreferences")} close={() => setPreferences(false)}>
+        <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
           {native && <section aria-label={t('defaultMuxLabel')}>
@@ -2182,7 +2245,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
         </Dialog>
       )}
-      {pushSettings && <Dialog title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
+      {pushSettings && <Dialog mobilePresentation="page" title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
         <Suspense fallback={<p>{t("appLoadingPushSettings")}</p>}><PushSettingsPanel /></Suspense>
       </Dialog>}
 
@@ -2195,12 +2258,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       </Dialog>}
       {native && <NotificationMonitor sessions={sessions.filter(session=>!session.local)} />}
       {inbox && (
-        <Dialog title={t("appNotificationInbox")} close={() => setInbox(false)}>
+        <Dialog mobilePresentation="page" title={t("appNotificationInbox")} close={() => setInbox(false)}>
           <NotificationPanel sessions={sessions.filter(session=>!session.local)} />
         </Dialog>
       )}
       {about && (
-        <Dialog title={t("appAboutLazysh")} close={() => setAbout(false)}>
+        <Dialog mobilePresentation="page" title={t("appAboutLazysh")} close={() => setAbout(false)}>
           <Suspense fallback={<p>{t("appLoadingLicense")}</p>}>
             <AboutPanel />
           </Suspense>
@@ -2252,14 +2315,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {sharing && (
-        <Dialog title={t("appShareableUploads")} close={() => setSharing(false)}>
+        <Dialog mobilePresentation="page" title={t("appShareableUploads")} close={() => setSharing(false)}>
           <Suspense fallback={<p>{t("appLoadingSharing")}</p>}>
             <SharePanel />
           </Suspense>
         </Dialog>
       )}
       {sync && (
-        <Dialog title={t("appEncryptedSync")} close={() => setSync(false)}>
+        <Dialog mobilePresentation="page" title={t("appEncryptedSync")} close={() => setSync(false)}>
           <Suspense fallback={<p>{t("appOpeningSync")}</p>}>
             <SyncPanel onHostsChanged={() => void loadHosts()} />
           </Suspense>

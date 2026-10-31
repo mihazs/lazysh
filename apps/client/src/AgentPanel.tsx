@@ -9,6 +9,7 @@ import HerdrAgentsPanel from './HerdrAgentsPanel';
 import KeepAwakeControl from './KeepAwakeControl';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
 import CompanionInstallPanel from './CompanionInstallPanel';
+import CompanionHooksPanel from './CompanionHooksPanel';
 import './AgentPanel.css';
 
 type AgentState = 'working' | 'needs_attention' | 'done';
@@ -66,7 +67,7 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true }: { sessionId: string;herdrSession?:string;visible?:boolean;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true }: { sessionId: string;herdrSession?:string;visible?:boolean;showHerdr?:boolean;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
   const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const [access]=useState(captureAccess);
@@ -153,10 +154,11 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
     <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
     <ApprovalPanel sessionId={sessionId} visible={panelVisible} />
     <div className="tool-bar"><h3>{t('agentsTitle')}</h3><button className="subtle-button" disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={15} />{t('agentsRefresh')}</button></div>
-    <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />
+    {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
     <p className="agent-note">{t('agentsReportedHint')}</p>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
     <CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{request.current++;snapshotFlight.current=null;void refresh();}}/>
+    <CompanionHooksPanel sessionId={sessionId} visible={panelVisible}/>
     <div className="agent-discovery">
       <label className="agent-search">{t('agentsSearch')}<input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label>
       <div className="agent-filters" role="group" aria-label={t('agentsFilterStatus')}>

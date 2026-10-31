@@ -112,3 +112,32 @@ test('explicit Zellij tab and pane gesture actions persist without changing defa
   await page.getByRole('button',{name:'Reset gestures',exact:true}).click();
   for(const [label] of bindings) await expect(page.getByRole('combobox',{name:label,exact:true})).toHaveValue('none');
 });
+
+
+test('long settings use a mobile page with a persistent close action and short choices stay sheets',async({page},testInfo)=>{
+  await page.goto('/'); await preferences(page);
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  const close=dialog.getByRole('button',{name:'Close Preferences',exact:true});
+  const phone=testInfo.project.name==='phone';
+  if(phone){
+    for(const height of [844,420]){
+      await page.setViewportSize({width:393,height});
+      const bounds=(await dialog.boundingBox())!;
+      expect(bounds.x).toBe(0);expect(bounds.y).toBe(0);expect(bounds.width).toBe(393);expect(bounds.height).toBe(height);
+      await dialog.locator('.dialog-content').evaluate(element=>{element.scrollTop=element.scrollHeight;});
+      await expect(close).toBeInViewport();
+      expect(await dialog.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+    }
+    await page.setViewportSize({width:393,height:844});
+  }else{
+    const bounds=(await dialog.boundingBox())!; expect(bounds.width).toBe(480);expect(bounds.x).toBeGreaterThan(0);expect(bounds.y).toBeGreaterThan(0);
+  }
+  await page.screenshot({path:testInfo.outputPath('settings-presentation.png')});
+  await close.click(); await page.keyboard.press('Control+k');
+  const choices=page.getByRole('dialog',{name:'Jump to a host',exact:true});
+  await expect(choices).toBeVisible();
+  expect(await choices.locator('..').getAttribute('data-mobile-presentation')).toBe('sheet');
+  if(phone){const bounds=(await choices.boundingBox())!;expect(bounds.y).toBeGreaterThan(0);expect(bounds.y+bounds.height).toBeLessThan(844);}
+  await page.screenshot({path:testInfo.outputPath('choice-sheet.png')});
+  await page.keyboard.press('Escape');await expect(choices).toHaveCount(0);
+});

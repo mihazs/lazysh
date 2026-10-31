@@ -39,9 +39,8 @@ export function readWorkspace(): SessionIntent[] {
         typeof item.hostId === "string" &&
         item.hostId.length > 0 &&
         item.hostId.length <= 100 &&
-        !(item.mosh && item.attached) &&
         !(item.et && (item.mosh || item.attached)) &&
-        !(item.auto && (item.mosh || item.et || item.attached)) &&
+        !(item.auto && (item.mosh || item.et)) &&
         (!item.auto || (validMosh(item.auto.mosh) && validEt(item.auto.et))) &&
         (!item.et || validEt(item.et)) &&
         (!item.mosh || validMosh(item.mosh)) &&
@@ -78,7 +77,7 @@ export function saveWorkspace(sessions: (SessionIntent & {attached?: SessionAtta
               },
             }
           : {}),
-        ...(!auto && attached
+        ...(attached
           ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
           : {}),
       })),

@@ -26,14 +26,14 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
-const FILE_LIMIT: u64 = 1024 * 1024;
+pub(crate) const FILE_LIMIT: u64 = 1024 * 1024;
 const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
-const OP_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
-pub(crate) use tests::guard_admission_fixture;
+pub(crate) use tests::{guard_admission_fixture, GuardAdmissionFixture};
 #[cfg(all(test, unix))]
 #[path = "tmux_jump_fixture.rs"]
 mod tmux_jump_fixture;
@@ -1956,12 +1956,14 @@ async fn spawn_terminal(
     Ok(Connected { session_id: id })
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn connect_mosh(
     lease: AccessLease,
 
     state: State<'_, AppState>,
     session_id: String,
     options: crate::mosh::Options,
+    entry: Option<crate::multiplexer::Entry>,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
@@ -1970,7 +1972,17 @@ pub async fn connect_mosh(
         .run(async {
             let parent = state.session(&session_id).await?;
             crate::mosh::check_size(cols, rows)?;
-            let bootstrap = crate::mosh::bootstrap(&parent, &lease, options).await?;
+            let (bootstrap, startup) = match entry {
+                Some(entry) => {
+                    let (bootstrap, startup) =
+                        crate::mosh::bootstrap_entry(&parent, &lease, options, entry).await?;
+                    (bootstrap, Some(startup))
+                }
+                None => (
+                    crate::mosh::bootstrap(&parent, &lease, options).await?,
+                    None,
+                ),
+            };
             #[cfg(any(
                 target_os = "linux",
                 target_os = "macos",
@@ -1984,6 +1996,7 @@ pub async fn connect_mosh(
                     parent,
                     events,
                     NativeTerminalKind::Mosh,
+                    startup,
                     crate::mosh::check_size,
                     move |access, input, cancel, initial, output, ready| {
                         tauri::async_runtime::spawn_blocking(move || {
@@ -2003,7 +2016,7 @@ pub async fn connect_mosh(
                 target_os = "ios"
             )))]
             {
-                let _ = (bootstrap, events);
+                let _ = (bootstrap, startup, events);
                 Err(SshError::new(
                     "mosh_unsupported",
                     "Mosh is not available on this platform",
@@ -2029,12 +2042,14 @@ impl NativeTerminalKind {
         }
     }
 }
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_native_terminal<Driver>(
     state: &AppState,
     creation: AccessLease,
     parent: Arc<Session>,
     events: Channel<SshEvent>,
     kind: NativeTerminalKind,
+    startup: Option<crate::mosh::EntryStartup>,
     validate_size: fn(u32, u32) -> Result<()>,
     driver: Driver,
 ) -> Result<Connected>
@@ -2056,6 +2071,7 @@ where
     let (input, input_rx) = mpsc::channel(32);
     let (cancel, cancellation) = watch::channel(false);
     let name = kind.name();
+    let entry_requested = startup.is_some();
     let mut session = Session::new(
         parent.handle.clone(),
         input,
@@ -2143,31 +2159,45 @@ where
         retiring.lock().await.remove(&task_id);
     });
     let mut parent_cancel = parent.cancel.subscribe();
-    let connected = if *parent_cancel.borrow() {
+    let mut child_cancel = session.cancel.subscribe();
+    let connected = if *parent_cancel.borrow() || *child_cancel.borrow() {
         Err(SshError::new(
             "cancelled",
             format!("{name} connection was cancelled"),
         ))
     } else {
         tokio::select! {
+            biased;
             _ = parent_cancel.changed() => Err(SshError::new("cancelled", format!("{name} connection was cancelled"))),
-            result = response => match result { Ok(response) => response, Err(_) => Err(SshError::new("terminal_worker", format!("{name} worker did not complete the connection"))) },
+            _ = child_cancel.changed() => Err(SshError::new("cancelled", format!("{name} connection ended before startup completed"))),
+            result = async {
+                response.await.map_err(|_| SshError::new("terminal_worker", format!("{name} worker did not complete the connection")))??;
+                if let Some(startup) = startup { startup.bind(&parent, &session, &session.creation).await?; }
+                Ok(())
+            } => result,
         }
     };
+    // A ready receipt can complete without yielding. Recheck current cancellation
+    // before publishing; watch subscriptions do not report already-seen values.
+    let connected = connected.and_then(|()| {
+        if *parent.cancel.borrow() || *session.cancel.borrow() {
+            Err(SshError::new(
+                "cancelled",
+                format!("{name} connection was cancelled"),
+            ))
+        } else {
+            Ok(())
+        }
+    });
     if let Err(error) = connected {
         let _ = session.cancel.send(true);
         session.output_credits.close();
         state.sessions.lock().await.remove(&id);
-        return Err(error);
-    }
-    if *parent.cancel.borrow() {
-        let _ = session.cancel.send(true);
-        session.output_credits.close();
-        state.sessions.lock().await.remove(&id);
-        return Err(SshError::new(
-            "cancelled",
-            format!("{name} connection was cancelled"),
-        ));
+        return Err(if entry_requested {
+            crate::mosh::entry_failed()
+        } else {
+            error
+        });
     }
     pending.armed = false;
     Ok(Connected { session_id: id })
@@ -5937,6 +5967,7 @@ mod tests {
                 app.state(),
                 id.clone(),
                 options,
+                None,
                 80,
                 24,
                 events,
@@ -6953,6 +6984,66 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn already_cancelled_native_child_cannot_be_admitted_by_buffered_entry_receipt() {
+        let access = super::test_support::unlocked_access();
+        let lease = super::test_support::ready_lease(&access);
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        fixture.quiet();
+        let channel = fixture.channel(&lease).await;
+        channel.exec(true, "owned private receipt").await.unwrap();
+        let startup = crate::mosh::EntryStartup::test_ordinary_receipt(channel);
+        let (_directory, state) = fixture_state();
+        let registry = state.sessions.clone();
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let observed = captured.clone();
+        let (release, held) = tokio::sync::oneshot::channel();
+        let (events, _receiver) = super::test_support::json_events();
+        let result = spawn_native_terminal(
+            &state,
+            lease,
+            fixture.session.clone(),
+            events,
+            NativeTerminalKind::Fixture,
+            Some(startup),
+            check_size,
+            move |_access, input, _cancel, _initial, output, ready| {
+                let child = registry
+                    .try_lock()
+                    .unwrap()
+                    .values()
+                    .next()
+                    .unwrap()
+                    .clone();
+                child.cancel.send_replace(true);
+                *observed.lock().unwrap() = Some(child);
+                ready.send(Ok(())).unwrap();
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    let _output = output;
+                    held.await.unwrap();
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        release.send(()).unwrap();
+        let child = captured.lock().unwrap().take().unwrap();
+        timeout(Duration::from_secs(2), async {
+            let mut finished = child.finished.subscribe();
+            while !*finished.borrow_and_update() {
+                finished.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        fixture.closed().await;
+        assert!(state.sessions.lock().await.is_empty());
+        assert_eq!(
+            result.err().expect("cancelled display was admitted").kind(),
+            "mosh_entry_startup_failed"
+        );
+    }
+    #[tokio::test]
     async fn naturally_finished_native_worker_releases_background_hold_before_final_output_resumes()
     {
         let TerminalFixture {
@@ -6985,6 +7076,7 @@ mod tests {
             parent.clone(),
             events,
             NativeTerminalKind::Fixture,
+            None,
             check_size,
             move |_access, input, _cancel, _initial, output, ready| {
                 tauri::async_runtime::spawn(async move {
@@ -7086,6 +7178,7 @@ mod tests {
                 parent,
                 Channel::new(|_| Ok(())),
                 NativeTerminalKind::Fixture,
+                None,
                 check_size,
                 move |_access, input, mut cancellation, _initial, output, ready| {
                     tauri::async_runtime::spawn(async move {
@@ -7333,6 +7426,7 @@ mod tests {
                 Ok(())
             }),
             NativeTerminalKind::Fixture,
+            None,
             check_size,
             move |_access, input, mut cancellation, _initial, output, ready| {
                 tauri::async_runtime::spawn(async move {

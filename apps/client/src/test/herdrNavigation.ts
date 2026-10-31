@@ -1,0 +1,2 @@
+/** Synthetic selected-server metadata; never grants terminal input authority. */
+export const herdrNavigationTree={workspaces:[{workspace_id:'w2E',label:'Work',focused:true,agent_status:'working'}],tabs:[{tab_id:'w2E:tC',workspace_id:'w2E',label:'Code',number:1,focused:true,agent_status:'working'}],panes:[{pane_id:'w2E:pF',terminal_id:'term-one',workspace_id:'w2E',tab_id:'w2E:tC',cwd:'/work/codex',focused:true,agent_status:'working'}],agents:[{terminal_id:'term-one',name:'builder',agent:'codex',workspace_id:'w2E',tab_id:'w2E:tC',pane_id:'w2E:pF',agent_status:'working'}]};

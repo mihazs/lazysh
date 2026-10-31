@@ -56,22 +56,7 @@ fn text(value: &str, max: usize) -> Result<()> {
 }
 
 fn target(value: &str, kind: Option<char>) -> Result<()> {
-    let mut parts = value.split(':');
-    let workspace = parts.next().unwrap_or("");
-    let valid = |part: &str, prefix| {
-        part.starts_with(prefix)
-            && part.len() > 1
-            && part[1..]
-                .bytes()
-                .all(|b| b"123456789ABCDEFGHJKMNPQRSTVWXYZ0".contains(&b))
-    };
-    if value.len() > 50
-        || !valid(workspace, 'w')
-        || match kind {
-            None => parts.next().is_some(),
-            Some(kind) => !parts.next().is_some_and(|p| valid(p, kind)) || parts.next().is_some(),
-        }
-    {
+    if !lazysh_common::valid_herdr_id(value, kind) {
         return Err(SshError::new(
             "invalid_target",
             "Invalid exact Herdr target",
@@ -202,6 +187,9 @@ pub enum HerdrAction {
     FocusTab {
         target: String,
     },
+    FocusPane {
+        target: String,
+    },
     FocusAgent {
         target: String,
     },
@@ -264,6 +252,15 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
             target(value, Some('t'))?;
             format!("tab focus {}", quote(value))
         }
+        HerdrAction::FocusPane { target: value } => {
+            target(value, Some('p'))?;
+            text(session, 200)?;
+            return Ok(format!(
+                "lazysh-agent herdr-focus-pane --session {} --pane {}",
+                quote(session),
+                quote(value)
+            ));
+        }
         HerdrAction::FocusAgent { target: value } => {
             target(value, Some('p'))?;
             format!("agent focus {}", quote(value))
@@ -312,12 +309,60 @@ pub async fn herdr_action(
     access: AccessLease,
 ) -> crate::ssh::AccessResult<()> {
     access
-        .run(crate::multiplexer::execute_action(
-            &state,
-            &access,
-            &session_id,
-            action_command(&name, &action),
-        ))
+        .run(async {
+            let command = action_command(&name, &action)?;
+            let session = state.session(&session_id).await?;
+            let pane = match &action {
+                HerdrAction::FocusPane { target } => Some(target.as_str()),
+                _ => None,
+            };
+            let command = if pane.is_some() {
+                crate::companion::required_command(&session, command, "lazysh-herdr-companion-required", &access).await?
+            } else {
+                command
+            };
+            let focus = matches!(
+                action,
+                HerdrAction::FocusWorkspace { .. }
+                    | HerdrAction::FocusTab { .. }
+                    | HerdrAction::FocusPane { .. }
+                    | HerdrAction::FocusAgent { .. }
+            );
+            let retained = if focus {
+                crate::herdr_guard::retire_for_view(&session, &access)
+                    .await?
+                    .map(|permit| permit as std::sync::Arc<dyn Send + Sync>)
+            } else {
+                None
+            };
+            let output = crate::ssh::exec_bounded(
+                &session,
+                command,
+                &access,
+                crate::ssh::OP_TIMEOUT,
+                crate::ssh::FILE_LIMIT as usize,
+                retained,
+            )
+            .await?;
+            if let Some(pane) = pane {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Focused {
+                    schema_version: u8,
+                    status: String,
+                    pane_id: String,
+                }
+                if output.trim()=="lazysh-herdr-companion-required" {return Err(SshError::new("herdr_focus_companion_required","Install or update the companion from Agents for exact Herdr pane navigation"));}
+                let reply: Focused = serde_json::from_str(&output)?;
+                if reply.schema_version != 1 || reply.status != "focused" || reply.pane_id != pane {
+                    return Err(SshError::new(
+                        "invalid_output",
+                        "Invalid exact Herdr focus reply",
+                    ));
+                }
+            }
+            Ok(())
+        })
         .await
 }
 
@@ -389,6 +434,16 @@ mod tests {
             assert_eq!(tree.agents.unwrap()[0].pane_id, pane);
             assert!(target(&workspace, None).is_ok());
             assert!(target(&tab, Some('t')).is_ok());
+            assert_eq!(
+                action_command(
+                    "owned",
+                    &HerdrAction::FocusPane {
+                        target: pane.clone()
+                    }
+                )
+                .unwrap(),
+                format!("lazysh-agent herdr-focus-pane --session 'owned' --pane '{pane}'")
+            );
             assert_eq!(
                 action_command(
                     "owned",

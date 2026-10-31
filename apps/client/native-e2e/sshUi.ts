@@ -28,7 +28,7 @@ export async function enterOwnedKey(gui:NativeGui,ssh:SshFixture,connect:Termina
   await (await connect.$(`button=${recovery?'Reconnect uploads':'Connect'}`)).click();
 }
 
-export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh'='ssh',port=ssh.port) {
+export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh'='ssh',port=ssh.port,entry?:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>) {
   const browser=gui.browser!,owner=await gui.appOwner();
   gui.stage='owned SSH host editor';
   const add=await browser.$('button[aria-label="Add host"]');await add.waitForDisplayed({timeout:30_000});await add.click();
@@ -37,6 +37,10 @@ export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|
   await (await editor.$('input[placeholder="workstation.local"]')).setValue('127.0.0.1');
   await (await editor.$('label.port-field input')).setValue(String(port));
   await (await editor.$('input[placeholder="Your SSH username"]')).setValue(ssh.username);
+  if(entry) {
+    await (await (await editor.$('label*=Default multiplexer')).$('select')).selectByAttribute('value',entry.kind);
+    await (await editor.$('input[maxlength="200"]')).setValue(entry.name);
+  }
   await (await (await editor.$('label*=Preferred transport')).$('select')).selectByAttribute('value',transport);
   await (await editor.$('button=Save host')).click();await editor.waitForDisplayed({reverse:true});
   gui.stage='owned SSH manual key';
@@ -60,7 +64,7 @@ export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|
     return terminal.isDisplayed();
   },{timeout:20_000,timeoutMsg:'Owned SSH terminal was not displayed'});
   // Mosh starts the login shell; its caller proves readiness with the fresh challenge.
-  if(transport==='ssh')await browser.waitUntil(async()=>(await terminal.getText()).includes(ssh!.prompt),{timeout:20_000,timeoutMsg:'Owned SSH prompt was not observed'});
+  if(transport==='ssh' && !entry)await browser.waitUntil(async()=>(await terminal.getText()).includes(ssh!.prompt),{timeout:20_000,timeoutMsg:'Owned SSH prompt was not observed'});
   expect(await gui.appOwner()).toEqual(owner);
   expect(ssh.challenge).not.toContain(ssh.expected);
   return {browser,terminal,owner};
@@ -79,14 +83,14 @@ export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Te
   expect(gui.connections).toBe(0);
 }
 
-export async function disconnectOwnedSsh(gui:NativeGui,terminal:Terminal) {
+export async function disconnectOwnedSsh(gui:NativeGui,terminal:Terminal,name='Owned SSH GUI host') {
   const browser=gui.browser!;
   gui.stage='owned SSH explicit disconnect';
-  await (await browser.$('button[aria-label="End Owned SSH GUI host connection"]')).click();
+  await (await browser.$(`button[aria-label=${JSON.stringify(`End ${name} connection`)}]`)).click();
   await terminal.waitForDisplayed({reverse:true});
 }
 
-async function cleanupOwnedSshGui(window:NativeGui|undefined,server:SshFixture|undefined,failed:boolean,captureSafe:boolean) {
+async function cleanupOwnedSshGui(window:NativeGui|undefined,server:Pick<SshFixture,'stop'>|undefined,failed:boolean,captureSafe:boolean) {
   if(failed && window) {
     console.error(`Owned SSH GUI failure stage: ${window.stage}`);
     if(captureSafe)try{await window.screenshot();}catch{console.error('Owned SSH GUI screenshot unavailable');}
@@ -98,7 +102,7 @@ async function cleanupOwnedSshGui(window:NativeGui|undefined,server:SshFixture|u
 }
 
 export function ownedSshGui() {
-  const fixture:{gui?:NativeGui;ssh?:SshFixture;captureSafe:boolean}={captureSafe:false};
+  const fixture:{gui?:NativeGui;ssh?:Pick<SshFixture,'stop'>;captureSafe:boolean}={captureSafe:false};
   afterEach(async context=>{
     const {gui,ssh,captureSafe}=fixture;fixture.gui=undefined;fixture.ssh=undefined;
     await cleanupOwnedSshGui(gui,ssh,context.task.result?.state==='fail',captureSafe);

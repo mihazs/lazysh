@@ -240,9 +240,11 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
 // LatinIME can acknowledge a visible IME window while hardware input suppresses
 // its keyboard view. Admit real software input only on the owned test emulator,
 // and restore the exact previous preference before package/fixture cleanup.
-export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000) {
+// The opt-in Google profile is calibrated separately; ordinary CI stays AOSP-only.
+export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000,profile:'aosp-latin'|'google-api36-latin'='aosp-latin') {
   if(!/^emulator-[0-9]{4,5}$/.test(serial) || !Number.isSafeInteger(budget) || budget<1 || budget>5000)
     throw new Error('Owned software keyboard requires an explicit emulator and bounded budget');
+  if(!['aosp-latin','google-api36-latin'].includes(profile))throw new Error('Owned software keyboard profile is unsupported');
   const key='show_ime_with_hard_keyboard';
   const deadline=performance.now()+budget;
   const probe=async(args:string[],until:number,stage:string)=>{
@@ -250,11 +252,22 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
     if(result.state!=='available')throw new Error(`Owned software keyboard unavailable: ${stage}`);
     return result.output;
   };
-  const latin=(value:string)=>['com.android.inputmethod.latin/.LatinIME','com.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'].includes(value);
+  const latin=(value:string)=>(profile==='aosp-latin'
+    ? ['com.android.inputmethod.latin/.LatinIME','com.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME']
+    : ['com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME']).includes(value);
   if(!latin(await probe(['settings','get','secure','default_input_method'],deadline,'default IME')))
-    throw new Error('Owned software keyboard requires the image AOSP LatinIME');
+    throw new Error(`Owned software keyboard requires the image ${profile==='aosp-latin'?'AOSP':'Google'} LatinIME`);
   const installed=await probe(['ime','list','-s'],deadline,'installed IME');
   if(!installed.split(/\r?\n/).some(latin))throw new Error('Owned software keyboard image IME is not installed');
+  if(profile==='google-api36-latin') {
+    const [sdk,model,system]=await Promise.all([
+      probe(['getprop','ro.build.version.sdk'],deadline,'Google image SDK'),
+      probe(['getprop','ro.product.model'],deadline,'Google image model'),
+      probe(['pm','list','packages','-s','com.google.android.inputmethod.latin'],deadline,'Google system keyboard'),
+    ]);
+    if(sdk!=='36' || model!=='sdk_gphone64_x86_64' || !system.split(/\r?\n/).includes('package:com.google.android.inputmethod.latin'))
+      throw new Error('Owned software keyboard Google API36 system image identity was not verified');
+  }
   const get=(until:number)=>probe(['settings','get','secure',key],until,'preference');
   const previous=await get(deadline);
   if(!['0','1','null'].includes(previous))throw new Error('Owned software keyboard preference is unrecognized');
@@ -284,11 +297,12 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
     await androidSshCleanup(true,[['software-keyboard',restore]]);
     throw error;
   }
-  return {observation:{ime:'aosp-latin' as const,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
+  return {observation:{ime:profile,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false) {
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(herdrMosh && (!herdr || companion || moshBackground))throw new Error('Owned Mosh Herdr requires its separate guarded fixture');
   if(moshBackground && (herdr || companion))throw new Error('Owned Android Mosh background mode must be isolated');
   if(companion && (herdr || process.arch!=='x64' || process.env.GITHUB_ACTIONS!=='true' || process.env.RUNNER_ENVIRONMENT!=='github-hosted'))throw new Error('Published Android companion acceptance requires its explicit disposable hosted runner');
   const serial=process.env.ANDROID_SERIAL;
@@ -312,7 +326,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let primary=false;
   const shell=(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args]);
   try {
-    if(moshBackground) {
+    if(moshBackground || herdrMosh) {
       const server=join(fixture.directory,'bin/mosh-server');
       if((await stat(server)).size>64*1024*1024)throw new Error('Owned Mosh server binary exceeds bound');
       const bytes=await readFile(server);
@@ -328,15 +342,17 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       console.log(`Public Android companion receipt version=${evidence.version} source=${evidence.source} sha256=${evidence.sha256} bytes=${evidence.bytes}`);
     }
     // The host allowlist key must match the concrete device port removed in cleanup.
-    if(!moshBackground) {
+    if(!moshBackground && !herdrMosh) {
       await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
       reverse=String(fixture.port);
     }
-    keyboard=await ownedSoftwareKeyboard(adb,serial);
+    const keyboardProfile=process.env.LAZYSH_ANDROID_KEYBOARD_PROFILE??'aosp-latin';
+    if(keyboardProfile!=='aosp-latin' && keyboardProfile!=='google-api36-latin')throw new Error('Owned software keyboard profile is unsupported');
+    keyboard=await ownedSoftwareKeyboard(adb,serial,5000,keyboardProfile);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
     if(moshBackground) {
       moshWitness=observeAndroidMoshBackground(fixture);
     }
@@ -348,9 +364,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      herdr?'-PlazyshHerdrAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
+      herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):companion?'-PlazyshCompanionAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
       ...(herdr?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr;
     try {await gradle.finish('actual Android SSH UI instrumentation',600_000);}
@@ -363,11 +379,12 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
     }
     if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
+    if(herdrMosh && await readFile(join(fixture.directory,'mosh-bootstraps'),'utf8')!=='bootstrap\n')throw new Error('Owned Mosh Herdr entry must bootstrap exactly once');
     console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;
     try {
-      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':companion?'companion-ui':moshBackground?'mosh-background-ui':'ssh-ui');
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):companion?'companion-ui':moshBackground?'mosh-background-ui':'ssh-ui');
       const crash=await crashes?.stop();
       // Sample before an inspection adb command could implicitly restart its server.
       const hostServerAfter=await hostAdbServerIdentity(adb);

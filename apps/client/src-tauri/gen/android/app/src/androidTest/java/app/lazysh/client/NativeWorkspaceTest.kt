@@ -30,6 +30,7 @@ import android.webkit.WebView
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
@@ -64,6 +65,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -574,6 +576,21 @@ class NativeWorkspaceTest {
             // Metadata must never replace the original assertion/type/cause.
             runCatching { failure.addSuppressed(AssertionError("Native typing timing: ${timing.report(System.nanoTime())}")) }
             throw failure
+        }
+    }
+
+    @Test fun systemBarsContrastWithTheNativeWindowBackground() {
+        NativeActivityFixture.scenario.onActivity { activity ->
+            val background = activity.window.decorView.background as? android.graphics.drawable.ColorDrawable
+            assertNotNull("Native window must retain its opaque color background", background)
+            val color = background!!.color
+            assertEquals("System bars expose the native background", activity.getColor(R.color.ic_launcher_background), color)
+            assertEquals("Native background must be opaque", 255, android.graphics.Color.alpha(color))
+            assertTrue("Light icons must contrast with the native background",
+                androidx.core.graphics.ColorUtils.calculateContrast(android.graphics.Color.WHITE, color) >= 4.5)
+            val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+            assertFalse("Status bar icons must remain light over navy", controller.isAppearanceLightStatusBars)
+            assertFalse("Navigation bar icons must remain light over navy", controller.isAppearanceLightNavigationBars)
         }
     }
 
@@ -1339,7 +1356,41 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String) {
+    private fun herdrConfirmationObservation(scenario: ActivityScenario<MainActivity>, expectedChild: String, expectedDraft: String): (Long) -> String {
+        val expression = """
+            (()=>{
+              const expectedChild=${JSONObject.quote(expectedChild)},expectedDraft=${JSONObject.quote(expectedDraft)};
+              const regions=Array.from(document.querySelectorAll("section[aria-label='Terminal input']"));
+              const buttons=regions.flatMap(region=>Array.from(region.querySelectorAll('button')));
+              const choose=buttons.filter(button=>button.textContent.trim()==='Choose terminal destination');
+              const confirm=buttons.filter(button=>button.textContent.trim()==='Confirm this destination');
+              const send=buttons.filter(button=>button.textContent.trim()==='Send to terminal');
+              const alerts=regions.flatMap(region=>Array.from(region.querySelectorAll('[role=alert]')));
+              const categories=new Map([
+                ['Guarded input is unavailable for this Herdr terminal. Use Stage or open the terminal.','unavailable'],
+                ['The terminal destination changed. Confirm it again.','stale'],
+                ['This source or input is unsupported. Use Stage or the terminal.','invalid'],
+                ['Send accepts up to 4,096 UTF-8 bytes, including line feeds and tabs. Other control characters are unsupported. Use Stage or the terminal for other drafts.','invalid'],
+                ['Another terminal input is in progress. Confirm the destination again before trying.','busy'],
+                ['The terminal returned an unsupported destination or input response. Choose the destination again.','invalidReply'],
+                ['Queue admission was not confirmed. Input may have arrived and was not resent. Inspect the terminal before confirming again.','uncertain']
+              ]);
+              const footer=document.querySelector('.workspace-footer > span:last-child');
+              return {
+                regions:Math.min(8,regions.length),choose:Math.min(8,choose.length),confirm:Math.min(8,confirm.length),send:Math.min(8,send.length),
+                chooseDisabled:choose.length>0&&choose.every(button=>button.disabled===true),
+                pending:regions.some(region=>Array.from(region.querySelectorAll('[role=status]')).some(node=>node.textContent==='Waiting for the terminal response…')),
+                errorPresent:alerts.length>0,error:alerts.length===0?'none':alerts.length===1?(categories.get(alerts[0].textContent)||'other'):'other',
+                ownedChildDisconnected:Array.from(document.querySelectorAll('.session-tabs [role=tab]')).some(tab=>tab.textContent.trim()===expectedChild&&Boolean(tab.querySelector('.status-idle'))),
+                moshFooter:Boolean(footer&&Array.from(footer.childNodes).some(node=>node.nodeType===3&&node.textContent.trim()==='Mosh')),
+                draftMatches:document.querySelector('form.chat-composer textarea')?.value===expectedDraft
+              };
+            })()
+        """
+        return { remaining -> evaluateIfPresent(scenario, expression, remaining) ?: "unavailable" }
+    }
+
+    private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String, alreadyAttached: Boolean = false) {
         val name = herdr.getString("name")
         val transcript = herdr.getString("transcript")
         val record = herdr.getString("record")
@@ -1361,12 +1412,14 @@ class NativeWorkspaceTest {
             typeInto(scenario, selector, value)
             closeSoftKeyboard()
         }
-        sessionView(scenario, "Sessions")
-        awaitDocument(scenario, "owned Herdr available", hasButton("List herdr sessions"))
-        click("List herdr sessions")
-        awaitDocument(scenario, "owned Herdr listed", hasButton("Attach herdr $name"))
-        click("Attach herdr $name")
-        awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
+        if (!alreadyAttached) {
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "owned Herdr available", hasButton("List herdr sessions"))
+            click("List herdr sessions")
+            awaitDocument(scenario, "owned Herdr listed", hasButton("Attach herdr $name"))
+            click("Attach herdr $name")
+            awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
+        }
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
@@ -1379,7 +1432,8 @@ class NativeWorkspaceTest {
         assertEquals("Native paste must preserve the exact draft", "true", evaluate(scenario,
             "document.querySelector('form.chat-composer textarea')?.value===${JSONObject.quote(draft)}"))
         click("Choose terminal destination")
-        awaitDocument(scenario, "owned Herdr confirmation", hasButton("Confirm this destination"))
+        awaitDocument(scenario, "owned Herdr confirmation", hasButton("Confirm this destination"),
+            herdrConfirmationObservation(scenario, "$parent / $name", draft))
         assertEquals("Preparation alone must not enable Send", "false", evaluate(scenario, hasButton("Send to terminal")))
         click("Confirm this destination")
         awaitDocument(scenario, "explicit owned Herdr binding", hasButton("Send to terminal"))
@@ -1395,9 +1449,11 @@ class NativeWorkspaceTest {
         awaitDocument(scenario, "source edit retires guarded controls", "!document.querySelector(${JSONObject.quote(region)})")
         replace(path, transcript)
         assertEquals("Returning to the source must not restore a confirmation", "false", evaluate(scenario, hasButton("Send to terminal")))
-        val child = "button[aria-label='Disconnect $parent / $name']"
-        onWebView().withElement(findElement(Locator.CSS_SELECTOR, child)).perform(webClick())
-        awaitDocument(scenario, "owned Herdr child disconnected", "document.querySelectorAll('[role=tab]').length===1")
+        if (!alreadyAttached) {
+            val child = "button[aria-label='Disconnect $parent / $name']"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, child)).perform(webClick())
+            awaitDocument(scenario, "owned Herdr child disconnected", "document.querySelectorAll('[role=tab]').length===1")
+        }
         println("lazysh guarded Herdr Chat: real packaged UI/companion/native SSH preparation, confirmation, queue acknowledgement and source retirement completed")
     }
 
@@ -1459,6 +1515,7 @@ class NativeWorkspaceTest {
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
+    @Test fun ownedMoshDefaultHerdrChatThroughRealUi() = ownedSshUi(true, requireHerdrMosh = true)
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
 
@@ -1641,10 +1698,10 @@ class NativeWorkspaceTest {
         }
         fun send(command: String) {
             if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true")
-                onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Compose']")).perform(webClick())
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Compose']")).perform(webClick())
             pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
             closeSoftKeyboard()
-            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Paste draft']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Paste draft']")).perform(webClick())
             closeSoftKeyboard()
             onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
         }
@@ -1749,7 +1806,9 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false) {
+        require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
+        val useMosh = requireMoshBackground || requireHerdrMosh
         require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
@@ -1772,9 +1831,11 @@ class NativeWorkspaceTest {
         val fixture = try { JSONObject(String(bytes, Charsets.UTF_8)) }
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
         if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name").isNotEmpty()) { "Owned Herdr fixture required" }
+        require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
         val name = "Android SSH $nonce"
+        val connectedName = if (requireHerdrMosh) "$name / ${fixture.getJSONObject("herdr").getString("name")}" else name
         require(fixture.getString("name") == name && fixture.getInt("port") in 1..65535)
         val privateKey = fixture.getString("privateKey")
         require(privateKey.length in 1..8192) { "Invalid owned identity size" }
@@ -1797,14 +1858,14 @@ class NativeWorkspaceTest {
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val label = "lazysh-ui-ssh-$nonce"
         fun clickButton(text: String) {
-            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$text']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH,
+                "//button[@aria-label='$text' or (not(@aria-label) and normalize-space(text())='$text')]")).perform(webClick())
         }
         fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
-        fun selectTransport() {
+        fun selectOwnedOption(selector: String, value: String) {
             closeSoftKeyboard()
-            val selector = "[role=dialog] select:has(option[value='ssh'])"
-            assertEquals("Exactly one transport control must offer SSH", "1", evaluate(scenario,
+            assertEquals("Owned select control must be unique", "1", evaluate(scenario,
                 "document.querySelectorAll(${JSONObject.quote(selector)}).length"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webScrollIntoView())
             // A DOM click atom does not activate Chromium's native select popup.
@@ -1850,17 +1911,17 @@ class NativeWorkspaceTest {
                     assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
                     floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
                 }, Press.FINGER))
-                val transportLabel = if (!requireMoshBackground) "SSH" else {
+                val transportLabel = if (value == "mosh") {
                     val labels = JSONArray(evaluate(scenario,
                         "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value=mosh]")})).map(x=>x.label)"))
                     moshTransportLabel((0 until labels.length()).map { labels.getString(it) })
-                }
+                } else if (value == "herdr") "Herdr" else "SSH"
                 val option = onView(withText(transportLabel)).inRoot(isDialog())
                 option.check(matches(isDisplayed()))
                 println("lazysh SSH UI: native transport chooser ready")
                 option.perform(click())
                 assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
-                    "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(if (requireMoshBackground) "mosh" else "ssh")}"))
+                    "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(value)}"))
                 println("lazysh SSH UI: native transport selected")
             } catch (failure: Throwable) {
                 tapFailure = failure
@@ -1883,6 +1944,7 @@ class NativeWorkspaceTest {
                 }
             }
         }
+        fun selectTransport() = selectOwnedOption("[role=dialog] select:has(option[value='ssh'])", if (useMosh) "mosh" else "ssh")
         fun verifyCompanionInstallation() {
             val companion = fixture.getJSONObject("companion")
             val version = companion.getString("version")
@@ -1916,13 +1978,15 @@ class NativeWorkspaceTest {
                 if (evaluate(scenario, "document.querySelector('$panel')?.open===true") != "true")
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$panel summary")).perform(webScrollIntoView()).perform(webClick())
                 val action = if (reused) "Update companion" else "Install companion"
-                val button = onWebView().withElement(findElement(Locator.XPATH,
-                    "//details[contains(@class,'companion-install')]//button[normalize-space(.)='$action']"))
-                button.perform(webScrollIntoView())
-                awaitDocument(scenario, "owned companion action ready", workspaceButtonVisible(panel, action) +
-                    " && Array.from(document.querySelectorAll('$panel button')).some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled)")
-                button.perform(webClick())
                 val expected = if (reused) "reused" else "installed"
+                println("lazysh companion action: iteration=$expected boundary=beforeAction")
+                val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
+                    "$panel > .tool-bar > button"))
+                button.perform(webScrollIntoView())
+                awaitDocument(scenario, "owned companion $expected action ready", workspaceButtonVisible(panel, action) +
+                    " && Array.from(document.querySelectorAll('$panel > .tool-bar > button')).some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled)" +
+                    " && document.querySelector('$panel')?.getAttribute('data-install-outcome')===${JSONObject.quote(if(reused) "installed" else "idle")}")
+                button.perform(webClick())
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(245)
                 var phase = "unavailable"; var failure = "unavailable"; var outcome = "unavailable"; var reason = "unavailable"
                 var completedWithinBudget = false
@@ -1950,8 +2014,19 @@ class NativeWorkspaceTest {
                 assertTrue(observation, completedWithinBudget)
                 assertEquals(observation, expected, outcome)
                 val text = if (reused) "Host companion $version is already installed." else "Installed host companion $version."
-                assertEquals("Owned companion version/path and cleanup must match the public fixture", "true", evaluate(scenario,
-                    "document.querySelector('$panel [role=status]')?.textContent.includes(${JSONObject.quote(text)}) && document.querySelector('$panel code')?.textContent===${JSONObject.quote(destination)} && !document.querySelector('$panel')?.textContent.includes('Some temporary installation files remain')"))
+                val proof = JSONObject(evaluate(scenario, """
+                    (()=>{const p=document.querySelector('$panel'), statuses=document.querySelectorAll('$panel [role=status]'), first=document.querySelector('$panel [role=status]');
+                      const stage=p?.getAttribute('data-install-cleanup-stage'), reason=p?.getAttribute('data-install-cleanup-reason');return {
+                      statusCount:!statuses.length?'zero':statuses.length===1?'one':'many',
+                      statusKind:!first?'absent':first.tagName==='P'?'progress':first.tagName==='DIV'?'result':'other',
+                      textMatches:first?.textContent.includes(${JSONObject.quote(text)})===true,
+                      pathMatches:document.querySelector('$panel code')?.textContent===${JSONObject.quote(destination)},
+                      residueAbsent:!p?.textContent.includes('Some temporary installation files remain'),
+                      cleanupStage:['none','admission','ownership','closeUpload','directory','verifyFile','removeFile','removeDirectory'].includes(stage)?stage:'unavailable',
+                      cleanupReason:['none','disconnected','unowned','missing','identity','hash','request','timeout'].includes(reason)?reason:'unavailable'};})()
+                """))
+                assertTrue("Owned companion version/path and cleanup must match the public fixture: $observation iteration=$expected proof=$proof",
+                    proof.getBoolean("textMatches") && proof.getBoolean("pathMatches") && proof.getBoolean("residueAbsent"))
                 assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
             }
             awaitDocument(scenario, "visible companion Connections navigation", workspaceButtonVisible(".workspace-navigation-modes", "Connections"))
@@ -1970,27 +2045,31 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Add host']")).perform(webClick())
             typeInto(scenario, "input[placeholder='Home workstation']", name)
-            typeInto(scenario, "input[placeholder='workstation.local']", if (requireMoshBackground) "10.0.2.2" else "127.0.0.1")
+            typeInto(scenario, "input[placeholder='workstation.local']", if (useMosh) "10.0.2.2" else "127.0.0.1")
             typeInto(scenario, "input[placeholder='Your SSH username']", fixture.getString("username"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".port-field input")).perform(webClick())
             onView(isAssignableFrom(WebView::class.java)).perform(
                 pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
                 pressKey(KeyEvent.KEYCODE_DEL))
             typeInto(scenario, ".port-field input", fixture.getInt("port").toString())
+            if (requireHerdrMosh) {
+                selectOwnedOption("[role=dialog] select:has(option[value='herdr'])", "herdr")
+                typeInto(scenario, "[role=dialog] input[maxlength='200']", fixture.getJSONObject("herdr").getString("name"))
+            }
             selectTransport()
             clickButton("Save host")
             val connect = "button[aria-label='Connect to $name']"
             awaitDocument(scenario, "SSH fixture host saved", present(connect))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, connect)).perform(webClick())
             awaitDocument(scenario, "SSH authentication dialog", present("[role=dialog] input[type=password]"))
-            if (requireCompanion) {
+            if (requireCompanion || requireHerdrMosh) {
                 closeSoftKeyboard()
                 // The real Add Host chooser saved this preference; do not invoke
-                // a redundant second native popup in this installer-only case.
+                // a redundant second native popup in these saved-preference cases.
                 val savedTransport = "[role=dialog] select:has(option[value='ssh'])"
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, savedTransport)).perform(webScrollIntoView())
-                assertEquals("Saved SSH transport must reach companion authentication", "true", evaluate(scenario,
-                    workspaceElementVisible(savedTransport, true) + " && (()=>{const choices=document.querySelectorAll(${JSONObject.quote(savedTransport)});return choices.length===1&&!choices[0].disabled&&choices[0].value==='ssh';})()"))
+                assertEquals("Saved transport must reach authentication", "true", evaluate(scenario,
+                    workspaceElementVisible(savedTransport, true) + " && (()=>{const choices=document.querySelectorAll(${JSONObject.quote(savedTransport)});return choices.length===1&&!choices[0].disabled&&choices[0].value===${JSONObject.quote(if (useMosh) "mosh" else "ssh")};})()"))
             } else selectTransport()
             clickButton("Private key")
             val keySelector = "[role=dialog] textarea[placeholder='-----BEGIN OPENSSH PRIVATE KEY-----']"
@@ -2006,10 +2085,22 @@ class NativeWorkspaceTest {
             clickButton("Trust key and connect")
             if (requireMoshBackground) {
                 verifyMoshBackground(scenario, fixture, name, label)
-            } else {
+            } else if (!requireHerdrMosh) {
                 awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             }
-            if (requireCompanion) verifyCompanionInstallation() else if (!requireMoshBackground) {
+            if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
+                awaitDocument(scenario, "saved default Herdr entered through Mosh", """
+                    document.querySelectorAll('[role=tab]').length===1 &&
+                    document.querySelector('[role=tab]')?.textContent.includes(${JSONObject.quote(connectedName)}) &&
+                    document.querySelector('.workspace-footer')?.textContent.includes('Mosh') &&
+                    Boolean(document.querySelector('.terminal-canvas .xterm-screen'))
+                """)
+                verifyBoardKeepAwake(scenario, fixture.getJSONObject("herdr"))
+                verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label, true)
+                assertEquals("Private Mosh startup bytes must stay out of terminal output", "true", evaluate(scenario,
+                    "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
+                println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
+            } else if (!requireMoshBackground) {
                 clickButton("Compose")
                 typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
                 val keyboardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
@@ -2145,14 +2236,34 @@ class NativeWorkspaceTest {
                 verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
                 if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             }
-            val disconnect = "button[aria-label='Disconnect $name']"
-            if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
+            val disconnect = "button[aria-label='Disconnect $connectedName']"
+            if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {
+                val switcher = "[role=dialog][aria-label='Switch terminal session']"
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.session-switcher-trigger")).perform(webClick())
+                awaitDocument(scenario, "exact owned session choice", """
+                    (()=>{const choices=Array.from(document.querySelectorAll("$switcher .session-choice"));
+                      return choices.filter(choice=>choice.querySelector('.session-choice-name')?.textContent===${JSONObject.quote(connectedName)}).length===1;})()
+                """)
+                val choice = onWebView().withElement(findElement(Locator.XPATH,
+                    "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[@class='session-choice-name' and text()='$connectedName']]"))
+                choice.perform(webScrollIntoView())
+                choice.perform(webClick())
+                awaitDocument(scenario, "exact owned session selected before End", """
+                    (()=>{const selected=document.querySelectorAll('.session-tabs [role=tab][aria-selected=true]');
+                      return !document.querySelector("$switcher") && selected.length===1 &&
+                        selected[0].textContent.trim()===${JSONObject.quote(connectedName)} &&
+                        document.querySelector('.session-switcher-trigger')?.textContent===${JSONObject.quote(connectedName)} &&
+                        document.querySelectorAll(${JSONObject.quote(disconnect)}).length===1 &&
+                        ${if (requireHerdrMosh) "document.querySelector('.workspace-footer')?.textContent.includes('Mosh')" else "true"};})()
+                """)
+                workspaceMenuAction(scenario, "End $connectedName connection")
+            } else if (evaluate(scenario, workspaceElementVisible(disconnect)) == "true") {
                 val close = onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect))
                 close.perform(webScrollIntoView())
                 awaitDocument(scenario, "touchable exact session disconnect", workspaceElementVisible(disconnect, true))
                 close.perform(webClick())
             } else {
-                workspaceMenuAction(scenario, "End $name connection")
+                workspaceMenuAction(scenario, "End $connectedName connection")
             }
             awaitDocument(scenario, "owned SSH disconnected", "!" + present(".terminal-canvas"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
@@ -2847,4 +2958,166 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
+    @Test fun ownedImeRetiresActualRemoteConnectionWithoutPrivateKeyboardFlags() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val arguments=InstrumentationRegistry.getArguments()
+        org.junit.Assume.assumeTrue("Owned IME acceptance only",arguments.getString("lazyshImeAcceptance")=="true")
+        assertTrue("Dedicated cached emulator required",Build.VERSION.SDK_INT==36 && Build.MODEL=="sdk_gphone64_x86_64")
+        val nonce=checkNotNull(arguments.getString("lazyshImeNonce"))
+        assertTrue("Exact owned IME nonce required",Regex("[0-9a-f]{32}").matches(nonce))
+        val port=checkNotNull(arguments.getString("lazyshImePort")).toInt()
+        assertTrue("Owned loopback fixture port required",port in 1024..65535)
+        fun shell(command:String):String {
+            val descriptor=instrumentation.uiAutomation.executeShellCommand(command)
+            return android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
+                val bytes=it.readNBytes(4097)
+                check(bytes.size<=4096) {"Owned IME shell response exceeded bound"}
+                String(bytes,Charsets.UTF_8).trim()
+            }
+        }
+        val component="${instrumentation.context.packageName}/app.lazysh.client.OwnedImeService"
+        val original=shell("settings get secure default_input_method")
+        assertTrue("Original IME must be restorable",Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+").matches(original) && original!=component)
+        val enabled=shell("settings get secure enabled_input_methods")
+        assertTrue("Fixture IME must start disabled",enabled.split(':').none {it.substringBefore(';')==component})
+        val resolver=instrumentation.targetContext.contentResolver
+        val control=Uri.parse("content://app.lazysh.client.test.imefixture")
+        fun call(method:String)=checkNotNull(resolver.call(control,method,nonce,null))
+        fun awaitIme(label:String,predicate:(android.os.Bundle)->Boolean):android.os.Bundle {
+            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(120)
+            do {
+                val state=call("state")
+                if(predicate(state))return state
+                Thread.sleep(50)
+            }while(System.nanoTime()<deadline)
+            throw AssertionError(label)
+        }
+        fun editor(state:android.os.Bundle) {
+            assertTrue("Actual IME remote proxy required",state.getBoolean("remoteProxy"))
+            assertTrue("Normal text editor required",state.getBoolean("normalText"))
+            assertTrue("Autocomplete hint must reach native NO_SUGGESTIONS",state.getBoolean("noSuggestions"))
+            assertFalse("Native AUTO_CORRECT must stay off",state.getBoolean("autoCorrect"))
+            assertFalse("Private learning flag must remain absent",state.getBoolean("privateLearning"))
+        }
+        val scenario=NativeActivityFixture.scenario
+        val clientBefore=AtomicReference<android.webkit.WebViewClient>()
+        val documentBefore=AtomicReference<String>()
+        val documentDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30)
+        do {
+            scenario.onActivity {activity->
+                val web=webView(activity.window.decorView)
+                val location=web?.url
+                if(web!=null && location!=null) {clientBefore.set(web.webViewClient);documentBefore.set(location)}
+            }
+            if(documentBefore.get()!=null)break
+            Thread.sleep(50)
+        }while(System.nanoTime()<documentDeadline)
+        val originalClient=checkNotNull(clientBefore.get()) {"Original native WebView client unavailable"}
+        val originalDocument=checkNotNull(documentBefore.get()) {"Original document not observed within native readiness bound"}
+        val location=Uri.parse(originalDocument)
+        assertTrue("Owned packaged root document required",location.scheme in listOf("http","https") &&
+            location.host=="tauri.localhost" && location.port== -1 && location.userInfo==null &&
+            location.path in listOf("","/") && location.query==null && location.fragment==null)
+        var navigated=false
+        fun navigate(phase:String,url:String,html:String?=null) {
+            val finished=CountDownLatch(1)
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView))
+                val previous=web.webViewClient
+                web.webViewClient=object:android.webkit.WebViewClient() {
+                    override fun shouldInterceptRequest(view:WebView,request:android.webkit.WebResourceRequest)=
+                        previous.shouldInterceptRequest(view,request)
+                    override fun onPageStarted(view:WebView,url:String?,icon:android.graphics.Bitmap?) {
+                        previous.onPageStarted(view,url,icon)
+                    }
+                    override fun onPageFinished(view:WebView,completedUrl:String?) {
+                        previous.onPageFinished(view,completedUrl)
+                        if(completedUrl==url) {
+                            android.util.Log.i("lazysh-ime-owned","phase=$phase finished=true expectedUrl=true progress=${view.progress}")
+                            finished.countDown()
+                        }
+                    }
+                }
+                android.util.Log.i("lazysh-ime-owned","phase=$phase navigation=true progress=${web.progress}")
+                navigated=true
+                if(html==null)web.loadUrl(url)else web.loadDataWithBaseURL(url,html,"text/html","UTF-8",null)
+            }
+            assertTrue("Owned $phase native page completion required",finished.await(30,TimeUnit.SECONDS))
+        }
+        var primary:Throwable?=null
+        var armed=false
+        try {
+            call("arm");armed=true
+            navigate("blank","about:blank")
+            assertEquals("Owned trivial JavaScript callback required","4",evaluate(scenario,"2+2"))
+            android.util.Log.i("lazysh-ime-owned","phase=blank callback=true")
+            val html="""<!doctype html><meta charset="utf-8"><script type="module">
+              import {mountTerminalImeHarness} from '/e2e/fixtures/TerminalImeHarness.ts';
+              window.ownedIme=mountTerminalImeHarness();window.__lazyshImeOwner='$nonce';
+            </script>"""
+            navigate("harness","http://127.0.0.1:$port/owned-ime-harness/",html)
+            awaitDocument(scenario,"current-source owned IME fixture","window.__lazyshImeOwner==='$nonce' && !!window.ownedIme?.textarea")
+            shell("ime enable $component")
+            shell("ime set $component")
+            assertEquals("Only owned IME selected",component,shell("settings get secure default_input_method"))
+            // Native focus must precede DOM focus, as in typeInto: refocusing afterward can blur the editor.
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView))
+                if(!web.hasFocus())assertTrue("Owned IME native focus was denied",web.requestFocus())
+                assertTrue("Owned IME native focus required",web.hasFocus())
+            }
+            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            val focused=JSONObject(evaluate(scenario,"""(()=>{const area=window.ownedIme.textarea;return {
+                connected:area.isConnected, editable:!area.readOnly&&!area.disabled,
+                targetFocused:document.activeElement===area, documentFocused:document.hasFocus()};})()"""))
+            assertTrue("Owned IME editor admission: $focused",listOf("connected","editable","targetFocused","documentFocused").all {focused.getBoolean(it)})
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView))
+                assertTrue("Owned IME DOM selection lost native focus",web.hasFocus())
+                activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .showSoftInput(web,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+            val first=awaitIme("Actual first IME editor required") {it.getBoolean("connected") && it.getBoolean("normalText")}
+            editor(first);call("capture")
+            assertTrue("Real IME preedit queued",call("preedit").getBoolean("accepted"))
+            awaitDocument(scenario,"real IME preedit in current xterm","window.ownedIme.textarea.value==='owned-preedit-$nonce'")
+            assertEquals("Preedit has not committed", "true",evaluate(scenario,"window.ownedIme.writes.length===0"))
+            evaluate(scenario,"window.ownedIme.observation.reset();true")
+            assertEquals("Renderer editor revoked", "true",evaluate(scenario,"window.ownedIme.textarea.readOnly"))
+            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            val second=awaitIme("Remote epoch inconclusive: distinct later framework proxy was not observed") {
+                it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("distinct") && it.getLong("generation")>first.getLong("generation")
+            }
+            editor(second)
+            val old=call("old")
+            assertFalse("Retired remote connection cannot read new editor",old.getBoolean("readReturned"))
+            val current=call("current")
+            assertTrue("Current remote connection accepted fixed text",current.getBoolean("accepted"))
+            assertTrue("Current remote read confirms fixed text",current.getBoolean("readMatched"))
+            awaitDocument(scenario,"current generation commits once without old preedit or old command",
+                "JSON.stringify(window.ownedIme.writes)===JSON.stringify(['owned-current-$nonce'])")
+            android.util.Log.i("lazysh-ime-owned","remoteEpoch=true noSuggestions=true privateLearning=false oldRead=false currentRead=true exactWrites=true")
+        } catch(failure:Throwable) {primary=failure;throw failure}
+        finally {
+            var cleanup:Throwable?=null
+            for(action in listOf<()->Unit>(
+                {if(armed)call("release")},
+                {shell("ime set $original");assertEquals("Original IME restored",original,shell("settings get secure default_input_method"))},
+                {shell("ime disable $component");assertEquals("Original enabled IMEs preserved",enabled,shell("settings get secure enabled_input_methods"))},
+                {
+                    try {if(navigated)navigate("restore",originalDocument)}
+                    finally {
+                        scenario.onActivity {activity->
+                            val web=checkNotNull(webView(activity.window.decorView))
+                            web.webViewClient=originalClient
+                            assertSame("Original native WebView client restored",originalClient,web.webViewClient)
+                        }
+                    }
+                    assertEquals("Original document restored","true",evaluate(scenario,"location.href===${JSONObject.quote(originalDocument)}"))
+                    android.util.Log.i("lazysh-ime-owned","originalClientRestored=true originalDocumentRestored=true")
+                }
+            ))try {action()}catch(failure:Throwable){if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+            if(cleanup!=null){if(primary!=null)primary!!.addSuppressed(cleanup!!)else throw cleanup!!}
+        }
+    }
 }

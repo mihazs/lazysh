@@ -286,12 +286,28 @@ jobs:
           prefix-key: v0-rust-ubuntu-22.04
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
-      - name: Exercise owned companion transfer and managed execution over SSH
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-guarded-herdr
+      - name: Verify same-run guarded binary and exercise owned SSH binding
+        env:
+          GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
+          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-guarded-herdr/herdr
+        run: |
+          cd "$RUNNER_TEMP/lazysh-guarded-herdr"
+          printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
+          chmod 700 herdr
+          timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
+          cd "$GITHUB_WORKSPACE"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
+          printf '%s\n' "LAZYSH_TEST_HERDR=$LAZYSH_TEST_HERDR" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/release/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/release/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
+      - name: Exercise owned companion transfer and exact Mosh entry over SSH
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
         run: |
-          cargo build --release --locked -p lazysh-agent --bin lazysh-agent
-          cases=(ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers)
+          cargo build --release --locked -p lazysh-agent --bin lazysh-agent --example owned_terminal_receiver
+          cases=(ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure)
           for case_name in "${cases[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
@@ -354,21 +370,6 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_unsupported_client_loops_keep_terminal_without_binding
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
-      - uses: actions/download-artifact@v4
-        with:
-          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/lazysh-guarded-herdr
-      - name: Verify same-run guarded binary and exercise owned SSH binding
-        env:
-          GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
-          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-guarded-herdr/herdr
-        run: |
-          cd "$RUNNER_TEMP/lazysh-guarded-herdr"
-          printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
-          chmod 700 herdr
-          timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
-          cd "$GITHUB_WORKSPACE"
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
 
   native-desktop:
     strategy:

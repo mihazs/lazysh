@@ -20,6 +20,7 @@ const PREFIX: &[u8] = b"\x1eLAZYSH-GUARD-1:";
 
 struct Fixture {
     base: PathBuf,
+    executable: PathBuf,
     children: Vec<Child>,
 }
 impl Fixture {
@@ -35,6 +36,7 @@ impl Fixture {
         fs::write(base.join("config.toml"), "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n").unwrap();
         Self {
             base,
+            executable: PathBuf::from(env!("CARGO_BIN_EXE_herdr")),
             children: Vec::new(),
         }
     }
@@ -94,7 +96,7 @@ impl Fixture {
     }
 
     fn command(&self, session: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        let mut command = Command::new(&self.executable);
         command
             .env_clear()
             .envs(self.environment())
@@ -622,6 +624,9 @@ struct TerminalClient {
 }
 impl TerminalClient {
     fn attach(fixture: &Fixture, session: &str) -> Self {
+        Self::attach_mode(fixture, session, true)
+    }
+    fn attach_mode(fixture: &Fixture, session: &str, guarded: bool) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -630,7 +635,7 @@ impl TerminalClient {
                 pixel_height: 0,
             })
             .unwrap();
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+        let mut command = CommandBuilder::new(&fixture.executable);
         command.env_clear();
         for (key, value) in fixture.environment() {
             command.env(key, value);
@@ -650,7 +655,10 @@ impl TerminalClient {
             command.env(key, value);
         }
         command.cwd(fixture.base.join(session));
-        command.args(["--session", session, "--guarded-attach"]);
+        command.args(["--session", session]);
+        if guarded {
+            command.arg("--guarded-attach");
+        }
         let arguments = command.get_argv().clone();
         let child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
@@ -660,7 +668,7 @@ impl TerminalClient {
         let shared = display.clone();
         let handle = thread::spawn(move || {
             let mut initial = Vec::new();
-            let mut registered = false;
+            let mut registered = !guarded;
             let mut chunk = [0_u8; 4096];
             while let Ok(count) = reader.read(&mut chunk) {
                 if count == 0 {
@@ -776,6 +784,143 @@ impl Drop for TerminalClient {
             }
         }
     }
+}
+
+#[tokio::test]
+#[ignore = "requires explicit unchanged stock Herdr and current lazysh companion"]
+async fn stock_public_focus_moves_both_clients_for_shell_and_agent_without_input_or_fallback() {
+    let mut fixture = Fixture::new();
+    fixture.executable = PathBuf::from(
+        std::env::var_os("LAZYSH_TEST_HERDR_STOCK").expect("explicit unchanged stock binary"),
+    );
+    let companion = PathBuf::from(
+        std::env::var_os("LAZYSH_TEST_AGENT_BIN").expect("explicit current companion binary"),
+    );
+    assert!(fixture.executable.is_absolute() && companion.is_absolute());
+    fs::create_dir(fixture.base.join("bin")).unwrap();
+    std::os::unix::fs::symlink(&fixture.executable, fixture.base.join("bin/herdr")).unwrap();
+    fixture.start("shared");
+    let mut targets = Vec::new();
+    for (index, marker) in ["SHARED_SOURCE_SCREEN", "SHARED_TARGET_SCREEN"]
+        .iter()
+        .enumerate()
+    {
+        let created=fixture.api("shared","workspace.create",json!({"label":format!("Space-{index}"),"cwd":fixture.base.join("shared"),"focus":false}));
+        assert!(created.get("error").is_none());
+        let snapshot = fixture.api("shared", "session.snapshot", json!({}));
+        let tree = &snapshot["result"]["snapshot"];
+        let workspace = tree["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["label"] == format!("Space-{index}"))
+            .unwrap()["workspace_id"]
+            .clone();
+        let pane = tree["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["workspace_id"] == workspace)
+            .unwrap()
+            .clone();
+        let script=format!("printf '\\033[2J\\033[H{marker}\\n'; stty raw -echo; : > ready-{index}; exec cat > bytes-{index}");
+        assert!(fixture
+            .api(
+                "shared",
+                "pane.send_input",
+                json!({"pane_id":pane["pane_id"],"text":script,"keys":["Enter"]})
+            )
+            .get("error")
+            .is_none());
+        crate::support::wait_for_file(
+            &fixture.base.join("shared").join(format!("ready-{index}")),
+            BOUND,
+        );
+        targets.push(pane);
+    }
+    let first = TerminalClient::attach_mode(&fixture, "shared", false);
+    let second = TerminalClient::attach_mode(&fixture, "shared", false);
+    let ordinary = |args: &[&str]| {
+        let mut command = fixture.command("shared");
+        command.args(args);
+        async move {
+            let output = bounded_public_command(command).await;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    };
+    ordinary(&[
+        "workspace",
+        "focus",
+        targets[0]["workspace_id"].as_str().unwrap(),
+    ])
+    .await;
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_SOURCE_SCREEN", true);
+        client.wait_screen("SHARED_TARGET_SCREEN", false);
+    }
+    ordinary(&["tab", "focus", targets[1]["tab_id"].as_str().unwrap()]).await;
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_TARGET_SCREEN", true);
+        client.wait_screen("SHARED_SOURCE_SCREEN", false);
+    }
+    let focus = |pane: &str| {
+        let mut command = Command::new(&companion);
+        command
+            .env_clear()
+            .envs(fixture.environment())
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", fixture.base.join("bin").display()),
+            )
+            .env("HERDR_CONFIG_PATH", fixture.base.join("config.toml"))
+            .args(["herdr-focus-pane", "--session", "shared", "--pane", pane]);
+        bounded_public_command(command)
+    };
+    assert!(focus(targets[0]["pane_id"].as_str().unwrap())
+        .await
+        .status
+        .success());
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_SOURCE_SCREEN", true);
+        client.wait_screen("SHARED_TARGET_SCREEN", false);
+    }
+    ordinary(&[
+        "pane",
+        "report-agent",
+        targets[1]["pane_id"].as_str().unwrap(),
+        "--source",
+        "lazysh-owned",
+        "--agent",
+        "codex",
+        "--state",
+        "unknown",
+    ])
+    .await;
+    assert!(focus(targets[1]["pane_id"].as_str().unwrap())
+        .await
+        .status
+        .success());
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_TARGET_SCREEN", true);
+        client.wait_screen("SHARED_SOURCE_SCREEN", false);
+    }
+    assert!(!focus("wZZ:pZZ").await.status.success());
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_TARGET_SCREEN", true);
+        client.wait_screen("SHARED_SOURCE_SCREEN", false);
+    }
+    for index in 0..2 {
+        assert!(
+            fs::read(fixture.base.join("shared").join(format!("bytes-{index}")))
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(fixture.bytes("shared").is_empty());
 }
 
 #[tokio::test]
@@ -969,4 +1114,226 @@ async fn actual_session_terminal_client_private_join_and_copy_barrier() {
             }
         }
     }
+}
+
+#[test]
+fn guarded_capability_and_invalid_descriptor_do_not_emit_terminal_or_ticket_bytes() {
+    use std::os::unix::process::CommandExt;
+    let fixture = Fixture::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env_clear()
+        .envs(fixture.environment())
+        .current_dir(&fixture.base)
+        .arg("--guarded-attach-capabilities")
+        .output()
+        .unwrap();
+    assert!(output.status.success() && output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        json!({"schemaVersion":1,"startupFd":true})
+    );
+    assert!(
+        !fixture.base.join("config").exists(),
+        "advertisement opened configuration"
+    );
+    for alias_stdout in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        command
+            .env_clear()
+            .envs(fixture.environment())
+            .current_dir(&fixture.base)
+            .args(["--guarded-attach", "--startup-fd", "3"]);
+        unsafe {
+            command.pre_exec(move || {
+                if alias_stdout {
+                    if libc::dup2(1, 3) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                } else {
+                    libc::close(3);
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success() && output.stdout.is_empty());
+        assert!(!output
+            .stderr
+            .windows(PREFIX.len())
+            .any(|bytes| bytes == PREFIX));
+        assert!(!fixture.base.join("config").exists());
+    }
+}
+
+#[test]
+fn real_guarded_ticket_uses_only_fd3_closes_it_and_claims_original_pty() {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::process::CommandExt;
+    let mut fixture = Fixture::new();
+    fixture.start("descriptor");
+    let (mut master_fd, mut slave_fd) = (-1, -1);
+    let size = libc::winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &size,
+            )
+        },
+        0
+    );
+    let mut master = unsafe { fs::File::from_raw_fd(master_fd) };
+    let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+    let mut descriptors = [-1; 2];
+    assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+    let mut reader = unsafe { fs::File::from_raw_fd(descriptors[0]) };
+    let writer = unsafe { fs::File::from_raw_fd(descriptors[1]) };
+    // Keep the pre-exec source clear of the stdio/FD3 remapping range.
+    let inherited = unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 10) };
+    assert!(inherited >= 10);
+    let inherited = unsafe { fs::File::from_raw_fd(inherited) };
+    drop(writer);
+    let source_fd = inherited.as_raw_fd();
+    for fd in [reader.as_raw_fd(), master.as_raw_fd(), slave.as_raw_fd()] {
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+            0
+        );
+    }
+    let mut command = fixture.command("descriptor");
+    command
+        .args(["--guarded-attach", "--startup-fd", "3"])
+        .stdin(slave.try_clone().unwrap())
+        .stdout(slave.try_clone().unwrap())
+        .stderr(slave.try_clone().unwrap());
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setsid() < 0
+                || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0
+                || libc::dup2(source_fd, 3) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            libc::close(source_fd);
+            Ok(())
+        });
+    }
+    let child = command.spawn().unwrap();
+    fixture.children.push(child);
+    drop(inherited);
+    drop(slave);
+    for fd in [reader.as_raw_fd(), master.as_raw_fd()] {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert!(
+            flags >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == 0
+        );
+    }
+    let deadline = Instant::now() + BOUND;
+    let mut frame = Vec::new();
+    let mut eof = false;
+    while Instant::now() < deadline {
+        let mut bytes = [0; 1024];
+        match reader.read(&mut bytes) {
+            Ok(0) => {
+                eof = true;
+                break;
+            }
+            Ok(count) => {
+                frame.extend_from_slice(&bytes[..count]);
+                assert!(frame.len() <= 1024);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(5))
+            }
+            Err(_) => panic!("owned private descriptor read failed"),
+        }
+    }
+    assert!(eof, "ticket descriptor remained open");
+    assert!(
+        fixture
+            .children
+            .last_mut()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_none(),
+        "owned client exited before TUI"
+    );
+    assert!(frame.starts_with(PREFIX) && frame.last() == Some(&0x1f));
+    let begin = PREFIX.len() + 9;
+    let size = usize::from_str_radix(
+        std::str::from_utf8(&frame[PREFIX.len()..begin - 1]).unwrap(),
+        16,
+    )
+    .unwrap();
+    assert!(size <= 512 && frame.len() == begin + size + 1 && frame[begin - 1] == b':');
+    let registration: Value = serde_json::from_slice(&frame[begin..begin + size]).unwrap();
+    let owner = claim(&fixture, "descriptor", &registration);
+    let binding = prepare(&fixture, "descriptor", &owner, 1, SOURCE);
+    let queued = fixture.api(
+        "descriptor",
+        "lazysh.guard.input",
+        input(&binding, 1, Some("owned FD channel")),
+    );
+    assert!(
+        queued.get("error").is_none(),
+        "FD claimant could not queue original target"
+    );
+    wait_bytes(&fixture, "descriptor", b"owned FD channel\r");
+    let replay = fixture.api(
+        "descriptor",
+        "lazysh.guard.claim",
+        json!({"boot":registration["boot"],"ticket":registration["ticket"]}),
+    );
+    assert!(replay.get("error").is_some(), "FD ticket replayed");
+    let mut display = Vec::new();
+    while Instant::now() < deadline {
+        let mut bytes = [0; 4096];
+        match master.read(&mut bytes) {
+            Ok(0) => break,
+            Ok(count) => {
+                display.extend_from_slice(&bytes[..count]);
+                assert!(display.len() <= 512 * 1024);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if !display.is_empty() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !display.is_empty(),
+        "owned TUI never rendered after FD closure"
+    );
+    assert!(
+        !display.windows(PREFIX.len()).any(|bytes| bytes == PREFIX),
+        "ticket leaked to PTY"
+    );
+    for field in ["boot", "ticket"] {
+        let secret = registration[field].as_str().unwrap().as_bytes();
+        assert!(!display.windows(secret.len()).any(|bytes| bytes == secret));
+    }
+}
+
+async fn bounded_public_command(command: Command) -> std::process::Output {
+    tokio::time::timeout(
+        BOUND,
+        tokio::process::Command::from(command)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("owned public focus deadline")
+    .expect("owned public focus process")
 }

@@ -5,6 +5,10 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     process::Command,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 #[path = "support/binary.rs"]
@@ -21,16 +25,35 @@ fn owned_command(directory: &std::path::Path, tools: &std::path::Path) -> Comman
         .env("PATH", tools);
     command
 }
+#[cfg(unix)]
+fn owned_config_dir(directory: &std::path::Path) -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        directory.join("Library/Application Support/lazysh")
+    } else {
+        directory.join("config/lazysh")
+    }
+}
 #[test]
 #[cfg(unix)]
 fn missing_external_cli_uses_builtin_collectors_without_exposing_authentication() {
+    builtin_quota_fixture(None);
+}
+#[test]
+#[cfg(unix)]
+fn empty_external_report_does_not_hide_available_builtin_quota() {
+    builtin_quota_fixture(Some("printf '%s' '{\"schema_version\":1,\"entries\":[]}'"));
+}
+#[cfg(unix)]
+fn builtin_quota_fixture(external: Option<&str>) {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
-    let config = directory.path().join("config/lazysh");
+    let config = owned_config_dir(directory.path());
     fs::create_dir_all(&config).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
+    let finished = Arc::new(AtomicBool::new(false));
+    let cancelled = finished.clone();
     let server = std::thread::spawn(move || {
         let stop = Instant::now() + Duration::from_secs(10);
         loop {
@@ -47,13 +70,12 @@ fn missing_external_cli_uses_builtin_collectors_without_exposing_authentication(
                         .contains("authorization: bearer fixture-secret-never-wire"));
                     let body = r#"{"used":42,"limit":100,"balance":12.3,"reset":"2026-11-01T00:00:00Z","private":"not-for-the-phone"}"#;
                     write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
-                    return;
+                    return true;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(
-                        Instant::now() < stop,
-                        "fixture did not receive builtin request"
-                    );
+                    if cancelled.load(Ordering::Relaxed) || Instant::now() >= stop {
+                        return false;
+                    }
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(error) => panic!("{error}"),
@@ -64,7 +86,11 @@ fn missing_external_cli_uses_builtin_collectors_without_exposing_authentication(
     fs::write(
         &path,
         format!(
-            r#"[anthropic]
+            r#"[context]
+enabled=false
+[notifications]
+enabled=false
+[anthropic]
 enabled=false
 [openai]
 enabled=false
@@ -95,9 +121,16 @@ currency="USD"
     )
     .unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    let output = owned_command(directory.path(), &directory.path().join("no-external-cli"))
-        .output()
-        .unwrap();
+    let tools = directory.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    if let Some(script) = external {
+        let executable = tools.join("ai-usagebar");
+        fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let output = owned_command(directory.path(), &tools).output().unwrap();
+    finished.store(true, Ordering::Relaxed);
+    let received = server.join().unwrap();
     assert!(output.status.success(), "bounded companion query failed");
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["source"], "builtin");
@@ -109,7 +142,7 @@ currency="USD"
     assert!(!serialized.contains("fixture-secret-never-wire"));
     assert!(!serialized.contains("not-for-the-phone"));
     assert!(output.stderr.is_empty());
-    server.join().unwrap();
+    assert!(received, "fixture did not receive builtin request");
 }
 
 #[cfg(unix)]
@@ -139,6 +172,20 @@ fn only_a_private_context_free_notification_free_profile_can_start_external_cli(
             false,
         ),
         (
+            "safe-empty",
+            "[context]\nenabled=false\n[notifications]\nenabled=false\n",
+            false,
+            0o600,
+            true,
+        ),
+        (
+            "safe-error",
+            "[context]\nenabled=false\n[notifications]\nenabled=false\n",
+            false,
+            0o600,
+            true,
+        ),
+        (
             "safe",
             "[context]\nenabled=false\n[notifications]\nenabled=false\n",
             false,
@@ -147,7 +194,7 @@ fn only_a_private_context_free_notification_free_profile_can_start_external_cli(
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let config = directory.path().join("config/lazysh");
+        let config = owned_config_dir(directory.path());
         let tools = directory.path().join("tools");
         fs::create_dir_all(&config).unwrap();
         fs::create_dir(&tools).unwrap();
@@ -156,7 +203,13 @@ fn only_a_private_context_free_notification_free_profile_can_start_external_cli(
         fs::write(&path, &text).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(permissions)).unwrap();
         let executable = tools.join("ai-usagebar");
-        fs::write(&executable,"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$OWNED_USAGE_ARGV\"\nprintf '%s' '{\"schema_version\":1,\"entries\":[]}'\n").unwrap();
+        let entries = if profile == "safe-empty" {
+            serde_json::json!([])
+        } else {
+            serde_json::json!([{"id":"owned","name":"Owned","status":if profile=="safe-error" {"error"}else{"ready"},"stale":profile=="safe-error","sections":[{"type":"text","label":"Balance","value":"$12.30"}]}])
+        };
+        let payload = serde_json::json!({"schema_version":1,"entries":entries});
+        fs::write(&executable,format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$OWNED_USAGE_ARGV\"\nprintf '%s' '{payload}'\n")).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let marker = directory.path().join("argv");
         let output = owned_command(directory.path(), &tools)
@@ -167,10 +220,23 @@ fn only_a_private_context_free_notification_free_profile_can_start_external_cli(
         let response: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(
             response["source"],
-            if external { "external_cli" } else { "builtin" },
+            if external && profile != "safe-empty" {
+                "external_cli"
+            } else {
+                "builtin"
+            },
             "{profile}"
         );
         assert_eq!(marker.exists(), external, "{profile}");
+        if profile == "safe-empty" {
+            assert_eq!(response["report"]["entries"], serde_json::json!([]));
+        }
+        if profile == "safe-error" {
+            let entry = &response["report"]["entries"][0];
+            assert_eq!(entry["status"], "error");
+            assert_eq!(entry["rows"][0]["value"], "$12.30");
+        }
+
         if external {
             assert_eq!(
                 fs::read_to_string(&marker)

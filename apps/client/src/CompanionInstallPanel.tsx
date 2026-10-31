@@ -6,7 +6,9 @@ import {t,useUi} from './i18n/core';
 
 const stages={detecting:'companionInstallDetecting',checkingRelease:'companionInstallRelease',downloading:'companionInstallDownloading',uploading:'companionInstallUploading',verifying:'companionInstallVerifying',installing:'companionInstallInstalling',checkingInstalled:'companionInstallChecking',cleaningUp:'companionInstallFinishing'} as const;
 type Stage=keyof typeof stages;
-type Result={schemaVersion:1;status:'installed'|'reused'|'uncertain';version:string;path:string;cleanup:'complete'|'residue';reason?:'committedDurabilityUnknown'|'commitResponseLost'|'verificationUnavailable'};
+const cleanupReasons={admission:['disconnected'],ownership:['unowned'],closeUpload:['missing','request','timeout'],directory:['missing','identity','request','timeout'],verifyFile:['missing','identity','hash','request','timeout'],removeFile:['missing','request','timeout'],removeDirectory:['missing','request','timeout']} as const;
+type CleanupFailure={stage:keyof typeof cleanupReasons;reason:typeof cleanupReasons[keyof typeof cleanupReasons][number]};
+type Result={schemaVersion:1;status:'installed'|'reused'|'uncertain';version:string;path:string;cleanup:'complete'|'residue';cleanupFailure?:CleanupFailure;reason?:'committedDurabilityUnknown'|'commitResponseLost'|'verificationUnavailable'};
 const failures={companion_install_busy:'companionInstallAlreadyRunning',companion_install_unsupported:'companionInstallUnsupported',companion_release_unavailable:'companionInstallUnavailable',companion_newer_installed:'companionInstallNewer'} as const;
 
 const failureKinds=['companion_install_busy','companion_install_unsupported','companion_release_unavailable','companion_newer_installed','companion_installer_invalid','companion_staging','companion_install_timeout','disconnected','app_locked','ssh_error','remote_command_failed','invalid_output','output_too_large','timeout'] as const;
@@ -28,12 +30,17 @@ export function companionInstallStage(value:unknown):Stage|undefined {
 export function parseCompanionInstall(value:unknown):Result {
   if(!value || typeof value!=='object')throw new LocalUiError('companionInstallInvalid');
   const result=value as Result;
-  if(Object.keys(result).some(key=>!['schemaVersion','status','version','path','cleanup','reason'].includes(key))
+  const detail=result.cleanupFailure;
+  const validCleanup=detail && typeof detail==='object' && !Array.isArray(detail)
+    && Object.keys(detail).length===2 && Object.keys(detail).every(key=>key==='stage'||key==='reason')
+    && Object.hasOwn(cleanupReasons,detail.stage) && (cleanupReasons[detail.stage] as readonly unknown[]).includes(detail.reason);
+  if(Object.keys(result).some(key=>!['schemaVersion','status','version','path','cleanup','cleanupFailure','reason'].includes(key))
     || result.schemaVersion!==1 || !['installed','reused','uncertain'].includes(result.status)
     || typeof result.version!=='string' || result.version.length>64 || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(result.version)
     || typeof result.path!=='string' || !/^(?:\/|[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/.test(result.path)
     || new TextEncoder().encode(result.path).length>4096 || /[\x00-\x1f\x7f-\x9f]/.test(result.path)
     || !['complete','residue'].includes(result.cleanup)
+    || (Object.hasOwn(result,'cleanupFailure') && (result.cleanup!=='residue' || !validCleanup))
     || (result.status==='uncertain' ? !['committedDurabilityUnknown','commitResponseLost','verificationUnavailable'].includes(result.reason??'') : Object.hasOwn(result,'reason')))
     throw new LocalUiError('companionInstallInvalid');
   return result;
@@ -71,7 +78,7 @@ export default function CompanionInstallPanel({sessionId,visible=true,ready=fals
     }
     finally {if(owns())setStage(undefined);if(pending.current===current)pending.current=null;}
   }
-  return <details data-install-phase={observation.phase} data-install-failure={observation.failure} data-install-outcome={observation.outcome} data-install-reason={observation.reason} className="companion-install" hidden={!visible} open={!ready || !!stage || !!result || !!error} aria-label={t('companionInstallTitle')}>
+  return <details data-install-phase={observation.phase} data-install-failure={observation.failure} data-install-outcome={observation.outcome} data-install-reason={observation.reason} data-install-cleanup-stage={result?.cleanupFailure?.stage??'none'} data-install-cleanup-reason={result?.cleanupFailure?.reason??'none'} className="companion-install" hidden={!visible} open={!ready || !!stage || !!result || !!error} aria-label={t('companionInstallTitle')}>
     <summary>{t('companionInstallTitle')}</summary>
     <div className="tool-bar"><button className="subtle-button" disabled={!visible || !!stage || !access.current()} onClick={()=>void install()}>{stage?t('companionInstallBusy'):t(ready?'companionInstallUpdate':'companionInstallButton')}</button></div>
     {stage && <p className="agent-note" role="status">{t(stages[stage])}</p>}
