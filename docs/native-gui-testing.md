@@ -86,6 +86,104 @@ exact source commit, application SHA-256, selected case count, cleanup result an
 limitations there for each qualifying run. Compilation, policy unit tests and an
 older binary's success do not establish current-source native GUI acceptance.
 
+## Installed Windows GUI foundation
+
+The native Windows job selects `actual Windows installed GUI` in the existing release-artifact owner after packaging NSIS. It reuses installer identity, collision, repair and uninstall gates, with a fixed GUI-only branch. Ordinary release maintenance does not launch the GUI. Only explicitly selected fresh GitHub-hosted Windows jobs are admitted; existing processes, application data or installation state are refused.
+
+The transaction owns initially absent actual KnownFolder `app.lazysh.client` roaming/local directories with unique sentinels. Windows Tauri paths use KnownFolder APIs, so overriding `APPDATA` would not isolate them. After the GUI closes, cleanup rejects reparse points and removes only those owned application directories before the existing repair marker test and uninstall. No parent registry/data directory is removed.
+
+Pinned official tauri-driver 2.1.0 launches the exact installed image through Microsoft EdgeDriver matching installed WebView2. Its Windows implementation creates a kill-on-close Job Object before spawning the native driver. The acceptance verifies loopback listener process ownership, native image/hash/PID/start/HWND, bundled frontend, About version and source revision. The parent retains the driver process, bounds the client and descendant retirement, suppresses raw native output, and requires cleanup/uninstall after failure. It captures no desktop screenshots or user application content.
+
+Window admission requires one visible ownerless `Tauri Window` with positive outer and client dimensions. Only the pinned Tao and single-instance event-helper classes may accompany it; both require successful zero-client-area reads, the exact layered/tool/transparent/no-activate extended styles and either the pinned paint style or its observed WS_CLIPSIBLINGS variant. There is no fixed 16×16 outer-size rule: [GetWindowRect may include invisible resize borders](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect), while [GetClientRect reports the client dimensions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclientrect). Bounded failure metadata includes both sets of extents so native CI can reject an incorrect zero-client assumption.
+
+After session creation fails, two bounded read-only `/status` probes record only finite health categories, after rechecking the original driver identities and listener roles before and after. Responses, capabilities and messages are discarded; READY does not establish session or GUI success. The original failure and cleanup gates remain authoritative.
+
+A failure-only startup snapshot reuses the same bounded owned inventory. It reports at most 32 observed runtime processes and ancestry roots, numeric registered/driver/root-image versions, Microsoft signature status and fixed inherited-environment presence flags. A root has no verified WebView2 ancestor; renderer/GPU descendants do not add roots. These are observed process groups, [not WebView instance counts](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/process-model). Zero observed descendants cannot establish that a browser never started or crashed; it may be brokered or outside the retained ancestry. Missing identities, races, signature/version uncertainty or overflow report UNVERIFIED. The original CIM CreationDate must match sampled StartTime in UTC at [CIM's microsecond representation](https://learn.microsoft.com/en-us/windows/win32/wmisdk/cim-datetime) (10 .NET ticks, matching the [MMI timestamp codec](https://github.com/PowerShell/MMI/blob/cf32fc695b32c2eae848b693395c09222fe1d2ae/src/Microsoft.Management.Infrastructure/Native/Structures/MI_Datetime.cs#L110)), with no millisecond/second allowance; missing, unspecified or unsupported-precision timestamps are unverified. Parent creation after child creation rejects the ancestry, following [Win32_Process PID-reuse guidance](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process). The flags describe the checker's inherited environment, not effective child values. No command lines, PIDs, process paths, user-data folders, profiles or raw stderr are retained.
+
+The failure snapshot also reports `appIntegrity` as LOW, MEDIUM, HIGH, SYSTEM or UNVERIFIED for the exact retained installed application. It uses [TokenIntegrityLevel](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation) with TOKEN_QUERY and a process handle opened only for PROCESS_QUERY_LIMITED_INFORMATION. Native handle creation time must match the retained start, and existing PID/start/image-hash fences run before and after sampling. Unknown mandatory-label SID/RID, denied/failed queries or unsupported data yield UNVERIFIED for this field; lifetime or image failure still invalidates the census. No identity/group SID, privilege, token value or environment value is retained or changed. [Microsoft documents](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/security#for-an-elevated-host-app-use-appropriate-override-flags) that elevated WebView2 hosts ignore environment overrides, while API-specified flags are honored. Runner administrator membership and UI interactivity alone do not establish the installed app's integrity; HIGH remains unverified until observed. No environment treatment or security-policy change accompanies this observation.
+
+The required Windows GUI owner now requests an ordinary-user context through the
+existing #494 / #492 work, instead of requiring synthetic de-elevation of the
+hosted runner's administrator token. An elevated broker creates one disposable
+local Users account and starts one suspended bootstrap through
+[CreateProcessWithLogonW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw)
+with `LOGON_WITH_PROFILE` and a NULL environment. Before resume it verifies the
+exact new SID, image/hash/birth, session, primary token, MEDIUM/non-elevation,
+UIAccess false, Users membership and no enabled administrator group, and assigns
+the owned kill-on-close Job. Existing WinSta0\Default access is required; no
+window-station/desktop ACE, service, privilege or security-policy change is made.
+Missing prerequisites stop the transaction.
+
+The bootstrap drops unrelated environment variables and receives only a fixed
+nonsecret configuration. It runs the complete existing NSIS/GUI/repair/uninstall
+transaction within its own HKCU and profile; the new `requireStandard` proof is
+separate from the restricted launcher. Source and dependencies are copied into a
+bounded fixture with byte checks and read/execute access. Only the owned work
+folder, precreated Vite `.vite`/`.vite-temp` and Vitest `.vitest-cache` directories
+are writable. No host
+profile, checkout `.git`, credentials or caches are copied. Passwords exist only
+in native buffers and never enter argv, environment, capsules or logs.
+
+The existing actual app/source/About/window checks and before/after MEDIUM proofs
+remain required. A failed baseline does not enter the old restricted/capability
+counterfactual, open another account or retry NewSession. A passing admission
+cannot pass GUI acceptance. The earlier restricted ACCESS_DENIED and HIGH GUI
+failures remain negative historical evidence, not newly passing tests.
+
+The broker retires its Job before deleting only the initially absent exact-SID
+profile and matching account. A parent-only recovery capsule contains synthetic
+ownership metadata, never the password, and is excluded from artifacts. The
+workflow always runs recovery. Capsule intent is not atomic with process creation:
+if cancellation leaves INTENT, recovery reports cleanup uncertainty and refuses
+profile/account deletion. It does not kill by SID/name or claim VM disposal as
+cleanup. Setup, owner and cleanup share the existing650-second test/12-minute
+workflow limits, with the600-second native and20-second session limits unchanged.
+Actual Windows account/profile/desktop/GUI qualification remains unexecuted until
+the reviewed normal CI head runs; portable compilation is not that qualification.
+
+The restricted-context experiment additionally projects the exact application's `appElevation` as ELEVATED, NOT_ELEVATED or UNVERIFIED from the same held TOKEN_QUERY token. After unchanged HIGH baseline and capability-treatment cleanup, one MEDIUM_AUTOMATIC arm may run within the original 600-second budget. This is a restricted-context counterfactual, since administrator groups and privileges change with integrity. It cannot replace the original failing acceptance result.
+
+The retained legacy restricted-token launcher uses [CreateProcessWithTokenW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createprocesswithtokenw), requiring already-enabled SeImpersonate. It validates an own-user/session linked filtered token or a newly restricted own-token copy: MEDIUM, non-elevated, UIAccess false and administrator groups deny-only. No caller privilege is enabled or caller token modified. There is no AsUser fallback, account creation, foreign token, ACL repair, profile load, UAC/policy change or HIGH fallback. The explicit existing `winsta0\default` desktop avoids the API's implicit desktop-access adjustment. Each child starts suspended, enters an anonymous parent-owned kill-on-close Job, and passes native image/start/token checks before resume. The exact installed app must independently report MEDIUM and NOT_ELEVATED before frontend actions.
+
+The retained opt-in restricted-launch owner exercises private write access, NUL stdin/stdout/stderr, command-line quoting, nested tauri-driver/Edge Job ownership and descendant retirement. Unsupported token rights, desktop access or NUL behavior stop this gate. Fixed native C# source travels through bounded stdin rather than the PowerShell command line; CreateProcessWithTokenW commands retain their 1,024-character limit, and every native PowerShell command is bounded below CreateProcessW's 32,767 UTF-16 limit. Local portable compilation/quoting tests do not establish Win32 token, stdio or nested-Job support; actual Windows evidence remains required. The original 20-second NewSession and 600-second transaction budgets, cleanup guards, installed-byte equality and final baseline failure remain unchanged.
+
+Each retained runtime ancestry root contributes one `rootDebugTransports` record with exactly `role` and `transport`. Whole records are sorted together, preserving their correlation. Transport remains PIPE, EPHEMERAL_PORT, FIXED_PORT, ABSENT, AMBIGUOUS or UNVERIFIED. An absent or single empty `--type` yields BROWSER_CANDIDATE; a single nonempty ASCII/control-free selector yields TYPED_CHILD, without claiming that selector is valid. Duplicate selectors yield AMBIGUOUS; unsupported input yields UNVERIFIED. The candidate classification follows [pinned Chromium browser dispatch](https://github.com/chromium/chromium/blob/dbeca94f3190b496ceb20437995b29aaf20f5370/content/app/content_main_runner_impl.cc#L1240), not a claim about WebView counts or readiness. Only the original lifetime-verified CIM command line is parsed, using [CommandLineToArgvW/LocalFree](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw) and the [pinned Chromium Windows switch rules](https://github.com/chromium/chromium/blob/dbeca94f3190b496ceb20437995b29aaf20f5370/base/command_line.cc#L646). Duplicate/mixed transports are ambiguous; malformed values, special raw-tail parsing and unsupported whitespace are unverified. Parser failure preserves the valid base census. Categories expose neither arguments nor port numbers and describe startup switch presence only, not listening, readiness or a successful debugging handshake. They are not paired with the separately deduplicated image-version set. Actual Win32 tokenization vectors execute in the existing native Windows owner before GUI acceptance. Its 35-second outer Bun guard supervises the existing 30-second native helper guard: actual Windows evidence hit the former default five-second test deadline before that native guard could report. This helper supervision repair changes no application/session/transaction deadline. The endpoint owner composes only its required exported helpers, keeping its Windows command line below the documented CreateProcess limit.
+
+A separate diagnostic treatment can run only after an automatic NewSession failure with verified installed-window ownership and complete owned GUI process/profile cleanup. It reuses the same installed image, verifies the retained driver hashes, recreates absent sentinel-owned data roots and starts a new driver Job. Its sole WebDriver capability delta is `webviewOptions.additionalBrowserArguments: ['--remote-debugging-port=0']`, the [documented browser-argument channel](https://learn.microsoft.com/en-us/microsoft-edge/webdriver/capabilities-edge-options). The [pinned Chromium server defaults to IPv4/IPv6 loopback](https://github.com/chromium/chromium/blob/dbeca94f3190b496ceb20437995b29aaf20f5370/chrome/browser/devtools/remote_debugging_server.cc#L85); exact EdgeDriver/WebView2 discovery remains experimental. There is no fixed port, debuggerAddress, environment override, profile reuse/read, new endpoint probe or retry. Both sessions retain the 20-second deadline. The existing 600-second parent budget is unchanged: the treatment is skipped unless 420 seconds remain for startup/client, cleanup and uninstall. Separate finite treatment receipts never replace the original failure, including when the treatment passes; publication/acceptance remains failed. An inconclusive cleanup, image/tool change or profile collision stops the experiment. Native uninstall runs once through the existing transaction.
+
+The original window identity or closed rejection is written before this snapshot. If signature/hash work consumes the existing 15-second probe budget, the client preserves that completed core proof and marks startup unavailable. No additional timer, session attempt or launch configuration is introduced; the original 20-second NewSession failure and cleanup remain authoritative.
+
+This is a foundation gate; its first actual Windows execution remains required before merge. It does not establish warm singleton argv, ConPTY terminal behavior or authenticated SSH, which remain under #457. Published 0.23.0 assets are untouched; CI evidence belongs to its exact candidate source/binary.
+
+The passive UIA snapshot can additionally retain `englishControlCounts` with exactly
+`about`, `checking`, `locked`, `error` and `workspace`, each 0–2; 2 means two or
+more eligible controls. The existing single own-HWND query uses a finite allowlist
+from the English source: the versioned About button, access-check/locked headings,
+three fixed access-error messages, Add a host and Preferences. Only enabled,
+on-offscreen controls from retained owned providers within the unchanged physical
+client rectangle contribute. At most 16 matching candidates are processed. Counts
+are published only after the existing worker join and COM/DPI cleanup, then the
+original process/image lifetime fences are checked again.
+
+The same query can retain the separate optional `ownedDocumentCount`, capped at
+0, 1 or 2 (two or more). It matches Document control type 50030 independently of
+name and locale, with the same eligibility and lifetime checks. The document branch
+does not consume cached Name, Value, URL or text. The uniform shared cache also
+requests Name for Document candidates, although the managed document branch never
+consumes or exports it. Provider-internal predicate evaluation is not constrained.
+One eligible accessible document does not establish
+its URL, JavaScript, React, IPC, paint or the cause of startup failure. Zero or
+multiple documents remain ambiguous and cannot establish frontend acceptance.
+
+The control counts are English-label observations, not an OS-locale assertion, DOM inventory,
+paint/performance measurement or GUI acceptance. No locale is forced. A zero or
+ambiguous count, an unknown locale or absent accessibility exposure cannot show
+that the document, JavaScript or React is absent. Unknown text is never mapped to
+an error state or retained. Positive counts cannot turn the original failed
+NewSession into success; the normal frontend/About/source checks remain required.
+No input, focus action, app IPC, script injection, browser flags or retries are
+added, and the existing session/probe/worker budgets remain unchanged.
+
 ## Owned SSH connection
 
 The Linux suite also creates a fresh loopback OpenSSH server using the same `SshFixture` as Android acceptance. Its portable process/SSH owner lives in `tests/support/sshFixture.ts`; Android keeps its existing re-exports. The test adds a host through the bundled UI, chooses SSH explicitly, enters only the ephemeral private key without saving it, reviews the exact generated host fingerprint and confirms trust. Ordinary terminal keyboard input must produce the fixture's non-echoable challenge output while the original GUI owner remains unchanged. The singleton cases retain their separate zero-connection target.
