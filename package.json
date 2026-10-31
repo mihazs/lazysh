@@ -44,6 +44,7 @@
     "test:ios-workspace": "turbo run test:ios-workspace --filter=@lazysh/client",
     "test:android-theme-links": "turbo run test:android-theme-links --filter=@lazysh/client",
     "test:android-ssh": "turbo run test:android-ssh --filter=@lazysh/client",
+    "test:android-herdr-navigation": "turbo run test:android-herdr-navigation --filter=@lazysh/client",
     "build:android:fdroid": "turbo run build:android:fdroid --filter=@lazysh/client",
     "test:android-fdroid": "turbo run test:android-fdroid --filter=@lazysh/client",
     "test:android-ntfy": "turbo run test:android-ntfy --filter=@lazysh/client",

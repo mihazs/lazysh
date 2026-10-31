@@ -61,3 +61,52 @@ test('owned host context projects only unique validated label/cwd readback and o
     expect(()=>ownedHerdrContext(invalid,agent,'/owned/cwd','/owned/cwd')).toThrow('Owned Herdr navigation context changed');
   expect(()=>ownedHerdrContext(snapshot,agent,'/other/cwd','/owned/cwd')).toThrow('Owned Herdr navigation context changed');
 });
+
+test('CI actually invokes the stock two-display native case through its own uncached task',async()=>{
+  const root=join(import.meta.dir,'..');
+  const workflow=Bun.YAML.parse(await readFile(join(root,'.github/workflows/checks.yml'),'utf8')) as any;
+  const client=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8'));
+  const turbo=JSON.parse(await readFile(join(root,'turbo.json'),'utf8'));
+  const source=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
+  const names=[...source.matchAll(/\('([^']*actual Android two-display stock Herdr navigation[^']*)',async/g)];
+  expect(names).toHaveLength(1);
+  const name=names[0][1];
+  const script=client.scripts['test:android-herdr-navigation'];
+  expect(script).toBeDefined();
+  expect(script).toStartWith('LAZYSH_ANDROID_UI_HERDR_NAVIGATION=1 bun test ');
+  expect(script).toContain(`--test-name-pattern '^${name}$'`);
+  expect(script).not.toContain('--pass-with-no-tests');
+  const task=turbo.tasks['test:android-herdr-navigation'];
+  expect(task.cache).toBe(false);expect(task.dependsOn).toEqual(['build:android:emulator']);
+  expect(task.passThroughEnv).not.toContain('LAZYSH_ANDROID_UI_HERDR');
+  const job=workflow.jobs['native-android-herdr-navigation'];
+  expect(job.needs).toBe('herdr-native');expect(job['timeout-minutes']).toBe(30);
+  expect(job.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('herdr-navigation');
+  const download=job.steps.find((step:any)=>step.uses==='actions/download-artifact@v4');
+  expect(download.with.name).toBe('stock-herdr-${{ github.run_id }}-${{ github.run_attempt }}');
+  const emulator=job.steps.find((step:any)=>step.uses?.startsWith('mihazs/lazysh-android-emulator-runner@'));
+  expect(emulator.with.script).toContain('bun run test:android-herdr-navigation');
+  expect(emulator.with.script).toContain('Unknown Android runtime owner');
+  expect(job.steps.find((step:any)=>step.name==='Verify same-run stock Herdr').env.STOCK_HERDR_SHA256).toBe('${{ needs.herdr-native.outputs.stock-sha256 }}');
+});
+
+test('the shared emulator wrapper rejects unknown owners and both exact command bodies parse without execution',async()=>{
+  const workflow=Bun.YAML.parse(await readFile(join(import.meta.dir,'../.github/workflows/checks.yml'),'utf8')) as any;
+  const guarded=workflow.jobs['native-android-runtime'],stock=workflow.jobs['native-android-herdr-navigation'];
+  expect(guarded.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('guarded');
+  const action=(job:any)=>job.steps.find((step:any)=>step.uses?.startsWith('mihazs/lazysh-android-emulator-runner@'));
+  const script=action(stock).with.script;
+  expect(script).toBe(action(guarded).with.script);
+  expect(script).toContain('bun run test:android-mosh && bun run test:android-ssh;');
+  expect(script).toContain('bun run test:android-fdroid;');
+  const body=script.slice("bash -c '".length,-1);
+  const syntax=Bun.spawn(['bash','-n'],{stdin:Buffer.from(body),stdout:'pipe',stderr:'pipe'});
+  expect(await syntax.exited).toBe(0);
+  const selector=/case "\$LAZYSH_ANDROID_RUNTIME_OWNER" in[\s\S]*?esac;/.exec(body)?.[0];
+  expect(selector).toBeDefined();
+  for(const owner of ['unknown','']){
+    const child=Bun.spawn(['bash','-c',selector!],{env:{...process.env,LAZYSH_ANDROID_RUNTIME_OWNER:owner},stdout:'pipe',stderr:'pipe'});
+    expect(await child.exited).toBe(1);
+    expect(await new Response(child.stderr).text()).toBe('Unknown Android runtime owner\n');
+  }
+});

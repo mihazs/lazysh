@@ -86,3 +86,23 @@ cargo +1.96.1 test --locked --bin herdr api::schema::tests::generated_protocol_s
 ```
 
 The example is a native Cargo process fixture that only writes its owned invocation marker and exits. It never implements SSH or opens a network. Its current-source build must precede the explicit path passed to acceptance; an arbitrary existing absolute binary is not provenance. Real-server cases use only private temporary sockets/config, two owned servers, an owned shell workload, and tracked child cleanup. They do not establish lazysh's future SSH/access-lease adapter, provider identity, GUI/physical-device or Windows guarded acceptance. Unsupported socket receive deadlines fail closed for guarded attachment while ordinary attachment retains upstream behavior.
+
+## Stock Android navigation CI artifact
+
+The `herdr-native` job also builds the original commit-addressed archive above in
+a fresh external `stock-source` directory after copying and sealing the guarded
+executable. It verifies all 1,828 original manifest records before and after the
+stock build. Stock compilation and artifact retention use a separate `stock-target`
+Cargo directory. Only the Cargo registry/toolchain and generated, hash-admitted Zig
+dependency packages are reused; compiled crates, fingerprints and guarded outputs
+are not copied. Additional compile cost is unmeasured; the existing Rust/Zig and
+30-minute producer limit remain unchanged.
+
+The short-lived `stock-herdr-<run>-<attempt>` artifact includes the original license,
+stock executable and a receipt binding source commit, archive/manifest digests,
+original-file count, workflow checkout and executable SHA-256. Its consumer checks
+that receipt and the same-run producer output before invoking the dedicated stock
+Android navigation task. This is a distinct artifact from guarded Herdr; neither
+is substituted for the other. The hosted stock build and Android result must be
+observed on the new workflow before claiming execution; local baseline binary
+`d25acea6…` is a functional reference, not an expected reproducible CI digest.

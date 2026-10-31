@@ -2,13 +2,51 @@ import {OwnedProcess, OUTPUT_LIMIT, identity} from './ownedProcess';
 import {SshFixture, sshCommand} from './sshFixture';
 export {SshFixture, listening, stopOwnedTree, type HerdrTools} from './sshFixture';
 export {OwnedProcess, identity, type OwnedPid} from './ownedProcess';
-import {lstat, mkdir, readFile, readlink, realpath, stat, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, open, readdir, readFile, readlink, realpath, stat, writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import type {HerdrFixture} from './androidHerdr';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './androidMoshBackground';
+
+// Fixed native case names only; this is the existing ntfy tag scanner, not a general XML parser.
+export function nativeReportCases(text:string) {
+  const xml=text.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g,'');
+  const cases=[...xml.matchAll(/<testcase\b[^>]*>/g)].map(([tag])=>({name:/\sname="([^"]*)"/.exec(tag)?.[1],className:/\sclassname="([^"]*)"/.exec(tag)?.[1]}));
+  return {cases,failed:/<(?:failure|error|skipped)\b/.test(xml)};
+}
+export function validateSharedHerdrReport(text:string) {
+  const {cases,failed}=nativeReportCases(text),suite=/<testsuites\b[^>]*>/.exec(text)?.[0]??'';
+  if(cases.length!==1 || cases[0].className!=='app.lazysh.client.NativeWorkspaceTest' || cases[0].name!=='ownedSharedHerdrNavigationThroughRealUi' || failed
+    || !['tests="1"','failures="0"','errors="0"','skipped="0"'].every(value=>suite.includes(' '+value)) || !/<\/testsuites>\s*$/.test(text))
+    throw new Error('Actual shared Herdr native case did not pass exactly once without skips');
+  return {nativeCase:'ownedSharedHerdrNavigationThroughRealUi',passed:1,failed:0,skipped:0};
+}
+const reportIdentity=(value:{dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint})=>[value.dev,value.ino,value.size,value.mtimeNs].join(':');
+async function sharedHerdrReportFile(directory:string,optional=false) {
+  const entries=await readdir(directory,{recursive:true}).catch(error=>{if(optional && error.code==='ENOENT')return [];throw error;});
+  const files=entries.filter(name=>name.endsWith('.xml'));
+  if(optional && files.length===0)return;
+  if(files.length!==1)throw new Error('Expected one owned shared Herdr native report');
+  const path=join(directory,files[0]),metadata=await lstat(path,{bigint:true});
+  if(!metadata.isFile() || metadata.size<1n || metadata.size>262144n)throw new Error('Invalid owned shared Herdr report file');
+  return {path,identity:reportIdentity(metadata)};
+}
+export async function sharedHerdrReportIdentity(directory:string) {return (await sharedHerdrReportFile(directory,true))?.identity;}
+export async function verifySharedHerdrResult(directory:string,previous?:string) {
+  const report=(await sharedHerdrReportFile(directory))!;
+  if(report.identity===previous)throw new Error('Shared Herdr native report was not refreshed');
+  const file=await open(report.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  try {
+    const metadata=await file.stat({bigint:true});
+    if(!metadata.isFile() || reportIdentity(metadata)!==report.identity)throw new Error('Shared Herdr report identity changed');
+    const bytes=Buffer.alloc(Number(metadata.size)+1),read=await file.read(bytes,0,bytes.length,0);
+    if(read.bytesRead!==Number(metadata.size) || reportIdentity(await file.stat({bigint:true}))!==report.identity)throw new Error('Shared Herdr report changed while reading');
+    return validateSharedHerdrReport(bytes.subarray(0,read.bytesRead).toString('utf8'));
+  } finally {await file.close();}
+}
 
 // Android 16 ApplicationExitInfo.dump fields; free-form descriptions/traces never leave memory.
 // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
@@ -367,6 +405,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {[before,hostServerBefore]=await Promise.all([emulatorContinuity(adb,serial,reverse,fixture.port),hostAdbServerIdentity(adb)]);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
     try {crashes=captureOwnedCaseCrashes(adb,serial,fixture.nonce);} catch {/* Never change test admission for unavailable diagnostics. */}
     const android=join(root,'apps/client/src-tauri/gen/android');
+    const sharedReportDirectory=join(android,'app/build/outputs/androidTest-results/herdr-ui');
+    const previousSharedReport=sharedHerdr?await sharedHerdrReportIdentity(sharedReportDirectory):undefined;
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
@@ -390,7 +430,11 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     finally {monitoring=false;await byteWitness;timing.gradleEndMs=crashes?.elapsedMs()??null;}
     if(byteFailure)throw byteFailure;
     if(instrumentationFailure)throw instrumentationFailure;
-    if(sharedHerdr)await navigationScreenshots();
+    if(sharedHerdr){
+      const receipt=await verifySharedHerdrResult(sharedReportDirectory,previousSharedReport);
+      console.log('Owned shared Herdr native result '+JSON.stringify(receipt));
+      await navigationScreenshots();
+    }
     await crashes?.stop();
     await moshWitness?.assertVerified();
     if(evidence) {

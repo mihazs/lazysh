@@ -46,6 +46,7 @@
     "test:ios-workspace": "xcodebuild -project src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshWorkspaceUITests -configuration debug -destination \"platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID\" -parallel-testing-enabled NO -resultBundlePath src-tauri/gen/apple/workspace-ui.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO",
     "test:android-theme-links": "src-tauri/gen/android/gradlew -p src-tauri/gen/android :app:connectedUniversalDebugAndroidTest -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -x :app:rustBuildX86_64Debug -PlazyshThemeLinkAcceptance=true -Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#themeLinksUseFirstActivityAndWarmIntentWithExplicitReview",
     "test:android-ssh": "LAZYSH_ANDROID_UI_SSH=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts",
+    "test:android-herdr-navigation": "LAZYSH_ANDROID_UI_HERDR_NAVIGATION=1 bun test ../../tests/android-ssh-host.test.ts --test-name-pattern '^actual Android two-display stock Herdr navigation keeps the selected display and sends zero receiver bytes$'",
     "test:android-qr": "LAZYSH_ANDROID_UI_QR=1 bun test ../../tests/android-qr.test.ts"
   },
   "dependencies": {

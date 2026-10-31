@@ -245,3 +245,23 @@ their existing bounds. Screenshots and exact selected-binary hashes accompany th
 case. A compiled test APK or host fixture pass alone is not Android acceptance;
 #591 remains open until actual packaged-device evidence and its remaining scope
 are qualified.
+
+### Stock Herdr Android CI owner
+
+`bun run test:android-herdr-navigation` builds the emulator APK and selects only
+`ownedSharedHerdrNavigationThroughRealUi` through the existing owned SSH fixture.
+The client task sets its own opt-in; it does not run guarded SSH/Mosh owners against
+stock. The selected native case must produce one fresh, bounded JUnit report with
+its exact class/method and no failure, error or skip. Existing receiver identity,
+zero-input monitoring and native/host cleanup remain required.
+
+The separate `native-android-herdr-navigation` CI job retains the existing 30-minute
+job and 600-second fixture limits. It consumes only the same-run stock artifact,
+whose official commit/archive and original-file manifest are verified before and
+after compilation. The guarded artifact is sealed first and remains separate.
+Stock uses a separate Cargo target; compiled crates and guarded outputs are not
+copied. Its additional compile cost is unmeasured within the unchanged job cap.
+Binary hashes are build-specific; the job verifies its producer's hash and source
+receipt, then retains its own runtime results. A configured job or local
+contract pass is not Android acceptance: inspect the fresh native case and cleanup
+results before claiming parity or merging the acceptance milestone.
