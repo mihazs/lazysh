@@ -9,7 +9,7 @@ use std::{net::SocketAddr, time::Duration};
 ))]
 use tokio::sync::watch;
 use tokio::time::timeout;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -198,11 +198,7 @@ async fn bootstrap_exec(
     let _ = timeout(Duration::from_secs(2), channel.close()).await;
     result
 }
-pub(crate) async fn bootstrap(
-    session: &Session,
-    lease: &crate::app_lock::AccessLease,
-    options: Options,
-) -> Result<Bootstrap> {
+fn route(session: &Session, options: &Options) -> Result<SocketAddr> {
     options.validate()?;
     if !cfg!(any(
         target_os = "linux",
@@ -218,16 +214,298 @@ pub(crate) async fn bootstrap(
     if session.handle.agent_forwarding_enabled() {
         return Err(SshError::new("mosh_unsupported_forwarding", "Agent forwarding is currently supported only by SSH terminals. Disable forwarding before selecting Mosh."));
     }
-    let address = session.handle.peer_address.ok_or_else(|| {
+    session.handle.peer_address.ok_or_else(|| {
         SshError::new(
             "mosh_unsupported_route",
             "Mosh requires a direct SSH connection; bastion routes currently support SSH terminals",
         )
-    })?;
+    })
+}
+pub(crate) async fn bootstrap(
+    session: &Session,
+    lease: &crate::app_lock::AccessLease,
+    options: Options,
+) -> Result<Bootstrap> {
+    let address = route(session, &options)?;
     let locales = bootstrap_exec(session, lease, "locale -a".into()).await?;
     let locale = utf8_locale(&locales)?;
     let bytes = bootstrap_exec(session, lease, options.command(&locale)).await?;
     parse_bootstrap(&bytes, address, &options)
+}
+
+pub(crate) fn entry_failed() -> SshError {
+    SshError::new("mosh_entry_startup_failed", "Mosh entry could not establish its selected display binding. No automatic replacement was started. SSH entry remains available; choose it explicitly or retry after checking the host.")
+}
+enum EntryBinding {
+    Ordinary {
+        marker: String,
+    },
+    Tmux {
+        marker: String,
+        name: String,
+        server: crate::tmux_server::TmuxServer,
+    },
+    Herdr {
+        name: String,
+    },
+}
+/// Private SSH startup bytes never enter the terminal event stream.
+pub(crate) struct EntryStartup {
+    channel: crate::ssh::OwnedChannel,
+    bytes: Zeroizing<Vec<u8>>,
+    received: usize,
+    status: Option<u32>,
+    binding: EntryBinding,
+}
+impl EntryStartup {
+    #[cfg(test)]
+    pub(crate) fn test_ordinary_receipt(channel: crate::ssh::OwnedChannel) -> Self {
+        let bytes = b"owned-live-child\t42\t/dev/pts/1\n".to_vec();
+        Self {
+            channel,
+            received: bytes.len(),
+            bytes: Zeroizing::new(bytes),
+            status: Some(0),
+            binding: EntryBinding::Ordinary {
+                marker: "owned-live-child".into(),
+            },
+        }
+    }
+    async fn read(&mut self) -> Result<bool> {
+        use russh::ChannelMsg;
+        match self.channel.wait().await {
+            Some(ChannelMsg::Data { data }) => {
+                self.received = self.received.saturating_add(data.len());
+                if self.received > 8192 {
+                    return Err(entry_failed());
+                }
+                self.bytes.extend_from_slice(&data);
+            }
+            Some(ChannelMsg::ExtendedData { data, .. }) => {
+                self.received = self.received.saturating_add(data.len());
+                if self.received > 8192 {
+                    return Err(entry_failed());
+                }
+            }
+            Some(ChannelMsg::ExitStatus { exit_status }) => {
+                if exit_status != 0 || self.status.is_some() {
+                    return Err(entry_failed());
+                }
+                self.status = Some(exit_status);
+            }
+            Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return Ok(false),
+            _ => {}
+        }
+        Ok(true)
+    }
+    pub(crate) async fn bind(
+        mut self,
+        parent: &Session,
+        child: &std::sync::Arc<Session>,
+        lease: &crate::app_lock::AccessLease,
+    ) -> Result<()> {
+        let result = async {
+            // Mosh's launcher exits before its PTY child is released by UDP. Consume
+            // that status separately so it cannot terminate the existing receipt parsers.
+            while self.status.is_none() {
+                if !self.read().await? {
+                    return Err(entry_failed());
+                }
+            }
+            match &self.binding {
+                EntryBinding::Ordinary { marker } => {
+                    // Actual child startup evidence only; this grants no tmux/Herdr input authority.
+                    crate::tmux_jump::handshake(&mut self.channel, &mut self.bytes, marker)
+                        .await
+                        .ok_or_else(entry_failed)?;
+                }
+                EntryBinding::Tmux {
+                    marker,
+                    name,
+                    server,
+                } => {
+                    let identity =
+                        crate::tmux_jump::handshake(&mut self.channel, &mut self.bytes, marker)
+                            .await
+                            .ok_or_else(entry_failed)?;
+                    let control =
+                        crate::tmux_jump::prepare(&parent.handle, identity, name, server, lease)
+                            .await
+                            .ok_or_else(entry_failed)?;
+                    lease.check()?;
+                    *child.tmux_server.lock().map_err(|_| entry_failed())? = Some(server.clone());
+                    *child.tmux.lock().map_err(|_| entry_failed())? =
+                        Some(crate::tmux_jump::start(control, child.cancel.subscribe()));
+                }
+                EntryBinding::Herdr { name } => {
+                    let initial = std::mem::take(&mut *self.bytes);
+                    let (startup, rest) = crate::herdr_guard::acquire(
+                        parent,
+                        lease,
+                        name,
+                        &mut self.channel,
+                        initial,
+                    )
+                    .await?;
+                    self.bytes = Zeroizing::new(rest);
+                    lease.check()?;
+                    *child.herdr.lock().map_err(|_| entry_failed())? =
+                        Some(crate::herdr_guard::start(
+                            startup,
+                            child.handle.clone(),
+                            child.cancel.subscribe(),
+                        ));
+                }
+            }
+            if !self.bytes.is_empty() {
+                return Err(entry_failed());
+            }
+            Ok(())
+        };
+        let result = timeout(Duration::from_secs(3), result)
+            .await
+            .map_err(|_| entry_failed())?;
+        let _ = timeout(Duration::from_secs(2), self.channel.close()).await;
+        result
+    }
+}
+fn take_entry_header(
+    bytes: &mut Zeroizing<Vec<u8>>,
+    address: SocketAddr,
+    options: &Options,
+) -> Result<Option<Bootstrap>> {
+    let mut start = 0;
+    for end in 0..bytes.len() {
+        if bytes[end] != b'\n' {
+            continue;
+        }
+        if bytes[start..end].starts_with(b"MOSH CONNECT ") {
+            let bootstrap =
+                parse_bootstrap(&bytes[..=end], address, options).map_err(|_| entry_failed())?;
+            let rest = bytes.split_off(end + 1);
+            bytes.zeroize();
+            **bytes = rest;
+            return Ok(Some(bootstrap));
+        }
+        start = end + 1;
+    }
+    Ok(None)
+}
+pub(crate) async fn bootstrap_entry(
+    session: &Session,
+    lease: &crate::app_lock::AccessLease,
+    options: Options,
+    entry: crate::multiplexer::Entry,
+) -> Result<(Bootstrap, EntryStartup)> {
+    let address = route(session, &options)?;
+    entry.validate()?;
+    let unix = crate::ssh::exec_bounded(
+        session,
+        "sh -c 'printf \"lazysh-mosh-entry-v1\\n\"; uname -s'".into(),
+        lease,
+        Duration::from_secs(5),
+        128,
+        None,
+    )
+    .await;
+    lease.check()?;
+    if !matches!(
+        unix.as_deref(),
+        Ok("lazysh-mosh-entry-v1\nLinux\n" | "lazysh-mosh-entry-v1\nDarwin\n")
+    ) {
+        return Err(SshError::new(
+            "mosh_entry_unsupported_host",
+            "Mosh multiplexer entry requires a positively identified Linux or macOS SSH host.",
+        ));
+    }
+    // Only this read-only pre-dispatch absence permits Auto to retry SSH.
+    let presence = crate::ssh::exec_bounded(
+        session,
+        format!("sh -c {}", quote(&format!("if command -v -- {} >/dev/null 2>&1; then printf 'lazysh-mosh-executable-v1:present\\n'; else printf 'lazysh-mosh-executable-v1:absent\\n'; fi", quote(&options.server_path)))),
+        lease, Duration::from_secs(5), 128, None,
+    ).await?;
+    match presence.as_str() {
+        "lazysh-mosh-executable-v1:present\n" => {}
+        "lazysh-mosh-executable-v1:absent\n" => {
+            return Err(SshError::new(
+                "mosh_bootstrap",
+                "The configured Mosh executable is unavailable. No multiplexer entry was started.",
+            ))
+        }
+        _ => return Err(entry_failed()),
+    }
+    let locales = bootstrap_exec(session, lease, "locale -a".into()).await?;
+    let locale = utf8_locale(&locales)?;
+    entry.prepare(session, lease).await?;
+    let (binding, command) = match entry.kind {
+        crate::multiplexer::MultiplexerKind::Tmux => {
+            let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
+            let server = entry.server()?;
+            let command = crate::tmux_jump::attach_receipt(&entry.name, &marker, &server);
+            (
+                EntryBinding::Tmux {
+                    marker,
+                    name: entry.name.clone(),
+                    server,
+                },
+                command,
+            )
+        }
+        crate::multiplexer::MultiplexerKind::Herdr
+            if crate::herdr_guard::available(session, &entry.name, lease).await =>
+        {
+            crate::herdr_guard::require_startup_fd(session, lease).await?;
+            (
+                EntryBinding::Herdr {
+                    name: entry.name.clone(),
+                },
+                crate::herdr_guard::attach_receipt(&entry.name),
+            )
+        }
+        _ => {
+            let marker = format!("LAZYSH_ATTACH_{}", uuid::Uuid::new_v4().simple());
+            let command = crate::tmux_jump::receipt_command(&entry.command()?, &marker);
+            (EntryBinding::Ordinary { marker }, command)
+        }
+    };
+    let command = format!(
+        "exec 3>&1; exec {} -- sh -c {}",
+        options.command(&locale),
+        quote(&command)
+    );
+    let command = format!("sh -c {}", quote(&command));
+    let channel = crate::ssh::open_owned_channel(
+        &session.handle,
+        lease,
+        tokio::time::Instant::now() + Duration::from_secs(15),
+    )
+    .await?;
+    let mut startup = EntryStartup {
+        channel,
+        bytes: Zeroizing::new(Vec::new()),
+        received: 0,
+        status: None,
+        binding,
+    };
+    let mut cancelled = session.cancel.subscribe();
+    let result = async {
+        lease.check()?;
+        startup.channel.exec(true, command).await?;
+        loop {
+            if let Some(bootstrap) = take_entry_header(&mut startup.bytes, address, &options)? {
+                return Ok(bootstrap);
+            }
+            if !startup.read().await? {
+                return Err(entry_failed());
+            }
+        }
+    };
+    let bootstrap = tokio::select! { biased;
+        _ = lease.cancelled() => return Err(entry_failed()),
+        _ = cancelled.changed() => return Err(entry_failed()),
+        result = timeout(Duration::from_secs(15), result) => result.map_err(|_| entry_failed())?.map_err(|_| entry_failed())?,
+    };
+    Ok((bootstrap, startup))
 }
 
 #[cfg(any(
@@ -405,6 +683,139 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn private_receipt_channel(
+        lease: &crate::app_lock::AccessLease,
+    ) -> (crate::ssh::GuardAdmissionFixture, crate::ssh::OwnedChannel) {
+        let fixture = crate::ssh::guard_admission_fixture(lease.clone()).await;
+        fixture.quiet();
+        let channel = fixture.channel(lease).await;
+        channel.exec(true, "owned private receipt").await.unwrap();
+        (fixture, channel)
+    }
+    #[tokio::test]
+    async fn ordinary_entry_requires_its_private_nonce_receipt_and_grants_no_input_authority() {
+        use crate::ssh::test_support::{ready_lease, unlocked_access};
+        for (receipt, accepted) in [
+            ("owned-nonce\t123\t/dev/pts/7\n", true),
+            ("other-nonce\t123\t/dev/pts/7\n", false),
+            ("owned-nonce\t0\t/dev/pts/7\n", false),
+            ("", false),
+        ] {
+            let access = unlocked_access();
+            let lease = ready_lease(&access);
+            let (fixture, channel) = private_receipt_channel(&lease).await;
+            let startup = EntryStartup {
+                channel,
+                bytes: Zeroizing::new(receipt.as_bytes().to_vec()),
+                received: receipt.len(),
+                status: Some(0),
+                binding: EntryBinding::Ordinary {
+                    marker: "owned-nonce".into(),
+                },
+            };
+            let result = startup
+                .bind(&fixture.session, &fixture.session, &lease)
+                .await;
+            assert_eq!(result.is_ok(), accepted, "receipt admission mismatch");
+            assert!(fixture.session.tmux.lock().unwrap().is_none());
+            assert!(fixture.session.herdr.lock().unwrap().is_none());
+            assert_eq!(fixture.private_execs(), 0);
+            fixture.closed().await;
+        }
+    }
+    #[tokio::test]
+    async fn native_display_marker_cannot_replace_private_receipt_and_pending_entry_cancels() {
+        use crate::ssh::test_support::{ready_lease, unlocked_access};
+        for cancel_parent in [false, true] {
+            let access = unlocked_access();
+            let lease = ready_lease(&access);
+            let (fixture, channel) = private_receipt_channel(&lease).await;
+            let directory = tempfile::tempdir().unwrap();
+            let state = crate::ssh::AppState::new(directory.path().join("state")).unwrap();
+            let startup = EntryStartup {
+                channel,
+                bytes: Zeroizing::new(Vec::new()),
+                received: 0,
+                status: Some(0),
+                binding: EntryBinding::Ordinary {
+                    marker: "owned-display-spoof".into(),
+                },
+            };
+            let (events, _received) = crate::ssh::test_support::json_events();
+            let (started, starting) = tokio::sync::oneshot::channel();
+            let (stopped, stopping) = tokio::sync::oneshot::channel();
+            let pending = crate::ssh::spawn_native_terminal(
+                &state,
+                lease.clone(),
+                fixture.session.clone(),
+                events,
+                crate::ssh::NativeTerminalKind::Fixture,
+                Some(startup),
+                crate::ssh::check_size,
+                move |_access, input, mut cancellation, _initial, output, ready| {
+                    tauri::async_runtime::spawn(async move {
+                        let _input = input;
+                        ready.send(Ok(())).unwrap();
+                        output
+                            .send(b"owned-display-spoof\t123\t/dev/pts/7\n".to_vec())
+                            .await
+                            .unwrap();
+                        started.send(()).unwrap();
+                        if !*cancellation.borrow() {
+                            let _ = cancellation.changed().await;
+                        }
+                        let _ = stopped.send(());
+                        Ok(())
+                    })
+                },
+            );
+            tokio::pin!(pending);
+            tokio::select! {
+                started = starting => started.unwrap(),
+                _ = &mut pending => panic!("entry completed before driver startup"),
+            }
+            if cancel_parent {
+                fixture.session.cancel.send_replace(true);
+            }
+            let error = timeout(Duration::from_secs(5), &mut pending)
+                .await
+                .unwrap()
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), "mosh_entry_startup_failed");
+            timeout(Duration::from_secs(2), stopping)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(fixture.private_execs(), 0);
+            fixture.closed().await;
+        }
+    }
+    #[test]
+    fn entry_header_handles_every_split_without_forwarding_the_key_or_receipt() {
+        let options = Options::default();
+        let address = "127.0.0.1:22".parse().unwrap();
+        let header = b"owned banner\nMOSH CONNECT 60001 AAAAAAAAAAAAAAAAAAAAAA\n";
+        for split in 0..header.len() {
+            let mut bytes = Zeroizing::new(header[..split].to_vec());
+            assert!(take_entry_header(&mut bytes, address, &options)
+                .unwrap()
+                .is_none());
+            bytes.extend_from_slice(&header[split..]);
+            bytes.extend_from_slice(b"PRIVATE_RECEIPT");
+            let result = take_entry_header(&mut bytes, address, &options)
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.remote.port(), 60001);
+            assert_eq!(bytes.as_slice(), b"PRIVATE_RECEIPT");
+        }
+        let mut bytes = Zeroizing::new(b"MOSH CONNECT 22 PRIVATE_KEY_DO_NOT_ECHO\n".to_vec());
+        let error = take_entry_header(&mut bytes, address, &options)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), "mosh_entry_startup_failed");
+        assert!(!format!("{error:?}").contains("PRIVATE_KEY"));
+    }
     #[test]
     fn bootstrap_rejects_ambiguous_unbounded_or_out_of_range_secrets_without_echoing_them() {
         let options = Options::default();

@@ -157,13 +157,36 @@ pub(crate) fn attach_command(
     attach_with_prefix(name, marker, &server.prefix())
 }
 pub(crate) fn attach_with_prefix(name: &str, marker: &str, prefix: &str) -> String {
+    attach_with_output(name, marker, prefix, false)
+}
+pub(crate) fn attach_receipt(
+    name: &str,
+    marker: &str,
+    server: &crate::tmux_server::TmuxServer,
+) -> String {
+    attach_with_output(name, marker, &server.prefix(), true)
+}
+fn attach_with_output(name: &str, marker: &str, prefix: &str, receipt: bool) -> String {
+    startup_command(
+        &format!(
+            "{} attach-session -t {}",
+            prefix,
+            crate::multiplexer::tmux_arg(&format!("={name}"))
+        ),
+        marker,
+        receipt,
+    )
+}
+pub(crate) fn receipt_command(command: &str, marker: &str) -> String {
+    startup_command(command, marker, true)
+}
+fn startup_command(command: &str, marker: &str, receipt: bool) -> String {
     // Keep POSIX metadata syntax inside sh rather than the user's login shell.
     // That process's PID survives exec into the displayed tmux client.
+    let output = if receipt { " >&3; exec 3>&-" } else { "" };
     let script = format!(
-        "printf '{}\\t%s\\t%s\\n' \"$$\" \"$(tty)\"; exec {} attach-session -t {}",
-        marker,
-        prefix,
-        crate::multiplexer::tmux_arg(&format!("={name}"))
+        "printf '{}\\t%s\\t%s\\n' \"$$\" \"$(tty)\"{}; exec {}",
+        marker, output, command,
     );
     format!("exec sh -c {}", ssh::quote(&script))
 }
