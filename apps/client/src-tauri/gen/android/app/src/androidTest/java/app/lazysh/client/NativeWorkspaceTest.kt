@@ -1585,14 +1585,30 @@ class NativeWorkspaceTest {
         require((bounds + visible).all { it.isFinite() } && visible[2] > 0 && visible[3] > 0 && visible[4] == 1.0 &&
             bounds[0] >= visible[0] && bounds[1] >= visible[1] && bounds[2] <= visible[0] + visible[2] &&
             bounds[3] <= visible[1] + visible[3] && bounds[2] > bounds[0] && bounds[3] > bounds[1])
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        lateinit var fingerActivity: MainActivity
+        lateinit var fingerView: WebView
+        lateinit var fingerDecor: View
+        lateinit var fingerRoot: View
+        scenario.onActivity { activity ->
+            fingerActivity = activity; fingerDecor = activity.window.decorView
+            fingerView = checkNotNull(webView(fingerDecor)); fingerRoot = fingerView.rootView
+        }
         var startFrame: List<Int>? = null
-        fun fingerPoint(view: View, fraction: Double): FloatArray {
+        fun fingerFrame(view: View): List<Int> {
             val origin = IntArray(2); view.getLocationOnScreen(origin)
-            val frame = listOf(origin[0], origin[1], view.width, view.height)
+            return listOf(origin[0], origin[1], view.width, view.height)
+        }
+        fun ownsFingerView() = !fingerActivity.isFinishing && !fingerActivity.isDestroyed &&
+            fingerActivity.window.decorView === fingerDecor && fingerView.rootView === fingerRoot &&
+            fingerView.isAttachedToWindow && fingerView.isShown && fingerView.hasWindowFocus() &&
+            (startFrame == null || fingerFrame(fingerView) == startFrame)
+        fun fingerPoint(view: View, fraction: Double): FloatArray {
+            val frame = fingerFrame(view)
             if (startFrame == null) startFrame = frame else assertEquals("Swipe WebView frame must remain stable", startFrame, frame)
             val density = view.resources.displayMetrics.density.toDouble()
             val predicates = mapOf(
-                "webView" to (view is WebView), "attached" to view.isAttachedToWindow, "shown" to view.isShown,
+                "ownedView" to (view === fingerView && ownsFingerView()), "webView" to (view is WebView), "attached" to view.isAttachedToWindow, "shown" to view.isShown,
                 "windowFocused" to view.hasWindowFocus(), "layoutSettled" to !view.isLayoutRequested,
                 "sizePositive" to (view.width > 0 && view.height > 0), "densityValid" to (density.isFinite() && density > 0),
                 "densityMatchesDom" to (geometry.getDouble("density") == density))
@@ -1615,12 +1631,11 @@ class NativeWorkspaceTest {
             val x = ((bounds[0] + bounds[2]) / 2 - visible[0]) * scaleX
             val y = (bounds[1] + (bounds[3] - bounds[1]) * fraction - visible[1]) * scaleY
             assertTrue("Swipe finger must stay inside the measured native WebView", x > 0 && y > 0 && x < view.width && y < view.height)
-            return floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+            return floatArrayOf((frame[0] + x).toFloat(), (frame[1] + y).toFloat())
         }
         val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
         val fingerObservation = "(()=>{$fingerScript;return ownedHerdrObserveFinger(window,$fingerKey,$screens);})()"
         assertEquals("Owned continuous finger observation installed", "true", evaluate(scenario, fingerObservation))
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
         val downTime = android.os.SystemClock.uptimeMillis()
         val pointer = android.view.MotionEvent.PointerProperties().apply {
             id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
@@ -1628,6 +1643,10 @@ class NativeWorkspaceTest {
         var fingerDown = false
         var lastPoint = floatArrayOf()
         var fingerFailure: Throwable? = null
+        val fingerStarted = System.nanoTime()
+        val fingerDeadline = fingerStarted + TimeUnit.SECONDS.toNanos(5)
+        val dispatches = JSONArray()
+        fun elapsed() = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - fingerStarted).coerceIn(0, 65_535)
         fun sendFinger(action: Int, point: FloatArray) {
             val coordinate = android.view.MotionEvent.PointerCoords().apply {
                 x = point[0]; y = point[1]; pressure = 1f; size = 1f
@@ -1641,17 +1660,52 @@ class NativeWorkspaceTest {
             } finally {event.recycle()}
         }
         fun injectFinger(action: Int, fraction: Double) {
-            scenario.onActivity {activity -> lastPoint = fingerPoint(checkNotNull(webView(activity.window.decorView)), fraction)}
+            val dispatch = JSONObject().put("action", action).put("frameBeginMs", elapsed())
+            if (dispatches.length() == 0) dispatch.put("geometry", geometry.getJSONObject("diagnostic"))
+            assertTrue("Owned finger dispatch trace is bounded", dispatches.length() < 6)
+            dispatches.put(dispatch)
+            // ActivityScenario.onActivity waits for UI idle before dispatch, outside its callback timeout.
+            instrumentation.runOnMainSync {
+                lastPoint = fingerPoint(fingerView, fraction)
+                val global = Rect(); val visibleWindow = Rect()
+                dispatch.put("globalVisible", fingerView.getGlobalVisibleRect(global))
+                fingerView.getWindowVisibleDisplayFrame(visibleWindow)
+                dispatch.put("frame", JSONArray(startFrame)).put("point", JSONArray(lastPoint.map { it.toInt() }))
+                    .put("scroll", JSONArray(listOf(fingerView.scrollX, fingerView.scrollY)))
+                    .put("global", JSONArray(listOf(global.left, global.top, global.right, global.bottom)))
+                    .put("window", JSONArray(listOf(visibleWindow.left, visibleWindow.top, visibleWindow.right, visibleWindow.bottom)))
+            }
+            dispatch.put("injectBeginMs", elapsed()).put("eventAgeMs", android.os.SystemClock.uptimeMillis() - downTime)
+            if (action != android.view.MotionEvent.ACTION_UP)
+                assertTrue("Owned finger injection requires remaining original budget: dispatches=$dispatches", System.nanoTime() < fingerDeadline)
             sendFinger(action, lastPoint)
+            dispatch.put("injectEndMs", elapsed())
         }
-        val fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         var lastFingerSample = JSONObject()
+        var samplePhase = 0
+        var sampleSequence = 0
+        var sampleAtMs = 0L
+        fun fingerSample(timeoutMillis: Long): String {
+            val result = AtomicReference<String>()
+            val completed = CountDownLatch(1)
+            assertTrue("Owned finger probe dispatch rejected", fingerView.post {
+                if (ownsFingerView() && System.nanoTime() < fingerDeadline) {
+                    fingerView.evaluateJavascript("window[$fingerKey].sample()") { value ->
+                        if (ownsFingerView() && System.nanoTime() < fingerDeadline) result.set(value)
+                        completed.countDown()
+                    }
+                } else completed.countDown()
+            })
+            assertTrue("Owned finger probe exceeded original budget: dispatches=$dispatches", completed.await(timeoutMillis, TimeUnit.MILLISECONDS))
+            return checkNotNull(result.get()) { "Owned finger probe lost view identity or original budget" }
+        }
         fun progress(before: Int, moves: Int): Int {
             while (true) {
                 val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
-                assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before sample=$lastFingerSample", remaining > 0)
-                val sample = JSONObject(evaluate(scenario, "window[$fingerKey].sample()", remaining.coerceAtMost(1_000)))
+                assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches sample=$lastFingerSample", remaining > 0)
+                val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
                 lastFingerSample = sample
+                samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
                 assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
                 val row = sample.getInt("row")
                 if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
