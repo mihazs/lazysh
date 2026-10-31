@@ -15,10 +15,13 @@ for the selected CLI and installed companion version before configuring it.
 
 ## Explicit setup
 
-Managed setup supports Claude Code, Codex, OpenCode, Gemini CLI and Cursor CLI on
+Managed setup supports Claude Code, Codex, OpenCode, Gemini CLI, Cursor CLI and
+Droid on
 qualified platforms. Inspect the exact selected existing profile with
 `lazysh-agent hooks status`; install/update or remove only after reviewing its
-returned plan, using the corresponding expected plan hash. Preserve foreign
+returned plan, using the corresponding expected plan hash. Droid requires an
+already-existing standalone `.factory/hooks.json`; missing files require native
+setup/review, without migrating or shadowing settings/legacy hooks. Preserve foreign
 hooks, profile ownership and the user's normal trust/approval policy. Do not
 change profiles because the intended one is unavailable. Installed configuration
 is not proof that hooks are trusted, enabled, loaded or reporting.

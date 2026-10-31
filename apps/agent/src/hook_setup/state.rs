@@ -85,13 +85,15 @@ pub(super) fn classify(
     {
         return Ok(Observation::Conflict);
     }
-    let next_counts = json::counts(text, next).map_err(|_| "HooksInvalidConfiguration")?;
+    let next_counts = json::counts(text, next, record.agent == Agent::Droid)
+        .map_err(|_| "HooksInvalidConfiguration")?;
     let obsolete = previous
         .iter()
         .filter(|entry| !next.contains(entry))
         .cloned()
         .collect::<Vec<_>>();
-    let old_counts = json::counts(text, &obsolete).map_err(|_| "HooksInvalidConfiguration")?;
+    let old_counts = json::counts(text, &obsolete, record.agent == Agent::Droid)
+        .map_err(|_| "HooksInvalidConfiguration")?;
     if old_counts.iter().any(|count| *count > 0) {
         return Ok(Observation::Conflict);
     }

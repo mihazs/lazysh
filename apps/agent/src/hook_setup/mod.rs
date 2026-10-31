@@ -21,6 +21,7 @@ use std::path::PathBuf;
 pub enum AgentProfile {
     Claude,
     Codex,
+    Droid,
     Gemini,
     Cursor,
     Opencode,
@@ -31,6 +32,7 @@ impl AgentProfile {
         match self {
             Self::Claude => record::Agent::Claude,
             Self::Codex => record::Agent::Codex,
+            Self::Droid => record::Agent::Droid,
             Self::Gemini => record::Agent::Gemini,
             Self::Cursor => record::Agent::Cursor,
             Self::Opencode => record::Agent::Opencode,
@@ -89,7 +91,10 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         )
     } else {
         let entries = render::entries(agent, &source).map_err(Error::Installation)?;
-        let asset = if matches!(agent, record::Agent::Gemini | record::Agent::Cursor) {
+        let asset = if matches!(
+            agent,
+            record::Agent::Gemini | record::Agent::Cursor | record::Agent::Droid
+        ) {
             let content = render::configuration(agent, "{}", &[], &entries)
                 .map_err(|_| Error::Installation("HooksInvalidTemplate"))?;
             serde_json::from_str(&content)
@@ -111,6 +116,7 @@ fn preview(agent: AgentProfile) -> Result<Value> {
     let (asset, dialect) = match agent {
         AgentProfile::Claude => (crate::claude_config(), "posix-shell"),
         AgentProfile::Codex => (crate::hooks::codex_config(), "posix-shell"),
+        AgentProfile::Droid => (crate::hooks::droid_config(), "posix-shell"),
         AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
         AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
         AgentProfile::Opencode => (
@@ -148,9 +154,11 @@ fn manage(command: Command) -> Result<Value> {
         );
     }
     let inspected = match files::inspect(selected, &source) {
-        Err(Error::Installation("HooksAclUnsupported")) => {
+        Err(Error::Installation(
+            reason @ ("HooksAclUnsupported" | "HooksDroidStandaloneRequired"),
+        )) => {
             return Ok(
-                json!({"schemaVersion":1,"supported":false,"reason":"HooksAclUnsupported","reporting":"notChecked","trust":"notChecked"}),
+                json!({"schemaVersion":1,"supported":false,"reason":reason,"reporting":"notChecked","trust":"notChecked"}),
             )
         }
         other => other?,

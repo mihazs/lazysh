@@ -40,7 +40,7 @@ it('requires a fresh inspection after an uncertain write without retrying it',as
   expect(await screen.findByRole('alert')).toHaveProperty('textContent','Setup could not be confirmed. Inspect again before retrying.');
   expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();expect(hooks).toHaveBeenCalledTimes(2);
 });
-it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor']] as const)('uses the explicit %s profile only after inspection',async(agent,placeholder)=>{
+it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor'],['droid','/home/user/.factory']] as const)('uses the explicit %s profile only after inspection',async(agent,placeholder)=>{
   hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'configured'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'configured'});
   render(<CompanionHooksPanel sessionId="new-provider" visible/>);
   fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:agent}});
@@ -51,4 +51,11 @@ it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor']] as con
   fireEvent.click(await screen.findByRole('button',{name:'Install or update hooks'}));
   await screen.findByText('Hooks configured. Live reporting has not been verified.');
   expect(hooks.mock.calls[1]).toEqual(['new-provider',{agent,action:'install',profileRoot:`/owned/${agent} profile`,expectedPlan:inspected.installPlan}]);
+});
+
+it('explains required native Droid standalone setup without enabling mutation',async()=>{
+  hooks.mockResolvedValue({schemaVersion:1,supported:false,reason:'HooksDroidStandaloneRequired',reporting:'notChecked',trust:'notChecked'});
+  render(<CompanionHooksPanel sessionId="droid-fallback" visible/>);selectProfile();fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  expect(await screen.findByText('Create standalone hooks.json in Droid’s /hooks UI, then inspect again. Existing settings and legacy hooks are not migrated.')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();expect(hooks).toHaveBeenCalledTimes(1);
 });

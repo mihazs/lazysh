@@ -127,15 +127,19 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
 
 #[cfg(target_os = "linux")]
 async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Path) {
-    for agent in ["claude", "codex", "gemini", "cursor", "opencode"] {
+    for agent in ["claude", "codex", "droid", "gemini", "cursor", "opencode"] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
         let json_name = match agent {
             "claude" | "gemini" => Some("settings.json"),
-            "codex" | "cursor" => Some("hooks.json"),
+            "codex" | "droid" | "cursor" => Some("hooks.json"),
             _ => None,
         };
-        let foreign = "{\"foreign\": { \"keep\" : true }}";
+        let foreign = if agent == "droid" {
+            "{\"ForeignEvent\":[{ \"keep\" : true }]}"
+        } else {
+            "{\"foreign\": { \"keep\" : true }}"
+        };
         if let Some(name) = json_name {
             fs::write(profile.join(name), foreign).unwrap();
         }
