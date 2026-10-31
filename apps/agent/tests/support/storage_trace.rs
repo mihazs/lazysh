@@ -229,6 +229,9 @@ pub(super) fn initialization_workers(round: u8, workers: &[super::ContendedWorke
 
 // Only reviewed source names may leave the private owner spool.
 const FAILED_TESTS: &[&str] = &[
+    "cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_hooks",
+    "amp_native_state_projection_requires_exact_version_and_bounded_identity",
+    "aider_native_callback_records_only_health_without_reading_stdin_or_changing_sessions",
     "absent_settings_read_returns_defaults_without_creating_state",
     "atomic_updates_persist_exact_values_and_reject_stale_revisions",
     "chained_custom_link_route_is_rejected_without_mutating_its_target",

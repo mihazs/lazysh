@@ -5,7 +5,7 @@ use super::{
     state::{self, Observation},
 };
 use crate::{managed_directory::Directory, Error, Result};
-use lazysh_common::{fs as private, storage_filesystem};
+use lazysh_common::storage_filesystem;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "linux")]
@@ -154,7 +154,15 @@ pub(super) fn binary(path: &Path) -> Result<Binary> {
     if !record::valid_path(path) {
         return Err(rejected("HooksInvalidBinary"));
     }
-    let mut file = private::read_options(false).open(path)?;
+    let parent = Directory::executable_parent(
+        path.parent()
+            .ok_or_else(|| rejected("HooksInvalidBinary"))?,
+    )?;
+    let basename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| rejected("HooksInvalidBinary"))?;
+    let mut file = parent.open_file(basename, libc::O_RDONLY)?;
     let before = file.metadata()?;
     let owner = unsafe { libc::geteuid() };
     if !before.is_file()
@@ -169,9 +177,15 @@ pub(super) fn binary(path: &Path) -> Result<Binary> {
     }
     let mut digest = Sha256::new();
     let bytes = io::copy(&mut (&mut file).take(64 * 1024 * 1024 + 1), &mut digest)?;
-    if identity(&before) != identity(&file.metadata()?) || bytes != before.len() {
+    parent.check()?;
+    let at_path = parent.open_file(basename, libc::O_RDONLY)?.metadata()?;
+    if identity(&before) != identity(&file.metadata()?)
+        || identity(&before) != identity(&at_path)
+        || bytes != before.len()
+    {
         return Err(rejected("HooksChangedBinary"));
     }
+    parent.check()?;
     Ok(Binary {
         path: path.to_owned(),
         sha256: format!("{:x}", digest.finalize()),

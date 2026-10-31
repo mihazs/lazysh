@@ -20,6 +20,7 @@ const PREFIX: &[u8] = b"\x1eLAZYSH-GUARD-1:";
 
 struct Fixture {
     base: PathBuf,
+    executable: PathBuf,
     children: Vec<Child>,
 }
 impl Fixture {
@@ -35,6 +36,7 @@ impl Fixture {
         fs::write(base.join("config.toml"), "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n").unwrap();
         Self {
             base,
+            executable: PathBuf::from(env!("CARGO_BIN_EXE_herdr")),
             children: Vec::new(),
         }
     }
@@ -94,7 +96,7 @@ impl Fixture {
     }
 
     fn command(&self, session: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        let mut command = Command::new(&self.executable);
         command
             .env_clear()
             .envs(self.environment())
@@ -622,6 +624,9 @@ struct TerminalClient {
 }
 impl TerminalClient {
     fn attach(fixture: &Fixture, session: &str) -> Self {
+        Self::attach_mode(fixture, session, true)
+    }
+    fn attach_mode(fixture: &Fixture, session: &str, guarded: bool) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -630,7 +635,7 @@ impl TerminalClient {
                 pixel_height: 0,
             })
             .unwrap();
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+        let mut command = CommandBuilder::new(&fixture.executable);
         command.env_clear();
         for (key, value) in fixture.environment() {
             command.env(key, value);
@@ -650,7 +655,10 @@ impl TerminalClient {
             command.env(key, value);
         }
         command.cwd(fixture.base.join(session));
-        command.args(["--session", session, "--guarded-attach"]);
+        command.args(["--session", session]);
+        if guarded {
+            command.arg("--guarded-attach");
+        }
         let arguments = command.get_argv().clone();
         let child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
@@ -660,7 +668,7 @@ impl TerminalClient {
         let shared = display.clone();
         let handle = thread::spawn(move || {
             let mut initial = Vec::new();
-            let mut registered = false;
+            let mut registered = !guarded;
             let mut chunk = [0_u8; 4096];
             while let Ok(count) = reader.read(&mut chunk) {
                 if count == 0 {
@@ -776,6 +784,143 @@ impl Drop for TerminalClient {
             }
         }
     }
+}
+
+#[tokio::test]
+#[ignore = "requires explicit unchanged stock Herdr and current lazysh companion"]
+async fn stock_public_focus_moves_both_clients_for_shell_and_agent_without_input_or_fallback() {
+    let mut fixture = Fixture::new();
+    fixture.executable = PathBuf::from(
+        std::env::var_os("LAZYSH_TEST_HERDR_STOCK").expect("explicit unchanged stock binary"),
+    );
+    let companion = PathBuf::from(
+        std::env::var_os("LAZYSH_TEST_AGENT_BIN").expect("explicit current companion binary"),
+    );
+    assert!(fixture.executable.is_absolute() && companion.is_absolute());
+    fs::create_dir(fixture.base.join("bin")).unwrap();
+    std::os::unix::fs::symlink(&fixture.executable, fixture.base.join("bin/herdr")).unwrap();
+    fixture.start("shared");
+    let mut targets = Vec::new();
+    for (index, marker) in ["SHARED_SOURCE_SCREEN", "SHARED_TARGET_SCREEN"]
+        .iter()
+        .enumerate()
+    {
+        let created=fixture.api("shared","workspace.create",json!({"label":format!("Space-{index}"),"cwd":fixture.base.join("shared"),"focus":false}));
+        assert!(created.get("error").is_none());
+        let snapshot = fixture.api("shared", "session.snapshot", json!({}));
+        let tree = &snapshot["result"]["snapshot"];
+        let workspace = tree["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["label"] == format!("Space-{index}"))
+            .unwrap()["workspace_id"]
+            .clone();
+        let pane = tree["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["workspace_id"] == workspace)
+            .unwrap()
+            .clone();
+        let script=format!("printf '\\033[2J\\033[H{marker}\\n'; stty raw -echo; : > ready-{index}; exec cat > bytes-{index}");
+        assert!(fixture
+            .api(
+                "shared",
+                "pane.send_input",
+                json!({"pane_id":pane["pane_id"],"text":script,"keys":["Enter"]})
+            )
+            .get("error")
+            .is_none());
+        crate::support::wait_for_file(
+            &fixture.base.join("shared").join(format!("ready-{index}")),
+            BOUND,
+        );
+        targets.push(pane);
+    }
+    let first = TerminalClient::attach_mode(&fixture, "shared", false);
+    let second = TerminalClient::attach_mode(&fixture, "shared", false);
+    let ordinary = |args: &[&str]| {
+        let mut command = fixture.command("shared");
+        command.args(args);
+        async move {
+            let output = bounded_public_command(command).await;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    };
+    ordinary(&[
+        "workspace",
+        "focus",
+        targets[0]["workspace_id"].as_str().unwrap(),
+    ])
+    .await;
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_SOURCE_SCREEN", true);
+        client.wait_screen("SHARED_TARGET_SCREEN", false);
+    }
+    ordinary(&["tab", "focus", targets[1]["tab_id"].as_str().unwrap()]).await;
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_TARGET_SCREEN", true);
+        client.wait_screen("SHARED_SOURCE_SCREEN", false);
+    }
+    let focus = |pane: &str| {
+        let mut command = Command::new(&companion);
+        command
+            .env_clear()
+            .envs(fixture.environment())
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", fixture.base.join("bin").display()),
+            )
+            .env("HERDR_CONFIG_PATH", fixture.base.join("config.toml"))
+            .args(["herdr-focus-pane", "--session", "shared", "--pane", pane]);
+        bounded_public_command(command)
+    };
+    assert!(focus(targets[0]["pane_id"].as_str().unwrap())
+        .await
+        .status
+        .success());
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_SOURCE_SCREEN", true);
+        client.wait_screen("SHARED_TARGET_SCREEN", false);
+    }
+    ordinary(&[
+        "pane",
+        "report-agent",
+        targets[1]["pane_id"].as_str().unwrap(),
+        "--source",
+        "lazysh-owned",
+        "--agent",
+        "codex",
+        "--state",
+        "unknown",
+    ])
+    .await;
+    assert!(focus(targets[1]["pane_id"].as_str().unwrap())
+        .await
+        .status
+        .success());
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_TARGET_SCREEN", true);
+        client.wait_screen("SHARED_SOURCE_SCREEN", false);
+    }
+    assert!(!focus("wZZ:pZZ").await.status.success());
+    for client in [&first, &second] {
+        client.wait_screen("SHARED_TARGET_SCREEN", true);
+        client.wait_screen("SHARED_SOURCE_SCREEN", false);
+    }
+    for index in 0..2 {
+        assert!(
+            fs::read(fixture.base.join("shared").join(format!("bytes-{index}")))
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(fixture.bytes("shared").is_empty());
 }
 
 #[tokio::test]
@@ -969,4 +1114,16 @@ async fn actual_session_terminal_client_private_join_and_copy_barrier() {
             }
         }
     }
+}
+
+async fn bounded_public_command(command: Command) -> std::process::Output {
+    tokio::time::timeout(
+        BOUND,
+        tokio::process::Command::from(command)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("owned public focus deadline")
+    .expect("owned public focus process")
 }

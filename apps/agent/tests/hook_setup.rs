@@ -1090,3 +1090,106 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         assert_eq!(fixture.cli("status", None)["state"], "removed");
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_namespaces_admit_owned_and_root_parents_but_refuse_mutable_and_linked_routes() {
+    use std::{
+        fs,
+        os::unix::fs::{symlink, MetadataExt, PermissionsExt},
+    };
+    let system = std::path::Path::new("/usr/bin/true");
+    assert_eq!(
+        fs::symlink_metadata(system.parent().unwrap())
+            .unwrap()
+            .uid(),
+        0
+    );
+    assert!(
+        files::binary(system).is_ok(),
+        "read-only root-owned executable namespace must remain supported"
+    );
+    if unsafe { libc::geteuid() } != 0 {
+        assert!(
+            managed_directory::Directory::profile(system.parent().unwrap()).is_err(),
+            "executable admission must not relax mutable profile ownership"
+        );
+    }
+    let mut fixture = ProfileFixture::new(record::Agent::Claude);
+    let outer = fixture._root.path().join("source tools");
+    let parent = outer.join("bin");
+    fs::create_dir_all(&parent).unwrap();
+    let source = parent.join("owned companion");
+    fs::rename(&fixture.companion, &source).unwrap();
+    fixture.companion = source;
+    let original = files::binary(&fixture.companion).unwrap();
+    assert_eq!(original.identity.links, 1);
+    for (directory, mode) in [
+        (&outer, 0o777),
+        (&outer, 0o775),
+        (&parent, 0o1777),
+        (&parent, 0o1775),
+    ] {
+        fs::set_permissions(&outer, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(directory, fs::Permissions::from_mode(mode)).unwrap();
+        assert!(
+            files::binary(&fixture.companion).is_err(),
+            "mutable source ancestor {mode:o} was accepted"
+        );
+    }
+    fs::set_permissions(&outer, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+    let alias = fixture._root.path().join("source alias");
+    symlink(&outer, &alias).unwrap();
+    assert!(files::binary(&alias.join("bin/owned companion")).is_err());
+    assert_eq!(files::binary(&fixture.companion).unwrap(), original);
+    let retained = managed_directory::Directory::executable_parent(&parent).unwrap();
+    fs::rename(&parent, outer.join("old-bin")).unwrap();
+    fs::create_dir(&parent).unwrap();
+    assert!(
+        retained.check().is_err(),
+        "retained source parent must match the current pathname"
+    );
+    assert!(!fixture.manifest().exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn source_namespace_changes_at_each_commit_cutoff_never_publish_provider_hooks() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    for cutoff in [
+        commit::Boundary::BeforeRecord,
+        commit::Boundary::BeforeProvider,
+    ] {
+        let mut fixture = ProfileFixture::new(record::Agent::Claude);
+        let parent = fixture._root.path().join("isolated source");
+        fs::create_dir(&parent).unwrap();
+        let source = parent.join("lazysh-agent");
+        fs::rename(&fixture.companion, &source).unwrap();
+        fixture.companion = source;
+        fs::write(fixture.provider(), "{\"foreign\":true}").unwrap();
+        let plan = fixture.plan(files::Action::Install);
+        interrupt(move |point| {
+            if point == cutoff {
+                fs::set_permissions(&parent, fs::Permissions::from_mode(0o777))?;
+            }
+            Ok(())
+        });
+        let result = fixture.apply(files::Action::Install, &plan);
+        clear_interrupt();
+        if cutoff == commit::Boundary::BeforeRecord {
+            assert!(result.is_err());
+            assert!(!fixture.manifest().exists());
+        } else {
+            let outcome = result.unwrap();
+            assert_eq!(outcome.status, "uncertain");
+            assert!(outcome.metadata_committed);
+            assert!(!outcome.provider_committed);
+        }
+        assert_eq!(
+            fs::read_to_string(fixture.provider()).unwrap(),
+            "{\"foreign\":true}"
+        );
+    }
+}
