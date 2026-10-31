@@ -59,7 +59,11 @@ fn target(value: &str, kind: Option<char>) -> Result<()> {
     let mut parts = value.split(':');
     let workspace = parts.next().unwrap_or("");
     let valid = |part: &str, prefix| {
-        part.starts_with(prefix) && part.len() > 1 && part[1..].bytes().all(|b| b.is_ascii_digit())
+        part.starts_with(prefix)
+            && part.len() > 1
+            && part[1..]
+                .bytes()
+                .all(|b| b"123456789ABCDEFGHJKMNPQRSTVWXYZ0".contains(&b))
     };
     if value.len() > 50
         || !valid(workspace, 'w')
@@ -354,6 +358,51 @@ mod tests {
             assert!(!serde_json::to_string(&tree)
                 .unwrap()
                 .contains("not retained"));
+        }
+    }
+    #[test]
+    fn accepts_herdr_public_alphabet_in_snapshots_and_exact_action_targets() {
+        for suffix in [
+            "Z",
+            "2E",
+            "2N",
+            "C",
+            "F",
+            "123456789ABCDEFG",
+            "HJKMNPQRSTVWXYZ0",
+        ] {
+            let workspace = format!("w{suffix}");
+            let tab = format!("{workspace}:t{suffix}");
+            let pane = format!("{workspace}:p{suffix}");
+            let mut source = reported_snapshot();
+            let snapshot = &mut source["result"]["snapshot"];
+            for collection in ["workspaces", "tabs", "panes", "agents"] {
+                snapshot[collection][0]["workspace_id"] = workspace.clone().into();
+                if collection != "workspaces" {
+                    snapshot[collection][0]["tab_id"] = tab.clone().into();
+                }
+                if matches!(collection, "panes" | "agents") {
+                    snapshot[collection][0]["pane_id"] = pane.clone().into();
+                }
+            }
+            let tree = parse(&source.to_string()).unwrap();
+            assert_eq!(tree.agents.unwrap()[0].pane_id, pane);
+            assert!(target(&workspace, None).is_ok());
+            assert!(target(&tab, Some('t')).is_ok());
+            assert_eq!(
+                action_command(
+                    "owned",
+                    &HerdrAction::FocusAgent {
+                        target: pane.clone()
+                    }
+                )
+                .unwrap(),
+                format!("herdr --session 'owned' agent focus '{pane}'")
+            );
+        }
+        for suffix in ["I", "L", "O", "U", "a", "é", "-", "_", "1;id", "1:2", ""] {
+            assert!(target(&format!("w{suffix}"), None).is_err());
+            assert!(target(&format!("w1:p{suffix}"), Some('p')).is_err());
         }
     }
     #[test]

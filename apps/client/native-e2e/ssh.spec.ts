@@ -49,9 +49,10 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   await (await browser.$('button=Open transcript')).click();
   const messages=await browser.$('.chat-messages');
   await browser.waitUntil(async()=>(await messages.getText()).includes(herdr.record),{timeout:20_000});
-  const draft=await browser.$('form.chat-composer textarea');
-  await draft.setValue(herdr.draft);
-  expect(await draft.getValue()).toBe(herdr.draft);
+  // WebKit may retire element identifiers after controlled-input updates; resolve each read afresh.
+  const draft='form.chat-composer textarea';
+  await (await browser.$(draft)).setValue(herdr.draft);
+  expect(await (await browser.$(draft)).getValue()).toBe(herdr.draft);
   await herdr.expectBytes(Buffer.alloc(0));
   gui.stage='owned Mosh Herdr explicit confirmation';
   await (await browser.$('button=Choose terminal destination')).click();
@@ -60,7 +61,7 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   const send=await browser.$('button=Send to terminal');await send.waitForDisplayed();
   await herdr.expectBytes(Buffer.alloc(0));
   await send.click();
-  await browser.waitUntil(async()=>await draft.getValue()==='',{timeout:20_000});
+  await browser.waitUntil(async()=>await (await browser.$(draft)).getValue()==='',{timeout:20_000});
   const stop=await browser.$('button=Request stop');await stop.click();
   await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
   expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
