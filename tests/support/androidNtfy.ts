@@ -203,7 +203,7 @@ export function settingsObservation(text:string) {
 }
 export function eventObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('eventObservation[').length!==2)return;
-  const rows=[...text.matchAll(/Actual bound-event notification required; eventObservation\[entered=(true|false) readReturned=(true|false) initialReceipts=(zero|one|many|unavailable) finalReceipts=(zero|one|many|unavailable) appNotifications=(true|false|unavailable) postPermission=(true|false|unavailable) channelEnabled=(true|false|unavailable) ownedNotification=(true|false|unavailable)(?: reads=(zero|one|many) returnedReads=(zero|one|many) writes=(zero|one|many) returnedWrites=(zero|one|many) storedEnabled=(true|false|unavailable) clock=(unavailable|negative|rollback|beforeIssued|expired|withinWindow))?\]/g)];
+  const rows=[...text.matchAll(/Actual bound-event notification required; eventObservation\[entered=(true|false) readReturned=(true|false) initialReceipts=(zero|one|many|unavailable) finalReceipts=(zero|one|many|unavailable) appNotifications=(true|false|unavailable) postPermission=(true|false|unavailable) channelEnabled=(true|false|unavailable) ownedNotification=(true|false|unavailable)(?: reads=(zero|one|many) returnedReads=(zero|one|many) writes=(zero|one|many) returnedWrites=(zero|one|many) storedEnabled=(true|false|unavailable) clock=(unavailable|negative|rollback|beforeIssued|expired|withinWindow)(?: hostProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) issuedInHandler=(within|outside|unavailable) postProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) callbackProgress=(consistentWithinSecond|wallAhead|wallBehind|unavailable) postClock=(unavailable|beforeIssued|expired|withinWindow))?)?\]/g)];
   if(rows.length!==1)return;
   const match=rows[0];
   if(match[1]==='false' && match[2]==='true')return;
@@ -211,7 +211,7 @@ export function eventObservation(text:string) {
   return {entered:match[1]==='true',readReturned:match[2]==='true',initialReceipts:match[3],finalReceipts:match[4],
     appNotifications:flag(match[5]),postPermission:flag(match[6]),channelEnabled:flag(match[7]),ownedNotification:flag(match[8]),
     ...(match[9]===undefined?{}:{reads:match[9],returnedReads:match[10],writes:match[11],returnedWrites:match[12],
-      storedEnabled:flag(match[13]),clock:match[14]})};
+      storedEnabled:flag(match[13]),clock:match[14],...(match[15]===undefined?{}:{hostProgress:match[15],issuedInHandler:match[16],postProgress:match[17],callbackProgress:match[18],postClock:match[19]})})};
 }
 async function nativeFailure(directory:string) {
   try {
