@@ -60,8 +60,10 @@ export class SshFixture {
   get challenge(){return `printf 'SSH_%s_END\\n' '${this.nonce}'`;}
   readonly username=userInfo().username;
   private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv,private readonly privateTtyGroup=false) {this.nonce=nonce;}
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean}={}) {
+    if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
+    if(options.moshBinary && (tools || options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
     if(tools && options.companion)throw new Error('Companion installation requires a fixture without preinstalled tools');
     const directory=await mkdtemp(join(tools||options.companion?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
@@ -83,15 +85,22 @@ export class SshFixture {
       const prompt=`UI_PROMPT_${nonce}> `;
       let environment:NodeJS.ProcessEnv|undefined;
       let subsystem:string|undefined;
-      if(options.companion) {
+      if(options.companion || options.moshBinary) {
         for(const candidate of ['/usr/lib/openssh/sftp-server','/usr/lib/ssh/sftp-server']) {
           if(await stat(candidate).then(value=>value.isFile()).catch(()=>false)){subsystem=candidate;break;}
         }
-        if(!subsystem)throw new Error('Owned companion fixture requires installed OpenSSH SFTP server');
+        if(!subsystem)throw new Error('Owned file-transfer fixture requires installed OpenSSH SFTP server');
         environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:'/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
         for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]) {
           const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
         }
+      }
+      if(options.moshBinary) {
+        const binary=options.moshBinary;
+        if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit owned Mosh binary required');
+        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700});
+        await copyFile(binary,join(bin,'mosh-server'));await chmod(join(bin,'mosh-server'),0o700);
+        environment!.PATH=bin+':/usr/bin:/bin';
       }
       if(tools) {
         const bin=join(directory,'bin');await mkdir(bin,{mode:0o700});
@@ -104,12 +113,14 @@ export class SshFixture {
           const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
         }
       }
+      const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
+      const commandSeconds=options.companion?companionFixtureBudget/1000:90;
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
         `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no','PasswordAuthentication no','KbdInteractiveAuthentication no','UsePAM no','StrictModes no','LogLevel ERROR',
         environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
-        ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${companionFixtureBudget/1000}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s ${companionFixtureBudget/1000}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${companionFixtureBudget/1000}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
+        ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then ${observeBootstrap}exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
         environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s 90s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
         `Banner none`,''].join('\n'),{mode:0o600});
       const arguments_=['-D','-e','-f',config];
@@ -127,13 +138,13 @@ export class SshFixture {
         fields[2]=String(userInfo().gid);groups[tty[0]]=fields.join(':');
         const groupFile=join(directory,'namespace-group');
         await writeFile(groupFile,groups.join('\n'),{mode:0o600,flag:'wx'});
-        daemon=new OwnedProcess('/usr/bin/bwrap',['--die-with-parent','--unshare-user','--dev-bind','/','/','--ro-bind',groupFile,groupSource,'--',sshd,...arguments_]);
+        daemon=new OwnedProcess('/usr/bin/bwrap',['--die-with-parent','--unshare-user','--dev-bind','/','/',...(options.moshBinary?['--unshare-pid','--proc','/proc']:[]),'--ro-bind',groupFile,groupSource,'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
-      if(!await daemon.liveIdentity())throw new Error('Owned SSH root identity unavailable');
+      if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
       const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,options.privateTtyGroup);
       const deadline=performance.now()+3000;
       while(!await listening(port)) {
-        if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error('Owned sshd not ready');
+        if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error(`Owned sshd not ready; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
         await delay(10);
       }
       return fixture;
@@ -143,15 +154,15 @@ export class SshFixture {
       throw error;
     }
   }
-  private async keyOptions(identity=true) {
+  private async keyOptions(identity=true,port=this.port) {
     const known=join(this.directory,'known_hosts');
-    await writeFile(known,`[127.0.0.1]:${this.port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
+    await writeFile(known,`[127.0.0.1]:${port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
     return ['-F','/dev/null','-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
       '-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${known}`,'-o','GlobalKnownHostsFile=/dev/null',
       ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none'])];
   }
-  async client(identity=true,remoteCommand?:string) {
-    return new OwnedProcess('ssh',[remoteCommand===undefined?'-tt':'-T','-p',String(this.port),...await this.keyOptions(identity),`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
+  async client(identity=true,remoteCommand?:string,port=this.port) {
+    return new OwnedProcess('ssh',[remoteCommand===undefined?'-tt':'-T','-p',String(port),...await this.keyOptions(identity,port),`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
   }
   async sftp() {
     return new OwnedProcess('sftp',['-b','-','-P',String(this.port),...await this.keyOptions(),`${this.username}@127.0.0.1`]);

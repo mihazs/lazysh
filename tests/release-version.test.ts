@@ -2,12 +2,13 @@ import { afterEach, expect, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
+import { ownedWorkspaces, synchronizeWorkspaceVersions, verifyRelease } from '../.changeset/bun-lock';
 
 const source = new URL('../', import.meta.url).pathname;
 const tauriCli = join(source, 'node_modules/@tauri-apps/cli/tauri.js');
 const json = (directory: string, path: string) => Bun.file(join(directory, path)).json();
 const temporary: string[] = [];
+const generatedHistories = Object.keys(ownedWorkspaces).map(path => `${path}/CHANGELOG.md`).sort();
 const platformSources = [
   'apps/client/src-tauri/apple/project.yml.hbs',
   'apps/client/src-tauri/Info.plist',
@@ -105,11 +106,14 @@ test('real multi-package release preparation scopes generated history but reject
   await copyFile(join(source, '.jscpd.json'), join(directory, '.jscpd.json'));
   const manifests = [...new Bun.Glob('{apps,packages}/*/package.json').scanSync({ cwd: directory })];
   const generated = manifests.map(path => path.replace('package.json', 'CHANGELOG.md')).sort();
-  expect(generated).toHaveLength(15);
-  for (const path of generated) await copyFile(join(source, path), join(directory, path));
+  expect(generated).toEqual(generatedHistories);
+  for (const path of generated) {
+    if (await Bun.file(join(source, path)).exists()) await copyFile(join(source, path), join(directory, path));
+  }
   const result = await successful(directory, ['bun', 'run', 'release:prepare']);
   expect(result.stdout + result.stderr).toContain('Found 0 clones.');
   expect((await json(directory, 'package.json')).version).toBe('0.2.0');
+  for (const path of generatedHistories) expect(await Bun.file(join(directory, path)).text()).toContain('## 0.2.0');
   for (const path of ['apps/agent/CHANGELOG.md', 'apps/client/CHANGELOG.md']) {
     expect(await Bun.file(join(directory, path)).text()).toContain('Report bounded session history');
   }
@@ -231,7 +235,7 @@ test.each([['patch', '0.1.1', '1001'], ['minor', '0.2.0', '2000'], ['major', '1.
       expect(await readFile(join(directory, 'packages', name, 'Cargo.toml'))).toEqual(vendors[index]);
     }
     const workspaceFiles = [...new Bun.Glob('{apps,packages}/*/CHANGELOG.md').scanSync({ cwd: directory })];
-    expect(workspaceFiles).toHaveLength(15);
+    expect(workspaceFiles.sort()).toEqual(generatedHistories);
     for (const path of workspaceFiles) expect(await Bun.file(join(directory, path)).text()).toContain(`## ${expected}`);
     expect((await readdir(join(directory, '.changeset'))).sort()).toEqual(['bun-lock.ts', 'config.json']);
     await successful(directory, ['cargo', 'metadata', '--no-deps', '--locked', '--offline', '--format-version', '1']);

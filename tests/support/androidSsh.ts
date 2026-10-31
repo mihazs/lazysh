@@ -2,12 +2,13 @@ import {OwnedProcess, OUTPUT_LIMIT, identity} from './ownedProcess';
 import {SshFixture, sshCommand} from './sshFixture';
 export {SshFixture, listening, stopOwnedTree, type HerdrTools} from './sshFixture';
 export {OwnedProcess, identity, type OwnedPid} from './ownedProcess';
-import {lstat, mkdir, readlink, realpath, stat, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, readFile, readlink, realpath, stat, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import type {HerdrFixture} from './androidHerdr';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
+import {observeAndroidMoshBackground} from './androidMoshBackground';
 
 // Android 16 ApplicationExitInfo.dump fields; free-form descriptions/traces never leave memory.
 // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/app/ApplicationExitInfo.java
@@ -286,14 +287,17 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
   return {observation:{ime:'aosp-latin' as const,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false) {
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(moshBackground && (herdr || companion))throw new Error('Owned Android Mosh background mode must be isolated');
   if(companion && (herdr || process.arch!=='x64' || process.env.GITHUB_ACTIONS!=='true' || process.env.RUNNER_ENVIRONMENT!=='github-hosted'))throw new Error('Published Android companion acceptance requires its explicit disposable hosted runner');
   const serial=process.env.ANDROID_SERIAL;
   if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
   const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
   const evidence=companion?await publishedCompanion():undefined;
-  const fixture=herdr?.ssh??await (companion?SshFixture.start(undefined,{companion:true}):SshFixture.start());
+  const moshBinary=moshBackground?await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim()):undefined;
+  const fixture=herdr?.ssh??await SshFixture.start(undefined,companion?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
+  let moshWitness:ReturnType<typeof observeAndroidMoshBackground>|undefined;
   const managed=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
   const remote=`/data/local/tmp/lazysh-ui-ssh-${fixture.nonce}`;
   let reverse:string|undefined;
@@ -308,6 +312,15 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   let primary=false;
   const shell=(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args]);
   try {
+    if(moshBackground) {
+      const server=join(fixture.directory,'bin/mosh-server');
+      if((await stat(server)).size>64*1024*1024)throw new Error('Owned Mosh server binary exceeds bound');
+      const bytes=await readFile(server);
+      if(bytes.length>64*1024*1024)throw new Error('Owned Mosh server read exceeds bound');
+      const version=(await sshCommand('owned Android Mosh version',server,['--version'])).match(/^mosh-server \(mosh ([0-9]+(?:[.][0-9]+){1,3})\)/)?.[1];
+      if(!version)throw new Error('Owned Mosh server version unavailable');
+      console.log(`Owned Android Mosh fixture origin=${process.env.LAZYSH_NATIVE_MOSH_SERVER?'explicit':'system'} version=${version} sha256=${createHash('sha256').update(bytes).digest('hex')}`);
+    }
     if(evidence) {
       const missing=await fixture.client(true,'if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
       await missing.finish('no preinstalled Android companion fixture executable',5000);
@@ -315,13 +328,18 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       console.log(`Public Android companion receipt version=${evidence.version} source=${evidence.source} sha256=${evidence.sha256} bytes=${evidence.bytes}`);
     }
     // The host allowlist key must match the concrete device port removed in cleanup.
-    await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
-    reverse=String(fixture.port);
+    if(!moshBackground) {
+      await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
+      reverse=String(fixture.port);
+    }
     keyboard=await ownedSoftwareKeyboard(adb,serial);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
-    await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:Number(reverse),username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{})}),{mode:0o600});
+    await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+    if(moshBackground) {
+      moshWitness=observeAndroidMoshBackground(fixture);
+    }
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
     try {[before,hostServerBefore]=await Promise.all([emulatorContinuity(adb,serial,reverse,fixture.port),hostAdbServerIdentity(adb)]);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
@@ -330,14 +348,15 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      herdr?'-PlazyshHerdrAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':'-PlazyshSshAcceptance=true',
+      herdr?'-PlazyshHerdrAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
       ...(herdr?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?'ownedGuardedHerdrChatThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr;
     try {await gradle.finish('actual Android SSH UI instrumentation',600_000);}
     finally {timing.gradleEndMs=crashes?.elapsedMs()??null;}
     await crashes?.stop();
+    await moshWitness?.assertVerified();
     if(evidence) {
       await installedCompanion(fixture,evidence);
       if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
@@ -348,7 +367,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   } catch(error) {
     primary=true;
     try {
-      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':companion?'companion-ui':'ssh-ui');
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?'herdr-ui':companion?'companion-ui':moshBackground?'mosh-background-ui':'ssh-ui');
       const crash=await crashes?.stop();
       // Sample before an inspection adb command could implicitly restart its server.
       const hostServerAfter=await hostAdbServerIdentity(adb);
@@ -360,6 +379,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
     throw error;
   } finally {
+    await moshWitness?.stop();
     await crashes?.stop();
     await androidSshCleanup(primary,[
       ['software-keyboard',()=>keyboard?.restore()??Promise.resolve()],

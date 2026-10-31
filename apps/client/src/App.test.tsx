@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     trustHostKey: vi.fn(),
     connect: vi.fn(),
     restoreFileTransfer: vi.fn(),
+    restoreHostTools: vi.fn(),
     connectLocal: vi.fn(),
     connectMosh: vi.fn(),
     connectEt: vi.fn(),
@@ -39,6 +40,10 @@ const mocks = vi.hoisted(() => ({
   terminal: { write: vi.fn(), dispose: vi.fn() },
   createTerminal: vi.fn(),
   invoke: vi.fn(),
+  accountUsageSession: vi.fn(),
+  accountUsageRefresh: vi.fn(),
+  accountUsageDisconnected: false,
+  terminalPaneProps: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
   realAgents:false,
@@ -64,10 +69,13 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
   return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;if(mocks.launchEvent===callback)mocks.launchEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
+vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
 vi.mock("./TerminalPane", () => ({
-  default: ({ active }: { active: boolean }) =>
-    active ? <div>Live SSH terminal</div> : null,
+  default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
+    mocks.terminalPaneProps(props);
+    return props.active ? <div>Live SSH terminal</div> : null;
+  },
 }));
 vi.mock('./AgentPanel',async original=>{
   const actual=await original<typeof import('./AgentPanel')>();
@@ -96,7 +104,7 @@ const host: Host = {
 
 beforeEach(() => {
   generationBase+=10;
-  vi.clearAllMocks();mocks.realAgents=false;
+  vi.clearAllMocks();mocks.realAgents=false;mocks.accountUsageDisconnected=false;
   mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
@@ -124,6 +132,47 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it('opens AI account usage for the exact connected terminal from the existing footer',async()=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'usage-owner'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.accountUsageSession).toHaveBeenLastCalledWith('usage-owner');
+  const bar=screen.getByRole('button',{name:'Open AI account usage'});
+  expect(bar.closest('.workspace-footer')).not.toBeNull();await user.click(bar);
+  expect(await screen.findByRole('region',{name:'AI account usage'})).toBeTruthy();
+  expect(await screen.findByRole('button',{name:'Use latest report for Watch'})).toBeTruthy();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
+it('reauthenticates only host tools from disconnected Mosh account usage and refreshes after success',async()=>{
+  enableTransports();mocks.accountUsageDisconnected=true;
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'quota-mosh'});
+  mocks.api.restoreHostTools.mockResolvedValue({schemaVersion:1,status:'restored'});
+  const user=await connectAuto();await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  await user.click(await screen.findByRole('button',{name:t('accountUsageRestore')}));
+  const dialog=await screen.findByRole('dialog');
+  await user.type(within(dialog).getByLabelText('Password'),'explicit-quota-recovery');
+  expect(mocks.api.restoreHostTools).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByRole('button',{name:t('hostToolsRestore')}));
+  await waitFor(()=>expect(mocks.accountUsageRefresh).toHaveBeenCalledOnce());
+  expect(mocks.api.restoreHostTools).toHaveBeenCalledExactlyOnceWith('quota-mosh',{password:'explicit-quota-recovery'},{useSavedCredentials:false});
+  expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
+it('opens attachments from the live toolbar and retires held callbacks after navigation or unmount',async()=>{
+  mocks.api.connect.mockResolvedValue({sessionId:'toolbar-attachments'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  const open=mocks.terminalPaneProps.mock.lastCall![0].onOpenAttachments;
+  expect(open).toBeTypeOf('function');
+  await act(async()=>open());await screen.findByText('Attach to this host');
+  await user.click(screen.getByRole('button',{name:'Usage'}));
+  await screen.findByRole('button',{name:'Use latest report for Watch'});
+  await act(async()=>open());expect(screen.queryByText('Attach to this host')).toBeNull();
+  cleanup();await act(async()=>open());expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
 it('uses the canonical Bed Mode mark decoratively beside one app name',async()=>{
@@ -464,7 +513,7 @@ it.each(['remember','saved','jump'] as const)('keeps the launch receipt in the %
   mocks.api.connect.mockResolvedValue({sessionId:'branch-session'});
   const user=userEvent.setup();render(<App/>);await screen.findByRole('dialog',{name:'Connect to Home'});
   if(branch==='remember')await user.click(screen.getByLabelText('Save credentials on this device after connecting'));
-  else if(branch==='saved')await user.click(await screen.findByLabelText('Use saved credentials'));
+  else if(branch==='saved')expect(await screen.findByLabelText('Use saved credentials')).toHaveProperty('checked',true);
   else {await user.click(screen.getByLabelText('Use bastion’s saved credentials'));await user.type(screen.getByLabelText('Bastion password'),'jump-entry');}
   if(branch!=='saved')await user.type(screen.getByLabelText('Password'),'target-entry');
   await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
@@ -671,7 +720,7 @@ describe("connection flow", () => {
     );
   });
 
-  it("uses saved native credentials only after explicit selection without exposing their values", async () => {
+  it("defaults to available saved native credentials without exposing their values", async () => {
     mocks.invoke.mockImplementation(
       async (command) => command === "has_credentials",
     );
@@ -681,7 +730,7 @@ describe("connection flow", () => {
     await user.click(
       await screen.findByRole("button", { name: "Connect to Home" }),
     );
-    await user.click(await screen.findByLabelText("Use saved credentials"));
+    expect(await screen.findByLabelText("Use saved credentials")).toHaveProperty('checked',true);
     expect(screen.queryByLabelText("Password")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Connect" }));
     expect(await screen.findByText("Live SSH terminal")).toBeTruthy();
@@ -696,6 +745,33 @@ describe("connection flow", () => {
       '[{"hostId":"home"}]',
     );
     expect(window.sessionStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('preserves manually entered credentials when the saved-credential check finishes late',async()=>{
+    const original=mocks.invoke.getMockImplementation()!;
+    let finish!:(saved:boolean)=>void;
+    mocks.invoke.mockImplementation((command,...args)=>command==='has_credentials'?new Promise<boolean>(resolve=>{finish=resolve;}):original(command,...args));
+    mocks.api.connect.mockResolvedValue({sessionId:'manual-choice'});
+    const user=userEvent.setup();render(<App/>);
+    await user.click(await screen.findByRole('button',{name:'Connect to Home'}));
+    await user.type(await screen.findByLabelText('Password'),'manual-entry');
+    await act(async()=>finish(true));
+    expect(await screen.findByLabelText('Use saved credentials')).toHaveProperty('checked',false);
+    expect(screen.getByLabelText('Password')).toHaveProperty('value','manual-entry');
+    await user.click(screen.getByRole('button',{name:'Connect'}));
+    await screen.findByText('Live SSH terminal');
+    expect(mocks.api.connect).toHaveBeenCalledExactlyOnceWith('home',{password:'manual-entry'},expect.any(Function));
+  });
+
+  it.each(['Password','Private key'])('allows an explicit %s choice after saved credentials become the default',async method=>{
+    mocks.invoke.mockImplementation(async command=>command==='has_credentials');
+    const user=userEvent.setup();render(<App/>);
+    await user.click(await screen.findByRole('button',{name:'Connect to Home'}));
+    const saved=await screen.findByLabelText('Use saved credentials');
+    expect(saved).toHaveProperty('checked',true);
+    await user.click(screen.getByRole('button',{name:method}));
+    expect(saved).toHaveProperty('checked',false);
+    expect(screen.getByLabelText(method==='Password'?'Password':'Private key (OpenSSH or PEM)')).toBeTruthy();
   });
 
   it("forgets saved credentials before removing the saved-login option", async () => {
@@ -1403,6 +1479,10 @@ it('opens an explicit local terminal without SSH authentication and hides remote
   expect(screen.queryByRole('button',{name:'Agents'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Apple status'})).toBeNull();
   expect(screen.queryByText('Apple controls for local:desktop')).toBeNull();
+  expect(mocks.accountUsageSession).toHaveBeenLastCalledWith('local:desktop');
+  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  expect(await screen.findByRole('region',{name:'AI account usage'})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Use latest report for Watch'})).toBeNull();
   expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.workspace.v1','[{"local":true}]');
   await user.click(screen.getByRole('button',{name:'Disconnect Local terminal'}));
   expect(mocks.api.disconnect).toHaveBeenCalledWith('local:desktop');
@@ -1586,6 +1666,32 @@ it('persists and removes the host default without changing the saved transport',
   await waitFor(()=>expect(mocks.api.saveHost).toHaveBeenCalledTimes(2));
   expect(mocks.api.saveHost.mock.calls[1][0]).toMatchObject({transport:'et',defaultMultiplexer:undefined});
 });
+it('opens the active host multiplexer setting directly from workspace tools without changing its running session',async()=>{
+  mocks.api.listHosts.mockResolvedValue([{...host,id:'other-host',name:'Other'},{...host,transport:'mosh'}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'settings-current'});
+  mocks.api.saveHost.mockResolvedValue(undefined);
+  const user=await openConnection();
+  await user.selectOptions(screen.getByLabelText('Transport'),'ssh');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  const terminal=await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(screen.getByRole('button',{name:'Default multiplexer'}));
+  const editor=await screen.findByRole('dialog',{name:'Edit host'});
+  const setting=within(editor).getByLabelText('Default multiplexer');
+  expect(document.activeElement).toBe(setting);
+  expect(within(editor).getByLabelText('Name')).toHaveProperty('value','Home');
+  await user.selectOptions(setting,'herdr');
+  await user.type(within(editor).getByLabelText('Default multiplexer session'),'named-work');
+  await user.click(within(editor).getByRole('button',{name:'Save host'}));
+  await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Edit host'})).toBeNull());
+  expect(mocks.api.saveHost).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({id:host.id,transport:'mosh',defaultMultiplexer:{kind:'herdr',name:'named-work'}}));
+  expect(screen.getByText('Live SSH terminal')).toBe(terminal);
+  expect(mocks.api.connect).toHaveBeenCalledOnce();
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button',{name:'Edit Home'}));
+  expect(document.activeElement).not.toBe(screen.getByLabelText('Default multiplexer'));
+});
 it.each([{kind:'tmux',name:'bad.name'},{kind:'tmux',name:'bad:name'},{kind:'herdr',name:' '},{kind:'herdr',name:'bad name'},{kind:'herdr',name:'..'},{kind:'herdr',name:'a'.repeat(65)},{kind:'zellij',name:'--option'},{kind:'herdr',name:'é'.repeat(101)},{kind:'other',name:'work'}])('rejects invalid saved default %j before native save',target=>{
   expect(validateHost({...host,defaultMultiplexer:target as Host['defaultMultiplexer']})).toBeTruthy();
 });
@@ -1665,17 +1771,19 @@ it.each([
   {name:'wrong schema',response:{schemaVersion:2,status:'restored'},valid:false},
   {name:'uncertain status',response:{schemaVersion:1,status:'uncertain'},valid:false},
   {name:'extra field',response:{schemaVersion:1,status:'restored',extra:true},valid:false},
-])('validates $name upload recovery without creating or adopting a terminal',async({response,valid})=>{
+].flatMap(item=>(['files','hostTools'] as const).map(purpose=>({...item,purpose}))))('validates $name $purpose recovery without creating or adopting a terminal',async({response,valid,purpose})=>{
   const user=userEvent.setup(),restored=vi.fn(),connected=vi.fn();
-  mocks.api.restoreFileTransfer.mockResolvedValue(response);
-  render(<ConnectDialog host={{...host,transport:'mosh'}} hosts={[host]} connected={connected} close={vi.fn()} recovery={{sessionId:'original-mosh',restored}}/>);
+  const restore=purpose==='files'?mocks.api.restoreFileTransfer:mocks.api.restoreHostTools;
+  restore.mockResolvedValue(response);
+  render(<ConnectDialog host={{...host,transport:'mosh'}} hosts={[host]} connected={connected} close={vi.fn()} recovery={{sessionId:'original-mosh',purpose,restored}}/>);
   expect(screen.queryByLabelText('Transport')).toBeNull();
   expect(screen.queryByText('Save credentials on this device after connecting')).toBeNull();
   await user.type(screen.getByLabelText('Password'),'ephemeral-restore');
-  await user.click(screen.getByRole('button',{name:'Reconnect uploads'}));
+  await user.click(screen.getByRole('button',{name:t(purpose==='files'?'attachmentRestore':'hostToolsRestore')}));
   if(valid)await waitFor(()=>expect(restored).toHaveBeenCalledOnce());
-  else {expect(await screen.findByRole('alert')).toHaveProperty('textContent',t('attachmentRestoreInvalid'));expect(restored).not.toHaveBeenCalled();}
-  expect(mocks.api.restoreFileTransfer).toHaveBeenCalledWith('original-mosh',{password:'ephemeral-restore'},{useSavedCredentials:false});
+  else {expect(await screen.findByRole('alert')).toHaveProperty('textContent',t(purpose==='files'?'attachmentRestoreInvalid':'hostToolsRestoreInvalid'));expect(restored).not.toHaveBeenCalled();}
+  expect(restore).toHaveBeenCalledWith('original-mosh',{password:'ephemeral-restore'},{useSavedCredentials:false});
+  expect(purpose==='files'?mocks.api.restoreHostTools:mocks.api.restoreFileTransfer).not.toHaveBeenCalled();
   expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.connectMosh).not.toHaveBeenCalled();
   expect(mocks.api.adoptSession).not.toHaveBeenCalled();expect(mocks.createTerminal).not.toHaveBeenCalled();expect(connected).not.toHaveBeenCalled();
 });
@@ -1685,7 +1793,7 @@ it('uses existing saved credential authorization for upload recovery and suppres
   mocks.invoke.mockImplementation(async command=>command==='has_credentials');
   mocks.api.restoreFileTransfer.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
   render(<ConnectDialog host={{...host,credentialsStored:true,biometricUnlock:true}} hosts={[host]} connected={vi.fn()} close={vi.fn()} recovery={{sessionId:'original-mosh',restored}}/>);
-  await user.click(await screen.findByLabelText('Use saved credentials'));
+  expect(await screen.findByLabelText('Use saved credentials')).toHaveProperty('checked',true);
   await user.click(screen.getByRole('button',{name:'Reconnect uploads'}));
   expect(mocks.api.restoreFileTransfer).toHaveBeenCalledWith('original-mosh',{}, {useSavedCredentials:true});
   await act(async()=>{
@@ -1693,4 +1801,23 @@ it('uses existing saved credential authorization for upload recovery and suppres
     complete({schemaVersion:1,status:'restored'});
   });
   expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
+});
+
+it.each(['lock','hidden','closed-source','unmount'] as const)('does not publish late host-tools recovery after %s',async mode=>{
+  applyAccessStatus(unlockedStatus());
+  const user=userEvent.setup(),restored=vi.fn(),current=vi.fn(()=>true);let complete!:(value:{schemaVersion:1;status:'restored'})=>void;
+  mocks.api.restoreHostTools.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
+  const view=render(<ConnectDialog host={host} hosts={[host]} connected={vi.fn()} close={vi.fn()} recovery={{sessionId:'original-mosh',purpose:'hostTools',current,restored}}/>);
+  await user.type(screen.getByLabelText('Password'),'ephemeral-tools');
+  await user.click(screen.getByRole('button',{name:t('hostToolsRestore')}));
+  expect(mocks.api.restoreHostTools).toHaveBeenCalledWith('original-mosh',{password:'ephemeral-tools'},{useSavedCredentials:false});
+  if(mode==='hidden'){
+    Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});
+    act(()=>document.dispatchEvent(new Event('visibilitychange')));
+    Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});
+  }else if(mode==='lock')applyAccessStatus({...unlockedStatus(),enabled:true,locked:true,generation:String(generationBase+1),nonce:undefined});
+  else if(mode==='closed-source')current.mockReturnValue(false);
+  else view.unmount();
+  await act(async()=>complete({schemaVersion:1,status:'restored'}));
+  expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();
 });

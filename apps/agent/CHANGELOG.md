@@ -1,5 +1,25 @@
 # @lazysh/agent
 
+## 1.3.0
+
+### Minor Changes
+
+- 9565f8a: Add compact AI account quotas and built-in host collectors when ai-usagebar is unavailable, keeping credentials on the session machine.
+
+### Patch Changes
+
+- Updated dependencies [9565f8a]
+  - @lazysh/account-usage@1.3.0
+  - @lazysh/common@1.3.0
+  - @lazysh/notification-client@1.3.0
+
+## 1.2.0
+
+### Patch Changes
+
+- @lazysh/common@1.2.0
+  - @lazysh/notification-client@1.2.0
+
 ## 1.1.7
 
 ### Patch Changes

@@ -21,8 +21,8 @@ authority. Non-main candidates, prereleases and regressions fail closed.
 
 Allowlisted publication alone uses a main `workflow_dispatch` with `initial: true` and
 `expected-source-sha` equal to the exact event/checkout SHA. Committed policy
-allowlists 1.0.0 and its failed, unpublished candidate as bounded first-parent ancestor
-`f2223e0d0673e7ef48f1c92ca91761b77f4c8508`; the corrected source must follow it.
+allowlists unpublished 1.3.0 and its failed candidate as bounded first-parent ancestor
+`f5186cf2dbd534ec24e4d1eed63033a8b9728126`; the reviewed repair source must follow it.
 This mode admits an unchanged version and retains pending Changesets for the next
 release. Prepare, tag and publish repeat the same checks. Dispatch cannot select
 arbitrary source or tags. Ordinary unchanged-version pushes skip builds; neither
@@ -32,16 +32,19 @@ The supported future workflow merges one Changesets version per main push; it do
 not enumerate arbitrary batched transitions or history. Per-source concurrency
 preserves different version runs. The repository must retain candidate history.
 
-The original 1.0.0 candidate failed its source scan because newly installed desktop
+The earlier 1.0.0 candidate failed its source scan because newly installed desktop
 WebDriver tools carried prebuilt zip.js WebAssembly. The corrected recipe removes
 that unused acceptance-only package before scanning; unexpected binaries still
-fail. Ordinary unchanged-version pushes intentionally skip admission, and rerunning
-the old event would rebuild its old recipe. After reviewing and merging the fix,
-dispatch the allowlisted path with the exact corrected main SHA. It rebuilds every
+fail. That repair used the then-current 1.0.0 allowlist; published versions remain
+immutable. The current 1.3.0 failure and its unresolved Windows acceptance evidence
+are recorded in [the installation guide](install-and-update.md#current-native-acceptance-status).
+Ordinary unchanged-version pushes intentionally skip admission, and rerunning the
+failed event would rebuild its old source. After reviewing and merging the repair,
+dispatch the allowlisted path with the exact reviewed main SHA. It rebuilds every
 source and installation gate for that new source before creating any tag. It does
 not reuse old build receipts, rewrite the failed candidate, alter a published tag,
-or bypass a scan. The already published 0.23.0 remains unchanged. Pending patch
-fragments remain for the next version instead of being consumed by this retry.
+or bypass a scan. Pending follow-up fragments remain for the next version instead
+of being discarded or consumed by this source-qualified publication.
 
 The committed manual-update recipe is pinned to its reviewed inputs. Its SHA256 must match the
 reviewed policy digest. Only source commit, build version/code and current

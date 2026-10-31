@@ -164,11 +164,16 @@ struct InitializationWorker {
 enum InitializationRecord {
     Phase(failure_record::Failure),
     Worker(InitializationWorker),
+    FailedTest(&'static str),
 }
 impl InitializationRecord {
     fn line(&self) -> String {
         match self {
             Self::Phase(record) => record.line(),
+            Self::FailedTest(name) => format!(
+                "lazysh-initialization-failed-test {}\n",
+                serde_json::json!({"name": name})
+            ),
             Self::Worker(record) => format!(
                 "{WORKER_PREFIX}{}\n",
                 serde_json::to_string(record).expect("finite worker diagnostic")
@@ -222,6 +227,62 @@ pub(super) fn initialization_workers(round: u8, workers: &[super::ContendedWorke
     }
 }
 
+// Only reviewed source names may leave the private owner spool.
+const FAILED_TESTS: &[&str] = &[
+    "absent_settings_read_returns_defaults_without_creating_state",
+    "atomic_updates_persist_exact_values_and_reject_stale_revisions",
+    "chained_custom_link_route_is_rejected_without_mutating_its_target",
+    "claude_discards_prompts_tool_arguments_and_unknown_fields",
+    "cli_updates_apply_all_explicit_flags_and_new_processes_observe_them",
+    "concurrent_hooks_preserve_every_event",
+    "concurrent_ingest_recovers_after_a_transient_database_lock",
+    "config_is_print_only_and_contains_supported_hooks",
+    "configuration_is_strict_bounded_and_updates_require_all_typed_values",
+    "crash_writer_child",
+    "disabled_operations_fail_before_transcript_or_device_access_but_settings_remain_readable",
+    "distinct_sessions_and_agents_keep_their_latest_state",
+    "invalid_events_fail_without_files_or_secret_echo",
+    "invalid_snapshot_limits_fail_before_creating_storage",
+    "killed_writer_recovers_committed_wal_and_discards_uncommitted_tail",
+    "legacy_read_only_transaction_blocks_migration_explicitly_without_losing_data",
+    "lifecycle_events_update_status_without_executing_actions",
+    "links_public_files_and_special_files_are_refused_without_changing_targets",
+    "live_sidecars_are_private_and_unsafe_sidecars_leave_targets_untouched",
+    "migration_preserves_existing_rows_and_verifies_full_wal_on_every_open",
+    "native_bootstrap_and_sqlite_share_one_wait_deadline",
+    "near_deadline_contention_counts_every_success_and_fails_explicitly",
+    "normal_automatic_checkpoints_recycle_retained_wal_after_many_commits",
+    "notifications_distinguish_attention_from_information",
+    "opening_another_store_preserves_an_existing_sqlite_writer_lock",
+    "oversized_stdin_fails_before_opening_storage",
+    "parent_traversal_after_missing_prefix_is_rejected_before_creation",
+    "real_binary_inspect_install_stale_preview_and_reuse_never_touch_state",
+    "refuses_state_symlinks_and_database_links_without_changing_the_target",
+    "short_lived_writers_keep_private_sidecar_inodes_and_recover_commits",
+    "simultaneous_clients_have_one_winner_without_lost_updates",
+    "simultaneous_initialization_and_ingest_preserve_every_event",
+    "snapshot_caps_rows_and_uses_private_local_storage",
+    "snapshot_expires_old_rows_even_without_new_events",
+    "storage_trace::bounded_excerpt_preserves_lock_start_and_commit_end",
+    "storage_trace::diagnostic_projection_is_finite_single_and_never_exports_raw_stderr",
+    "storage_trace::explicitly_requested_missing_tool_fails_before_creating_results",
+    "storage_trace::export_retains_only_a_bounded_number_of_owned_pid_files",
+    "storage_trace::failed_test_allowlist_covers_every_owned_source_test",
+    "storage_trace::failure_record::tests::records_are_bounded_and_reject_unknown_or_extra_data",
+    "storage_trace::initialization_failed_harness_footers_keep_only_static_names",
+    "storage_trace::initialization_failed_test_names_are_closed_bounded_and_deduplicated",
+    "storage_trace::initialization_projection_exports_only_bounded_closed_records",
+    "storage_trace::initialization_worker_projection_keeps_timing_without_raw_causes",
+    "storage_trace::initialization_worker_stage_drift_still_fails",
+    "storage_trace::project_owned_initialization_diagnostics",
+    "storage_trace::trace_export_rejects_symlinks_and_hard_links_without_reading_them",
+    "sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code",
+    "unsupported_platform_reports_capability_before_any_namespace_mutation",
+    "verified_darwin_system_temp_aliases_remain_supported",
+    "windows_junction_route_is_rejected_before_target_mutation",
+    "writable_ancestor_is_rejected_before_any_state_chmod_or_database_open",
+];
+
 fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> {
     if bytes.len() > EXCERPT_LIMIT {
         return None;
@@ -229,6 +290,7 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
     let mut records = Vec::new();
     let mut phases = 0;
     let mut workers = 0u64;
+    let mut failed_tests = std::collections::BTreeSet::new();
     for line in std::str::from_utf8(bytes).ok()?.lines() {
         if line.starts_with(failure_record::PREFIX) {
             if phases == 4 * 16 {
@@ -258,6 +320,21 @@ fn initialization_projection(bytes: &[u8]) -> Option<Vec<InitializationRecord>> 
             }
             workers |= bit;
             records.push(InitializationRecord::Worker(record));
+        } else if line.starts_with("test result: ") {
+            continue;
+        } else if line.starts_with("test ") && line.contains("FAILED") {
+            if line.len() > 512 {
+                return None;
+            }
+            let name = line.strip_prefix("test ")?.strip_suffix(" ... FAILED")?;
+            let name = name.strip_suffix(" - should panic").unwrap_or(name);
+            let name = FAILED_TESTS
+                .iter()
+                .copied()
+                .find(|allowed| *allowed == name)?;
+            if failed_tests.insert(name) {
+                records.push(InitializationRecord::FailedTest(name));
+            }
         }
     }
     Some(records)
@@ -296,6 +373,112 @@ fn initialization_projection_exports_only_bounded_closed_records() {
         assert!(initialization_projection(raw.as_bytes()).is_none());
     }
     assert!(initialization_projection(&[255]).is_none());
+}
+
+#[test]
+fn initialization_failed_test_names_are_closed_bounded_and_deduplicated() {
+    let name = "concurrent_hooks_preserve_every_event";
+    let failed = format!("test {name} ... FAILED\n");
+    let raw = format!(
+        "private assertion and /private/database\n{failed}{failed}test {name} ... ok\nprivate tail\n"
+    );
+    let records = initialization_projection(raw.as_bytes()).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].line(),
+        format!("lazysh-initialization-failed-test {{\"name\":\"{name}\"}}\n")
+    );
+    let should_panic = "storage_trace::initialization_worker_stage_drift_still_fails";
+    let decorated = format!("test {should_panic} - should panic ... FAILED\n");
+    assert_eq!(
+        initialization_projection(decorated.as_bytes()).unwrap()[0].line(),
+        format!("lazysh-initialization-failed-test {{\"name\":\"{should_panic}\"}}\n")
+    );
+    let all = FAILED_TESTS
+        .iter()
+        .map(|name| format!("test {name} ... FAILED\n"))
+        .collect::<String>();
+    assert_eq!(
+        initialization_projection(format!("{all}{all}").as_bytes())
+            .unwrap()
+            .len(),
+        FAILED_TESTS.len()
+    );
+    let mixed = format!("{}{failed}", journal_mode_busy_record().line());
+    assert_eq!(
+        initialization_projection(mixed.as_bytes()).unwrap().len(),
+        2
+    );
+    for raw in [
+        "test private_path_or_secret ... FAILED\n".to_owned(),
+        format!("test {name} ... FAILED private assertion\n"),
+        format!("test {name} ... FAILED\rprivate path\n"),
+        format!("test {name}... FAILED\n"),
+        format!("test {} ... FAILED\n", "x".repeat(513)),
+        format!("{}{failed}", "x".repeat(EXCERPT_LIMIT)),
+    ] {
+        assert!(initialization_projection(raw.as_bytes()).is_none());
+    }
+}
+
+#[test]
+fn initialization_failed_harness_footers_keep_only_static_names() {
+    let first = "concurrent_hooks_preserve_every_event";
+    let second = "simultaneous_clients_have_one_winner_without_lost_updates";
+    let harness = |name| {
+        format!(
+        "running 2 tests\ntest {name} ... FAILED\nfailures:\n---- {name} stdout ----\nprivate assertion /private/database token\nfailures:\n    {name}\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.00s\n"
+    )
+    };
+    let raw = format!("{}{}", harness(first), harness(second));
+    let records = initialization_projection(raw.as_bytes()).unwrap();
+    assert_eq!(records.len(), 2);
+    for (record, name) in records.iter().zip([first, second]) {
+        assert_eq!(
+            record.line(),
+            format!("lazysh-initialization-failed-test {{\"name\":\"{name}\"}}\n")
+        );
+    }
+    assert_eq!(
+        initialization_projection(raw.replace('\n', "\r\n").as_bytes()),
+        Some(records)
+    );
+}
+
+#[test]
+fn failed_test_allowlist_covers_every_owned_source_test() {
+    let sources = [
+        ("", include_str!("../cli.rs")),
+        ("", include_str!("../settings.rs")),
+        ("", include_str!("../storage_wal.rs")),
+        ("", include_str!("../installation.rs")),
+        ("storage_trace::", include_str!("storage_trace.rs")),
+        (
+            "storage_trace::failure_record::tests::",
+            include_str!("../../src/storage_failure_record.rs"),
+        ),
+    ];
+    let mut declared = std::collections::BTreeSet::new();
+    for (prefix, source) in sources {
+        let mut test = false;
+        for line in source.lines().map(str::trim) {
+            if line == "#[test]" {
+                test = true;
+            } else if test {
+                if let Some(name) = line
+                    .strip_prefix("fn ")
+                    .and_then(|line| line.split_once('('))
+                {
+                    assert!(declared.insert(format!("{prefix}{}", name.0)));
+                    test = false;
+                }
+            }
+        }
+        assert!(!test, "source test declaration did not end in a function");
+    }
+    let allowed = FAILED_TESTS.iter().map(|name| (*name).to_owned()).collect();
+    assert_eq!(declared, allowed);
+    assert_eq!(declared.len(), FAILED_TESTS.len());
 }
 
 #[test]
@@ -431,6 +614,13 @@ fn project_owned_initialization_diagnostics() {
                 records
                     .iter()
                     .filter(|record| matches!(record, InitializationRecord::Worker(_)))
+                    .count()
+            );
+            eprintln!(
+                "initialization-failed-tests={}",
+                records
+                    .iter()
+                    .filter(|record| matches!(record, InitializationRecord::FailedTest(_)))
                     .count()
             );
             for record in records {

@@ -47,24 +47,32 @@ class PublishedApkTest {
     private val usernameHint = "Username"
     private val deadline = System.nanoTime() + 45_000_000_000L
 
-    private fun progress(name: Stage, event: String) {
+    private var progressDepth = 0
+
+    private fun progress(name: Stage, event: String, depth: Int) {
         try {
             instrumentation.sendStatus(0, Bundle().apply {
-                putString("lazyshPublishedProgress", JSONObject().put("stage", name.name).put("event", event).toString())
+                putString("lazyshPublishedProgress", JSONObject().put("stage", name.name).put("event", event).put("depth", depth).toString())
             })
         } catch (_: Throwable) { /* Observation cannot replace the original UI result. */ }
     }
 
-    private fun <T> stage(name: Stage, action: () -> T): T = try {
-        progress(name, "entry")
-        check(System.nanoTime() < deadline)
-        action().also { progress(name, "exit") }
-    } catch (failure: Throwable) {
-        // Retain a nested owned stage; discard every arbitrary framework detail.
-        val closed = Stage.entries.firstOrNull {
-            failure is AssertionError && failure.message == "Published APK UI: ${it.name}"
-        } ?: name
-        throw AssertionError("Published APK UI: ${closed.name}")
+    private fun <T> stage(name: Stage, action: () -> T): T {
+        val depth = progressDepth
+        progressDepth++
+        return try {
+            progress(name, "entry", depth)
+            check(System.nanoTime() < deadline)
+            action().also { progress(name, "exit", depth) }
+        } catch (failure: Throwable) {
+            // Retain a nested owned stage; discard every arbitrary framework detail.
+            val closed = Stage.entries.firstOrNull {
+                failure is AssertionError && failure.message == "Published APK UI: ${it.name}"
+            } ?: name
+            throw AssertionError("Published APK UI: ${closed.name}")
+        } finally {
+            progressDepth = depth
+        }
     }
 
     private fun waitMillis(): Long = ((deadline - System.nanoTime()) / 1_000_000L).coerceIn(1, 5_000)

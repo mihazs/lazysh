@@ -72,6 +72,7 @@ function createRemoteSession(command:string,args:{sessionId:string}&Record<strin
   return createSession(command,args,onEvent);
 }
 export const api = {
+  accountUsage: (sessionId:string) => invoke<import("./accountUsageReport").AccountUsageResponse>("account_usage", {sessionId}),
   installCompanion: (sessionId:string,onProgress:(value:unknown)=>void) => {
     if(sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
     const progress=new Channel<unknown>();progress.onmessage=guardAccessCallback(onProgress);
@@ -114,6 +115,8 @@ export const api = {
   },
   restoreFileTransfer: (sessionId:string, credentials:Credentials, options:{useSavedCredentials?:boolean}={}) =>
     remoteInvoke<{schemaVersion:1;status:'restored'}>('restore_file_transfer',{sessionId,...credentials,...options}),
+  restoreHostTools: (sessionId:string, credentials:Credentials, options:{useSavedCredentials?:boolean}={}) =>
+    remoteInvoke<{schemaVersion:1;status:'restored'}>('restore_host_tools',{sessionId,...credentials,...options}),
   adoptSession: (sessionId:string) => invoke<void>('adopt_session',{sessionId}),
   write: (sessionId: string, data: string) =>
     invoke<void>(sessionId.startsWith('local:') ? 'local_write' : "write_stdin", { sessionId, data }),

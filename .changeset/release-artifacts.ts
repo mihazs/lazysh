@@ -184,7 +184,7 @@ export async function releaseNotes(root: string, version: string, initial = fals
     requireArtifact(policy.initialPublication?.version === version, 'initial notes version not allowlisted');
     const current = (await Bun.file(join(root, 'CHANGELOG.md')).text()).split(/^## \[Unreleased\]\s*$/m)[1]?.split(/^## /m)[0];
     requireArtifact(current?.trim(), 'missing initial development changes');
-    notes += `\n\n## Changes since version preparation\n\n${current.trim()}`;
+    notes += `\n\n## Current development changelog\n\n${current.trim()}`;
   }
   const guide = await Bun.file(join(root, 'docs/install-and-update.md')).text();
   const status = guide.split(/^## Current native acceptance status\s*$/m);

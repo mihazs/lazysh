@@ -1,0 +1,4 @@
+<resources>
+    <string name="session_notification_channel">Conexiones de terminal</string>
+    <string name="session_notification_active">Las conexiones de terminal están activas</string>
+</resources>

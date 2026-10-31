@@ -16,7 +16,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: () => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -307,7 +307,8 @@ describe("terminal interactions", () => {
     expect(mocks.writeSequence).toHaveBeenLastCalledWith("ssh", ["\x02","T"]);
     fireEvent.click(screen.getByRole("button", {name: "D-pad right corner"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x7f");
-    fireEvent.doubleClick(screen.getByRole("button", {name: "ctrl"}));
+    fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
+    fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
     fireEvent.click(screen.getByRole("button", {name: "c"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x03");
     fireEvent.click(screen.getByRole("button", {name: "d"}));
@@ -317,12 +318,12 @@ describe("terminal interactions", () => {
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "c");
   });
   it("uses terminal modifier sequences for toolbar arrows and Backspace", () => {
-    savePreferences({...defaults, toolbar: [...defaults.toolbar, "meta", "backspace"]});
+    savePreferences({...defaults, toolbar: [...defaults.toolbar, "backspace"]});
     mount();
     fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
     fireEvent.click(screen.getByRole("button", {name: "Arrow left"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x1b[1;5D");
-    fireEvent.click(screen.getByRole("button", {name: "meta"}));
+    fireEvent.click(screen.getByRole("button", {name: "Alt"}));
     fireEvent.click(screen.getByRole("button", {name: "Arrow right"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x1b[1;3C");
     fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
@@ -551,7 +552,7 @@ it.each([
 
 it('retains search result, modifier state and exact input bytes across language changes',async()=>{
   render(<LocaleTerminal/>);
-  const ctrl=screen.getByRole('button',{name:'ctrl'});fireEvent.doubleClick(ctrl);
+  const ctrl=screen.getByRole('button',{name:'ctrl'});fireEvent.click(ctrl);fireEvent.click(ctrl);
   fireEvent.click(screen.getByRole('button',{name:'Find'}));
   const input=screen.getByRole('textbox',{name:'Search terminal history'});
   fireEvent.change(input,{target:{value:'world'}});input.focus();fireEvent.submit(input.closest('form')!);
@@ -636,7 +637,7 @@ it.each(['key','chord'] as const)('retains a synchronous %s parser cause without
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw new LocalUiError('validationUnknownKeyValue1','{{<literal>}}');});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'c':'Parser fixture'}));
+    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Parser fixture'}));
     expect(parse).toHaveBeenCalledTimes(1);
     for(const locale of ['pt-BR','es','en']){
       await act(async()=>{await uiI18n.changeLanguage(locale);});
@@ -651,8 +652,81 @@ it.each(['key','chord'] as const)('preserves the original raw formatting of the 
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw raw;});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'c':'Raw parser fixture'}));
+    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Raw parser fixture'}));
     await act(async()=>{await uiI18n.changeLanguage('es');});
     expect(screen.getByRole('alert').textContent).toBe(branch==='key'?String(raw):raw.message);
   }finally{parse.mockRestore();}
+});
+
+
+describe("extended touch toolbar", () => {
+  it("cycles one-shot and locked modifiers, latches navigation Shift, and sends named keys", () => {
+    savePreferences({...defaults, toolbar:[...defaults.toolbar,"altgr","F12","PageUp",","]}); mount();
+    const key=(name:string)=>screen.getByRole('button',{name});
+    fireEvent.click(key('ctrl')); fireEvent.click(key('ctrl'));
+    expect(key('ctrl · lock').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(key('F12')); fireEvent.click(key('PageUp'));
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[24;5~','\x1b[5;5~']);
+    fireEvent.click(key('ctrl · lock')); fireEvent.click(key('Shift')); fireEvent.click(key('Arrow left'));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
+    expect(key('Shift').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(key('tab')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[Z');
+    expect(key('Shift').getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(key('AltGr')); fireEvent.click(key('Arrow right'));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;7C');
+    fireEvent.click(key(',')); expect(mocks.write).toHaveBeenLastCalledWith('ssh',',');
+    fireEvent.click(key('ctrl')); fireEvent.click(key('ctrl')); fireEvent.click(key('AltGr'));
+    expect(key('ctrl · lock').getAttribute('aria-pressed')).toBe('true');
+    expect(key('Alt').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(key('PageUp')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[5;7~');
+  });
+  it("repeats held navigation and stops on pointer cancellation and inactive sessions", () => {
+    vi.useFakeTimers(); const view=mount();
+    const left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.pointerDown(left,{pointerId:7});
+    expect(mocks.write).not.toHaveBeenCalled();
+    act(()=>vi.advanceTimersByTime(560)); expect(mocks.write).toHaveBeenCalledTimes(3);
+    fireEvent.pointerCancel(left,{pointerId:7}); act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
+    fireEvent.pointerDown(left,{pointerId:8});
+    view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
+    act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
+  });
+  it.each((["pending", "repeating"] as const).flatMap(phase=>[true,false].map(notify=>({phase,notify}))))("cancels a $phase held key when hidden (visibility event=$notify)", ({phase,notify}) => {
+    vi.useFakeTimers(); mount();
+    for (const name of ['ctrl','Alt']) {
+      const modifier=screen.getByRole('button',{name}); fireEvent.click(modifier); fireEvent.click(modifier);
+    }
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+    const left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.pointerDown(left,{pointerId:9});
+    if (phase === 'repeating') act(()=>vi.advanceTimersByTime(560));
+    const sent=mocks.write.mock.calls.length;
+    expect(sent).toBe(phase === 'pending' ? 0 : 3);
+    const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);
+    try {
+      if(notify)fireEvent(document,new Event('visibilitychange'));
+      act(()=>vi.advanceTimersByTime(2000)); expect(mocks.write).toHaveBeenCalledTimes(sent);
+      for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name}).getAttribute('aria-pressed')).toBe('false');
+      hidden.mockReturnValue(false); fireEvent(document,new Event('visibilitychange'));
+      act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(sent);
+      fireEvent.pointerUp(left,{pointerId:9}); fireEvent.click(left,{detail:1});
+      expect(mocks.write).toHaveBeenCalledTimes(sent);
+      fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));
+      expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
+    } finally {hidden.mockRestore();}
+  });
+  it("opens the existing attachment flow only for an active connected remote terminal", () => {
+    const onOpenAttachments=vi.fn();
+    const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+    const view=render(<TerminalPane session={session} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    fireEvent.click(screen.getByRole('button',{name:'Attach'})); expect(onOpenAttachments).toHaveBeenCalledOnce();
+    view.rerender(<TerminalPane session={{...session,local:true}} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    expect(screen.getByRole('button',{name:'Attach'})).toHaveProperty('disabled',true);
+  });
+});
+
+it("keeps ordinary terminal input usable and disables virtual modifiers when xterm provenance is unavailable", () => {
+  terminal._core.coreService.onUserInput = () => {throw new Error('different xterm internals');}; mount();
+  for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name})).toHaveProperty('disabled',true);
+  fireEvent.click(screen.getByRole('button',{name:'esc'})); expect(mocks.write).toHaveBeenCalledWith('ssh','\x1b');
 });

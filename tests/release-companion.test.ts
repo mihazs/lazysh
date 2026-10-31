@@ -2,7 +2,7 @@ import { expect, spyOn, test } from 'bun:test';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidateCompanion, checkCompanionCopy, companionFormat } from '../.changeset/release-companion';
+import { candidateCompanion, checkCompanionCopy, companionFormat, companionNotices } from '../.changeset/release-companion';
 import { artifactName, companionMaximumBytes, companionTargets, digestFile, releaseTargets, validateReceipt,
   type CompanionTarget } from '../.changeset/release-artifacts';
 import * as platform from '../.changeset/release-platform';
@@ -63,6 +63,32 @@ test('native matrix is complete and candidates cannot upload publication receipt
   expect(release.jobs.companion.with.stage).toBe(true);
   expect(release.jobs.aggregate.needs).toContain('companion');
 });
+test('quota consumer graphs and native desktop CI select the existing Rust ownership suite', async () => {
+  async function plan(args: string[]) {
+    const child = Bun.spawn([process.execPath, 'node_modules/turbo/bin/turbo', ...args, '--dry=json'], {
+      cwd: new URL('../', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe', timeout: 10_000,
+    });
+    const [status, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (status !== 0) throw new Error(`Turbo routing failed: ${error}`);
+    return JSON.parse(output).tasks as {taskId: string; command: string}[];
+  }
+  for (const consumer of ['client', 'agent']) {
+    const tasks = await plan(['run', 'test:rust', `--filter=@lazysh/${consumer}...`]);
+    expect(tasks.some(task => task.taskId === '@lazysh/account-usage#test:rust')).toBe(true);
+  }
+  const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as any;
+  const desktop = workflow.jobs['native-desktop'];
+  expect(desktop.strategy.matrix.os).toContain('windows-latest');
+  const quota = desktop.steps.find((step: any) => step.run?.startsWith('bunx turbo run test:rust --filter=@lazysh/account-usage'));
+  const tasks = await plan(quota.run.trim().split(/\s+/).slice(2));
+  const owner = await Bun.file(new URL('../packages/account-usage/package.json', import.meta.url)).json();
+  expect(tasks.find(task => task.taskId === '@lazysh/account-usage#test:rust')?.command).toBe(owner.scripts['test:rust']);
+  const linux = workflow.jobs['native-linux'].steps.find((step: any) => step.name?.startsWith('Exercise owned companion transfer'));
+  expect(linux.env.LAZYSH_TEST_AGENT_BIN).toBe('${{ github.workspace }}/target/release/lazysh-agent');
+  const cases = linux.run.match(/cases=\(([^)]*)\)/)[1].trim().split(/\s+/);
+  expect(cases).toContain('ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers');
+  expect(linux.run).toContain('--list --ignored --exact');
+}, 30_000);
 test('candidate CLI refuses a publication directory and non-main staging fails before touching output', () => owned(async root => {
   for (const [mode, message] of [['check', 'candidate checks do not accept'], ['stage', 'trusted main build required']]) {
     const output = join(root, mode);
@@ -83,6 +109,8 @@ test.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('source or s
     let revision = 0, events = 0;
     const mocked = spyOn(platform, 'native').mockImplementation(async (binary, args, env) => {
       if (args[0] === '--version') return `lazysh-agent ${identity.version}`;
+      if (args[0] === 'licenses') return JSON.stringify(await companionNotices());
+      if (args[0] === 'account-usage') return JSON.stringify({ schemaVersion: 1, state: 'ready', source: 'builtin', report: { entries: [] } });
       if (args[0] === 'settings') {
         if (args[1] === 'update') { if (Number(args[3]) !== revision) throw new Error('Owned stale revision'); revision++; }
         return JSON.stringify({ revision, transcriptDiscoveryEnabled: false, recordedUsageEnabled: false, deviceToolsEnabled: false });
@@ -99,6 +127,25 @@ test.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('source or s
       return '';
     });
     try { await expect(checkCompanionCopy('linux-agent-x64', source, identity.version)).rejects.toThrow('changed'); }
+    finally { mocked.mockRestore(); }
+  }
+}));
+test.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('packaged companion rejects altered legal bodies and missing built-in quota workers', () => owned(async root => {
+  const source = join(root, 'source'); await writeFile(source, header('linux-agent-x64')); await chmod(source, 0o700);
+  for (const failure of ['notice', 'worker']) {
+    const mocked = spyOn(platform, 'native').mockImplementation(async (_binary, args) => {
+      if (args[0] === '--version') return `lazysh-agent ${identity.version}`;
+      if (args[0] === 'settings') return JSON.stringify({ revision: 0 });
+      if (args[0] === 'licenses') {
+        const legal = await companionNotices();
+        if (failure === 'notice') legal.notices[0].text = legal.notices[0].text.slice(1);
+        return JSON.stringify(legal);
+      }
+      if (args[0] === 'account-usage') return JSON.stringify({ schemaVersion: 1, state: 'unavailable', source: 'builtin', report: null });
+      return '';
+    });
+    try { await expect(checkCompanionCopy('linux-agent-x64', source, identity.version)).rejects
+      .toThrow(failure === 'notice' ? 'embedded third-party notices differ' : 'packaged built-in account usage failed'); }
     finally { mocked.mockRestore(); }
   }
 }));

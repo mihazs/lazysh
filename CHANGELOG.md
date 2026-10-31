@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+- Permit an explicitly acknowledged repair source for unpublished 1.3.0 after its Windows companion acceptance failure. Rebuild every publication gate for that source; never replace a published tag or reuse the failed attempt's partial artifacts. Label the retained development changelog without implying every entry was added after version preparation.
+
+- Preserve upload-specific SSH closure guidance, including partial-file warnings and Reconnect uploads. Distinguish closed host-tools connections so Agents only offers command recovery for that purpose.
+
+- Keep Android terminal connections active while switching apps using a private foreground service and a generic ongoing notification. Backgrounded renderer output pauses without expiring the connection; the last native connection releases the service and wake lock. Held terminal keys stop while the app is hidden. Existing app-lock protections remain in place. Android system battery restrictions, Doze and force-stop can still interrupt connectivity.
+
+- Add compact AI account quota and credit reports for Android remote hosts and desktop remote/local terminals. Prefer a compatible ai-usagebar installation and use built-in companion collectors when it is absent or unsupported; existing provider sign-ins stay on the session machine. Account usage refreshes while the terminal is visible. Standalone companions expose retained collector and adapter license notices through `lazysh-agent licenses`.
+
+- Add explicit Reconnect host tools recovery for a Mosh session whose SSH command connection closed. Saved or manual credentials reauthenticate the original verified host without opening a terminal or changing upload-only recovery. Authentication remains user initiated.
+
+- Distinguish Herdr snapshots without live agent metadata from a confirmed empty agent list. Agents shows an explicit capability warning while Sessions keeps legacy tree compatibility; upload-only SSH recovery continues to leave host command access unchanged.
+
+- Keep live Herdr results, companion counts and empty states stable while Agents refreshes. Preserve a failed-read warning until its replacement completes, and remove failed live rows instead of presenting them as a successful empty discovery. Polling frequency, server selection and connection defaults are unchanged.
+
+- Expand the default terminal key row with Alt, Shift and Attach; offer AltGr, navigation, function and symbol keys in preferences. Ctrl and Alt cycle between one-shot, locked and off, and held keys repeat. Preserve custom and empty layouts. Use branded icon buttons for Compose and terminal-key visibility, and reduce terminal side padding to safe-area-aware 2px.
+
+- Select Use saved credentials by default after confirming availability in the native vault. Explicit Password/Private key choices and credentials entered while the availability check is pending keep manual authentication selected. Connect still requires an explicit action and stored secrets stay in the native vault.
+
+- Open the current saved host’s Default multiplexer setting directly from More, with the selector focused. Save a named Herdr, tmux or Zellij default for future connections without changing the running terminal or its saved transport preference. Connection defaults are unchanged.
+
+- Update installation and release acceptance notes with the explicit in-app Unix companion path, current Android/Linux installer proof and published-APK qualification limits. Keep documentation links usable in the attached guide and release notes.
+
 - Discover live Codex and other agent panes reported by Herdr independently of companion lifecycle reports. A single running Herdr server is selected automatically; choose a server when several are running. Only that server is refreshed, and its Idle, Working, Needs attention, Done and Unknown statuses remain distinct from companion history. No input, approval or history authority is inferred from discovery.
 
 - Enable direct vertical touch scrolling through the terminal’s wheel handling, including Herdr mouse reporting and alternate-screen applications. Active phone terminals now default to one compact header: single-session tabs, tool navigation and the workspace restore prompt collapse into More, where their actions remain reachable. Multiple-session navigation, desktop/nonterminal layouts, terminal keys above the keyboard and accessibility gestures remain supported.

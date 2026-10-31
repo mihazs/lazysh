@@ -66,6 +66,7 @@ import androidx.test.uiautomator.Configurator
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -1500,20 +1501,25 @@ class NativeWorkspaceTest {
     private fun pasteOwnedText(scenario: ActivityScenario<MainActivity>, selector: String, text: String, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).requestFocus() }
-        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
         val pasteDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        fun requireTime() = assertTrue("Owned native paste exceeded its input deadline", System.nanoTime() < pasteDeadline)
+        scenario.onActivity { activity -> requireNotNull(webView(activity.window.decorView)).requestFocus() }
+        requireTime()
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+        requireTime()
         val inputConstraints = typeTextIntoFocusedView("readiness-only").constraints
         while (true) {
+            requireTime()
             var ready = false
             scenario.onActivity { activity -> ready = inputConstraints.matches(requireNotNull(webView(activity.window.decorView))) }
+            requireTime()
             if (ready) break
-            assertTrue("Native key field input connection did not become ready", System.nanoTime() < pasteDeadline)
             Thread.sleep(25)
         }
         assertEquals("Key field must own DOM focus before paste", "true", evaluate(scenario,
             "document.activeElement===document.querySelector(${JSONObject.quote(selector)})",
             TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)))
+        requireTime()
         instrumentation.runOnMainSync {
             val clip = ClipData.newPlainText(label, text)
             clip.description.extras = android.os.PersistableBundle().apply {
@@ -1521,12 +1527,16 @@ class NativeWorkspaceTest {
             }
             clipboard.setPrimaryClip(clip)
         }
+        requireTime()
         onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_PASTE))
+        requireTime()
         // Boolean only: never retain a key value, DOM dump or screenshot in diagnostics.
         while (true) {
-            assertTrue("Native paste did not reach the controlled key field", System.nanoTime() < pasteDeadline)
+            requireTime()
             val remaining = TimeUnit.NANOSECONDS.toMillis(pasteDeadline - System.nanoTime()).coerceAtLeast(1)
-            if (evaluate(scenario, "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(text)}", remaining) == "true") break
+            val matched = evaluate(scenario, "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(text)}", remaining) == "true"
+            requireTime()
+            if (matched) break
             Thread.sleep(50)
         }
     }
@@ -1547,6 +1557,7 @@ class NativeWorkspaceTest {
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
+    @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
 
     // The target-UID-only synthetic provider exists only in the instrumentation APK.
     // Reads use the normal foreground Attachments action; this never uploads.
@@ -1608,8 +1619,237 @@ class NativeWorkspaceTest {
 
     private enum class SshUiCleanupStage { DISMISS, SESSION_SELECT, DISCONNECT, HOST_DELETE }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false) {
-        require(!requireHerdr || !requireCompanion) { "Owned SSH fixture mode is ambiguous" }
+    private fun ownedWakeLockHeld(power: String, uid: Int, pid: Int): Boolean {
+        val start = Regex("(?m)^Wake Locks: size=[0-9]+\\r?$").find(power)
+        val end = power.indexOf("\nSuspend Blockers:", start?.range?.last ?: 0)
+        require(start != null && end > start.range.last) { "Owned power observation unavailable" }
+        val locks = power.substring(start.range.last + 1, end).lineSequence()
+            .filter { it.contains("'lazysh:terminal-connections'") }.toList()
+        require(locks.size <= 1) { "Owned wake-lock observation ambiguous" }
+        val held = locks.singleOrNull()?.let {
+            it.contains("PARTIAL_WAKE_LOCK") && it.contains("ACQ=") && !it.contains("DISABLED") &&
+                Regex("\\(uid=$uid(?: [^\\r\\n()]*)? pid=$pid\\)").containsMatchIn(it)
+        } ?: false
+        require(locks.isEmpty() || held) { "Owned wake-lock identity or state unverified" }
+        return held
+    }
+
+    @Test fun wakeLockObservationRequiresExactOwnedAcquiredPartialLock() {
+        val row = "  PARTIAL_WAKE_LOCK 'lazysh:terminal-connections' ACQ=-1s (uid=10123 isFrozen=false pid=456)"
+        fun dump(vararg rows: String) = "Wake Locks: size=${rows.size}\n${rows.joinToString("\n")}\nSuspend Blockers:\n"
+        assertTrue("AOSP single-quoted acquired owned lock must be observed", ownedWakeLockHeld(dump(row), 10123, 456))
+        assertFalse(ownedWakeLockHeld(dump(), 10123, 456))
+        assertFalse(ownedWakeLockHeld(dump(row.replace("terminal-connections'", "terminal-connections-other'")), 10123, 456))
+        for (invalid in listOf(
+            dump(row.replace("uid=10123", "uid=10124")),
+            dump(row.replace("pid=456", "pid=457")),
+            dump(row.replace(" ACQ=", " DISABLED ACQ=")),
+            dump(row.replace(" ACQ=-1s", "")),
+            dump(row.replace("PARTIAL_WAKE_LOCK", "FULL_WAKE_LOCK")),
+            dump(row, row),
+        )) {
+            assertTrue("Unowned, inactive or ambiguous locks must fail closed", runCatching { ownedWakeLockHeld(invalid, 10123, 456) }.isFailure)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun connectionExecutionObservation(): JSONObject {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val pid = android.os.Process.myPid()
+        val uid = android.os.Process.myUid()
+        val manager = context.getSystemService(android.app.ActivityManager::class.java)
+        val services = manager.getRunningServices(64).filter {
+            it.service.packageName == context.packageName &&
+                it.service.className == "app.lazysh.client.SessionForegroundService"
+        }
+        val notifications = context.getSystemService(android.app.NotificationManager::class.java)
+            .activeNotifications.filter { it.id == 8461 && it.notification.channelId == "terminal-connections" }
+        val bytes = instrumentation.uiAutomation.executeShellCommand("timeout 2 dumpsys power").use { descriptor ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readNBytes(262145) }
+        }
+        require(bytes.size <= 262144) { "Owned power observation exceeds bound" }
+        val power = String(bytes, Charsets.UTF_8)
+        val held = ownedWakeLockHeld(power, uid, pid)
+        return JSONObject().put("serviceCount", services.size)
+            .put("foreground", services.singleOrNull()?.let { it.pid == pid && it.uid == uid && it.foreground } == true)
+            .put("notificationCount", notifications.size)
+            .put("notificationForeground", notifications.singleOrNull()?.let {
+                it.packageName == context.packageName &&
+                    it.notification.flags and android.app.Notification.FLAG_FOREGROUND_SERVICE != 0
+            } == true).put("wakeLock", held)
+    }
+
+    private fun initialNotificationReady(sample: JSONObject, observedAt: Long, deadline: Long): Boolean {
+        require(observedAt < deadline) { "Owned initial notification observation exceeded deadline" }
+        require(sample.get("serviceCount") == 1 && sample.get("foreground") == true && sample.get("wakeLock") == true) {
+            "Owned initial notification requires exact active kernel resources"
+        }
+        val count = sample.get("notificationCount")
+        require((count == 0 && sample.get("notificationForeground") == false) ||
+            (count == 1 && sample.get("notificationForeground") == true)) {
+            "Owned initial notification identity or flags unverified"
+        }
+        return count == 1
+    }
+
+    @Test fun initialNotificationReadinessAllowsOnlyTimelyPublicationWithOwnedKernelResources() {
+        val deadline = 100L
+        fun sample() = JSONObject().put("serviceCount", 1).put("foreground", true).put("wakeLock", true)
+            .put("notificationCount", 0).put("notificationForeground", false)
+        val pending = sample()
+        assertFalse(initialNotificationReady(pending, deadline - 1, deadline))
+        val ready = sample().put("notificationCount", 1).put("notificationForeground", true)
+        assertTrue(initialNotificationReady(ready, deadline - 1, deadline))
+        for (invalid in listOf(
+            sample().put("serviceCount", 0), sample().put("serviceCount", 2),
+            sample().put("foreground", false), sample().put("wakeLock", false),
+            sample().put("notificationCount", 2), sample().put("notificationForeground", true),
+            sample().put("notificationCount", 1), sample().put("notificationCount", "0"),
+            sample().apply { remove("wakeLock") },
+        )) assertTrue("Kernel, ownership and malformed notification observations must fail immediately",
+            runCatching { initialNotificationReady(invalid, deadline - 1, deadline) }.isFailure)
+        for (late in listOf(deadline, deadline + 1)) {
+            for (observation in listOf(pending, ready)) assertTrue("Late pending and ready observations must fail",
+                runCatching { initialNotificationReady(observation, late, deadline) }.isFailure)
+        }
+    }
+
+    private fun verifyMoshBackground(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, name: String, label: String) {
+        val owned = fixture.getJSONObject("moshBackground")
+        val directory = owned.getString("directory")
+        val nonce = fixture.getString("nonce")
+        val key = JSONObject.quote("__lazyshOwnedBackground_$nonce")
+        val token = JSONObject.quote(UUID.randomUUID().toString())
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val process = android.os.Process.myPid()
+        fun foreground() {
+            val launch = requireNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName))
+            context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED && System.nanoTime() < deadline) Thread.sleep(50)
+            assertEquals("Owned Mosh Activity must resume", androidx.lifecycle.Lifecycle.State.RESUMED, scenario.state)
+        }
+        fun home() {
+            closeSoftKeyboard()
+            assertTrue("Owned background action must reach Home", UiDevice.getInstance(instrumentation).pressHome())
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (scenario.state != androidx.lifecycle.Lifecycle.State.CREATED && System.nanoTime() < deadline) Thread.sleep(50)
+            assertEquals("Owned Mosh Activity must actually stop", androidx.lifecycle.Lifecycle.State.CREATED, scenario.state)
+        }
+        fun send(command: String) {
+            if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true")
+                onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Compose']")).perform(webClick())
+            pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
+            closeSoftKeyboard()
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='Paste draft']")).perform(webClick())
+            closeSoftKeyboard()
+            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+        }
+        fun proof(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
+        fun record(part: String) = "printf '%s %s\\n' \"${'$'}${'$'}\" \"${'$'}(awk '{print ${'$'}22}' /proc/${'$'}${'$'}/stat)\" >$directory/background-$part.tmp; " +
+            "mv $directory/background-$part.tmp $directory/background-$part; " +
+            "while ! test -f $directory/background-$part-ack; do sleep .1; done; "
+        fun execution(active: Boolean) {
+            val sample = connectionExecutionObservation()
+            val valid = if (active) sample.getInt("serviceCount") == 1 && sample.getBoolean("foreground") &&
+                sample.getInt("notificationCount") == 1 && sample.getBoolean("notificationForeground") && sample.getBoolean("wakeLock")
+            else sample.getInt("serviceCount") == 0 && sample.getInt("notificationCount") == 0 && !sample.getBoolean("wakeLock")
+            assertTrue("Owned connection execution active=$active observation=$sample", valid)
+        }
+        var primary: Throwable? = null
+        try {
+            awaitDocument(scenario, "owned Mosh terminal ready", "document.querySelectorAll('.terminal-canvas .xterm-screen').length===1")
+            assertEquals("Owned Mosh observation must retain one exact terminal", "true", evaluate(scenario, """
+                (()=>{if(Object.prototype.hasOwnProperty.call(window,$key))return false;
+                  const terminal=document.querySelector('.terminal-canvas');if(!terminal)return false;
+                  Object.defineProperty(window,$key,{value:{token:$token,terminal},configurable:true});return true;})()
+            """))
+            val ready = "BG_${nonce}_READY"
+            // The finite writer stops only on the fresh post-foreground shell
+            // command. Its private receipt rejects expiry and counts real output.
+            send(record("before") + "(i=0; while ! test -f $directory/background-stop && test ${'$'}i -lt 900; do " +
+                "case ${'$'}((i%4)) in 0)c=A;;1)c=B;;2)c=C;;3)c=D;;esac; " +
+                "printf '\\033[2J\\033[H'; printf '%01000d\\n' 0 | tr '0' \"${'$'}c\"; " +
+                "printf 'BG_%s_READY\\n' '$nonce'; i=${'$'}((i+1)); sleep .1; done; " +
+                "printf '%s\\n' \"${'$'}i\" >$directory/background-samples; " +
+                "if ! test -f $directory/background-stop; then touch $directory/background-expired; fi) & BG_JOB=${'$'}!")
+            awaitDocument(scenario, "owned Mosh busy output started", proof(ready))
+            // Android may defer the first FGS notification publication for 10s.
+            // Keep kernel resources mandatory throughout this initial-only wait.
+            val notificationUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (true) {
+                assertTrue("Owned initial notification publication exceeded deadline", System.nanoTime() < notificationUntil)
+                val sample = connectionExecutionObservation()
+                if (initialNotificationReady(sample, System.nanoTime(), notificationUntil)) break
+                Thread.sleep(100)
+            }
+            execution(true)
+            home()
+            val backgroundUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(36)
+            while (System.nanoTime() < backgroundUntil) {
+                assertEquals("Owned Mosh must stay stopped during busy output", androidx.lifecycle.Lifecycle.State.CREATED, scenario.state)
+                execution(true)
+                Thread.sleep(1000)
+            }
+            foreground()
+            assertEquals("Owned Mosh must retain the native app process", process, android.os.Process.myPid())
+            assertEquals("Owned Mosh must retain its exact terminal DOM", "true", evaluate(scenario,
+                "window[$key]?.token===$token && window[$key].terminal===document.querySelector('.terminal-canvas') && window[$key].terminal.isConnected && document.querySelectorAll('.terminal-canvas').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect $name']")}))"))
+            val fresh = UUID.randomUUID().toString().replace("-", "")
+            val response = "BG_${fresh}_RESUMED"
+            val challenge = "touch $directory/background-stop; wait \"${'$'}BG_JOB\"; if ! test -f $directory/background-expired; then " +
+                record("after") + "printf 'BG_%s_RESUMED\\n' '$fresh'; fi"
+            require(!challenge.contains(response)) { "Owned Mosh challenge must not echo its response" }
+            send(challenge)
+            awaitDocument(scenario, "owned Mosh fresh response after background", proof(response))
+            execution(true)
+            send("sleep 3; exit")
+            home()
+            val cleanupUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            var released = false
+            while (System.nanoTime() < cleanupUntil) {
+                assertEquals("Last-worker release must occur before Activity foreground", androidx.lifecycle.Lifecycle.State.CREATED, scenario.state)
+                val sample = connectionExecutionObservation()
+                released = sample.getInt("serviceCount") == 0 && sample.getInt("notificationCount") == 0 && !sample.getBoolean("wakeLock")
+                if (released) break
+                Thread.sleep(100)
+            }
+            assertTrue("Owned last Mosh worker must release execution while Activity is stopped", released)
+            println("lazysh Mosh background: >35s busy Home interval, same app/terminal, fresh remote challenge and last-worker foreground service/notification/wake-lock cleanup before foreground")
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try {
+                foreground()
+                assertEquals("Owned terminal observation must be removed", "true", evaluate(scenario,
+                    "(()=>{const x=window[$key];if(!x)return true;if(x.token!==$token)return false;delete window[$key];return !Object.prototype.hasOwnProperty.call(window,$key);})()"))
+            } catch (failure: Throwable) {
+                val closed = AssertionError("Owned Mosh background cleanup unavailable: ${failure.javaClass.simpleName}")
+                if (primary != null) primary!!.addSuppressed(closed) else throw closed
+            }
+        }
+    }
+
+    private fun moshTransportLabel(labels: List<String>): String {
+        require(labels.size == 1 && labels.single() in setOf("Mosh", "Mosh (forced)")) {
+            "Owned Mosh transport option is unavailable or ambiguous"
+        }
+        return labels.single()
+    }
+
+    @Test fun moshTransportChooserUsesItsOwnOptionLabelWithAutomaticTransportPresent() {
+        for (label in listOf("Mosh", "Mosh (forced)")) {
+            val options = listOf("auto" to "Auto", "ssh" to "SSH", "mosh" to label)
+            assertEquals(label, moshTransportLabel(options.filter { it.first == "mosh" }.map { it.second }))
+        }
+        for (labels in listOf(emptyList(), listOf("Unknown"), listOf("Mosh", "Mosh (forced)"))) {
+            assertTrue("Missing, unknown or ambiguous Mosh options must fail closed", runCatching { moshTransportLabel(labels) }.isFailure)
+        }
+    }
+
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false) {
+        require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val path = InstrumentationRegistry.getArguments().getString("lazyshSshFixture")
         require(path != null && Regex("/data/local/tmp/lazysh-ui-ssh-[a-f0-9]{32}/fixture[.]json").matches(path)) {
@@ -1637,6 +1877,21 @@ class NativeWorkspaceTest {
         require(fixture.getString("name") == name && fixture.getInt("port") in 1..65535)
         val privateKey = fixture.getString("privateKey")
         require(privateKey.length in 1..8192) { "Invalid owned identity size" }
+        if (requireMoshBackground) {
+            val owned = fixture.getJSONObject("moshBackground")
+            require(owned.getString("host") == "10.0.2.2") { "Owned Mosh requires the emulator host route" }
+            require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+").matches(owned.getString("directory"))) {
+                "Owned Mosh directory invalid"
+            }
+            // This owned-install case proves the granted-permission notification record only.
+            val context = instrumentation.targetContext
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                    instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
+                assertEquals("Owned background notification permission must precede connection", PackageManager.PERMISSION_GRANTED,
+                    context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS))
+            }
+        }
         val scenario = NativeActivityFixture.scenario
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val label = "lazysh-ui-ssh-$nonce"
@@ -1645,7 +1900,7 @@ class NativeWorkspaceTest {
         }
         fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
         fun screenContains(text: String) = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.includes(${JSONObject.quote(text)}))"
-        fun selectSsh() {
+        fun selectTransport() {
             closeSoftKeyboard()
             val selector = "[role=dialog] select:has(option[value='ssh'])"
             assertEquals("Exactly one transport control must offer SSH", "1", evaluate(scenario,
@@ -1694,12 +1949,17 @@ class NativeWorkspaceTest {
                     assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
                     floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
                 }, Press.FINGER))
-                val option = onView(withText("SSH")).inRoot(isDialog())
+                val transportLabel = if (!requireMoshBackground) "SSH" else {
+                    val labels = JSONArray(evaluate(scenario,
+                        "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value=mosh]")})).map(x=>x.label)"))
+                    moshTransportLabel((0 until labels.length()).map { labels.getString(it) })
+                }
+                val option = onView(withText(transportLabel)).inRoot(isDialog())
                 option.check(matches(isDisplayed()))
                 println("lazysh SSH UI: native transport chooser ready")
                 option.perform(click())
                 assertEquals("SSH must be selected through the actual chooser", "true", evaluate(scenario,
-                    "document.querySelector(${JSONObject.quote(selector)})?.value==='ssh'"))
+                    "document.querySelector(${JSONObject.quote(selector)})?.value===${JSONObject.quote(if (requireMoshBackground) "mosh" else "ssh")}"))
                 println("lazysh SSH UI: native transport selected")
             } catch (failure: Throwable) {
                 tapFailure = failure
@@ -1809,14 +2069,14 @@ class NativeWorkspaceTest {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Add host']")).perform(webClick())
             typeInto(scenario, "input[placeholder='Home workstation']", name)
-            typeInto(scenario, "input[placeholder='workstation.local']", "127.0.0.1")
+            typeInto(scenario, "input[placeholder='workstation.local']", if (requireMoshBackground) "10.0.2.2" else "127.0.0.1")
             typeInto(scenario, "input[placeholder='Your SSH username']", fixture.getString("username"))
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".port-field input")).perform(webClick())
             onView(isAssignableFrom(WebView::class.java)).perform(
                 pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
                 pressKey(KeyEvent.KEYCODE_DEL))
             typeInto(scenario, ".port-field input", fixture.getInt("port").toString())
-            selectSsh()
+            selectTransport()
             clickButton("Save host")
             val connect = "button[aria-label='Connect to $name']"
             awaitDocument(scenario, "SSH fixture host saved", present(connect))
@@ -1830,7 +2090,7 @@ class NativeWorkspaceTest {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, savedTransport)).perform(webScrollIntoView())
                 assertEquals("Saved SSH transport must reach companion authentication", "true", evaluate(scenario,
                     workspaceElementVisible(savedTransport, true) + " && (()=>{const choices=document.querySelectorAll(${JSONObject.quote(savedTransport)});return choices.length===1&&!choices[0].disabled&&choices[0].value==='ssh';})()"))
-            } else selectSsh()
+            } else selectTransport()
             clickButton("Private key")
             val keySelector = "[role=dialog] textarea[placeholder='-----BEGIN OPENSSH PRIVATE KEY-----']"
             pasteOwnedText(scenario, keySelector, privateKey, label)
@@ -1843,8 +2103,12 @@ class NativeWorkspaceTest {
                 "document.querySelector('.fingerprint code')?.textContent===${JSONObject.quote(fixture.getString("fingerprint"))}"))
             assertEquals("No terminal before explicit trust", "false", evaluate(scenario, present(".terminal-canvas .xterm-screen")))
             clickButton("Trust key and connect")
-            awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
-            if (requireCompanion) verifyCompanionInstallation() else {
+            if (requireMoshBackground) {
+                verifyMoshBackground(scenario, fixture, name, label)
+            } else {
+                awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
+            }
+            if (requireCompanion) verifyCompanionInstallation() else if (!requireMoshBackground) {
                 clickButton("Compose")
                 typeInto(scenario, ".terminal-compose textarea", fixture.getString("challenge"))
                 val keyboardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)

@@ -139,6 +139,7 @@ fn main() {
         "trust_host_key",
         "connect",
         "restore_file_transfer",
+        "restore_host_tools",
         "adopt_session",
         "write_stdin",
         "ack_output",
@@ -160,6 +161,7 @@ fn main() {
         "update_companion_settings",
         "agent_transcript",
         "agent_usage",
+        "account_usage",
         "agent_transcripts",
     ]);
     let mut attributes = tauri_build::Attributes::new().app_manifest(app);

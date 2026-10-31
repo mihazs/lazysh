@@ -1,5 +1,45 @@
 # @lazysh/client
 
+## 1.3.0
+
+### Minor Changes
+
+- e5a32d9: Keep Android terminal sessions active while switching apps, with worker-owned background execution and paused renderer output deadlines.
+- 9565f8a: Add compact AI account quotas and built-in host collectors when ai-usagebar is unavailable, keeping credentials on the session machine.
+- 6c2657a: Keep Agents results, counts and empty states stable during periodic refreshes. Preserve read failures until a replacement completes; a failed live read clears its rows and count. This fixes polling flicker without claiming that the reported missing Herdr agents are resolved.
+  
+  Preserve whether a Herdr snapshot supplies live agent metadata. Show an explicit compatibility warning instead of a healthy zero-agent count when that metadata is missing; legacy Sessions trees remain supported.
+  
+  Add explicit host-tools SSH recovery for eligible Mosh sessions with a closed command connection. Authenticate for the original verified host while keeping the terminal and the independent upload connection; no authentication runs automatically.
+- 54197d2: Open the current host's Default multiplexer setting directly from More, with the selector focused. Saving keeps the running terminal and saved transport preference intact; the named default applies to future connections.
+  
+  Select Use saved credentials by default when the native vault confirms they are available. Preserve explicit manual authentication choices and credentials entered before the availability check finishes; connecting remains explicit and secrets stay in the native vault.
+  
+  Expand terminal keys with Shift, Alt/AltGr, attachment, function/navigation/symbol keys, modifier locking and repeat. Preserve custom layouts and migrate the old default row. Make Compose and terminal-key visibility branded icon buttons and reduce terminal side padding.
+
+### Patch Changes
+
+- e92681c: Preserve the file-transfer closure warning and its partial-file guidance when uploads need reauthentication. Distinguish host-tools SSH closure so Agents only offers command recovery for the correct connection purpose; quota reads continue to classify a closed command connection as disconnected.
+- Updated dependencies [9565f8a]
+  - @lazysh/account-usage@1.3.0
+  - @lazysh/common@1.3.0
+  - @lazysh/display-idle@1.3.0
+  - @lazysh/et-transport@1.3.0
+  - @lazysh/mosh-transport@1.3.0
+
+## 1.2.0
+
+### Minor Changes
+
+- 87aca79: Install or update the published host companion from the existing SSH connection, including when it is missing, with verified transfer, explicit progress and conservative uncertain outcomes. Prefer a valid managed Unix executable while preserving legacy PATH behavior when absent; installation and host permission changes remain explicit.
+
+### Patch Changes
+
+- @lazysh/common@1.2.0
+  - @lazysh/display-idle@1.2.0
+  - @lazysh/et-transport@1.2.0
+  - @lazysh/mosh-transport@1.2.0
+
 ## 1.1.7
 
 ### Patch Changes

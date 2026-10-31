@@ -63,11 +63,11 @@ it('requests only the typed named default entry through the existing native atta
   expect(invoke.mock.calls[0][1]).not.toHaveProperty('command');
 });
 
-it('restores uploads through a guarded ordinary request without replacing terminal output ownership',async()=>{
+it.each(['files','hostTools'] as const)('restores %s through a guarded ordinary request without replacing terminal output ownership',async purpose=>{
   const original=vi.fn();registerSessionOutput('original-mosh',original);
   invoke.mockResolvedValueOnce({schemaVersion:1,status:'restored'});
-  await api.restoreFileTransfer('original-mosh',{privateKey:'owned-ephemeral-key'},{useSavedCredentials:false});
-  expect(invoke).toHaveBeenLastCalledWith('restore_file_transfer',{sessionId:'original-mosh',privateKey:'owned-ephemeral-key',useSavedCredentials:false},expect.anything());
+  await (purpose==='files'?api.restoreFileTransfer:api.restoreHostTools)('original-mosh',{privateKey:'owned-ephemeral-key'},{useSavedCredentials:false});
+  expect(invoke).toHaveBeenLastCalledWith(purpose==='files'?'restore_file_transfer':'restore_host_tools',{sessionId:'original-mosh',privateKey:'owned-ephemeral-key',useSavedCredentials:false},expect.anything());
   expect(invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty('events');
   disposeSessionOutput('original-mosh');expect(original).toHaveBeenCalledOnce();
 });

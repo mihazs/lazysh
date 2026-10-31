@@ -13,6 +13,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Print the exact retained third-party licenses and attribution notices.
+    Licenses,
     /// Inspect or explicitly install this verified binary into its managed user namespace.
     Installation {
         #[command(subcommand)]
@@ -27,6 +29,12 @@ enum Command {
     Settings {
         #[command(subcommand)]
         command: SettingsCommand,
+    },
+    /// Read live account quotas using the built-in collectors or compatible ai-usagebar.
+    AccountUsage {
+        /// Stop when this private command channel closes its input.
+        #[arg(long)]
+        watch_channel: bool,
     },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
@@ -153,6 +161,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
     }
     let output = match cli.command {
+        Command::Licenses => Some(serde_json::json!({
+            "schemaVersion": 1,
+            "notices": [
+                {"id": "ai-usagebar", "text": include_str!("../../../packages/ai-usagebar-vendor/LICENSE")},
+                {"id": "account-usage-adapter", "text": include_str!("../../../packages/account-usage/NOTICE")},
+                {"id": "herdr-apache", "text": include_str!("../../../packages/account-usage/licenses/HERDR-APACHE-2.0.txt")},
+            ],
+        })),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
         Command::Relay { command } => Some(lazysh_agent::relay::run(
             command,
@@ -190,6 +206,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 offset,
             )?)
             .map_err(|_| Error::InvalidEvent)?,
+        ),
+        Command::AccountUsage { watch_channel } => Some(
+            serde_json::to_value(lazysh_agent::account_usage::run(watch_channel)?)
+                .map_err(|_| Error::InvalidEvent)?,
         ),
         Command::Devices { command } => {
             if let lazysh_agent::devices::DeviceCommand::Android {
@@ -394,6 +414,9 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     Ok(())
 }
 fn main() -> std::process::ExitCode {
+    if let Some(code) = lazysh_account_usage::worker_main() {
+        return code;
+    }
     match execute(Cli::parse()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

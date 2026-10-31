@@ -1,13 +1,14 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
-import { useMountedAccess, useProtectedApi } from './access';
+import { subscribeAccess, useMountedAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
 import { api as nativeApi } from "./bridge";
-import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
-import type { LiveSession } from "./terminal";
+import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
+import { modifiedTerminalText, observeTerminalInput, type LiveSession } from "./terminal";
 import { applyTerminalTheme } from "./terminalBold";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
 import { errorMessage } from "./SessionTools";
@@ -27,10 +28,11 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, reportError }: {
+export default function TerminalPane({ session, active, reportError, onOpenAttachments }: {
   session: LiveSession;
   active: boolean;
   reportError: (message: UiErrorCause) => void;
+  onOpenAttachments?: () => void;
 }) {
   useUi();
   const api = useProtectedApi(nativeApi);
@@ -49,6 +51,22 @@ export default function TerminalPane({ session, active, reportError }: {
   const [ctrlLocked, setCtrlLocked] = useState(false);
   const [dpadOpen, setDpadOpen] = useState(false);
   const [meta, setMeta] = useState(false);
+  const [metaLocked, setMetaLocked] = useState(false);
+  const [shift, setShift] = useState(false);
+  const [modifierInput, setModifierInput] = useState(true);
+  const modifierState = useRef({ctrl, ctrlLocked, meta, metaLocked, shift});
+  modifierState.current = {ctrl, ctrlLocked, meta, metaLocked, shift};
+  const inputLane = useRef<"keyboard" | "literal" | null>(null);
+  const literalPaste = useRef(false);
+  const pointerInputEvent = useRef<Event | null>(null);
+  const keyboardInputEvent = useRef<Event | null>(null);
+  const repeated = useRef(false);
+  const repeat = useRef<{delay?: ReturnType<typeof setTimeout>; timer?: ReturnType<typeof setInterval>}>({});
+  function stopRepeat() {clearTimeout(repeat.current.delay); clearInterval(repeat.current.timer); repeat.current = {};}
+  function clearModifiers() {setCtrl(false); setCtrlLocked(false); setMeta(false); setMetaLocked(false); setShift(false); modifierState.current = {ctrl:false, ctrlLocked:false, meta:false, metaLocked:false, shift:false}; inputLane.current = null; pointerInputEvent.current = null; keyboardInputEvent.current = null; stopRepeat();}
+  function consumeModifiers() {const state = modifierState.current; if (!state.ctrlLocked) {state.ctrl = false; setCtrl(false);} if (!state.metaLocked) {state.meta = false; setMeta(false);}}
+  function pasteLiteral(text: string) {literalPaste.current = true; try {session.terminal.paste(text);} finally {literalPaste.current = false;}}
+  const sendNamedRef = useRef<(key: string, physical?: KeyboardEvent) => void>(() => {});
   const [clipboard, setClipboard] = useState<string | null>(null);
   const pendingClipboard = useRef(false);
   const pasteRead = useRef<AbortController | null>(null);
@@ -77,6 +95,13 @@ export default function TerminalPane({ session, active, reportError }: {
   const toolbarVisible = toolbarOverride ?? !(preferences.autoHideToolbar && desktopPointer);
   const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || Object.values(preferences.bodyGestures).some(action => action !== "none"));
 
+  useEffect(() => {
+    const visibility = () => {if (document.hidden) {clearModifiers(); repeated.current = true;}};
+    document.addEventListener("visibilitychange", visibility);
+    return () => document.removeEventListener("visibilitychange", visibility);
+  }, []);
+  useEffect(() => subscribeAccess(() => {if (!access.current()) clearModifiers();}), []);
+  useEffect(() => {if (!active || !session.connected || !toolbarVisible) clearModifiers(); return stopRepeat;}, [active, session.connected, toolbarVisible, session.id]);
   useEffect(() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}, [customTouch]);
   useEffect(() => {if (!active) cancelTaps(); return cancelTaps;}, [active, session.id, preferences.bodyGestures]);
 
@@ -183,14 +208,43 @@ export default function TerminalPane({ session, active, reportError }: {
         requestAnimationFrame(() => searchInput.current?.focus());
         return false;
       }
+      const state = modifierState.current;
+      if (event.type === "keydown" && !event.isComposing && !event.metaKey && !event.getModifierState?.("AltGraph") && (state.ctrl || state.meta) && /^[ -~]$/.test(event.key) && !(event.ctrlKey && (/^v$/i.test(event.key) || (event.shiftKey && /^c$/i.test(event.key))))) {
+        event.preventDefault(); sendNamedRef.current(event.key === " " ? "Space" : event.key, event); return false;
+      }
+      const named = {ArrowLeft:"Left", ArrowRight:"Right", ArrowUp:"Up", ArrowDown:"Down", Escape:"Escape", Tab:"Tab", Enter:"Enter", Backspace:"Backspace", Home:"Home", End:"End", PageUp:"PageUp", PageDown:"PageDown", Insert:"Insert", Delete:"Delete"} as Record<string,string>;
+      if (event.type === "keydown" && !event.isComposing && (state.ctrl || state.meta || state.shift) && (named[event.key] || /^F(?:[1-9]|1[0-2])$/.test(event.key))) {
+        event.preventDefault(); sendNamedRef.current(named[event.key] ?? event.key, event); return false;
+      }
       return true;
     });
     if (terminal.element) element.append(terminal.element);
     else terminal.open(element);
     try {applyTerminalTheme(terminal, preferences, fontFamilyFor(preferences, fonts));} catch (error) {reportError(String(error));}
-    const output = terminal.onData(data => {
-      if (session.connected) void api.write(session.id, data).catch(error => reportError(String(error)));
+    const keyboardLane = (event: Event) => {if (event.target === terminal.textarea) {inputLane.current = "keyboard"; keyboardInputEvent.current = event;}};
+    const literalLane = () => {inputLane.current = "literal";};
+    const pointerLane = (event: Event) => {pointerInputEvent.current = event;};
+    const lanes = ["keydown", "keypress", "input", "compositionstart", "compositionend"];
+    lanes.forEach(name => element.addEventListener(name, keyboardLane, true));
+    element.addEventListener("paste", literalLane, true);
+    const pointerEvents = ["pointerdown", "pointermove", "pointerup", "pointercancel", "mousedown", "mousemove", "mouseup", "wheel", "touchstart", "touchmove", "touchend", "touchcancel"];
+    pointerEvents.forEach(name => document.addEventListener(name, pointerLane, true));
+    const output = observeTerminalInput(terminal, (data, userInput) => {
+      let value = data;
+      if (userInput) {
+        // DOM dispatch can checkpoint microtasks between capture and xterm's
+        // listener. eventPhase identifies the real active source without timing
+        // guesses, while retaining the lane for asynchronously committed IME.
+        const pointerInput = !!pointerInputEvent.current?.eventPhase && !keyboardInputEvent.current?.eventPhase;
+        if (!pointerInput && !literalPaste.current && inputLane.current === "keyboard") {
+          const state = modifierState.current;
+          value = modifiedTerminalText(data, state.ctrl, state.meta); consumeModifiers();
+        }
+        if (!pointerInput) inputLane.current = null;
+      }
+      if (session.connected) void api.write(session.id, value).catch(error => reportError(String(error)));
     });
+    setModifierInput(output.available);
     const size = terminal.onResize(({ cols, rows }) => {
       if (session.connected) void api.resize(session.id, cols, rows).catch(error => reportError(String(error)));
     });
@@ -210,6 +264,9 @@ export default function TerminalPane({ session, active, reportError }: {
     addon.fit();
     terminal.focus();
     return () => {
+      lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
+      element.removeEventListener("paste", literalLane, true);
+      pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
       resize.disconnect(); output.dispose(); size.dispose(); osc.dispose(); links.dispose(); addon.dispose();
       terminal.attachCustomKeyEventHandler(() => true);
       fit.current = null;
@@ -225,17 +282,26 @@ export default function TerminalPane({ session, active, reportError }: {
     if (active) requestAnimationFrame(() => { fit.current?.fit(); if (composing) composerInput.current?.focus(); else session.terminal.focus(); });
   }, [active, session, composing]);
 
+  function sendNamed(key: string, physical?: KeyboardEvent) {
+    if (!activeRef.current || !session.connected || !mounted.current || !access.current()) return;
+    if (document.hidden) {clearModifiers(); repeated.current = true; return;}
+    const state = modifierState.current;
+    const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${(state.shift && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
+    try {void api.write(session.id, key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`)).catch(error => reportError(String(error)));}
+    catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return;}
+    consumeModifiers();
+    if (key === "Tab") {modifierState.current.shift = false; setShift(false);}
+    session.terminal.focus();
+  }
+  sendNamedRef.current = sendNamed;
   function sendKey(key: string) {
-    if (!session.connected) return;
-    let data = key;
-    if (ctrl || meta) {
-      const named: Record<string, string> = {"\x1b": "Escape", "\t": "Tab", "\r": "Enter", "\x7f": "Backspace", "\x1b[D": "Left", "\x1b[A": "Up", "\x1b[B": "Down", "\x1b[C": "Right"};
-      try {data = parseChord(`${ctrl ? "Ctrl+" : ""}${meta ? "Alt+" : ""}${named[key] ?? key}`);}
-      catch (error) {reportError(error instanceof LocalUiError?error:String(error)); return;}
-    }
-    void api.write(session.id, data).catch(error => reportError(String(error)));
-    if (!ctrlLocked) setCtrl(false);
-    setMeta(false); session.terminal.focus();
+    const named: Record<string, string> = {"\x1b":"Escape", "\t":"Tab", "\r":"Enter", "\x7f":"Backspace", "\x1b[D":"Left", "\x1b[A":"Up", "\x1b[B":"Down", "\x1b[C":"Right"};
+    sendNamed(named[key] ?? key);
+  }
+  function cycleModifier(key: "ctrl" | "meta") {
+    const state = modifierState.current;
+    if (key === "ctrl") {const locked = state.ctrl && !state.ctrlLocked; const enabled = !state.ctrlLocked; state.ctrl = enabled; state.ctrlLocked = locked; setCtrl(enabled); setCtrlLocked(locked);}
+    else {const locked = state.meta && !state.metaLocked; const enabled = !state.metaLocked; state.meta = enabled; state.metaLocked = locked; setMeta(enabled); setMetaLocked(locked);}
   }
   async function copy(text: string) {
     if (!mounted.current || !access.current()) return;
@@ -262,7 +328,7 @@ export default function TerminalPane({ session, active, reportError }: {
       // The retained terminal may now have a fresh onData handler after unlock.
       if (!current()) return;
       checkPasteSize(text, session.terminal.modes?.bracketedPasteMode);
-      session.terminal.paste(text); session.terminal.focus();
+      pasteLiteral(text); session.terminal.focus();
     }
     catch { if (current()) reportError(new LocalUiError('terminalPasteUnavailable')); }
     finally {
@@ -423,10 +489,13 @@ export default function TerminalPane({ session, active, reportError }: {
     </form>}
     <div ref={container} className="terminal-canvas" style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
-      <button disabled={!session.connected || !draft} onClick={() => {session.terminal.paste(draft); setDraft(""); session.terminal.focus();}}>{t('terminalPasteDraft')}</button><button onClick={() => setComposing(false)}>{t('terminalCloseComposer')}</button>
+      <button disabled={!session.connected || !draft} onClick={() => {pasteLiteral(draft); setDraft(""); session.terminal.focus();}}>{t('terminalPasteDraft')}</button><button onClick={() => setComposing(false)}>{t('terminalCloseComposer')}</button>
     </div>}
-    <div className="terminal-toolbar-toggle"><button onClick={() => setComposing(!composing)}>{t('terminalCompose')}</button><button onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")}</button></div>
-    {ctrlLocked && <div className="session-notice" role="status">{t('terminalControlLocked')}</div>}
+    <div className="terminal-toolbar-toggle">
+      <button type="button" className="subtle-button" aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={16} aria-hidden="true" />{t('terminalCompose')}</button>
+      <button type="button" className="subtle-button" onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={16} aria-hidden="true" /> : <Keyboard size={16} aria-hidden="true" />}{toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")}</button>
+    </div>
+    {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
     {toolbarVisible && dpadOpen && preferences.toolbar.includes("dpad") && <div className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')}>
       {preferences.dpadCorners.left === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadLeftCorner')} title={preferences.gestureChords.cornerLeft ?? t(gestureLabelKeys[preferences.dpadCorners.left])} onClick={() => runGesture(preferences.dpadCorners.left, "cornerLeft")}>{preferences.dpadCorners.left === "interrupt" ? "^C" : preferences.dpadCorners.left === "backspace" ? "⌫" : "1"}</button>}
       <button disabled={!session.connected} aria-label={t('terminalDpadUp')} onClick={() => sendKey("\x1b[A")}>↑</button>
@@ -434,13 +503,31 @@ export default function TerminalPane({ session, active, reportError }: {
       <button disabled={!session.connected} aria-label={t('terminalDpadLeft')} onClick={() => sendKey("\x1b[D")}>←</button><button disabled={!session.connected} aria-label={t('terminalDpadDown')} onClick={() => sendKey("\x1b[B")}>↓</button><button disabled={!session.connected} aria-label={t('terminalDpadRight')} onClick={() => sendKey("\x1b[C")}>→</button>
     </div>}
     {toolbarVisible && <div className="terminal-keys" aria-label={t('terminalKeys')}>
-      {preferences.toolbar.map(key => <button key={key} disabled={(!session.connected && key !== "dpad") || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))} aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={key === "ctrl" ? ctrl : key === "meta" ? meta : key === "dpad" ? dpadOpen : undefined} aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined} title={key === "ctrl" ? ctrlLocked ? t("terminalControlRelease") : t("terminalControlLock") : undefined} onDoubleClick={() => {if (key === "ctrl") {setCtrl(true); setCtrlLocked(true);}}} onClick={() => {
-        if (key === "ctrl") {if (ctrlLocked) {setCtrlLocked(false); setCtrl(false);} else setCtrl(!ctrl);}
-        else if (key === "meta") setMeta(!meta);
-        else if (key === "paste") { if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry(); }
-        else if (key === "dpad") setDpadOpen(!dpadOpen);
-        else sendKey(sequences[key] ?? key);
-      }}>{labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key)}{key === "ctrl" && ctrlLocked ? ` · ${t("terminalLock")}` : ""}</button>)}
+      {preferences.toolbar.map(key => {
+        const modifier = key === "ctrl" || key === "meta" || key === "altgr" || key === "shift";
+        const locked = key === "ctrl" ? ctrlLocked : key === "meta" ? metaLocked : key === "altgr" ? ctrlLocked && metaLocked : false;
+        const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : undefined;
+        const action = () => {
+          if (key === "ctrl" || key === "meta") cycleModifier(key);
+          else if (key === "altgr") {const both = modifierState.current.ctrl && modifierState.current.meta; if (both || !modifierState.current.ctrl) cycleModifier("ctrl"); if (both || !modifierState.current.meta) cycleModifier("meta");}
+          else if (key === "shift") {modifierState.current.shift = !shift; setShift(!shift);}
+          else if (key === "paste") {if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry();}
+          else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
+          else if (key === "keyboard") {if (document.activeElement === session.terminal.textarea) session.terminal.blur(); else session.terminal.focus();}
+          else if (key === "dpad") setDpadOpen(!dpadOpen);
+          else sendKey(sequences[key] ?? key);
+        };
+        const repeatable = !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad";
+        return <button key={key} disabled={(!session.connected && key !== "dpad") || (modifier && !modifierInput) || (key === "attach" && (session.local || !onOpenAttachments)) || (key === "paste" && (pasteBusy || clipboardPlatform.phase === "loading"))}
+          aria-busy={key === "paste" ? pasteBusy : undefined} aria-pressed={pressed}
+          aria-label={labels[key] ? t(arrowLabelKeys[key as keyof typeof arrowLabelKeys]) : undefined}
+          title={modifier && !modifierInput ? t("terminalModifiersUnavailable") : undefined}
+          onPointerDown={event => {if (key !== "attach") event.preventDefault(); if (repeatable) {stopRepeat(); repeated.current = false; event.currentTarget.setPointerCapture?.(event.pointerId); repeat.current.delay = setTimeout(() => {repeated.current = true; action(); if (!document.hidden) repeat.current.timer = setInterval(action, 80);}, 400);}}}
+          onPointerUp={stopRepeat} onPointerCancel={stopRepeat} onLostPointerCapture={stopRepeat} onBlur={stopRepeat}
+          onClick={event => {if (!repeatable || !repeated.current || event.detail === 0) action();}}>
+          {key === "attach" ? <><Paperclip size={16} aria-hidden="true" />{t("terminalAttach")}</> : labels[key] ?? (key === "paste" ? t(clipboardPlatform.phase === "ready" ? "terminalPaste" : clipboardPlatform.phase === "loading" ? "clipboardChecking" : "clipboardRetry") : key === "dpad" ? t("terminalDpad") : key === "keyboard" ? <Keyboard size={16} aria-label={t("terminalKeyboardToggle")} /> : toolbarKeyLabel(key))}{locked ? ` · ${t("terminalLock")}` : ""}
+        </button>;
+      })}
       {preferences.snippets.map((snippet, index) => <button key={`snippet-${index}`} disabled={!session.connected} onClick={() => {setDraft(snippet.text); setComposing(true);}}>{snippet.label}</button>)}
       {preferences.chords.map((chord, index) => <button key={`chord-${index}`} title={chord.keys} disabled={!session.connected} onClick={() => {if (sendChord(chord.keys)) session.terminal.focus();}}>{chord.label}</button>)}
       <button onClick={() => {setSearching(!searching); requestAnimationFrame(() => searchInput.current?.focus());}}>{t('terminalFind')}</button>

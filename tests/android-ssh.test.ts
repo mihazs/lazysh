@@ -6,12 +6,48 @@ import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
   const error=await owned.finish('synthetic failure',1000).catch(error=>error as Error);
   expect((error as Error).message).toBe('Owned fixture failed: synthetic failure; exit=31');
+  expect(await owned.startupDiagnostic()).toEqual({state:'early-exit',exitCode:31});
+});
+
+test.skipIf(process.platform!=='linux').each(['missing','denied'] as const)('owned startup distinguishes %s launcher without exposing paths or arguments',async failure=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-process-admission-'));
+  const executable=join(directory,'private-launcher');
+  if(failure==='denied')await writeFile(executable,'#!/bin/sh\necho private-output\n',{mode:0o600});
+  const child=new OwnedProcess(executable,['private-argument']);
+  const completion=child.done.catch(error=>error as Error);
+  try {
+    expect(await child.liveIdentity()).toBeUndefined();
+    expect(await child.startupDiagnostic()).toEqual({state:failure==='missing'?'missing-launcher':'launch-denied',exitCode:null});
+    expect(child.child.pid).toBeUndefined();
+    expect((await completion as Error).message).toBe('Owned fixture process could not start');
+  } finally {await child.stop().catch(()=>{});await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(process.platform!=='linux')('owned startup separates live process metadata from subsequent signaled exit',async()=>{
+  const child=new OwnedProcess('sleep',['120']);
+  try {
+    expect(await child.liveIdentity()).toBeDefined();
+    expect(await child.startupDiagnostic()).toEqual({state:'running',exitCode:null});
+    await child.stop();
+    expect(await child.startupDiagnostic()).toEqual({state:'signaled',exitCode:null});
+  } finally {await child.stop();}
+});
+
+test.skipIf(process.platform!=='linux')('SSH startup retains its closed missing-launcher diagnostic without an unhandled rejection',async()=>{
+  const original=childProcess.spawn;
+  const spawn=spyOn(childProcess,'spawn').mockImplementation((program,args,options)=>
+    original(program==='/usr/bin/bwrap'?'/nonexistent-private-fixture-launcher':program,args,options));
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await expect(SshFixture.start(undefined,{privateTtyGroup:true})).rejects.toThrow(
+      'Owned SSH root identity unavailable; startup={"state":"missing-launcher","exitCode":null}');
+  } finally {spawn.mockRestore();warning.mockRestore();}
 });
 test.skipIf(process.platform!=='linux')('owned deadline stops its process group',async()=>{
   const child=new OwnedProcess('sleep',['120']);

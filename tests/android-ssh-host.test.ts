@@ -1,10 +1,12 @@
 import {expect,test} from 'bun:test';
-import {chmod,mkdir,readFile,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {OwnedProcess,SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
+import {observeAndroidMoshBackground} from './support/androidMoshBackground';
+import {sshCommand} from './support/sshFixture';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -107,6 +109,30 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced 
   await expect(stat(lost.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
 
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced SSH Mosh witness attributes both receipts to the same live shell and UDP socket',async()=>{
+  const binary=await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Mosh witness binary','sh',['-c','command -v mosh-server'])).trim());
+  const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,moshBinary:binary,observeMoshBootstraps:true});
+  const observer=observeAndroidMoshBackground(fixture);
+  let client:OwnedProcess|undefined;
+  try {
+    const output=`i=0; while test $i -lt 263; do printf '%01000d' 0; i=$((i+1)); done; printf '%s\\n' "$i" >${fixture.directory}/background-samples; `;
+    const script=['before','after'].map(part=>(part==='after'?output:'')+`printf '%s %s\\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" >${fixture.directory}/background-${part}.tmp; mv ${fixture.directory}/background-${part}.tmp ${fixture.directory}/background-${part}; while ! test -f ${fixture.directory}/background-${part}-ack; do sleep .1; done;`).join(' ')+' sleep 90';
+    const command="'mosh-server' new -s -c 256 -p 60000:61000 -l 'LC_ALL=C.UTF-8' -- /bin/sh -c '"+script.replaceAll("'","'\\''")+"'";
+    const bootstrap=await fixture.client(true,command);
+    const connect=(await bootstrap.finish('owned Mosh witness bootstrap',5000)).match(/MOSH CONNECT ([0-9]+) ([A-Za-z0-9+/=]+)/);
+    expect(connect!==null).toBe(true);
+    client=new OwnedProcess('/usr/bin/script',['-q','-e','-c',`stty rows 24 cols 80; exec mosh-client 127.0.0.1 ${connect![1]}`,'/dev/null'],undefined,{...process.env,TERM:'xterm-256color',MOSH_KEY:connect![2]},false);
+    const deadline=performance.now()+5000;
+    while(!await stat(join(fixture.directory,'background-after-ack')).catch(()=>false)) {
+      observer.check();
+      expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(10);
+    }
+    await observer.assertVerified();
+    await writeFile(join(fixture.directory,'mosh-bootstraps'),'bootstrap\nbootstrap\n');
+    await expect(observer.assertVerified()).rejects.toThrow('Owned Mosh bootstrapped again');
+  } finally {await observer.stop();try{await fixture.stop();}finally{await client?.stop();}}
+},15_000);
+
 test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails explicitly while still removing its private directory',async()=>{
   const fixture=await SshFixture.start();
   await fixture.daemon.stop();
@@ -116,6 +142,10 @@ test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails ex
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app performs explicit trust and authenticated interactive SSH',async()=>{
   await androidSshAcceptance();
+},610_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android Mosh survives busy background with the same owned shell and releases its last worker',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,true);
 },610_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app installs and reuses the verified public companion through its UI',async()=>{

@@ -1,13 +1,13 @@
 [workspace]
-members = ["apps/client/src-tauri", "apps/agent", "apps/share-service", "apps/transcription-service", "apps/notification-service", "packages/credential-vault", "packages/mosh-transport", "packages/et-transport", "packages/apple-speech", "packages/apple-status", "packages/push-registration", "packages/parakeet-runtime", "packages/common", "packages/notification-client", "packages/display-idle"]
+members = ["apps/client/src-tauri", "apps/agent", "apps/share-service", "apps/transcription-service", "apps/notification-service", "packages/credential-vault", "packages/mosh-transport", "packages/et-transport", "packages/apple-speech", "packages/apple-status", "packages/push-registration", "packages/parakeet-runtime", "packages/common", "packages/account-usage", "packages/notification-client", "packages/display-idle"]
 resolver = "2"
-exclude = ["packages/portable-pty-vendor", "packages/deep-link-vendor", "packages/herdr-upstream"]
+exclude = ["packages/ai-usagebar-vendor", "packages/portable-pty-vendor", "packages/deep-link-vendor", "packages/herdr-upstream"]
 
 [patch.crates-io]
 tauri-plugin-deep-link = { path = "packages/deep-link-vendor" }
 
 [workspace.package]
-version = "1.1.7"
+version = "1.3.0"
 license = "GPL-3.0-or-later"
 
 [profile.release]

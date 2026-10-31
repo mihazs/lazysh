@@ -9,6 +9,9 @@ export const aboutLegalFiles = [
   'packages/et-transport/LICENSE-MIT',
   'packages/portable-pty-vendor/LICENSE.md',
   'apps/client/src-tauri/licenses/quircs-LICENSE',
+  'packages/ai-usagebar-vendor/LICENSE',
+  'packages/account-usage/NOTICE',
+  'packages/account-usage/licenses/HERDR-APACHE-2.0.txt',
 ] as const;
 export const aboutLocales = [
   {locale:'en',openHosts:'Open hosts',region:'About lazysh',source:'View corresponding source and build history',license:'License: Protocol Buffers'},
