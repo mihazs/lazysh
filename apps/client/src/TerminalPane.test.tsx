@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { StrictMode, useState } from "react";
 import {uiI18n,useUi} from "./i18n/core";
-import {uiErrorText,type UiErrorCause} from "./i18n/localError";
+import {LocalUiError,uiErrorText,type UiErrorCause} from "./i18n/localError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {prepareClipboardPlatform} from "./deviceClipboard";
@@ -16,7 +16,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -42,6 +42,18 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+it.each(['write','resize'] as const)('keeps structured native and localized %s failures readable',async operation=>{
+  let receive!:(data:string)=>void, resized!:(size:{cols:number;rows:number})=>void;
+  terminal.onData=listener=>{receive=listener;return{dispose(){}};};
+  terminal.onResize=(listener:(size:{cols:number;rows:number})=>void)=>{resized=listener;return{dispose(){}};};
+  const reportError=vi.fn();
+  render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={reportError} />);
+  for(const cause of [{kind:'transport_error',message:'Owned transport unavailable'},new LocalUiError('hostToolsClosed')]) {
+    mocks[operation].mockRejectedValueOnce(cause);
+    await act(async()=>{if(operation==='write')receive('reply');else resized({cols:80,rows:24});});
+    expect(reportError).toHaveBeenLastCalledWith(cause instanceof LocalUiError?cause:cause.message);
+  }
+});
 function mountInputOwner(initial = "") {
   const element=document.createElement('div'), textarea=document.createElement('textarea');
   textarea.value=initial;

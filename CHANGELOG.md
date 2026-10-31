@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Display native terminal failure messages instead of `[object Object]`, preserving localized errors.
+
 - Keep connected Herdr navigation and agent reports in one scrollable drawer so live rows remain reachable on short phone screens. Preserve the existing navigation, report readers and drafts when switching views.
 - Initialize companion database tables and indexes in one deferred transaction, avoiding separate schema commits and rolling back partial initialization on failure. Preserve full synchronization, existing writer coexistence and storage wait budgets.
 
