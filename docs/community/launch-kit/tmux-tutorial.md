@@ -12,8 +12,7 @@ the server's full SHA256 host-key fingerprint through a trusted independent path
 never accept a fingerprint solely because it appeared in the app.
 
 On that host, create an isolated demonstration session with
-`tmux new-session -s lazysh-demo`. Inside it, run `printf 'demo session remains on host
-'`
+`tmux new-session -s lazysh-demo`. Inside it, run `printf '%s\n' 'demo session remains on host'`
 and leave the shell open. Detach with tmux's default Ctrl-b then d. Confirm it is
 listed by `tmux list-sessions`. These commands are ordinary tmux setup, not commands
 run automatically by lazysh. Avoid using a session name already containing work.
