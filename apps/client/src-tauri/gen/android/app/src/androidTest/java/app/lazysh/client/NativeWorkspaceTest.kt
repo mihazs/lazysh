@@ -1545,8 +1545,10 @@ class NativeWorkspaceTest {
         try {
             for (display in 1..2) {
                 sessionView(scenario, "Sessions")
+                val discoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+                awaitDocument(scenario, "owned Herdr list ready for display $display", "Array.from(document.querySelectorAll('.multiplexer-panel button')).filter(x=>x.textContent.trim()==='List herdr sessions' && !x.disabled).length===1", deadline = discoveryDeadline)
                 click("List herdr sessions")
-                awaitDocument(scenario, "owned server discovered for display $display", "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Attach herdr $server').length===1")
+                awaitDocument(scenario, "owned server discovered for display $display", "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Attach herdr $server').length===1", deadline = discoveryDeadline)
                 click("Attach herdr $server")
                 awaitDocument(scenario, "distinct owned Herdr display $display", "document.querySelectorAll('.session-tabs [role=tab]').length===${display + 1} && document.querySelectorAll('.session-tabs [role=tab]')[${display}]?.getAttribute('aria-selected')==='true'")
             }
