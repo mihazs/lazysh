@@ -907,7 +907,8 @@ function GuiProcess($file, $arguments, $counterfactual = $false, $medium = $fals
   if ($file -eq $env:LAZYSH_GUI_NODE) {
     $info.Environment['LAZYSH_GUI_COUNTERFACTUAL'] = $(if ($counterfactual -and !$medium) {'1'} else {'0'})
     $info.Environment['LAZYSH_GUI_MEDIUM_ARM'] = $(if ($medium) {'1'} else {'0'})
-    if ($medium) { $info.Environment['LAZYSH_GUI_MEDIUM_ROOTS']=(@($roaming,$local,$directory) | ConvertTo-Json -Compress) }
+    $info.Environment['LAZYSH_GUI_REQUIRE_STANDARD'] = $(if ($medium -or $env:LAZYSH_GUI_REQUIRE_STANDARD -ceq '1') {'1'} else {'0'})
+    if ($medium -or $env:LAZYSH_GUI_REQUIRE_STANDARD -ceq '1') { $info.Environment['LAZYSH_GUI_MEDIUM_ROOTS']=(@($roaming,$local,$directory) | ConvertTo-Json -Compress) }
   }
   foreach ($argument in $arguments) { $info.ArgumentList.Add($argument) }
   if ($medium) { return GuiMediumStart $mediumJob $info }
@@ -936,7 +937,7 @@ function RemoveGuiDirectory($path) {
 }
 function GuiCounterfactual($baselineFailure) {
   try {
-    if ($env:LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE -ceq '1') { return }
+    if ($env:LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE -ceq '1' -or $env:LAZYSH_GUI_REQUIRE_STANDARD -ceq '1') { return }
     if ($baselineFailure -cnotmatch '\AGUI_SESSION_[A-Z_]+_WINDOW_VERIFIED:HEALTH_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)_NATIVE_(READY|NOT_READY|NO_RESPONSE|UNVERIFIED)\z') { return }
     if (!$guiCleanupVerified) { [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_COUNTERFACTUAL:NOT_RUN_CLEANUP');return }
     # Same 600-second parent: reserve 420 seconds for client/startup, owned cleanup and native uninstall.
@@ -964,6 +965,7 @@ function GuiMediumCounterfactual {
   }
 }
 function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
+  $requireStandard=$medium -or $env:LAZYSH_GUI_REQUIRE_STANDARD -ceq '1'
   $script:stage = 'gui'
   Require ([Environment]::UserInteractive -and (Get-Process -Id $PID).SessionId -ne 0) 'GUI_INTERACTIVE'
   foreach ($file in @($env:LAZYSH_GUI_DRIVER, $env:LAZYSH_GUI_EDGE, $env:LAZYSH_GUI_NODE, $env:LAZYSH_GUI_VITEST)) { Plain $file; Require (Test-Path -LiteralPath $file -PathType Leaf) 'GUI_TOOLS' }
@@ -1048,11 +1050,11 @@ function ExerciseInstalledGui([switch]$counterfactual,[switch]$medium) {
       Require $false 'GUI_CLIENT'
     }
     Plain $env:LAZYSH_GUI_RECEIPT
-    Require ((Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le $(if ($medium) {8192} else {1024})) 'GUI_CLIENT'
+    Require ((Get-Item -LiteralPath $env:LAZYSH_GUI_RECEIPT).Length -le $(if ($requireStandard) {8192} else {1024})) 'GUI_CLIENT'
     $receipt = Get-Content -Raw -LiteralPath $env:LAZYSH_GUI_RECEIPT | ConvertFrom-Json
     Require ($receipt.source -eq $env:GITHUB_SHA -and $receipt.version -eq $env:LAZYSH_VERSION -and $receipt.sha256 -eq $env:LAZYSH_NSIS_BINARY_SHA256 -and $receipt.pid -gt 0 -and $receipt.start -match '^[1-9][0-9]{0,19}$' -and $receipt.window -match '^[1-9][0-9]{0,19}$') 'GUI_CLIENT'
     if (!$counterfactual) { [Console]::Out.WriteLine((@{source=$receipt.source;version=$receipt.version;sha256=$receipt.sha256;pid=$receipt.pid;start=$receipt.start;window=$receipt.window;webview=$runtime;edgeDriver=$edgeVersion} | ConvertTo-Json -Compress)) }
-    if ($medium) {
+    if ($requireStandard) {
       Require ($receipt.startup.available -eq $true -and $receipt.startup.appIntegrity -ceq 'MEDIUM' -and $receipt.startup.appElevation -ceq 'NOT_ELEVATED') 'GUI_MEDIUM_UNAVAILABLE'
       [Console]::Out.WriteLine('LAZYSH_WINDOWS_GUI_MEDIUM_STARTUP:' + ($receipt.startup | ConvertTo-Json -Depth 4 -Compress))
     }
@@ -1126,7 +1128,7 @@ export const windowsGuiTokenReasons=[
 ] as const;
 export const windowsGuiLaunchErrors=['ACCESS_DENIED','INVALID_HANDLE','INVALID_PARAMETER','PRIVILEGE_NOT_HELD','FILE_NOT_FOUND','PATH_NOT_FOUND','BAD_EXE_FORMAT','DIRECTORY','OTHER'] as const;
 export const windowsGuiMediumSource=windowsGuiIntegritySource+String.raw`
-public sealed class OwnedMediumGui : System.IDisposable {
+public sealed partial class OwnedMediumGui : System.IDisposable {
   enum TokenReason { ${windowsGuiTokenReasons.join(',')} }
   enum LaunchCall { UNVERIFIED,CREATE_PROCESS_WITH_TOKEN,CREATE_PROCESS_AS_USER,RESUME_THREAD }
   enum LaunchError { UNVERIFIED,RESUME_COUNT_UNEXPECTED,${windowsGuiLaunchErrors.join(',')} }
@@ -1293,8 +1295,9 @@ public sealed class OwnedMediumGui : System.IDisposable {
     var disabled=new System.Collections.Generic.List<Group>();foreach(var group in Groups(caller))if(Admin(group)&&(group.Attributes&4)!=0)disabled.Add(group);TokenNeed(disabled.Count>0,TokenReason.NO_ENABLED_ADMIN_GROUP);
     if(Word(caller,18)==2){try{using(var data=new Data(caller,19)){TokenNeed(data.Length==IntPtr.Size,TokenReason.LINKED_LAYOUT);linked=Marshal.ReadIntPtr(data.Pointer);}IntPtr copy=Copy(linked);try{if(Candidate(copy,caller,disabled.ToArray())){token=copy;copy=IntPtr.Zero;Kind="LINKED";}}finally{if(copy!=IntPtr.Zero)CloseHandle(copy);}}catch{}finally{if(linked!=IntPtr.Zero){CloseHandle(linked);linked=IntPtr.Zero;}}}
     if(token==IntPtr.Zero){tokenFailure=TokenReason.UNVERIFIED;token=Restricted(caller,disabled.ToArray());Need(Candidate(token,caller,disabled.ToArray()),"TOKEN_UNAVAILABLE");Kind="RESTRICTED";}
-    job=CreateJobObject(IntPtr.Zero,null);Need(job!=IntPtr.Zero,"JOB_UNAVAILABLE");var limits=new Limits();limits.Basic.Flags=0x2000;Need(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits))),"JOB_UNAVAILABLE");
+    CreateOwnedJob();
   }catch{Dispose();throw;}finally{if(caller!=IntPtr.Zero)CloseHandle(caller);}}
+  void CreateOwnedJob(){job=CreateJobObject(IntPtr.Zero,null);Need(job!=IntPtr.Zero,"JOB_UNAVAILABLE");var limits=new Limits();limits.Basic.Flags=0x2000;Need(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Limits))),"JOB_UNAVAILABLE");}
   public static string Command(string image,string[] arguments){var output=new System.Text.StringBuilder();foreach(string value in new[]{image})output.Append(Quote(value));foreach(string value in arguments)output.Append(' ').Append(Quote(value));Need(output.Length+1<=1024,"ARGV_BOUND");return output.ToString();}
   static string Quote(string value){Need(value!=null&&value.IndexOf('\0')<0,"ARGV_BOUND");var output=new System.Text.StringBuilder("\"");int slashes=0;foreach(char c in value){if(c=='\\'){slashes++;continue;}if(c=='\"'){output.Append('\\',slashes*2+1).Append(c);slashes=0;continue;}output.Append('\\',slashes).Append(c);slashes=0;}output.Append('\\',slashes*2).Append('"');return output.ToString();}
   public System.Diagnostics.Process StartProbe(string image,string[] arguments,string directory,string environment,long deadline){
@@ -1340,13 +1343,17 @@ public sealed class OwnedMediumGui : System.IDisposable {
         finally{bool restored=false;try{bool present;restored=Equal(before,CallerPrivileges(caller,quota,out present));}catch{}Need(restored,"CLEANUP_UNVERIFIED");}}
       else{createdChild=CreateProcessWithTokenW(token,0,image,new System.Text.StringBuilder(command),0x08000404,block,directory,ref startup,out child);if(!createdChild){int error=Marshal.GetLastWin32Error();launchCall=LaunchCall.CREATE_PROCESS_WITH_TOKEN;launchError=Win32Failure(error);}}
       Need(createdChild,"LAUNCH_UNAVAILABLE");
-      Need(AssignProcessToJobObject(job,child.Process),"JOB_UNAVAILABLE");long created,exited,kernel,user;Need(GetProcessTimes(child.Process,out created,out exited,out kernel,out user),"IDENTITY_UNVERIFIED");long start=DateTime.FromFileTimeUtc(created).Ticks;var path=new System.Text.StringBuilder(32768);uint length=32768;Need(QueryFullProcessImageName(child.Process,0,path,ref length)&&String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(path.ToString()),StringComparison.OrdinalIgnoreCase),"IDENTITY_UNVERIFIED");
-      var fact=OwnedGuiIntegrity.Query(child.Id,start.ToString(CultureInfo.InvariantCulture));TokenNeed(fact[0]!="UNVERIFIED"&&fact[0]!="IDENTITY_UNVERIFIED"&&fact[1]!="UNVERIFIED",TokenReason.CHILD_TOKEN_UNVERIFIED);TokenNeed(fact[0]=="MEDIUM",TokenReason.CHILD_NOT_MEDIUM);TokenNeed(fact[1]=="NOT_ELEVATED",TokenReason.CHILD_ELEVATED);
+      long start=VerifyCreated(child,image);
       if(asUser)Need(OpenProcessToken(child.Process,8,out childToken)&&Candidate(childToken,caller,denied),"ASUSER_UNVERIFIED");
       managed=System.Diagnostics.Process.GetProcessById(child.Id);IntPtr retained=managed.SafeHandle.DangerousGetHandle();Need(managed.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");if(creationOnly){Need(TerminateProcess(child.Process,1),"CLEANUP_UNVERIFIED");Need(WaitForSingleObject(child.Process,10000)==0,"CLEANUP_UNVERIFIED");}
       else{uint count=ResumeThread(child.Thread);if(count!=1){int error=count==uint.MaxValue?Marshal.GetLastWin32Error():0;launchCall=LaunchCall.RESUME_THREAD;launchError=ResumeFailure(count,error);}Need(count==1,"LAUNCH_UNAVAILABLE");}
       processes.Add(child.Process);child.Process=IntPtr.Zero;admitted=true;return managed;
     }finally{bool closed=true;if(!admitted&&child.Process!=IntPtr.Zero){closed &= TerminateProcess(child.Process,1);closed &= WaitForSingleObject(child.Process,10000)==0;closed &= CloseHandle(child.Process);if(managed!=null)managed.Dispose();}if(child.Thread!=IntPtr.Zero)closed &= CloseHandle(child.Thread);if(childToken!=IntPtr.Zero)closed &= CloseHandle(childToken);if(caller!=IntPtr.Zero)closed &= CloseHandle(caller);if(nul!=IntPtr.Zero&&nul!=new IntPtr(-1))closed &= CloseHandle(nul);if(block!=IntPtr.Zero)Marshal.FreeHGlobal(block);Need(closed,"CLEANUP_UNVERIFIED");}
+  }
+  long VerifyCreated(PI child,string image){
+    Need(AssignProcessToJobObject(job,child.Process),"JOB_UNAVAILABLE");long created,exited,kernel,user;Need(GetProcessTimes(child.Process,out created,out exited,out kernel,out user),"IDENTITY_UNVERIFIED");long start=DateTime.FromFileTimeUtc(created).Ticks;var path=new System.Text.StringBuilder(32768);uint length=32768;Need(QueryFullProcessImageName(child.Process,0,path,ref length)&&String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(path.ToString()),StringComparison.OrdinalIgnoreCase),"IDENTITY_UNVERIFIED");
+      var fact=OwnedGuiIntegrity.Query(child.Id,start.ToString(CultureInfo.InvariantCulture));TokenNeed(fact[0]!="UNVERIFIED"&&fact[0]!="IDENTITY_UNVERIFIED"&&fact[1]!="UNVERIFIED",TokenReason.CHILD_TOKEN_UNVERIFIED);TokenNeed(fact[0]=="MEDIUM",TokenReason.CHILD_NOT_MEDIUM);TokenNeed(fact[1]=="NOT_ELEVATED",TokenReason.CHILD_ELEVATED);
+    return start;
   }
   public void Stop(long deadline){if(job==IntPtr.Zero)return;try{Need(TerminateJobObject(job,1),"CLEANUP_UNVERIFIED");IntPtr data=Marshal.AllocHGlobal(48);try{uint length;while(true){Need(QueryInformationJobObject(job,1,data,48,out length)&&length>=44,"CLEANUP_UNVERIFIED");if(Marshal.ReadInt32(data,40)==0)break;Need(DateTime.UtcNow.Ticks<deadline,"CLEANUP_UNVERIFIED");System.Threading.Thread.Sleep(10);}}finally{Marshal.FreeHGlobal(data);}}finally{Dispose();}}
   public void Dispose(){bool closed=true;if(job!=IntPtr.Zero){closed &= CloseHandle(job);job=IntPtr.Zero;}foreach(var process in processes)closed &= CloseHandle(process);processes.Clear();if(token!=IntPtr.Zero){closed &= CloseHandle(token);token=IntPtr.Zero;}Need(closed,"CLEANUP_UNVERIFIED");}

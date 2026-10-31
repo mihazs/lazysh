@@ -1,6 +1,7 @@
+import {windowsStandardInstallation,windowsStandardUserSource,standardOwnerCode,insideStandardRoot,copyStandardClosure,parseStandardReceipt,standardWorkerEnvironment,standardBrokerScript} from '../.changeset/windows-standard-user';
 import {english} from '../apps/client/src/i18n/en';
 import { expect, test } from 'bun:test';
-import { appendFile, mkdtemp, mkdir, rm, rmdir, symlink, unlink } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregatePackages, artifactName, artifactTargets, releaseTargets, digestFile, stagePackages,
@@ -674,23 +675,20 @@ test('restricted Windows admission reports only exact finite smoke results',()=>
   for(const result of mediumAdmissionResults)expect(mediumAdmissionResult(result)).toBe(result);
   for(const value of [undefined,null,42,{},'','private path','UNAVAILABLE_PRIVATE','UNAVAILABLE_LAUNCH_UNAVAILABLE:PRIVATE:CREATE_PROCESS_WITH_TOKEN:ACCESS_DENIED','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:RESUME_COUNT_UNEXPECTED','UNAVAILABLE_LAUNCH_UNAVAILABLE:DRIVER:RESUME_THREAD:5','UNAVAILABLE_LAUNCH_UNAVAILABLE:PROBE:CREATE_PROCESS_WITH_TOKEN:OTHER private','UNAVAILABLE_TOKEN_UNAVAILABLE:PRIVATE','UNAVAILABLE_TOKEN_UNAVAILABLE:OWN_TOKEN_OPEN private','UNAVAILABLE_TOKEN_UNAVAILABLE private','ADMITTED_LINKED\nprivate','PORTABLE_CONTRACT\r',' UNVERIFIED','CLEANUP_UNVERIFIED\0'])expect(mediumAdmissionResult(value)).toBe('UNVERIFIED');
 });
-test('Windows evidence routing retains the failed admission and every required successful predecessor',async()=>{
+test('Windows required gate uses complete standard context and retains unconditional owned recovery',async()=>{
   const workflow=Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml',import.meta.url)).text()) as any;
   const steps=workflow.jobs['native-desktop'].steps;
-  const early=steps.find((step:any)=>step.id==='windows_restricted');
-  expect(workflow.jobs['native-desktop']['continue-on-error']).toBeUndefined();expect(early['continue-on-error']).toBeUndefined();expect(early.if).toBe("runner.os == 'Windows'");expect(early['timeout-minutes']).toBe(2);
-  expect(early.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE).toBe('1');
-  const eligible="runner.os == 'Windows' && !cancelled() && steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial'";
-  const required:string[]=[];
+  expect(workflow.jobs['native-desktop']['continue-on-error']).toBeUndefined();
+  expect(steps.find((step:any)=>step.id==='windows_restricted')).toBeUndefined();
   for(const id of ['native_build','credential_check','windows_package','windows_installer','windows_gui']){
-    const step=steps.find((step:any)=>step.id===id),resume=[eligible,...required.map(prior=>`steps.${prior}.outcome == 'success'`)].join(' && ');
-    expect(step['continue-on-error']).toBeUndefined();
-    expect(step.if).toBe('${{ '+(id.startsWith('windows_')?"runner.os == 'Windows' && (success() || ("+resume+'))':'success() || ('+resume+')')+' }}');
-    required.push(id);
+    const step=steps.find((step:any)=>step.id===id);expect(step['continue-on-error']).toBeUndefined();
+    expect(step.if).toBe(id.startsWith('windows_')?"runner.os == 'Windows'":undefined);
   }
-  const gui=steps.find((step:any)=>step.id==='windows_gui');
-  expect(gui.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE).toBe("${{ steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial' && '1' || '0' }}");
-  expect(gui['timeout-minutes']).toBe(12);
+  const contracts=steps.find((step:any)=>step.name==='Verify owned Windows launch contracts without creating accounts');
+  expect(contracts.if).toBe("runner.os == 'Windows'");expect(contracts.env.LAZYSH_TEST_WINDOWS_GUI).toBe('1');expect(contracts['continue-on-error']).toBeUndefined();
+  for(const owner of ['Windows launch portable contracts without process creation','owned UIA candidate contract','Windows standard broker portable'])expect(contracts.run).toContain(owner);
+  const gui=steps.find((step:any)=>step.id==='windows_gui');expect(gui.env.LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE).toBeUndefined();expect(gui['timeout-minutes']).toBe(12);
+  const recovery=steps.find((step:any)=>step.run==='bun .changeset/windows-standard-user.ts --recover');expect(recovery.if).toBe("${{ always() && runner.os == 'Windows' }}");expect(recovery['continue-on-error']).toBeUndefined();
 });
 
 test('HIGH evidence continuation requires the complete safe-denial wire record',()=>{
@@ -732,22 +730,7 @@ test('creation-only counterprobe results cannot replace the original denial or c
   expect(mediumAdmissionObservation(probeDenial)).toEqual({result:probeDenial});
   expect(mediumAdmissionObservation(counterprobePrefix+'LINKED:PRIVATE\nCLEANUP_UNVERIFIED')).toEqual({result:'CLEANUP_UNVERIFIED',counterprobe:'UNVERIFIED'});
 });
-test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restricted launcher contracts and native admission',async()=>{
-  let wire:unknown,observed=mediumAdmissionObservation(undefined);
-  const root=await mkdtemp(join(process.env.RUNNER_TEMP??tmpdir(),'lazysh-medium-admission-'));
-  try{
-    const tools=process.platform==='win32'?windowsGuiToolEnvironment(process.env.LAZYSH_GUI_DRIVER??'',process.env.LAZYSH_GUI_EDGE??''):{};
-    if(process.platform==='win32'){
-      if(process.env.GITHUB_ACTIONS!=='true'||process.env.RUNNER_ENVIRONMENT!=='github-hosted')throw new Error('Restricted context requires owned Windows CI');
-      const receipt=Bun.file(join(tools.LAZYSH_GUI_DRIVER!,'../../.crates2.json'));
-      if(receipt.size>65536||!isWindowsGuiDriverReceipt(await receipt.json()))throw new Error('Unverified native driver receipt');
-    }
-    const probe=String.raw`$ErrorActionPreference='Stop';Add-Type 'using System;using System.Runtime.InteropServices;public class Q{[DllImport("kernel32")]public static extern IntPtr GetStdHandle(int n);[DllImport("kernel32")]public static extern uint GetFileType(IntPtr h);}';foreach($n in -10,-11,-12){if([Q]::GetFileType([Q]::GetStdHandle($n))-ne2){exit 4}};[Console]::OpenStandardOutput().WriteByte(88);[Console]::OpenStandardError().WriteByte(88);if([Console]::OpenStandardInput().ReadByte()-ne -1){exit 5};$w=[IO.File]::Open($env:LAZYSH_MEDIUM_PROOF,[IO.FileMode]::CreateNew);$w.WriteByte(89);$w.Dispose()`;
-    const script=windowsInstallerPathsScript+windowsGuiMediumScript+windowsGuiEndpointsScript+windowsGuiHealthOwnershipScript+windowsGuiDebugTransportScript+String.raw`
-$ErrorActionPreference='Stop'
-$probeDeadline=[Environment]::TickCount64+100000
-$guiMediumSource=[Console]::In.ReadToEnd()
-Add-Type -TypeDefinition $guiMediumSource -ErrorAction Stop
+const windowsLaunchPortableContracts=String.raw`
 $flags=[Reflection.BindingFlags]'NonPublic,Static'
 $classify=[OwnedMediumGui].GetMethod('Win32Failure',$flags)
 foreach($case in @(@(5,'ACCESS_DENIED'),@(6,'INVALID_HANDLE'),@(87,'INVALID_PARAMETER'),@(1314,'PRIVILEGE_NOT_HELD'),@(2,'FILE_NOT_FOUND'),@(3,'PATH_NOT_FOUND'),@(193,'BAD_EXE_FORMAT'),@(267,'DIRECTORY'),@(0,'OTHER'),@(-1,'OTHER'),@([int]::MaxValue,'OTHER'))){
@@ -838,6 +821,35 @@ if (!$IsWindows) { [Console]::Out.Write('PORTABLE_CONTRACT');exit 0 }
 if ((GuiDebugTransport 'tool').transport -cne 'ABSENT') { throw 'native tokenizer unavailable' }
 $parsed=[OwnedGuiArguments]::Parse($quoted)
 if ($parsed.Count -ne 5 -or $parsed[1] -cne 'space value' -or $parsed[2] -cne 'quote"value' -or $parsed[3] -cne 'trailing\' -or $parsed[4] -cne '') { throw 'native quoting mismatch' }
+`;
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('Windows launch portable contracts without process creation',async()=>{
+  const script=windowsGuiDebugTransportScript+String.raw`
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop
+${windowsLaunchPortableContracts}
+[Console]::Out.Write('PORTABLE_CONTRACT')
+`;
+  expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],process.env,30000,windowsGuiMediumSource)).toBe('PORTABLE_CONTRACT');
+},35000);
+
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows restricted launcher contracts and native admission',async()=>{
+  let wire:unknown,observed=mediumAdmissionObservation(undefined);
+  const root=await mkdtemp(join(process.env.RUNNER_TEMP??tmpdir(),'lazysh-medium-admission-'));
+  try{
+    const tools=process.platform==='win32'?windowsGuiToolEnvironment(process.env.LAZYSH_GUI_DRIVER??'',process.env.LAZYSH_GUI_EDGE??''):{};
+    if(process.platform==='win32'){
+      if(process.env.GITHUB_ACTIONS!=='true'||process.env.RUNNER_ENVIRONMENT!=='github-hosted')throw new Error('Restricted context requires owned Windows CI');
+      const receipt=Bun.file(join(tools.LAZYSH_GUI_DRIVER!,'../../.crates2.json'));
+      if(receipt.size>65536||!isWindowsGuiDriverReceipt(await receipt.json()))throw new Error('Unverified native driver receipt');
+    }
+    const probe=String.raw`$ErrorActionPreference='Stop';Add-Type 'using System;using System.Runtime.InteropServices;public class Q{[DllImport("kernel32")]public static extern IntPtr GetStdHandle(int n);[DllImport("kernel32")]public static extern uint GetFileType(IntPtr h);}';foreach($n in -10,-11,-12){if([Q]::GetFileType([Q]::GetStdHandle($n))-ne2){exit 4}};[Console]::OpenStandardOutput().WriteByte(88);[Console]::OpenStandardError().WriteByte(88);if([Console]::OpenStandardInput().ReadByte()-ne -1){exit 5};$w=[IO.File]::Open($env:LAZYSH_MEDIUM_PROOF,[IO.FileMode]::CreateNew);$w.WriteByte(89);$w.Dispose()`;
+    const script=windowsInstallerPathsScript+windowsGuiMediumScript+windowsGuiEndpointsScript+windowsGuiHealthOwnershipScript+windowsGuiDebugTransportScript+String.raw`
+$ErrorActionPreference='Stop'
+$probeDeadline=[Environment]::TickCount64+100000
+$guiMediumSource=[Console]::In.ReadToEnd()
+Add-Type -TypeDefinition $guiMediumSource -ErrorAction Stop
+${windowsLaunchPortableContracts}
 $job=$null;$driver=$null;$probe=$null;$edge=$null;$outcome='UNVERIFIED';$launchRole='UNVERIFIED'
 try {
   foreach ($path in @($env:LAZYSH_MEDIUM_ROOT,$env:LAZYSH_GUI_DRIVER,$env:LAZYSH_GUI_EDGE)) { Plain $path }
@@ -920,7 +932,7 @@ test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI !== '1')('actual Windows install
   const installer = await exactlyOne('nsis/*.exe', join(import.meta.dir, '../target/release/bundle'));
   const binary = join(import.meta.dir, '../target/release/lazysh.exe');
   const { version } = await Bun.file(join(import.meta.dir, '../apps/client/package.json')).json();
-  console.info(await windowsInstallation(installer, binary, version, true));
+  console.info(await windowsStandardInstallation(installer, binary, version));
 }, 650_000);
 test('installed GUI refuses an implicit request before reading any files', async () => {
   const prior = process.env.LAZYSH_TEST_WINDOWS_GUI;
@@ -1445,3 +1457,31 @@ test('NSIS image prediction preserves the runtime bundle-comparison constants by
   expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: Buffer.byteLength(expected),
     sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
 }));
+
+test('Windows standard owner keeps output closed and staging inside its public dependency closure',async()=>{
+  for(const code of ['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','CLEANUP_UNVERIFIED','ACCOUNT_COLLISION'])expect(standardOwnerCode('LAZYSH_STANDARD_OWNER:'+code)).toBe(code);
+  expect(standardOwnerCode('LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:STANDARD_LOGON_UNAVAILABLE')).toBe('CLEANUP_UNVERIFIED');
+  for(const value of ['LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:STANDARD_OWNER_PASSED','LAZYSH_STANDARD_OWNER:CLEANUP_UNVERIFIED:private',null,{},'STANDARD_OWNER_PASSED','LAZYSH_STANDARD_OWNER:private','LAZYSH_STANDARD_OWNER:STANDARD_OWNER_PASSED\nprivate'])expect(standardOwnerCode(value)).toBe('UNVERIFIED');
+  expect(insideStandardRoot('/owned/public/file','/owned/public')).toBe(true);expect(insideStandardRoot('/owned/private','/owned/public')).toBe(false);
+  await fixture(async root=>{const source=join(root,'public'),target=join(root,'copied');await mkdir(source);await writeFile(join(root,'private'),'never copied');await symlink(join(root,'private'),join(source,'foreign'));await expect(copyStandardClosure(source,target,source)).rejects.toThrow('escapes');expect(await Bun.file(join(target,'foreign')).exists()).toBe(false);});
+  const configured=Object.fromEntries(['GITHUB_ACTIONS','RUNNER_ENVIRONMENT','GITHUB_REPOSITORY','GITHUB_SHA','RUNNER_TEMP','TEMP','TMP','PATH','LAZYSH_TEST_WINDOWS_GUI','LAZYSH_GUI_DRIVER','LAZYSH_GUI_EDGE'].map(key=>[key,'synthetic']));
+  const selected=standardWorkerEnvironment({USERPROFILE:'fresh-profile',GITHUB_TOKEN:'synthetic-secret',ACTIONS_RUNTIME_TOKEN:'synthetic-secret',SSH_AUTH_SOCK:'synthetic-socket',PATH:'foreign-tools'},configured);
+  expect(selected.USERPROFILE).toBe('fresh-profile');expect(selected.PATH).toBe('synthetic');
+  for(const key of ['GITHUB_TOKEN','ACTIONS_RUNTIME_TOKEN','SSH_AUTH_SOCK'])expect(key in selected).toBe(false);
+  expect(()=>standardWorkerEnvironment({}, {...configured,GITHUB_TOKEN:'synthetic-secret'})).toThrow();
+  const receipt={result:'PASSED',source:'a'.repeat(40),binary:'b'.repeat(64)};
+  expect(parseStandardReceipt(receipt,receipt.source,receipt.binary)).toEqual({result:'PASSED'});
+  expect(parseStandardReceipt({...receipt,result:'FAILED',failure:'gui:GUI_FRONTEND'},receipt.source,receipt.binary)).toEqual({result:'FAILED',failure:'gui:GUI_FRONTEND'});
+  for(const change of [{account:'private'},{source:'c'.repeat(40)},{binary:'c'.repeat(64)},{result:'ADMITTED'},{failure:'gui:GUI_FRONTEND'},{result:'FAILED',failure:'private data'}])expect(()=>parseStandardReceipt({...receipt,...change},receipt.source,receipt.binary)).toThrow();
+  expect(windowsStandardUserSource.match(/CreateProcessWithLogonW\(name,/g)).toHaveLength(1);
+  expect(windowsStandardUserSource).toContain('IntPtr.Zero,root,ref startup,out child)');
+  expect(windowsStandardUserSource).toContain('Need(data[4]!="INTENT","CLEANUP_UNVERIFIED")');
+  expect(windowsStandardUserSource).not.toMatch(/AdjustTokenPrivileges|ChangeServiceConfig|StartService|SwitchDesktop|SetUserObjectSecurity|LOGON_NETCREDENTIALS_ONLY/);
+});
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('Windows standard broker portable contracts reject orphan-gap cleanup before any account API',async()=>{
+  await fixture(async root=>{
+    const capsule=join(root,'account.owner');await writeFile(capsule,['lshci0123456789ab','S-1-5-21-1-2-3-1001','0'.repeat(32),'1','INTENT','a'.repeat(64),'123','C:\\Users\\lshci0123456789ab'].join('\n'));
+    const script=String.raw`$ErrorActionPreference='Stop';$tokens=$null;$parseErrors=$null;$null=[Management.Automation.Language.Parser]::ParseInput($env:LAZYSH_STANDARD_CONTRACT_SCRIPT,[ref]$tokens,[ref]$parseErrors);if($parseErrors.Count){throw 'actual standard broker PowerShell syntax rejected'};Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;$flags=[Reflection.BindingFlags]'NonPublic,Static';$registry=[OwnedMediumGui].GetMethod('RegistryRoot',$flags);if($registry.Invoke($null,@([uint32]2147483651)).ToInt64() -ne -2147483645){throw 'predefined HKEY lost sign extension'};$writable=[OwnedMediumGui].GetMethod('WritableFixture',$flags);if(!$writable.Invoke($null,@([IO.Path]::Combine($env:LAZYSH_STANDARD_CONTRACT_ROOT,'work','receipt'),$env:LAZYSH_STANDARD_CONTRACT_ROOT)) -or $writable.Invoke($null,@([IO.Path]::Combine($env:LAZYSH_STANDARD_CONTRACT_ROOT,'node_modules','vite','source.js'),$env:LAZYSH_STANDARD_CONTRACT_ROOT))){throw 'source gained generated-cache write access'};if(!$writable.Invoke($null,@([IO.Path]::Combine($env:LAZYSH_STANDARD_CONTRACT_ROOT,'node_modules','.vitest-cache','module'),$env:LAZYSH_STANDARD_CONTRACT_ROOT)) -or $writable.Invoke($null,@([IO.Path]::Combine($env:LAZYSH_STANDARD_CONTRACT_ROOT,'node_modules','.vitest-cache-foreign','module'),$env:LAZYSH_STANDARD_CONTRACT_ROOT))){throw 'Vitest module cache scope rejected'};$sid=[OwnedMediumGui].GetMethod('StandardSid',$flags);foreach($value in @('S-1-5-18','S-1-5-32-544','S-1-5-21-1-2-3-1001 private','')){if($sid.Invoke($null,@($value))){throw 'unknown account SID admitted'}};if(!$sid.Invoke($null,@('S-1-5-21-1-2-3-1001'))){throw 'ordinary SID rejected'};$cleanup=[OwnedMediumGui].GetMethod('CleanupAccount',$flags);$rejected=$false;try{$cleanup.Invoke($null,@($env:LAZYSH_STANDARD_CONTRACT_ROOT,([Environment]::TickCount64+1000)))}catch{$rejected=$_.Exception.GetBaseException().Message -ceq 'CLEANUP_UNVERIFIED'};if(!$rejected){throw 'uncertain launch gap reached account deletion'};if(!$IsWindows){$rejected=$false;try{[OwnedMediumGui]::RunStandard('unowned','unowned','unowned',('a'*64),1)}catch{$rejected=$_.Exception.GetBaseException().Message -ceq 'HOSTED_ONLY'};if(!$rejected){throw 'local native account execution admitted'}};[Console]::Out.Write('STANDARD_PORTABLE_CONTRACT')`;
+    expect(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command',script],{...process.env,LAZYSH_STANDARD_CONTRACT_ROOT:root,LAZYSH_STANDARD_CONTRACT_SCRIPT:standardBrokerScript},30000,windowsStandardUserSource)).toBe('STANDARD_PORTABLE_CONTRACT');
+  });
+},35000);

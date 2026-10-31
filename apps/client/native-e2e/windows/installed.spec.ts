@@ -15,7 +15,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   assertDirectDriverEnvironment(process.env);
   const port=Number(process.env.LAZYSH_GUI_PORT),sha=process.env.GITHUB_SHA??'',version=process.env.LAZYSH_VERSION??'';
   if(!Number.isInteger(port)||port<1||port>65535||!/^[a-f0-9]{40}$/.test(sha)||!/^\d+\.\d+\.\d+$/.test(version))throw new Error('Invalid installed GUI invocation');
-  const medium=process.env.LAZYSH_GUI_MEDIUM_ARM==='1';
+  const requireStandard=process.env.LAZYSH_GUI_REQUIRE_STANDARD==='1';
   let startup:ReturnType<typeof windowsGuiStartupProbe>['startup'];
   const owner=async(diagnostic=false,accessibility=false)=>{
     let core:unknown;
@@ -31,10 +31,10 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
     } catch(error) {throw new Error('Installed GUI native window/image ownership rejected',{cause:windowsGuiProbeDiagnostic(core??(error as {stdout?:unknown}).stdout)});}
   };
   const capabilities=windowsGuiCapabilities(process.env.LAZYSH_GUI_BINARY!,process.env.LAZYSH_GUI_COUNTERFACTUAL);
-  let stage=medium?'GUI_MEDIUM_UNAVAILABLE':'GUI_SESSION';
+  let stage=requireStandard?'GUI_MEDIUM_UNAVAILABLE':'GUI_SESSION';
   let session:ReturnType<typeof windowsGuiSessionResponse>|undefined;
   try {
-  if(medium){
+  if(requireStandard){
     const roots=JSON.parse(process.env.LAZYSH_GUI_MEDIUM_ROOTS??'null');
     if(!Array.isArray(roots)||roots.length!==3||!roots.every(root=>typeof root==='string'))throw new Error('Invalid private workspace');
     for(const root of roots){
@@ -48,7 +48,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   browser=await remote({hostname:'127.0.0.1',port,path:'/',logLevel:'silent',connectionRetryCount:0,connectionRetryTimeout:20000,
     capabilities,transformResponse:response=>{if(stage==='GUI_SESSION')session=windowsGuiSessionResponse(response);return response;}});
   let admitted:Awaited<ReturnType<typeof owner>>|undefined;
-  if(medium){stage='GUI_OWNER';admitted=await owner(true);if(!startup?.available||startup.appIntegrity!=='MEDIUM'||startup.appElevation!=='NOT_ELEVATED')throw new Error('Standard context unverified');}
+  if(requireStandard){stage='GUI_OWNER';admitted=await owner(true);if(!startup?.available||startup.appIntegrity!=='MEDIUM'||startup.appElevation!=='NOT_ELEVATED')throw new Error('Standard context unverified');}
   stage='GUI_FRONTEND';
   expect(['http://tauri.localhost/','https://tauri.localhost/','tauri://localhost/']).toContain(await browser.getUrl());
   expect(await browser.getWindowHandles()).toHaveLength(1);
@@ -61,10 +61,10 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
   expect(await panel.getText()).toContain(version);
   expect(await (await panel.$('code')).getText()).toBe(sha);
   stage='GUI_OWNER';
-  expect(await owner(medium)).toEqual(original);
-  if(medium&&(!startup?.available||startup.appIntegrity!=='MEDIUM'||startup.appElevation!=='NOT_ELEVATED'))throw new Error('Standard context retired');
+  expect(await owner(requireStandard)).toEqual(original);
+  if(requireStandard&&(!startup?.available||startup.appIntegrity!=='MEDIUM'||startup.appElevation!=='NOT_ELEVATED'))throw new Error('Standard context retired');
   // These are synthetic test identities only; no DOM/profile/desktop capture is retained.
-  await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify({...original,source:sha,version,...(medium?{startup}: {})}),{flag:'wx'});
+  await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify({...original,source:sha,version,...(requireStandard?{startup}: {})}),{flag:'wx'});
   } catch(error) {
     const failure: {failure:string;session?:ReturnType<typeof windowsGuiSessionResponse>;ownedWindow?:'VERIFIED'|'UNVERIFIED';probe?:ReturnType<typeof windowsGuiProbeDiagnostic>['phase'];roleMask?:number;metadata?:ReturnType<typeof windowsGuiProbeDiagnostic>['metadata'];proxyHealth?:string;nativeHealth?:string;startup?:ReturnType<typeof windowsGuiStartupProbe>['startup']}={failure:stage};
     if(stage==='GUI_SESSION') {
@@ -74,7 +74,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
       });
       failure.proxyHealth=health.proxy;failure.nativeHealth=health.native;
       failure.session=session??windowsGuiSessionNoResponse(error,port);
-      try {await owner(true,!medium);failure.ownedWindow='VERIFIED';}
+      try {await owner(true,!requireStandard);failure.ownedWindow='VERIFIED';}
       catch(probe) {
         failure.ownedWindow='UNVERIFIED';
         const diagnostic=probe instanceof Error ? probe.cause as ReturnType<typeof windowsGuiProbeDiagnostic> : undefined;
@@ -82,7 +82,7 @@ it.skipIf(process.platform!=='win32')('opens the exact installed bundled applica
       }
       failure.startup=startup??{available:false,overflow:false,signature:'UNVERIFIED'};
     }
-    if(medium&&startup)failure.startup=startup;
+    if(requireStandard&&startup)failure.startup=startup;
     await writeFile(process.env.LAZYSH_GUI_RECEIPT!,JSON.stringify(failure),{flag:'wx'});
     throw new Error(`Installed GUI rejected: ${stage}`);
   }

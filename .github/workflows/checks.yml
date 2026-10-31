@@ -422,23 +422,16 @@ jobs:
           Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$runtime/edgedriver_win64.zip" -OutFile $archive -TimeoutSec 60
           if ((Get-Item -LiteralPath $archive).Length -gt 52428800) { throw 'EdgeDriver archive exceeds its bound' }
           Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $tools 'edge')
-      - name: Admit the owned restricted Windows launch before app compilation
-        id: windows_restricted
+      - name: Verify owned Windows launch contracts without creating accounts
         if: runner.os == 'Windows'
         timeout-minutes: 2
         env:
           LAZYSH_TEST_WINDOWS_GUI: '1'
-          LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE: '1'
-          LAZYSH_GUI_DRIVER: ${{ runner.temp }}/lazysh-installed-gui-tools/bin/tauri-driver.exe
-          LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
-        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows restricted launcher contracts'
-      # A safe denial permits observation only; the failed admission keeps the job failed.
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'Windows launch portable contracts without process creation|owned UIA candidate contract|Windows standard broker portable'
       - run: bun run build:native
         id: native_build
-        if: ${{ success() || (runner.os == 'Windows' && !cancelled() && steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial') }}
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
         id: credential_check
-        if: ${{ success() || (runner.os == 'Windows' && !cancelled() && steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial' && steps.native_build.outcome == 'success') }}
       - name: Package and validate native macOS permission localizations
         if: runner.os == 'macOS'
         run: |
@@ -446,26 +439,28 @@ jobs:
           plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
       - name: Package the actual Windows NSIS installer
         id: windows_package
-        if: ${{ runner.os == 'Windows' && (success() || (runner.os == 'Windows' && !cancelled() && steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial' && steps.native_build.outcome == 'success' && steps.credential_check.outcome == 'success')) }}
+        if: runner.os == 'Windows'
         run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
       - name: Exercise actual Windows install, same-version repair and uninstall
         id: windows_installer
-        if: ${{ runner.os == 'Windows' && (success() || (runner.os == 'Windows' && !cancelled() && steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial' && steps.native_build.outcome == 'success' && steps.credential_check.outcome == 'success' && steps.windows_package.outcome == 'success')) }}
+        if: runner.os == 'Windows'
         timeout-minutes: 10
         env:
           LAZYSH_TEST_WINDOWS_INSTALLER: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows NSIS'
       - name: Exercise the actual installed Windows GUI and owned uninstall
         id: windows_gui
-        if: ${{ runner.os == 'Windows' && (success() || (runner.os == 'Windows' && !cancelled() && steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial' && steps.native_build.outcome == 'success' && steps.credential_check.outcome == 'success' && steps.windows_package.outcome == 'success' && steps.windows_installer.outcome == 'success')) }}
+        if: runner.os == 'Windows'
         timeout-minutes: 12
         env:
           LAZYSH_TEST_WINDOWS_GUI: '1'
-          # HIGH-EVIDENCE-ONLY: no PORT_ZERO or medium arm; the early failure remains final.
-          LAZYSH_TEST_WINDOWS_HIGH_EVIDENCE: ${{ steps.windows_restricted.outcome == 'failure' && steps.windows_restricted.outputs.high_gui_evidence == 'safe-denial' && '1' || '0' }}
           LAZYSH_GUI_DRIVER: ${{ runner.temp }}/lazysh-installed-gui-tools/bin/tauri-driver.exe
           LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows (installed GUI|GUI (endpoint|window))'
+      - name: Retire only the owned Windows standard-user scope
+        if: ${{ always() && runner.os == 'Windows' }}
+        timeout-minutes: 1
+        run: bun .changeset/windows-standard-user.ts --recover
       - name: Reject unverified Windows private-file permissions
         if: runner.os == 'Windows'
         run: cargo test --locked -p lazysh-common --features service --lib service_secrets::tests::public_storage_helpers_reject_unverified_host_permissions -- --exact

@@ -141,7 +141,8 @@ export async function windowsNsisBinaryDigest(path: string, source: { bytes: num
   predicted.update(tail);
   return { bytes, sha256: predicted.digest('hex') };
 }
-export async function windowsInstallation(installer: string, binary: string, version: string, gui = false) {
+export async function windowsInstallation(installer: string, binary: string, version: string, gui = false, requireStandard = false) {
+  requirePlatform(!requireStandard || gui, 'Standard context requires GUI acceptance');
   requirePlatform(!gui || process.env.LAZYSH_TEST_WINDOWS_GUI === '1', 'Windows GUI acceptance must be explicitly selected');
   requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
     && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
@@ -202,6 +203,11 @@ if ($env:LAZYSH_TEST_WINDOWS_GUI -eq '1') {
 $stage = 'paths'
 $roaming = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'app.lazysh.client'
 $local = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'app.lazysh.client'
+if ($env:LAZYSH_GUI_REQUIRE_STANDARD -ceq '1') {
+  Plain $env:USERPROFILE
+  $profile=[IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\')+'\'
+  foreach($path in @($roaming,$local)){Require ([IO.Path]::GetFullPath($path).StartsWith($profile,[StringComparison]::OrdinalIgnoreCase)) 'GUI_MEDIUM_UNAVAILABLE'}
+}
 $manufacturer = 'HKCU:\Software\lazysh\lazysh'
 $uninstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\lazysh'
 $protocol = 'HKCU:\Software\Classes\lazysh'
@@ -308,7 +314,7 @@ if ($primaryFailed) { exit 1 }
 'Windows NSIS install, same-version repair, marker preservation and uninstall passed'
 `], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
     LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256, LAZYSH_BINARY_BYTES: String(expected.bytes),
-    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256, LAZYSH_TEST_WINDOWS_GUI: gui ? '1' : '', ...guiTools,
+    LAZYSH_NSIS_BINARY_SHA256: packaged.sha256, LAZYSH_TEST_WINDOWS_GUI: gui ? '1' : '', LAZYSH_GUI_REQUIRE_STANDARD: requireStandard ? '1' : '0', ...guiTools,
     LAZYSH_GUI_NODE: gui ? await native('node', ['-p', 'process.execPath']) : '',
     LAZYSH_GUI_VITEST: join(root, 'node_modules/vitest/vitest.mjs'),
     LAZYSH_GUI_CLIENT_ROOT: join(root, 'apps/client'),
