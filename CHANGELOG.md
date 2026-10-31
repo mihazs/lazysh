@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Retain only closed stage and reason observations when companion staging cleanup reports residue. Existing warnings, installation outcomes, time limits, identity/hash checks and conservative deletion behavior remain unchanged; this diagnostic does not claim a cleanup repair.
+- Pipeline companion verification through a fixed window of SFTP reads, preserving ordered full-file hashes, partial reads, EOF and metadata checks, existing time limits and conservative deletion guards. Retain closed cleanup stage/reason observations when completion is not verified; residue remains distinct from installation success.
 
 - Open live Agents on the current terminal's attached Herdr session when it is present in discovery, including hosts with several running sessions. An explicit server choice takes precedence; a missing attached session requires choosing a server instead of silently showing another one. Plain terminals retain their existing selection behavior.
 

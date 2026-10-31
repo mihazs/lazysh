@@ -1,4 +1,5 @@
 use super::*;
+use futures_util::{stream, StreamExt};
 use russh_sftp::{
     client::RawSftpSession,
     protocol::{FileAttributes, OpenFlags, StatusCode},
@@ -169,6 +170,34 @@ impl Staging {
             .await
             .map_err(|failure| failure.error)
     }
+    async fn read_range(
+        &self,
+        handle: &str,
+        offset: u64,
+        length: u32,
+    ) -> std::result::Result<Vec<u8>, VerificationFailure> {
+        let mut bytes = Vec::with_capacity(length as usize);
+        while bytes.len() < length as usize {
+            let remaining = length as usize - bytes.len();
+            let data = match self
+                .raw
+                .read(handle, offset + bytes.len() as u64, remaining as u32)
+                .await
+            {
+                Err(russh_sftp::client::error::Error::Status(status))
+                    if status.status_code == StatusCode::Eof =>
+                {
+                    return Err(VerificationFailure::invalid(CleanupReason::Identity));
+                }
+                result => result?,
+            };
+            if data.data.is_empty() || data.data.len() > remaining {
+                return Err(VerificationFailure::invalid(CleanupReason::Identity));
+            }
+            bytes.extend_from_slice(&data.data);
+        }
+        Ok(bytes)
+    }
     async fn verify_observed(
         &self,
         path: &str,
@@ -195,30 +224,23 @@ impl Staging {
             }
             let mut count = 0u64;
             let mut hash = Sha256::new();
-            loop {
-                match self
-                    .raw
-                    .read(
-                        &handle,
-                        count,
-                        ((self.bytes + 1 - count).min(65_536)) as u32,
-                    )
-                    .await
-                {
-                    Ok(data) => {
-                        if data.data.is_empty() || count + data.data.len() as u64 > self.bytes {
-                            return Err(VerificationFailure::invalid(CleanupReason::Identity));
-                        }
-                        count += data.data.len() as u64;
-                        hash.update(&data.data);
-                    }
-                    Err(russh_sftp::client::error::Error::Status(status))
-                        if status.status_code == StatusCode::Eof =>
-                    {
-                        break
-                    }
-                    Err(e) => return Err(e.into()),
-                }
+            // Ordered slots hash in file order even when the peer replies out of order.
+            // The bound is per verification; cancelled wire requests retire with the transport.
+            let mut ranges = stream::iter((0..self.bytes).step_by(65_536))
+                .map(|offset| {
+                    self.read_range(&handle, offset, (self.bytes - offset).min(65_536) as u32)
+                })
+                .buffered(8);
+            while let Some(data) = ranges.next().await {
+                let data = data?;
+                count += data.len() as u64;
+                hash.update(&data);
+            }
+            match self.raw.read(&handle, self.bytes, 1).await {
+                Err(russh_sftp::client::error::Error::Status(status))
+                    if status.status_code == StatusCode::Eof => {}
+                Ok(_) => return Err(VerificationFailure::invalid(CleanupReason::Identity)),
+                Err(error) => return Err(error.into()),
             }
             let after = self.raw.fstat(&handle).await?.attrs;
             let named = self.raw.lstat(path).await?.attrs;
