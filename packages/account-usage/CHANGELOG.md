@@ -1,5 +1,11 @@
 # @lazysh/account-usage
 
+## 1.4.0
+
+### Patch Changes
+
+- bc6c84d: Recover built-in account quotas from empty external reports and offer companion setup when a remote usage command is missing or outdated.
+
 ## 1.3.3
 
 No changes in this release.
