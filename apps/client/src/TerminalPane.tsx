@@ -3,9 +3,10 @@ import {LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
 import { subscribeAccess, useMountedAccess, useProtectedApi } from './access';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Keyboard, KeyboardOff, Paperclip, SquarePen } from "lucide-react";
+import { Keyboard, KeyboardOff, Paperclip, ClipboardPaste, SquarePen, X } from "lucide-react";
 import { api as nativeApi } from "./bridge";
 import { decodeClipboardRequest, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyLabel, usePreferences, type GestureAction, type GestureSlot, type ToolbarKey } from "./preferences";
 import { modifiedTerminalText, observeTerminalInput, type LiveSession } from "./terminal";
@@ -28,11 +29,12 @@ export function terminalWebUrl(value: string): string | undefined {
   } catch { /* Ignore malformed remote links. */ }
 }
 
-export default function TerminalPane({ session, active, reportError, onOpenAttachments }: {
+export default function TerminalPane({ session, active, reportError, onOpenAttachments, controlsTarget }: {
   session: LiveSession;
   active: boolean;
   reportError: (message: UiErrorCause) => void;
   onOpenAttachments?: () => void;
+  controlsTarget?: HTMLElement | null;
 }) {
   useUi();
   const api = useProtectedApi(nativeApi);
@@ -145,7 +147,8 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
             press.current = null; cancelTaps();
             // xterm's wheel path also reports mouse scrolling to Herdr/other full-screen apps.
             session.terminal.element?.dispatchEvent(new WheelEvent('wheel', {
-              bubbles: true, cancelable: true, clientX: point.clientX, clientY: point.clientY, deltaY,
+              // Keep the whole drag in its original pane, as with a stationary mouse wheel.
+              bubbles: true, cancelable: true, clientX: scroll.x, clientY: scroll.y, deltaY,
             }));
             event.stopPropagation();
             if (event.cancelable) event.preventDefault();
@@ -470,6 +473,10 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     press.current = null;
     gesture.current = null;
   }
+  const controls = <div className={`terminal-actions${controlsTarget ? "" : " terminal-actions-fallback"}`}>
+    <button type="button" className="icon-button" title={t('terminalCompose')} aria-label={t('terminalCompose')} aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={18} aria-hidden="true" /></button>
+    <button type="button" className="icon-button" title={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} aria-label={toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")} onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={18} aria-hidden="true" /> : <Keyboard size={18} aria-hidden="true" />}</button>
+  </div>;
   return <div className="terminal-pane" style={{display: active ? "flex" : "none"}}>
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>}
@@ -489,12 +496,9 @@ export default function TerminalPane({ session, active, reportError, onOpenAttac
     </form>}
     <div ref={container} className="terminal-canvas" style={{touchAction: preferences.screenReader ? "auto" : "none"}} aria-label={t("terminalCanvas",{name:session.name})} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => {pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionStartCapture={() => {imeComposing.current = true; pointers.current.clear(); gesture.current = null; press.current = null; cancelTaps();}} onCompositionEndCapture={() => {imeComposing.current = false;}} />
     {composing && <div className="terminal-compose"><label>{t('terminalComposeText')}<textarea ref={composerInput} maxLength={65536} value={draft} onChange={event => setDraft(event.target.value)} /></label>
-      <button disabled={!session.connected || !draft} onClick={() => {pasteLiteral(draft); setDraft(""); session.terminal.focus();}}>{t('terminalPasteDraft')}</button><button onClick={() => setComposing(false)}>{t('terminalCloseComposer')}</button>
+      <div className="terminal-compose-actions"><button type="button" className="icon-button" title={t('terminalPasteDraft')} aria-label={t('terminalPasteDraft')} disabled={!session.connected || !draft} onClick={() => {pasteLiteral(draft); setDraft(""); session.terminal.focus();}}><ClipboardPaste size={18} aria-hidden="true" /></button><button type="button" className="icon-button" title={t('terminalCloseComposer')} aria-label={t('terminalCloseComposer')} onClick={() => setComposing(false)}><X size={18} aria-hidden="true" /></button></div>
     </div>}
-    <div className="terminal-toolbar-toggle">
-      <button type="button" className="subtle-button" aria-pressed={composing} onClick={() => setComposing(!composing)}><SquarePen size={16} aria-hidden="true" />{t('terminalCompose')}</button>
-      <button type="button" className="subtle-button" onClick={() => setToolbarOverride(!toolbarVisible)} aria-expanded={toolbarVisible}>{toolbarVisible ? <KeyboardOff size={16} aria-hidden="true" /> : <Keyboard size={16} aria-hidden="true" />}{toolbarVisible ? t("terminalHideKeys") : t("terminalShowKeys")}</button>
-    </div>
+    {active && (controlsTarget ? createPortal(controls, controlsTarget) : controls)}
     {ctrlLocked && <div className="sr-only" role="status">{t('terminalControlLocked')}</div>}
     {toolbarVisible && dpadOpen && preferences.toolbar.includes("dpad") && <div className="terminal-dpad" role="group" aria-label={t('terminalDpadGroup')}>
       {preferences.dpadCorners.left === "none" ? <span /> : <button disabled={!session.connected} aria-label={t('terminalDpadLeftCorner')} title={preferences.gestureChords.cornerLeft ?? t(gestureLabelKeys[preferences.dpadCorners.left])} onClick={() => runGesture(preferences.dpadCorners.left, "cornerLeft")}>{preferences.dpadCorners.left === "interrupt" ? "^C" : preferences.dpadCorners.left === "backspace" ? "⌫" : "1"}</button>}

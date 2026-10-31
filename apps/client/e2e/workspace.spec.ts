@@ -222,6 +222,32 @@ test('mobile terminal keeps one compact header and reaches every session control
     await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
     await page.getByRole('button',{name:'Connect',exact:true}).click();
   }
+  const startup=page.locator('.workspace > .workspace-restore');
+  const startupRow=startup.locator('.workspace-restore-row');
+  const widths=phone?[320,393,412]:[1280];
+  for(const width of widths)for(const font of [1,1.5,2]){
+    await page.setViewportSize({width,height:844});
+    await startupRow.evaluate((element,scale)=>{element.style.fontSize=`${11*scale}px`;for(const button of element.querySelectorAll('button'))button.style.fontSize='inherit';},font);
+    const restoreButton=(await startupRow.getByRole('button',{name:'Restore previous workspace',exact:true}).boundingBox())!;
+    const info=(await startupRow.getByRole('button',{name:'Workspace details',exact:true}).boundingBox())!;
+    const dismiss=(await startupRow.getByRole('button',{name:'Dismiss',exact:true}).boundingBox())!;
+    expect(restoreButton.x+restoreButton.width).toBeLessThanOrEqual(info.x);
+    expect(info.x+info.width).toBeLessThanOrEqual(dismiss.x);
+    expect(info.width).toBe(44);expect(info.height).toBe(44);expect(dismiss.width).toBe(44);expect(dismiss.height).toBe(44);
+    expect(info.y+info.height/2).toBe(dismiss.y+dismiss.height/2);
+    expect(await startup.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  }
+  await startupRow.evaluate(element=>{element.style.fontSize='';for(const button of element.querySelectorAll('button'))button.style.fontSize='';});
+  await page.setViewportSize({width:phone?393:1280,height:844});
+  const collapsed=(await startup.boundingBox())!.height;
+  expect(await startup.locator('.workspace-restore-help').count()).toBe(0);
+  await startupRow.getByRole('button',{name:'Workspace details',exact:true}).click();
+  await expect(startup.getByText('Uses saved credentials; tmux and Herdr reattach. Open Zellij sessions from Sessions.',{exact:true})).toBeVisible();
+  expect((await startup.boundingBox())!.height).toBeGreaterThan(collapsed);
+  await expect(page.locator('.terminal-canvas:visible')).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath('restore-details.png')});
+  await startupRow.getByRole('button',{name:'Workspace details',exact:true}).click();
+  await page.screenshot({path:testInfo.outputPath('compact-restore.png')});
   await connectHost();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   const canvas=await page.locator('.terminal-canvas:visible').elementHandle();
@@ -229,12 +255,30 @@ test('mobile terminal keeps one compact header and reaches every session control
   const strip=page.locator('.session-toolbar');
   const tabs=page.locator('.session-tabs');
   const restore=page.locator('.workspace > .workspace-restore');
+  const actions=header.locator('.terminal-actions');
+  await expect(actions.getByRole('button')).toHaveCount(2);
+  expect(await page.locator('.terminal-toolbar-toggle').count()).toBe(0);
+  await actions.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.getByLabel('Compose text',{exact:true}).fill('Review this draft');
+  const composer=page.locator('.terminal-compose');
+  for(const name of ['Paste draft','Close composer']) {
+    const button=composer.getByRole('button',{name,exact:true});
+    expect(await button.textContent()).toBe(''); await expect(button.locator('svg')).toHaveCount(1);
+  }
   if(phone){
     for(const width of [393,412]) for(const height of [844,420]){
       await page.setViewportSize({width,height});
       await expect(strip).toBeHidden();await expect(tabs).toBeHidden();await expect(restore).toBeHidden();
       expect((await header.boundingBox())!.height).toBe(44);
       expect((await page.locator('.session-body').boundingBox())!.y).toBe(44);
+      const text=(await composer.getByRole('textbox',{name:'Compose text',exact:true}).boundingBox())!;
+      const buttons=(await composer.locator('.terminal-compose-actions').boundingBox())!;
+      expect(text.x+text.width).toBeLessThanOrEqual(buttons.x);
+      expect(buttons.y+buttons.height).toBeLessThanOrEqual(height);
+      const withKeys=(await page.locator('.terminal-canvas:visible').boundingBox())!.height;
+      await actions.getByRole('button',{name:'Hide terminal keys',exact:true}).click();
+      expect((await page.locator('.terminal-canvas:visible').boundingBox())!.height).toBeGreaterThan(withKeys);
+      await actions.getByRole('button',{name:'Show terminal keys',exact:true}).click();
       for(const name of ['Open hosts','Switch terminal session','Workspace tools']){
         const bounds=(await page.getByRole('button',{name,exact:true}).boundingBox())!;
         expect(bounds.height).toBeGreaterThanOrEqual(44);expect(bounds.width).toBeGreaterThanOrEqual(44);
@@ -248,6 +292,8 @@ test('mobile terminal keeps one compact header and reaches every session control
       }
     }
     await page.setViewportSize({width:393,height:844});
+    await page.screenshot({path:testInfo.outputPath('compact-composer.png')});
+    await composer.getByRole('button',{name:'Close composer',exact:true}).click();
     const protocol=await page.context().newCDPSession(page);
     await protocol.send('Emulation.setSafeAreaInsetsOverride',{insets:{top:62}});
     await expect(header).toHaveCSS('padding-top','62px');
@@ -282,6 +328,8 @@ test('mobile terminal keeps one compact header and reaches every session control
     await expect(strip).toBeHidden();expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
     await page.screenshot({path:testInfo.outputPath('compact-terminal.png')});
   }else{
+    await page.screenshot({path:testInfo.outputPath('desktop-composer.png')});
+    await composer.getByRole('button',{name:'Close composer',exact:true}).click();
     await expect(header).toBeVisible();await expect(strip).toBeVisible();await expect(tabs).toBeVisible();await expect(restore).toBeVisible();
     expect((await header.boundingBox())!.height).toBe(63);
   }

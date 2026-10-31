@@ -268,7 +268,13 @@ pub fn from_wire(bytes: &[u8]) -> Response {
         if response.schema_version != 1
             || !matches!(
                 response.state.as_str(),
-                "ready" | "invalid_report" | "busy" | "disconnected" | "timeout" | "unavailable"
+                "ready"
+                    | "companion_required"
+                    | "invalid_report"
+                    | "busy"
+                    | "disconnected"
+                    | "timeout"
+                    | "unavailable"
             )
             || response
                 .source

@@ -49,9 +49,37 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   await (await browser.$('button=Open transcript')).click();
   const messages=await browser.$('.chat-messages');
   await browser.waitUntil(async()=>(await messages.getText()).includes(herdr.record),{timeout:20_000});
-  // WebKit may retire element identifiers after controlled-input updates; resolve each read afresh.
+  // WebKit Send Keys treats raw TAB as navigation; paste literal control characters on the owned display.
   const draft='form.chat-composer textarea';
-  await (await browser.$(draft)).setValue(herdr.draft);
+  const clipboardKey=`__lazyshOwnedDraftClipboard_${herdr.ssh.nonce}`;
+  expect(await browser.execute(({selector,text,key})=>{
+    const target=document.querySelector(selector);
+    if(!(target instanceof HTMLTextAreaElement)||Object.hasOwn(window,key))return false;
+    const state={phase:'waiting',dispose:()=>target.removeEventListener('click',copy)};
+    const copy=()=>{
+      if(!navigator.clipboard?.writeText){state.phase='unavailable';return;}
+      try {void navigator.clipboard.writeText(text).then(()=>{state.phase='ready';},()=>{state.phase='unavailable';});}
+      catch {state.phase='unavailable';}
+    };
+    Object.defineProperty(window,key,{value:state,configurable:true});
+    target.addEventListener('click',copy,{once:true});return true;
+  },{selector:draft,text:herdr.draft,key:clipboardKey})).toBe(true);
+  let clipboardFailed=false;
+  try {
+    await (await browser.$(draft)).click();
+    await browser.waitUntil(async()=>await browser.execute(key=>(window as unknown as Record<string,{phase:string}>)[key]?.phase,clipboardKey)==='ready',
+      {timeout:3000,timeoutMsg:'Owned private clipboard write was not confirmed'});
+    await browser.keys(['Control','v']);
+  } catch(error) {
+    clipboardFailed=true;throw error;
+  } finally {
+    try {
+      await browser.execute(key=>{
+        const owner=window as unknown as Record<string,{dispose:()=>void}>;
+        owner[key]?.dispose();delete owner[key];
+      },clipboardKey);
+    } catch(error) {if(clipboardFailed)console.error('Owned draft clipboard cleanup also failed');else throw error;}
+  }
   expect(await (await browser.$(draft)).getValue()).toBe(herdr.draft);
   await herdr.expectBytes(Buffer.alloc(0));
   gui.stage='owned Mosh Herdr explicit confirmation';

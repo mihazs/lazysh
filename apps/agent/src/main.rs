@@ -20,6 +20,11 @@ enum Command {
         #[command(subcommand)]
         command: lazysh_agent::installation::Command,
     },
+    /// Preview and explicitly manage packaged product skills for an existing agent profile.
+    Skills {
+        #[command(subcommand)]
+        command: lazysh_agent::skills::Command,
+    },
     /// Explicit opt-in relay setup and bounded drain; never installs hooks or schedules.
     Relay {
         #[command(subcommand)]
@@ -96,6 +101,18 @@ enum Command {
         #[arg(long)]
         reported_history: bool,
     },
+    /// Print a Codex hook fragment; never changes settings or hook trust.
+    CodexConfig,
+    /// Print a Gemini hook fragment; never changes settings.
+    GeminiConfig,
+    /// Print a standalone Droid hooks.json fragment; never changes settings.
+    DroidConfig,
+    /// Print a Kimi TOML hook fragment; never changes settings.
+    KimiConfig,
+    /// Print a Copilot CLI hook fragment; never changes settings.
+    CopilotConfig,
+    /// Print an OpenCode plugin asset; never installs it.
+    OpencodePlugin,
     /// Read a hook-reported Claude source hint, never live input authority.
     ReportedHistory {
         #[arg(long)]
@@ -170,6 +187,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             ],
         })),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
+        Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
         Command::Relay { command } => Some(lazysh_agent::relay::run(
             command,
             &lazysh_agent::state_directory()?,
@@ -265,6 +283,12 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         } else {
             lazysh_agent::claude_config()
         }),
+        Command::CodexConfig => Some(lazysh_agent::hooks::codex_config()),
+        Command::GeminiConfig => Some(lazysh_agent::hooks::gemini_config()),
+        Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
+        Command::KimiConfig => Some(lazysh_agent::hooks::kimi_config()),
+        Command::CopilotConfig => Some(lazysh_agent::hooks::copilot_config()),
+        Command::OpencodePlugin => Some(lazysh_agent::hooks::opencode_plugin()),
         Command::ReportedHistory { session_id } => Some(
             Store::open(&lazysh_agent::state_directory()?)?
                 .reported_history(&session_id, chrono::Utc::now())?,

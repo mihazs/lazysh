@@ -37,10 +37,18 @@ class NativeResumeCoverTest {
                 activity.findViewById<ViewGroup>(android.R.id.content).addView(blank)
                 val cover = type.getConstructor(Activity::class.java).newInstance(activity)
                 controller = cover
+                fun coverView(name: String) = type.getDeclaredField(name).apply { isAccessible = true }.get(cover) as View
                 load.invoke(cover, blank, activity)
                 type.getMethod("register", Channel::class.java).invoke(cover, channel)
                 assertEquals(View.INVISIBLE, blank.visibility)
                 assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+                assertEquals("Startup remains branded until native policy is known", View.VISIBLE, coverView("logo").visibility)
+                assertEquals(View.GONE, coverView("unlock").visibility)
+                assertEquals(View.GONE, coverView("title").visibility)
+                assertEquals(true, apply.invoke(cover, true, true, 1L, 0L))
+                assertEquals(View.INVISIBLE, blank.visibility)
+                assertEquals(View.GONE, coverView("logo").visibility)
+                assertEquals("A confirmed lock must retain its unlock action", View.VISIBLE, coverView("unlock").visibility)
                 assertEquals(true, apply.invoke(cover, false, true, 2L, 0L))
                 assertEquals(View.VISIBLE, blank.visibility)
                 assertTrue("Enabled policy must retain secure-window protection while unlocked",
@@ -60,6 +68,10 @@ class NativeResumeCoverTest {
                 assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
                 assertEquals(false, apply.invoke(cover, false, true, 2L, 0L))
                 assertEquals(View.INVISIBLE, blank.visibility)
+                val logo = type.getDeclaredField("logo").apply { isAccessible = true }.get(cover) as View
+                val unlock = type.getDeclaredField("unlock").apply { isAccessible = true }.get(cover) as View
+                assertEquals(View.VISIBLE, logo.visibility)
+                assertEquals("Stale unlock must not flash an interactive cover", View.GONE, unlock.visibility)
                 assertEquals(true, apply.invoke(cover, true, true, 3L, 1L))
                 assertEquals(true, apply.invoke(cover, false, true, 4L, 1L))
                 assertEquals(View.VISIBLE, blank.visibility)

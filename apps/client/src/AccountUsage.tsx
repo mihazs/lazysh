@@ -1,4 +1,4 @@
-import {Activity,RefreshCw} from 'lucide-react';
+import {Activity,Download,RefreshCw} from 'lucide-react';
 import {t,useUi,formatDateTime} from './i18n/core';
 import {accountUsageHeadline,accountUsageMessages,accountUsagePercent,accountUsageStale} from './accountUsageReport';
 import type {AccountUsageModel} from './useAccountUsage';
@@ -9,22 +9,22 @@ export function AccountUsageBar({model,onOpen}:{model:AccountUsageModel;onOpen:(
   const headline=entry?accountUsageHeadline(entry):null;
   const stale=!!entry&&(accountUsageStale(entry)||response?.state!=='ready');
   return <button type="button" className="account-usage-chip" onClick={onOpen} aria-label={t('accountUsageOpen')} title={entry?`${entry.name}: ${headline?.text}${stale?` · ${t('accountUsageStaleShort')}`:''}`:t('accountUsageTitle')}>
-    <Activity size={12} aria-hidden="true"/>{headline?.percent!==null&&headline?.percent!==undefined&&<meter min={0} max={100} value={Math.min(100,headline.percent)} aria-hidden="true"/>}<span>{entry?`${entry.shortName} ${headline?.text}`:t(refreshing?'accountUsageLoading':'accountUsageShort')}</span>{stale&&<span aria-label={t('accountUsageStaleLabel')}>· {t('accountUsageStaleShort')}</span>}
+    <Activity size={12} aria-hidden="true"/>{headline?.percent!==null&&headline?.percent!==undefined&&<meter min={0} max={100} value={Math.min(100,headline.percent)} aria-hidden="true"/>}<span>{entry?`${entry.shortName} ${headline?.text}`:t(refreshing?'accountUsageLoading':response?.state==='companion_required'?'accountUsageSetupShort':response?.state&&response.state!=='ready'?'accountUsageUnavailableShort':response?.report?.entries.length===0?'accountUsageEmptyShort':'accountUsageShort')}</span>{stale&&<span aria-label={t('accountUsageStaleLabel')}>· {t('accountUsageStaleShort')}</span>}
   </button>;
 }
-export function AccountUsageDetails({model,onRestoreHostTools}:{model:AccountUsageModel;onRestoreHostTools?:(restored:()=>void)=>void}) {
+export function AccountUsageDetails({model,onRestoreHostTools,onOpenCompanion}:{model:AccountUsageModel;onOpenCompanion?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void}) {
   useUi();
   const {entry,response,refreshing,refresh,select}=model;
   const problem=response&&response.state!=='ready'?t(accountUsageMessages[response.state]):null;
   return <section className="account-usage-details" aria-label={t('accountUsageTitle')}>
     <header><h2>{t('accountUsageTitle')}</h2><button type="button" onClick={refresh} disabled={refreshing}><RefreshCw size={16} aria-hidden="true"/>{t(refreshing?'accountUsageRefreshing':'accountUsageRefresh')}</button></header>
-    <p>{t('accountUsageDescription')}</p>
     {problem&&<p role="status">{problem}</p>}
     {response?.state==='disconnected'&&onRestoreHostTools&&<button type="button" onClick={()=>onRestoreHostTools(refresh)}>{t('accountUsageRestore')}</button>}
-    {response?.state==='unavailable'&&<p>{t('accountUsageSetup')}</p>}
-    {response?.source&&<p>{t(response.source==='builtin'?'accountUsageBuiltin':'accountUsageExternal')}</p>}
+    {onOpenCompanion&&(response?.state==='companion_required'||response?.state==='invalid_report')&&<button type="button" onClick={onOpenCompanion}><Download size={16} aria-hidden="true"/>{t('accountUsageInstall')}</button>}
+    {entry&&response?.source&&<p>{t(response.source==='builtin'?'accountUsageBuiltin':'accountUsageExternal')}</p>}
     {response?.report?.entries.length===0&&<p>{t('accountUsageEmpty')}</p>}
     {entry&&<>
+      <p>{t('accountUsageDescription')}</p>
       <label>{t('accountUsageAccount')}<select value={entry.id} onChange={e=>select(e.target.value)}>{response?.report?.entries.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select></label>
       <p>{entry.plan??t('accountUsagePlanUnknown')} · {t(entry.status==='error'?'accountUsageProviderUnavailable':accountUsageStale(entry)||response?.state!=='ready'?'accountUsageStale':'accountUsageLatest')}{entry.fetchedAt&&<> · <time dateTime={entry.fetchedAt}>{formatDateTime(new Date(entry.fetchedAt))}</time></>}</p>
       <dl>{entry.rows.map((row,index)=><div key={`${row.label}:${index}`}><dt>{row.label}</dt><dd>{row.type==='metric'?<>
