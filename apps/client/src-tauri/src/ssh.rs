@@ -2160,7 +2160,7 @@ where
     });
     let mut parent_cancel = parent.cancel.subscribe();
     let mut child_cancel = session.cancel.subscribe();
-    let connected = if *parent_cancel.borrow() {
+    let connected = if *parent_cancel.borrow() || *child_cancel.borrow() {
         Err(SshError::new(
             "cancelled",
             format!("{name} connection was cancelled"),
@@ -2177,6 +2177,18 @@ where
             } => result,
         }
     };
+    // A ready receipt can complete without yielding. Recheck current cancellation
+    // before publishing; watch subscriptions do not report already-seen values.
+    let connected = connected.and_then(|()| {
+        if *parent.cancel.borrow() || *session.cancel.borrow() {
+            Err(SshError::new(
+                "cancelled",
+                format!("{name} connection was cancelled"),
+            ))
+        } else {
+            Ok(())
+        }
+    });
     if let Err(error) = connected {
         let _ = session.cancel.send(true);
         session.output_credits.close();
@@ -2186,15 +2198,6 @@ where
         } else {
             error
         });
-    }
-    if *parent.cancel.borrow() {
-        let _ = session.cancel.send(true);
-        session.output_credits.close();
-        state.sessions.lock().await.remove(&id);
-        return Err(SshError::new(
-            "cancelled",
-            format!("{name} connection was cancelled"),
-        ));
     }
     pending.armed = false;
     Ok(Connected { session_id: id })
@@ -6979,6 +6982,66 @@ mod tests {
                 access.ready(access.generation().unwrap()).unwrap();
             }
         }
+    }
+    #[tokio::test]
+    async fn already_cancelled_native_child_cannot_be_admitted_by_buffered_entry_receipt() {
+        let access = super::test_support::unlocked_access();
+        let lease = super::test_support::ready_lease(&access);
+        let fixture = guard_admission_fixture(lease.clone()).await;
+        fixture.quiet();
+        let channel = fixture.channel(&lease).await;
+        channel.exec(true, "owned private receipt").await.unwrap();
+        let startup = crate::mosh::EntryStartup::test_ordinary_receipt(channel);
+        let (_directory, state) = fixture_state();
+        let registry = state.sessions.clone();
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let observed = captured.clone();
+        let (release, held) = tokio::sync::oneshot::channel();
+        let (events, _receiver) = super::test_support::json_events();
+        let result = spawn_native_terminal(
+            &state,
+            lease,
+            fixture.session.clone(),
+            events,
+            NativeTerminalKind::Fixture,
+            Some(startup),
+            check_size,
+            move |_access, input, _cancel, _initial, output, ready| {
+                let child = registry
+                    .try_lock()
+                    .unwrap()
+                    .values()
+                    .next()
+                    .unwrap()
+                    .clone();
+                child.cancel.send_replace(true);
+                *observed.lock().unwrap() = Some(child);
+                ready.send(Ok(())).unwrap();
+                tauri::async_runtime::spawn(async move {
+                    let _input = input;
+                    let _output = output;
+                    held.await.unwrap();
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        release.send(()).unwrap();
+        let child = captured.lock().unwrap().take().unwrap();
+        timeout(Duration::from_secs(2), async {
+            let mut finished = child.finished.subscribe();
+            while !*finished.borrow_and_update() {
+                finished.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        fixture.closed().await;
+        assert!(state.sessions.lock().await.is_empty());
+        assert_eq!(
+            result.err().expect("cancelled display was admitted").kind(),
+            "mosh_entry_startup_failed"
+        );
     }
     #[tokio::test]
     async fn naturally_finished_native_worker_releases_background_hold_before_final_output_resumes()

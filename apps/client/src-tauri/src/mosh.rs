@@ -258,6 +258,19 @@ pub(crate) struct EntryStartup {
     binding: EntryBinding,
 }
 impl EntryStartup {
+    #[cfg(test)]
+    pub(crate) fn test_ordinary_receipt(channel: crate::ssh::OwnedChannel) -> Self {
+        let bytes = b"owned-live-child\t42\t/dev/pts/1\n".to_vec();
+        Self {
+            channel,
+            received: bytes.len(),
+            bytes: Zeroizing::new(bytes),
+            status: Some(0),
+            binding: EntryBinding::Ordinary {
+                marker: "owned-live-child".into(),
+            },
+        }
+    }
     async fn read(&mut self) -> Result<bool> {
         use russh::ChannelMsg;
         match self.channel.wait().await {
