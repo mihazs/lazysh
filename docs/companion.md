@@ -890,6 +890,14 @@ authority. Search the live Herdr section by agent, project or pane. Discovery st
 while the Agents view is hidden. Failed reads remove the previous live results;
 check the terminal when a status cannot be read.
 
+A pane with a supported Codex, Claude Code or OpenCode ID reference offers collapsed
+**Reported session** details. These show an exact matching companion report from
+this SSH connection, its project and recorded time. References may be stale and
+shared by several panes in the selected server; they do not establish ownership.
+Failed or unavailable companion reads are distinct from a missing matching report.
+Path references and unsupported/private metadata are discarded. These details never
+select a transcript, change hook attribution or enable Chat/input actions.
+
 ### Spaces and live pane navigation
 
 Open Spaces for the workspace/tab/pane hierarchy or live Agents for grouped agent
