@@ -18,6 +18,30 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             5,
         ),
         Agent::Codex => (common || event == "Interrupt", 3),
+        Agent::Gemini => (
+            matches!(
+                event,
+                "BeforeAgent"
+                    | "BeforeTool"
+                    | "AfterTool"
+                    | "Notification"
+                    | "AfterAgent"
+                    | "SessionEnd"
+            ),
+            5000,
+        ),
+        Agent::Cursor => (
+            matches!(
+                event,
+                "beforeSubmitPrompt"
+                    | "postToolUse"
+                    | "postToolUseFailure"
+                    | "afterAgentThought"
+                    | "stop"
+                    | "sessionEnd"
+            ),
+            5,
+        ),
         Agent::Opencode => (false, 0),
     };
     if !valid {
@@ -29,9 +53,14 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
         command.replace('\'', "'\\''"),
         agent.name()
     );
+    let group = if agent == Agent::Cursor {
+        serde_json::json!({"command":command,"timeout":timeout})
+    } else {
+        serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":timeout}]})
+    };
     Ok(Entry {
         event: event.into(),
-        group: serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":timeout}]}),
+        group,
     })
 }
 
@@ -39,8 +68,13 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
     let config = match agent {
         Agent::Claude => crate::claude_config(),
         Agent::Codex => crate::hooks::codex_config(),
+        Agent::Gemini => crate::hooks::gemini_config(),
+        Agent::Cursor => crate::hooks::cursor_config(),
         Agent::Opencode => return Ok(Vec::new()),
     };
+    if agent == Agent::Cursor && config["version"] != 1 {
+        return Err("HooksInvalidTemplate");
+    }
     let events = config["hooks"].as_object().ok_or("HooksInvalidTemplate")?;
     events
         .iter()
@@ -51,7 +85,16 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
                 .ok_or("HooksInvalidTemplate")?;
             let entry = v1_entry(agent, binary, event)?;
             let mut current = groups[0].clone();
-            current["hooks"][0]["command"] = entry.group["hooks"][0]["command"].clone();
+            let pointer = if agent == Agent::Cursor {
+                "/command"
+            } else {
+                "/hooks/0/command"
+            };
+            *current.pointer_mut(pointer).ok_or("HooksInvalidTemplate")? = entry
+                .group
+                .pointer(pointer)
+                .ok_or("HooksInvalidTemplate")?
+                .clone();
             if current != entry.group {
                 return Err("HooksInvalidTemplate");
             }
@@ -72,4 +115,19 @@ pub(super) fn plugin(binary: &Path) -> Result<String, &'static str> {
         COMMAND,
         &format!("[{path}, 'ingest', '--agent', 'opencode']"),
     ))
+}
+
+/// Provider envelope handling stays separate from ownership of individual groups.
+pub(super) fn configuration(
+    agent: Agent,
+    input: &str,
+    previous: &[Entry],
+    next: &[Entry],
+) -> Result<String, super::json::Fault> {
+    let input = if agent == Agent::Cursor && (!previous.is_empty() || !next.is_empty()) {
+        super::json::cursor_document(input, !next.is_empty())?
+    } else {
+        input.into()
+    };
+    super::json::rewrite(&input, previous, next)
 }

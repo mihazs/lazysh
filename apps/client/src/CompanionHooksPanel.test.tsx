@@ -40,3 +40,15 @@ it('requires a fresh inspection after an uncertain write without retrying it',as
   expect(await screen.findByRole('alert')).toHaveProperty('textContent','Setup could not be confirmed. Inspect again before retrying.');
   expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();expect(hooks).toHaveBeenCalledTimes(2);
 });
+it.each([['gemini','/home/user/.gemini'],['cursor','/home/user/.cursor']] as const)('uses the explicit %s profile only after inspection',async(agent,placeholder)=>{
+  hooks.mockResolvedValueOnce(inspected).mockResolvedValueOnce({schemaVersion:1,outcome:{status:'configured'},reporting:'notChecked',trust:'notChecked'}).mockResolvedValueOnce({...inspected,state:'configured'});
+  render(<CompanionHooksPanel sessionId="new-provider" visible/>);
+  fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:agent}});
+  expect(screen.getByLabelText('Host profile directory')).toHaveProperty('placeholder',placeholder);
+  expect(hooks).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Host profile directory'),{target:{value:`/owned/${agent} profile`}});
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Install or update hooks'}));
+  await screen.findByText('Hooks configured. Live reporting has not been verified.');
+  expect(hooks.mock.calls[1]).toEqual(['new-provider',{agent,action:'install',profileRoot:`/owned/${agent} profile`,expectedPlan:inspected.installPlan}]);
+});
