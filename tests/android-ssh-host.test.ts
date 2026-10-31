@@ -231,6 +231,8 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(new Set(targets.map(target=>target.paneId)).size).toBe(3);
     expect(new Set(targets.map(target=>target.marker)).size).toBe(3);
     const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
+    const metadata=owned.metadata(),sourcePane=snapshot.panes.find((pane:Record<string,unknown>)=>pane.pane_id===metadata.agent.paneId && pane.terminal_id===metadata.agent.terminalId);
+    expect(metadata.agentContext).toBe([snapshot.workspaces.find((workspace:Record<string,unknown>)=>workspace.workspace_id===metadata.agent.workspaceId).label,snapshot.tabs.find((tab:Record<string,unknown>)=>tab.tab_id===metadata.agent.tabId && tab.workspace_id===metadata.agent.workspaceId).label,sourcePane.cwd].join(' / '));
     expect(snapshot.panes).toHaveLength(3);expect(snapshot.agents).toHaveLength(2);
     for(const target of targets)expect(snapshot.panes.some((pane:Record<string,unknown>)=>pane.pane_id===target.paneId&&pane.terminal_id===target.terminalId&&pane.workspace_id===target.workspaceId&&pane.tab_id===target.tabId)).toBe(true);
     await owned.expectNavigationBytes();

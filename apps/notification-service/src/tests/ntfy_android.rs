@@ -4,6 +4,45 @@ use axum::response::IntoResponse;
 use sha2::{Digest, Sha256};
 use std::{fs, os::unix::fs::MetadataExt, path::PathBuf};
 
+#[derive(Clone, Copy)]
+struct FixtureClock {
+    wall: i64,
+    before: std::time::Instant,
+    after: std::time::Instant,
+}
+impl FixtureClock {
+    fn sample() -> Self {
+        let before = std::time::Instant::now();
+        let wall = crate::store::now();
+        Self {
+            wall,
+            before,
+            after: std::time::Instant::now(),
+        }
+    }
+    fn progress(self, later: Self) -> &'static str {
+        let Some(minimum) = later.before.checked_duration_since(self.after) else {
+            return "unavailable";
+        };
+        let Some(maximum) = later.after.checked_duration_since(self.before) else {
+            return "unavailable";
+        };
+        if self.wall < 0 || later.wall < 0 || self.after < self.before || later.after < later.before
+        {
+            return "unavailable";
+        }
+        let wall = i128::from(later.wall - self.wall) * 1_000_000_000;
+        // Two floor-second samples differ from elapsed time by less than one second.
+        if wall < minimum.as_nanos() as i128 - 1_000_000_000 {
+            "wallBehind"
+        } else if wall > maximum.as_nanos() as i128 + 1_000_000_000 {
+            "wallAhead"
+        } else {
+            "consistentWithinSecond"
+        }
+    }
+}
+
 fn fixture_authorized(headers: &HeaderMap, nonce: &str) -> bool {
     headers
         .get("X-Lazysh-Fixture")
@@ -13,7 +52,11 @@ fn fixture_authorized(headers: &HeaderMap, nonce: &str) -> bool {
 
 // Extract only the frozen window from the same snapshot encrypted below.
 // Neither a new clock sample nor private subscription/event fields leave here.
-fn event_window_headers(snapshot: &str) -> Option<HeaderMap> {
+fn event_window_headers(
+    snapshot: &str,
+    before: FixtureClock,
+    after: FixtureClock,
+) -> Option<HeaderMap> {
     let value: serde_json::Value = serde_json::from_str(snapshot).ok()?;
     let issued = value.get("issuedAt")?.as_i64()?;
     let expires = value.get("expiresAt")?.as_i64()?;
@@ -33,18 +76,98 @@ fn event_window_headers(snapshot: &str) -> Option<HeaderMap> {
         "x-lazysh-fixture-expires-at",
         expires.to_string().parse().ok()?,
     );
+    headers.insert(
+        "x-lazysh-fixture-clock-progress",
+        before.progress(after).parse().ok()?,
+    );
+    headers.insert(
+        "x-lazysh-fixture-issued-in-handler",
+        if before.progress(after) == "unavailable" {
+            "unavailable"
+        } else if before.wall <= issued && issued <= after.wall {
+            "within"
+        } else {
+            "outside"
+        }
+        .parse()
+        .ok()?,
+    );
     Some(headers)
 }
 
 #[test]
 fn event_window_response_preserves_frozen_bounds_and_rejects_invalid_metadata() {
+    let before = FixtureClock::sample();
+    let after = FixtureClock {
+        wall: before.wall + 1,
+        before: before.after + Duration::from_secs(1),
+        after: before.after + Duration::from_secs(1),
+    };
     let headers = event_window_headers(
         r#"{"schemaVersion":2,"issuedAt":1000,"expiresAt":1300,"subscription":"private"}"#,
+        FixtureClock {
+            wall: 1000,
+            ..before
+        },
+        FixtureClock {
+            wall: 1001,
+            ..after
+        },
     )
     .unwrap();
-    assert_eq!(headers.len(), 2);
+    assert_eq!(headers.len(), 4);
     assert_eq!(headers["x-lazysh-fixture-issued-at"], "1000");
     assert_eq!(headers["x-lazysh-fixture-expires-at"], "1300");
+    assert_eq!(
+        headers["x-lazysh-fixture-clock-progress"],
+        "consistentWithinSecond"
+    );
+    assert_eq!(headers["x-lazysh-fixture-issued-in-handler"], "within");
+    for offset in [0, 600, -600] {
+        assert_eq!(
+            FixtureClock {
+                wall: 1000 + offset,
+                ..before
+            }
+            .progress(FixtureClock {
+                wall: 1001 + offset,
+                ..after
+            }),
+            "consistentWithinSecond"
+        );
+    }
+    assert_eq!(
+        before.progress(FixtureClock {
+            wall: before.wall + 5,
+            ..after
+        }),
+        "wallAhead"
+    );
+    assert_eq!(
+        before.progress(FixtureClock {
+            wall: before.wall - 5,
+            ..after
+        }),
+        "wallBehind"
+    );
+    assert_eq!(
+        before.progress(FixtureClock { wall: -1, ..after }),
+        "unavailable"
+    );
+    assert_eq!(after.progress(before), "unavailable");
+    let outside = event_window_headers(
+        r#"{"schemaVersion":2,"issuedAt":1000,"expiresAt":1300}"#,
+        FixtureClock {
+            wall: 1001,
+            ..before
+        },
+        FixtureClock {
+            wall: 1002,
+            ..after
+        },
+    )
+    .unwrap();
+    assert_eq!(outside["x-lazysh-fixture-issued-in-handler"], "outside");
     for input in [
         "{}",
         r#"{"schemaVersion":1,"issuedAt":1000,"expiresAt":1300}"#,
@@ -55,9 +178,14 @@ fn event_window_response_preserves_frozen_bounds_and_rejects_invalid_metadata() 
         r#"{"schemaVersion":2,"issuedAt":1000.5,"expiresAt":1300}"#,
         r#"{"schemaVersion":2,"issuedAt":9223372036854775807,"expiresAt":9223372036854775808}"#,
     ] {
-        assert!(event_window_headers(input).is_none());
+        assert!(event_window_headers(input, before, after).is_none());
     }
-    assert!(event_window_headers(r#"{"schemaVersion":2,"issuedAt":0,"expiresAt":1}"#).is_some());
+    assert!(event_window_headers(
+        r#"{"schemaVersion":2,"issuedAt":0,"expiresAt":1}"#,
+        before,
+        after
+    )
+    .is_some());
 }
 
 fn signal(nonce: String, gate: Arc<Semaphore>) -> axum::routing::MethodRouter {
@@ -330,6 +458,7 @@ async fn real_ntfy_android_encrypted_challenge() {
                         }
                         // An explicit test-operator action, not Android authority:
                         // the original admin/source APIs and production worker deliver it.
+                        let clock_before = FixtureClock::sample();
                         enable(&service).await;
                         let receipt = enqueue(&service, SOURCE, &event()).await;
                         let deadline = std::time::Instant::now() + Duration::from_secs(8);
@@ -366,8 +495,12 @@ async fn real_ntfy_android_encrypted_challenge() {
                                 accepted.store(true, Ordering::SeqCst);
                                 return (
                                     StatusCode::NO_CONTENT,
-                                    event_window_headers(&snapshot)
-                                        .expect("Exact frozen event window required"),
+                                    event_window_headers(
+                                        &snapshot,
+                                        clock_before,
+                                        FixtureClock::sample(),
+                                    )
+                                    .expect("Exact frozen event window required"),
                                 )
                                     .into_response();
                             }

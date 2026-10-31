@@ -1251,17 +1251,16 @@ class NativeWorkspaceTest {
                 Regex("${Regex.escape(workspace)}:t[0-9]+").matches(tab) && tab.length <= 50 &&
                 Regex("${Regex.escape(workspace)}:p[0-9]+").matches(pane) && pane.length <= 50 &&
                 terminal.length in 1..256 && terminal.none { c -> c.isISOControl() }) { "Owned Herdr report identity required" }
-            // Terminal correlation is checked against the real host snapshot and
-            // native parser. The UI exposes server/workspace/tab/pane scope only.
-            val scope = JSONObject.quote("$server · $workspace · $tab · $pane")
+            // Pane/terminal membership and this label/cwd context come from the
+            // same real host snapshot. Shipping navigation intentionally exposes labels, not IDs.
+            val context = it.getString("agentContext")
+            require(context.length in 1..4096 && context.none { c -> c.isISOControl() })
+            val navigationOracle = InstrumentationRegistry.getInstrumentation().context.assets
+                .open("owned-visible-herdr.js").use { it.readNBytes(4097) }
+                .also { require(it.size <= 4096) { "Herdr navigation oracle bound" } }.toString(Charsets.UTF_8)
             """(()=>{
-              const panel=document.querySelector('.herdr-agents');
-              const cards=panel?.querySelectorAll('.live-agent-list .agent-card');
-              return panel?.querySelector('select')?.value===${JSONObject.quote(server)} && cards?.length===1 &&
-                cards[0].querySelector('strong')?.textContent==='codex' &&
-                Array.from(cards[0].querySelectorAll('p')).some(x=>x.textContent==='Unknown status') &&
-                cards[0].querySelector('small')?.textContent===$scope &&
-                !cards[0].querySelector('button,input,textarea') &&
+              $navigationOracle
+              return ownedLiveHerdrNavigation(document,${JSONObject.quote(server)},${JSONObject.quote(context)}) &&
                 Array.from(document.querySelectorAll('.agent-panel .panel-empty h3')).some(x=>x.textContent==='No agent events yet.') &&
                 !document.querySelector('.agent-panel .agent-board .agent-card');
             })()"""
@@ -1270,10 +1269,13 @@ class NativeWorkspaceTest {
         try {
             awaitFlag(false, "connected terminal before opt-in")
             sessionView(scenario, "Agents")
-            awaitDocument(scenario, "board keep-awake available and off",
-                "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)} && ($liveHerdr)")
+            val keepAwakeReady = "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}"
+            awaitDocument(scenario, "board keep-awake off and owned live Herdr navigation",
+                "($keepAwakeReady) && ($liveHerdr)", observe = { remaining ->
+                    evaluateIfPresent(scenario, "JSON.stringify({keepAwakeReady:Boolean($keepAwakeReady),liveHerdrReady:Boolean($liveHerdr)})", remaining) ?: "unavailable"
+                })
             if (herdr != null) {
-                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".herdr-agents .live-agent-list .agent-card"))
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".herdr-navigation:not([hidden]) .herdr-navigation-row"))
                     .perform(webScrollIntoView())
                 val viewportOracle = InstrumentationRegistry.getInstrumentation().context.assets
                     .open("owned-keyboard-viewport.js").use { it.readNBytes(2049) }
@@ -1281,10 +1283,8 @@ class NativeWorkspaceTest {
                 assertEquals("Owned live Herdr report must be visible over empty companion reports", "true", evaluate(scenario, """
                     (()=>{
                       if(!($liveHerdr)) return false;
-                      const card=document.querySelector('.herdr-agents .live-agent-list .agent-card');
-                      const labels=[card?.querySelector('strong'),
-                        Array.from(card?.querySelectorAll('p')??[]).find(label=>label.textContent==='Unknown status'),
-                        card?.querySelector('small')];
+                      const card=document.querySelector('.herdr-navigation:not([hidden]) .herdr-navigation-row');
+                      const labels=[card?.querySelector('strong'),card?.querySelector(':scope > small'),card?.querySelector('span > small')];
                       if(!card || labels.some(label=>!label)) return false;
                       const ranges=labels.map(label=>{
                         const range=document.createRange(); range.selectNodeContents(label); return range;
@@ -1298,7 +1298,7 @@ class NativeWorkspaceTest {
                         }));
                     })()
                 """))
-                println("lazysh live Herdr agents: synthetic Codex report visible with exact server/pane scope and empty companion reports")
+                println("lazysh live Herdr navigation: owned Codex row visible with exact server and host-readback context over empty companion reports")
             }
             assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')!=='true'"))
@@ -2490,7 +2490,48 @@ class NativeWorkspaceTest {
         val failedClock=NtfyEventRead();val originalFailure=IllegalStateException("Owned clock failure")
         try {failedClock.clock {throw originalFailure};throw AssertionError("Original clock failure required")}
         catch(failure:IllegalStateException) {assertSame(originalFailure,failure)}
+        for(offset in listOf(-600L,0L,600L)) {
+            val before=NtfyClockPoint(1000+offset,0,0)
+            assertEquals("consistentWithinSecond",before.progress(NtfyClockPoint(1002+offset,2_000_000_000,2_000_000_000)))
+            assertEquals("wallAhead",before.progress(NtfyClockPoint(1005+offset,2_000_000_000,2_000_000_000)))
+            assertEquals("wallBehind",before.progress(NtfyClockPoint(999+offset,2_000_000_000,2_000_000_000)))
+            assertEquals("consistentWithinSecond",before.progress(NtfyClockPoint(1060+offset,60_000_000_000,60_000_000_000)))
+        }
+        val before=NtfyClockPoint(1000,0,0)
+        assertEquals("consistentWithinSecond",before.progress(NtfyClockPoint(1001,999_999_999,1_000_000_001)))
+        assertEquals("unavailable",before.progress(NtfyClockPoint(-1,2,2)))
+        assertEquals("unavailable",NtfyClockPoint(1000,3,4).progress(NtfyClockPoint(1001,2,2)))
+        assertEquals("beforeIssued",before.window(1001L to 1301L))
     }
+
+    private data class NtfyClockPoint(val wall:Long,val before:Long,val after:Long) {
+        companion object {
+            fun sample():NtfyClockPoint {
+                val before=android.os.SystemClock.elapsedRealtimeNanos()
+                val wall=System.currentTimeMillis()/1000
+                return NtfyClockPoint(wall,before,android.os.SystemClock.elapsedRealtimeNanos())
+            }
+        }
+        fun progress(later:NtfyClockPoint):String {
+            if(wall<0 || later.wall<0 || before<0 || after<before || later.before<after || later.after<later.before)return "unavailable"
+            val second=java.math.BigInteger.valueOf(1_000_000_000)
+            val delta=(java.math.BigInteger.valueOf(later.wall)-java.math.BigInteger.valueOf(wall))*second
+            // Floor-second wall samples have less than one second of difference uncertainty.
+            return when {
+                delta<java.math.BigInteger.valueOf(later.before-after)-second->"wallBehind"
+                delta>java.math.BigInteger.valueOf(later.after-before)+second->"wallAhead"
+                else->"consistentWithinSecond"
+            }
+        }
+        fun window(bounds:Pair<Long,Long>?)=when {
+            bounds==null || wall<0->"unavailable"
+            wall<bounds.first->"beforeIssued"
+            wall>=bounds.second->"expired"
+            else->"withinWindow"
+        }
+    }
+    private data class NtfyPostClock(val before:NtfyClockPoint,val after:NtfyClockPoint,
+        val hostProgress:String,val issuedInHandler:String)
 
     private class NtfyEventRead {
         val entered=CountDownLatch(1)
@@ -2502,24 +2543,31 @@ class NativeWorkspaceTest {
         val returnedWrites=java.util.concurrent.atomic.AtomicInteger()
         val storedEnabled=AtomicReference("unavailable")
         val highWater=AtomicReference<Long?>(null)
-        private val at=AtomicReference<Long?>(null)
+        private val at=AtomicReference<NtfyClockPoint?>(null)
         private val clocks=java.util.concurrent.atomic.AtomicInteger()
         @Synchronized fun increment(counter:java.util.concurrent.atomic.AtomicInteger) {counter.updateAndGet {minOf(it+1,2)}}
         fun count(counter:java.util.concurrent.atomic.AtomicInteger)=when(counter.get()) {0->"zero";1->"one";else->"many"}
         fun clock(original:()->Long):Long {
+            val before=android.os.SystemClock.elapsedRealtimeNanos()
             val value=original()
-            synchronized(this) {increment(clocks);at.set(value)}
+            val after=android.os.SystemClock.elapsedRealtimeNanos()
+            synchronized(this) {increment(clocks);at.set(NtfyClockPoint(value,before,after))}
             return value
+        }
+        private fun singleClock():NtfyClockPoint?=
+            if(reads.get()==1 && returnedReads.get()==1 && clocks.get()==1)at.get() else null
+        @Synchronized fun progress(before:NtfyClockPoint?):String {
+            val current=singleClock() ?: return "unavailable"
+            return before?.progress(current) ?: "unavailable"
         }
         @Synchronized fun clockCategory(window:Pair<Long,Long>?):String {
             // Multiple callbacks cannot be collapsed into one clock decision.
-            if(reads.get()!=1 || returnedReads.get()!=1 || clocks.get()!=1)return "unavailable"
-            val value=at.get() ?: return "unavailable"
+            val point=singleClock() ?: return "unavailable"
+            val value=point.wall
             val high=highWater.get() ?: return "unavailable"
             if(value<0)return "negative"
             if(value<high)return "rollback"
-            val bounds=window ?: return "unavailable"
-            return when {value<bounds.first->"beforeIssued";value>=bounds.second->"expired";else->"withinWindow"}
+            return point.window(window)
         }
     }
 
@@ -2774,6 +2822,7 @@ class NativeWorkspaceTest {
         }
         awaitDocument(scenario,"Actual distributor registration","window.__lazyshNtfyControl===true")
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        var eventPost:NtfyPostClock?=null
         fun signal(name:String):Pair<Long,Long>? {
             assertTrue("Fixed fixture control",name in listOf("background","replay","complete","event","event-replay"))
             val connection=java.net.URL(data.getString("relayOrigin")+"/__fixture/"+name).openConnection(java.net.Proxy.NO_PROXY) as javax.net.ssl.HttpsURLConnection
@@ -2784,6 +2833,7 @@ class NativeWorkspaceTest {
                 connection.readTimeout=if(name=="event")10000 else 2000
                 connection.instanceFollowRedirects=false
                 connection.requestMethod="POST";connection.setRequestProperty("X-Lazysh-Fixture",nonce)
+                val clockBefore=if(name=="event")NtfyClockPoint.sample() else null
                 assertTrue("Owned fixture control acknowledged",connection.responseCode==204)
                 if(name!="event")return null
                 fun header(name:String):Long {
@@ -2794,6 +2844,14 @@ class NativeWorkspaceTest {
                 val issued=header("x-lazysh-fixture-issued-at")
                 val expires=header("x-lazysh-fixture-expires-at")
                 check(expires>issued && expires-issued<=300) {"Exact owned event window required"}
+                fun category(name:String,allowed:List<String>):String {
+                    val values=connection.headerFields.filterKeys {it?.equals(name,true)==true}.values.flatten()
+                    check(values.size==1 && values.single() in allowed) {"Exact owned event clock required"}
+                    return values.single()
+                }
+                val hostProgress=category("x-lazysh-fixture-clock-progress",listOf("consistentWithinSecond","wallAhead","wallBehind","unavailable"))
+                val issuedInHandler=category("x-lazysh-fixture-issued-in-handler",listOf("within","outside","unavailable"))
+                eventPost=NtfyPostClock(checkNotNull(clockBefore),NtfyClockPoint.sample(),hostProgress,issuedInHandler)
                 return issued to expires
             } finally {connection.disconnect()}
         }
@@ -2890,7 +2948,10 @@ class NativeWorkspaceTest {
                     " ownedNotification=${flag {ownedNotification()!=null}}"+
                     " reads=${eventRead.count(eventRead.reads)} returnedReads=${eventRead.count(eventRead.returnedReads)}"+
                     " writes=${eventRead.count(eventRead.writes)} returnedWrites=${eventRead.count(eventRead.returnedWrites)}"+
-                    " storedEnabled=${eventRead.storedEnabled.get()} clock=${eventRead.clockCategory(eventWindow)}]"
+                    " storedEnabled=${eventRead.storedEnabled.get()} clock=${eventRead.clockCategory(eventWindow)}"+
+                    " hostProgress=${eventPost?.hostProgress ?: "unavailable"} issuedInHandler=${eventPost?.issuedInHandler ?: "unavailable"}"+
+                    " postProgress=${eventPost?.let {it.before.progress(it.after)} ?: "unavailable"}"+
+                    " callbackProgress=${eventRead.progress(eventPost?.before)} postClock=${eventPost?.after?.window(eventWindow) ?: "unavailable"}]"
             }
             val notification=delivered.notification
             assertTrue("Actual private generic notification",notification.visibility==android.app.Notification.VISIBILITY_PRIVATE &&

@@ -8,6 +8,13 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";
 type ReportedAgent={terminalId:string;workspaceId:string;tabId:string;paneId:string};
+export function ownedHerdrContext(snapshot:{workspaces:Record<string,unknown>[];tabs:Record<string,unknown>[]},agent:ReportedAgent,cwd:unknown,directory:string) {
+  const workspaces=snapshot.workspaces.filter(value=>value.workspace_id===agent.workspaceId);
+  const tabs=snapshot.tabs.filter(value=>value.tab_id===agent.tabId && value.workspace_id===agent.workspaceId);
+  if(workspaces.length!==1 || tabs.length!==1 || ![workspaces[0]?.label,tabs[0]?.label].every(value=>typeof value==='string' && value.length>0 && value.length<=256 && !/[\x00-\x1f\x7f-\x9f]/.test(value)) || cwd!==directory)
+    throw new Error('Owned Herdr navigation context changed');
+  return [workspaces[0].label,tabs[0].label,cwd].join(' / ');
+}
 export class HerdrFixture {
   readonly name:string;
   readonly record:string;
@@ -17,6 +24,7 @@ export class HerdrFixture {
   private server:OwnedProcess|undefined;
   private receiver:OwnedPid|undefined;
   private agent:ReportedAgent|undefined;
+  private agentContext:string|undefined;
   private stopped=false;
   private navigationReceivers:{directory:string;receiver:OwnedPid}[]=[];
   private navigation: {source:ReportedAgent & {marker:string;label:string};shell:ReportedAgent & {marker:string;label:string};agent:ReportedAgent & {marker:string;label:string};workspaceLabel:string}|undefined;
@@ -63,7 +71,7 @@ export class HerdrFixture {
       const reported=JSON.parse(await owned.run(['api','snapshot']))?.result?.snapshot;
       const rows=reported?.agents;
       const panes=reported?.panes;
-      if(!Array.isArray(rows) || rows.length!==1 || !Array.isArray(panes) || panes.length!==1)
+      if(!Array.isArray(rows) || rows.length!==1 || !Array.isArray(panes) || panes.length!==1 || !Array.isArray(reported.workspaces) || !Array.isArray(reported.tabs))
         throw new Error('Owned Herdr agent snapshot unavailable');
       const row=rows[0],source=panes[0];
       if(!row || !source || row.agent!=='codex' || row.agent_status!=='unknown'
@@ -77,6 +85,7 @@ export class HerdrFixture {
         || !row.tab_id.startsWith(row.workspace_id+':') || !pane.startsWith(row.workspace_id+':'))
         throw new Error('Owned Herdr agent identity changed');
       owned.agent={terminalId:row.terminal_id,workspaceId:row.workspace_id,tabId:row.tab_id,paneId:pane};
+      owned.agentContext=ownedHerdrContext(reported,owned.agent,source.cwd,ssh.directory);
       await owned.expectBytes(Buffer.alloc(0));
       if(navigation)await owned.prepareNavigation();
       return owned;
@@ -164,8 +173,8 @@ export class HerdrFixture {
     if(!await this.receiverAlive(receiver))throw new Error('Owned receiver identity changed');
   }
   metadata() {
-    if(!this.agent)throw new Error('Owned Herdr agent report required');
-    return {name:this.name,transcript:this.transcript,record:this.record,draft:this.draft,agent:this.agent,...(this.navigation?{navigation:this.navigation}:{})};
+    if(!this.agent || !this.agentContext)throw new Error('Owned Herdr agent report required');
+    return {name:this.name,transcript:this.transcript,record:this.record,draft:this.draft,agent:this.agent,agentContext:this.agentContext,...(this.navigation?{navigation:this.navigation}:{})};
   }
   async stop() {
     if(this.stopped)return;
