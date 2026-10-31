@@ -113,6 +113,7 @@ pub enum Agent {
     Copilot,
     Cursor,
     Amp,
+    Cline,
     Generic,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -211,10 +212,11 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             }
             serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
         }
-        Agent::Opencode | Agent::Cursor | Agent::Amp => match match agent {
+        Agent::Opencode | Agent::Cursor | Agent::Amp | Agent::Cline => match match agent {
             Agent::Opencode => hooks::opencode_event(payload, pane),
             Agent::Cursor => hooks::cursor_event(payload, pane),
             Agent::Amp => hooks::amp_event(payload, pane),
+            Agent::Cline => hooks::cline_event(payload, pane),
             _ => unreachable!(),
         }? {
             Some(event) => event,

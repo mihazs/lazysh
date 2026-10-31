@@ -1113,3 +1113,70 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
     }
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn cline_root_lifecycle_preserves_native_identity_and_prints_without_profile_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = run(directory.path(), &["cline-plugin"], b"");
+    assert!(output.status.success());
+    let printed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(printed["scope"], "root-only");
+    assert_eq!(printed["content"], include_str!("../hooks/cline.js"));
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+    for (status, state) in [
+        ("start", "working"),
+        ("completed", "done"),
+        ("aborted", "done"),
+        ("failed", "needs_attention"),
+    ] {
+        let event = json!({"schemaVersion":1,"agentId":"agent_root","conversationId":"conv_root","runId":"run_native","parentAgentId":null,"directory":"/owned/project","status":status,"messages":["SECRET"],"error":{"message":"SECRET"},"policy":{"autoApprove":true}});
+        assert!(ingest(directory.path(), "cline", &event).status.success());
+        let report = snapshot(directory.path(), "10");
+        assert!(report["sessions"][0]["sessionId"]
+            .as_str()
+            .unwrap()
+            .starts_with("cline:"));
+        assert_eq!(report["sessions"][0]["agent"], "Cline CLI");
+        assert_eq!(report["sessions"][0]["state"], state);
+        assert!(!report.to_string().contains("SECRET"));
+    }
+    let before = snapshot(directory.path(), "10");
+    let child = json!({"schemaVersion":1,"agentId":"agent_child","conversationId":"conv_child","runId":"run_child","parentAgentId":"agent_root","directory":"/unqualified/child","status":"completed"});
+    assert!(ingest(directory.path(), "cline", &child).status.success());
+    assert_eq!(snapshot(directory.path(), "10"), before);
+    for key in ["runId", "agentId", "conversationId"] {
+        let mut invalid = child.clone();
+        invalid["parentAgentId"] = Value::Null;
+        invalid[key] = json!("");
+        assert!(!ingest(directory.path(), "cline", &invalid).status.success());
+    }
+    assert_eq!(snapshot(directory.path(), "10"), before);
+}
+
+#[test]
+fn cline_distinct_roots_sharing_a_conversation_keep_separate_stable_report_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = json!({"schemaVersion":1,"agentId":"agent_one","conversationId":"shared_conversation","runId":"run_one","parentAgentId":null,"directory":"/owned/project","status":"start"});
+    let mut second = first.clone();
+    second["agentId"] = json!("agent_two");
+    second["status"] = json!("completed");
+    for event in [&first, &second] {
+        assert!(ingest(directory.path(), "cline", event).status.success());
+    }
+    let report = snapshot(directory.path(), "10");
+    let rows = report["sessions"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0]["sessionId"], rows[1]["sessionId"]);
+    for row in rows {
+        assert_eq!(row["sessionId"].as_str().unwrap().len(), 70);
+    }
+    let mut next = first.clone();
+    next["runId"] = json!("run_next");
+    next["status"] = json!("failed");
+    assert!(ingest(directory.path(), "cline", &next).status.success());
+    let after = snapshot(directory.path(), "10");
+    assert_eq!(after["sessions"][0]["state"], "needs_attention");
+    assert_eq!(after["sessions"][0]["eventCount"], 2);
+    assert_eq!(after["sessions"][1]["state"], "done");
+    assert_eq!(after["sessions"][1]["eventCount"], 1);
+}
