@@ -194,12 +194,59 @@ impl InitializationRecord {
         }
     }
 }
+pub(super) fn assert_child_storage_error(output: &Output, code: i32) {
+    let record = InitializationWorker::child(
+        0,
+        output,
+        &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+    )
+    .unwrap();
+    assert!(record.valid());
+    assert_eq!(record.result, WorkerResult::StorageError);
+    assert_eq!(record.sqlite_code, Some(code));
+    assert_eq!(record.stage, WorkerStage::Unknown);
+    assert_eq!(record.open_elapsed_us, None);
+}
+
+// Only the CLI's complete sanitized terminal error is source-bound here.
+// It identifies a cause class, never the SQL boundary or time spent waiting.
+fn child_error(output: &Output) -> Option<(WorkerResult, Option<i32>)> {
+    if output.status.code() != Some(1) || !output.stdout.is_empty() || output.stderr.len() > 4096 {
+        return None;
+    }
+    let line = std::str::from_utf8(&output.stderr)
+        .ok()?
+        .strip_suffix('\n')?;
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    match line {
+        "lazysh-agent: IoError: operation failed" => Some((WorkerResult::IoError, None)),
+        "lazysh-agent: StorageError: operation failed" => Some((WorkerResult::StorageError, None)),
+        _ => {
+            let code = line
+                .strip_prefix("lazysh-agent: StorageError: operation failed (sqlite_code=")?
+                .strip_suffix(')')?;
+            let value = code.parse::<i32>().ok()?;
+            (value.to_string() == code).then_some((WorkerResult::StorageError, Some(value)))
+        }
+    }
+}
+
 impl InitializationWorker {
     fn child(
         worker: u8,
         output: &Output,
         (start, elapsed): &(std::time::Duration, std::time::Duration),
     ) -> Option<Self> {
+        let (result, sqlite_code) = child_error(output).unwrap_or_else(|| {
+            (
+                if output.status.success() {
+                    WorkerResult::Success
+                } else {
+                    WorkerResult::OtherError
+                },
+                None,
+            )
+        });
         Some(Self {
             origin: WorkerOrigin::ConcurrentHooks,
             round: 0,
@@ -210,12 +257,8 @@ impl InitializationWorker {
             actual_hold_us: None,
             // The ordinary child strips diagnostics. Its SQL boundary is not observed.
             stage: WorkerStage::Unknown,
-            result: if output.status.success() {
-                WorkerResult::Success
-            } else {
-                WorkerResult::OtherError
-            },
-            sqlite_code: None,
+            result,
+            sqlite_code,
             exit_code: output.status.code(),
         })
     }
@@ -238,10 +281,13 @@ impl InitializationWorker {
             return self.open_elapsed_us.is_none()
                 && self.actual_hold_us.is_none()
                 && self.stage == WorkerStage::Unknown
-                && self.sqlite_code.is_none()
                 && match (&self.result, self.exit_code) {
-                    (WorkerResult::Success, Some(0)) => true,
-                    (WorkerResult::OtherError, code) => code != Some(0),
+                    (WorkerResult::Success, Some(0)) => self.sqlite_code.is_none(),
+                    (WorkerResult::StorageError, Some(1)) => true,
+                    (WorkerResult::IoError, Some(1)) => self.sqlite_code.is_none(),
+                    (WorkerResult::OtherError, code) => {
+                        code != Some(0) && self.sqlite_code.is_none()
+                    }
                     _ => false,
                 };
         }
@@ -757,6 +803,100 @@ fn worker_origins_keep_independent_epochs_and_strict_bounds() {
 #[test]
 fn child_observations_keep_unknown_sql_phase_and_redact_output() {
     let directory = tempfile::tempdir().unwrap();
+    let mut error = super::run(directory.path(), &["ingest", "--agent", "generic"], b"{}");
+    assert_eq!(error.status.code(), Some(1));
+    for (text, result, code) in [
+        ("IoError: operation failed", WorkerResult::IoError, None),
+        (
+            "StorageError: operation failed",
+            WorkerResult::StorageError,
+            None,
+        ),
+        (
+            "StorageError: operation failed (sqlite_code=5)",
+            WorkerResult::StorageError,
+            Some(5),
+        ),
+        (
+            "StorageError: operation failed (sqlite_code=-2147483648)",
+            WorkerResult::StorageError,
+            Some(i32::MIN),
+        ),
+        (
+            "StorageError: operation failed (sqlite_code=2147483647)",
+            WorkerResult::StorageError,
+            Some(i32::MAX),
+        ),
+    ] {
+        for ending in ["\n", "\r\n"] {
+            error.stderr = format!("lazysh-agent: {text}{ending}").into_bytes();
+            let record = InitializationWorker::child(
+                7,
+                &error,
+                &(std::time::Duration::ZERO, std::time::Duration::ZERO),
+            )
+            .unwrap();
+            assert_eq!(record.result, result);
+            assert_eq!(record.sqlite_code, code);
+            assert_eq!(record.stage, WorkerStage::Unknown);
+            assert_eq!(record.open_elapsed_us, None);
+            let value = serde_json::to_value(&record).unwrap();
+            rejects_worker_fields(
+                &value,
+                &[
+                    ("exitCode", serde_json::json!(0)),
+                    ("stage", serde_json::json!("ingest")),
+                    ("openElapsedUs", serde_json::json!(0)),
+                ],
+            );
+            assert!(initialization_projection(
+                InitializationRecord::Worker(record).line().as_bytes()
+            )
+            .is_some());
+        }
+    }
+    for code in [
+        "+5",
+        "05",
+        "-0",
+        " 5",
+        "5 ",
+        "2147483648",
+        "-2147483649",
+        "",
+        "private",
+    ] {
+        error.stderr =
+            format!("lazysh-agent: StorageError: operation failed (sqlite_code={code})\n")
+                .into_bytes();
+        assert!(child_error(&error).is_none());
+    }
+    let canonical = b"lazysh-agent: StorageError: operation failed (sqlite_code=5)\n";
+    for rejected in [
+        [canonical.as_slice(), canonical.as_slice()].concat(),
+        [canonical.as_slice(), b"private payload"].concat(),
+        [
+            journal_mode_busy_record().line().as_bytes(),
+            canonical.as_slice(),
+        ]
+        .concat(),
+        [
+            b"lazysh-storage-diagnostic {invalid}\n",
+            canonical.as_slice(),
+        ]
+        .concat(),
+        [b"private payload\n", canonical.as_slice()].concat(),
+        canonical[..canonical.len() - 1].to_vec(),
+        vec![b'x'; 4097],
+        vec![0xff],
+    ] {
+        error.stderr = rejected;
+        assert!(child_error(&error).is_none());
+    }
+    error.stderr = canonical.to_vec();
+    error.stdout = b"private output".to_vec();
+    assert!(child_error(&error).is_none());
+
     for (worker, args) in [
         (0, &["--help"][..]),
         (1, &["private-unrecognized-command"][..]),
@@ -764,6 +904,10 @@ fn child_observations_keep_unknown_sql_phase_and_redact_output() {
         let started = std::time::Instant::now();
         let output = super::run(directory.path(), args, b"");
         assert_eq!(output.status.success(), worker == 0);
+        let mut contradiction = output.clone();
+        contradiction.stdout.clear();
+        contradiction.stderr = canonical.to_vec();
+        assert!(child_error(&contradiction).is_none());
         let timing = (std::time::Duration::from_micros(19), started.elapsed());
         let record = InitializationWorker::child(worker, &output, &timing).unwrap();
         assert!(record.valid());
