@@ -240,9 +240,11 @@ export function captureOwnedCaseCrashes(adb:string,serial:string,nonce:string) {
 // LatinIME can acknowledge a visible IME window while hardware input suppresses
 // its keyboard view. Admit real software input only on the owned test emulator,
 // and restore the exact previous preference before package/fixture cleanup.
-export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000) {
+// The opt-in Google profile is calibrated separately; ordinary CI stays AOSP-only.
+export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000,profile:'aosp-latin'|'google-api36-latin'='aosp-latin') {
   if(!/^emulator-[0-9]{4,5}$/.test(serial) || !Number.isSafeInteger(budget) || budget<1 || budget>5000)
     throw new Error('Owned software keyboard requires an explicit emulator and bounded budget');
+  if(!['aosp-latin','google-api36-latin'].includes(profile))throw new Error('Owned software keyboard profile is unsupported');
   const key='show_ime_with_hard_keyboard';
   const deadline=performance.now()+budget;
   const probe=async(args:string[],until:number,stage:string)=>{
@@ -250,11 +252,22 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
     if(result.state!=='available')throw new Error(`Owned software keyboard unavailable: ${stage}`);
     return result.output;
   };
-  const latin=(value:string)=>['com.android.inputmethod.latin/.LatinIME','com.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'].includes(value);
+  const latin=(value:string)=>(profile==='aosp-latin'
+    ? ['com.android.inputmethod.latin/.LatinIME','com.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME']
+    : ['com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME']).includes(value);
   if(!latin(await probe(['settings','get','secure','default_input_method'],deadline,'default IME')))
-    throw new Error('Owned software keyboard requires the image AOSP LatinIME');
+    throw new Error(`Owned software keyboard requires the image ${profile==='aosp-latin'?'AOSP':'Google'} LatinIME`);
   const installed=await probe(['ime','list','-s'],deadline,'installed IME');
   if(!installed.split(/\r?\n/).some(latin))throw new Error('Owned software keyboard image IME is not installed');
+  if(profile==='google-api36-latin') {
+    const [sdk,model,system]=await Promise.all([
+      probe(['getprop','ro.build.version.sdk'],deadline,'Google image SDK'),
+      probe(['getprop','ro.product.model'],deadline,'Google image model'),
+      probe(['pm','list','packages','-s','com.google.android.inputmethod.latin'],deadline,'Google system keyboard'),
+    ]);
+    if(sdk!=='36' || model!=='sdk_gphone64_x86_64' || !system.split(/\r?\n/).includes('package:com.google.android.inputmethod.latin'))
+      throw new Error('Owned software keyboard Google API36 system image identity was not verified');
+  }
   const get=(until:number)=>probe(['settings','get','secure',key],until,'preference');
   const previous=await get(deadline);
   if(!['0','1','null'].includes(previous))throw new Error('Owned software keyboard preference is unrecognized');
@@ -284,7 +297,7 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
     await androidSshCleanup(true,[['software-keyboard',restore]]);
     throw error;
   }
-  return {observation:{ime:'aosp-latin' as const,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
+  return {observation:{ime:profile,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false) {
@@ -333,7 +346,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       await shell(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);
       reverse=String(fixture.port);
     }
-    keyboard=await ownedSoftwareKeyboard(adb,serial);
+    const keyboardProfile=process.env.LAZYSH_ANDROID_KEYBOARD_PROFILE??'aosp-latin';
+    if(keyboardProfile!=='aosp-latin' && keyboardProfile!=='google-api36-latin')throw new Error('Owned software keyboard profile is unsupported');
+    keyboard=await ownedSoftwareKeyboard(adb,serial,5000,keyboardProfile);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,

@@ -292,7 +292,8 @@ test.each(['gradle','reverse','keyboard']).skipIf(process.platform!=='linux')('e
 },5000);
 
 const latinIme='com.android.inputmethod.latin/.LatinIME';
-async function withKeyboardAdb(options:{previous:string;failure?:string;ime?:string;installed?:string},run:(adb:string,state:()=>Promise<string>,calls:()=>Promise<string[][]>,pid:()=>Promise<number>)=>Promise<void>) {
+const googleIme='com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME';
+async function withKeyboardAdb(options:{previous:string;failure?:string;ime?:string;installed?:string;sdk?:string;model?:string;systemGoogle?:string},run:(adb:string,state:()=>Promise<string>,calls:()=>Promise<string[][]>,pid:()=>Promise<number>)=>Promise<void>) {
   await withDiagnosticAdb(options.previous,0,async(adb,args,fixture)=>{
     await writeFile(adb,`#!${process.execPath}
 const fs=require('node:fs'),a=process.argv.slice(2),state=process.env.EXIT_INFO_FIXTURE,options=${JSON.stringify(options)};
@@ -302,6 +303,10 @@ const hang=()=>{fs.writeFileSync(state+'.pid',String(process.pid));setInterval((
 if(command==='shell settings get secure default_input_method') {
   if(options.failure==='read-timeout')hang();else process.stdout.write(options.ime??latin);
 } else if(command==='shell ime list -s')process.stdout.write(options.installed??latin);
+else if(command==='shell getprop ro.build.version.sdk') {
+  if(options.failure==='image-timeout')hang();else process.stdout.write(options.sdk??'36');
+} else if(command==='shell getprop ro.product.model')process.stdout.write(options.model??'sdk_gphone64_x86_64');
+else if(command==='shell pm list packages -s com.google.android.inputmethod.latin')process.stdout.write(options.systemGoogle??'package:com.google.android.inputmethod.latin');
 else if(command==='shell settings get secure '+key) {
   const value=fs.readFileSync(state,'utf8');
   if(options.failure==='readback' && value==='1' && !fs.existsSync(state+'.gate')){fs.writeFileSync(state+'.gate','');process.stdout.write('private-keyboard-secret');}
@@ -344,6 +349,33 @@ test.each([{previous:'private-keyboard-secret'},{previous:'0',ime:'private-keybo
     const count=(await calls()).length;
     await expect(ownedSoftwareKeyboard(adb,'personal-device')).rejects.toThrow('explicit emulator');
     expect((await calls()).length).toBe(count);
+  });
+});
+test.skipIf(process.platform!=='linux')('Google image keyboard needs explicit profile and restores the original preference',async()=>{
+  await withKeyboardAdb({previous:'0',ime:googleIme,installed:googleIme},async(adb,state)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580')).rejects.toThrow('AOSP LatinIME');
+    const owner=await ownedSoftwareKeyboard(adb,'emulator-5580',5000,'google-api36-latin');
+    expect(owner.observation).toEqual({ime:'google-api36-latin',previous:'disabled',requested:'enabled'});
+    expect(await state()).toBe('1');await owner.restore();expect(await state()).toBe('0');
+  });
+});
+test.each([{ime:latinIme},{installed:latinIme},{sdk:'35'},{model:'unowned-model'},{systemGoogle:'package:other.keyboard'}]).skipIf(process.platform!=='linux')('Google keyboard rejects mismatched image identity before mutation %#',async mismatch=>{
+  await withKeyboardAdb({previous:'0',ime:googleIme,installed:googleIme,...mismatch},async(adb,state,calls)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580',5000,'google-api36-latin')).rejects.toThrow('Owned software keyboard');
+    expect(await state()).toBe('0');expect((await calls()).some(args=>args[4]==='put'||args[4]==='delete')).toBe(false);
+  });
+});
+test.skipIf(process.platform!=='linux')('Google image admission timeout retires its child without changing preference',async()=>{
+  await withKeyboardAdb({previous:'0',ime:googleIme,installed:googleIme,failure:'image-timeout'},async(adb,state,calls,pid)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580',500,'google-api36-latin')).rejects.toThrow('unavailable: Google image SDK');
+    const ownedPid=await pid();expect(()=>process.kill(ownedPid,0)).toThrow();
+    expect(await state()).toBe('0');expect((await calls()).some(args=>args[4]==='put'||args[4]==='delete')).toBe(false);
+  });
+});
+test.skipIf(process.platform!=='linux')('unknown keyboard profile is rejected before a device command',async()=>{
+  await withKeyboardAdb({previous:'0'},async(adb,state,calls)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580',5000,'unknown' as never)).rejects.toThrow('profile is unsupported');
+    expect(await calls()).toEqual([]);expect(await state()).toBe('0');
   });
 });
 test.each(['enable-applied','enable-unapplied','readback','enable-timeout']).skipIf(process.platform!=='linux')('partial software keyboard setup restores state after %s',async failure=>{
