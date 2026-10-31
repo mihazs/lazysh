@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Display native terminal failure messages instead of `[object Object]`, preserving localized errors.
+
 - Initialize companion database tables and indexes in one deferred transaction, avoiding separate schema commits and rolling back partial initialization on failure. Preserve full synchronization, existing writer coexistence and storage wait budgets.
 
 - Keep Android status and navigation icons light over the fixed navy native window background in both system appearances. Preserve keyboard and system insets and custom app/terminal themes.
