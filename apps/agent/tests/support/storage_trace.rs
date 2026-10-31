@@ -236,6 +236,8 @@ const FAILED_TESTS: &[&str] = &[
     "atomic_updates_persist_exact_values_and_reject_stale_revisions",
     "chained_custom_link_route_is_rejected_without_mutating_its_target",
     "claude_discards_prompts_tool_arguments_and_unknown_fields",
+    "cline_root_lifecycle_preserves_native_identity_and_prints_without_profile_changes",
+    "cline_distinct_roots_sharing_a_conversation_keep_separate_stable_report_rows",
     "cli_updates_apply_all_explicit_flags_and_new_processes_observe_them",
     "concurrent_hooks_preserve_every_event",
     "concurrent_ingest_recovers_after_a_transient_database_lock",

@@ -2,6 +2,12 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  terminalEditAnnouncement: ['Edição não enviada', 'Edición no enviada'],
+  terminalEditNotSent: ['Edição não enviada · Revisar', 'Edición no enviada · Revisar'],
+  terminalEditContext: ['Contexto de entrada local não aplicado. O terminal permanece inalterado.', 'Contexto de entrada local sin aplicar. El terminal no cambió.'],
+  terminalEditTruncated: ['O contexto excede o limite de revisão. Não é possível copiar.', 'El contexto supera el límite de revisión. No se puede copiar.'],
+  terminalEditCopy: ['Copiar contexto', 'Copiar contexto'],
+  terminalEditDismiss: ['Descartar e voltar a digitar', 'Descartar y seguir escribiendo'],
   herdrNavigationTitle: ["Navegação Herdr", "Navegación Herdr"],
   herdrNavigationBack: ["Voltar ao terminal", "Volver al terminal"],
   herdrNavigationSpaces: ["Espaços", "Espacios"],
