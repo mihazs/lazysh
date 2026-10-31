@@ -1466,16 +1466,26 @@ class NativeWorkspaceTest {
             val visible = device.wait(androidx.test.uiautomator.Until.hasObject(By.pkg(vendor)), 5000)
             val nodes = if (visible) device.findObjects(By.pkg(vendor)).take(64) else emptyList()
             val facts = org.json.JSONArray()
-            for (node in nodes) facts.put(JSONObject()
-                .put("class", node.className.take(100)).put("resource", node.resourceName?.take(160))
-                .put("text", node.text?.take(160)).put("description", node.contentDescription?.take(160))
-                .put("clickable", node.isClickable).put("enabled", node.isEnabled))
+            var truncated = false
+            for (node in nodes) {
+                facts.put(JSONObject()
+                    .put("class", node.className.take(100)).put("resource", node.resourceName?.take(160))
+                    .put("text", node.text?.take(160)).put("description", node.contentDescription?.take(160))
+                    .put("clickable", node.isClickable).put("enabled", node.isEnabled))
+                if (facts.toString().toByteArray(Charsets.UTF_8).size > 8 * 1024) {
+                    facts.remove(facts.length() - 1)
+                    truncated = true
+                    break
+                }
+            }
             // Fresh, offline, accountless vendor UI only; never capture the
             // product form/SSH key or raw dumpsys/profile data in this receipt.
             val report = JSONObject().put("stage", "vendor-ui-discovery").put("qualified", false)
-                .put("freshInstall", true).put("visible", visible).put("nodes", facts)
+                .put("freshInstall", true).put("visible", visible).put("nodes", facts).put("truncated", truncated)
                 .put("settledOff", "unqualified").put("realReplacement", "not-executed")
-            java.io.File(target.cacheDir, "owned-swiftkey-discovery.json").writeText(report.toString())
+            val encoded = report.toString().toByteArray(Charsets.UTF_8)
+            require(encoded.size <= 12 * 1024) { "Owned vendor facts must fit the bounded ADB collector" }
+            java.io.File(target.cacheDir, "owned-swiftkey-discovery.json").writeBytes(encoded)
             throw AssertionError("UNQUALIFIED: inspect fresh vendor AX; settled OFF and real replacement are not admitted")
         } finally {
             if (installed) {
