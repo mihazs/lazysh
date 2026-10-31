@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Document Obtainium as the preferred Android installation/update method, with explicit APK flavor filters, signature-channel caveats and manual SHA256 verification. No application default changes.
+
+- Correct README download availability and link to the public roadmap and installation guidance.
+
 - Keep Android status and navigation icons light over the fixed navy native window background in both system appearances. Preserve keyboard and system insets and custom app/terminal themes.
 - Add a print-only Cline runtime plugin for root run activity, completion/stopped and generic failure attention, using native run identities and a two-second companion writer deadline. Child runs, permission waits and managed Cline installation remain unsupported; existing profiles, approval policy and adapters are unchanged.
 
