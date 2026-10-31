@@ -697,7 +697,8 @@ button svg {
   padding: 8px 12px;
   background: var(--theme-panel, #151c12);
 }
-.terminal-keys button {
+.terminal-keys button,
+.terminal-keys button:hover {
   background: var(--theme-control, #202a1a);
   border: 1px solid var(--theme-border, #303e27);
   color: var(--theme-text, #b2c3a4);
@@ -708,10 +709,16 @@ button svg {
   font-family: monospace;
   font-size: 11px;
 }
-.terminal-keys button:hover,
+.terminal-keys button:active,
 .terminal-keys button[aria-pressed="true"] {
   background: var(--theme-hover, #435c2d);
   color: var(--theme-accent, #e0f6ca);
+}
+@media (hover: hover) and (pointer: fine) {
+  .terminal-keys button:hover:not(:disabled) {
+    background: var(--theme-hover, #435c2d);
+    color: var(--theme-accent, #e0f6ca);
+  }
 }
 .terminal-keys > span {
   flex: 1;
