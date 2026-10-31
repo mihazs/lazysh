@@ -4,6 +4,7 @@ import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/reac
 import {invoke} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
 import AppleStatusPanel from './AppleStatusPanel';
+import {t} from './i18n/core';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn().mockResolvedValue(()=>{})}));
 afterEach(()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.resetAllMocks();});
@@ -119,3 +120,29 @@ async function configuredReview() {
   const configured=vi.mocked(invoke).mock.calls.find(([command,args])=>command==='apple_status_configure' && (args as {enabled:boolean}).enabled)![1] as {subscriptionId:string};
   return {review, callback, configured};
 }
+
+it('compacts only confirmed unavailable status and retains guidance after a sharing request',async()=>{
+  setup();let available=false,complete!:()=>void;
+  vi.mocked(invoke).mockImplementation((command,args)=>{
+    if(command==='apple_status_capability')return Promise.resolve({liveActivities:available,watchInstalled:available,reason:available?'Available owned status.':'Unavailable owned status.'}) as never;
+    if(command==='apple_status_configure' && (args as {enabled:boolean}).enabled)return new Promise<void>(resolve=>{complete=resolve;}) as never;
+    if(command==='apple_status_configure')return Promise.reject(new Error('Stop unavailable')) as never;
+    return Promise.resolve({schemaVersion:1,sessions:[],requests:[]}) as never;
+  });
+  const view=render(<AppleStatusPanel sessionId={id}/>);
+  await screen.findByText(/Unavailable owned status/);
+  expect(screen.queryByRole('button',{name:'Enable Watch status'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Start Live Activity'})).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='apple_status_configure')).toBe(false);
+  available=true;view.rerender(<AppleStatusPanel sessionId="b11c6ca6-e4f7-4f63-859c-d08e66df2240"/>);
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Enable Watch status'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'Enable Watch status'}));
+  await act(async()=>{complete();});
+  expect(screen.getByRole('button',{name:'Stop Apple status'})).toBeTruthy();
+  available=false;view.rerender(<AppleStatusPanel sessionId="b11c6ca6-e4f7-4f63-859c-d08e66df2241"/>);
+  await screen.findByText(/Unavailable owned status/);
+  fireEvent.click(screen.getByRole('button',{name:'Stop Apple status'}));
+  expect(screen.getByRole('button',{name:'Start Live Activity'})).toBeTruthy();
+  expect(screen.getByText(t('appleStatusPrivacy'))).toBeTruthy();
+  expect(screen.getByText(t('appleStatusReview'))).toBeTruthy();
+});
