@@ -2,7 +2,7 @@
 use crate::{field, Event, Result, SessionState};
 use serde_json::{json, Value};
 
-pub(crate) fn command_config(agent: &str, events: &[&str], timeout: u8) -> Value {
+pub(crate) fn command_config(agent: &str, events: &[&str], timeout: u16) -> Value {
     let mut hooks = serde_json::Map::new();
     for kind in events {
         hooks.insert((*kind).into(), json!([{"hooks":[{"type":"command","command":format!("lazysh-agent ingest --agent {agent}"),"timeout":timeout}]}]));
@@ -25,6 +25,66 @@ pub fn codex_config() -> Value {
         ],
         3,
     )
+}
+
+pub fn gemini_config() -> Value {
+    command_config(
+        "gemini",
+        &[
+            "BeforeAgent",
+            "BeforeTool",
+            "AfterTool",
+            "Notification",
+            "AfterAgent",
+            "SessionEnd",
+        ],
+        5000,
+    )
+}
+
+pub fn droid_config() -> Value {
+    let mut config = command_config(
+        "droid",
+        &[
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "Notification",
+            "Stop",
+            "SessionEnd",
+        ],
+        5,
+    );
+    config["hooks"].take()
+}
+
+pub fn kimi_config() -> Value {
+    let events = [
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Notification",
+        "SessionEnd",
+    ];
+    let content = events.iter().map(|event| format!("[[hooks]]\nevent = \"{event}\"\ncommand = \"lazysh-agent ingest --agent kimi\"\ntimeout = 5\n")).collect::<Vec<_>>().join("\n");
+    json!({"schemaVersion":1,"format":"toml","filename":"config.toml","content":content})
+}
+
+pub fn copilot_config() -> Value {
+    let mut hooks = serde_json::Map::new();
+    // Avoid preToolUse's fail-closed observer errors and pre-approval permissionRequest.
+    for event in [
+        "UserPromptSubmit",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Stop",
+        "SessionEnd",
+        "notification",
+    ] {
+        hooks.insert(event.into(), json!([{"type":"command","exec":"lazysh-agent","args":["ingest","--agent","copilot"],"timeoutSec":5}]));
+    }
+    json!({"version":1,"hooks":hooks})
 }
 
 pub fn opencode_plugin() -> Value {
