@@ -117,8 +117,10 @@ Missing prerequisites stop the transaction.
 The broker authenticates the same fresh account once with
 [LogonUserW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-logonuserw).
 Its SID-verified credential token provides a synchronous impersonation context only
-for reading the retained child's actual token and checking desktop access. It does
-not replace child evidence. Explicit-credential impersonation follows the
+for reading and duplicating the retained child's actual token. After reversion,
+the parent reads its station/desktop descriptors and calls AccessCheck with that
+explicit child duplicate. The duplicate closes even when observation fails; it
+does not replace child evidence. Explicit-credential impersonation follows the
 [documented exception](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-impersonateloggedonuser)
 without enabling privileges. Job, identity, profile, capsule, resume and cleanup
 operations remain outside that scope. Failed reversion terminates the broker

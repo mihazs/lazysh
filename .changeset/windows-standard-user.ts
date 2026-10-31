@@ -1,4 +1,4 @@
-import {windowsGuiMediumSource,windowsGuiTokenReasons} from './windows-installed-gui';
+import {windowsGuiMediumSource,windowsGuiTokenReasons,windowsGuiDaclFailures} from './windows-installed-gui';
 import {digestFile} from './release-artifacts';
 import {native,windowsInstallerFailure} from './release-platform';
 import {copyFile,lstat,mkdir,readdir,realpath,readFile,writeFile,appendFile,rm} from 'node:fs/promises';
@@ -7,7 +7,7 @@ import {dirname,join,relative,resolve,sep} from 'node:path';
 
 export const standardWritableDirectories=['work','node_modules/.vite','node_modules/.vite-temp','node_modules/.vitest-cache','apps/client/node_modules/.vite','apps/client/node_modules/.vite-temp'] as const;
 
-const standardCodes=['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','STANDARD_OWNER_TIMEOUT','HOSTED_ONLY','ACCOUNT_BUDGET','ACCOUNT_COLLISION','ACCOUNT_CREATE_UNAVAILABLE','ACCOUNT_IDENTITY','PROFILE_IDENTITY','PROFILE_COLLISION','FIXTURE_IDENTITY','FIXTURE_ACCESS','STANDARD_LOGON_UNAVAILABLE','TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','DESKTOP_SESSION_UNAVAILABLE','DESKTOP_ACCESS_UNAVAILABLE','JOB_UNAVAILABLE','IDENTITY_UNVERIFIED','LAUNCH_UNAVAILABLE','CLEANUP_UNVERIFIED',...windowsGuiTokenReasons.map(reason=>'TOKEN_UNAVAILABLE_'+reason)] as const;
+const standardCodes=['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','STANDARD_OWNER_TIMEOUT','HOSTED_ONLY','ACCOUNT_BUDGET','ACCOUNT_COLLISION','ACCOUNT_CREATE_UNAVAILABLE','ACCOUNT_IDENTITY','PROFILE_IDENTITY','PROFILE_COLLISION','FIXTURE_IDENTITY','FIXTURE_ACCESS','STANDARD_LOGON_UNAVAILABLE','TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','DESKTOP_SESSION_UNAVAILABLE','DESKTOP_ACCESS_UNAVAILABLE','JOB_UNAVAILABLE','IDENTITY_UNVERIFIED','LAUNCH_UNAVAILABLE','CLEANUP_UNVERIFIED',...windowsGuiDaclFailures,...windowsGuiTokenReasons.map(reason=>'TOKEN_UNAVAILABLE_'+reason)] as const;
 // Test-only broker. Native account methods are reached only by the explicit hosted owner.
 export const windowsStandardUserSource=windowsGuiMediumSource+String.raw`
 public sealed partial class OwnedMediumGui {
@@ -41,6 +41,7 @@ public sealed partial class OwnedMediumGui {
   static void FixtureTree(string path,string root,string parent,string child,ref int count,int depth){Need(depth<=64&&++count<=50000,"FIXTURE_IDENTITY");PlainOwned(path,root);if(System.IO.Path.GetFileName(path)=="account.owner")return;FixtureAcl(path,root,parent,child,WritableFixture(path,root));if(System.IO.Directory.Exists(path))foreach(string entry in System.IO.Directory.EnumerateFileSystemEntries(path))FixtureTree(entry,root,parent,child,ref count,depth+1);}
   static string ClosedStandardFailure(string value){return Array.IndexOf(new[]{${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>JSON.stringify(code)).join(',')}},value)>=0?value:"UNVERIFIED";}
   public static string StandardTokenFailure(){return ClosedStandardFailure("TOKEN_UNAVAILABLE_"+TokenFailure);}
+  static string StandardDesktopFailure(){return ClosedStandardFailure(daclFailure);}
   static string StandardPrimaryFailure(string code){return ClosedStandardFailure(code=="TOKEN_UNAVAILABLE"?StandardTokenFailure():code);}
   [DllImport("userenv.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool GetProfilesDirectory(System.Text.StringBuilder path,ref uint length);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode)] static extern int RegQueryValueEx(IntPtr key,string name,IntPtr reserved,out uint kind,[Out] byte[] data,ref uint length);
@@ -95,7 +96,7 @@ public sealed partial class OwnedMediumGui {
       SaveCapsule(root,new[]{name,actual[0],nonce,"1","INTENT",imageHash,DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture),expectedProfile});
       creationAttempted=true;bool created=CreateProcessWithLogonW(name,".",password,1,image,new System.Text.StringBuilder(command),0x08000004,IntPtr.Zero,root,ref startup,out child);creationReturned=true;for(int i=0;i<98;i++)Marshal.WriteByte(password,i,0);Need(created,"STANDARD_LOGON_UNAVAILABLE");
       long start=owned.VerifyCreated(child,image,credential);using(var hash=System.Security.Cryptography.SHA256.Create())using(var file=System.IO.File.OpenRead(image))Need(Convert.ToHexString(hash.ComputeHash(file)).ToLowerInvariant()==imageHash,"IDENTITY_UNVERIFIED");InspectAs(credential,()=>StandardToken(child.Process,actual[0],session));Need(Profile(actual[0])&&Hive(actual[0]),"PROFILE_IDENTITY");OwnedProfile(actual[0],name,expectedProfile);
-      InspectAs(credential,()=>{IntPtr client=IntPtr.Zero;try{TokenNeed(OpenProcessToken(child.Process,10,out client),TokenReason.STANDARD_TOKEN_OPEN);IntPtr impersonation;TokenNeed(DuplicateTokenEx(client,8,IntPtr.Zero,2,2,out impersonation),TokenReason.DUPLICATE_FAILED);try{Need(CheckDacl(GetProcessWindowStation(),impersonation,2,3)=="ALLOWS"&&CheckDacl(GetThreadDesktop(GetCurrentThreadId()),impersonation,3,4)=="ALLOWS","DESKTOP_ACCESS_UNAVAILABLE");}finally{Need(CloseHandle(impersonation),"CLEANUP_UNVERIFIED");}}finally{if(client!=IntPtr.Zero)Need(CloseHandle(client),"CLEANUP_UNVERIFIED");}});
+      WithDesktopToken(credential,child.Process,impersonation=>Need(CheckDacl(GetProcessWindowStation(),impersonation,2,3)=="ALLOWS"&&CheckDacl(GetThreadDesktop(GetCurrentThreadId()),impersonation,3,4)=="ALLOWS",StandardDesktopFailure()));
       var process=System.Diagnostics.Process.GetProcessById(child.Id);try{Need(process.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");long remaining=deadline-Environment.TickCount64-15000;Need(remaining>0&&remaining<=650000,"ACCOUNT_BUDGET");Need(ResumeThread(child.Thread)==1,"LAUNCH_UNAVAILABLE");owned.processes.Add(child.Process);child.Process=IntPtr.Zero;retained=true;
         Need(process.WaitForExit((int)remaining),"STANDARD_OWNER_TIMEOUT");Need(process.ExitCode==0,"STANDARD_OWNER_FAILED");outcome="STANDARD_OWNER_PASSED";
       }finally{process.Dispose();}

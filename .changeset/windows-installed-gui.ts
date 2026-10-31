@@ -5,6 +5,8 @@ export function windowsGuiSessionNonzero(value:unknown){
   return value==='PORTABLE_CONTRACT:SESSION_NONZERO_TRUE'?true:value==='PORTABLE_CONTRACT:SESSION_NONZERO_FALSE'?false:undefined;
 }
 
+export const windowsGuiDaclFailures=['WINSTA','DESKTOP'].flatMap(object=>['DESCRIPTOR_READ','DESCRIPTOR_LAYOUT','ACCESS_CHECK','DENIED'].map(phase=>object+'_'+phase));
+
 export const windowsGuiRoleRejections = ['ROLE_DATA_UNVERIFIED', 'MAIN_OWNER_MISMATCH', 'MAIN_GEOMETRY_MISMATCH', 'MAIN_STYLE_MISMATCH', 'MAIN_EXSTYLE_MISMATCH', 'TAO_OWNER_MISMATCH', 'TAO_GEOMETRY_MISMATCH', 'TAO_STYLE_CLIPSIBLINGS_ONLY', 'TAO_STYLE_MISMATCH', 'TAO_EXSTYLE_MISMATCH', 'UNKNOWN_CLASS', 'MULTIPLE_ROLE_MISMATCHES'] as const;
 export const windowsGuiProbePhases = [...windowsGuiRoleRejections, 'PROBE_UNVERIFIED', 'DRIVER_IDENTITY_UNVERIFIED', 'OWNED_INVENTORY_UNVERIFIED', 'EXPECTED_IMAGE_CANDIDATE_ABSENT', 'IMAGE_IDENTITY_UNVERIFIED', 'WINDOW_UNVERIFIED', 'WINDOW_ENUMERATION_FAILED', 'NO_OWNED_HANDLES_OBSERVED', 'OWNED_HANDLES_INVISIBLE', 'VISIBLE_HANDLES_AMBIGUOUS', 'WINDOW_ROLE_UNVERIFIED', 'UNEXPECTED_VISIBLE_ROLE', 'NO_MAIN_WINDOW_OBSERVED'] as const;
 // Bit positions are fixed by this closed list; the aggregate phase is not a concrete role.
@@ -1211,12 +1213,14 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
     catch{Need(CloseHandle(handle),"CLEANUP_UNVERIFIED");throw;}
   }
   static bool DaclFileMatches(IntPtr original,string path,bool directory){IntPtr current=IntPtr.Zero;try{current=DaclFile(path,directory);FileIdentity a,b;return GetFileInformationByHandle(original,out a)&&GetFileInformationByHandle(current,out b)&&(a.IndexHigh!=0||a.IndexLow!=0)&&a.Volume==b.Volume&&a.IndexHigh==b.IndexHigh&&a.IndexLow==b.IndexLow&&a.SizeHigh==b.SizeHigh&&a.SizeLow==b.SizeLow&&a.WrittenHigh==b.WrittenHigh&&a.WrittenLow==b.WrittenLow;}finally{if(current!=IntPtr.Zero)Need(CloseHandle(current),"CLEANUP_UNVERIFIED");}}
+  static string daclFailure="UNVERIFIED";
+  static void DaclPhase(int kind,string phase){daclFailure=(kind==2?"WINSTA":kind==3?"DESKTOP":"FILE")+"_"+phase;}
   static string CheckDacl(IntPtr handle,IntPtr client,int kind,int observation){
     IntPtr descriptor=IntPtr.Zero,privileges=IntPtr.Zero,owner,group,dacl,sacl;
-    try{if(handle==IntPtr.Zero||GetSecurityInfo(handle,kind==1?1:7,7,out owner,out group,out dacl,out sacl,out descriptor)!=0||descriptor==IntPtr.Zero||owner==IntPtr.Zero||group==IntPtr.Zero||!IsValidSecurityDescriptor(descriptor))return "UNVERIFIED";
+    try{DaclPhase(kind,"DESCRIPTOR_READ");if(handle==IntPtr.Zero||GetSecurityInfo(handle,kind==1?1:7,7,out owner,out group,out dacl,out sacl,out descriptor)!=0)return "UNVERIFIED";DaclPhase(kind,"DESCRIPTOR_LAYOUT");if(descriptor==IntPtr.Zero||owner==IntPtr.Zero||group==IntPtr.Zero||!IsValidSecurityDescriptor(descriptor))return "UNVERIFIED";
       uint size=GetSecurityDescriptorLength(descriptor);if(size==0||size>65536)return "UNVERIFIED";
       var mapping=DaclMapping(kind);uint length=4096,granted;bool allowed;privileges=Marshal.AllocHGlobal(4096);
-      bool queried=AccessCheck(descriptor,client,DaclMask(observation),ref mapping,privileges,ref length,out granted,out allowed);return DaclResult(queried&&length<=4096,allowed);
+      DaclPhase(kind,"ACCESS_CHECK");bool queried=AccessCheck(descriptor,client,DaclMask(observation),ref mapping,privileges,ref length,out granted,out allowed);if(queried&&length<=4096)DaclPhase(kind,allowed?"ALLOWED":"DENIED");return DaclResult(queried&&length<=4096,allowed);
     }finally{if(privileges!=IntPtr.Zero)Marshal.FreeHGlobal(privileges);if(descriptor!=IntPtr.Zero)Need(LocalFree(descriptor)==IntPtr.Zero,"CLEANUP_UNVERIFIED");}
   }
   string ObserveDacls(string image,string directory){
@@ -1360,6 +1364,7 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
   }
   static void RequireReverted(bool reverted){if(!reverted)Environment.Exit(1);}
   static void InspectAs(IntPtr credential,Action inspect){if(credential==IntPtr.Zero){inspect();return;}TokenNeed(ImpersonateLoggedOnUser(credential),TokenReason.STANDARD_TOKEN_CONTEXT);try{inspect();}finally{RequireReverted(RevertToSelf());}}
+  static void WithDesktopToken(IntPtr credential,IntPtr process,Action<IntPtr> observe){IntPtr duplicate=IntPtr.Zero;try{InspectAs(credential,()=>{IntPtr client=IntPtr.Zero;try{TokenNeed(OpenProcessToken(process,10,out client),TokenReason.STANDARD_TOKEN_OPEN);TokenNeed(DuplicateTokenEx(client,8,IntPtr.Zero,2,2,out duplicate),TokenReason.DUPLICATE_FAILED);}finally{if(client!=IntPtr.Zero)Need(CloseHandle(client),"CLEANUP_UNVERIFIED");}});observe(duplicate);}finally{if(duplicate!=IntPtr.Zero)Need(CloseHandle(duplicate),"CLEANUP_UNVERIFIED");}}
   long VerifyCreated(PI child,string image,IntPtr credential=default(IntPtr)){
     Need(AssignProcessToJobObject(job,child.Process),"JOB_UNAVAILABLE");Need(child.Id>0&&GetProcessId(child.Process)==(uint)child.Id,"IDENTITY_UNVERIFIED");long created,exited,kernel,user;Need(GetProcessTimes(child.Process,out created,out exited,out kernel,out user),"IDENTITY_UNVERIFIED");long start=DateTime.FromFileTimeUtc(created).Ticks;var path=new System.Text.StringBuilder(32768);uint length=32768;Need(QueryFullProcessImageName(child.Process,0,path,ref length)&&String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(path.ToString()),StringComparison.OrdinalIgnoreCase),"IDENTITY_UNVERIFIED");
     InspectAs(credential,()=>{IntPtr childToken=IntPtr.Zero;try{TokenNeed(OpenProcessToken(child.Process,8,out childToken),TokenReason.STANDARD_TOKEN_OPEN);var fact=OwnedGuiIntegrity.ReadToken(childToken);TokenNeed(fact[0]!="UNVERIFIED"&&fact[0]!="IDENTITY_UNVERIFIED"&&fact[1]!="UNVERIFIED",TokenReason.CHILD_TOKEN_UNVERIFIED);TokenNeed(fact[0]=="MEDIUM",TokenReason.CHILD_NOT_MEDIUM);TokenNeed(fact[1]=="NOT_ELEVATED",TokenReason.CHILD_ELEVATED);}finally{if(childToken!=IntPtr.Zero)Need(CloseHandle(childToken),"CLEANUP_UNVERIFIED");}});
