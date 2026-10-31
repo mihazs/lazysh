@@ -1627,6 +1627,28 @@ it.each(['tmux','herdr','zellij'] as const)('enters the saved named %s directly 
   expect(mocks.api.connectMosh).not.toHaveBeenCalled();expect(mocks.api.connectEt).not.toHaveBeenCalled();
   expect(mocks.api.saveHost).not.toHaveBeenCalled();
 });
+it('opens Agents on the attached default Herdr session among several running servers',async()=>{
+  reportedHistoryApp(reportedAppMetadata);
+  const companion=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_sessions')return Promise.resolve([{name:'other'},{name:'named-work'}]);
+    if(command==='herdr_tree')return Promise.resolve({panes:[],agents:[]});
+    return companion(command,args);
+  });
+  mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'agents-parent'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'agents-child'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Agents'}));
+  const select=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});
+  await waitFor(()=>expect(select).toHaveProperty('disabled',false));
+  expect(select).toHaveProperty('value','named-work');
+  expect(mocks.invoke.mock.calls.filter(([command])=>command==='herdr_tree')).toEqual([
+    ['herdr_tree',{sessionId:'agents-child',name:'named-work'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}],
+  ]);
+  expect(mocks.api.write).not.toHaveBeenCalled();
+});
 it('shows a selected multiplexer preflight failure and closes its bootstrap without adopting a blank terminal',async()=>{
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'zellij',name:'work'}}]);
   mocks.api.connect.mockResolvedValue({sessionId:'unavailable-parent'});
