@@ -27,8 +27,10 @@ forecast. Traffic, active users, installations and retention were not measured.
 
 [v1.3.3](https://github.com/mihazs/lazysh/releases/tag/v1.3.3) has 14 assets,
 including raw companion binaries for five targets. Apple companion binaries do
-not establish macOS/iOS application distribution. This audit inspected API asset
-names, not every binary's signatures or a device installation. Existing native
+not establish macOS/iOS application distribution. The downloaded `release.json` declares Android APKs signed, Linux/Windows apps
+unsigned and macOS companions ad-hoc signed, all bound to source
+`fd1f718b8947bee31f748c758b769baa4ca535f4`. These are manifest declarations,
+not independent binary-signature verification or device installation. Existing native
 acceptance is detailed in [install/update](../install-and-update.md) and
 [#20](https://github.com/mihazs/lazysh/issues/20).
 

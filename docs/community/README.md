@@ -10,7 +10,7 @@ You do not need private project membership to report a bug or contribute.
 | Help or a reproducible bug | [Support](../../SUPPORT.md) |
 | Responsible disclosure | [Security policy](../../SECURITY.md) |
 | Participation expectations | [Code of conduct](../../CODE_OF_CONDUCT.md) |
-| Current evidence and gaps | [Growth audit](growth-audit.md) |
+| Current evidence and gaps | [Growth audit](growth-audit.md) · [Execution status](execution-status.md) |
 | Real screenshots and walkthrough | [Capture procedure and evidence register](demonstrations.md) |
 | Public communication drafts | [Launch kit](launch-kit/README.md) |
 | Weekly measurement | [Scorecard](scorecard.md) |
