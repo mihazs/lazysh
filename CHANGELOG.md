@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep Android status and navigation icons light over the fixed navy native window background in both system appearances. Preserve keyboard and system insets and custom app/terminal themes.
+
 - Support OpenCode 2.2 native plugin loading with the same reviewed hook asset used by OpenCode 1.19.5. Serialize companion writes, coalesce pending session states, bound queued sessions, and stop owned ingest processes when the plugin unloads. Hook installation remains explicit and does not alter agent trust or permissions.
 
 - Honor a saved Mosh preference when entering a default tmux, Herdr or Zellij session. Auto entry tries Mosh and then SSH only for safe failures before entry dispatch; uncertain startup or guard admission never opens a replacement display. Keep the exact transport and attachment together for workspace restore (Zellij restore remains manual). SSH entry stays selectable; saved ET entry continues to use SSH. Native Mosh entry requires its private startup receipt, and tmux additionally requires a verified display binding. Guarded Herdr requires the positively advertised startup-FD extension; stock Herdr keeps ordinary display capabilities.
