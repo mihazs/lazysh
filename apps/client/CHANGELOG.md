@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.3.1
+
+### Patch Changes
+
+- 9b7be20: Start live agent discovery on the attached Herdr session while preserving explicit server selection and refusing to substitute an absent attached target.
+- @lazysh/account-usage@1.3.1
+  - @lazysh/common@1.3.1
+  - @lazysh/display-idle@1.3.1
+  - @lazysh/et-transport@1.3.1
+  - @lazysh/mosh-transport@1.3.1
+
 ## 1.3.0
 
 ### Minor Changes
