@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.3.2
+
+### Patch Changes
+
+- 5fd13cf: Retain closed last-poll selector counts and timing for public Android APK readiness failures without adding accessibility queries or changing acceptance actions and deadlines.
+- @lazysh/account-usage@1.3.2
+  - @lazysh/common@1.3.2
+  - @lazysh/display-idle@1.3.2
+  - @lazysh/et-transport@1.3.2
+  - @lazysh/mosh-transport@1.3.2
+
 ## 1.3.1
 
 ### Patch Changes
