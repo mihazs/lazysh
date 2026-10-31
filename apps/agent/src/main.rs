@@ -127,6 +127,8 @@ enum Command {
     CursorConfig,
     /// Print an Amp native state-observer plugin; never installs it.
     AmpPlugin,
+    /// Print a root-only Cline runtime plugin; never installs or changes policy.
+    ClinePlugin,
     /// Print native Aider callback arguments and their capability limits.
     AiderConfig,
     /// Record aggregate native Aider input-boundary notification health; reads no stdin.
@@ -316,6 +318,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::CopilotConfig => Some(lazysh_agent::hooks::copilot_config()),
         Command::CursorConfig => Some(lazysh_agent::hooks::cursor_config()),
         Command::AmpPlugin => Some(lazysh_agent::hooks::amp_plugin()),
+        Command::ClinePlugin => Some(lazysh_agent::hooks::cline_plugin()),
         Command::AiderConfig => Some(lazysh_agent::hooks::aider_config()),
         Command::AiderNotification => {
             Store::open(&lazysh_agent::state_directory()?)?

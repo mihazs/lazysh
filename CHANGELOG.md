@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a print-only Cline runtime plugin for root run activity, completion/stopped and generic failure attention, using native run identities and a two-second companion writer deadline. Child runs, permission waits and managed Cline installation remain unsupported; existing profiles, approval policy and adapters are unchanged.
+
 - Extend explicit managed hook setup to Gemini CLI and Cursor CLI through the companion and SSH-connected Agents view. Preserve Gemini's 5000 ms deadline and existing disable settings; retain Cursor's version-1 envelope, five-second fail-open observers and permission-hook exclusions. Existing foreign values/policy, filesystem checks and trust defaults remain unchanged; incompatible Cursor versions are refused.
 
 - Support OpenCode 2.2 native plugin loading with the same reviewed hook asset used by OpenCode 1.19.5. Serialize companion writes, coalesce pending session states, bound queued sessions, and stop owned ingest processes when the plugin unloads. Hook installation remains explicit and does not alter agent trust or permissions.

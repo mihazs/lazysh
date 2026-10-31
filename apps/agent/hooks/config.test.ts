@@ -49,12 +49,14 @@ test('actual CLI prints distinct Gemini, Droid, Kimi and Copilot formats without
 test('actual CLI prints the exact Amp asset and truthful Aider arguments without installing anything', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'lazysh-observer-config-'));
   try {
-    for (const command of ['amp-plugin', 'aider-config']) {
+    for (const command of ['amp-plugin', 'cline-plugin', 'aider-config']) {
       const output = Bun.spawnSync([binary, command], { cwd: directory, env: { ...process.env, LAZYSH_STATE_DIR: join(directory, 'state') }, stdout: 'pipe', stderr: 'pipe' });
       expect(output.exitCode).toBe(0);
       expect(output.stderr.toString()).toBe('');
       const printed = JSON.parse(output.stdout.toString());
-      if (command === 'amp-plugin') {
+      if (command === 'cline-plugin') {
+        expect(printed).toEqual({ schemaVersion: 1, filename: 'lazysh.js', scope: 'root-only', content: await Bun.file(join(import.meta.dir, 'cline.js')).text() });
+      } else if (command === 'amp-plugin') {
         expect(printed).toEqual({ schemaVersion: 1, filename: 'lazysh.js', content: await Bun.file(join(import.meta.dir, 'amp.js')).text() });
       } else {
         expect(printed.arguments).toEqual(['--notifications', '--notifications-command', 'lazysh-agent aider-notification']);
