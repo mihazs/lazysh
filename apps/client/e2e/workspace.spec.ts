@@ -200,7 +200,8 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   if(phone){await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();await page.getByRole('button',{name:'Open hosts',exact:true}).click();}
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
   await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
-  await expect(board.locator('.companion-install button')).toBeHidden();
+  const installer=board.getByRole('button',{name:'Update companion',exact:true,includeHidden:true});
+  await expect(installer).toHaveCount(1);await expect(installer).toBeHidden();
   expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
   expect((await commands()).filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
   await search.scrollIntoViewIfNeeded();
