@@ -1,0 +1,57 @@
+{
+  "package": "com.touchtype.swiftkey",
+  "versionCode": "1236402240",
+  "versionName": "9.13.18.4",
+  "signer": "0ad0088dfb347a8a515f2d13b17a561d5c3f9773438a207241bae7483c99b76f",
+  "files": [
+    {
+      "name": "com.touchtype.swiftkey-1236402240-LanguagesBundled.apk",
+      "bytes": 20874,
+      "sha256": "cc49116ccd809e1829ec1299da070dab2834d96ccd05d5ff8b357f5c8c3a2cec"
+    },
+    {
+      "name": "com.touchtype.swiftkey-1236402240-LanguagesBundled.config.en.apk",
+      "bytes": 7553566,
+      "sha256": "e67d09e7396834b6bd706257b635cfaeb2564f53c1951c7e0974d2eb5cbcfaef"
+    },
+    {
+      "name": "com.touchtype.swiftkey-1236402240-config.en.apk",
+      "bytes": 233881,
+      "sha256": "ec0801270f1d72831ce81dabbebfb017f32a78b2ca91bf16d258993cf24029d1"
+    },
+    {
+      "name": "com.touchtype.swiftkey-1236402240-config.x86_64.apk",
+      "bytes": 11654018,
+      "sha256": "8eb218e0ceaff2a4605c4126d15f7f7bae772441226ec96e292e6b10e2236544"
+    },
+    {
+      "name": "com.touchtype.swiftkey-1236402240-config.xxhdpi.apk",
+      "bytes": 135874,
+      "sha256": "d53001a23af1d6151fa5d8efe1974d5e0c5d9b9b24550fc3d0602b821a46b701"
+    },
+    {
+      "name": "com.touchtype.swiftkey-1236402240.apk",
+      "bytes": 26105626,
+      "sha256": "adca8b4fc4157acd3e68008a52ade1cc19abcd37a9dc0977cd3519aec794c0e5"
+    }
+  ],
+  "goopdlWheelSha256": "47a4920ecce25b695ac887645a3e952e9b7a5308aba17d2fb049ae20af76328a",
+  "dependencies": {
+    "annotated_doc": "0.0.5",
+    "anyio": "4.15.1",
+    "certifi": "2026.10.23",
+    "goopdl": "1.3.1",
+    "h11": "0.16.0",
+    "httpcore": "1.0.9",
+    "httpx": "0.28.1",
+    "idna": "3.20",
+    "markdown_it_py": "4.2.0",
+    "mdurl": "0.1.2",
+    "pygments": "2.21.0",
+    "rich": "15.0.0",
+    "shellingham": "1.5.4",
+    "typer": "0.27.3",
+    "typing_extensions": "4.16.0",
+    "websocket_client": "1.9.2"
+  }
+}

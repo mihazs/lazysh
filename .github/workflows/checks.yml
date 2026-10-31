@@ -1059,3 +1059,67 @@ jobs:
         timeout-minutes: 2
         if: always() && env.APPLE_STATUS_SIMULATOR_ID != ''
         run: xcrun simctl delete "$APPLE_STATUS_SIMULATOR_ID"
+
+
+  # Intermediate #602 gate: failure/UNQUALIFIED is expected until the actual
+  # fresh vendor UI and replacement owner are admitted. Never required PR green.
+  native-android-swiftkey:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'mihazs/lazysh' && github.head_ref == 'test/android-swiftkey-native' }}
+    needs: herdr-native
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - *source-bun
+      - *android-java
+      - *android-sdk
+      - *android-toolchains
+      - *android-ndk
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with: *android-cache-environment
+      - run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 bubblewrap python3-venv pkg-config libssl-dev
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-swiftkey-herdr
+      - name: Prepare immutable current-source inputs outside the offline runtime
+        env:
+          GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
+        run: |
+          cd "$RUNNER_TEMP/lazysh-swiftkey-herdr"
+          printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
+          chmod 700 herdr
+          cd "$GITHUB_WORKSPACE"
+          cargo build --locked -p lazysh-agent --bins --example owned_terminal_receiver
+          bunx turbo run build:android:emulator --filter=@lazysh/client
+          apps/client/src-tauri/gen/android/gradlew -p apps/client/src-tauri/gen/android :app:assembleUniversalDebugAndroidTest --no-daemon -PabiList=x86_64 -ParchList=x86_64 -PtargetList=x86_64 -PlazyshSwiftkeyAcceptance=true -x :app:rustBuildX86_64Debug
+          sdkmanager 'emulator' 'system-images;android-36;google_apis;x86_64'
+      - name: Admit this runner UID to the isolated guest's KVM descriptor
+        run: |
+          test -c /dev/kvm
+          sudo chown "$(id -u):$(id -g)" /dev/kvm
+          sudo chmod 0600 /dev/kvm
+      - name: Run private exact-fetch and isolated native discovery
+        env:
+          LAZYSH_ANDROID_SWIFTKEY: '1'
+          LAZYSH_SWIFTKEY_PRODUCT_APK: ${{ github.workspace }}/apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          LAZYSH_SWIFTKEY_TEST_APK: ${{ github.workspace }}/apps/client/src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
+          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-swiftkey-herdr/herdr
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent
+          LAZYSH_TEST_RECEIVER_BIN: ${{ github.workspace }}/target/debug/examples/owned_terminal_receiver
+          LAZYSH_SWIFTKEY_RECEIPT: ${{ runner.temp }}/lazysh-swiftkey-receipt.json
+          LAZYSH_SWIFTKEY_AX: ${{ runner.temp }}/lazysh-swiftkey-ax.json
+        run: bun test tests/android-ssh.test.ts --test-name-pattern 'hosted SwiftKey native discovery'
+      - name: Retain only finite ownership and fresh vendor UI facts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-swiftkey-admission
+          path: |
+            ${{ runner.temp }}/lazysh-swiftkey-receipt.json
+            ${{ runner.temp }}/lazysh-swiftkey-ax.json
+          if-no-files-found: warn
