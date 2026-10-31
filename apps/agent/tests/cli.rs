@@ -559,30 +559,37 @@ fn config_is_print_only_and_contains_supported_hooks() {
 fn concurrent_hooks_preserve_every_event() {
     let trace = storage_trace::StorageTrace::from_env();
     let dir = tempfile::tempdir().unwrap();
-    let outputs = std::thread::scope(|scope| {
+    let epoch = std::time::Instant::now();
+    let workers = std::thread::scope(|scope| {
         let workers = (0..16)
             .map(|worker| {
                 let trace = trace.as_ref();
                 let directory = dir.path();
                 scope.spawn(move || {
-                    run_traced(
+                    let started = std::time::Instant::now();
+                    let output = run_traced(
                         directory,
                         &["ingest", "--agent", "generic"],
                         &serde_json::to_vec(&event("same", "working")).unwrap(),
                         trace.map(|trace| (trace, worker)),
-                    )
+                    );
+                    (output, (started.duration_since(epoch), started.elapsed()))
                 })
             })
             .collect::<Vec<_>>();
         thread_join::join_workers(workers)
     });
+    let (outputs, timings): (Vec<_>, Vec<_>) = workers.into_iter().unzip();
+    if outputs.iter().any(|output| !output.status.success()) {
+        storage_trace::concurrent_workers(&outputs, &timings);
+    }
     // Retain evidence from this exact failing case before its unchanged gates.
     if let Some(trace) = trace {
         trace
             .export(&outputs)
             .expect("export owned storage trace excerpts");
     }
-    for output in outputs {
+    for output in &outputs {
         assert!(
             output.status.success(),
             "{}",
@@ -591,6 +598,13 @@ fn concurrent_hooks_preserve_every_event() {
     }
     let output = snapshot(dir.path(), "50");
     let sessions = output["sessions"].as_array().unwrap();
+    if sessions.len() != 1
+        || sessions
+            .first()
+            .is_none_or(|session| session["eventCount"] != 16)
+    {
+        storage_trace::concurrent_workers(&outputs, &timings);
+    }
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["eventCount"], 16);
 }
@@ -749,6 +763,9 @@ fn contended_ingests(
 fn concurrent_ingest_recovers_after_a_transient_database_lock() {
     // Leave ample budget for all writers, scheduling and durable filesystem I/O.
     let (workers, actual_hold, stored) = contended_ingests(std::time::Duration::from_millis(250));
+    if workers.iter().any(|worker| worker.result.is_err()) || stored != 16 {
+        storage_trace::transient_workers(actual_hold, &workers);
+    }
     assert!(
         workers.iter().all(|worker| worker.result.is_ok()),
         "actual_hold={actual_hold:?}, workers={workers:#?}"
