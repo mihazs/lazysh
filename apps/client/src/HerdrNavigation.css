@@ -8,3 +8,5 @@
 .herdr-navigation-tree ul { margin-left: 12px; padding-left: 8px; border-left: 1px solid var(--border); }
 .herdr-navigation-row { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 44px; margin: 3px 0; padding: 8px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .herdr-navigation-row > span { min-width: 0; }
+
+.herdr-navigation details { min-width: 0; overflow-wrap: anywhere; }

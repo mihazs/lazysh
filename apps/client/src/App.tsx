@@ -1816,7 +1816,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
         </div>
-        {remoteActive && active && <HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/> }
+        {remoteActive && active && <AgentPanel key={active.id} showHerdr={false} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} renderNavigation={reports=><HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/>} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+            if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
+          }:undefined}/>}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
           <h3>{t('navigationLiveSessions')}</h3>
           <div className="workspace-live-sessions" role="group" aria-label={t('navigationLiveSessions')}>
@@ -1831,11 +1833,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
           }}/></Suspense>}
-        </div>}
-        {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
-          <AgentPanel key={active.id} showHerdr={false} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
-            if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
-          }:undefined}/>
         </div>}
         <div className="sidebar-bottom">
           <div>

@@ -49,6 +49,43 @@ pub struct Agent {
     pub agent_status: String,
     pub agent: Option<String>,
     pub name: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "reported_session",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub agent_session: Option<ReportedSessionRef>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ReportedSessionRef {
+    source: String,
+    agent: String,
+    kind: String,
+    value: String,
+}
+
+// Project only bounded provider IDs; path references and optional private metadata are discarded.
+fn reported_session<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<ReportedSessionRef>, D::Error> {
+    let raw = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(reference) = raw.and_then(|v| serde_json::from_value::<ReportedSessionRef>(v).ok())
+    else {
+        return Ok(None);
+    };
+    let valid = matches!(
+        (reference.source.as_str(), reference.agent.as_str()),
+        ("herdr:codex", "codex") | ("herdr:claude", "claude") | ("herdr:opencode", "opencode")
+    ) && reference.kind == "id"
+        && !reference.value.is_empty()
+        && reference.value.len() <= 256
+        && reference.value.as_bytes()[0].is_ascii_alphanumeric()
+        && reference
+            .value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    Ok(valid.then_some(reference))
 }
 
 fn text(value: &str, max: usize) -> Result<()> {
@@ -85,7 +122,7 @@ fn parse(output: &str) -> Result<HerdrTree> {
             "Unsupported Herdr snapshot",
         ));
     }
-    let tree = value.result.snapshot;
+    let mut tree = value.result.snapshot;
     if tree.workspaces.len() > 1000
         || tree.tabs.len() > 2000
         || tree.panes.len() > 4096
@@ -157,6 +194,15 @@ fn parse(output: &str) -> Result<HerdrTree> {
             || a.name.as_ref().is_some_and(|v| text(v, 64).is_err())
         {
             return Err(invalid());
+        }
+    }
+    for agent in tree.agents.iter_mut().flatten() {
+        if agent
+            .agent_session
+            .as_ref()
+            .is_some_and(|r| agent.agent.as_deref() != Some(r.agent.as_str()))
+        {
+            agent.agent_session = None;
         }
     }
     Ok(tree)
@@ -403,6 +449,44 @@ mod tests {
             assert!(!serde_json::to_string(&tree)
                 .unwrap()
                 .contains("not retained"));
+        }
+    }
+    #[test]
+    fn projects_only_closed_id_references_and_discards_paths_or_conflicts() {
+        for provider in ["codex", "claude", "opencode"] {
+            let mut source = reported_snapshot();
+            let agent = &mut source["result"]["snapshot"]["agents"][0];
+            agent["agent"] = provider.into();
+            let reference = serde_json::json!({"source":format!("herdr:{provider}"),"agent":provider,"kind":"id","value":"ID_a-2"});
+            agent["agent_session"] = reference.clone();
+            agent["agent_session"]["private"] = "discard".into();
+            let tree = parse(&source.to_string()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&tree.agents.as_ref().unwrap()[0].agent_session).unwrap(),
+                reference
+            );
+            for change in [
+                serde_json::json!({"kind":"path"}),
+                serde_json::json!({"value":"/private/file"}),
+                serde_json::json!({"value":"a".repeat(257)}),
+                serde_json::json!({"value":"é"}),
+                serde_json::json!({"value":""}),
+                serde_json::json!({"agent":"other"}),
+                serde_json::json!({"source":"private"}),
+            ] {
+                let mut invalid = source.clone();
+                let raw = &mut invalid["result"]["snapshot"]["agents"][0]["agent_session"];
+                for (key, value) in change.as_object().unwrap() {
+                    raw[key] = value.clone();
+                }
+                let tree = parse(&invalid.to_string()).unwrap();
+                assert!(tree.agents.as_ref().unwrap()[0].agent_session.is_none());
+                assert!(!serde_json::to_string(&tree).unwrap().contains("discard"));
+            }
+            source["result"]["snapshot"]["agents"][0]["agent"] = "other".into();
+            assert!(parse(&source.to_string()).unwrap().agents.unwrap()[0]
+                .agent_session
+                .is_none());
         }
     }
     #[test]
@@ -669,6 +753,22 @@ mod tests {
         assert_eq!(agent.workspace_id, workspace);
         assert_eq!(agent.tab_id, tab);
         assert_eq!(agent.pane_id, pane);
+        run(command(
+            session,
+            format!("pane report-agent-session {} --source herdr:codex --agent codex --agent-session-id lazysh-owned-634", quote(&pane)),
+        ).unwrap());
+        let referenced = snapshot();
+        let projected = referenced
+            .agents
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|agent| agent.pane_id == pane && agent.terminal_id == terminal)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&projected.agent_session).unwrap(),
+            serde_json::json!({"source":"herdr:codex","agent":"codex","kind":"id","value":"lazysh-owned-634"})
+        );
         run(action_command(
             session,
             &HerdrAction::FocusAgent {
