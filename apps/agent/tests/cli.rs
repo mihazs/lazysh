@@ -624,6 +624,7 @@ fn opening_another_store_preserves_an_existing_sqlite_writer_lock() {
         !output.status.success(),
         "opening another Store released a live SQLite writer's OS lock"
     );
+    storage_trace::assert_child_storage_error(&output, 5);
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         "lazysh-agent: StorageError: operation failed (sqlite_code=5)\n"
