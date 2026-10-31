@@ -1148,6 +1148,30 @@ test('Windows English control counts stay finite, source-bound and separate from
   expect(()=>parseWindowsGuiStartup({available:false,overflow:false,signature:'UNVERIFIED',englishControlCounts:counts})).toThrow();
 });
 
+test('owned document observations are name-independent, finite and cannot establish frontend acceptance',()=>{
+  const value={...startupFixture(),appIntegrity:'HIGH',appElevation:'ELEVATED',frontend:'UNVERIFIED',frontendReason:'NO_ABOUT',englishControlCounts:{about:0,checking:0,locked:0,error:0,workspace:0}};
+  for(const ownedDocumentCount of [0,1,2]){
+    const snapshot={...value,ownedDocumentCount};
+    expect(parseWindowsGuiStartup(snapshot)).toEqual(snapshot);
+    expect(windowsGuiStartupProbe('owned-core\nLAZYSH_WINDOWS_GUI_STARTUP:'+JSON.stringify(snapshot))).toEqual({core:'owned-core',startup:snapshot});
+    for(const change of [{englishControlCounts:undefined},{frontendReason:'TIMEOUT'},{appIntegrity:'MEDIUM'},{appElevation:'UNVERIFIED'},{frontend:'EXACT_ABOUT_ACTION_OBSERVED'}])
+      expect(()=>parseWindowsGuiStartup({...snapshot,...change})).toThrow();
+  }
+  for(const ownedDocumentCount of [-1,3,0.5,NaN,Infinity,'1',true,null,[],{},'private URL'])
+    expect(()=>parseWindowsGuiStartup({...value,ownedDocumentCount})).toThrow();
+  expect(()=>parseWindowsGuiStartup({available:false,overflow:false,signature:'UNVERIFIED',ownedDocumentCount:1})).toThrow();
+  const query=windowsGuiAccessibilitySource;
+  expect(query).toContain('CreatePropertyCondition(30003,50030,out document)');
+  expect(query.match(/root\.FindAllBuildCache\(/g)).toHaveLength(1);
+  expect(query).toContain('count<=16');
+  expect(query).toContain('thread.Join(2000)');
+  expect(query).toContain('put_ConnectionTimeout(250)');
+  expect(query).toContain('put_TransactionTimeout(250)');
+  const documentBranch=query.slice(query.indexOf('if((int)actualType==50030){'),query.indexOf('}else{',query.indexOf('if((int)actualType==50030){')));
+  expect(documentBranch).toContain('observed[5]=Math.Min(2,observed[5]+1)');
+  expect(documentBranch).not.toMatch(/Cached\(|GetCurrent|GetText|GetValue|Write|Console|30005|30045/);
+});
+
 test.skipIf(process.env.LAZYSH_TEST_WINDOWS_GUI!=='1')('owned UIA candidate contract rejects unknown providers, hidden controls and invalid physical rectangles',async()=>{
   const script=windowsGuiStartupScript+String.raw`
 $ErrorActionPreference='Stop'
@@ -1158,6 +1182,12 @@ $base=[object[]]@('About lazysh · 1.1.4','About lazysh · 1.1.4',50000,$true,$f
 if(!$about.Invoke($null,$base)){throw 'exact bounded candidate rejected'}
 foreach($case in @(@(1,'About lazysh · 1.1.5'),@(1,'about lazysh · 1.1.4'),@(2,50001),@(3,$false),@(4,$true),@(5,99),@(6,[int[]]@()),@(6,[int[]](1..34)),@(7,[double[]]@(9,12,20,10)),@(7,[double[]]@(11,12,0,10)),@(7,[double[]]@(11,12,20,-1)),@(7,[double[]]@(11,12,40,10)),@(7,[double[]]@(11,12,20,40)),@(7,[double[]]@([double]::NaN,12,20,10)),@(7,[double[]]@(11,[double]::PositiveInfinity,20,10)),@(7,[double[]]@(11,12,20)),@(8,[double[]]@(10,10,9,50)))){
   $changed=$base.Clone();$changed[$case[0]]=$case[1];if($about.Invoke($null,$changed)){throw 'unverified UIA candidate admitted'}
+}
+$document=[OwnedGuiAccessibility].GetMethod('Document',$flags)
+$documentBase=[object[]]@(50030,$true,$false,7,[int[]]@(7,8),[double[]]@(11,12,20,10),[double[]]@(10,10,50,50))
+if(!$document.Invoke($null,$documentBase)){throw 'owned document role rejected'}
+foreach($case in @(@(0,50000),@(1,$false),@(2,$true),@(3,99),@(4,[int[]]@()),@(5,[double[]]@(9,12,20,10)),@(5,[double[]]@(11,12,0,10)),@(5,[double[]]@(11,12,40,10)),@(5,[double[]]@([double]::NaN,12,20,10)))){
+  $changed=$documentBase.Clone();$changed[$case[0]]=$case[1];if($document.Invoke($null,$changed)){throw 'unverified document admitted'}
 }
 $category=[OwnedGuiAccessibility].GetMethod('Category',$flags)
 $labels=[OwnedGuiAccessibility].GetMethod('Labels',$flags).Invoke($null,@('1.1.4'))
@@ -1190,14 +1220,16 @@ $complete=$true;$script:metadataEligible=$true;$script:metadataAppId=3;$script:m
 function GuiImageIdentity { return !$script:retired }
 function Get-Item { [PSCustomObject]@{VersionInfo=[PSCustomObject]@{ProductVersion='1.2.3.4'}} }
 function GuiAppToken { return @($script:testIntegrity,$script:testElevation) }
-function GuiAccessibility { $script:observations++;if($script:retireAfter){$script:retired=$true};return @('EXACT_ABOUT_ACTION_OBSERVED','OBSERVED',@{about=1;checking=0;locked=0;error=0;workspace=2}) }
+function GuiAccessibility { $script:observations++;if($script:retireAfter){$script:retired=$true};return @('EXACT_ABOUT_ACTION_OBSERVED','OBSERVED',@{about=1;checking=0;locked=0;error=0;workspace=2},$script:documentCount) }
+foreach($script:documentCount in 0..2){
 foreach($case in @(@('0','HIGH','ELEVATED',$false,$null,0),@('1','HIGH','ELEVATED',$false,'EXACT_ABOUT_ACTION_OBSERVED',1),@('1','MEDIUM','NOT_ELEVATED',$false,'UNVERIFIED',0),@('1','HIGH','UNVERIFIED',$false,'UNVERIFIED',0),@('1','HIGH','ELEVATED',$true,$null,1))){
   $env:LAZYSH_GUI_ACCESSIBILITY_PROBE=$case[0];$script:testIntegrity=$case[1];$script:testElevation=$case[2];$script:retireAfter=$case[3];$script:retired=$false;$script:observations=0
   $snapshot=GuiStartupSnapshot
   if($script:observations -ne $case[5]){throw 'UIA observation escaped failure/high gate'}
   $expectedReason=if($null -eq $case[4]){$null}elseif($case[4] -ceq 'EXACT_ABOUT_ACTION_OBSERVED'){'OBSERVED'}else{'NOT_ADMITTED'}
-  if($case[3]){if($snapshot.available -or $snapshot.frontend -or $snapshot.frontendReason -or $snapshot.englishControlCounts){throw 'retired lifetime published UIA positive'}}elseif(!$snapshot.available -or $snapshot.frontend -cne $case[4] -or $snapshot.frontendReason -cne $expectedReason){throw 'optional UIA changed snapshot/core semantics'}
-  if(!$case[3] -and $case[4] -ceq 'EXACT_ABOUT_ACTION_OBSERVED'){if($snapshot.englishControlCounts.workspace -ne 2){throw 'bounded control counts not retained'}}elseif($snapshot.englishControlCounts){throw 'unadmitted control counts retained'}
+  if($case[3]){if($snapshot.available -or $snapshot.frontend -or $snapshot.frontendReason -or $snapshot.englishControlCounts -or $snapshot.ContainsKey('ownedDocumentCount')){throw 'retired lifetime published UIA positive'}}elseif(!$snapshot.available -or $snapshot.frontend -cne $case[4] -or $snapshot.frontendReason -cne $expectedReason){throw 'optional UIA changed snapshot/core semantics'}
+  if(!$case[3] -and $case[4] -ceq 'EXACT_ABOUT_ACTION_OBSERVED'){if($snapshot.englishControlCounts.workspace -ne 2 -or !$snapshot.ContainsKey('ownedDocumentCount') -or $snapshot.ownedDocumentCount -ne $script:documentCount){throw 'bounded control/document counts not retained'}}elseif($snapshot.englishControlCounts -or $snapshot.ContainsKey('ownedDocumentCount')){throw 'unadmitted control/document counts retained'}
+}
 }
 [Console]::Out.Write('PORTABLE_UIA_CONTRACT')
 `;

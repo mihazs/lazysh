@@ -277,3 +277,18 @@ test.skipIf(process.env.LAZYSH_ANDROID_NTFY!=='1')('actual official ntfy encrypt
 test.skipIf(!process.env.LAZYSH_NTFY_SERVER_ARCHIVE)('official owned ntfy starts HTTPS with the actual native relay configuration',async()=>{
   await realNtfyStartup(process.env.LAZYSH_NTFY_SERVER_ARCHIVE!);
 },150_000);
+
+test('clock bookends retain only closed progress and window relations without raw timestamps',()=>{
+  const text=clockDiagnostic.replace('clock=beforeIssued]','clock=beforeIssued hostProgress=consistentWithinSecond issuedInHandler=within postProgress=consistentWithinSecond callbackProgress=wallBehind postClock=beforeIssued]');
+  expect(eventObservation(text)).toMatchObject({hostProgress:'consistentWithinSecond',issuedInHandler:'within',postProgress:'consistentWithinSecond',callbackProgress:'wallBehind',postClock:'beforeIssued'});
+  expect(JSON.stringify(eventObservation(text))).not.toMatch(/[0-9]|issuedAt|elapsedRealtime|private/);
+  for(const key of ['hostProgress','postProgress','callbackProgress']) {
+    for(const category of ['consistentWithinSecond','wallAhead','wallBehind','unavailable']) {
+      const changed=text.replace(new RegExp(`${key}=[a-zA-Z]+`),`${key}=${category}`);
+      expect(eventObservation(changed)?.[key as keyof NonNullable<ReturnType<typeof eventObservation>>]).toBe(category);
+    }
+  }
+  for(const category of ['within','outside','unavailable'])expect(eventObservation(text.replace('issuedInHandler=within',`issuedInHandler=${category}`))?.issuedInHandler).toBe(category);
+  for(const category of ['unavailable','beforeIssued','withinWindow','expired'])expect(eventObservation(text.replace('postClock=beforeIssued',`postClock=${category}`))?.postClock).toBe(category);
+  for(const bad of [text.replace('hostProgress=consistentWithinSecond','hostProgress=private'),text.replace('postProgress=consistentWithinSecond','postProgress=1000'),text.replace('issuedInHandler=within','issuedInHandler=within issuedAt=1000'),text.replace(' postClock=beforeIssued',''),text.replace('postClock=beforeIssued]','postClock=beforeIssued elapsedRealtime=1000]'),text+text])expect(eventObservation(bad)).toBeUndefined();
+});

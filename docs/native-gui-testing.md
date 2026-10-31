@@ -126,7 +126,17 @@ client rectangle contribute. At most 16 matching candidates are processed. Count
 are published only after the existing worker join and COM/DPI cleanup, then the
 original process/image lifetime fences are checked again.
 
-These are English-label observations, not an OS-locale assertion, DOM inventory,
+The same query can retain the separate optional `ownedDocumentCount`, capped at
+0, 1 or 2 (two or more). It matches Document control type 50030 independently of
+name and locale, with the same eligibility and lifetime checks. The document branch
+does not consume cached Name, Value, URL or text. The uniform shared cache also
+requests Name for Document candidates, although the managed document branch never
+consumes or exports it. Provider-internal predicate evaluation is not constrained.
+One eligible accessible document does not establish
+its URL, JavaScript, React, IPC, paint or the cause of startup failure. Zero or
+multiple documents remain ambiguous and cannot establish frontend acceptance.
+
+The control counts are English-label observations, not an OS-locale assertion, DOM inventory,
 paint/performance measurement or GUI acceptance. No locale is forced. A zero or
 ambiguous count, an unknown locale or absent accessibility exposure cannot show
 that the document, JavaScript or React is absent. Unknown text is never mapped to

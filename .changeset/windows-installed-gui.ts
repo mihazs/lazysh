@@ -51,7 +51,7 @@ type GuiFrontendReason=typeof windowsGuiFrontendReasons[number];
 // Eligible English-label matches only; 2 means two or more, never GUI readiness.
 const windowsGuiEnglishControlKeys=['about','checking','locked','error','workspace'] as const;
 type EnglishControlCounts=Record<typeof windowsGuiEnglishControlKeys[number],number>;
-type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];appElevation:'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED';observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>;frontend?:'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED';frontendReason?:GuiFrontendReason;englishControlCounts?:EnglishControlCounts};
+type GuiStartup=typeof startupUnavailable|{available:false;overflow:true;signature:'UNVERIFIED'}|{available:true;overflow:false;signature:'MICROSOFT'|'NONE_OBSERVED';observedProcesses:number;observedRootGroups:number;registeredRuntimeVersion:string;edgeDriverVersion:string;rootImageVersions:string[];rootDebugTransports:GuiRootDebug[];appIntegrity:typeof windowsGuiIntegrityLevels[number];appElevation:'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED';observerEnvPresence:Record<keyof typeof windowsGuiOverrideNames,boolean>;frontend?:'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED';frontendReason?:GuiFrontendReason;englishControlCounts?:EnglishControlCounts;ownedDocumentCount?:number};
 function guiNumericVersion(value:unknown):value is string {
   return typeof value==='string'&&/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){3}$/.exec(value)?.[0]===value&&value!=='0.0.0.0'&&value.split('.').every(part=>Number(part)<=65535);
 }
@@ -77,7 +77,9 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
     englishControlCounts=Object.fromEntries(windowsGuiEnglishControlKeys.map(key=>[key,counts[key]])) as EnglishControlCounts;
     if((row.frontendReason==='OBSERVED'&&englishControlCounts.about!==1)||(row.frontendReason==='NO_ABOUT'&&englishControlCounts.about!==0))return fail();
   }
-  if(Object.keys(row).filter(key=>!['frontend','frontendReason','englishControlCounts'].includes(key)).sort().join(',')!=='appElevation,appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
+  const ownedDocumentCount=row.ownedDocumentCount;
+  if(ownedDocumentCount!==undefined&&(!englishControlCounts||typeof ownedDocumentCount!=='number'||!Number.isInteger(ownedDocumentCount)||ownedDocumentCount<0||ownedDocumentCount>2))return fail();
+  if(Object.keys(row).filter(key=>!['frontend','frontendReason','englishControlCounts','ownedDocumentCount'].includes(key)).sort().join(',')!=='appElevation,appIntegrity,available,edgeDriverVersion,observedProcesses,observedRootGroups,observerEnvPresence,overflow,registeredRuntimeVersion,rootDebugTransports,rootImageVersions,signature'||row.available!==true||row.overflow!==false)return fail();
   const {observedProcesses,observedRootGroups}=row;
   if(typeof observedProcesses!=='number'||!Number.isInteger(observedProcesses)||observedProcesses<0||observedProcesses>32||typeof observedRootGroups!=='number'||!Number.isInteger(observedRootGroups)||observedRootGroups<0||observedRootGroups>observedProcesses)return fail();
   if(!guiNumericVersion(row.registeredRuntimeVersion)||!guiNumericVersion(row.edgeDriverVersion)||!Array.isArray(row.rootImageVersions)||!row.rootImageVersions.every(guiNumericVersion)||new Set(row.rootImageVersions).size!==row.rootImageVersions.length||row.rootImageVersions.length>observedRootGroups)return fail();
@@ -89,7 +91,7 @@ export function parseWindowsGuiStartup(value:unknown):GuiStartup {
   if(!presence||typeof presence!=='object'||Object.keys(presence).sort().join(',')!==Object.keys(windowsGuiOverrideNames).sort().join(','))return fail();
   const observerEnvPresence={} as Record<keyof typeof windowsGuiOverrideNames,boolean>;
   for(const key of Object.keys(windowsGuiOverrideNames) as (keyof typeof windowsGuiOverrideNames)[]){const flag=(presence as Record<string,unknown>)[key];if(typeof flag!=='boolean')return fail();observerEnvPresence[key]=flag;}
-  return {available:true,overflow:false,appElevation:row.appElevation as 'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED',appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence,...(row.frontend!==undefined?{frontend:row.frontend as 'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED'}:{}),...(row.frontendReason!==undefined?{frontendReason:row.frontendReason as GuiFrontendReason}:{}),...(englishControlCounts?{englishControlCounts}:{})};
+  return {available:true,overflow:false,appElevation:row.appElevation as 'ELEVATED'|'NOT_ELEVATED'|'UNVERIFIED',appIntegrity:row.appIntegrity as typeof windowsGuiIntegrityLevels[number],signature:row.signature as 'MICROSOFT'|'NONE_OBSERVED',observedProcesses,observedRootGroups,registeredRuntimeVersion:row.registeredRuntimeVersion,edgeDriverVersion:row.edgeDriverVersion,rootImageVersions:[...row.rootImageVersions].sort(),rootDebugTransports:[...row.rootDebugTransports].sort((a,b)=>(a.role+':'+a.transport).localeCompare(b.role+':'+b.transport)),observerEnvPresence,...(row.frontend!==undefined?{frontend:row.frontend as 'EXACT_ABOUT_ACTION_OBSERVED'|'UNVERIFIED'}:{}),...(row.frontendReason!==undefined?{frontendReason:row.frontendReason as GuiFrontendReason}:{}),...(englishControlCounts?{englishControlCounts}:{}),...(ownedDocumentCount!==undefined?{ownedDocumentCount:ownedDocumentCount as number}:{})};
 }
 export function windowsGuiStartupProbe(stdout:unknown):{core:string;startup?:GuiStartup} {
   if(typeof stdout!=='string'||stdout.length>2097152)return {core:''};
@@ -528,6 +530,9 @@ public static class OwnedGuiAccessibility {
     foreach(double value in bounds)if(!Finite(value))return false;foreach(double value in client)if(!Finite(value))return false;
     return bounds[2]>0&&bounds[3]>0&&client[2]>client[0]&&client[3]>client[1]&&Finite(bounds[0]+bounds[2])&&Finite(bounds[1]+bounds[3])&&bounds[0]>=client[0]&&bounds[1]>=client[1]&&bounds[0]+bounds[2]<=client[2]&&bounds[1]+bounds[3]<=client[3];
   }
+  static bool Document(int control,bool enabled,bool offscreen,int provider,int[] owned,double[] bounds,double[] client){
+    return control==50030&&Candidate(enabled,offscreen,provider,owned,bounds,client);
+  }
   static bool About(string expected,string name,int control,bool enabled,bool offscreen,int provider,int[] owned,double[] bounds,double[] client){
     return expected!=null&&String.Equals(name,expected,StringComparison.Ordinal)&&control==50000&&Candidate(enabled,offscreen,provider,owned,bounds,client);
   }
@@ -562,17 +567,24 @@ public static class OwnedGuiAccessibility {
         Remember(client.CreateAndCondition(name,type,out pair),pair,conditions);
         if(condition==IntPtr.Zero)condition=pair;else{IntPtr joined;Remember(client.CreateOrCondition(condition,pair,out joined),joined,conditions);condition=joined;}
       }
+      IntPtr document,expanded;Remember(client.CreatePropertyCondition(30003,50030,out document),document,conditions);Remember(client.CreateOrCondition(condition,document,out expanded),expanded,conditions);condition=expanded;
       Ok(root.FindAllBuildCache(4,condition,cache,out found));Need(found!=null);int count;Ok(found.get_Length(out count));Need(count>=0&&count<=16);
-      int aboutCount=0,aboutProvider=0;var observed=new int[5];
+      int aboutCount=0,aboutProvider=0;var observed=new int[6];
       for(int index=0;index<count;index++){
         Ok(found.GetElement(index,out button));
-        object actualName=Cached(button,30005),actualType=Cached(button,30003),enabled=Cached(button,30010),offscreen=Cached(button,30022),provider=Cached(button,30002),bounds=Cached(button,30001);
+        object actualType=Cached(button,30003),enabled=Cached(button,30010),offscreen=Cached(button,30022),provider=Cached(button,30002),bounds=Cached(button,30001);
         reason="CANDIDATE_REJECTED";
-        Need(actualName is string&&actualType is int&&enabled is bool&&offscreen is bool&&provider is int);
-        int category=Category(version,(string)actualName,(int)actualType);Need(category>=0);
-        bool eligible=category==0?About(labels[0],(string)actualName,(int)actualType,(bool)enabled,(bool)offscreen,(int)provider,owned,bounds as double[],rectangle):Candidate((bool)enabled,(bool)offscreen,(int)provider,owned,bounds as double[],rectangle);
-        if(category==0){aboutCount++;if(eligible)aboutProvider=(int)provider;}
-        if(eligible)observed[category]=Math.Min(2,observed[category]+1);
+        Need(actualType is int&&enabled is bool&&offscreen is bool&&provider is int);
+        if((int)actualType==50030){
+          // Never consume the document's cached Name, Value, URL or text.
+          if(Document((int)actualType,(bool)enabled,(bool)offscreen,(int)provider,owned,bounds as double[],rectangle))observed[5]=Math.Min(2,observed[5]+1);
+        }else{
+          object actualName=Cached(button,30005);Need(actualName is string);
+          int category=Category(version,(string)actualName,(int)actualType);Need(category>=0);
+          bool eligible=category==0?About(labels[0],(string)actualName,(int)actualType,(bool)enabled,(bool)offscreen,(int)provider,owned,bounds as double[],rectangle):Candidate((bool)enabled,(bool)offscreen,(int)provider,owned,bounds as double[],rectangle);
+          if(category==0){aboutCount++;if(eligible)aboutProvider=(int)provider;}
+          if(eligible)observed[category]=Math.Min(2,observed[category]+1);
+        }
         Need(Release(button));button=null;
       }
       reason="OWNERSHIP_REJECTED";var after=Client(window,process);for(int index=0;index<4;index++)Need(after[index]==rectangle[index]);
@@ -637,7 +649,7 @@ function GuiRuntimeRoots($inventory, $memberIds, $driverId) {
   return $roots
 }
 function GuiAccessibility($providerIds) {
-  $reason='SOURCE_REJECTED';$projection=$null
+  $reason='SOURCE_REJECTED';$projection=$null;$documentCount=$null
   try {
     if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -cne '1') { return @('UNVERIFIED','NOT_ADMITTED') }
     $source=[Console]::In.ReadToEnd()
@@ -646,11 +658,11 @@ function GuiAccessibility($providerIds) {
     $reason='NATIVE_GUARD'
     [int[]]$counts=$null
     $provider=[OwnedGuiAccessibility]::Observe([long]$mainHandle,[int]$script:metadataAppId,$env:LAZYSH_VERSION,[int[]]$providerIds,[ref]$reason,[ref]$counts)
-    if($counts -and $counts.Count -eq 5 -and $reason -cin @('NO_ABOUT','AMBIGUOUS_ABOUT','OBSERVED')){$projection=@{about=$counts[0];checking=$counts[1];locked=$counts[2];error=$counts[3];workspace=$counts[4]}}
-    if ($provider -gt 0 -and $provider -in $providerIds -and $reason -ceq 'OBSERVED') { return @('EXACT_ABOUT_ACTION_OBSERVED',$reason,$projection) }
+    if($counts -and $counts.Count -eq 6 -and $reason -cin @('NO_ABOUT','AMBIGUOUS_ABOUT','OBSERVED')){$projection=@{about=$counts[0];checking=$counts[1];locked=$counts[2];error=$counts[3];workspace=$counts[4]};$documentCount=$counts[5]}
+    if ($provider -gt 0 -and $provider -in $providerIds -and $reason -ceq 'OBSERVED') { return @('EXACT_ABOUT_ACTION_OBSERVED',$reason,$projection,$documentCount) }
     if ($provider -gt 0 -or $reason -ceq 'OBSERVED') { $reason='OWNERSHIP_REJECTED' }
   } catch { }
-  return @('UNVERIFIED',$reason,$projection)
+  return @('UNVERIFIED',$reason,$projection,$documentCount)
 }
 function GuiStartupSnapshot {
   $unverified=@{available=$false;overflow=$false;signature='UNVERIFIED'}
@@ -699,13 +711,14 @@ function GuiStartupSnapshot {
     if ($integrity -ceq 'IDENTITY_UNVERIFIED') { return $unverified }
     if ($integrity -cnotin @('LOW','MEDIUM','HIGH','SYSTEM','UNVERIFIED')) { $integrity='UNVERIFIED' }
     if ($elevation -cnotin @('ELEVATED','NOT_ELEVATED','UNVERIFIED')) { $elevation='UNVERIFIED' }
-    $frontend=$null;$frontendReason=$null;$englishControlCounts=$null
-    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -ceq '1') { $frontend='UNVERIFIED';$frontendReason='NOT_ADMITTED';if ($integrity -ceq 'HIGH' -and $elevation -ceq 'ELEVATED') { $observation=GuiAccessibility (@([int]$script:metadataAppId)+@($retained.Keys));$frontend=$observation[0];$frontendReason=$observation[1];if($observation.Count -eq 3){$englishControlCounts=$observation[2]} } }
+    $frontend=$null;$frontendReason=$null;$englishControlCounts=$null;$ownedDocumentCount=$null
+    if ($env:LAZYSH_GUI_ACCESSIBILITY_PROBE -ceq '1') { $frontend='UNVERIFIED';$frontendReason='NOT_ADMITTED';if ($integrity -ceq 'HIGH' -and $elevation -ceq 'ELEVATED') { $observation=GuiAccessibility (@([int]$script:metadataAppId)+@($retained.Keys));$frontend=$observation[0];$frontendReason=$observation[1];if($observation.Count -ge 3){$englishControlCounts=$observation[2]};if($observation.Count -eq 4){$ownedDocumentCount=$observation[3]} } }
     foreach ($fence in $fences) { if (!(GuiImageIdentity $fence.Id $fence.Start $fence.Image $fence.Hash)) { return $unverified } }
     # Snapshot groups only: no observed owned runtime does not prove it never started or crashed.
     $snapshot=@{available=$true;overflow=$false;appIntegrity=$integrity;appElevation=$elevation;signature=$(if ($members.Count) {'MICROSOFT'} else {'NONE_OBSERVED'});observedProcesses=$members.Count;observedRootGroups=$roots.Count;registeredRuntimeVersion=$registered;edgeDriverVersion=$edgeVersion;rootImageVersions=$versions;rootDebugTransports=$transports;observerEnvPresence=@{${Object.entries(windowsGuiOverrideNames).map(([key,name])=>key+"=(Test-Path -LiteralPath 'Env:"+name+"')").join(';')}}}
     if ($frontend) { $snapshot.frontend=$frontend;$snapshot.frontendReason=$frontendReason }
     if ($englishControlCounts) { $snapshot.englishControlCounts=$englishControlCounts }
+    if ($null -ne $ownedDocumentCount) { $snapshot.ownedDocumentCount=$ownedDocumentCount }
     return $snapshot
   } catch { return $unverified }
 }
