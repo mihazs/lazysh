@@ -1,5 +1,19 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  hooksTitle: "Agent hook setup",
+  hooksProvider: "Hook provider",
+  hooksProfile: "Host profile directory",
+  hooksInspect: "Inspect setup",
+  hooksInstall: "Install or update hooks",
+  hooksRemove: "Remove lazysh hooks",
+  hooksConfigured: "Hooks configured. Live reporting has not been verified.",
+  hooksNotConfigured: "Hooks need setup or repair.",
+  hooksUnsupported: "Managed hook setup is not supported on this host filesystem yet.",
+  hooksConflict: "The profile changed. Review its hooks before continuing.",
+  hooksUncertain: "Setup could not be confirmed. Inspect again before retrying.",
+  hooksTrust: "Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.",
+  hooksInvalid: "Invalid hook setup response.",
+
   herdrNavigationTitle: "Herdr navigation",
   herdrNavigationBack: "Back to terminal",
   herdrNavigationSpaces: "Spaces",

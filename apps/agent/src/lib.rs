@@ -3,6 +3,7 @@ pub mod account_usage;
 pub mod approvals;
 pub mod devices;
 pub mod herdr;
+pub mod hook_setup;
 pub mod hooks;
 pub mod installation;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

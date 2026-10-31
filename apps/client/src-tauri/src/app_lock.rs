@@ -810,7 +810,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::hooks::companion_hooks];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -849,7 +849,12 @@ mod tests {
             installer.body = tauri::ipc::InvokeBody::Json(
                 serde_json::json!({"sessionId":"not-connected","progress":"__CHANNEL__:17"}),
             );
-            [read, update, installer]
+            let mut hooks = request(nonce);
+            hooks.cmd = "companion_hooks".into();
+            hooks.body = tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"sessionId":"not-connected","request":{"agent":"codex","action":"status","profileRoot":"/owned/selected"}}),
+            );
+            [read, update, installer, hooks]
         };
         let rejected = |nonce: Option<&str>| {
             for request in protected_requests(nonce) {
@@ -869,7 +874,7 @@ mod tests {
                 }
                 assert_eq!(
                     error["kind"], "disconnected",
-                    "valid access must reach the real protected handler"
+                    "valid access must reach the real protected handler: {error}"
                 );
             }
         };

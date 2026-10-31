@@ -6,6 +6,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tauri::{ipc::Channel, State};
+pub mod hooks;
 mod install;
 mod release;
 mod resolve;
