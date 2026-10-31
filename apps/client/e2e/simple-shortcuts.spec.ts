@@ -314,6 +314,24 @@ test('named key pickers persist toolbar and gesture bindings and deliver exact s
 });
 
 
+test('terminal canvas stays anchored when keyboard-sized resizes reveal its input',async({page})=>{
+  await fixture(page); await page.keyboard.press('Escape');
+  if((page.viewportSize()?.width??1280)<=600)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
+  await page.evaluate(()=>window.simpleShortcutOutput(Array.from({length:200},(_,i)=>`history ${i}\r\n`).join('')));
+  const width=(page.viewportSize()?.width??1280)<=600?412:1280;
+  for(const height of [659,365,659,365]) {
+    await page.setViewportSize({width,height});
+    await page.locator('.terminal-canvas .xterm-helper-textarea').evaluate(node=>node.scrollIntoView());
+    await expect.poll(()=>page.locator('.terminal-canvas').evaluate(canvas=>{
+      const bounds=canvas.getBoundingClientRect(),screen=canvas.querySelector('.xterm-screen')!.getBoundingClientRect();
+      return {scroll:canvas.scrollTop,inside:screen.top>=bounds.top&&screen.bottom<=bounds.bottom&&bounds.top>=0&&bounds.bottom<=innerHeight};
+    })).toEqual({scroll:0,inside:true});
+  }
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+});
+
 test('direct finger scrolling uses real xterm history and the same mouse reports as a wheel',async({page})=>{
   await fixture(page);
   await page.keyboard.press('Escape');

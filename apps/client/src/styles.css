@@ -681,7 +681,8 @@ button svg {
   min-height: 0;
   min-width: 0;
   padding: 0 max(2px, env(safe-area-inset-right)) 0 max(2px, env(safe-area-inset-left));
-  overflow: hidden;
+  /* Input visibility requests must not scroll this outer canvas above the screen. */
+  overflow: clip;
 }
 .terminal-canvas .xterm {
   height: 100%;

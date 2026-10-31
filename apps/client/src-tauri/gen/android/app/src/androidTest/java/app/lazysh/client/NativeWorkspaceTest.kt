@@ -1554,15 +1554,21 @@ class NativeWorkspaceTest {
             sessionView(scenario, "Terminal")
         }
         focusTab(historyTab)
-        closeSoftKeyboard()
         val screens = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0)"
         awaitDocument(scenario, "owned history newest row visible", "(() => {const screens=$screens; return screens.length===1 && screens[0].textContent.includes('NEW512');})()")
+        val geometryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        // Wait for the scheduled terminal focus before dismissing its keyboard.
+        awaitDocument(scenario, "owned history terminal focus settled", """
+            (()=>{const screens=$screens;return screens.length===1 &&
+              screens[0].parentElement?.classList.contains('focus') &&
+              screens[0].parentElement.querySelector('.xterm-helper-textarea')===document.activeElement;})()
+        """, deadline = geometryDeadline)
+        closeSoftKeyboard()
         val fingerSource = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-herdr-finger.js")
             .use { it.readNBytes(16_385) }
         require(fingerSource.size <= 16_384)
         val fingerScript = fingerSource.toString(Charsets.UTF_8)
         val geometryScript = "(()=>{$fingerScript;return ownedHerdrSwipeGeometry($screens,window.visualViewport,devicePixelRatio,document);})()"
-        val geometryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         var geometry = JSONObject()
         while (true) {
             val remaining = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime())
