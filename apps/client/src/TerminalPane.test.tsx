@@ -42,8 +42,9 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
-function mountInputOwner() {
+function mountInputOwner(initial = "") {
   const element=document.createElement('div'), textarea=document.createElement('textarea');
+  textarea.value=initial;
   element.append(textarea); Object.assign(terminal,{element,textarea});
   let mark!:()=>void, receive!:(data:string)=>void;
   terminal._core.coreService.onUserInput=(listener:()=>void)=>{mark=listener;return{dispose(){}};};
@@ -67,6 +68,31 @@ function touchScrollFixture() {
   return {view, canvas, wheels, touch};
 }
 describe("terminal interactions", () => {
+  it.each(['hidden','inactive','disconnect','lock','dispose'] as const)('clears unapplied local context at the %s boundary',boundary=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(false);
+    try {
+      Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+      const owner=mountInputOwner('previous');
+      const announcement=screen.getByRole('status');expect(announcement.textContent).toBe('');
+      act(()=>{
+        owner.textarea.value='local correction';owner.textarea.setSelectionRange(16,16);
+        owner.textarea.dispatchEvent(new InputEvent('input',{data:'local correction',inputType:'insertReplacementText',bubbles:true}));
+      });
+      expect(screen.getByText('Edit not sent · Review')).toBeDefined();
+      expect(announcement.textContent).toBe('Edit not sent');
+      expect(document.activeElement).toBe(owner.textarea);
+      expect(owner.textarea.readOnly).toBe(true);expect(mocks.write).not.toHaveBeenCalled();
+      if(boundary==='hidden'){hidden.mockReturnValue(true);fireEvent(document,new Event('visibilitychange'));}
+      else if(boundary==='lock')act(()=>access(true));
+      else if(boundary==='dispose')owner.view.unmount();
+      else owner.view.rerender(<TerminalPane session={boundary==='disconnect'?{...owner.session,connected:false}:owner.session} active={boundary!=='inactive'} reportError={vi.fn()} />);
+      expect(screen.queryByText('Edit not sent · Review')).toBeNull();
+      if(boundary==='dispose')expect(announcement.isConnected).toBe(false);
+      else expect(announcement.textContent).toBe('');
+      expect(owner.textarea.value).toBe('');expect(mocks.write).not.toHaveBeenCalled();
+    } finally {windowFocus.mockRestore();hidden.mockRestore();}
+  });
   it.each(['hidden','inactive','unfocused window','unfocused editor'] as const)('rejects user input for an %s context while preserving protocol replies',boundary=>{
     const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
     const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(false);

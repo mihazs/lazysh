@@ -1,7 +1,7 @@
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutOutput:(text:string)=>void}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutOutput:(text:string)=>void}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
     window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
@@ -496,4 +496,42 @@ test('terminal completion hints stay distinct from the normal Compose editor',as
   expect(await composer.evaluate(element=>element.tagName)).toBe('TEXTAREA');
 });
 
+});
+
+for(const truncated of [false,true])test(`unapplied inline input review preserves Compose and copy safety with truncated=${truncated}`,async({page,context})=>{
+  await openShortcutTerminal(page);
+  await page.evaluate(()=>{
+    window.simpleShortcutCopies=[];
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{window.simpleShortcutCopies.push(text);}}});
+  });
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.getByRole('textbox',{name:'Compose text',exact:true}).fill('keep my draft');
+  await page.getByRole('button',{name:'Close composer',exact:true}).click();
+  const input=page.locator('.xterm-helper-textarea');await input.focus();
+  await input.evaluate(async(element,truncated)=>{
+    const area=element as HTMLTextAreaElement;
+    for(const value of ['éx',truncated?'x'.repeat(65535)+'👩tail':'èy']){
+      area.dispatchEvent(new KeyboardEvent('keydown',{key:'Unidentified',keyCode:229,bubbles:true,composed:true}));
+      area.value=value;area.setSelectionRange(value.length,value.length);
+      area.dispatchEvent(new InputEvent('input',{data:value,inputType:'insertReplacementText',bubbles:true,composed:true}));
+      await new Promise(resolve=>setTimeout(resolve,10));
+    }
+  },truncated);
+  const review=page.locator('.terminal-edit-review');
+  await expect(review).toBeVisible();await expect(review.locator('pre')).not.toBeVisible();
+  await review.locator('summary').click();
+  await expect(review.getByText('Unapplied local input context. The terminal is unchanged.',{exact:true})).toBeVisible();
+  const copy=review.getByRole('button',{name:'Copy context',exact:true});
+  if(truncated){await expect(copy).toBeDisabled();await expect(review.getByRole('status')).toHaveText('Context exceeds the review limit. Copy is unavailable.');}
+  else {await copy.click();await expect.poll(()=>page.evaluate(()=>window.simpleShortcutCopies)).toEqual(['èy']);}
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toHaveValue('keep my draft');
+  await expect(page.getByRole('button',{name:'Paste draft',exact:true})).toBeDisabled();
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['éx']);
+  await review.getByRole('button',{name:'Dismiss and resume typing',exact:true}).click();
+  await expect(review).toHaveCount(0);
+  await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toHaveValue('keep my draft');
+  const cdp=await context.newCDPSession(page);await cdp.send('Input.insertText',{text:'new'});await cdp.detach();
+  await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['éx','new']);
+  if(truncated)expect(await page.evaluate(()=>window.simpleShortcutCopies)).toEqual([]);
 });
