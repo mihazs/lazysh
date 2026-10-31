@@ -163,16 +163,86 @@ test('unknown xterm helper shape keeps ordinary upstream keyboard behavior',asyn
   expect(await page.evaluate(()=>{window.ownedIme.observation.dispose();return window.ownedIme.textarea.getAttribute('autocomplete');})).toBeNull();
 });
 
-test('non-ASCII replacement keeps upstream handling without inventing unsafe erasure',async({page})=>{
+for(const inputType of ['insertReplacementText','insertCompositionText'])test(`unapplied combining correction sends no replay or guessed erasure for ${inputType}`,async({page})=>{
+  const writes=await page.evaluate(async inputType=>{
+    await window.ownedIme.replace('éx');await window.ownedIme.replace('èy',inputType);
+    return window.ownedIme.writes;
+  },inputType);
+  expect(writes,JSON.stringify({writes})).toEqual(['éx']);
+  expect(await page.evaluate(()=>window.ownedIme.proposal)).toEqual({text:'èy',truncated:false});
+});
+
+test('unapplied non-tail correction sends no whole-context replay',async({page})=>{
   const writes=await page.evaluate(async()=>{
-    const area=window.ownedIme.textarea;
-    for(const value of ['éx','èy']){
-      await window.ownedIme.replace(value);
-    }
+    await window.ownedIme.replace('teh tail');await window.ownedIme.replace('the tail','insertReplacementText',3);
     return window.ownedIme.writes;
   });
-  expect(writes).toEqual(['éx','èy']);
-  expect(writes.join('')).not.toContain('\x7f');
+  expect(writes,JSON.stringify({writes})).toEqual(['teh tail']);
+});
+
+test('unapplied native Unicode correction does not submit a deferred Enter',async({page,context})=>{
+  await page.evaluate(async()=>{await window.ownedIme.replace('éx');window.ownedIme.textarea.select();});
+  const cdp=await context.newCDPSession(page);
+  await cdp.send('Input.imeSetComposition',{text:'èy',selectionStart:3,selectionEnd:3});
+  await page.evaluate(()=>window.ownedIme.textarea.dispatchEvent(new KeyboardEvent('keydown',{
+    key:'Enter',code:'Enter',keyCode:13,bubbles:true,composed:true,cancelable:true,
+  })));
+  await cdp.send('Input.insertText',{text:'èy'});
+  await cdp.detach();
+  await page.waitForTimeout(20);
+  const writes=await page.evaluate(()=>window.ownedIme.writes);
+  expect(writes,JSON.stringify({writes})).toEqual(['éx']);
+});
+
+for(const boundary of ['reset','dispose'] as const)test(`unapplied context is cleared at the ${boundary} lifetime boundary`,async({page})=>{
+  const result=await page.evaluate(async boundary=>{
+    const owner=window.ownedIme;
+    await owner.replace('éx');await owner.replace('èy');
+    const before=owner.proposal;
+    owner.observation[boundary]();
+    return {before,after:owner.proposal,writes:owner.writes};
+  },boundary);
+  expect(result).toEqual({before:{text:'èy',truncated:false},after:null,writes:['éx']});
+});
+
+test('unapplied review blur retains context, blocks user input and preserves protocol until explicit dismissal',async({page,context})=>{
+  await page.evaluate(async()=>{
+    const owner=window.ownedIme;
+    await owner.replace('éx');await owner.replace('èy');
+    owner.textarea.blur();owner.observation.resume();
+    owner.terminal.input('stale-user-commit',true);
+    owner.terminal.input('protocol-reply',false);
+  });
+  expect(await page.evaluate(()=>({proposal:window.ownedIme.proposal,readOnly:window.ownedIme.textarea.readOnly,writes:window.ownedIme.writes})))
+    .toEqual({proposal:{text:'èy',truncated:false},readOnly:true,writes:['éx','protocol-reply']});
+  await page.evaluate(()=>{window.ownedIme.observation.dismiss();window.ownedIme.terminal.focus();});
+  const cdp=await context.newCDPSession(page);await cdp.send('Input.insertText',{text:'new'});await cdp.detach();
+  expect(await page.evaluate(()=>({proposal:window.ownedIme.proposal,writes:window.ownedIme.writes})))
+    .toEqual({proposal:null,writes:['éx','protocol-reply','new']});
+});
+
+test('direct unapplied dismissal retires the focused readonly editor before fresh typing',async({page,context})=>{
+  const boundary=await page.evaluate(async()=>{
+    const owner=window.ownedIme;
+    await owner.replace('éx');await owner.replace('èy');
+    const focused=document.activeElement===owner.textarea;
+    let blurs=0;owner.textarea.addEventListener('blur',()=>blurs++,{once:true});
+    owner.observation.dismiss();
+    return {focused,blurs,readOnly:owner.textarea.readOnly,stillFocused:document.activeElement===owner.textarea,proposal:owner.proposal};
+  });
+  expect(boundary).toEqual({focused:true,blurs:1,readOnly:false,stillFocused:false,proposal:null});
+  await page.evaluate(()=>window.ownedIme.terminal.focus());
+  const cdp=await context.newCDPSession(page);await cdp.send('Input.insertText',{text:'fresh'});await cdp.detach();
+  expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(['éx','fresh']);
+});
+
+test('unapplied context is bounded without splitting a supplementary character',async({page})=>{
+  const result=await page.evaluate(async()=>{
+    await window.ownedIme.replace('éx');await window.ownedIme.replace('x'.repeat(65535)+'👩tail');
+    const proposal=window.ownedIme.proposal;
+    return {length:proposal?.text.length,truncated:proposal?.truncated,last:proposal?.text.slice(-1),writes:window.ownedIme.writes};
+  });
+  expect(result).toEqual({length:65535,truncated:true,last:'x',writes:['éx']});
 });
 
 test('protocol output between compositionend and commit does not consume the input owner',async({page})=>{
@@ -227,7 +297,7 @@ test('hardware command boundary prevents a new correction from erasing the previ
   expect(writes.join('')).toBe('owned\rteh\x7f\x7fhe');
 });
 
-test('an edit after cursor movement retains upstream fallback instead of silently dropping text',async({page})=>{
+test('an edit after cursor movement retains unapplied context without replay',async({page})=>{
   const writes=await page.evaluate(async()=>{
     const area=window.ownedIme.textarea;
     for(const value of ['teh','the']){
@@ -236,10 +306,11 @@ test('an edit after cursor movement retains upstream fallback instead of silentl
     }
     return window.ownedIme.writes;
   });
-  expect(writes).toEqual(['teh','\x1b[D','the']);
+  expect(writes).toEqual(['teh','\x1b[D']);
+  expect(await page.evaluate(()=>window.ownedIme.proposal)).toEqual({text:'the',truncated:false});
 });
 
-test('a changed DOM baseline keeps the intercepted key229 fallback instead of losing its edit',async({page})=>{
+test('a changed DOM baseline retains the intercepted edit for review without replay',async({page})=>{
   const writes=await page.evaluate(async()=>{
     const area=window.ownedIme.textarea;
     area.value='foreign';area.setSelectionRange(7,7);
@@ -250,7 +321,8 @@ test('a changed DOM baseline keeps the intercepted key229 fallback instead of lo
     await new Promise(resolve=>setTimeout(resolve,5));
     return window.ownedIme.writes;
   });
-  expect(writes).toEqual(['updated']);
+  expect(writes).toEqual([]);
+  expect(await page.evaluate(()=>window.ownedIme.proposal)).toEqual({text:'updated',truncated:false});
 });
 
 for(const boundary of ['reset','another focused control'] as const)test(`native CDP composition cannot commit into a revoked editor after ${boundary}`,async({page,context})=>{
@@ -329,7 +401,7 @@ test('revoked unsupported-edit fallback cannot emit after the editor is explicit
   expect(writes).toEqual(['éx']);
 });
 
-for(const [value,inputType,expected] of [['é','insertReplacementText','\x7f'],['👩🏽‍💻','insertReplacementText','👩🏽‍💻'],['owned paste','insertFromPaste','owned paste']] as const)test(`owned fallback retains pinned upstream policy for ${inputType} ${value}`,async({page})=>{
+for(const [value,inputType,expected] of [['é','insertReplacementText','\x7f'],['👩🏽‍💻','insertReplacementText','👩🏽‍💻'],['owned paste','insertFromPaste','owned paste']] as const)test(`unapplied corrections preserve literal paste for ${inputType} ${value}`,async({page})=>{
   const writes=await page.evaluate(async({value,inputType})=>{
     if(inputType!=='insertFromPaste')await window.ownedIme.replace('éx');
     const area=window.ownedIme.textarea;
@@ -339,7 +411,7 @@ for(const [value,inputType,expected] of [['é','insertReplacementText','\x7f'],
     await new Promise(resolve=>setTimeout(resolve,10));
     return window.ownedIme.writes;
   },{value,inputType});
-  expect(writes).toEqual(inputType==='insertFromPaste'?[expected]:['éx',expected]);
+  expect(writes).toEqual(inputType==='insertFromPaste'?[expected]:value==='é'?['éx',expected]:['éx']);
 });
 
 test('native composition replacing an owned committed ASCII range edits the original word',async({page,context})=>{
