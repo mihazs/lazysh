@@ -298,9 +298,9 @@ is explicitly unsupported and is not used as a lifecycle substitute.
 
 ## Broader CLI coverage
 
-This ten-agent cohort is the compatibility target for issue #603. It is not a
-measured ranking of active CLI users: vendors do not publish comparable usage
-counts. It combines the three explicitly requested agents, established public
+This compatibility cohort covers ten native lifecycle integrations plus Aider
+callback health for issue #603. It is not a measured ranking of active CLI users:
+vendors do not publish comparable usage counts. It combines the three explicitly requested agents, established public
 CLI projects and commercial terminal agents with documented extension surfaces.
 As a public adoption cross-check on 2026-10-31, GitHub repository stars were
 OpenCode 223,379, Claude Code 153,994, Codex 132,149, Gemini CLI 108,640, Aider
