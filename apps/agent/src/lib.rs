@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
 pub mod devices;
+pub mod hook_setup;
 pub mod hooks;
 pub mod installation;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

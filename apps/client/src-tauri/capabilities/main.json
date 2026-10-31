@@ -133,6 +133,7 @@
     "allow-agent-snapshot",
     "allow-agent-reported-history",
     "allow-install-companion",
+    "allow-companion-hooks",
     "allow-get-companion-settings",
     "allow-update-companion-settings",
     "allow-agent-transcript",

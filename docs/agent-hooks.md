@@ -1,5 +1,58 @@
 # Agent lifecycle hooks
 
+## Managed setup for Claude Code, Codex and OpenCode
+
+In **Agents → Agent hook setup**, select the provider and its existing absolute
+profile directory on the connected SSH host, then choose **Inspect setup**.
+Installing/updating or removing requires a separate explicit action against
+that inspected plan. Install or update the host companion first when the host
+has an older version. Setup uses the resolved companion executable's absolute
+path; the agent hook environment does not need that executable on `PATH`.
+
+The equivalent local commands are:
+
+```sh
+lazysh-agent hooks preview --agent codex
+lazysh-agent hooks status --agent codex --profile-root /home/user/.codex
+lazysh-agent hooks install --agent codex --profile-root /home/user/.codex --expected-plan <installPlan>
+lazysh-agent hooks remove --agent codex --profile-root /home/user/.codex --expected-plan <removePlan>
+```
+
+`install` also updates existing owned entries. Every changed profile needs a
+fresh inspection. Claude uses `settings.json`, Codex uses `hooks.json`, and
+OpenCode uses `plugins/lazysh.js` under the selected profile. JSON must be strict,
+without comments or duplicate keys. Existing foreign JSON value bytes remain
+intact; owned entry separators and whitespace may change. A foreign same-name
+OpenCode plugin is never overwritten. The private prepared receipt records own
+templates and hashes/identities, never a copy of provider configuration.
+
+Managed writes currently support qualified local Linux filesystems without
+extended access/default ACLs. Special file permission bits, unsafe links,
+read-only files, unhandled ACLs and uncertain ownership are refused. Existing
+ordinary file permissions and group ID are retained. macOS/Windows writes
+remain unsupported; preview is available without accessing a profile. Preview
+labels POSIX shell or Bun JavaScript dialect. On Windows it returns the
+existing unbound print-only templates, explicitly without an executable
+binding or managed-setup support; it does not quote a Windows executable as
+a POSIX command. These
+limits do not disable the existing print-only configuration commands below.
+
+Configuration is separate from live reporting. Provider disable settings,
+selected-layer overrides and Codex trust review still apply. Lazysh never
+accepts Codex hook trust automatically. Review the provider's trust settings,
+start a new session and verify actual lifecycle reports in Agents.
+
+A stopped operation can leave prepared metadata. Inspect again and explicitly
+choose the next operation; setup never resumes, retries or rolls back a write
+automatically. Partial or edited owned entries produce a conflict requiring
+manual review. Foreign edits after removal can conservatively produce a
+conflict too. The cooperative profile lock and final preimage checks do not
+provide an atomic compare-and-swap against a noncooperating editor changing a
+path after the final check, or a physical power-loss durability guarantee.
+
+Other native providers retain their agent-specific print-only setup commands.
+Managed installation for them is not implemented by this first milestone.
+
 Companion lifecycle reports describe observed activity. They do not grant terminal
 input access, answer permission prompts, install an agent or discover processes
 that have not emitted a report. Transcript readers are separate from lifecycle

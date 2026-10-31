@@ -907,3 +907,33 @@ fn refuses_state_symlinks_and_database_links_without_changing_the_target() {
     assert!(Store::open(&storage).is_err());
     assert_eq!(fs::read(&victim).unwrap(), b"untouched");
 }
+
+#[test]
+fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state() {
+    let directory = tempfile::tempdir().unwrap();
+    for (agent, dialect) in [
+        ("claude", "posix-shell"),
+        ("codex", "posix-shell"),
+        ("opencode", "bun-javascript"),
+    ] {
+        let output = run(
+            directory.path(),
+            &["hooks", "preview", "--agent", agent],
+            b"",
+        );
+        assert!(output.status.success());
+        let preview: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(preview["agent"], agent);
+        assert_eq!(preview["dialect"], dialect);
+        assert_eq!(preview["reporting"], "notChecked");
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
+            assert_eq!(preview["binaryBinding"], "currentExecutable");
+            assert!(Path::new(preview["binary"].as_str().unwrap()).is_absolute());
+        } else {
+            assert_eq!(preview["binaryBinding"], "unboundTemplate");
+            assert_eq!(preview["managedSetupSupported"], false);
+            assert!(preview.get("binary").is_none());
+        }
+    }
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}

@@ -25,6 +25,11 @@ enum Command {
         #[command(subcommand)]
         command: lazysh_agent::skills::Command,
     },
+    /// Inspect and explicitly manage lifecycle hooks in an existing selected profile.
+    Hooks {
+        #[command(subcommand)]
+        command: lazysh_agent::hook_setup::Command,
+    },
     /// Explicit opt-in relay setup and bounded drain; never installs hooks or schedules.
     Relay {
         #[command(subcommand)]
@@ -188,6 +193,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         })),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
         Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
+        Command::Hooks { command } => Some(lazysh_agent::hook_setup::run(command)?),
         Command::Relay { command } => Some(lazysh_agent::relay::run(
             command,
             &lazysh_agent::state_directory()?,

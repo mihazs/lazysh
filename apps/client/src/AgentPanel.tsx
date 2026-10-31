@@ -9,6 +9,7 @@ import HerdrAgentsPanel from './HerdrAgentsPanel';
 import KeepAwakeControl from './KeepAwakeControl';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
 import CompanionInstallPanel from './CompanionInstallPanel';
+import CompanionHooksPanel from './CompanionHooksPanel';
 import './AgentPanel.css';
 
 type AgentState = 'working' | 'needs_attention' | 'done';
@@ -157,6 +158,7 @@ export function AgentPanel({ sessionId,herdrSession,onUseReportedHistory,onResto
     <p className="agent-note">{t('agentsReportedHint')}</p>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t('agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
     <CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{request.current++;snapshotFlight.current=null;void refresh();}}/>
+    <CompanionHooksPanel sessionId={sessionId} visible={panelVisible}/>
     <div className="agent-discovery">
       <label className="agent-search">{t('agentsSearch')}<input type="search" value={query} placeholder={t('agentsSearchHint')} onChange={event=>setQuery(event.target.value)} /></label>
       <div className="agent-filters" role="group" aria-label={t('agentsFilterStatus')}>
