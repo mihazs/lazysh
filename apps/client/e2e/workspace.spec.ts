@@ -86,7 +86,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript(()=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22}];
@@ -94,8 +94,10 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
       if(command==='transport_capabilities')return {mosh:false,et:false};
       if(command==='has_credentials')return false;
       if(command==='connect')return {sessionId:'owned-navigation-ssh'};
+      if(command==='attach_multiplexer'){if(args.sessionId!=='owned-navigation-ssh'||args.kind!=='herdr'||args.name!=='default')throw new Error('Wrong Herdr adoption target');return {sessionId:'owned-navigation-herdr'};}
+      if(command==='herdr_action'){if(args.sessionId!=='owned-navigation-herdr'||args.name!=='default')throw new Error('Wrong Herdr display');state.navigations.push(args.action);return;}
       if(command==='multiplexer_sessions')return [{name:'default'}];
-      if(command==='herdr_tree')return {panes:[{pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:'codex-builder',agent:'codex',agent_status:'idle'}]};
+      if(command==='herdr_tree'){const tree={workspaces:[{workspace_id:'w1',label:'Development',focused:true,agent_status:'idle'}],tabs:[{workspace_id:'w1',tab_id:'w1:t1',label:'Codex tasks',number:1,focused:true,agent_status:'idle'}],panes:[{focused:true,agent_status:'idle',pane_id:'w1:p1',workspace_id:'w1',tab_id:'w1:t1',terminal_id:'codex-terminal',cwd:'/nav/codex'}],agents:[{terminal_id:'codex-terminal',workspace_id:'w1',tab_id:'w1:t1',pane_id:'w1:p1',name:'codex-builder',agent:'codex',agent_status:'idle'}]};if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
       if(command==='install_companion'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
@@ -155,11 +157,20 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(board.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
-  const live=board.getByRole('region',{name:'Live Herdr agents',exact:true});
+  const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
-  await expect(live.getByText('Idle',{exact:true})).toBeVisible();
-  await live.getByRole('article').scrollIntoViewIfNeeded();
-  expect((await live.getByRole('article').boundingBox())!.x).toBeGreaterThanOrEqual(13);
+  await expect(live.getByRole('heading',{name:'Idle · 1',exact:true})).toBeVisible();
+  const steadyRow=live.getByRole('button',{name:/^codex-builder/}),originalRow=await steadyRow.elementHandle();
+  const opacity=await steadyRow.evaluate(node=>getComputedStyle(node).opacity);
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdTree:boolean}}).workspaceNavigationState.holdTree=true;});
+  await page.clock.runFor(5000);
+  await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead)).toBe('function');
+  expect(await originalRow!.evaluate(node=>node.isConnected&&node===document.querySelector('.herdr-navigation-row'))).toBe(true);
+  expect(await steadyRow.evaluate(node=>({disabled:(node as HTMLButtonElement).disabled,opacity:getComputedStyle(node).opacity}))).toEqual({disabled:false,opacity});
+  await expect(live.getByText('Reading Herdr workspaces…',{exact:true})).toHaveCount(0);
+  await page.evaluate(()=>(window as unknown as {finishHerdrRead:()=>void}).finishHerdrRead());
+  await live.getByRole('button',{name:/^codex-builder/}).scrollIntoViewIfNeeded();
+  expect((await live.getByRole('button',{name:/^codex-builder/}).boundingBox())!.x).toBeGreaterThanOrEqual(13);
   await page.screenshot({path:testInfo.outputPath('herdr-live-discovery.png')});
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{missing:boolean}}).workspaceNavigationState.missing=true;});
   await board.getByRole('button',{name:'Refresh',exact:true}).click();
@@ -190,6 +201,21 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('agent-navigation.png')});
   if(phone){await search.focus();await page.keyboard.press('Escape');await expect(board).toBeHidden();await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();}
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  await expect(live.getByRole('heading',{name:'Spaces',exact:true})).toBeVisible();
+  const collapse=live.getByRole('button',{name:'Expand or collapse Development',exact:true});
+  await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeHidden();
+  await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
+  await live.getByRole('searchbox').fill('codex');
+  await expect(live.getByText('Development',{exact:true})).toBeVisible();
+  await expect(live.getByText('Codex tasks',{exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath('herdr-spaces.png')});
+  expect(await live.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await live.getByRole('button',{name:/^codex-builder/}).click();
+  await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
 });
 
 test('mobile terminal keeps one compact header and reaches every session control through More',async({page},testInfo)=>{

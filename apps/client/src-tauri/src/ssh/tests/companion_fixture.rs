@@ -77,6 +77,8 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
     .unwrap();
     assert_eq!(second["status"], "reused");
     assert_eq!(second["cleanup"], "complete");
+    #[cfg(target_os = "linux")]
+    hooks_roundtrip(&session, &lease, directory).await;
     let saved = destination.with_extension("owned-backup");
     fs::rename(&destination, &saved).unwrap();
     std::os::unix::fs::symlink(&binary, &destination).unwrap();
@@ -121,4 +123,44 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
             .starts_with(".lazysh-install-")),
         "verified staging is cleaned without deleting managed state"
     );
+}
+
+#[cfg(target_os = "linux")]
+async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Path) {
+    for agent in ["claude", "codex", "opencode"] {
+        let profile = directory.join(format!("owned {agent} profile's $ path"));
+        fs::create_dir(&profile).unwrap();
+        let json_name = match agent {
+            "claude" => Some("settings.json"),
+            "codex" => Some("hooks.json"),
+            _ => None,
+        };
+        let foreign = "{\"foreign\": { \"keep\" : true }}";
+        if let Some(name) = json_name {
+            fs::write(profile.join(name), foreign).unwrap();
+        }
+        let invoke = |action: &str, plan: Option<&str>| {
+            let request = serde_json::from_value(serde_json::json!({"agent":agent,"action":action,"profileRoot":profile,"expectedPlan":plan})).unwrap();
+            crate::companion::hooks::execute(session, request, lease)
+        };
+        let before = invoke("status", None).await.unwrap();
+        let configured = invoke("install", before["installPlan"].as_str())
+            .await
+            .unwrap();
+        assert_eq!(configured["outcome"]["status"], "configured");
+        let current = invoke("status", None).await.unwrap();
+        assert_eq!(current["state"], "configured");
+        assert_eq!(current["reporting"], "notChecked");
+        let removed = invoke("remove", current["removePlan"].as_str())
+            .await
+            .unwrap();
+        assert_eq!(removed["outcome"]["status"], "removed");
+        if let Some(name) = json_name {
+            assert!(fs::read_to_string(profile.join(name))
+                .unwrap()
+                .contains("{ \"keep\" : true }"));
+        } else {
+            assert!(!profile.join("plugins/lazysh.js").exists());
+        }
+    }
 }

@@ -186,7 +186,7 @@ fn prepare(command: &mut Command) {
         command.process_group(0);
     }
 }
-fn bounded_command(
+pub(crate) fn bounded_command(
     mut command: Command,
     maximum: usize,
     cancelled: Arc<AtomicBool>,
@@ -304,7 +304,7 @@ impl Runner for SdkRunner {
     }
 }
 
-fn cancellation_signal() -> Result<Arc<AtomicBool>> {
+pub(crate) fn cancellation_signal() -> Result<Arc<AtomicBool>> {
     let cancelled = Arc::new(AtomicBool::new(false));
     let signal = cancelled.clone();
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))

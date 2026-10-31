@@ -17,6 +17,7 @@ pub(crate) struct Directory {
     pub(crate) file: File,
     pub(crate) path: PathBuf,
     private: bool,
+    root_leaf: bool,
 }
 fn denied(kind: &'static str) -> Error {
     Error::Installation(kind)
@@ -34,13 +35,29 @@ fn name(value: &OsStr) -> io::Result<CString> {
 }
 impl Directory {
     pub(crate) fn open(path: &Path) -> Result<Self> {
-        Self::walk(path, true)
+        Self::walk(path, true, false)
     }
     pub(crate) fn profile(path: &Path) -> Result<Self> {
-        Self::walk(path, false)
+        Self::walk(path, false, false)
     }
-    fn walk(path: &Path, private_leaf: bool) -> Result<Self> {
-        let path = storage_namespace::resolve(path)?;
+    /// Read-only executable parents may be root-owned, unlike mutable profiles.
+    /// Require the physical absolute namespace; never canonicalize away a link.
+    pub(crate) fn executable_parent(path: &Path) -> Result<Self> {
+        Self::walk(path, false, true)
+    }
+    fn walk(path: &Path, private_leaf: bool, root_leaf: bool) -> Result<Self> {
+        let path = if root_leaf {
+            if !path.is_absolute()
+                || path
+                    .components()
+                    .any(|part| matches!(part, Component::ParentDir))
+            {
+                return Err(denied("InstallUnsafeNamespace"));
+            }
+            path.to_owned()
+        } else {
+            storage_namespace::resolve(path)?
+        };
         let mut current = File::open("/")?;
         let parts = path.components().collect::<Vec<_>>();
         for (index, part) in parts.iter().enumerate() {
@@ -65,19 +82,19 @@ impl Directory {
             let uid = unsafe { libc::geteuid() };
             let leaf = index + 1 == parts.len();
             let sticky_root = metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
-            if (leaf && metadata.uid() != uid)
+            if (leaf && metadata.uid() != uid && !(root_leaf && metadata.uid() == 0))
                 || (!leaf && metadata.uid() != uid && metadata.uid() != 0)
                 || (metadata.mode() & 0o022 != 0 && (leaf || !sticky_root))
             {
                 return Err(denied("InstallUnsafeNamespace"));
             }
         }
-        Self::from_file(current, path, private_leaf)
+        Self::from_file(current, path, private_leaf, root_leaf)
     }
-    fn from_file(file: File, path: PathBuf, private_leaf: bool) -> Result<Self> {
+    fn from_file(file: File, path: PathBuf, private_leaf: bool, root_leaf: bool) -> Result<Self> {
         let metadata = file.metadata()?;
         if !metadata.is_dir()
-            || metadata.uid() != unsafe { libc::geteuid() }
+            || (metadata.uid() != unsafe { libc::geteuid() } && !(root_leaf && metadata.uid() == 0))
             || metadata.mode() & 0o022 != 0
             || (private_leaf && !private::owner_only(&metadata, true))
         {
@@ -87,6 +104,7 @@ impl Directory {
             file,
             path,
             private: private_leaf,
+            root_leaf,
         })
     }
     pub(crate) fn identity(&self) -> Result<[u64; 2]> {
@@ -94,7 +112,7 @@ impl Directory {
         Ok([metadata.dev(), metadata.ino()])
     }
     pub(crate) fn check(&self) -> Result<()> {
-        let current = Self::walk(&self.path, self.private)?;
+        let current = Self::walk(&self.path, self.private, self.root_leaf)?;
         if current.identity()? != self.identity()? {
             return Err(denied("InstallChangedNamespace"));
         }
@@ -102,7 +120,7 @@ impl Directory {
     }
     pub(crate) fn child(&self, basename: &str, private_leaf: bool) -> Result<Self> {
         let file = self.open_file(basename, libc::O_RDONLY | libc::O_DIRECTORY)?;
-        Self::from_file(file, self.path.join(basename), private_leaf)
+        Self::from_file(file, self.path.join(basename), private_leaf, false)
     }
     pub(crate) fn open_file(&self, basename: &str, flags: i32) -> io::Result<File> {
         let basename = name(OsStr::new(basename))?;

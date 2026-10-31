@@ -24,9 +24,11 @@ fn describe(phase: Phase, error: &Error) -> Failure {
         Error::InvalidArgument => ResultClass::InvalidArgument,
         Error::UnsupportedStateFilesystem => ResultClass::UnsupportedStateFilesystem,
         // These variants contain extensible static strings. Do not expose them here.
-        Error::Relay(_) | Error::Settings(_) | Error::Device(_) | Error::Installation(_) => {
-            ResultClass::OtherError
-        }
+        Error::Relay(_)
+        | Error::Settings(_)
+        | Error::Device(_)
+        | Error::Herdr(_)
+        | Error::Installation(_) => ResultClass::OtherError,
     };
     let sqlite_code = match error {
         Error::Storage(rusqlite::Error::SqliteFailure(code, _)) => Some(code.extended_code),
@@ -62,6 +64,7 @@ mod tests {
         for error in [
             Error::Relay("private"),
             Error::Device("private"),
+            Error::Herdr("private"),
             Error::Settings("private"),
         ] {
             let record = describe(Phase::RelayAdmission, &error);

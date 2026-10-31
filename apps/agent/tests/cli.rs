@@ -907,3 +907,198 @@ fn refuses_state_symlinks_and_database_links_without_changing_the_target() {
     assert!(Store::open(&storage).is_err());
     assert_eq!(fs::read(&victim).unwrap(), b"untouched");
 }
+
+#[test]
+fn cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut payload = json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-owned","generation_id":"turn-one","workspace_roots":["/project/one","/project/two"],"prompt":"PRIVATE_CURSOR","tool_input":{"secret":"PRIVATE_CURSOR"}});
+    for (kind, status, state) in [
+        ("beforeSubmitPrompt", "", "working"),
+        ("postToolUseFailure", "", "working"),
+        ("stop", "completed", "done"),
+        ("stop", "error", "needs_attention"),
+        ("stop", "aborted", "done"),
+    ] {
+        payload["hook_event_name"] = json!(kind);
+        payload["status"] = json!(status);
+        payload["generation_id"] = json!(format!("turn-{status}"));
+        let output = ingest(dir.path(), "cursor", &payload);
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        let observed = snapshot(dir.path(), "10");
+        assert_eq!(observed["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(observed["sessions"][0]["sessionId"], "conv-owned");
+        assert_eq!(
+            observed["sessions"][0]["project"],
+            "Cursor (2 workspace roots)"
+        );
+        assert_eq!(observed["sessions"][0]["state"], state);
+        assert!(!observed.to_string().contains("PRIVATE_CURSOR"));
+    }
+    let before = snapshot(dir.path(), "10");
+    for kind in [
+        "subagentStop",
+        "beforeShellExecution",
+        "beforeMCPExecution",
+        "preToolUse",
+        "workspaceOpen",
+    ] {
+        payload["hook_event_name"] = json!(kind);
+        assert!(ingest(dir.path(), "cursor", &payload).status.success());
+    }
+    assert_eq!(snapshot(dir.path(), "10"), before);
+    payload["hook_event_name"] = json!("postToolUse");
+    payload["cwd"] = json!("/actual/tool/project");
+    assert!(ingest(dir.path(), "cursor", &payload).status.success());
+    assert_eq!(
+        snapshot(dir.path(), "10")["sessions"][0]["project"],
+        "/actual/tool/project"
+    );
+    payload["cwd"] = Value::Null;
+    payload["workspace_roots"] = json!([]);
+    assert!(ingest(dir.path(), "cursor", &payload).status.success());
+    assert_eq!(
+        snapshot(dir.path(), "10")["sessions"][0]["project"],
+        "Cursor (no workspace)"
+    );
+    for (field, value) in [
+        ("conversation_id", json!("x".repeat(257))),
+        ("workspace_roots", json!(["/valid", 123])),
+        ("cwd", json!(false)),
+    ] {
+        let mut malformed = payload.clone();
+        malformed[field] = value;
+        assert!(!ingest(dir.path(), "cursor", &malformed).status.success());
+    }
+}
+
+#[test]
+fn amp_native_state_projection_requires_exact_version_and_bounded_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut payload = json!({"schemaVersion":1,"threadId":"amp-owned","directory":"/amp/project","state":"running","messages":["PRIVATE_AMP"]});
+    for (state, expected) in [
+        ("running", "working"),
+        ("awaiting-approval", "needs_attention"),
+        ("idle", "done"),
+        ("error", "needs_attention"),
+    ] {
+        payload["state"] = json!(state);
+        let output = ingest(dir.path(), "amp", &payload);
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        let observed = snapshot(dir.path(), "10");
+        assert_eq!(observed["sessions"][0]["state"], expected);
+        assert_eq!(observed["sessions"][0]["agent"], "Amp");
+        assert!(!observed.to_string().contains("PRIVATE_AMP"));
+    }
+    let before = snapshot(dir.path(), "10");
+    payload["state"] = json!("unknown");
+    assert!(ingest(dir.path(), "amp", &payload).status.success());
+    assert_eq!(snapshot(dir.path(), "10"), before);
+    payload["state"] = json!("running");
+    for (field, value) in [
+        ("schemaVersion", json!(2)),
+        ("threadId", json!("x".repeat(257))),
+        ("directory", json!("/x\nsecret")),
+    ] {
+        let mut malformed = payload.clone();
+        malformed[field] = value;
+        assert!(!ingest(dir.path(), "amp", &malformed).status.success());
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn aider_native_callback_records_only_health_without_reading_stdin_or_changing_sessions() {
+    use std::process::Stdio;
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        ingest(dir.path(), "generic", &event("existing-parent", "working"))
+            .status
+            .success()
+    );
+    let before = snapshot(dir.path(), "10");
+    let read_health = || {
+        let output = run(dir.path(), &["aider-hook-status"], b"");
+        assert!(output.status.success());
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(read_health()["callbackCount"], 0);
+    assert_eq!(read_health()["lastObservedAt"], Value::Null);
+    // Aider v0.86.0 io.py invokes the configured command through a shell with
+    // capture_output=True, no arguments, stdin payload or identity environment.
+    let output = Command::new("sh")
+        .args([
+            "-c",
+            "exec \"$1\" aider-notification",
+            "aider-native-notification",
+        ])
+        .arg(binary::path())
+        .env("LAZYSH_STATE_DIR", dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let mut child = Command::new(binary::path())
+        .arg("aider-notification")
+        .env("LAZYSH_STATE_DIR", dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let held_stdin = child.stdin.take().unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        if started.elapsed() > std::time::Duration::from_secs(5) {
+            child.kill().unwrap();
+            panic!("notification unexpectedly waited for stdin");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    drop(held_stdin);
+    let health = read_health();
+    assert_eq!(health["callbackCount"], 2);
+    assert_eq!(health["sessionAttribution"], "unavailable");
+    assert_eq!(health["lifecycleStates"], json!([]));
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(health["lastObservedAt"].as_str().unwrap()).is_ok()
+    );
+    assert_eq!(snapshot(dir.path(), "10"), before);
+    assert_eq!(health.as_object().unwrap().len(), 7);
+}
+
+#[test]
+fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state() {
+    let directory = tempfile::tempdir().unwrap();
+    for (agent, dialect) in [
+        ("claude", "posix-shell"),
+        ("codex", "posix-shell"),
+        ("opencode", "bun-javascript"),
+    ] {
+        let output = run(
+            directory.path(),
+            &["hooks", "preview", "--agent", agent],
+            b"",
+        );
+        assert!(output.status.success());
+        let preview: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(preview["agent"], agent);
+        assert_eq!(preview["dialect"], dialect);
+        assert_eq!(preview["reporting"], "notChecked");
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
+            assert_eq!(preview["binaryBinding"], "currentExecutable");
+            assert!(Path::new(preview["binary"].as_str().unwrap()).is_absolute());
+        } else {
+            assert_eq!(preview["binaryBinding"], "unboundTemplate");
+            assert_eq!(preview["managedSetupSupported"], false);
+            assert!(preview.get("binary").is_none());
+        }
+    }
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
