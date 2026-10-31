@@ -110,6 +110,24 @@ enum Command {
     },
     /// Print a Codex hook fragment; never changes settings or hook trust.
     CodexConfig,
+    /// Print a Gemini hook fragment; never changes settings.
+    GeminiConfig,
+    /// Print a standalone Droid hooks.json fragment; never changes settings.
+    DroidConfig,
+    /// Print a Kimi TOML hook fragment; never changes settings.
+    KimiConfig,
+    /// Print a Copilot CLI hook fragment; never changes settings.
+    CopilotConfig,
+    /// Print Cursor observation hooks; never changes profiles or permission policy.
+    CursorConfig,
+    /// Print an Amp native state-observer plugin; never installs it.
+    AmpPlugin,
+    /// Print native Aider callback arguments and their capability limits.
+    AiderConfig,
+    /// Record aggregate native Aider input-boundary notification health; reads no stdin.
+    AiderNotification,
+    /// Read aggregate Aider callback health, never agent session lifecycle state.
+    AiderHookStatus,
     /// Print an OpenCode plugin asset; never installs it.
     OpencodePlugin,
     /// Read a hook-reported Claude source hint, never live input authority.
@@ -286,6 +304,21 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             lazysh_agent::claude_config()
         }),
         Command::CodexConfig => Some(lazysh_agent::hooks::codex_config()),
+        Command::GeminiConfig => Some(lazysh_agent::hooks::gemini_config()),
+        Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
+        Command::KimiConfig => Some(lazysh_agent::hooks::kimi_config()),
+        Command::CopilotConfig => Some(lazysh_agent::hooks::copilot_config()),
+        Command::CursorConfig => Some(lazysh_agent::hooks::cursor_config()),
+        Command::AmpPlugin => Some(lazysh_agent::hooks::amp_plugin()),
+        Command::AiderConfig => Some(lazysh_agent::hooks::aider_config()),
+        Command::AiderNotification => {
+            Store::open(&lazysh_agent::state_directory()?)?
+                .record_aider_notification(chrono::Utc::now())?;
+            None
+        }
+        Command::AiderHookStatus => {
+            Some(Store::open(&lazysh_agent::state_directory()?)?.aider_hook_status()?)
+        }
         Command::OpencodePlugin => Some(lazysh_agent::hooks::opencode_plugin()),
         Command::ReportedHistory { session_id } => Some(
             Store::open(&lazysh_agent::state_directory()?)?

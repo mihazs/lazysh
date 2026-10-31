@@ -86,6 +86,8 @@ pub struct Installed {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
     cleanup: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cleanup_failure: Option<transfer::CleanupFailure>,
 }
 #[derive(Debug, Serialize)]
 pub struct InstallFailure {

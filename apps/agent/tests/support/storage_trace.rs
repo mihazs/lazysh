@@ -229,6 +229,9 @@ pub(super) fn initialization_workers(round: u8, workers: &[super::ContendedWorke
 
 // Only reviewed source names may leave the private owner spool.
 const FAILED_TESTS: &[&str] = &[
+    "cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_hooks",
+    "amp_native_state_projection_requires_exact_version_and_bounded_identity",
+    "aider_native_callback_records_only_health_without_reading_stdin_or_changing_sessions",
     "absent_settings_read_returns_defaults_without_creating_state",
     "atomic_updates_persist_exact_values_and_reject_stale_revisions",
     "chained_custom_link_route_is_rejected_without_mutating_its_target",
@@ -237,6 +240,8 @@ const FAILED_TESTS: &[&str] = &[
     "concurrent_hooks_preserve_every_event",
     "concurrent_ingest_recovers_after_a_transient_database_lock",
     "config_is_print_only_and_contains_supported_hooks",
+    "additional_native_agents_report_only_their_actual_lifecycle_contracts",
+    "unscoped_kimi_terminal_hooks_do_not_finish_or_fault_the_parent",
     "codex_hooks_preserve_main_turn_while_subagents_finish",
     "opencode_native_events_keep_exact_sessions_and_bounded_metadata",
     "native_hook_assets_are_print_only_and_never_change_profiles_or_trust",
