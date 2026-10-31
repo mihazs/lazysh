@@ -904,14 +904,36 @@ test('Herdr discovery observation retains only closed state and capped counts',a
   const observe=new Function('document',`return (${script.trim()});`);
   let panels:unknown[]=[],buttons=[{textContent:'List herdr sessions',disabled:false}];
   let capability='tmux available · Herdr detected · Zellij missing';
-  const document={querySelector:()=>({private:'never retain this'}),querySelectorAll:(selector:string)=>{
+  let endedText:string|undefined,childPresent=true,childSelected=false;
+  const otherSelected={private:'another selected tab must not establish child ownership'};
+  const child={closest:(selector:string)=>selector==='.session-tab'?{
+    querySelector:(selector:string)=>selector==='[role=tab][aria-selected=true]'&&childSelected?{private:'owned selected tab'}:null,
+  }:null};
+  const document={querySelector:(selector:string)=>{
+    if(selector==="button[aria-label='Disconnect owned child']")return childPresent?child:null;
+    if(selector==='.session-body > .panel-empty h3')return endedText===undefined?null:{textContent:endedText};
+    if(selector==='[role=tab][aria-selected=true]')return otherSelected;
+    return null;
+  },querySelectorAll:(selector:string)=>{
     if(selector==='.multiplexer-panel')return panels;
     if(selector.includes('aria-current=page'))return [{textContent:'Sessions'}];
     return Array(17).fill({private:'never retain this'});
   }};
   const absent=observe(document);
   expect(absent).toEqual({panelCount:0,loading:false,inlineError:false,herdrCapability:'unknown',listCount:0,listEnabled:false,
-    sessionsSelected:true,terminalSelected:false,menuCount:8,tabsCount:8,terminalCount:8,childDisconnect:true});
+    sessionsSelected:true,terminalSelected:false,menuCount:8,tabsCount:8,terminalCount:8,childDisconnect:true,endedPlaceholder:false,expectedChildTabSelected:false});
+  for(const ended of [false,true])for(const selected of [false,true]){
+    endedText=ended?'This connection has ended.':undefined;childSelected=selected;
+    expect(observe(document)).toMatchObject({endedPlaceholder:ended,expectedChildTabSelected:selected});
+  }
+  for(const text of ['private receiver output','This connection has ended. private trailing output','private prefix This connection has ended.']){
+    endedText=text;childSelected=false;
+    expect(observe(document)).toMatchObject({endedPlaceholder:false,expectedChildTabSelected:false});
+    expect(JSON.stringify(observe(document))).not.toContain('private');
+  }
+  endedText='This connection has ended.';childSelected=true;childPresent=false;
+  expect(observe(document)).toMatchObject({endedPlaceholder:true,childDisconnect:false,expectedChildTabSelected:false});
+  endedText=undefined;childPresent=true;childSelected=false;
   const panel={querySelectorAll:()=>buttons,querySelector:(selector:string)=>selector==='p.muted'?{textContent:capability}: {private:'never retain this'}};
   panels=[panel];
   const present=observe(document);

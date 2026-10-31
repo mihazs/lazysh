@@ -1409,12 +1409,15 @@ class NativeWorkspaceTest {
               const capability=capabilityText==='detected'?'detected':capabilityText==='not installed'?'missing':'unknown';
               const selected=label=>Array.from(document.querySelectorAll('.view-tabs button[aria-current=page], .mobile-session-views button[aria-current=page]')).some(x=>x.textContent.trim()===label);
               const count=selector=>Math.min(8,document.querySelectorAll(selector).length);
+              const child=document.querySelector($childDisconnect);
               return {panelCount:Math.min(8,panels.length),loading:Boolean(panel?.querySelector('.loading')),
                 inlineError:Boolean(panel?.querySelector('.inline-error[role=alert]')),herdrCapability:capability,
                 listCount:Math.min(8,list.length),listEnabled:list.length===1&&!list[0].disabled,
                 sessionsSelected:selected('Sessions'),terminalSelected:selected('Terminal'),
                 menuCount:count('.mobile-session-views'),tabsCount:count('[role=tab]'),
-                terminalCount:count('.terminal-canvas'),childDisconnect:Boolean(document.querySelector($childDisconnect))};
+                terminalCount:count('.terminal-canvas'),childDisconnect:Boolean(child),
+                endedPlaceholder:document.querySelector('.session-body > .panel-empty h3')?.textContent?.trim()==='This connection has ended.',
+                expectedChildTabSelected:Boolean(child?.closest('.session-tab')?.querySelector('[role=tab][aria-selected=true]'))};
             })()
         """.trimIndent()
         fun focusTab(tab: String) {
