@@ -2,6 +2,7 @@
 use super::{
     json,
     record::{hash, Agent, FileState, Record},
+    render,
 };
 
 #[derive(Debug, PartialEq, serde::Serialize)]
@@ -67,7 +68,8 @@ pub(super) fn classify(
         .unwrap_or_default();
     let text = contents.unwrap_or("{}\n");
     if *current == record.provider_before {
-        let planned = json::rewrite(text, previous, next).map_err(|_| "HooksInvalidRecord")?;
+        let planned = render::configuration(record.agent, text, previous, next)
+            .map_err(|_| "HooksInvalidRecord")?;
         if record.provider_after_sha256.as_deref() != Some(hash(planned.as_bytes()).as_str()) {
             return Err("HooksInvalidRecord");
         }
@@ -76,6 +78,12 @@ pub(super) fn classify(
         } else {
             Observation::Prepared
         });
+    }
+    if record.agent == Agent::Cursor
+        && record.next.is_some()
+        && json::cursor_document(text, false).is_err()
+    {
+        return Ok(Observation::Conflict);
     }
     let next_counts = json::counts(text, next).map_err(|_| "HooksInvalidConfiguration")?;
     let obsolete = previous
