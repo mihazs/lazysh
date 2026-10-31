@@ -26,6 +26,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.webkit.WebView
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -1356,6 +1357,29 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun swipeViewClearOfIme(visible: Boolean?, bottom: Int?, top: Int, height: Int, rootHeight: Int): Boolean {
+        val end = top.toLong() + height
+        if (top < 0 || height <= 0 || rootHeight <= 0 || end > rootHeight) return false
+        return when (visible) {
+            false -> true
+            true -> bottom != null && bottom > 0 && end <= rootHeight.toLong() - bottom
+            null -> false
+        }
+    }
+
+    @Test fun nativeSwipeAdmissionRequiresTheWholeWebViewAboveTheDockedIme() {
+        assertTrue(swipeViewClearOfIme(false, 0, 10, 190, 200))
+        assertTrue(swipeViewClearOfIme(true, 100, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, 100, 10, 91, 200))
+        assertFalse(swipeViewClearOfIme(null, null, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, null, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, 0, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, -1, 90, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, 10, 0, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, 10, 191, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, Int.MAX_VALUE, Int.MAX_VALUE, Int.MAX_VALUE))
+    }
+
     private fun herdrConfirmationObservation(scenario: ActivityScenario<MainActivity>, expectedChild: String, expectedDraft: String): (Long) -> String {
         val expression = """
             (()=>{
@@ -1420,6 +1444,213 @@ class NativeWorkspaceTest {
             click("Attach herdr $name")
             awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
         }
+        val history = herdr.getJSONObject("history")
+        val original = herdr.getJSONObject("agent")
+        val historyTab = history.getString("tabId")
+        val originalTab = original.getString("tabId")
+        require(historyTab.matches(Regex("w[0-9]+:t[0-9]+")) && historyTab.length <= 50 &&
+            originalTab.matches(Regex("w[0-9]+:t[0-9]+")) && originalTab.length <= 50 && historyTab != originalTab)
+        val childDisconnect = JSONObject.quote("button[aria-label='Disconnect $parent / $name']")
+        val discoveryObservation = """
+            (()=>{
+              const panels=Array.from(document.querySelectorAll('.multiplexer-panel'));
+              const panel=panels.length===1?panels[0]:null;
+              const list=Array.from(panel?.querySelectorAll('button')??[]).filter(x=>x.textContent.trim()==='List herdr sessions');
+              const capabilityText=panel?.querySelector('p.muted')?.textContent.match(/(?:^| · )Herdr (detected|not installed)(?: · |${'$'})/)?.[1];
+              const capability=capabilityText==='detected'?'detected':capabilityText==='not installed'?'missing':'unknown';
+              const selected=label=>Array.from(document.querySelectorAll('.view-tabs button[aria-current=page], .mobile-session-views button[aria-current=page]')).some(x=>x.textContent.trim()===label);
+              const count=selector=>Math.min(8,document.querySelectorAll(selector).length);
+              const child=document.querySelector($childDisconnect);
+              return {panelCount:Math.min(8,panels.length),loading:Boolean(panel?.querySelector('.loading')),
+                inlineError:Boolean(panel?.querySelector('.inline-error[role=alert]')),herdrCapability:capability,
+                listCount:Math.min(8,list.length),listEnabled:list.length===1&&!list[0].disabled,
+                sessionsSelected:selected('Sessions'),terminalSelected:selected('Terminal'),
+                menuCount:count('.mobile-session-views'),tabsCount:count('[role=tab]'),
+                terminalCount:count('.terminal-canvas'),childDisconnect:Boolean(child),
+                endedPlaceholder:document.querySelector('.session-body > .panel-empty h3')?.textContent?.trim()==='This connection has ended.',
+                expectedChildTabSelected:Boolean(child?.closest('.session-tab')?.querySelector('[role=tab][aria-selected=true]'))};
+            })()
+        """.trimIndent()
+        fun focusTab(tab: String) {
+            sessionView(scenario, "Sessions")
+            awaitDocument(scenario, "owned Herdr discovery controls", hasButton("List herdr sessions"),
+                observe = { remaining -> evaluate(scenario, discoveryObservation, remaining) })
+            click("List herdr sessions")
+            awaitDocument(scenario, "owned Herdr browse action", hasButton("Browse Herdr $name"))
+            click("Browse Herdr $name")
+            awaitDocument(scenario, "owned exact Herdr tab action", hasButton("Focus $tab"))
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='Focus $tab']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            awaitDocument(scenario, "owned Herdr tab focus acknowledged",
+                "Array.from(document.querySelectorAll('button')).find(x=>x.textContent.trim()==='Focus $tab')?.closest('details')?.querySelector('summary')?.textContent.endsWith(' · focused')===true")
+            sessionView(scenario, "Terminal")
+        }
+        focusTab(historyTab)
+        closeSoftKeyboard()
+        val screens = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0)"
+        awaitDocument(scenario, "owned history newest row visible", "(() => {const screens=$screens; return screens.length===1 && screens[0].textContent.includes('NEW512');})()")
+        val geometryScript = """
+            (()=>{
+              const screens=$screens, viewport=window.visualViewport;
+              const unavailable={ready:false,hits:['none','none','none']};
+              if(screens.length!==1 || !viewport || viewport.scale!==1) return unavailable;
+              const screen=screens[0],terminal=screen.parentElement,canvas=screen.closest('.terminal-canvas');
+              if(!terminal?.classList.contains('xterm') || !canvas || terminal.parentElement!==canvas) return unavailable;
+              const surfaces=terminal.querySelectorAll(':scope > .xterm-viewport');
+              if(surfaces.length!==1 || !surfaces[0].getClientRects().length ||
+                getComputedStyle(surfaces[0]).visibility==='hidden') return unavailable;
+              const surface=surfaces[0],r=screen.getBoundingClientRect(),s=surface.getBoundingClientRect();
+              const inside=b=>[b.left,b.top,b.right,b.bottom].every(Number.isFinite) && b.width>0 && b.height>0 &&
+                b.left>=viewport.offsetLeft && b.top>=viewport.offsetTop &&
+                b.right<=viewport.offsetLeft+viewport.width && b.bottom<=viewport.offsetTop+viewport.height;
+              const hits=[0.25,0.5,0.75].map(fraction=>{
+                const hit=document.elementFromPoint((r.left+r.right)/2,r.top+r.height*fraction);
+                return !hit?'none':hit===screen || screen.contains(hit)?'screen':hit===surface?'viewport':'other';
+              });
+              return {ready:inside(r) && inside(s) && hits.every(hit=>hit==='screen' || hit==='viewport'),hits,
+                rect:[r.left,r.top,r.right,r.bottom],viewport:[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale],density:devicePixelRatio};
+            })()
+        """
+        val geometryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        var geometry = JSONObject()
+        while (true) {
+            val remaining = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime())
+            assertTrue("Native swipe path did not settle inside its owned screen/viewport: hits=${geometry.optJSONArray("hits")}", remaining > 0)
+            geometry = JSONObject(evaluate(scenario, geometryScript, remaining))
+            if (geometry.getBoolean("ready") && System.nanoTime() < geometryDeadline) break
+            val pause = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime()).coerceAtMost(50)
+            if (pause > 0) Thread.sleep(pause)
+        }
+        val rect = geometry.getJSONArray("rect")
+        val viewport = geometry.getJSONArray("viewport")
+        val bounds = (0..3).map { rect.getDouble(it) }
+        val visible = (0..4).map { viewport.getDouble(it) }
+        require((bounds + visible).all { it.isFinite() } && visible[2] > 0 && visible[3] > 0 && visible[4] == 1.0 &&
+            bounds[0] >= visible[0] && bounds[1] >= visible[1] && bounds[2] <= visible[0] + visible[2] &&
+            bounds[3] <= visible[1] + visible[3] && bounds[2] > bounds[0] && bounds[3] > bounds[1])
+        var startFrame: List<Int>? = null
+        fun fingerPoint(view: View, fraction: Double): FloatArray {
+            val origin = IntArray(2); view.getLocationOnScreen(origin)
+            val frame = listOf(origin[0], origin[1], view.width, view.height)
+            if (startFrame == null) startFrame = frame else assertEquals("Swipe WebView frame must remain stable", startFrame, frame)
+            val density = view.resources.displayMetrics.density.toDouble()
+            val predicates = mapOf(
+                "webView" to (view is WebView), "attached" to view.isAttachedToWindow, "shown" to view.isShown,
+                "windowFocused" to view.hasWindowFocus(), "layoutSettled" to !view.isLayoutRequested,
+                "sizePositive" to (view.width > 0 && view.height > 0), "densityValid" to (density.isFinite() && density > 0),
+                "densityMatchesDom" to (geometry.getDouble("density") == density))
+            val insets = ViewCompat.getRootWindowInsets(view.rootView)
+            val imeVisible = insets?.isVisible(WindowInsetsCompat.Type.ime())
+            val bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom
+            val windowOrigin = IntArray(2); view.getLocationInWindow(windowOrigin)
+            val rootOrigin = IntArray(2); view.rootView.getLocationInWindow(rootOrigin)
+            val top = windowOrigin[1] - rootOrigin[1]
+            val clear = swipeViewClearOfIme(imeVisible, bottom, top, view.height, view.rootView.height)
+            val imeState = when (imeVisible) { true -> "visible"; false -> "hidden"; null -> "unavailable" }
+            val imeGeometry = listOf(top, view.height, view.rootView.height, bottom ?: -1).map { it.coerceIn(-1, 65535) }
+            assertTrue("Owned swipe requires the focused, stable WebView without IME overlap: native=$predicates ime=$imeState clear=$clear geometry=$imeGeometry",
+                predicates.values.all { it } && clear)
+            val scaleX = view.width / visible[2]
+            val scaleY = view.height / visible[3]
+            val travel = (bounds[3] - bounds[1]) * 0.5 * scaleY
+            assertTrue("Owned native swipe must exceed both DOM scroll admission and native touch slop",
+                travel > 10 * scaleY && travel > ViewConfiguration.get(view.context).scaledTouchSlop * 2 && travel > 10 * density)
+            val x = ((bounds[0] + bounds[2]) / 2 - visible[0]) * scaleX
+            val y = (bounds[1] + (bounds[3] - bounds[1]) * fraction - visible[1]) * scaleY
+            assertTrue("Swipe finger must stay inside the measured native WebView", x > 0 && y > 0 && x < view.width && y < view.height)
+            return floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+        }
+        val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
+        val fingerObservation = """
+            (()=>{
+              const key=$fingerKey, screens=$screens;
+              if(Object.hasOwn(window,key) || screens.length!==1) return false;
+              const screen=screens[0],canvas=screen.closest('.terminal-canvas');
+              if(!canvas) return false;
+              let starts=0,moves=0,ends=0,cancels=0,identifier=null,valid=true;
+              const record=event=>{
+                valid=valid && event.isTrusted && canvas.contains(event.target);
+                if(event.type==='touchstart') {
+                  starts++;valid=valid && starts===1 && event.touches.length===1;
+                  identifier=event.touches[0]?.identifier;
+                } else if(event.type==='touchmove') {
+                  moves++;valid=valid && event.touches.length===1 && event.touches[0].identifier===identifier;
+                } else if(event.type==='touchend')ends++;else cancels++;
+              };
+              const events=['touchstart','touchmove','touchend','touchcancel'];
+              events.forEach(type=>canvas.addEventListener(type,record,{capture:true,passive:true}));
+              Object.defineProperty(window,key,{configurable:true,value:{
+                sample:()=>{
+                  const match=screen.textContent.match(/OLD([0-9]{3})/);
+                  return {row:match?Number(match[1]):-1,newest:screen.textContent.includes('NEW512'),
+                    active:screen.isConnected && valid && starts<=1 && ends===0 && cancels===0,
+                    held:starts===1 && moves>0,moves:Math.min(2,moves)};
+                },dispose:()=>events.forEach(type=>canvas.removeEventListener(type,record,true))}});
+              return true;
+            })()
+        """.trimIndent()
+        assertEquals("Owned continuous finger observation installed", "true", evaluate(scenario, fingerObservation))
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val downTime = android.os.SystemClock.uptimeMillis()
+        val pointer = android.view.MotionEvent.PointerProperties().apply {
+            id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
+        }
+        var fingerDown = false
+        var lastPoint = floatArrayOf()
+        var fingerFailure: Throwable? = null
+        fun sendFinger(action: Int, point: FloatArray) {
+            val coordinate = android.view.MotionEvent.PointerCoords().apply {
+                x = point[0]; y = point[1]; pressure = 1f; size = 1f
+            }
+            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
+                1, arrayOf(pointer), arrayOf(coordinate), 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+            try {
+                assertEquals("One native finger identity throughout drag", 0, event.getPointerId(0))
+                assertEquals("One native DOWN epoch throughout drag", downTime, event.downTime)
+                instrumentation.sendPointerSync(event)
+            } finally {event.recycle()}
+        }
+        fun injectFinger(action: Int, fraction: Double) {
+            scenario.onActivity {activity -> lastPoint = fingerPoint(checkNotNull(webView(activity.window.decorView)), fraction)}
+            sendFinger(action, lastPoint)
+        }
+        val fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        fun progress(before: Int, moves: Int): Int {
+            while (true) {
+                val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
+                assertTrue("Owned continuous drag did not advance before UP", remaining > 0)
+                val sample = JSONObject(evaluate(scenario, "window[$fingerKey].sample()", remaining.coerceAtMost(1_000)))
+                assertTrue("Trusted finger stream must not restart, end or cancel before progress", sample.getBoolean("active"))
+                val row = sample.getInt("row")
+                if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
+                Thread.sleep(10)
+            }
+        }
+        try {
+            fingerDown = true
+            injectFinger(android.view.MotionEvent.ACTION_DOWN, 0.25)
+            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.5)
+            val firstRow = progress(512, 1)
+            injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.75)
+            val secondRow = progress(firstRow, 2)
+            assertTrue("Second MOVE must reveal further history before the same finger lifts", secondRow < firstRow)
+            injectFinger(android.view.MotionEvent.ACTION_UP, 0.75)
+            fingerDown = false
+        } catch (failure: Throwable) {fingerFailure = failure; throw failure}
+        finally {
+            var cleanup: Throwable? = null
+            try {
+                if (fingerDown && lastPoint.size == 2) sendFinger(android.view.MotionEvent.ACTION_CANCEL, lastPoint)
+            } catch (failure: Throwable) {cleanup = failure}
+            try {evaluate(scenario, "window[$fingerKey]?.dispose();delete window[$fingerKey];true")}
+            catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+            if(cleanup!=null) {if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!) else throw cleanup!!}
+        }
+        awaitDocument(scenario, "native finger swipe reveals older owned Herdr rows", """
+            (()=>{const screens=$screens; return screens.length===1 && /OLD[0-9]{3}/.test(screens[0].textContent) && !screens[0].textContent.includes('NEW512');})()
+        """)
+        focusTab(originalTab)
+        println("lazysh Herdr finger scroll: two native MOVE phases advanced history before one UP; original tab restored before guarded Chat")
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
@@ -1576,6 +1807,8 @@ class NativeWorkspaceTest {
             println("lazysh clipboard UI: PNG/JPEG preview without upload and non-content/oversize rejection verified")
         }
     }
+
+    private enum class SshUiCleanupStage { DISMISS, SESSION_SELECT, DISCONNECT, HOST_DELETE }
 
     private fun ownedWakeLockHeld(power: String, uid: Int, pid: Int): Boolean {
         val start = Regex("(?m)^Wake Locks: size=[0-9]+\\r?$").find(power)
@@ -1830,7 +2063,7 @@ class NativeWorkspaceTest {
         }
         val fixture = try { JSONObject(String(bytes, Charsets.UTF_8)) }
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
-        if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name").isNotEmpty()) { "Owned Herdr fixture required" }
+        if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name") == "owned-guard") { "Owned Herdr fixture required" }
         require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
         val nonce = fixture.getString("nonce")
         require(Regex("[a-f0-9]{32}").matches(nonce)) { "Invalid owned SSH nonce" }
@@ -2276,12 +2509,20 @@ class NativeWorkspaceTest {
         } finally {
             android.util.Log.i("LazyshOwnedCase", "end:$nonce:pid:${android.os.Process.myPid()}")
             var cleanupFailure: Throwable? = null
-            fun retainCleanup(failure: Throwable, message: String) {
+            fun retainCleanup(message: String) {
+                val failure = AssertionError(message)
                 val first = primaryFailure ?: cleanupFailure
-                if (first != null) first.addSuppressed(AssertionError(message))
+                if (first != null) first.addSuppressed(failure)
                 else cleanupFailure = failure
             }
-            try {
+            var cleanupStage = SshUiCleanupStage.DISMISS
+            fun cleanupUi(action: () -> Unit) {
+                try { action() }
+                catch (cleanup: Throwable) {
+                    retainCleanup("Owned SSH UI cleanup failed: ${cleanupStage.name}:${cleanup.javaClass.simpleName}")
+                }
+            }
+            cleanupUi {
                 val authentication = "[role=dialog] textarea, [role=dialog] .fingerprint code, [role=dialog] .destination"
                 if (evaluate(scenario, present(authentication)) == "true") {
                     clickButton("Cancel")
@@ -2294,19 +2535,40 @@ class NativeWorkspaceTest {
                         Thread.sleep(50)
                     }
                 }
-                val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
-                for (ownedName in ownedNames) {
+                val menu = "[role=dialog][aria-label='Workspace tools']"
+                if (evaluate(scenario, workspaceElementVisible(menu)) == "true")
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, "$menu button[aria-label='Close Workspace tools']")).perform(webClick())
+            }
+            val ownedNames = if (requireHerdr) listOf("$name / ${fixture.getJSONObject("herdr").getString("name")}", name) else listOf(name)
+            for (ownedName in ownedNames) {
+                cleanupUi {
+                    cleanupStage = SshUiCleanupStage.SESSION_SELECT
                     val disconnect = "button[aria-label='Disconnect $ownedName']"
-                    if (evaluate(scenario, present(disconnect)) == "true")
-                        onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                    if (evaluate(scenario, present(disconnect)) == "true") {
+                        val selected = "Array.from(document.querySelectorAll('[role=tab][aria-selected=true]')).some(x=>x.textContent.trim()===${JSONObject.quote(ownedName)})"
+                        if (evaluate(scenario, selected) != "true") {
+                            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Switch terminal session']")).perform(webClick())
+                            val choice = "//*[@role='dialog' and @aria-label='Switch terminal session']//button[span[normalize-space(.)='$ownedName']]"
+                            onWebView().withElement(findElement(Locator.XPATH, choice)).perform(webScrollIntoView()).perform(webClick())
+                            awaitDocument(scenario, "owned cleanup session selected", selected)
+                        }
+                        cleanupStage = SshUiCleanupStage.DISCONNECT
+                        if (evaluate(scenario, workspaceElementVisible(disconnect, true)) == "true")
+                            onWebView().withElement(findElement(Locator.CSS_SELECTOR, disconnect)).perform(webClick())
+                        else workspaceMenuAction(scenario, "End $ownedName connection")
+                        awaitDocument(scenario, "owned cleanup session ended", "!" + present(disconnect))
+                    }
                 }
+            }
+            cleanupStage = SshUiCleanupStage.HOST_DELETE
+            cleanupUi {
                 val delete = "button[aria-label='Delete $name']"
                 if (evaluate(scenario, present("button[aria-label='Connect to $name']")) == "true") {
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, delete)).perform(webClick())
                     onWebView().withElement(findElement(Locator.CSS_SELECTOR, "[role='dialog'][aria-label='Delete host'] button.danger-button")).perform(webClick())
                 }
-            } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH UI cleanup failed") }
+            }
             try {
                 instrumentation.runOnMainSync {
                     if (clipboard.primaryClipDescription?.label?.toString() == label) {
@@ -2314,7 +2576,7 @@ class NativeWorkspaceTest {
                         else clipboard.setPrimaryClip(ClipData.newPlainText(label, ""))
                     }
                 }
-            } catch (cleanup: Throwable) { retainCleanup(cleanup, "Owned SSH clipboard cleanup failed") }
+            } catch (_: Throwable) { retainCleanup("Owned SSH clipboard cleanup failed") }
             cleanupFailure?.let { throw it }
         }
     }

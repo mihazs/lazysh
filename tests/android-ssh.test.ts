@@ -929,6 +929,61 @@ test('partial passive tap setup failure attempts listener cleanup without exposi
   expect(attached.size).toBe(0);
 });
 
+test('Herdr discovery observation retains only closed state and capped counts',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const script=source.match(/val discoveryObservation = """([\s\S]*?)"""[.]trimIndent\(\)/)![1]
+    .replaceAll("${'$'}",'$').replace('$childDisconnect',JSON.stringify("button[aria-label='Disconnect owned child']"));
+  const observe=new Function('document',`return (${script.trim()});`);
+  let panels:unknown[]=[],buttons=[{textContent:'List herdr sessions',disabled:false}];
+  let capability='tmux available · Herdr detected · Zellij missing';
+  let endedText:string|undefined,childPresent=true,childSelected=false;
+  const otherSelected={private:'another selected tab must not establish child ownership'};
+  const child={closest:(selector:string)=>selector==='.session-tab'?{
+    querySelector:(selector:string)=>selector==='[role=tab][aria-selected=true]'&&childSelected?{private:'owned selected tab'}:null,
+  }:null};
+  const document={querySelector:(selector:string)=>{
+    if(selector==="button[aria-label='Disconnect owned child']")return childPresent?child:null;
+    if(selector==='.session-body > .panel-empty h3')return endedText===undefined?null:{textContent:endedText};
+    if(selector==='[role=tab][aria-selected=true]')return otherSelected;
+    return null;
+  },querySelectorAll:(selector:string)=>{
+    if(selector==='.multiplexer-panel')return panels;
+    if(selector.includes('aria-current=page'))return [{textContent:'Sessions'}];
+    return Array(17).fill({private:'never retain this'});
+  }};
+  const absent=observe(document);
+  expect(absent).toEqual({panelCount:0,loading:false,inlineError:false,herdrCapability:'unknown',listCount:0,listEnabled:false,
+    sessionsSelected:true,terminalSelected:false,menuCount:8,tabsCount:8,terminalCount:8,childDisconnect:true,endedPlaceholder:false,expectedChildTabSelected:false});
+  for(const ended of [false,true])for(const selected of [false,true]){
+    endedText=ended?'This connection has ended.':undefined;childSelected=selected;
+    expect(observe(document)).toMatchObject({endedPlaceholder:ended,expectedChildTabSelected:selected});
+  }
+  for(const text of ['private receiver output','This connection has ended. private trailing output','private prefix This connection has ended.']){
+    endedText=text;childSelected=false;
+    expect(observe(document)).toMatchObject({endedPlaceholder:false,expectedChildTabSelected:false});
+    expect(JSON.stringify(observe(document))).not.toContain('private');
+  }
+  endedText='This connection has ended.';childSelected=true;childPresent=false;
+  expect(observe(document)).toMatchObject({endedPlaceholder:true,childDisconnect:false,expectedChildTabSelected:false});
+  endedText=undefined;childPresent=true;childSelected=false;
+  const panel={querySelectorAll:()=>buttons,querySelector:(selector:string)=>selector==='p.muted'?{textContent:capability}: {private:'never retain this'}};
+  panels=[panel];
+  const present=observe(document);
+  expect(present).toMatchObject({panelCount:1,loading:true,inlineError:true,herdrCapability:'detected',listCount:1,listEnabled:true});
+  for(const value of ['missing','private path/error and host']){
+    capability=value==='missing'?'Herdr not installed':value;
+    expect(observe(document).herdrCapability).toBe(value==='missing'?'missing':'unknown');
+  }
+  buttons=[{textContent:'List herdr sessions',disabled:true}];
+  expect(observe(document)).toMatchObject({listCount:1,listEnabled:false});
+  buttons=Array(17).fill({textContent:'List herdr sessions',disabled:false});
+  expect(observe(document)).toMatchObject({listCount:8,listEnabled:false});
+  panels=[panel,panel];
+  expect(observe(document)).toMatchObject({panelCount:2,herdrCapability:'unknown',listCount:0});
+  expect(JSON.stringify(observe(document))).not.toContain('private');
+  expect(Object.values(present).every(value=>typeof value==='boolean'||Number.isInteger(value)||['detected','missing','unknown'].includes(value as string))).toBe(true);
+});
+
 async function herdrConfirmationFixture() {
   const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const source=kotlin.match(/private fun herdrConfirmationObservation\([\s\S]*?val expression = """([\s\S]*?)"""/)!;
@@ -988,4 +1043,39 @@ test('Herdr confirmation observation caps duplicates and retains only owned DOM 
   for(const value of [child,draft,privateValue,'secret','/private'])expect(serialized).not.toContain(value);
   expect(serialized.length).toBeLessThan(250);
   expect(observe({regions:[{buttons:[...buttons,{textContent:'Choose terminal destination',disabled:false}]}],tabs:[{textContent:child+'-other',idle:true}],footer:['Mosh-private'],value:draft+'-other'})).toMatchObject({chooseDisabled:false,ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
+});
+
+
+test('native continuous finger observation rejects restarts, identity changes, untrusted events and early release',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const match=source.match(/val fingerObservation = """([\s\S]*?)"""[.]trimIndent\(\)/)!;
+  expect(match).not.toBeNull();
+  const key='owned-finger-probe';
+  const expression=match[1].replaceAll('$fingerKey',JSON.stringify(key)).replaceAll('$screens','ownedScreens');
+  function setup() {
+    const callbacks=new Map<string,(event:Record<string,unknown>)=>void>();
+    const canvas={contains:(target:unknown)=>target===screen,addEventListener:(name:string,fn:(event:Record<string,unknown>)=>void)=>callbacks.set(name,fn),
+      removeEventListener:(name:string)=>callbacks.delete(name)};
+    const screen={isConnected:true,textContent:'OLD490OLD491NEW512',closest:()=>canvas};
+    const window={} as Record<string,{sample:()=>{row:number;newest:boolean;active:boolean;held:boolean;moves:number};dispose:()=>void}>;
+    const install=new Function('window','ownedScreens',`return (${expression.trim()});`);
+    expect(install(window,[screen])).toBe(true);expect(install(window,[screen])).toBe(false);
+    const event=(type:string,identifier=3,trusted=true)=>callbacks.get(type)!({type,isTrusted:trusted,target:screen,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier}]});
+    return {screen,window,event,sample:()=>window[key].sample(),dispose:()=>window[key].dispose(),callbacks};
+  }
+  const good=setup();expect(good.sample()).toEqual({row:490,newest:true,active:true,held:false,moves:0});
+  good.event('touchstart');good.event('touchmove');good.screen.textContent='OLD480OLD481';
+  expect(good.sample()).toEqual({row:480,newest:false,active:true,held:true,moves:1});
+  good.event('touchmove');good.screen.textContent='OLD470OLD471';expect(good.sample().row).toBeLessThan(480);expect(good.sample().moves).toBe(2);
+  good.event('touchend');expect(good.sample().active).toBe(false);
+  good.dispose();expect(good.callbacks.size).toBe(0);
+  for(const bad of ['restart','identity','untrusted','cancel','detached']) {
+    const fixture=setup();fixture.event('touchstart');
+    if(bad==='restart')fixture.event('touchstart');
+    if(bad==='identity')fixture.event('touchmove',4);
+    if(bad==='untrusted')fixture.event('touchmove',3,false);
+    if(bad==='cancel')fixture.event('touchcancel');
+    if(bad==='detached')fixture.screen.isConnected=false;
+    expect(fixture.sample().active).toBe(false);fixture.dispose();expect(fixture.callbacks.size).toBe(0);
+  }
 });
