@@ -1037,6 +1037,39 @@ it("focuses host search when opened with the command palette shortcut", async ()
   ).toBeTruthy();
 });
 
+it('keeps restore gated on host loading and explicit action while exposing its limitations on demand',async()=>{
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'home'}]):null);
+  let loaded!:(value:Host[])=>void; mocks.api.listHosts.mockImplementationOnce(()=>new Promise(resolve=>{loaded=resolve;}));
+  let connected!:(value:{sessionId:string})=>void; mocks.api.connect.mockImplementationOnce(()=>new Promise(resolve=>{connected=resolve;}));
+  const user=userEvent.setup(); render(<App/>);
+  const restore=await screen.findByRole('button',{name:'Restore previous workspace'});
+  expect(restore).toHaveProperty('disabled',true);
+  const details=screen.getByRole('button',{name:'Workspace details'});
+  expect(details.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeNull();
+  await user.click(details);
+  expect(screen.getByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeTruthy();
+  expect(mocks.api.connect).not.toHaveBeenCalled();
+  await act(async()=>loaded([host])); await waitFor(()=>expect(restore).toHaveProperty('disabled',false));
+  await user.click(restore);
+  expect(screen.getByRole('button',{name:'Restoring…'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Dismiss'})).toHaveProperty('disabled',true);
+  expect(mocks.api.connect).toHaveBeenCalledWith('home',{},expect.any(Function),{useSavedCredentials:true});
+  await act(async()=>connected({sessionId:'restored-explicit'})); await screen.findByText('Live SSH terminal');
+});
+it('dismisses saved restoration without disconnecting or replacing the current workspace',async()=>{
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'previous-host'}]):null);
+  mocks.api.connect.mockResolvedValue({sessionId:'keep-current-session'});
+  const user=await openConnection(); await user.click(screen.getByRole('button',{name:'Connect'})); await screen.findByText('Live SSH terminal');
+  const dismiss=screen.getByRole('button',{name:'Dismiss'});
+  expect(dismiss.textContent).toBe(''); expect(dismiss.querySelector('svg')).not.toBeNull();
+  await user.click(dismiss);
+  expect(screen.queryByRole('button',{name:'Restore previous workspace'})).toBeNull();
+  expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home'}]));
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1); expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  expect(screen.getByText('Live SSH terminal')).toBeTruthy();
+});
+
 it.each([undefined, "agents"])("restores the exact tmux workspace on server %s without sending shell text", async tmuxServer => {
   vi.mocked(localStorage.getItem).mockReturnValue(
     JSON.stringify([
@@ -1650,8 +1683,8 @@ it('opens Agents on the attached default Herdr session among several running ser
   ]);
   expect(mocks.api.write).not.toHaveBeenCalled();
 });
-it.each(['current','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
-  const existing=outcome==='current'||outcome==='unsupported';
+it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
+  const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported';
   mocks.api.listHosts.mockResolvedValue([{...host,...(existing?{defaultMultiplexer:{kind:'herdr',name:'named-work'}}:{})}]);
   mocks.api.connect.mockResolvedValue({sessionId:'navigation-source'});
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'navigation-existing'});
@@ -1660,6 +1693,7 @@ it.each(['current','adopt','adopt-held-tree','adopt-held-reply','cancel-before-p
   if(outcome==='cancel-before-publication')mocks.api.attachMultiplexer.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
   const original=mocks.invoke.getMockImplementation()!;
   mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,sessions:[]});
     if(command==='multiplexer_sessions')return Promise.resolve([{name:'named-work'}]);
     if(command==='herdr_tree'){
       if(++reads===1)return Promise.resolve(herdrNavigationTree);
@@ -1670,6 +1704,12 @@ it.each(['current','adopt','adopt-held-tree','adopt-held-reply','cancel-before-p
     return original(command,args);
   });
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  if(outcome==='current-second-display'){
+    await user.click(screen.getByRole('button',{name:'Sessions'}));
+    await user.click(await screen.findByRole('button',{name:'List herdr sessions'}));
+    await user.click(await screen.findByRole('button',{name:'Attach herdr named-work'}));
+    await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work / named-work'}).getAttribute('aria-selected')).toBe('true'));
+  }
   await user.click(screen.getByRole('button',{name:'Workspaces'}));
   const browser=within(await screen.findByRole('region',{name:t('herdrNavigationTitle')}));
   await user.click(await browser.findByRole('button',{name:/^builder/}));
@@ -1703,10 +1743,11 @@ it.each(['current','adopt','adopt-held-tree','adopt-held-reply','cancel-before-p
     expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
   } else if(outcome==='unsupported')expect(await browser.findByRole('alert')).toHaveProperty('textContent',t('herdrNavigationUnsupported'));
   else if(outcome==='missing')expect((await screen.findByRole('alert')).textContent).toContain(t('herdrNavigationChanged'));
-  else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_chat',{sessionId:existing?'navigation-existing':'navigation-adopted',action:{kind:'navigate',name:'named-work',target:{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'}}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
+  else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_chat',{sessionId:existing&&outcome!=='current-second-display'?'navigation-existing':'navigation-adopted',action:{kind:'navigate',name:'named-work',target:{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'}}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
   const sent=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_chat');
   expect(sent).toHaveLength(outcome==='missing'||outcome==='stale'||(cancelled&&outcome!=='cancel-pending-reply')?0:1);
-  if(existing)expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  if(outcome==='current-second-display'){expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-existing','herdr','named-work',expect.any(Function));expect(sent.every(([,args])=>(args as {sessionId:string}).sessionId==='navigation-adopted')).toBe(true);expect(mocks.api.adoptSession.mock.calls.map(([id])=>id)).toEqual(['navigation-existing','navigation-adopted']);expect(screen.getByRole('tab',{name:'Home / named-work / named-work'}).getAttribute('aria-selected')).toBe('true');}
+  else if(existing)expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
   else expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-source','herdr','named-work',expect.any(Function));
   expect(mocks.api.write).not.toHaveBeenCalled();
   if(outcome==='cancel-before-publication')expect(mocks.api.adoptSession).not.toHaveBeenCalledWith('navigation-adopted');

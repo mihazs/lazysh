@@ -29,6 +29,81 @@ async function fixture(page:Page) {
   await page.getByText('Keyboard chords',{exact:true}).click();
 }
 
+test('momentary terminal touch feedback clears after release while modifiers remain intentional',async({page},testInfo)=>{
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await fixture(page);
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if(testInfo.project.name==='phone') await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await page.clock.install();
+  const keys=page.getByLabel('Terminal keys',{exact:true});
+  const colors=(button:import('@playwright/test').Locator)=>button.evaluate(element=>({background:getComputedStyle(element).backgroundColor,color:getComputedStyle(element).color}));
+  const resting=await colors(keys.getByRole('button',{name:'esc',exact:true}));
+  const activate=async(button:import('@playwright/test').Locator)=>{
+    if(testInfo.project.name==='phone') await button.tap();
+    else {await button.click();await page.mouse.move(0,0);}
+  };
+  const expected:string[]=[];
+  for(const [name,bytes] of [['tab','\t'],['Arrow right','\x1b[C']]){
+    const button=keys.getByRole('button',{name,exact:true});
+    await activate(button);
+    expected.push(bytes); await page.clock.runFor(1000);
+    expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(expected);
+    expect(await button.getAttribute('aria-pressed')).toBeNull();
+    await testInfo.attach(`${name}-state.json`,{body:JSON.stringify({hover:await button.evaluate(element=>element.matches(':hover')),pressed:await button.getAttribute('aria-pressed'),colors:await colors(button),writes:expected}),contentType:'application/json'});
+    await page.screenshot({path:testInfo.outputPath('momentary-toolbar.png')});
+    await expect.poll(()=>colors(button)).toEqual(resting);
+  }
+  for(const name of ['ctrl','Alt']){
+    const modifier=keys.getByRole('button',{name:new RegExp(`^${name}(?: · lock)?$`)});
+    await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','true');
+    expect(await colors(modifier)).not.toEqual(resting);
+    await activate(modifier);await expect(modifier).toContainText('lock');
+    await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','false');
+    await expect.poll(()=>colors(modifier)).toEqual(resting);
+  }
+  const shift=keys.getByRole('button',{name:'Shift',exact:true});
+  await activate(shift);await expect(shift).toHaveAttribute('aria-pressed','true');
+  expect(await colors(shift)).not.toEqual(resting);await activate(shift);
+  const right=keys.getByRole('button',{name:'Arrow right',exact:true});
+  await right.scrollIntoViewIfNeeded();
+  const point=(await right.boundingBox())!;
+  const cdp=await page.context().newCDPSession(page);
+  const location={x:point.x+point.width/2,y:point.y+point.height/2};
+  if(testInfo.project.name==='phone') await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[location]});
+  else {await page.mouse.move(location.x,location.y);await page.mouse.down();}
+  if(testInfo.project.name==='desktop') expect(await colors(right)).not.toEqual(resting);
+  await page.clock.runFor(560);
+  const held=await page.evaluate(()=>window.simpleShortcutWrites);
+  expect(held.slice(0,expected.length)).toEqual(expected);
+  expect(held.length).toBeGreaterThanOrEqual(expected.length+2);
+  expect(held.slice(expected.length).every(value=>value==='\x1b[C')).toBe(true);
+  if(testInfo.project.name==='phone') await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});
+  else {await page.mouse.up();await page.mouse.move(0,0);}
+  const released=await page.evaluate(()=>window.simpleShortcutWrites);
+  expect(released.slice(0,held.length)).toEqual(held);
+  expect(released.slice(held.length).every(value=>value==='\x1b[C')).toBe(true);
+  await page.clock.runFor(1000);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(released);
+  await expect.poll(()=>colors(right)).toEqual(resting);
+  if(testInfo.project.name==='desktop') {
+    await right.hover();expect(await colors(right)).not.toEqual(resting);await page.mouse.move(0,0);
+  }
+  await right.focus();await page.keyboard.press('Shift+Tab');await page.keyboard.press('Tab');
+  await expect(right).toBeFocused();
+  expect(await right.evaluate(element=>getComputedStyle(element).outlineStyle)).not.toBe('none');
+  await page.keyboard.down('Space');
+  await expect.poll(()=>right.evaluate(element=>element.matches(':active'))).toBe(true);
+  await expect.poll(()=>colors(right)).not.toEqual(resting);
+  await page.keyboard.up('Space');
+  await expect.poll(()=>colors(right)).toEqual(resting);
+  await keys.evaluate(element=>{element.style.setProperty('--theme-control','rgb(10, 20, 30)');element.style.setProperty('--theme-text','rgb(220, 230, 240)');element.style.setProperty('--theme-hover','rgb(40, 50, 60)');element.style.setProperty('--theme-accent','rgb(70, 80, 90)');});
+  await activate(right);
+  await expect.poll(()=>colors(right)).toEqual({background:'rgb(10, 20, 30)',color:'rgb(220, 230, 240)'});
+  await activate(shift);
+  await expect.poll(()=>colors(shift)).toEqual({background:'rgb(40, 50, 60)',color:'rgb(70, 80, 90)'});
+});
+
+
 test('Simple custom text survives reload and sends exact toolbar bytes only on explicit click',async({page})=>{
   await fixture(page);
   await expect(page.getByLabel('Shortcut builder')).toHaveValue('advanced');

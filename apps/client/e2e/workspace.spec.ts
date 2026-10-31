@@ -242,6 +242,32 @@ test('mobile terminal keeps one compact header and reaches every session control
     await page.getByRole('textbox',{name:'Password',exact:true}).fill('synthetic-only');
     await page.getByRole('button',{name:'Connect',exact:true}).click();
   }
+  const startup=page.locator('.workspace > .workspace-restore');
+  const startupRow=startup.locator('.workspace-restore-row');
+  const widths=phone?[320,393,412]:[1280];
+  for(const width of widths)for(const font of [1,1.5,2]){
+    await page.setViewportSize({width,height:844});
+    await startupRow.evaluate((element,scale)=>{element.style.fontSize=`${11*scale}px`;for(const button of element.querySelectorAll('button'))button.style.fontSize='inherit';},font);
+    const restoreButton=(await startupRow.getByRole('button',{name:'Restore previous workspace',exact:true}).boundingBox())!;
+    const info=(await startupRow.getByRole('button',{name:'Workspace details',exact:true}).boundingBox())!;
+    const dismiss=(await startupRow.getByRole('button',{name:'Dismiss',exact:true}).boundingBox())!;
+    expect(restoreButton.x+restoreButton.width).toBeLessThanOrEqual(info.x);
+    expect(info.x+info.width).toBeLessThanOrEqual(dismiss.x);
+    expect(info.width).toBe(44);expect(info.height).toBe(44);expect(dismiss.width).toBe(44);expect(dismiss.height).toBe(44);
+    expect(info.y+info.height/2).toBe(dismiss.y+dismiss.height/2);
+    expect(await startup.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  }
+  await startupRow.evaluate(element=>{element.style.fontSize='';for(const button of element.querySelectorAll('button'))button.style.fontSize='';});
+  await page.setViewportSize({width:phone?393:1280,height:844});
+  const collapsed=(await startup.boundingBox())!.height;
+  expect(await startup.locator('.workspace-restore-help').count()).toBe(0);
+  await startupRow.getByRole('button',{name:'Workspace details',exact:true}).click();
+  await expect(startup.getByText('Uses saved credentials; tmux and Herdr reattach. Open Zellij sessions from Sessions.',{exact:true})).toBeVisible();
+  expect((await startup.boundingBox())!.height).toBeGreaterThan(collapsed);
+  await expect(page.locator('.terminal-canvas:visible')).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath('restore-details.png')});
+  await startupRow.getByRole('button',{name:'Workspace details',exact:true}).click();
+  await page.screenshot({path:testInfo.outputPath('compact-restore.png')});
   await connectHost();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   const canvas=await page.locator('.terminal-canvas:visible').elementHandle();

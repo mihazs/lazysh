@@ -29,6 +29,7 @@ import {
   GitCompareArrows,
   KeyRound,
   Layers,
+  Info,
   Menu,
   MessageSquare,
   Settings,
@@ -1122,6 +1123,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [inbox, setInbox] = useState(false);
   const [previousWorkspace, setPreviousWorkspace] = useState(() => registry.sessions.length ? [] : readWorkspace());
   const [restoring, setRestoring] = useState(false);
+  const [restoreDetails, setRestoreDetails] = useState(false);
   const restoringRef = useRef(false);
   const mounted = useRef(true);
   const restoringSessions = useRef(new PendingSessions());
@@ -1645,8 +1647,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   async function openHerdrTarget(source:LiveSession,name:string,target:HerdrNavigationTarget|undefined,owner:AccessLease,visible:()=>boolean) {
     const selectedNavigation=navigationState.current[source.id];
     if(!selectedNavigation)throw new LocalUiError('herdrNavigationChanged');
-    let destination=sessionsRef.current.find(session=>session.connected && !session.disposed && !closingSessions.current.has(session.id)
-      && session.hostId===source.hostId && session.destination===source.destination && session.attached?.kind==='herdr' && session.attached.name===name);
+    const matchingDisplay=(session:LiveSession)=>session.connected && !session.disposed && !closingSessions.current.has(session.id)
+      && session.hostId===source.hostId && session.destination===source.destination && session.attached?.kind==='herdr' && session.attached.name===name;
+    let destination=matchingDisplay(source)?source:sessionsRef.current.find(matchingDisplay);
     let adopted=false;
     const intent={source:source.id,destination:undefined as string|undefined,navigation:selectedNavigation};
     herdrNavigationIntent.current=intent;
@@ -1689,20 +1692,23 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   );
 
   const workspaceRestoreControls = <>
-    <button
+    <div className="workspace-restore-row">
+    <button type="button"
       disabled={restoring || !loaded}
       onClick={() => {setMobileTools(false);void restoreWorkspace();}}
     >
       {restoring ? t("appRestoring") : t("appRestorePreviousWorkspace")}
     </button>
-    <span>{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</span>
-    <button
+    <button type="button" className="icon-button" aria-label={t("muxDetails")} title={t("muxDetails")} aria-expanded={restoreDetails} onClick={() => setRestoreDetails(!restoreDetails)}><Info size={18} aria-hidden="true" /></button>
+    <button type="button" className="icon-button" aria-label={t("appDismiss")} title={t("appDismiss")}
       disabled={restoring}
       onClick={() => {
         setPreviousWorkspace([]);
         persistWorkspace(sessionsRef.current);
       }}
-    >{t("appDismiss")}</button>
+    ><X size={18} aria-hidden="true" /></button>
+    </div>
+    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
   </>;
   return (
     <div className="app-shell">
