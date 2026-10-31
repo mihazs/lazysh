@@ -3,13 +3,13 @@ import {api as nativeApi} from './bridge';
 import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useEffect,useRef,useState} from 'react';
-type Agent='claude'|'codex'|'gemini'|'cursor'|'opencode';
-type Status={supported:boolean;state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string};
+type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode';
+type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string};
 export function parseHookStatus(value:unknown):Status {
   if(!value || typeof value!=='object')throw new LocalUiError('hooksInvalid');
   const v=value as Record<string,unknown>;
   if(v.schemaVersion!==1 || typeof v.supported!=='boolean' || v.reporting!=='notChecked' || v.trust!=='notChecked')throw new LocalUiError('hooksInvalid');
-  if(!v.supported){if(v.reason!=='HooksAclUnsupported')throw new LocalUiError('hooksInvalid');return {supported:false,state:null};}
+  if(!v.supported){if(v.reason!=='HooksAclUnsupported' && v.reason!=='HooksDroidStandaloneRequired')throw new LocalUiError('hooksInvalid');return {supported:false,state:null,reason:v.reason};}
   if(![null,'prepared','configured','removed','conflict'].includes(v.state as null))throw new LocalUiError('hooksInvalid');
   if(v.state==='conflict')return {supported:true,state:'conflict'};
   if(![v.installPlan,v.removePlan].every(plan=>typeof plan==='string' && /^[a-f0-9]{64}$/.test(plan)))throw new LocalUiError('hooksInvalid');
@@ -44,11 +44,11 @@ export default function CompanionHooksPanel({sessionId,visible}:{sessionId:strin
   return <details className="companion-install" hidden={!visible} aria-label={t('hooksTitle')}>
     <summary>{t('hooksTitle')}</summary>
     <div className="tool-bar">
-      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent)}><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option></select></label>
-      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
+      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent)}><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option></select></label>
+      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
       <button className="subtle-button" disabled={busy || !profile.startsWith('/')} onClick={()=>void run('status')}>{t('hooksInspect')}</button>
     </div>
-    {status && <p className="agent-note" role="status">{t(!status.supported?'hooksUnsupported':status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
+    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
     {status?.supported && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
