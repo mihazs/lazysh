@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a dedicated Herdr Spaces hierarchy and live agent groups to workspace navigation, with one selected-server reader and search. Reuse a matching display or attach the selected server before validating the destination. Workspace and tab jumps use stock Herdr; exact shell and agent pane jumps use the updated companion. Focus is shared with other connections to that server. Navigation retires prior Chat confirmation, and server focus metadata is not presented as this client’s current selection. Connection defaults are unchanged.
+
 - Pipeline companion verification through a fixed window of SFTP reads, preserving ordered full-file hashes, partial reads, EOF and metadata checks, existing time limits and conservative deletion guards. Retain closed cleanup stage/reason observations when completion is not verified; residue remains distinct from installation success.
 
 - Add native Cursor CLI activity/completion hooks, an Amp thread-state observer plugin and aggregate Aider notification health. Print reviewed configuration/assets without changing profiles or approvals; Aider callbacks have no session identity or lifecycle states and never alter running session rows. Cursor permission waits and Kimi per-turn completion remain unsupported.

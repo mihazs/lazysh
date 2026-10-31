@@ -1,5 +1,14 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  herdrNavigationTitle: "Herdr navigation",
+  herdrNavigationBack: "Back to terminal",
+  herdrNavigationSpaces: "Spaces",
+  herdrNavigationSearch: "Search spaces, tabs and panes",
+  herdrNavigationCollapse: "Expand or collapse {{name}}",
+  herdrNavigationEmpty: "No matching live agents.",
+  herdrNavigationCompanion: "Install or update the companion from Agents for exact pane navigation.",
+  herdrNavigationShared: "Shared focus changes focus for other connections to this server.",
+  herdrNavigationChanged: "The selected connection or destination changed. Open navigation again.",
   accountUsageRestore: "Reconnect host tools",
   accountUsageOpen: "Open AI account usage",
   accountUsageTitle: "AI account usage",

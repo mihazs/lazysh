@@ -41,6 +41,13 @@ enum Command {
         #[arg(long)]
         watch_channel: bool,
     },
+    /// Focus an exact stock Herdr pane; focus is shared with other clients.
+    HerdrFocusPane {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        pane: String,
+    },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
         #[arg(long, value_enum)]
@@ -188,6 +195,9 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
     }
     let output = match cli.command {
+        Command::HerdrFocusPane { session, pane } => {
+            Some(lazysh_agent::herdr::focus_pane(&session, &pane)?)
+        }
         Command::Licenses => Some(serde_json::json!({
             "schemaVersion": 1,
             "notices": [

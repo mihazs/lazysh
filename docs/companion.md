@@ -889,3 +889,20 @@ from companion lifecycle reports and do not establish approval, input or transcr
 authority. Search the live Herdr section by agent, project or pane. Discovery stops
 while the Agents view is hidden. Failed reads remove the previous live results;
 check the terminal when a status cannot be read.
+
+### Spaces and live pane navigation
+
+Open Spaces for the workspace/tab/pane hierarchy or live Agents for grouped agent
+panes. Both views share one reader for the selected Herdr server. Opening a target
+reuses the active matching terminal or explicitly attaches that exact server.
+Herdr workspace and tab focus use the stock CLI. Exact shell and agent pane focus
+requires the companion's `herdr-focus-pane` command, which sends only `pane.focus`
+to the selected running server's Unix socket. Install/update the companion from
+Agents when the app offers setup. No Herdr replacement or configuration change is
+required for view navigation.
+
+Focus is shared: other connections to that server may move too. The app labels
+this behavior and does not infer this client's selection from global snapshot
+focus fields. Navigation retires prior guarded Chat confirmation; sending input
+still requires a fresh, separately validated confirmation. Pane navigation is
+bounded and never falls back to terminal input or another pane after a failure.

@@ -5,6 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
 import {applyAccessStatus} from './access';
 import HerdrAgentsPanel,{parseHerdrAgents} from './HerdrAgentsPanel';
+import HerdrNavigation from './HerdrNavigation';
+import {herdrNavigationTree as tree} from './test/herdrNavigation';
 import {t,uiI18n} from './i18n/core';
 
 vi.mock('@tauri-apps/api/core', async original => ({...await original<typeof import('@tauri-apps/api/core')>(), invoke: vi.fn(),Channel:class {onmessage?:unknown;}}));
@@ -365,7 +367,64 @@ it('keeps the companion empty state stable during polling and retains an error u
 }));
 
 describe('live Herdr discovery',()=>{
-  const tree={workspaces:[{workspace_id:'w2E',label:'Work',focused:true,agent_status:'working'}],tabs:[{tab_id:'w2E:tC',workspace_id:'w2E',label:'Code',number:1,focused:true,agent_status:'working'}],panes:[{pane_id:'w2E:pF',workspace_id:'w2E',tab_id:'w2E:tC',cwd:'/work/codex',focused:true,agent_status:'working'}],agents:[{terminal_id:'term-one',name:'builder',agent:'codex',workspace_id:'w2E',tab_id:'w2E:tC',pane_id:'w2E:pF',agent_status:'working'}]};
+
+  it('shares the selected server reader across Spaces and live Agents without treating reports as navigation authority',()=>pollingClock(async invoke=>{
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    const navigate=vi.fn(async()=>{}),attach=vi.fn(async()=>{}),close=vi.fn();
+    const props={sessionId:'navigation-host',hostLabel:'Owned host',visible:true,onNavigate:navigate,onAttach:attach,onClose:close};
+    const view=render(<HerdrNavigation {...props} mode="spaces"/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
+    expect(browser.getByRole('heading',{name:t('herdrNavigationSpaces')})).toBeTruthy();
+    expect(browser.getByRole('button',{name:/^Work/})).toBeTruthy();
+    const search=browser.getByRole('searchbox');fireEvent.change(search,{target:{value:'codex'}});
+    expect(browser.getByText('builder')).toBeTruthy();
+    view.rerender(<HerdrNavigation {...props} mode="agents"/>);
+    expect(browser.getByRole('heading',{name:t('herdrAgentsTitle')})).toBeTruthy();
+    expect(browser.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','codex');
+    expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_tree')).toHaveLength(1);
+    fireEvent.click(browser.getByRole('button',{name:/^builder/}));
+    await act(async()=>{});
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('default',{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'},expect.objectContaining({current:expect.any(Function)}),expect.any(Function));
+    expect(attach).not.toHaveBeenCalled();expect(close).toHaveBeenCalledOnce();
+    view.rerender(<HerdrNavigation {...props} mode="agents" visible={false}/>);
+    const reads=vi.mocked(invoke).mock.calls.length;
+    await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});
+    expect(vi.mocked(invoke).mock.calls).toHaveLength(reads);
+  }));
+  it('keeps loaded navigation rows enabled during passive reads and blocks only the explicit action',()=>pollingClock(async invoke=>{
+    let reads=0;const poll=deferredRead(),action=deferredRead();
+    vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):++reads===1?Promise.resolve(tree):poll.promise);
+    const navigate=vi.fn(()=>action.promise.then(()=>{})),close=vi.fn();
+    render(<HerdrNavigation sessionId="steady-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={close}/>);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
+    const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
+    const row=browser.getByRole('button',{name:/^builder/}),select=browser.getByRole('combobox'),attach=browser.getByRole('button',{name:'Attach Herdr default'});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(reads).toBe(2);expect(browser.getByRole('button',{name:/^builder/})).toBe(row);
+    expect(row).toHaveProperty('disabled',false);expect(select).toHaveProperty('disabled',false);expect(attach).toHaveProperty('disabled',false);
+    expect(browser.queryByText(t('herdrReading'))).toBeNull();
+    expect(browser.getByRole('button',{name:t('herdrRefresh')})).toHaveProperty('disabled',true);
+    fireEvent.click(row);expect(navigate).toHaveBeenCalledOnce();
+    expect(row).toHaveProperty('disabled',true);expect(select).toHaveProperty('disabled',true);expect(attach).toHaveProperty('disabled',true);
+    await act(async()=>poll.resolve(tree));expect(row).toHaveProperty('disabled',true);
+    await act(async()=>action.resolve(undefined));expect(close).toHaveBeenCalledOnce();
+  }));
+  it.each(['hide','mode','unmount'] as const)('revokes a pending navigation action after %s without stealing focus or closing its replacement',async change=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    const pending=deferredRead();let current!:()=>boolean;
+    const navigate=vi.fn((_server,_target,_lease,owns:()=>boolean)=>{current=owns;return pending.promise.then(()=>{});});
+    const close=vi.fn(),props={sessionId:'navigation-host',hostLabel:'Owned host',visible:true,onNavigate:navigate,onAttach:vi.fn(async()=>{}),onClose:close};
+    const view=render(<HerdrNavigation {...props} mode="spaces"/>);
+    fireEvent.click(await screen.findByRole('button',{name:/^builder/}));
+    expect(current()).toBe(true);
+    if(change==='unmount')view.unmount();else view.rerender(<HerdrNavigation {...props} mode={change==='mode'?'agents':'spaces'} visible={change!=='hide'}/>);
+    expect(current()).toBe(false);
+    await act(async()=>pending.resolve(undefined));
+    expect(close).not.toHaveBeenCalled();
+    expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_tree')).toHaveLength(1);
+  });
   it.each([{name:'no servers',servers:[]},{name:'server choice',servers:[{name:'first'},{name:'second'}]}])('keeps $name steady while its server list refreshes',({servers})=>pollingClock(async invoke=>{
       let pending!:ReturnType<typeof deferredRead>,calls=0;
       vi.mocked(invoke).mockImplementation(()=>++calls===1?Promise.resolve(servers):(pending=deferredRead()).promise);

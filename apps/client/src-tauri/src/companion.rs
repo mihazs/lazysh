@@ -29,18 +29,30 @@ pub(crate) async fn account_usage_command(
     session: &Session,
     lease: &AccessLease,
 ) -> Result<String> {
-    let original = "lazysh-agent account-usage --watch-channel";
+    required_command(
+        session,
+        "lazysh-agent account-usage --watch-channel".into(),
+        USAGE_COMPANION_REQUIRED,
+        lease,
+    )
+    .await
+}
+pub(crate) async fn required_command(
+    session: &Session,
+    original: String,
+    marker: &str,
+    lease: &AccessLease,
+) -> Result<String> {
     match resolve::detect(session, lease).await? {
         Some(unix) => {
-            let resolved = unix.command(original)?;
-            let script = format!(
-                "{resolved} 2>/dev/null; code=$?; case $code in 2|126|127) printf '%s\\n' '{USAGE_COMPANION_REQUIRED}';; *) exit \"$code\";; esac"
-            );
+            let resolved = unix.command(&original)?;
+            let script=format!("{resolved} 2>/dev/null; code=$?; case $code in 2|126|127) printf '%s\\n' {};; *) exit \"$code\";; esac",ssh::quote(marker));
             Ok(format!("sh -c {}", ssh::quote(&script)))
         }
-        None => Ok(original.into()),
+        None => Ok(original),
     }
 }
+
 pub(crate) async fn exec(
     session: &Session,
     original: String,

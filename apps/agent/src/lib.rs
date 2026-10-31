@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
 pub mod devices;
+pub mod herdr;
 pub mod hooks;
 pub mod installation;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -75,6 +76,7 @@ pub enum Error {
     Installation(&'static str),
     UnsupportedStateFilesystem,
     Device(&'static str),
+    Herdr(&'static str),
     Settings(&'static str),
     Relay(&'static str),
     Io(io::Error),
@@ -87,7 +89,7 @@ impl Error {
             Self::InvalidArgument => "InvalidArgument",
             Self::Installation(kind) => kind,
             Self::UnsupportedStateFilesystem => "UnsupportedStateFilesystem",
-            Self::Device(kind) => kind,
+            Self::Device(kind) | Self::Herdr(kind) => kind,
             Self::Settings(kind) => kind,
             Self::Relay(kind) => kind,
             Self::Io(_) => "IoError",
