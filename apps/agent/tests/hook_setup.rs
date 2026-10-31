@@ -147,7 +147,13 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
             changed: [1, 0],
         },
     };
-    for agent in [Agent::Claude, Agent::Codex, Agent::Opencode] {
+    for agent in [
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Gemini,
+        Agent::Cursor,
+        Agent::Opencode,
+    ] {
         let entries = render::entries(agent, &binary.path).unwrap();
         let plugin = (agent == Agent::Opencode).then(|| render::plugin(&binary.path).unwrap());
         let owned = Owned {
@@ -161,7 +167,11 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
             .as_ref()
             .map(|body| record::hash(body.as_bytes()))
             .unwrap_or_else(|| {
-                record::hash(rewrite("{}\n", &[], &owned.entries).unwrap().as_bytes())
+                record::hash(
+                    render::configuration(agent, "{}\n", &[], &owned.entries)
+                        .unwrap()
+                        .as_bytes(),
+                )
             });
         let record = Record {
             schema_version: 1,
@@ -188,12 +198,17 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
             assert!(!plugin.contains("['lazysh-agent'"));
         } else {
             for entry in record.next.unwrap().entries {
+                let command = if agent == Agent::Cursor {
+                    &entry.group["command"]
+                } else {
+                    &entry.group["hooks"][0]["command"]
+                };
                 assert_eq!(
-                    entry.group["hooks"][0]["command"],
-                    format!(
+                    command,
+                    &json!(format!(
                         "'/owned/it'\\''s a companion' ingest --agent {}",
                         agent.name()
-                    )
+                    ))
                 );
             }
         }
@@ -207,15 +222,38 @@ fn generated_shell_handlers_execute_the_quoted_absolute_companion_with_an_empty_
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("companion with ' and $ spaces");
     fs::copy(binary::path(), &path).unwrap();
-    for agent in [record::Agent::Claude, record::Agent::Codex] {
+    for agent in [
+        record::Agent::Claude,
+        record::Agent::Codex,
+        record::Agent::Gemini,
+        record::Agent::Cursor,
+    ] {
+        let (event, payload) = match agent {
+            record::Agent::Gemini => (
+                "BeforeAgent",
+                json!({"hook_event_name":"BeforeAgent","session_id":"owned-hook","cwd":"/owned/project","prompt":"must not be retained"}),
+            ),
+            record::Agent::Cursor => (
+                "beforeSubmitPrompt",
+                json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"owned-hook","workspace_roots":["/owned/project"],"prompt":"must not be retained"}),
+            ),
+            _ => (
+                "UserPromptSubmit",
+                json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-hook","cwd":"/owned/project","prompt":"must not be retained"}),
+            ),
+        };
         let state = directory.path().join(agent.name());
         let hook = render::entries(agent, &path)
             .unwrap()
             .into_iter()
-            .find(|entry| entry.event == "UserPromptSubmit")
+            .find(|entry| entry.event == event)
             .unwrap();
-        let command = hook.group["hooks"][0]["command"].as_str().unwrap();
-        let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-hook","cwd":"/owned/project","prompt":"must not be retained"});
+        let pointer = if agent == record::Agent::Cursor {
+            "/command"
+        } else {
+            "/hooks/0/command"
+        };
+        let command = hook.group.pointer(pointer).unwrap().as_str().unwrap();
         let output = process::run(
             Command::new("/bin/sh")
                 .args(["-c", command])
@@ -283,7 +321,11 @@ fn initial_record(agent: record::Agent) -> record::Record {
         owned.plugin_sha256 = Some(digest.clone());
         digest
     } else {
-        record::hash(rewrite("{}\n", &[], &owned.entries).unwrap().as_bytes())
+        record::hash(
+            render::configuration(agent, "{}\n", &[], &owned.entries)
+                .unwrap()
+                .as_bytes(),
+        )
     });
     record
 }
@@ -489,8 +531,8 @@ impl ProfileFixture {
     }
     fn provider(&self) -> std::path::PathBuf {
         self.target.profile.join(match self.target.agent {
-            record::Agent::Claude => "settings.json",
-            record::Agent::Codex => "hooks.json",
+            record::Agent::Claude | record::Agent::Gemini => "settings.json",
+            record::Agent::Codex | record::Agent::Cursor => "hooks.json",
             record::Agent::Opencode => "plugins/lazysh.js",
         })
     }
@@ -1071,6 +1113,8 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
     for agent in [
         record::Agent::Claude,
         record::Agent::Codex,
+        record::Agent::Gemini,
+        record::Agent::Cursor,
         record::Agent::Opencode,
     ] {
         let fixture = ProfileFixture::new(agent);
@@ -1192,4 +1236,131 @@ fn source_namespace_changes_at_each_commit_cutoff_never_publish_provider_hooks()
             "{\"foreign\":true}"
         );
     }
+}
+
+#[test]
+fn gemini_and_cursor_configuration_preserves_disable_policy_and_exact_native_envelopes() {
+    let binary = std::path::Path::new("/owned/companion's $ path");
+    let gemini_policy = r#"{ "enabled":false, "disabled":["foreign-command"] }"#;
+    let cursor_policy = r#"{ "command":"foreign", "failClosed":true }"#;
+    for (agent, original, preserved) in [
+        (
+            record::Agent::Gemini,
+            format!(r#"{{"hooksConfig":{gemini_policy},"custom":{{ "keep":1e+02 }}}}"#),
+            gemini_policy,
+        ),
+        (
+            record::Agent::Cursor,
+            format!(
+                r#"{{"version":1,"hooks":{{"beforeShellExecution":[{cursor_policy}]}},"custom":{{ "keep":1e+02 }}}}"#
+            ),
+            cursor_policy,
+        ),
+    ] {
+        let entries = render::entries(agent, binary).unwrap();
+        let installed = render::configuration(agent, &original, &[], &entries).unwrap();
+        assert!(installed.contains(preserved));
+        assert!(installed.contains(r#"{ "keep":1e+02 }"#));
+        let config: Value = serde_json::from_str(&installed).unwrap();
+        if agent == record::Agent::Gemini {
+            assert_eq!(config["hooksConfig"]["enabled"], false);
+            assert_eq!(
+                config["hooks"]["BeforeAgent"][0]["hooks"][0]["timeout"],
+                5000
+            );
+        } else {
+            assert_eq!(config["version"], 1);
+            assert_eq!(config["hooks"]["beforeSubmitPrompt"][0]["timeout"], 5);
+            assert!(config["hooks"]["beforeSubmitPrompt"][0]
+                .get("failClosed")
+                .is_none());
+            for excluded in [
+                "beforeMCPExecution",
+                "beforeReadFile",
+                "beforeTabFileRead",
+                "subagentStart",
+                "preToolUse",
+            ] {
+                assert!(config["hooks"].get(excluded).is_none());
+            }
+            assert_eq!(
+                config["hooks"]["beforeShellExecution"],
+                serde_json::from_str::<Value>(&format!("[{cursor_policy}]")).unwrap()
+            );
+        }
+        let removed = render::configuration(agent, &installed, &entries, &[]).unwrap();
+        assert!(removed.contains(preserved));
+        assert!(json::counts(&removed, &entries)
+            .unwrap()
+            .iter()
+            .all(|count| *count == 0));
+    }
+    let cursor = render::entries(record::Agent::Cursor, binary).unwrap();
+    let initialized =
+        render::configuration(record::Agent::Cursor, "{\"custom\":true}", &[], &cursor).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&initialized).unwrap()["version"],
+        1
+    );
+    let removed = render::configuration(record::Agent::Cursor, &initialized, &cursor, &[]).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&removed).unwrap()["version"],
+        1
+    );
+    for version in [
+        json!(0),
+        json!(2),
+        json!("1"),
+        Value::Null,
+        json!(1.0),
+        json!(-1),
+    ] {
+        let incompatible = json!({"version":version,"custom":"foreign"}).to_string();
+        assert!(render::configuration(record::Agent::Cursor, &incompatible, &[], &cursor).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cursor_schema_preparation_recovers_explicitly_and_edited_version_never_gets_adopted() {
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::Cursor);
+    fs::write(fixture.provider(), "{\"custom\": { \"keep\":1e+02 }}").unwrap();
+    let first = fixture.plan(files::Action::Install);
+    fixture.prepare_without_provider(&first);
+    assert_eq!(
+        fixture.inspect().observation,
+        Some(state::Observation::Prepared)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.provider()).unwrap(),
+        "{\"custom\": { \"keep\":1e+02 }}"
+    );
+    assert!(fixture.apply(files::Action::Install, &first).is_err());
+    let fresh = fixture.plan(files::Action::Install);
+    assert_eq!(
+        fixture
+            .apply(files::Action::Install, &fresh)
+            .unwrap()
+            .status,
+        "configured"
+    );
+    let bytes = fs::read_to_string(fixture.provider()).unwrap();
+    assert!(bytes.contains("{ \"keep\":1e+02 }"));
+    let expected = fixture.plan(files::Action::Remove);
+    let mut edited: Value = serde_json::from_str(&bytes).unwrap();
+    edited["version"] = json!(2);
+    let edited = edited.to_string();
+    fs::write(fixture.provider(), &edited).unwrap();
+    assert_eq!(
+        fixture.inspect().observation,
+        Some(state::Observation::Conflict)
+    );
+    assert!(fixture.apply(files::Action::Remove, &expected).is_err());
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), edited);
+    let unowned = ProfileFixture::new(record::Agent::Cursor);
+    fs::write(unowned.provider(), "{\"version\":2,\"foreign\":true}").unwrap();
+    assert!(unowned.inspect().plan(files::Action::Install).is_err());
+    assert!(!unowned.manifest().exists());
+    assert!(!unowned.target.profile.join(".lazysh-hooks.lock").exists());
 }

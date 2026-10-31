@@ -1079,6 +1079,8 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
     for (agent, dialect) in [
         ("claude", "posix-shell"),
         ("codex", "posix-shell"),
+        ("gemini", "posix-shell"),
+        ("cursor", "posix-shell"),
         ("opencode", "bun-javascript"),
     ] {
         let output = run(
@@ -1091,6 +1093,15 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
         assert_eq!(preview["agent"], agent);
         assert_eq!(preview["dialect"], dialect);
         assert_eq!(preview["reporting"], "notChecked");
+        if agent == "cursor" {
+            assert_eq!(preview["asset"]["version"], 1);
+            assert!(preview["asset"]["hooks"]["preToolUse"].is_null());
+        } else if agent == "gemini" {
+            assert_eq!(
+                preview["asset"]["hooks"]["BeforeAgent"][0]["hooks"][0]["timeout"],
+                5000
+            );
+        }
         if cfg!(any(target_os = "linux", target_os = "macos")) {
             assert_eq!(preview["binaryBinding"], "currentExecutable");
             assert!(Path::new(preview["binary"].as_str().unwrap()).is_absolute());

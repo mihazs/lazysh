@@ -127,12 +127,12 @@ pub(super) async fn verify(app: &tauri::App<tauri::test::MockRuntime>, id: &str,
 
 #[cfg(target_os = "linux")]
 async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Path) {
-    for agent in ["claude", "codex", "opencode"] {
+    for agent in ["claude", "codex", "gemini", "cursor", "opencode"] {
         let profile = directory.join(format!("owned {agent} profile's $ path"));
         fs::create_dir(&profile).unwrap();
         let json_name = match agent {
-            "claude" => Some("settings.json"),
-            "codex" => Some("hooks.json"),
+            "claude" | "gemini" => Some("settings.json"),
+            "codex" | "cursor" => Some("hooks.json"),
             _ => None,
         };
         let foreign = "{\"foreign\": { \"keep\" : true }}";
@@ -151,6 +151,15 @@ async fn hooks_roundtrip(session: &Session, lease: &AccessLease, directory: &Pat
         let current = invoke("status", None).await.unwrap();
         assert_eq!(current["state"], "configured");
         assert_eq!(current["reporting"], "notChecked");
+        if agent == "cursor" {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(
+                    &fs::read(profile.join("hooks.json")).unwrap()
+                )
+                .unwrap()["version"],
+                1
+            );
+        }
         let removed = invoke("remove", current["removePlan"].as_str())
             .await
             .unwrap();

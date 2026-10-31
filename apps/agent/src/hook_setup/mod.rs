@@ -21,6 +21,8 @@ use std::path::PathBuf;
 pub enum AgentProfile {
     Claude,
     Codex,
+    Gemini,
+    Cursor,
     Opencode,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -29,6 +31,8 @@ impl AgentProfile {
         match self {
             Self::Claude => record::Agent::Claude,
             Self::Codex => record::Agent::Codex,
+            Self::Gemini => record::Agent::Gemini,
+            Self::Cursor => record::Agent::Cursor,
             Self::Opencode => record::Agent::Opencode,
         }
     }
@@ -84,11 +88,17 @@ fn preview(agent: AgentProfile) -> Result<Value> {
             "bun-javascript",
         )
     } else {
-        (
-            serde_json::to_value(render::entries(agent, &source).map_err(Error::Installation)?)
-                .map_err(|_| Error::Installation("HooksInvalidTemplate"))?,
-            "posix-shell",
-        )
+        let entries = render::entries(agent, &source).map_err(Error::Installation)?;
+        let asset = if matches!(agent, record::Agent::Gemini | record::Agent::Cursor) {
+            let content = render::configuration(agent, "{}", &[], &entries)
+                .map_err(|_| Error::Installation("HooksInvalidTemplate"))?;
+            serde_json::from_str(&content)
+                .map_err(|_| Error::Installation("HooksInvalidTemplate"))?
+        } else {
+            serde_json::to_value(entries)
+                .map_err(|_| Error::Installation("HooksInvalidTemplate"))?
+        };
+        (asset, "posix-shell")
     };
     Ok(
         json!({"schemaVersion":1,"agent":agent,"binary":source,"asset":asset,"dialect":dialect,"binaryBinding":"currentExecutable","reporting":"notChecked","trust":"notChecked"}),
@@ -101,6 +111,8 @@ fn preview(agent: AgentProfile) -> Result<Value> {
     let (asset, dialect) = match agent {
         AgentProfile::Claude => (crate::claude_config(), "posix-shell"),
         AgentProfile::Codex => (crate::hooks::codex_config(), "posix-shell"),
+        AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
+        AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
         AgentProfile::Opencode => (
             crate::hooks::opencode_plugin()["content"].clone(),
             "bun-javascript",
