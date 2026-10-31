@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Package original lazysh host-setup and agent-reporting skills with explicit preview, profile status, install/update and removal commands. Linux/macOS Claude and Codex profile writes require an exact inspected plan and preserve foreign skills, edits and agent configuration. No skills, hooks, services or provider settings change automatically; other platforms retain preview-only capability.
+
 - Detect live Herdr agents and accept exact workspace, tab and pane actions when their public IDs contain Herdr’s encoded letters, such as `wZ` and `w2E:pF`. Preserve target bounds, relationships and command quoting; connection and server-selection defaults are unchanged.
 
 - Retain bounded last-poll selector counts and timing when public Android APK workspace readiness fails. Reuse existing accessibility queries without changing actions, readiness checks or deadlines; no cold-start cause or Google runtime qualification is inferred.
