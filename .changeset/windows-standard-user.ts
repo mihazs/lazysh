@@ -21,6 +21,7 @@ public sealed partial class OwnedMediumGui {
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text,uint revision,out IntPtr descriptor,out uint size);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool SetFileSecurity(string path,uint information,IntPtr descriptor);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CreateProcessWithLogonW(string user,string domain,IntPtr password,uint logon,string image,System.Text.StringBuilder command,uint flags,IntPtr environment,string directory,ref SI startup,out PI child);
+  [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool LogonUserW(string name,string domain,IntPtr password,uint kind,uint provider,out IntPtr token);
   [DllImport("userenv.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool DeleteProfileW(string sid,string path,string computer);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode)] static extern int RegOpenKeyEx(IntPtr key,string path,uint options,uint access,out IntPtr opened);
   [DllImport("advapi32.dll")] static extern int RegCloseKey(IntPtr key);
@@ -38,7 +39,7 @@ public sealed partial class OwnedMediumGui {
     return false;
   }
   static void FixtureTree(string path,string root,string parent,string child,ref int count,int depth){Need(depth<=64&&++count<=50000,"FIXTURE_IDENTITY");PlainOwned(path,root);if(System.IO.Path.GetFileName(path)=="account.owner")return;FixtureAcl(path,root,parent,child,WritableFixture(path,root));if(System.IO.Directory.Exists(path))foreach(string entry in System.IO.Directory.EnumerateFileSystemEntries(path))FixtureTree(entry,root,parent,child,ref count,depth+1);}
-  static string ClosedStandardFailure(string value){switch(value){${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>'case "'+code+'":return value;').join('')}}return "UNVERIFIED";}
+  static string ClosedStandardFailure(string value){return Array.IndexOf(new[]{${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>JSON.stringify(code)).join(',')}},value)>=0?value:"UNVERIFIED";}
   public static string StandardTokenFailure(){return ClosedStandardFailure("TOKEN_UNAVAILABLE_"+TokenFailure);}
   static string StandardPrimaryFailure(string code){return ClosedStandardFailure(code=="TOKEN_UNAVAILABLE"?StandardTokenFailure():code);}
   [DllImport("userenv.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool GetProfilesDirectory(System.Text.StringBuilder path,ref uint length);
@@ -61,8 +62,8 @@ public sealed partial class OwnedMediumGui {
   static void FixtureAcl(string path,string root,string parent,string child,bool writable){PlainOwned(path,root);Need(StandardSid(parent)&&(child==null||StandardSid(child)),"FIXTURE_IDENTITY");string rules="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;"+parent+")"+(child==null?"":"(A;OICI;"+(writable?"0x1301bf":"0x1200a9")+";;;"+child+")");IntPtr descriptor=IntPtr.Zero;try{uint size;Need(ConvertStringSecurityDescriptorToSecurityDescriptor(rules,1,out descriptor,out size)&&size>0&&size<=65536&&SetFileSecurity(path,0x80000004,descriptor),"FIXTURE_ACCESS");}finally{if(descriptor!=IntPtr.Zero)Need(LocalFree(descriptor)==IntPtr.Zero,"CLEANUP_UNVERIFIED");}}
   static string[] Capsule(string root){string path=System.IO.Path.Combine(root,"account.owner");PlainOwned(path,root);Need(new System.IO.FileInfo(path).Length<=2048,"ACCOUNT_IDENTITY");var parts=System.IO.File.ReadAllLines(path);Need(parts.Length==8&&System.Text.RegularExpressions.Regex.IsMatch(parts[0],@"\Alshci[a-f0-9]{12}\z")&&(parts[1]==""||StandardSid(parts[1]))&&System.Text.RegularExpressions.Regex.IsMatch(parts[2],@"\A[a-f0-9]{32}\z")&&(parts[3]=="0"||parts[3]=="1")&&(parts[4]=="SETUP"||parts[4]=="INTENT"||parts[4]=="RETIRED")&&System.Text.RegularExpressions.Regex.IsMatch(parts[5],@"\A[a-f0-9]{64}\z")&&System.Text.RegularExpressions.Regex.IsMatch(parts[6],@"\A[0-9]{1,19}\z")&&ProfilePath(parts[0],parts[7]),"ACCOUNT_IDENTITY");return parts;}
   static void SaveCapsule(string root,string[] data){string path=System.IO.Path.Combine(root,"account.owner");PlainOwned(path,root);System.IO.File.WriteAllLines(path,data);}
-  static void CleanupAccount(string root,long deadline){
-    var data=Capsule(root);Need(data[4]!="INTENT","CLEANUP_UNVERIFIED");var actual=Account(data[0]);Need(actual==null||(actual[0]==data[1]&&actual[1]=="lazysh-owned:"+data[2]),"ACCOUNT_IDENTITY");
+  static void CleanupAccount(string root,long deadline,bool credentialClosed){
+    Need(credentialClosed,"CLEANUP_UNVERIFIED");var data=Capsule(root);Need(data[4]!="INTENT","CLEANUP_UNVERIFIED");var actual=Account(data[0]);Need(actual==null||(actual[0]==data[1]&&actual[1]=="lazysh-owned:"+data[2]),"ACCOUNT_IDENTITY");
     if(data[1]!=""&&data[3]=="1"){
       while(Hive(data[1])&&Environment.TickCount64<deadline)System.Threading.Thread.Sleep(10);
       Need(!Hive(data[1]),"CLEANUP_UNVERIFIED");
@@ -72,7 +73,7 @@ public sealed partial class OwnedMediumGui {
     if(actual!=null)Need(NetUserDel(null,data[0])==0&&Account(data[0])==null,"CLEANUP_UNVERIFIED");
     System.IO.File.Delete(System.IO.Path.Combine(root,"account.owner"));
   }
-  public static void RecoverStandard(string root){HostedRoot(root);if(System.IO.File.Exists(System.IO.Path.Combine(root,"account.owner")))CleanupAccount(root,Environment.TickCount64+10000);}
+  public static void RecoverStandard(string root){HostedRoot(root);if(System.IO.File.Exists(System.IO.Path.Combine(root,"account.owner")))CleanupAccount(root,Environment.TickCount64+10000,true);}
   OwnedMediumGui(bool accountOnly){Need(accountOnly,"ACCOUNT_IDENTITY");try{CreateOwnedJob();}catch{Dispose();throw;}}
   static void StandardToken(IntPtr process,string sid,uint session){IntPtr token=IntPtr.Zero;try{TokenNeed(OpenProcessToken(process,10,out token),TokenReason.STANDARD_TOKEN_OPEN);TokenNeed(TokenSid(token)==sid&&Word(token,8)==1&&Word(token,12)==session&&Word(token,20)==0&&Word(token,26)==0,TokenReason.STANDARD_TOKEN_IDENTITY);bool users=false;foreach(var group in Groups(token)){TokenNeed(!Admin(group)||(group.Attributes&4)==0,TokenReason.STANDARD_ADMIN_GROUP_ENABLED);if(Equal(group.Sid,new byte[]{1,2,0,0,0,0,0,5,32,0,0,0,33,2,0,0})&&(group.Attributes&4)!=0)users=true;}TokenNeed(users,TokenReason.STANDARD_USERS_GROUP_MISSING);var fact=OwnedGuiIntegrity.ReadToken(token);TokenNeed(fact[0]=="MEDIUM"&&fact[1]=="NOT_ELEVATED",TokenReason.STANDARD_TOKEN_INTEGRITY);}finally{if(token!=IntPtr.Zero)Need(CloseHandle(token),"CLEANUP_UNVERIFIED");}}
   public static string RunStandard(string root,string image,string worker,string imageHash,long deadline){
@@ -80,7 +81,7 @@ public sealed partial class OwnedMediumGui {
     string parent=CurrentSid(),name="lshci"+Guid.NewGuid().ToString("N").Substring(0,12),nonce=Guid.NewGuid().ToString("N");Need(Account(name)==null,"ACCOUNT_COLLISION");string expectedProfile=ExpectedProfile(name);Need(!System.IO.Directory.Exists(expectedProfile)&&!System.IO.File.Exists(expectedProfile),"PROFILE_COLLISION");
     Need(System.Text.RegularExpressions.Regex.IsMatch(imageHash??"",@"\A[a-f0-9]{64}\z"),"IDENTITY_UNVERIFIED");using(var hash=System.Security.Cryptography.SHA256.Create())using(var file=System.IO.File.OpenRead(image))Need(Convert.ToHexString(hash.ComputeHash(file)).ToLowerInvariant()==imageHash,"IDENTITY_UNVERIFIED");
     string capsule=System.IO.Path.Combine(root,"account.owner");using(var empty=new System.IO.FileStream(capsule,System.IO.FileMode.CreateNew,System.IO.FileAccess.Write)){}FixtureAcl(capsule,root,parent,null,false);SaveCapsule(root,new[]{name,"",nonce,"0","SETUP",imageHash,"0",expectedProfile});
-    IntPtr password=Marshal.AllocHGlobal(98),accountName=IntPtr.Zero,comment=IntPtr.Zero,caller=IntPtr.Zero;OwnedMediumGui owned=null;PI child=new PI();bool retained=false,creationAttempted=false,creationReturned=false;string outcome="STANDARD_OWNER_FAILED",primary="UNVERIFIED";
+    IntPtr password=Marshal.AllocHGlobal(98),accountName=IntPtr.Zero,comment=IntPtr.Zero,caller=IntPtr.Zero,credential=IntPtr.Zero;OwnedMediumGui owned=null;PI child=new PI();bool retained=false,creationAttempted=false,creationReturned=false;string outcome="STANDARD_OWNER_FAILED",primary="UNVERIFIED";
     try{
       byte[] random=new byte[48];System.Security.Cryptography.RandomNumberGenerator.Fill(random);const string alphabet="abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#%";
       for(int i=0;i<48;i++)Marshal.WriteInt16(password,i*2,(short)alphabet[random[i]%alphabet.Length]);Marshal.WriteInt16(password,0,(short)'a');Marshal.WriteInt16(password,2,(short)'A');Marshal.WriteInt16(password,4,(short)'1');Marshal.WriteInt16(password,6,(short)'!');Marshal.WriteInt16(password,96,0);Array.Clear(random,0,random.Length);
@@ -88,12 +89,13 @@ public sealed partial class OwnedMediumGui {
       var actual=Account(name);Need(actual!=null&&actual[1]=="lazysh-owned:"+nonce,"ACCOUNT_IDENTITY");SaveCapsule(root,new[]{name,actual[0],nonce,"0","SETUP",imageHash,"0",expectedProfile});OrdinaryMembership(actual[0]);Need(!Profile(actual[0])&&!Hive(actual[0]),"PROFILE_COLLISION");SaveCapsule(root,new[]{name,actual[0],nonce,"1","SETUP",imageHash,"0",expectedProfile});
       int fixtureCount=0;FixtureTree(root,root,parent,actual[0],ref fixtureCount,0);FixtureAcl(capsule,root,parent,null,false);
       TokenNeed(OpenProcessToken(GetCurrentProcess(),8,out caller),TokenReason.OWN_TOKEN_OPEN);uint session=Word(caller,12);Need(session!=0,"DESKTOP_UNAVAILABLE");owned=new OwnedMediumGui(true);
+      Need(LogonUserW(name,".",password,2,0,out credential)&&credential!=IntPtr.Zero,"STANDARD_LOGON_UNAVAILABLE");TokenNeed(TokenSid(credential)==actual[0],TokenReason.STANDARD_TOKEN_IDENTITY);
       var startup=new SI{Size=Marshal.SizeOf(typeof(SI)),Desktop="winsta0\\default"};string command=Command(image,new[]{"run",worker});
       // NULL environment asks Windows for this account's profile environment, never the parent's CI environment.
       SaveCapsule(root,new[]{name,actual[0],nonce,"1","INTENT",imageHash,DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture),expectedProfile});
       creationAttempted=true;bool created=CreateProcessWithLogonW(name,".",password,1,image,new System.Text.StringBuilder(command),0x08000004,IntPtr.Zero,root,ref startup,out child);creationReturned=true;for(int i=0;i<98;i++)Marshal.WriteByte(password,i,0);Need(created,"STANDARD_LOGON_UNAVAILABLE");
-      long start=owned.VerifyCreated(child,image);using(var hash=System.Security.Cryptography.SHA256.Create())using(var file=System.IO.File.OpenRead(image))Need(Convert.ToHexString(hash.ComputeHash(file)).ToLowerInvariant()==imageHash,"IDENTITY_UNVERIFIED");StandardToken(child.Process,actual[0],session);Need(Profile(actual[0])&&Hive(actual[0]),"PROFILE_IDENTITY");OwnedProfile(actual[0],name,expectedProfile);
-      IntPtr client=IntPtr.Zero;try{TokenNeed(OpenProcessToken(child.Process,10,out client),TokenReason.STANDARD_TOKEN_OPEN);IntPtr impersonation;TokenNeed(DuplicateTokenEx(client,8,IntPtr.Zero,2,2,out impersonation),TokenReason.DUPLICATE_FAILED);try{Need(CheckDacl(GetProcessWindowStation(),impersonation,2,3)=="ALLOWS"&&CheckDacl(GetThreadDesktop(GetCurrentThreadId()),impersonation,3,4)=="ALLOWS","DESKTOP_UNAVAILABLE");}finally{Need(CloseHandle(impersonation),"CLEANUP_UNVERIFIED");}}finally{if(client!=IntPtr.Zero)Need(CloseHandle(client),"CLEANUP_UNVERIFIED");}
+      long start=owned.VerifyCreated(child,image,credential);using(var hash=System.Security.Cryptography.SHA256.Create())using(var file=System.IO.File.OpenRead(image))Need(Convert.ToHexString(hash.ComputeHash(file)).ToLowerInvariant()==imageHash,"IDENTITY_UNVERIFIED");InspectAs(credential,()=>StandardToken(child.Process,actual[0],session));Need(Profile(actual[0])&&Hive(actual[0]),"PROFILE_IDENTITY");OwnedProfile(actual[0],name,expectedProfile);
+      InspectAs(credential,()=>{IntPtr client=IntPtr.Zero;try{TokenNeed(OpenProcessToken(child.Process,10,out client),TokenReason.STANDARD_TOKEN_OPEN);IntPtr impersonation;TokenNeed(DuplicateTokenEx(client,8,IntPtr.Zero,2,2,out impersonation),TokenReason.DUPLICATE_FAILED);try{Need(CheckDacl(GetProcessWindowStation(),impersonation,2,3)=="ALLOWS"&&CheckDacl(GetThreadDesktop(GetCurrentThreadId()),impersonation,3,4)=="ALLOWS","DESKTOP_UNAVAILABLE");}finally{Need(CloseHandle(impersonation),"CLEANUP_UNVERIFIED");}}finally{if(client!=IntPtr.Zero)Need(CloseHandle(client),"CLEANUP_UNVERIFIED");}});
       var process=System.Diagnostics.Process.GetProcessById(child.Id);try{Need(process.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");long remaining=deadline-Environment.TickCount64-15000;Need(remaining>0&&remaining<=650000,"ACCOUNT_BUDGET");Need(ResumeThread(child.Thread)==1,"LAUNCH_UNAVAILABLE");owned.processes.Add(child.Process);child.Process=IntPtr.Zero;retained=true;
         Need(process.WaitForExit((int)remaining),"STANDARD_OWNER_TIMEOUT");Need(process.ExitCode==0,"STANDARD_OWNER_FAILED");outcome="STANDARD_OWNER_PASSED";
       }finally{process.Dispose();}
@@ -102,8 +104,9 @@ public sealed partial class OwnedMediumGui {
       if(!retained&&child.Process!=IntPtr.Zero){clean&=TerminateProcess(child.Process,1);clean&=WaitForSingleObject(child.Process,10000)==0;clean&=CloseHandle(child.Process);}
       if(child.Thread!=IntPtr.Zero)clean&=CloseHandle(child.Thread);if(caller!=IntPtr.Zero)clean&=CloseHandle(caller);
       if(owned!=null)try{owned.Stop(DateTime.UtcNow.AddSeconds(10).Ticks);}catch{clean=false;}
+      bool credentialClosed=credential==IntPtr.Zero||CloseHandle(credential);if(credentialClosed)credential=IntPtr.Zero;clean&=credentialClosed;
       for(int i=0;i<98;i++)Marshal.WriteByte(password,i,0);Marshal.FreeHGlobal(password);if(accountName!=IntPtr.Zero)Marshal.FreeHGlobal(accountName);if(comment!=IntPtr.Zero)Marshal.FreeHGlobal(comment);
-      try{if(clean){var state=Capsule(root);state[4]="RETIRED";SaveCapsule(root,state);}CleanupAccount(root,Math.Min(deadline,Environment.TickCount64+10000));}catch{clean=false;}
+      try{if(clean){var state=Capsule(root);state[4]="RETIRED";SaveCapsule(root,state);}CleanupAccount(root,Math.Min(deadline,Environment.TickCount64+10000),credentialClosed);}catch{clean=false;}
       if(!clean)throw new InvalidOperationException("CLEANUP_UNVERIFIED:"+primary);
     }return outcome;
   }

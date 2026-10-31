@@ -1125,7 +1125,7 @@ export const windowsGuiTokenReasons=[
   'CANDIDATE_UIACCESS','CANDIDATE_SESSION_MISMATCH','CANDIDATE_USER_MISMATCH','CANDIDATE_INTEGRITY_UNVERIFIED',
   'CANDIDATE_NOT_MEDIUM','CANDIDATE_ELEVATION_UNVERIFIED','CANDIDATE_ADMIN_NOT_DENY_ONLY','CANDIDATE_EXPECTED_GROUP_NOT_DENY_ONLY',
   'LAUNCHER_STATE','CHILD_TOKEN_UNVERIFIED','CHILD_NOT_MEDIUM','CHILD_ELEVATED',
-  'STANDARD_TOKEN_OPEN','STANDARD_TOKEN_IDENTITY','STANDARD_ADMIN_GROUP_ENABLED','STANDARD_USERS_GROUP_MISSING','STANDARD_TOKEN_INTEGRITY',
+  'STANDARD_TOKEN_OPEN','STANDARD_TOKEN_IDENTITY','STANDARD_ADMIN_GROUP_ENABLED','STANDARD_USERS_GROUP_MISSING','STANDARD_TOKEN_INTEGRITY','STANDARD_TOKEN_CONTEXT',
 ] as const;
 export const windowsGuiLaunchErrors=['ACCESS_DENIED','INVALID_HANDLE','INVALID_PARAMETER','PRIVILEGE_NOT_HELD','FILE_NOT_FOUND','PATH_NOT_FOUND','BAD_EXE_FORMAT','DIRECTORY','OTHER'] as const;
 export const windowsGuiMediumSource=windowsGuiIntegritySource+String.raw`
@@ -1158,6 +1158,8 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
   [StructLayout(LayoutKind.Sequential)] struct Luid { public uint Low;public int High; }
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool ImpersonateLoggedOnUser(IntPtr token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool RevertToSelf();
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr data,uint length,out uint needed);
   [DllImport("advapi32.dll",EntryPoint="GetTokenInformation",SetLastError=true)] static extern bool GetTokenUInt(IntPtr token,int kind,out uint value,uint length,out uint used);
   [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool LookupPrivilegeValue(string host,string name,out Luid id);
@@ -1352,9 +1354,11 @@ public sealed partial class OwnedMediumGui : System.IDisposable {
       processes.Add(child.Process);child.Process=IntPtr.Zero;admitted=true;return managed;
     }finally{bool closed=true;if(!admitted&&child.Process!=IntPtr.Zero){closed &= TerminateProcess(child.Process,1);closed &= WaitForSingleObject(child.Process,10000)==0;closed &= CloseHandle(child.Process);if(managed!=null)managed.Dispose();}if(child.Thread!=IntPtr.Zero)closed &= CloseHandle(child.Thread);if(childToken!=IntPtr.Zero)closed &= CloseHandle(childToken);if(caller!=IntPtr.Zero)closed &= CloseHandle(caller);if(nul!=IntPtr.Zero&&nul!=new IntPtr(-1))closed &= CloseHandle(nul);if(block!=IntPtr.Zero)Marshal.FreeHGlobal(block);Need(closed,"CLEANUP_UNVERIFIED");}
   }
-  long VerifyCreated(PI child,string image){
+  static void RequireReverted(bool reverted){if(!reverted)Environment.Exit(1);}
+  static void InspectAs(IntPtr credential,Action inspect){if(credential==IntPtr.Zero){inspect();return;}TokenNeed(ImpersonateLoggedOnUser(credential),TokenReason.STANDARD_TOKEN_CONTEXT);try{inspect();}finally{RequireReverted(RevertToSelf());}}
+  long VerifyCreated(PI child,string image,IntPtr credential=default(IntPtr)){
     Need(AssignProcessToJobObject(job,child.Process),"JOB_UNAVAILABLE");Need(child.Id>0&&GetProcessId(child.Process)==(uint)child.Id,"IDENTITY_UNVERIFIED");long created,exited,kernel,user;Need(GetProcessTimes(child.Process,out created,out exited,out kernel,out user),"IDENTITY_UNVERIFIED");long start=DateTime.FromFileTimeUtc(created).Ticks;var path=new System.Text.StringBuilder(32768);uint length=32768;Need(QueryFullProcessImageName(child.Process,0,path,ref length)&&String.Equals(System.IO.Path.GetFullPath(image),System.IO.Path.GetFullPath(path.ToString()),StringComparison.OrdinalIgnoreCase),"IDENTITY_UNVERIFIED");
-    IntPtr childToken=IntPtr.Zero;try{TokenNeed(OpenProcessToken(child.Process,8,out childToken),TokenReason.STANDARD_TOKEN_OPEN);var fact=OwnedGuiIntegrity.ReadToken(childToken);TokenNeed(fact[0]!="UNVERIFIED"&&fact[0]!="IDENTITY_UNVERIFIED"&&fact[1]!="UNVERIFIED",TokenReason.CHILD_TOKEN_UNVERIFIED);TokenNeed(fact[0]=="MEDIUM",TokenReason.CHILD_NOT_MEDIUM);TokenNeed(fact[1]=="NOT_ELEVATED",TokenReason.CHILD_ELEVATED);}finally{if(childToken!=IntPtr.Zero)Need(CloseHandle(childToken),"CLEANUP_UNVERIFIED");}
+    InspectAs(credential,()=>{IntPtr childToken=IntPtr.Zero;try{TokenNeed(OpenProcessToken(child.Process,8,out childToken),TokenReason.STANDARD_TOKEN_OPEN);var fact=OwnedGuiIntegrity.ReadToken(childToken);TokenNeed(fact[0]!="UNVERIFIED"&&fact[0]!="IDENTITY_UNVERIFIED"&&fact[1]!="UNVERIFIED",TokenReason.CHILD_TOKEN_UNVERIFIED);TokenNeed(fact[0]=="MEDIUM",TokenReason.CHILD_NOT_MEDIUM);TokenNeed(fact[1]=="NOT_ELEVATED",TokenReason.CHILD_ELEVATED);}finally{if(childToken!=IntPtr.Zero)Need(CloseHandle(childToken),"CLEANUP_UNVERIFIED");}});
     return start;
   }
   public void Stop(long deadline){if(job==IntPtr.Zero)return;try{Need(TerminateJobObject(job,1),"CLEANUP_UNVERIFIED");IntPtr data=Marshal.AllocHGlobal(48);try{uint length;while(true){Need(QueryInformationJobObject(job,1,data,48,out length)&&length>=44,"CLEANUP_UNVERIFIED");if(Marshal.ReadInt32(data,40)==0)break;Need(DateTime.UtcNow.Ticks<deadline,"CLEANUP_UNVERIFIED");System.Threading.Thread.Sleep(10);}}finally{Marshal.FreeHGlobal(data);}}finally{Dispose();}}

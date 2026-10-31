@@ -114,6 +114,17 @@ the owned kill-on-close Job. Existing WinSta0\Default access is required; no
 window-station/desktop ACE, service, privilege or security-policy change is made.
 Missing prerequisites stop the transaction.
 
+The broker authenticates the same fresh account once with
+[LogonUserW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-logonuserw).
+Its SID-verified credential token provides a synchronous impersonation context only
+for reading the retained child's actual token and checking desktop access. It does
+not replace child evidence. Explicit-credential impersonation follows the
+[documented exception](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-impersonateloggedonuser)
+without enabling privileges. Job, identity, profile, capsule, resume and cleanup
+operations remain outside that scope. Failed reversion terminates the broker
+before outer cleanup; uncertain credential-token closure blocks account/profile
+deletion even during SETUP. The extra token must close before profile cleanup.
+
 The bootstrap drops unrelated environment variables and receives only a fixed
 nonsecret configuration. It runs the complete existing NSIS/GUI/repair/uninstall
 transaction within its own HKCU and profile; the new `requireStandard` proof is
