@@ -239,6 +239,7 @@ fn result(
         path: path.into(),
         reason,
         cleanup: "complete",
+        cleanup_failure: None,
     }
 }
 pub(super) async fn run(
@@ -282,21 +283,31 @@ pub(super) async fn run_with(
             phase: work.phase,
         });
     op.stage(Stage::CleaningUp);
-    let cleaned = if let Some(staging) = &mut work.staging {
+    let cleanup = if let Some(staging) = &mut work.staging {
         if op.lease.check().is_ok() && !*op.session.cancel.borrow() {
-            tokio::time::timeout(Duration::from_secs(5), staging.cleanup())
-                .await
-                .unwrap_or(false)
+            match tokio::time::timeout(Duration::from_secs(5), staging.cleanup()).await {
+                Ok(result) => result,
+                Err(_) => Err(staging.cleanup_timeout()),
+            }
         } else {
-            false
+            Err(transfer::CleanupFailure {
+                stage: transfer::CleanupStage::Admission,
+                reason: transfer::CleanupReason::Disconnected,
+            })
         }
     } else {
-        true
+        Ok(())
     };
+    let cleanup_failure = cleanup.err();
     op.lease.check().map_err(SshError::from)?;
     match outcome {
         Ok(mut installed) => {
-            installed.cleanup = if cleaned { "complete" } else { "residue" };
+            installed.cleanup = if cleanup_failure.is_none() {
+                "complete"
+            } else {
+                "residue"
+            };
+            installed.cleanup_failure = cleanup_failure;
             Ok(installed)
         }
         Err(error) => match work.possible_commit {
@@ -311,7 +322,12 @@ pub(super) async fn run_with(
                         "commitResponseLost"
                     }),
                 );
-                installed.cleanup = if cleaned { "complete" } else { "residue" };
+                installed.cleanup = if cleanup_failure.is_none() {
+                    "complete"
+                } else {
+                    "residue"
+                };
+                installed.cleanup_failure = cleanup_failure;
                 Ok(installed)
             }
             None => Err(error),

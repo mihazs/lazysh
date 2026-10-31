@@ -4,10 +4,9 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { errorMessage } from './SessionTools';
 
-type Workspace = { workspace_id: string; label: string; focused: boolean; agent_status: string };
-type Tab = { tab_id: string; workspace_id: string; label: string; number: number; focused: boolean; agent_status: string };
-type Pane = { pane_id: string; workspace_id: string; tab_id: string; cwd?: string | null; focused: boolean; agent_status: string };
-type Tree = { workspaces: Workspace[]; tabs: Tab[]; panes: Pane[] };
+import type {HerdrTree} from './useHerdrNavigation';
+type Pane = HerdrTree['panes'][number];
+type Tree = HerdrTree;
 type Action =
   | { type: 'createWorkspace'; label: string; directory: string }
   | { type: 'renameWorkspace' | 'renameTab'; target: string; label: string }

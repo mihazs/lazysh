@@ -152,6 +152,90 @@ async fn install_capture(
     herdr_counter(pid).await.unwrap()
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires owned OpenSSH, LAZYSH_NATIVE_MOSH_SERVER and FD-capable LAZYSH_TEST_HERDR"]
+async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure() {
+    let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").unwrap());
+    let fixture = Fixture::with_mosh_mode(Some(&binary), true).await;
+    owned_herdr_shell_config(&fixture);
+    let mut servers = HerdrServers {
+        fixture: &fixture,
+        binary: &binary,
+        processes: Vec::new(),
+    };
+    let name = "owned-mosh-guard";
+    servers.start(name).await;
+    servers
+        .json(
+            name,
+            &[
+                "workspace",
+                "create",
+                "--label",
+                "MOSH_GUARDED",
+                "--cwd",
+                fixture.dir.path().to_str().unwrap(),
+            ],
+        )
+        .await;
+    let (app, state) = herdr_native_app(&fixture);
+    let (_authority, lease) = unlocked_authority();
+    let (source, _) = herdr_echo_source(&fixture, &state, &lease).await;
+    let parent = state.session(&source.session_id).await.unwrap();
+    assert!(crate::herdr_guard::available(&parent, name, &lease).await);
+    let entry = crate::multiplexer::Entry {
+        kind: crate::multiplexer::MultiplexerKind::Herdr,
+        name: name.into(),
+        tmux_server: None,
+        create_if_missing: false,
+    };
+    let (child, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
+    let native = state.session(&child.session_id).await.unwrap();
+    assert!(native.herdr.lock().unwrap().is_some());
+    assert!(Arc::ptr_eq(&parent.handle, &native.handle));
+    disconnect_inner(&state, source.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &source.session_id, &parent, true).await;
+    // The Connect dialog retires its bootstrap before publishing/adopting the child.
+    adopt(&app, &lease, &child).await;
+    let output = owned_terminal_output(&app, &child.session_id, &mut events, b"MOSH_GUARDED").await;
+    assert!(!output.windows(14).any(|part| part == b"LAZYSH-GUARD-1"));
+    assert_eq!(
+        guard(&app, &lease, &child, json!({"kind":"status"}))
+            .await
+            .unwrap()["available"],
+        true
+    );
+    let source = context("mosh-owned");
+    let capture = fixture.dir.path().join("mosh-guard-input");
+    let pid = fixture.dir.path().join("mosh-guard-pid");
+    let inspected = guard(
+        &app,
+        &lease,
+        &child,
+        json!({"kind":"prepare","source":source}),
+    )
+    .await
+    .unwrap();
+    let pane = inspected["destination"]["pane"].as_str().unwrap();
+    let original_pid = install_capture(&servers, name, pane, &capture, &pid).await;
+    let binding = confirm(&app, &lease, &child, &source).await;
+    guard(&app, &lease, &child, json!({"kind":"input","receipt":binding["receipt"],"source":source,"operation":1,"input":{"kind":"send","text":"MOSH-private-fresh"}})).await.unwrap();
+    captured(&capture, b"MOSH-private-fresh\r").await;
+    assert_eq!(
+        fs::read_to_string(&pid).unwrap().trim(),
+        original_pid.to_string()
+    );
+    servers.assert_running();
+    disconnect_inner(&state, child.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &child.session_id, &native, true).await;
+    servers.stop().await;
+}
+
 #[tokio::test]
 #[ignore = "requires owned OpenSSH and LAZYSH_TEST_HERDR built from current guarded source"]
 async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease() {
@@ -159,17 +243,7 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
         std::env::var("LAZYSH_TEST_HERDR").expect("absolute current-source guarded Herdr binary"),
     );
     let mut fixture = Fixture::with_herdr(Some(&binary)).await;
-    let config = fixture
-        .dir
-        .path()
-        .join("config-home")
-        .join(if cfg!(debug_assertions) {
-            "herdr-dev"
-        } else {
-            "herdr"
-        });
-    fs::create_dir_all(&config).unwrap();
-    fs::write(config.join("config.toml"), "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n").unwrap();
+    owned_herdr_shell_config(&fixture);
     let mut servers = HerdrServers {
         fixture: &fixture,
         binary: &binary,
@@ -303,6 +377,26 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
     guard(&app, &lease, &other, json!({"kind":"input","receipt":other_binding["receipt"],"source":source_a,"operation":1,"input":{"kind":"request_stop"}})).await.unwrap();
     captured(&other_bytes, &[0x1b]).await;
     assert!(guard(&app, &lease, &child, json!({"kind":"input","receipt":binding["receipt"],"source":source_a,"operation":1,"input":{"kind":"request_stop"}})).await.is_err());
+    captured(&bytes, &expected).await;
+    // A fresh receipt is valid here; earlier sequence-rejection checks retired their own receipt.
+    let view_binding = confirm(&app, &lease, &child, &source_a).await;
+    crate::herdr::herdr_action(
+        app.state(),
+        child.session_id.clone(),
+        "guard-left".into(),
+        crate::herdr::HerdrAction::FocusWorkspace {
+            target: view_binding["destination"]["workspace"]
+                .as_str()
+                .unwrap()
+                .into(),
+        },
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert!(guard(&app,&lease,&child,json!({"kind":"input","receipt":view_binding["receipt"],"source":source_a,"operation":1,"input":{"kind":"request_stop"}})).await.is_err());
     captured(&bytes, &expected).await;
     let source_b = context("B");
     let changed = confirm(&app, &lease, &child, &source_b).await;

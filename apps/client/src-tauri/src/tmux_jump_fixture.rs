@@ -69,6 +69,9 @@ impl Fixture {
         Self::with_herdr(None).await
     }
     async fn with_herdr(herdr: Option<&std::path::Path>) -> Self {
+        Self::with_mosh_mode(herdr, false).await
+    }
+    async fn with_mosh_mode(herdr: Option<&std::path::Path>, mosh: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let tmux = std::env::var("LAZYSH_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
         let tmux_path = std::path::Path::new(&tmux)
@@ -107,6 +110,9 @@ impl Fixture {
                 environment.push((key, path.display().to_string()));
             }
         }
+        if mosh {
+            environment.push(("MOSH_SERVER_NETWORK_TMOUT", "20".into()));
+        }
         assert!(
             environment.iter().all(|(_, value)| !value
                 .chars()
@@ -144,8 +150,50 @@ impl Fixture {
         assert!(sshd.status.success());
         let sshd = String::from_utf8(sshd.stdout).unwrap();
         assert!(sshd.trim().starts_with('/'));
-        let mut daemon = Process(
+        let mut launcher = if mosh {
+            // The existing foreground owner now also supervises daemonizing Mosh/tmux
+            // inside one private PID namespace, including assertion-failure cleanup.
+            let groups = fs::read_to_string("/etc/group").unwrap();
+            let mut count = 0;
+            let groups = groups
+                .lines()
+                .map(|row| {
+                    if row.starts_with("tty:") {
+                        count += 1;
+                        let mut fields = row.split(':').map(str::to_owned).collect::<Vec<_>>();
+                        fields[2] = unsafe { libc::getgid() }.to_string();
+                        fields.join(":")
+                    } else {
+                        row.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(count, 1);
+            let path = dir.path().join("private-groups");
+            fs::write(&path, groups + "\n").unwrap();
+            let mut launcher = Command::new("bwrap");
+            launcher
+                .args([
+                    "--die-with-parent",
+                    "--unshare-user",
+                    "--unshare-pid",
+                    "--dev-bind",
+                    "/",
+                    "/",
+                    "--proc",
+                    "/proc",
+                    "--ro-bind",
+                ])
+                .arg(path)
+                .args(["/etc/group", "--"])
+                .arg(sshd.trim());
+            launcher
+        } else {
             Command::new(sshd.trim())
+        };
+        let mut daemon = Process(
+            launcher
                 .args(["-D", "-e", "-f"])
                 .arg(config)
                 .stdout(Stdio::null())
@@ -1247,10 +1295,7 @@ async fn real_tmux_jump_default_entry_creates_exact_target_and_keeps_child_after
     let native = state.session(&child.session_id).await.unwrap();
     assert!(Arc::ptr_eq(&parent.handle, &native.handle));
     assert_eq!(native.creation.generation(), parent.creation.generation());
-    disconnect_inner(&state, source.session_id.clone())
-        .await
-        .unwrap();
-    herdr_retired(&state, &source.session_id, &parent, true).await;
+    retire_bootstrap(&state, &source, &parent).await;
     let bound =
         crate::tmux_jump::tmux_jump_snapshot(lease.clone(), app.state(), child.session_id.clone())
             .await
@@ -1287,9 +1332,248 @@ async fn real_tmux_jump_default_entry_creates_exact_target_and_keeps_child_after
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned local OpenSSH sshd and installed Zellij; saved default first-entry acceptance"]
-async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap() {
-    let f = Fixture::with_herdr(Some(std::path::Path::new("/usr/bin/zellij"))).await;
+#[ignore = "requires owned OpenSSH namespace and tmux; no Mosh daemon is launched"]
+async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
+    let f = Fixture::with_mosh_mode(None, true).await;
+    let (app, state) = herdr_native_app(&f);
+    let (_authority, lease) = unlocked_authority();
+    let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+    let parent = state.session(&source.session_id).await.unwrap();
+    let options = serde_json::from_value(
+        serde_json::json!({"serverPath":"/lazysh-owned-no-such-mosh-executable"}),
+    )
+    .unwrap();
+    let entry = crate::multiplexer::Entry {
+        kind: crate::multiplexer::MultiplexerKind::Tmux,
+        name: "must-not-create".into(),
+        tmux_server: Some("absent-mosh".into()),
+        create_if_missing: true,
+    };
+    let error = crate::mosh::bootstrap_entry(&parent, &lease, options, entry)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), "mosh_bootstrap");
+    assert!(!format!("{error:?}").contains("lazysh-owned-no-such"));
+    let missing = crate::ssh::exec_for_access(
+        &parent,
+        "tmux -L absent-mosh has-session -t =must-not-create".into(),
+        &lease,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(missing.kind(), "remote_command_failed");
+    assert_eq!(
+        crate::ssh::exec_for_access(&parent, "printf PARENT-STILL-ALIVE".into(), &lease)
+            .await
+            .unwrap(),
+        "PARENT-STILL-ALIVE"
+    );
+    disconnect_inner(&state, source.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(&state, &source.session_id, &parent, true).await;
+    drop(app);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires owned OpenSSH namespace, LAZYSH_NATIVE_MOSH_SERVER, LAZYSH_TEST_HERDR_STOCK and Zellij"]
+async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display() {
+    use crate::multiplexer::{Entry, MultiplexerKind};
+    let stock = std::env::var("LAZYSH_TEST_HERDR_STOCK").expect("absolute stock Herdr binary");
+    for (kind, binary) in [
+        (MultiplexerKind::Herdr, stock.as_str()),
+        (MultiplexerKind::Zellij, "/usr/bin/zellij"),
+    ] {
+        let f = Fixture::with_mosh_mode(Some(std::path::Path::new(binary)), true).await;
+        fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+        if matches!(kind, MultiplexerKind::Zellij) {
+            owned_zellij_layout(&f);
+        } else {
+            owned_herdr_shell_config(&f);
+        }
+        let (app, state) = herdr_native_app(&f);
+        let (_authority, lease) = unlocked_authority();
+        for create_if_missing in [true, false] {
+            let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+            let entry = Entry {
+                kind,
+                name: "owned-direct-mosh".into(),
+                tmux_server: None,
+                create_if_missing,
+            };
+            let (display, mut events) = mosh_entry_child(&app, &lease, &source, entry).await;
+            let session = state.session(&display.session_id).await.unwrap();
+            assert!(session.tmux.lock().unwrap().is_none());
+            assert!(session.herdr.lock().unwrap().is_none());
+            disconnect_inner(&state, source.session_id).await.unwrap();
+            let ready = if matches!(kind, MultiplexerKind::Herdr) {
+                // The private receipt precedes Herdr's server initialization. Wait
+                // on its real named API, never a timing sleep or rendered authority.
+                timeout(BOUND, async {
+                    while crate::ssh::exec_for_access(
+                        &session,
+                        "herdr --session owned-direct-mosh api snapshot".into(),
+                        &lease,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("owned Herdr server did not initialize");
+                if create_if_missing {
+                    crate::ssh::exec_for_access(
+                        &session,
+                        "herdr --session owned-direct-mosh workspace create --label ORDINARY_READY"
+                            .into(),
+                        &lease,
+                    )
+                    .await
+                    .unwrap();
+                }
+                b"ORDINARY_READY".as_slice()
+            } else {
+                b"ZELLIJ-PANE-READY".as_slice()
+            };
+            owned_terminal_output(&app, &display.session_id, &mut events, ready).await;
+            write_stdin(
+                lease.clone(),
+                app.state(),
+                display.session_id.clone(),
+                "printf 'ORDINARY-%s\\n' 'MOSH-ALIVE'\r".into(),
+                None,
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+            let bytes = owned_terminal_output(
+                &app,
+                &display.session_id,
+                &mut events,
+                b"ORDINARY-MOSH-ALIVE",
+            )
+            .await;
+            assert!(!bytes.windows(14).any(|part| part == b"LAZYSH_ATTACH_"));
+            disconnect_inner(&state, display.session_id.clone())
+                .await
+                .unwrap();
+            herdr_retired(&state, &display.session_id, &session, true).await;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires owned OpenSSH PID namespace, LAZYSH_NATIVE_MOSH_SERVER and binding-capable tmux"]
+async fn real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure() {
+    let f = Fixture::with_mosh_mode(None, true).await;
+    fs::write(f.dir.path().join(".zshrc"), "").unwrap();
+    let (app, state) = herdr_native_app(&f);
+    let (_authority, lease) = unlocked_authority();
+    let name = "named '$(printf NO);";
+    let server = "mosh 'server";
+    let entry = |name: &str, create| crate::multiplexer::Entry {
+        kind: crate::multiplexer::MultiplexerKind::Tmux,
+        name: name.into(),
+        tmux_server: Some(server.into()),
+        create_if_missing: create,
+    };
+    for create in [true, false] {
+        let (source, _) = herdr_echo_source(&f, &state, &lease).await;
+        let parent = state.session(&source.session_id).await.unwrap();
+        entry("another", true)
+            .prepare(&parent, &lease)
+            .await
+            .unwrap();
+        let (child, mut receiver) =
+            mosh_entry_child(&app, &lease, &source, entry(name, create)).await;
+        let native = state.session(&child.session_id).await.unwrap();
+        assert!(native.tmux.lock().unwrap().is_some());
+        assert!(native.file_control.is_some());
+        assert!(Arc::ptr_eq(&parent.handle, &native.handle));
+        retire_bootstrap(&state, &source, &parent).await;
+        let bound = crate::tmux_jump::tmux_jump_snapshot(
+            lease.clone(),
+            app.state(),
+            child.session_id.clone(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+        let bound = serde_json::to_value(bound).unwrap();
+        let current = bound["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == bound["current"]["sessionId"])
+            .unwrap();
+        assert_eq!(current["name"], name);
+        assert_eq!(
+            native.tmux_server.lock().unwrap().as_ref(),
+            Some(&crate::tmux_server::TmuxServer::Named(server.into()))
+        );
+        write_stdin(
+            lease.clone(),
+            app.state(),
+            child.session_id.clone(),
+            "printf 'MOSH-%s\\n' 'ENTRY-ALIVE'\r".into(),
+            None,
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+        let bytes =
+            owned_terminal_output(&app, &child.session_id, &mut receiver, b"MOSH-ENTRY-ALIVE")
+                .await;
+        for forbidden in [
+            b"MOSH CONNECT ".as_slice(),
+            b"LAZYSH_ATTACH_",
+            b"LAZYSH-GUARD-1:",
+        ] {
+            assert!(!bytes
+                .windows(forbidden.len())
+                .any(|value| value == forbidden));
+        }
+        assert_eq!(
+            crate::ssh::exec_for_access(&native, "printf HOST-TOOLS-ALIVE".into(), &lease)
+                .await
+                .unwrap(),
+            "HOST-TOOLS-ALIVE"
+        );
+        disconnect_inner(&state, child.session_id.clone())
+            .await
+            .unwrap();
+        herdr_retired(&state, &child.session_id, &native, true).await;
+    }
+    exec_inner_with_handle(
+        f.handle(),
+        format!("tmux -L {} kill-server", quote(server)),
+        &lease,
+        BOUND,
+        8192,
+        None,
+    )
+    .await
+    .unwrap();
+}
+
+fn owned_herdr_shell_config(fixture: &Fixture) {
+    for variant in ["herdr", "herdr-dev"] {
+        let config = fixture.dir.path().join("config-home").join(variant);
+        fs::create_dir_all(&config).unwrap();
+        fs::write(config.join("config.toml"), "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n").unwrap();
+    }
+}
+
+fn owned_zellij_layout(f: &Fixture) {
     // Zellij creates HOME/.config before choosing its writable config path.
     // Pre-create it in this owned HOME so its first-run wizard cannot intercept input.
     let config = f.dir.path().join(".config/zellij");
@@ -1297,6 +1581,14 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
     fs::write(config.join("config.kdl"),"show_release_notes false\nshow_startup_tips false\nsession_serialization false\ndefault_shell \"/bin/sh\"\ndefault_layout \"owned\"\n").unwrap();
     fs::create_dir(config.join("layouts")).unwrap();
     fs::write(config.join("layouts/owned.kdl"), r#"layout { pane command="/bin/sh" { args "-c" "echo ZELLIJ-PANE-READY; exec /bin/sh"; }; }"#).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires owned local OpenSSH sshd and installed Zellij; saved default first-entry acceptance"]
+async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap() {
+    let f = Fixture::with_herdr(Some(std::path::Path::new("/usr/bin/zellij"))).await;
+    owned_zellij_layout(&f);
     let name = "direct-zellij-literal";
     struct OwnedZellij<'a>(&'a Fixture, &'a str);
     impl Drop for OwnedZellij<'_> {
@@ -2798,6 +3090,51 @@ async fn multiplexer_child(
     assert_eq!(native.creation.generation(), lease.generation());
     (child, receiver)
 }
+async fn mosh_entry_child(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    lease: &AccessLease,
+    source: &Connected,
+    entry: crate::multiplexer::Entry,
+) -> (Connected, mpsc::UnboundedReceiver<serde_json::Value>) {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    drop(socket);
+    let binary =
+        std::env::var("LAZYSH_NATIVE_MOSH_SERVER").expect("explicit owned Mosh binary required");
+    assert!(std::path::Path::new(&binary).is_absolute());
+    let options = serde_json::from_value(
+        serde_json::json!({"serverPath":binary,"portMin":port,"portMax":port}),
+    )
+    .unwrap();
+    let (events, receiver) = super::test_support::json_events();
+    let result = connect_mosh(
+        lease.clone(),
+        app.state(),
+        source.session_id.clone(),
+        options,
+        Some(entry),
+        80,
+        24,
+        events,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        let kind = error
+            .into_inner()
+            .map(|error| error.kind())
+            .unwrap_or("access_changed");
+        panic!("owned Mosh entry failed: kind={kind}")
+    })
+    .into_inner()
+    .unwrap();
+    (result, receiver)
+}
+async fn retire_bootstrap(state: &AppState, source: &Connected, parent: &Session) {
+    disconnect_inner(state, source.session_id.clone())
+        .await
+        .unwrap();
+    herdr_retired(state, &source.session_id, parent, true).await;
+}
 async fn herdr_retired(state: &AppState, id: &str, session: &Session, including_notice: bool) {
     timeout(BOUND, async {
         loop {
@@ -3100,10 +3437,7 @@ async fn real_herdr_ssh_child_pty_preserves_source_and_durable_session() {
         "SOURCE_AFTER_UNLOCK",
     )
     .await;
-    disconnect_inner(&state, source.session_id.clone())
-        .await
-        .unwrap();
-    herdr_retired(&state, &source.session_id, &parent, true).await;
+    retire_bootstrap(&state, &source, &parent).await;
     assert!(state.sessions.lock().await.is_empty());
     assert!(state.retiring.lock().await.is_empty());
     eprintln!("owned Herdr stages: original_lease_revoked=true pending_child_retired=true durable_after_revoke=true no_launch_replay=true");

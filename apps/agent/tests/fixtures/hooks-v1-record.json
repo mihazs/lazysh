@@ -1,0 +1,57 @@
+{
+  "record": {
+    "schemaVersion": 1,
+    "product": "lazysh",
+    "agent": "claude",
+    "profile": "/owned/profile",
+    "profileIdentity": [
+      1,
+      3
+    ],
+    "previous": null,
+    "next": {
+      "templateVersion": 1,
+      "packageVersion": "1.3.3",
+      "binary": {
+        "path": "/owned/old companion",
+        "sha256": "abababababababababababababababababababababababababababababababab",
+        "identity": {
+          "device": 1,
+          "inode": 2,
+          "owner": 1000,
+          "mode": 33216,
+          "links": 1,
+          "bytes": 100,
+          "modified": [
+            1,
+            0
+          ],
+          "changed": [
+            1,
+            0
+          ]
+        }
+      },
+      "entries": [
+        {
+          "event": "Stop",
+          "group": {
+            "hooks": [
+              {
+                "command": "'/owned/old companion' ingest --agent claude",
+                "timeout": 5,
+                "type": "command"
+              }
+            ]
+          }
+        }
+      ],
+      "pluginSha256": null
+    },
+    "providerBefore": {
+      "state": "missing"
+    },
+    "providerAfterSha256": "9460c5544c139d87cde143fd7bab10542ba9a11d961acd090ceaa6b3caf9fc9b"
+  },
+  "sha256": "158e9fb427ad9a36af412d6fea797520f9966b3bb49c7e8999a7212da7dcf77e"
+}

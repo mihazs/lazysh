@@ -1,7 +1,9 @@
 import {mkdir,open,readFile,writeFile,lstat,realpath} from 'node:fs/promises';
 import {createConnection} from 'node:net';
 import {join} from 'node:path';
-import {OwnedProcess,SshFixture,stopOwnedTree,identity,type OwnedPid,type HerdrTools} from './androidSsh';
+import {OwnedProcess,identity,type OwnedPid} from './ownedProcess';
+import {SshFixture,stopOwnedTree,type HerdrTools} from './sshFixture';
+import {setTimeout as delay} from 'node:timers/promises';
 
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";
 type ReportedAgent={terminalId:string;workspaceId:string;tabId:string;paneId:string};
@@ -31,8 +33,8 @@ export class HerdrFixture {
     return new OwnedProcess(join(this.ssh.directory,'bin/herdr'),['--session',this.name,...args],this.ssh.directory,env)
       .finish('owned Herdr command',3000);
   }
-  static async start(tools:HerdrTools) {
-    const ssh=await SshFixture.start(tools);
+  static async start(tools:HerdrTools,moshBinary?:string) {
+    const ssh=await SshFixture.start(tools,moshBinary?{moshBinary,privateTtyGroup:true,observeMoshBootstraps:true}:{});
     const owned=new HerdrFixture(ssh);
     try {
       for(const name of ['herdr','herdr-dev']) {
@@ -41,13 +43,13 @@ export class HerdrFixture {
         await writeFile(join(directory,'config.toml'),"onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n",{mode:0o600});
       }
       await writeFile(owned.transcript,JSON.stringify({type:'user',uuid:'owned-'+ssh.nonce,message:{role:'user',content:owned.record}})+'\n',{mode:0o600});
-      owned.server=new OwnedProcess(join(ssh.directory,'bin/herdr'),['--session',owned.name,'server'],ssh.directory,ssh.environment);
+      owned.server=ssh.herdrServer(['--session',owned.name,'server']);
       const until=performance.now()+3000;
       while(true) {
         const ready=await owned.run(['api','snapshot']).then(()=>true,()=>false);
         if(ready)break;
         if(performance.now()>=until || !await owned.server.liveIdentity())throw new Error('Owned Herdr startup deadline');
-        await Bun.sleep(10);
+        await delay(10);
       }
       await owned.run(['workspace','create','--focus','--label','HERDR_'+ssh.nonce,'--cwd',ssh.directory]);
       const snapshot=JSON.parse(await owned.run(['api','snapshot']));
@@ -113,7 +115,7 @@ export class HerdrFixture {
         if(receiver && !['Z','X'].includes(receiver.state))return receiver;
       }
       if(performance.now()>=deadline)throw new Error('Owned receiver startup deadline');
-      await Bun.sleep(10);
+      await delay(10);
     }
   }
   private async receiverAlive(receiver=this.receiver) {
@@ -130,7 +132,7 @@ export class HerdrFixture {
         if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;
         throw error;
       });
-      if(!file){if(performance.now()>=deadline)throw new Error('Owned receiver output missing');await Bun.sleep(10);continue;}
+      if(!file){if(performance.now()>=deadline)throw new Error('Owned receiver output missing');await delay(10);continue;}
       let received:Buffer;
       try {
         const bytes=Buffer.alloc(expected.length+1);
@@ -139,7 +141,7 @@ export class HerdrFixture {
       } finally {await file.close();}
       if(received.equals(expected))break;
       if(received.length>expected.length || performance.now()>=deadline)throw new Error('Owned receiver bytes differ');
-      await Bun.sleep(10);
+      await delay(10);
     }
     if(!await this.receiverAlive(receiver))throw new Error('Owned receiver identity changed');
   }
@@ -169,7 +171,7 @@ export class HerdrFixture {
           {pane_id:pane.paneId,source:'visible',lines:1000,format:'text',strip_ansi:true}:
           {pane_id:pane.paneId,offset_from_bottom:offset}})+'\n'));
       socket.on('data',data=>{
-        if(bytes.length+data.length>65536 || data.includes(0)){finish();return;}
+        if(typeof data==='string' || bytes.length+data.length>65536 || data.includes(0)){finish();return;}
         bytes=Buffer.concat([bytes,data]);
         const end=bytes.indexOf(10);if(end<0)return;
         try {
@@ -216,7 +218,7 @@ export class HerdrFixture {
     if(this.stopped)return;
     let failure:unknown;
     try {
-      if(this.server)await stopOwnedTree(this.server,'Herdr');
+      if(this.server)await stopOwnedTree(this.server,'Herdr',true);
       if(await this.receiverAlive() || await this.receiverAlive(this.historyReceiver))throw new Error('Owned Herdr receiver survived teardown');
     } catch(error){failure=error;}
     try{await this.ssh.stop();}catch(error){failure??=error;}

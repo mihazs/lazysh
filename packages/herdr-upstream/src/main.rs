@@ -515,6 +515,9 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    if guarded_input::startup::capabilities(&raw_args, &mut io::stdout().lock())? {
+        return Ok(());
+    }
     if let Some(outcome) = cli::maybe_run_machine(&raw_args) {
         return finish_cli(outcome);
     }
@@ -792,8 +795,8 @@ fn main() -> io::Result<()> {
     let loaded_config = config::Config::load();
     exit_if_nested_disabled(&loaded_config.config);
 
-    if guarded_attach {
-        return client::run_guarded_client();
+    if let Some(output) = guarded_attach {
+        return client::run_guarded_client(output);
     }
 
     let saved_federation =

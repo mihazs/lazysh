@@ -45,52 +45,138 @@ pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<Strin
     })
 }
 
-// Default entry creates only the explicitly named target in the default namespace.
+/// A connection intention, never a renderer-provided executable or shell command.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Entry {
+    pub kind: MultiplexerKind,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_server: Option<String>,
+    #[serde(default)]
+    pub create_if_missing: bool,
+}
+impl Entry {
+    pub(crate) fn server(&self) -> Result<crate::tmux_server::TmuxServer> {
+        if !matches!(self.kind, MultiplexerKind::Tmux) && self.tmux_server.is_some() {
+            return Err(SshError::new(
+                "invalid_tmux_server",
+                "tmux server context is only valid for tmux",
+            ));
+        }
+        crate::tmux_server::TmuxServer::parse(self.tmux_server.as_deref())
+    }
+    pub(crate) fn validate(&self) -> Result<()> {
+        attach_command(self.kind, &self.name)?;
+        self.server()?;
+        if self.name.trim().is_empty() {
+            return Err(SshError::new(
+                "invalid_target",
+                "Enter a named multiplexer session",
+            ));
+        }
+        if matches!(self.kind, MultiplexerKind::Herdr)
+            && (self.name.len() > 64
+                || matches!(self.name.as_str(), "." | "..")
+                || !self
+                    .name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+        {
+            return Err(SshError::new("invalid_target", "Herdr session names need 1–64 ASCII letters, numbers, periods, underscores or hyphens, excluding . and .."));
+        }
+        Ok(())
+    }
+    pub(crate) fn command(&self) -> Result<String> {
+        self.validate()?;
+        match self.kind {
+            MultiplexerKind::Tmux => Ok(format!(
+                "{} attach-session -t {}",
+                self.server()?.prefix(),
+                tmux_arg(&format!("={}", self.name))
+            )),
+            MultiplexerKind::Zellij if !self.create_if_missing => {
+                Ok(format!("zellij attach {}", quote(&self.name)))
+            }
+            _ => attach_command(self.kind, &self.name),
+        }
+    }
+    fn preflight_command(&self) -> Result<String> {
+        self.validate()?;
+        let (tool, version) = match self.kind {
+            MultiplexerKind::Tmux => ("tmux", "-V"),
+            MultiplexerKind::Herdr => ("herdr", "--version"),
+            MultiplexerKind::Zellij => ("zellij", "--version"),
+        };
+        let mut command =
+            format!("command -v {tool} >/dev/null 2>&1 && {tool} {version} >/dev/null 2>&1");
+        if matches!(self.kind, MultiplexerKind::Tmux) {
+            let server = self.server()?;
+            let exists = format!(
+                "{} has-session -t {} 2>/dev/null",
+                server.prefix(),
+                tmux_arg(&format!("={}", self.name))
+            );
+            if self.create_if_missing {
+                let create = action_command_for(
+                    &TmuxAction::CreateSession {
+                        name: self.name.clone(),
+                        directory: ".".into(),
+                    },
+                    &server,
+                )?;
+                command.push_str(&format!(
+                    " && ({exists} || {{ {create} >/dev/null 2>&1; {exists}; }})"
+                ));
+            } else {
+                command.push_str(&format!(" && {exists}"));
+            }
+        }
+        Ok(format!("sh -c {}", quote(&command)))
+    }
+    pub(crate) async fn prepare(
+        &self,
+        session: &crate::ssh::Session,
+        lease: &AccessLease,
+    ) -> Result<()> {
+        let unavailable = || {
+            SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
+        };
+        crate::ssh::exec_for_access(session, self.preflight_command()?, lease)
+            .await
+            .map_err(|error| {
+                if error.kind() == "remote_command_failed" {
+                    unavailable()
+                } else {
+                    error
+                }
+            })?;
+        if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
+            let command = match self.kind {
+                MultiplexerKind::Herdr => "herdr session list --json",
+                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
+                MultiplexerKind::Tmux => unreachable!(),
+            };
+            let output = crate::ssh::exec_for_access(session, command.into(), lease).await?;
+            if !persistent_sessions(self.kind, &output)?
+                .iter()
+                .any(|target| target.name == self.name)
+            {
+                return Err(unavailable());
+            }
+        }
+        Ok(())
+    }
+}
+// Saved defaults create only their explicitly named target in the default namespace.
 pub(crate) fn default_entry_command(kind: MultiplexerKind, value: &str) -> Result<String> {
-    attach_command(kind, value)?;
-    if value.trim().is_empty() {
-        return Err(SshError::new(
-            "invalid_target",
-            "Enter a named default multiplexer session",
-        ));
+    Entry {
+        kind,
+        name: value.into(),
+        tmux_server: None,
+        create_if_missing: true,
     }
-    // The pinned Herdr CLI uses these names as private session directories.
-    if matches!(kind, MultiplexerKind::Herdr)
-        && (value.len() > 64
-            || matches!(value, "." | "..")
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-    {
-        return Err(SshError::new("invalid_target","Herdr session names need 1–64 ASCII letters, numbers, periods, underscores or hyphens, excluding . and .."));
-    }
-    let (tool, version) = match kind {
-        MultiplexerKind::Tmux => ("tmux", "-V"),
-        MultiplexerKind::Herdr => ("herdr", "--version"),
-        MultiplexerKind::Zellij => ("zellij", "--version"),
-    };
-    let mut command =
-        format!("command -v {tool} >/dev/null 2>&1 && {tool} {version} >/dev/null 2>&1");
-    if matches!(kind, MultiplexerKind::Tmux) {
-        let server = crate::tmux_server::TmuxServer::Default;
-        let create = action_command_for(
-            &TmuxAction::CreateSession {
-                name: value.into(),
-                directory: ".".into(),
-            },
-            &server,
-        )?;
-        let exists = format!(
-            "{} has-session -t {} 2>/dev/null",
-            server.prefix(),
-            tmux_arg(&format!("={value}"))
-        );
-        // A competing creator is accepted only after checking this exact name.
-        command.push_str(&format!(
-            " && ({exists} || {{ {create} >/dev/null 2>&1; {exists}; }})"
-        ));
-    }
-    Ok(format!("sh -c {}", quote(&command)))
+    .preflight_command()
 }
 pub(crate) async fn prepare_default_entry(
     session: &crate::ssh::Session,
@@ -98,10 +184,14 @@ pub(crate) async fn prepare_default_entry(
     kind: MultiplexerKind,
     value: &str,
 ) -> Result<()> {
-    let command = default_entry_command(kind, value)?;
-    crate::ssh::exec_for_access(session,command,lease).await.map(|_|()).map_err(|error| {
-        if error.kind()=="remote_command_failed" {SshError::new("multiplexer_unavailable","Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")} else {error}
-    })
+    Entry {
+        kind,
+        name: value.into(),
+        tmux_server: None,
+        create_if_missing: true,
+    }
+    .prepare(session, lease)
+    .await
 }
 
 fn persistent_sessions(kind: MultiplexerKind, output: &str) -> Result<Vec<PersistentSession>> {
@@ -508,6 +598,36 @@ pub async fn tmux_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_entry_keeps_namespace_and_creation_policy_without_a_command_interface() {
+        let entry: Entry = serde_json::from_value(
+            serde_json::json!({"kind":"tmux","name":"work 'literal;","tmuxServer":"named 'server"}),
+        )
+        .unwrap();
+        assert!(!entry.create_if_missing);
+        let command = entry.command().unwrap();
+        assert!(command.contains("tmux -u -L 'named '\\''server'"));
+        assert!(entry.preflight_command().unwrap().contains("has-session"));
+        assert!(!entry.preflight_command().unwrap().contains("new-session"));
+        let zellij: Entry =
+            serde_json::from_value(serde_json::json!({"kind":"zellij","name":"existing"})).unwrap();
+        assert_eq!(zellij.command().unwrap(), "zellij attach 'existing'");
+        for invalid in [
+            serde_json::json!({"kind":"herdr","name":"work","tmuxServer":"other"}),
+            serde_json::json!({"kind":"tmux","name":"work","tmuxServer":"/tmp/socket"}),
+            serde_json::json!({"kind":"herdr","name":"../other"}),
+            serde_json::json!({"kind":"zellij","name":"--option"}),
+        ] {
+            assert!(serde_json::from_value::<Entry>(invalid)
+                .unwrap()
+                .validate()
+                .is_err());
+        }
+        assert!(serde_json::from_value::<Entry>(
+            serde_json::json!({"kind":"herdr","name":"work","command":"arbitrary"})
+        )
+        .is_err());
+    }
     #[cfg(unix)]
     #[test]
     fn default_entry_refuses_missing_and_unrunnable_tools_before_attachment() {

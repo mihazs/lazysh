@@ -951,3 +951,64 @@ test('Herdr discovery observation retains only closed state and capped counts',a
   expect(JSON.stringify(observe(document))).not.toContain('private');
   expect(Object.values(present).every(value=>typeof value==='boolean'||Number.isInteger(value)||['detected','missing','unknown'].includes(value as string))).toBe(true);
 });
+
+async function herdrConfirmationFixture() {
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const source=kotlin.match(/private fun herdrConfirmationObservation\([\s\S]*?val expression = """([\s\S]*?)"""/)!;
+  expect(source).not.toBeNull();
+  const child='owned/private-child',draft='private-draft-path-and-token';
+  const expression=source[1].replaceAll('${JSONObject.quote(expectedChild)}',JSON.stringify(child)).replaceAll('${JSONObject.quote(expectedDraft)}',JSON.stringify(draft));
+  type Button={textContent:string;disabled:boolean};
+  type Region={buttons?:Button[];alerts?:string[];statuses?:string[]};
+  const observe=({regions=[],tabs=[],footer=[],value}:{regions?:Region[];tabs?:{textContent:string;idle:boolean}[];footer?:string[];value?:string}={})=>{
+    const document={
+      querySelectorAll(selector:string) {
+        if(selector==="section[aria-label='Terminal input']")return regions.map(region=>({querySelectorAll(selector:string){
+          if(selector==='button')return region.buttons??[];
+          if(selector==='[role=alert]')return (region.alerts??[]).map(textContent=>({textContent}));
+          if(selector==='[role=status]')return (region.statuses??[]).map(textContent=>({textContent}));
+          throw new Error('Unexpected regional query');
+        }}));
+        if(selector==='.session-tabs [role=tab]')return tabs.map(tab=>({textContent:tab.textContent,querySelector:()=>tab.idle?{}:null}));
+        throw new Error('Unexpected global query');
+      },
+      querySelector(selector:string) {
+        if(selector==='.workspace-footer > span:last-child')return footer.length?{childNodes:footer.map(textContent=>({nodeType:3,textContent}))}:null;
+        if(selector==='form.chat-composer textarea')return value===undefined?null:{value};
+        throw new Error('Unexpected global selection');
+      },
+    };
+    return new Function('document',`return (${expression});`)(document);
+  };
+  return {observe,child,draft};
+}
+
+test('Herdr confirmation observation is closed when absent or pending',async()=>{
+  const {observe}=await herdrConfirmationFixture();
+  expect(observe()).toEqual({regions:0,choose:0,confirm:0,send:0,chooseDisabled:false,pending:false,errorPresent:false,error:'none',ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
+  expect(observe({regions:[{buttons:[{textContent:'Choose terminal destination',disabled:true}],statuses:['Waiting for the terminal response…']}]})).toMatchObject({regions:1,choose:1,confirm:0,chooseDisabled:true,pending:true,errorPresent:false,error:'none'});
+});
+
+test('Herdr confirmation observation classifies exact known regional copy without retaining errors',async()=>{
+  const {english}=await import('../apps/client/src/i18n/en');
+  const {observe}=await herdrConfirmationFixture();
+  const categories=[['chatHerdrUnavailable','unavailable'],['chatTerminalStale','stale'],['chatTerminalInvalid','invalid'],['chatTerminalInvalidDraft','invalid'],['chatTerminalBusy','busy'],['chatTerminalInvalidReply','invalidReply'],['chatHerdrUncertain','uncertain']] as const;
+  for(const [key,error] of categories)expect(observe({regions:[{alerts:[english[key]]}]})).toMatchObject({errorPresent:true,error});
+  for(const privateError of ['private-error-path/token',english.chatTerminalBusy+' private-token',' '+english.chatTerminalStale]){
+    const snapshot=observe({regions:[{alerts:[privateError]}]});
+    expect(snapshot.error).toBe('other');expect(JSON.stringify(snapshot)).not.toContain(privateError);
+  }
+  expect(observe({regions:[{alerts:[english.chatHerdrUnavailable,english.chatHerdrUnavailable]}]}).error).toBe('other');
+});
+
+test('Herdr confirmation observation caps duplicates and retains only owned DOM comparisons',async()=>{
+  const {observe,child,draft}=await herdrConfirmationFixture();
+  const privateValue='/private/token/'+ 'secret'.repeat(20_000);
+  const buttons=[{textContent:'Choose terminal destination',disabled:true},{textContent:'Confirm this destination',disabled:false},{textContent:'Send to terminal',disabled:false},{textContent:privateValue,disabled:true}];
+  const snapshot=observe({regions:Array.from({length:20},()=>({buttons})),tabs:[{textContent:child,idle:true},{textContent:privateValue,idle:true}],footer:['Mosh',privateValue],value:draft});
+  expect(snapshot).toEqual({regions:8,choose:8,confirm:8,send:8,chooseDisabled:true,pending:false,errorPresent:false,error:'none',ownedChildDisconnected:true,moshFooter:true,draftMatches:true});
+  const serialized=JSON.stringify(snapshot);
+  for(const value of [child,draft,privateValue,'secret','/private'])expect(serialized).not.toContain(value);
+  expect(serialized.length).toBeLessThan(250);
+  expect(observe({regions:[{buttons:[...buttons,{textContent:'Choose terminal destination',disabled:false}]}],tabs:[{textContent:child+'-other',idle:true}],footer:['Mosh-private'],value:draft+'-other'})).toMatchObject({chooseDisabled:false,ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
+});

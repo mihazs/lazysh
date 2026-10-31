@@ -9,6 +9,7 @@ import type {DesktopMux} from './useDesktopLaunch';
 import canonicalBedMode from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {aboutLocales} from './test/aboutData';
 import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
+import {herdrNavigationTree} from './test/herdrNavigation';
 import {tmuxJumpSnapshot as navigationSnapshot} from './test/tmuxJumpData';
 import {tmuxChatReply,tmuxChatReaderSource,tmuxChatReaderPage} from './test/tmuxChat';
 vi.mock('../package.json',()=>({default:{version:'2.3.4'}}));
@@ -43,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   accountUsageSession: vi.fn(),
   accountUsageRefresh: vi.fn(),
   accountUsageDisconnected: false,
+  accountUsageCompanionRequired: false,
   terminalPaneProps: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
@@ -69,7 +71,7 @@ vi.mock('@tauri-apps/api/event',()=>({listen:vi.fn(async (name:string,callback:(
   return()=>{if(mocks.lockEvent===callback)mocks.lockEvent=undefined;if(mocks.launchEvent===callback)mocks.launchEvent=undefined;};
 })}));
 vi.mock("./bridge", () => ({ native: true, api: mocks.api }));
-vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
+vi.mock('./useAccountUsage',()=>({useAccountUsage:(sessionId:string|null)=>{mocks.accountUsageSession(sessionId);return {response:{schemaVersion:1,state:mocks.accountUsageCompanionRequired?'companion_required':mocks.accountUsageDisconnected?'disconnected':'ready',source:'builtin',report:{primary:null,entries:[]}},refreshing:false,refresh:mocks.accountUsageRefresh,entry:null,select:()=>{}};}}));
 vi.mock("./terminal", () => ({ createTerminal: () => mocks.createTerminal() }));
 vi.mock("./TerminalPane", () => ({
   default: (props: { active: boolean; onOpenAttachments?:()=>void }) => {
@@ -104,7 +106,7 @@ const host: Host = {
 
 beforeEach(() => {
   generationBase+=10;
-  vi.clearAllMocks();mocks.realAgents=false;mocks.accountUsageDisconnected=false;
+  vi.clearAllMocks();mocks.realAgents=false;mocks.accountUsageDisconnected=false;mocks.accountUsageCompanionRequired=false;
   mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;mocks.prepareError=null;
   vi.stubGlobal("localStorage", {
     setItem: vi.fn(),
@@ -144,6 +146,18 @@ it('opens AI account usage for the exact connected terminal from the existing fo
   expect(await screen.findByRole('region',{name:'AI account usage'})).toBeTruthy();
   expect(await screen.findByRole('button',{name:'Use latest report for Watch'})).toBeTruthy();
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+});
+
+it('opens the existing Agents sidebar installer from account usage setup without starting installation',async()=>{
+  mocks.accountUsageCompanionRequired=true;mocks.realAgents=true;
+  mocks.api.connect.mockResolvedValue({sessionId:'usage-needs-companion'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
+  await user.click(await screen.findByRole('button',{name:'Install or update companion'}));
+  expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
+  expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page');
+  expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
+  expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
 it('reauthenticates only host tools from disconnected Mosh account usage and refreshes after success',async()=>{
@@ -1036,6 +1050,39 @@ it("focuses host search when opened with the command palette shortcut", async ()
   ).toBeTruthy();
 });
 
+it('keeps restore gated on host loading and explicit action while exposing its limitations on demand',async()=>{
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'home'}]):null);
+  let loaded!:(value:Host[])=>void; mocks.api.listHosts.mockImplementationOnce(()=>new Promise(resolve=>{loaded=resolve;}));
+  let connected!:(value:{sessionId:string})=>void; mocks.api.connect.mockImplementationOnce(()=>new Promise(resolve=>{connected=resolve;}));
+  const user=userEvent.setup(); render(<App/>);
+  const restore=await screen.findByRole('button',{name:'Restore previous workspace'});
+  expect(restore).toHaveProperty('disabled',true);
+  const details=screen.getByRole('button',{name:'Workspace details'});
+  expect(details.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeNull();
+  await user.click(details);
+  expect(screen.getByText(t('appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij'))).toBeTruthy();
+  expect(mocks.api.connect).not.toHaveBeenCalled();
+  await act(async()=>loaded([host])); await waitFor(()=>expect(restore).toHaveProperty('disabled',false));
+  await user.click(restore);
+  expect(screen.getByRole('button',{name:'Restoring…'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'Dismiss'})).toHaveProperty('disabled',true);
+  expect(mocks.api.connect).toHaveBeenCalledWith('home',{},expect.any(Function),{useSavedCredentials:true});
+  await act(async()=>connected({sessionId:'restored-explicit'})); await screen.findByText('Live SSH terminal');
+});
+it('dismisses saved restoration without disconnecting or replacing the current workspace',async()=>{
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([{hostId:'previous-host'}]):null);
+  mocks.api.connect.mockResolvedValue({sessionId:'keep-current-session'});
+  const user=await openConnection(); await user.click(screen.getByRole('button',{name:'Connect'})); await screen.findByText('Live SSH terminal');
+  const dismiss=screen.getByRole('button',{name:'Dismiss'});
+  expect(dismiss.textContent).toBe(''); expect(dismiss.querySelector('svg')).not.toBeNull();
+  await user.click(dismiss);
+  expect(screen.queryByRole('button',{name:'Restore previous workspace'})).toBeNull();
+  expect(localStorage.setItem).toHaveBeenLastCalledWith('lazysh.workspace.v1',JSON.stringify([{hostId:'home'}]));
+  expect(mocks.api.connect).toHaveBeenCalledTimes(1); expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  expect(screen.getByText('Live SSH terminal')).toBeTruthy();
+});
+
 it.each([undefined, "agents"])("restores the exact tmux workspace on server %s without sending shell text", async tmuxServer => {
   vi.mocked(localStorage.getItem).mockReturnValue(
     JSON.stringify([
@@ -1610,15 +1657,75 @@ it('retains only class-branded global failures across locales and preserves ever
   }finally{await act(async()=>{await uiI18n.changeLanguage('en');});}
 });
 
+it.each(['tmux','herdr','zellij'] as const)('enters the saved Mosh default %s directly without creating an SSH display',async kind=>{
+  enableTransports();
+  const target={kind,name:'named-work'};
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'mosh',defaultMultiplexer:target}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'entry-control'});
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'entry-mosh'});
+  const user=await openConnection();
+  expect(screen.getByLabelText('Transport')).toHaveProperty('value','mosh');
+  await user.click(screen.getByRole('button',{name:'Connect'}));
+  await screen.findByText('Live SSH terminal');
+  expect(mocks.api.connectMosh).toHaveBeenCalledExactlyOnceWith('entry-control',
+    {serverPath:'mosh-server',portMin:60000,portMax:61000},expect.any(Function),{...target,createIfMissing:true});
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();
+  expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  expect(mocks.api.adoptSession).toHaveBeenCalledWith('entry-mosh');
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'entry-control'});
+  expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.saveHost).not.toHaveBeenCalled();
+  const saved=vi.mocked(localStorage.setItem).mock.calls.filter(([key])=>key==='lazysh.workspace.v1').at(-1);
+  expect(JSON.parse(saved![1])).toEqual([{hostId:host.id,mosh:{serverPath:'mosh-server',portMin:60000,portMax:61000},attached:target}]);
+});
+it.each(['mosh_entry_startup_failed','herdr_guard_startup_unsupported','mosh_entry_unsupported_host'])('does not retry an Auto multiplexer admission failure %s as another display',async kind=>{
+  enableTransports();
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'auto',defaultMultiplexer:{kind:'herdr',name:'work'}}]);
+  mocks.api.connectMosh.mockRejectedValue({kind,message:'Owned entry admission failed'});
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
+  expect((await screen.findByRole('alert')).textContent).toContain('Owned entry admission failed');
+  expect(mocks.api.connectMosh).toHaveBeenCalledOnce();
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  expect(mocks.api.adoptSession).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'verified-control'});
+});
+it('uses SSH for default entry Auto only after a safe pre-dispatch Mosh fallback',async()=>{
+  enableTransports();
+  const target={kind:'herdr' as const,name:'work'};
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'auto',defaultMultiplexer:target}]);
+  mocks.api.connectMosh.mockRejectedValue({kind:'mosh_unsupported',message:'Unsupported platform before bootstrap'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'auto-entry-ssh'});
+  const user=await openConnection();
+  expect(screen.getByRole('option',{name:'Auto (Mosh, then SSH)'})).toBeTruthy();
+  await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  expect(mocks.api.attachDefaultMultiplexer).toHaveBeenCalledExactlyOnceWith('verified-control',target,expect.any(Function));
+  expect(mocks.api.connectEt).not.toHaveBeenCalled();
+  const saved=vi.mocked(localStorage.setItem).mock.calls.filter(([key])=>key==='lazysh.workspace.v1').at(-1);
+  expect(JSON.parse(saved![1])).toEqual([{hostId:host.id,auto:autoOptions,attached:target}]);
+});
+it.each(['mosh','auto'] as const)('restores an exact %s attachment and tmux server instead of the saved host default',async mode=>{
+  enableTransports();
+  const attached={kind:'tmux' as const,name:'actual-work',tmuxServer:'agents'};
+  const intent={hostId:host.id,attached,...(mode==='auto'?{auto:autoOptions}:{mosh:autoOptions.mosh})};
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key==='lazysh.workspace.v1'?JSON.stringify([intent]):null);
+  mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'different'}}]);
+  mocks.api.connectMosh.mockResolvedValue({sessionId:'restored-mosh-entry'});
+  const user=userEvent.setup();render(<App/>);await screen.findByRole('button',{name:'Connect to Home'});
+  await user.click(screen.getByRole('button',{name:'Restore previous workspace'}));await screen.findByText('Live SSH terminal');
+  expect(mocks.api.connectMosh).toHaveBeenCalledExactlyOnceWith('verified-control',autoOptions.mosh,expect.any(Function),attached);
+  expect(mocks.api.attachDefaultMultiplexer).not.toHaveBeenCalled();expect(mocks.api.attachTmux).not.toHaveBeenCalled();
+  expect(mocks.api.adoptSession).toHaveBeenCalledWith('restored-mosh-entry');
+  const saved=vi.mocked(localStorage.setItem).mock.calls.filter(([key])=>key==='lazysh.workspace.v1').at(-1);
+  expect(JSON.parse(saved![1])).toEqual([intent]);
+});
 it.each(['tmux','herdr','zellij'] as const)('enters the saved named %s directly through SSH and retires only its bootstrap',async kind=>{
   const target={kind,name:kind==='herdr' ? 'named-work' : "work 'literal;"};
-  mocks.api.listHosts.mockResolvedValue([{...host,transport:'mosh',defaultMultiplexer:target}]);
+  mocks.api.listHosts.mockResolvedValue([{...host,transport:'ssh',defaultMultiplexer:target}]);
   mocks.api.connect.mockResolvedValue({sessionId:'default-parent'});
   mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'default-child'});
   const user=await openConnection();
   expect(screen.getByLabelText('Transport')).toHaveProperty('value','ssh');
-  expect(screen.getByLabelText('Transport')).toHaveProperty('disabled',true);
-  expect(screen.getByText(/Direct multiplexer entry uses SSH. The saved transport preference is unchanged./)).toBeTruthy();
+  expect(screen.getByLabelText('Transport')).toHaveProperty('disabled',false);
+  expect(screen.getByText(/Direct multiplexer entry supports SSH or Mosh./)).toBeTruthy();
   await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');
   expect(mocks.api.attachDefaultMultiplexer).toHaveBeenCalledExactlyOnceWith('default-parent',target,expect.any(Function));
@@ -1632,7 +1739,7 @@ it('opens Agents on the attached default Herdr session among several running ser
   const companion=mocks.invoke.getMockImplementation()!;
   mocks.invoke.mockImplementation((command,args)=>{
     if(command==='multiplexer_sessions')return Promise.resolve([{name:'other'},{name:'named-work'}]);
-    if(command==='herdr_tree')return Promise.resolve({panes:[],agents:[]});
+    if(command==='herdr_tree')return Promise.resolve({workspaces:[],tabs:[],panes:[],agents:[]});
     return companion(command,args);
   });
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);
@@ -1648,6 +1755,83 @@ it('opens Agents on the attached default Herdr session among several running ser
     ['herdr_tree',{sessionId:'agents-child',name:'named-work'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}],
   ]);
   expect(mocks.api.write).not.toHaveBeenCalled();
+});
+it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
+  if(outcome==='unsupported')mocks.realAgents=true;
+  const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported';
+  mocks.api.listHosts.mockResolvedValue([{...host,...(existing?{defaultMultiplexer:{kind:'herdr',name:'named-work'}}:{})}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'navigation-source'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'navigation-existing'});
+  mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'navigation-adopted'});
+  let complete!:(value:unknown)=>void,reads=0;
+  if(outcome==='cancel-before-publication')mocks.api.attachMultiplexer.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,sessions:[]});
+    if(command==='multiplexer_sessions')return Promise.resolve([{name:'named-work'}]);
+    if(command==='herdr_tree'){
+      if(++reads===1)return Promise.resolve(herdrNavigationTree);
+      if(reads===2 && (outcome==='stale'||outcome==='adopt-held-tree'||outcome==='cancel-after-publication'||outcome==='cancel-server'||outcome==='hidden-then-visible'))return new Promise(resolve=>{complete=resolve;});
+      return Promise.resolve(outcome==='missing'?{...herdrNavigationTree,panes:[]}:herdrNavigationTree);
+    }
+    if(command==='herdr_action'){if(outcome==='adopt-held-reply'||outcome==='cancel-pending-reply')return new Promise(resolve=>{complete=resolve;});return outcome==='unsupported'?Promise.reject({kind:'herdr_focus_companion_required'}):Promise.resolve(undefined);}
+    return original(command,args);
+  });
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  if(outcome==='current-second-display'){
+    await user.click(screen.getByRole('button',{name:'Sessions'}));
+    await user.click(await screen.findByRole('button',{name:'List herdr sessions'}));
+    await user.click(await screen.findByRole('button',{name:'Attach herdr named-work'}));
+    await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work / named-work'}).getAttribute('aria-selected')).toBe('true'));
+  }
+  await user.click(screen.getByRole('button',{name:'Workspaces'}));
+  const browser=within(await screen.findByRole('region',{name:t('herdrNavigationTitle')}));
+  expect(browser.getByText(t('herdrNavigationShared'))).toBeTruthy();
+  await user.click(await browser.findByRole('button',{name:/^builder/}));
+  const cancelled=outcome.startsWith('cancel-')||outcome==='hidden-then-visible';
+  if(cancelled){
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    if(outcome!=='cancel-before-publication')await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work'}).getAttribute('aria-selected')).toBe('true'));
+    if(outcome==='hidden-then-visible'){
+      const hidden=vi.spyOn(document,'hidden','get');
+      hidden.mockReturnValue(true);act(()=>document.dispatchEvent(new Event('visibilitychange')));
+      hidden.mockReturnValue(false);act(()=>document.dispatchEvent(new Event('visibilitychange')));hidden.mockRestore();
+    }else if(outcome==='cancel-server'){
+      const server=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});await waitFor(()=>expect(server).toHaveProperty('disabled',false));await user.selectOptions(server,'');
+    }else await user.click(screen.getByRole('button',{name:t('herdrNavigationBack')}));
+    if(outcome==='cancel-pending-reply')await user.click(screen.getByRole('tab',{name:'Home'}));
+    await act(async()=>complete(outcome==='cancel-before-publication'?{sessionId:'navigation-adopted'}:outcome==='cancel-pending-reply'?undefined:herdrNavigationTree));
+    if(outcome==='cancel-pending-reply')expect(screen.getByRole('tab',{name:'Home'}).getAttribute('aria-selected')).toBe('true');
+    if(outcome==='cancel-before-publication')expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'navigation-adopted'});
+    else expect(mocks.invoke).not.toHaveBeenCalledWith('disconnect',{sessionId:'navigation-adopted'});
+  }
+  if(outcome==='adopt-held-tree'||outcome==='adopt-held-reply'){
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work'}).getAttribute('aria-selected')).toBe('true'));
+    await act(async()=>complete(outcome==='adopt-held-tree'?herdrNavigationTree:undefined));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'Workspaces'}).closest('aside')!.classList.contains('sidebar-open')).toBe(false));
+  }
+  if(cancelled){}else if(outcome==='stale'){
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    await user.click(screen.getByRole('button',{name:'Connections'}));
+    await act(async()=>complete(herdrNavigationTree));
+    expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
+  } else if(outcome==='unsupported'){
+    expect(await browser.findByRole('alert')).toHaveProperty('textContent',t('herdrNavigationCompanion'));
+    await user.click(browser.getByRole('button',{name:t('companionInstallTitle')}));
+    expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
+    expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
+  }
+  else if(outcome==='missing')expect((await screen.findByRole('alert')).textContent).toContain(t('herdrNavigationChanged'));
+  else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_action',{sessionId:existing&&outcome!=='current-second-display'?'navigation-existing':'navigation-adopted',name:'named-work',action:{type:'focusPane',target:'w2E:pF'}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
+  const sent=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_action');
+  expect(sent).toHaveLength(outcome==='missing'||outcome==='stale'||(cancelled&&outcome!=='cancel-pending-reply')?0:1);
+  if(outcome==='current-second-display'){expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-existing','herdr','named-work',expect.any(Function));expect(sent.every(([,args])=>(args as {sessionId:string}).sessionId==='navigation-adopted')).toBe(true);expect(mocks.api.adoptSession.mock.calls.map(([id])=>id)).toEqual(['navigation-existing','navigation-adopted']);expect(screen.getByRole('tab',{name:'Home / named-work / named-work'}).getAttribute('aria-selected')).toBe('true');}
+  else if(existing)expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  else expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-source','herdr','named-work',expect.any(Function));
+  expect(mocks.api.write).not.toHaveBeenCalled();
+  if(outcome==='cancel-before-publication')expect(mocks.api.adoptSession).not.toHaveBeenCalledWith('navigation-adopted');
+  else if(!existing)expect(mocks.api.adoptSession.mock.calls.filter(([id])=>id==='navigation-adopted')).toHaveLength(1);
 });
 it('shows a selected multiplexer preflight failure and closes its bootstrap without adopting a blank terminal',async()=>{
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'zellij',name:'work'}}]);
@@ -1744,7 +1928,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   expect(screen.queryByRole('region',{name:'Agent activity'})).toBeNull();
   const reads=mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
   await user.click(screen.getByRole('button',{name:'Agents navigation'}));
-  await screen.findByRole('searchbox');expect(screen.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','/project');
+  await screen.findByRole('searchbox',{name:'Search reported agents'});expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);expect(search).toHaveProperty('value','/project');
   expect(settings).toHaveProperty('checked',false);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(reads+1);
@@ -1842,4 +2026,21 @@ it.each(['lock','hidden','closed-source','unmount'] as const)('does not publish 
   else view.unmount();
   await act(async()=>complete({schemaVersion:1,status:'restored'}));
   expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();
+});
+
+it('uses the existing guarded dialog shell for long mobile tasks and keeps choices separate', async () => {
+  const user=userEvent.setup(); render(<App />);
+  const preferences=await screen.findByRole('button',{name:'Preferences'});
+  await user.click(preferences);
+  const dialog=screen.getByRole('dialog',{name:'Preferences'});
+  expect(dialog.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
+  expect(dialog.querySelector('.dialog-content')).not.toBeNull();
+  within(dialog).getByRole('button',{name:'Close Preferences'}).focus();
+  await user.keyboard('{Escape}'); expect(screen.queryByRole('dialog')).toBeNull();
+  expect(document.activeElement).toBe(preferences);
+  await user.click(screen.getByRole('button',{name:'Connect to Home'}));
+  const connection=screen.getByRole('dialog',{name:'Connect to Home'});
+  expect(connection.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
+  await user.click(within(connection).getByRole('button',{name:'Close Connect to Home'}));
+  expect(screen.queryByRole('dialog')).toBeNull();
 });

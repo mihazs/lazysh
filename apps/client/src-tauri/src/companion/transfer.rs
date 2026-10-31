@@ -1,4 +1,5 @@
 use super::*;
+use futures_util::{stream, StreamExt};
 use russh_sftp::{
     client::RawSftpSession,
     protocol::{FileAttributes, OpenFlags, StatusCode},
@@ -19,6 +20,59 @@ fn invalid() -> SshError {
         "Companion staging identity or bytes differ from the verified artifact",
     )
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum CleanupStage {
+    Admission,
+    Ownership,
+    CloseUpload,
+    Directory,
+    VerifyFile,
+    RemoveFile,
+    RemoveDirectory,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum CleanupReason {
+    Disconnected,
+    Unowned,
+    Missing,
+    Identity,
+    Hash,
+    Request,
+    Timeout,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct CleanupFailure {
+    pub stage: CleanupStage,
+    pub reason: CleanupReason,
+}
+struct VerificationFailure {
+    reason: CleanupReason,
+    error: SshError,
+}
+impl VerificationFailure {
+    fn invalid(reason: CleanupReason) -> Self {
+        Self {
+            reason,
+            error: invalid(),
+        }
+    }
+}
+impl From<russh_sftp::client::error::Error> for VerificationFailure {
+    fn from(error: russh_sftp::client::error::Error) -> Self {
+        let reason = if matches!(&error, russh_sftp::client::error::Error::Status(status) if status.status_code == StatusCode::NoSuchFile)
+        {
+            CleanupReason::Missing
+        } else {
+            CleanupReason::Request
+        };
+        Self {
+            reason,
+            error: error.into(),
+        }
+    }
+}
 pub(super) struct Staging {
     raw: RawSftpSession,
     pub path: String,
@@ -31,6 +85,7 @@ pub(super) struct Staging {
     file_owned: bool,
     executable: bool,
     handle: Option<String>,
+    cleanup_stage: CleanupStage,
 }
 impl Staging {
     pub fn new(raw: RawSftpSession, unix: &resolve::Unix, selection: &release::Selection) -> Self {
@@ -51,6 +106,7 @@ impl Staging {
             file_owned: false,
             executable: false,
             handle: None,
+            cleanup_stage: CleanupStage::Ownership,
         }
     }
     pub async fn upload(&mut self, home: &str, data: &[u8]) -> Result<()> {
@@ -110,9 +166,46 @@ impl Staging {
         Ok(())
     }
     pub async fn verify(&self, path: &str, mode: u32) -> Result<()> {
+        self.verify_observed(path, mode)
+            .await
+            .map_err(|failure| failure.error)
+    }
+    async fn read_range(
+        &self,
+        handle: &str,
+        offset: u64,
+        length: u32,
+    ) -> std::result::Result<Vec<u8>, VerificationFailure> {
+        let mut bytes = Vec::with_capacity(length as usize);
+        while bytes.len() < length as usize {
+            let remaining = length as usize - bytes.len();
+            let data = match self
+                .raw
+                .read(handle, offset + bytes.len() as u64, remaining as u32)
+                .await
+            {
+                Err(russh_sftp::client::error::Error::Status(status))
+                    if status.status_code == StatusCode::Eof =>
+                {
+                    return Err(VerificationFailure::invalid(CleanupReason::Identity));
+                }
+                result => result?,
+            };
+            if data.data.is_empty() || data.data.len() > remaining {
+                return Err(VerificationFailure::invalid(CleanupReason::Identity));
+            }
+            bytes.extend_from_slice(&data.data);
+        }
+        Ok(bytes)
+    }
+    async fn verify_observed(
+        &self,
+        path: &str,
+        mode: u32,
+    ) -> std::result::Result<(), VerificationFailure> {
         let before = self.raw.lstat(path).await?.attrs;
         if !attrs(self.uid, mode, false, Some(self.bytes), &before) {
-            return Err(invalid());
+            return Err(VerificationFailure::invalid(CleanupReason::Identity));
         }
         let handle = self
             .raw
@@ -127,45 +220,41 @@ impl Staging {
                 Some(self.bytes),
                 &self.raw.fstat(&handle).await?.attrs,
             ) {
-                return Err(invalid());
+                return Err(VerificationFailure::invalid(CleanupReason::Identity));
             }
             let mut count = 0u64;
             let mut hash = Sha256::new();
-            loop {
-                match self
-                    .raw
-                    .read(
-                        &handle,
-                        count,
-                        ((self.bytes + 1 - count).min(65_536)) as u32,
-                    )
-                    .await
-                {
-                    Ok(data) => {
-                        if data.data.is_empty() || count + data.data.len() as u64 > self.bytes {
-                            return Err(invalid());
-                        }
-                        count += data.data.len() as u64;
-                        hash.update(&data.data);
-                    }
-                    Err(russh_sftp::client::error::Error::Status(status))
-                        if status.status_code == StatusCode::Eof =>
-                    {
-                        break
-                    }
-                    Err(e) => return Err(e.into()),
-                }
+            // Ordered slots hash in file order even when the peer replies out of order.
+            // The bound is per verification; cancelled wire requests retire with the transport.
+            let mut ranges = stream::iter((0..self.bytes).step_by(65_536))
+                .map(|offset| {
+                    self.read_range(&handle, offset, (self.bytes - offset).min(65_536) as u32)
+                })
+                .buffered(8);
+            while let Some(data) = ranges.next().await {
+                let data = data?;
+                count += data.len() as u64;
+                hash.update(&data);
+            }
+            match self.raw.read(&handle, self.bytes, 1).await {
+                Err(russh_sftp::client::error::Error::Status(status))
+                    if status.status_code == StatusCode::Eof => {}
+                Ok(_) => return Err(VerificationFailure::invalid(CleanupReason::Identity)),
+                Err(error) => return Err(error.into()),
             }
             let after = self.raw.fstat(&handle).await?.attrs;
             let named = self.raw.lstat(path).await?.attrs;
+            let digest = format!("{:x}", hash.finalize());
             if count != self.bytes
-                || format!("{:x}", hash.finalize()) != self.digest
                 || !attrs(self.uid, mode, false, Some(self.bytes), &after)
                 || !attrs(self.uid, mode, false, Some(self.bytes), &named)
                 || before.mtime != after.mtime
                 || after.mtime != named.mtime
             {
-                return Err(invalid());
+                return Err(VerificationFailure::invalid(CleanupReason::Identity));
+            }
+            if digest != self.digest {
+                return Err(VerificationFailure::invalid(CleanupReason::Hash));
             }
             Ok(())
         }
@@ -188,43 +277,58 @@ impl Staging {
         self.executable = true;
         self.verify(&self.path, 0o700).await
     }
-    pub async fn cleanup(&mut self) -> bool {
-        if !self.touched {
-            return true;
+    fn cleanup_failure(&self, reason: CleanupReason) -> CleanupFailure {
+        CleanupFailure {
+            stage: self.cleanup_stage,
+            reason,
         }
+    }
+    pub fn cleanup_timeout(&self) -> CleanupFailure {
+        self.cleanup_failure(CleanupReason::Timeout)
+    }
+    pub async fn cleanup(&mut self) -> std::result::Result<(), CleanupFailure> {
+        if !self.touched {
+            return Ok(());
+        }
+        self.cleanup_stage = CleanupStage::Ownership;
         if !self.owned {
-            return false;
+            return Err(self.cleanup_failure(CleanupReason::Unowned));
         }
         if let Some(handle) = self.handle.take() {
-            if self.raw.close(handle).await.is_err() {
-                return false;
-            }
+            self.cleanup_stage = CleanupStage::CloseUpload;
+            self.raw
+                .close(handle)
+                .await
+                .map_err(|error| self.cleanup_failure(VerificationFailure::from(error).reason))?;
         }
-        if !attrs(
-            self.uid,
-            0o700,
-            true,
-            None,
-            &match self.raw.lstat(&self.directory).await {
-                Ok(v) => v.attrs,
-                Err(_) => return false,
-            },
-        ) {
-            return false;
+        self.cleanup_stage = CleanupStage::Directory;
+        let directory = self
+            .raw
+            .lstat(&self.directory)
+            .await
+            .map_err(|error| self.cleanup_failure(VerificationFailure::from(error).reason))?;
+        if !attrs(self.uid, 0o700, true, None, &directory.attrs) {
+            return Err(self.cleanup_failure(CleanupReason::Identity));
         }
         if self.file_owned {
             // No recursive deletion. Unknown/truncated/replaced bytes are left as residue.
-            if self
-                .verify(&self.path, if self.executable { 0o700 } else { 0o600 })
+            self.cleanup_stage = CleanupStage::VerifyFile;
+            self.verify_observed(&self.path, if self.executable { 0o700 } else { 0o600 })
                 .await
-                .is_err()
-                || self.raw.remove(&self.path).await.is_err()
-            {
-                return false;
-            }
+                .map_err(|error| self.cleanup_failure(error.reason))?;
+            self.cleanup_stage = CleanupStage::RemoveFile;
+            self.raw
+                .remove(&self.path)
+                .await
+                .map_err(|error| self.cleanup_failure(VerificationFailure::from(error).reason))?;
             self.file_owned = false;
         }
-        self.raw.rmdir(&self.directory).await.is_ok()
+        self.cleanup_stage = CleanupStage::RemoveDirectory;
+        self.raw
+            .rmdir(&self.directory)
+            .await
+            .map_err(|error| self.cleanup_failure(VerificationFailure::from(error).reason))?;
+        Ok(())
     }
 }
 impl Drop for Staging {
