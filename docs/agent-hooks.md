@@ -134,6 +134,44 @@ session forms verify an attributed attention report; completion remains tied to
 the identified session rather than its parent. Full provider turns
 and authenticated sessions remain separate acceptance checks.
 
+## Cline CLI roots
+
+`lazysh-agent cline-plugin` prints one original JavaScript plugin as JSON with
+`filename`, `content` and `scope: root-only`. Review the content and place it in a
+selected project's `.cline/plugins/lazysh.js`, or use Cline's ordinary reviewed
+local-plugin installation. Preserve foreign plugins and their enabled/disabled
+policies. This command does not install, enable or change anything in Cline.
+
+Support is qualified for Cline CLI 3.0.74 default worker mode with one fixed
+host-session workspace. A repeated setup disables observation rather than
+rebinding old callbacks to a different workspace; SDK embedding and dynamic
+workspace changes within one plugin instance are unsupported.
+
+The plugin uses the native awaited `beforeRun` and `afterRun` callbacks, not
+Cline's detached file hooks. It requires the actual run, conversation and agent
+IDs. Report row IDs are a bounded domain-separated SHA-256 of the native agent
+and conversation pair, preserving distinct roots even if a conversation is reused.
+The plugin reports working on run start, completion/stopped on completed/aborted runs,
+and generic attention on failure. It sends no prompts, responses, tool arguments,
+error text or approval decisions. A fixed-argv companion process has a two-second
+SIGKILL deadline and is reaped; plugin disposal retires queued work and reaps its
+active process. Missing companions never change the callbacks' control results.
+
+Initial support is deliberately root-only. Delegated children can inherit the
+parent plugin while using another directory, so their callbacks are ignored;
+parent workspace context is never attributed to a child. Shared root-session IDs
+are not native run identity. Permission/question waits and managed Cline setup
+are unsupported. A loaded plugin is not proof of fresh reporting, and native
+worker failure or a missed callback can leave an observation stale.
+
+Contract source: [Cline CLI 3.0.74 runtime hooks](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/docs/sdk/plugins.mdx).
+The official Linux CLI 3.0.74 was qualified with a private loopback provider:
+one interactive root retained its exact agent/conversation IDs across two native
+run IDs and reported working, done, working, done to the actual companion Store.
+Root-only child omission also has plugin/ingestion regression coverage; actual
+child directory binding remains unqualified. Windows and real authenticated
+provider sessions require separate qualification.
+
 ## Gemini CLI, Droid and Kimi CLI
 
 `lazysh-agent gemini-config` prints a Gemini `settings.json` fragment. Its
@@ -278,12 +316,13 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Native observer adapter and shell-free print-only fragment; CLI contract fixtures |
 | [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter, print-only fragment and explicit Linux managed setup; actual permission-wait detection unavailable |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter and print-only standalone hook map; contract fixtures |
+| [Cline CLI](https://docs.cline.bot/sdk/plugins) | Awaited root beforeRun; afterRun completed/aborted/failed | Root-only native runtime plugin; child directory binding and permission waits unsupported |
 | [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Native state-observer plugin and bounded adapter; actual asset fixtures, authenticated runtime unverified |
 | [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Native callback health only; no session attribution or lifecycle states; creates no session rows |
 | [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/customization/hooks.html) | Prompt/tool activity; permission notification; root CLI SessionEnd | Native observable callbacks and TOML fragment; unscoped per-turn completion remains unavailable; hooks are beta |
 
 Generic schema-1 ingestion remains available for explicit integrations, but a
-generic wrapper is not evidence of native parity. Nine agents have some native
+generic wrapper is not evidence of native parity. Ten agents have some native
 lifecycle coverage; Aider has health-only callback coverage. Cursor permission
 waits and Kimi per-turn completion remain unavailable. This milestone does not
 close issue #603 or install hooks into any profile automatically.
