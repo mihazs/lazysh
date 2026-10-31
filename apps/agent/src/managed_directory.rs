@@ -145,13 +145,14 @@ impl Directory {
             } else {
                 #[cfg(target_os = "linux")]
                 {
-                    libc::renameat2(
+                    libc::syscall(
+                        libc::SYS_renameat2,
                         fd,
                         source.as_ptr(),
                         fd,
                         destination.as_ptr(),
                         libc::RENAME_NOREPLACE,
-                    )
+                    ) as i32
                 }
                 #[cfg(target_os = "macos")]
                 {
