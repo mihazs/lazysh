@@ -2,7 +2,7 @@ import {expect,test,type Page,type BrowserContext} from '@playwright/test';
 import type {mountTerminalImeHarness} from './fixtures/TerminalImeHarness';
 declare global {interface Window {ownedIme:ReturnType<typeof mountTerminalImeHarness>}}
 
-async function replaceNativeSelection(page:Page,context:BrowserContext,text:string) {
+async function commitNativeComposition(page:Page,context:BrowserContext,text:string) {
   const cdp=await context.newCDPSession(page);
   await cdp.send('Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});
   await cdp.send('Input.insertText',{text});
@@ -344,7 +344,7 @@ for(const [value,inputType,expected] of [['é','insertReplacementText','\x7f'],
 
 test('native composition replacing an owned committed ASCII range edits the original word',async({page,context})=>{
   await page.evaluate(async()=>{await window.ownedIme.replace('teh');window.ownedIme.textarea.setSelectionRange(0,3);});
-  await replaceNativeSelection(page,context,'the');
+  await commitNativeComposition(page,context,'the');
   const writes=await page.evaluate(()=>window.ownedIme.writes);
   const remote:string[]=[];for(const character of writes.join('')){if(character==='\x7f')remote.pop();else remote.push(character);}
   expect(remote.join(''),JSON.stringify({writes})).toBe('the');
@@ -356,7 +356,7 @@ for(const [initial,replacement,cursor] of [['éx','èy',false],['teh','the',tr
   await page.evaluate(initial=>window.ownedIme.replace(initial),initial);
   if(cursor)await page.keyboard.press('ArrowLeft');
   await page.evaluate(()=>window.ownedIme.textarea.select());
-  await replaceNativeSelection(page,context,replacement);
+  await commitNativeComposition(page,context,replacement);
   expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual(cursor?[initial,'\x1b[D']:[initial]);
 });
 
@@ -384,4 +384,23 @@ for(const macOptionIsMeta of [false,true])for(const screenReaderMode of [false,t
   await cdp.detach();
 });
 
+});
+
+
+test('sustained software messages keep a long owned context without replaying it after Enter',async({page,context})=>{
+  const prefix='Inspect the owned workspace and report progress. '.repeat(12);
+  for(let message=0;message<3;message++){
+    await commitNativeComposition(page,context,prefix);
+    await expect.poll(()=>page.evaluate(()=>window.ownedIme.textarea.value.length)).toBe(prefix.length);
+    expect(prefix.length).toBeGreaterThan(512);
+    await commitNativeComposition(page,context,'teh');
+    await page.evaluate(()=>{const area=window.ownedIme.textarea;area.setSelectionRange(area.value.length-3,area.value.length);});
+    await commitNativeComposition(page,context,'the');
+    await expect.poll(()=>page.evaluate(()=>window.ownedIme.textarea.value)).toBe(prefix+'the');
+    await page.keyboard.press('Enter');
+    expect(await page.evaluate(()=>window.ownedIme.textarea.value)).toBe('');
+  }
+  const writes=await page.evaluate(()=>window.ownedIme.writes);
+  const remote:string[]=[];for(const character of writes.join('')){if(character==='\x7f')remote.pop();else remote.push(character);}
+  expect(remote.join(''),JSON.stringify({writes})).toBe((prefix+'the\r').repeat(3));
 });

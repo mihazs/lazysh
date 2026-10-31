@@ -3,7 +3,7 @@ import { StrictMode, useState } from "react";
 import {uiI18n,useUi} from "./i18n/core";
 import {uiErrorText,type UiErrorCause} from "./i18n/localError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {prepareClipboardPlatform} from "./deviceClipboard";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
@@ -53,6 +53,18 @@ function mountInputOwner() {
   const view=render(<TerminalPane session={session} active reportError={vi.fn()} />);
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit};
+}
+function touchScrollFixture() {
+  const target = document.createElement('div');
+  Object.assign(terminal, {element: target});
+  const wheels: WheelEvent[] = [];
+  target.addEventListener('wheel', event => wheels.push(event));
+  const view = mount();
+  const canvas = screen.getByLabelText('Terminal for Host');
+  const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
+    bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
+  }));
+  return {view, canvas, wheels, touch};
 }
 describe("terminal interactions", () => {
   it.each(['hidden','inactive','unfocused window','unfocused editor'] as const)('rejects user input for an %s context while preserving protocol replies',boundary=>{
@@ -389,17 +401,11 @@ describe("terminal interactions", () => {
   });
   it("routes vertical touch through xterm wheel handling even with configurable gestures disabled", () => {
     savePreferences({...defaults, pinchZoom: false, gestures: {left:'none',right:'none',up:'none',down:'none'}, bodyGestures: {...defaults.bodyGestures,tap:'none',doubleTap:'none',tripleTap:'none',swipeLeft:'none',swipeRight:'none'}});
-    const target = document.createElement('div');
-    Object.assign(terminal, {element: target});
-    const wheels: WheelEvent[] = [];
-    target.addEventListener('wheel', event => wheels.push(event));
-    const view = mount();
-    const canvas = screen.getByLabelText('Terminal for Host');
-    const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {bubbles:true,cancelable:true,touches:[{identifier:1,clientX:x,clientY:y}] as Touch[]}));
+    const {view, canvas, wheels, touch} = touchScrollFixture();
     touch('touchstart',100,100);
     expect(touch('touchmove',101,70)).toBe(false);
     touch('touchmove',102,130);
-    expect(wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[30,101,70],[-60,102,130]]);
+    expect(wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[30,100,100],[-60,100,100]]);
     touch('touchend',102,130);
     touch('touchmove',102,160);
     expect(wheels).toHaveLength(2);
@@ -416,6 +422,24 @@ describe("terminal interactions", () => {
     view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('keeps one continuous drag routed to its original pane across boundaries and reversal until end or cancel', () => {
+    const {wheels, touch} = touchScrollFixture();
+    touch('touchstart',140,180);
+    const trace=[[142,168],[144,145],[245,100],[280,55],[281,12],[280,90],[141,190]];
+    for (const [x,y] of trace) expect(touch('touchmove',x,y)).toBe(false);
+    // Herdr dispatches each wheel to the pane under that report's coordinates.
+    const originalPane = wheels.filter(event=>event.clientX>=80&&event.clientX<200&&event.clientY>=120&&event.clientY<300);
+    expect(originalPane).toHaveLength(trace.length);
+    expect(wheels.map(event=>[event.clientX,event.clientY])).toEqual(trace.map(()=>[140,180]));
+    expect(wheels.map(event=>event.deltaY)).toEqual([12,23,45,45,43,-78,-100]);
+    touch('touchend',141,190); touch('touchmove',141,210);
+    expect(wheels).toHaveLength(trace.length);
+    touch('touchstart',310,240); touch('touchmove',315,200);
+    expect([wheels.at(-1)!.clientX,wheels.at(-1)!.clientY,wheels.at(-1)!.deltaY]).toEqual([310,240,40]);
+    touch('touchcancel',315,200); touch('touchmove',315,100);
+    expect(wheels).toHaveLength(trace.length+1);
     expect(mocks.write).not.toHaveBeenCalled();
   });
   it("preserves system touch gestures in screen-reader mode and reserves configured multitouch", () => {
@@ -698,6 +722,19 @@ it.each(['key','chord'] as const)('preserves the original raw formatting of the 
 
 
 describe("extended touch toolbar", () => {
+  it("keeps Tab, arrows and Attach momentary and dispatches only once after a touch release", () => {
+    vi.useFakeTimers(); const onOpenAttachments=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    for (const name of ['tab','Arrow right','Attach']) {
+      const button=screen.getByRole('button',{name});
+      fireEvent.pointerDown(button,{pointerId:11,pointerType:'touch'});
+      fireEvent.pointerUp(button,{pointerId:11,pointerType:'touch'}); fireEvent.click(button,{detail:1});
+      expect(button.getAttribute('aria-pressed')).toBeNull();
+      act(()=>vi.advanceTimersByTime(1200));
+    }
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\t','\x1b[C']);
+    expect(onOpenAttachments).toHaveBeenCalledOnce();
+  });
   it("cycles one-shot and locked modifiers, latches navigation Shift, and sends named keys", () => {
     savePreferences({...defaults, toolbar:[...defaults.toolbar,"altgr","F12","PageUp",","]}); mount();
     const key=(name:string)=>screen.getByRole('button',{name});
@@ -767,4 +804,26 @@ it("keeps ordinary terminal input usable and disables virtual modifiers when xte
   terminal._core.coreService.onUserInput = () => {throw new Error('different xterm internals');}; mount();
   for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name})).toHaveProperty('disabled',true);
   fireEvent.click(screen.getByRole('button',{name:'esc'})); expect(mocks.write).toHaveBeenCalledWith('ssh','\x1b');
+});
+
+it("portals only the active terminal controls into the existing header and retains literal drafts", () => {
+  const target=document.createElement('div'); document.body.append(target);
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const reportError=vi.fn(); const view=render(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
+  try {
+    expect(within(target).getAllByRole('button')).toHaveLength(2);
+    fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
+    fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'c'}});
+    const paste=screen.getByRole('button',{name:'Paste draft'});
+    expect(paste.textContent).toBe(''); expect(paste.querySelector('svg')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Close composer'}));
+    fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
+    expect(screen.getByLabelText('Compose text')).toHaveProperty('value','c');
+    fireEvent.click(screen.getByRole('button',{name:'Paste draft'})); expect(terminal.paste).toHaveBeenCalledWith('c');
+    view.rerender(<TerminalPane session={session} active={false} reportError={reportError} controlsTarget={target} />);
+    expect(target.childElementCount).toBe(0);
+    view.rerender(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
+    expect(within(target).getAllByRole('button')).toHaveLength(2);
+    view.unmount(); expect(target.childElementCount).toBe(0);
+  } finally {target.remove();}
 });

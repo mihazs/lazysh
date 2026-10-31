@@ -24,6 +24,7 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
   const sequence = useRef(0);
   const running = useRef(false);
   const startActivity = useRef(false);
+  const requestedSharing = useRef(false);
   const review = useRef(onReview); review.current = onReview;
   const pendingReview = useRef<ReviewIntent|undefined>(undefined);
   function stop() {
@@ -60,6 +61,7 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
     };
   },[sessionId]);
   async function enable(activity:boolean) {
+    requestedSharing.current=true;
     const id=crypto.randomUUID(); active.current=id; sequence.current=0; startActivity.current=activity;
     setBusy(true);setError('');
     try {
@@ -102,16 +104,17 @@ export default function AppleStatusPanel({sessionId, usage=null, onReview}:Props
     void publish(); const timer=window.setInterval(()=>void publish(),10000);
     return()=>{alive=false;window.clearInterval(timer);};
   },[subscription,sessionId,usage]);
+  const unavailable=capability?.liveActivities===false && capability.watchInstalled===false && !requestedSharing.current && !subscription && !busy && !error;
   return <section className="tool-panel" aria-label={t('appAppleStatus')}>
     <h3>{t('appAppleStatus')}</h3>
-    <p>{t('appleStatusPrivacy')}</p>
+    {!unavailable && <p>{t('appleStatusPrivacy')}</p>}
     {capability && <p>{capability.reason} {capability.watchInstalled?(capability.watchReachable?t('appleStatusWatchReachable'):t('appleStatusWatchUnavailable')): t('appleStatusWatchMissing')}</p>}
-    {!subscription && <div className="tool-bar">
+    {!unavailable && !subscription && <div className="tool-bar">
       <button disabled={!capability?.watchInstalled || busy} onClick={()=>void enable(false)}>{t('appleStatusEnableWatch')}</button>
       <button disabled={!capability?.liveActivities || busy} onClick={()=>void enable(true)}>{t('appleStatusStartActivity')}</button>
     </div>}
     {subscription && <><p role="status">{t('appleStatusSharing')}</p><button onClick={stop}>{t('appleStatusStop')}</button></>}
-    <p>{t('appleStatusReview')}</p>
+    {!unavailable && <p>{t('appleStatusReview')}</p>}
     {error && <p role="alert" className="inline-error">{uiErrorText(error)}</p>}
   </section>;
 }
