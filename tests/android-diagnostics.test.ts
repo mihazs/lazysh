@@ -6,7 +6,7 @@ import {OwnedProcess} from './support/ownedProcess';
 
 const temporary: string[] = [];
 const workflow = Bun.YAML.parse(await Bun.file(new URL('../.github/workflows/checks.yml', import.meta.url)).text()) as {
-  jobs: Record<string, { 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; run?: string; with?: { script?: string; 'env-vars'?: string } }[] }>;
+  jobs: Record<string, { needs?:string; 'runs-on'?: string; 'timeout-minutes'?: number; env?: Record<string,string>; steps: { uses?:string; name?: string; 'timeout-minutes'?: number; env?: Record<string,string>; run?: string; with?: { name?:string; path?:string; script?: string; 'env-vars'?: string } }[] }>;
 };
 const decoded = workflow.jobs['native-android-runtime'].steps.find(step => step.name === 'Run native Android instrumentation')!.with!.script!;
 // Match emulator-runner v2's parseScript: each retained line is a separate sh -c.
@@ -41,10 +41,26 @@ test('native fixture namespaces are admitted without privilege changes before Li
   expect(decoded).toContain('test:android-ssh');
 });
 
+test('independent Android auxiliary owners have their own finite native job and unchanged prerequisites',()=>{
+  const guarded=workflow.jobs['native-android-runtime'],auxiliary=workflow.jobs['native-android-auxiliary'];
+  expect(auxiliary).toBeDefined();
+  expect(auxiliary['timeout-minutes']).toBe(30);
+  expect(auxiliary['runs-on']).toBe('ubuntu-24.04');
+  expect(auxiliary.needs).toBeUndefined();
+  expect(auxiliary.env).toEqual({ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'auxiliary',VITE_LAZYSH_QR_CAMERA_TRACE:'1'});
+  for(const name of ['Grant this runner access to KVM','Run native Android instrumentation'])
+    expect(auxiliary.steps.find(step=>step.name===name)).toEqual(guarded.steps.find(step=>step.name===name));
+  expect(auxiliary.steps.some(step=>step.name==='Install native Mosh fixture dependencies'||step.name==='Verify native GUI namespace prerequisites'||step.name==='Build the pinned official Mosh fixture outside the checkout'||step.name==='Build real companion and receiver for owned Android cases'||step.uses==='actions/download-artifact@v4')).toBe(false);
+  const outputs=[guarded,auxiliary,workflow.jobs['native-android-herdr-navigation']].map(job=>job.steps.find(step=>step.uses==='actions/upload-artifact@v4')!.with!);
+  expect(new Set(outputs.map(output=>output.name)).size).toBe(3);
+  expect(outputs[1].name).toBe('lazysh-android-auxiliary-results');
+  expect(outputs[1].path).toBe(outputs[0].path);
+});
+
 test.skipIf(process.platform!=='linux')('decoded Android toolchain fingerprint separates host glibc and architecture for every cache caller',async()=>{
   const name='Fingerprint Android native build tools';
   const script=workflow.jobs['native-android'].steps.find(step=>step.name===name)!.run!;
-  for(const job of ['native-android','native-android-runtime','native-android-herdr-navigation','native-android-ntfy']) {
+  for(const job of ['native-android','native-android-runtime','native-android-herdr-navigation','native-android-auxiliary','native-android-ntfy']) {
     const steps=workflow.jobs[job].steps;
     const fingerprint=steps.findIndex(step=>step.name===name);
     const cache=steps.findIndex(step=>step.with?.['env-vars']==='LAZYSH_ANDROID_TOOLCHAIN');
@@ -143,17 +159,20 @@ test('actual Turbo task forwards pinned Mosh path, companion opt-in and hosted m
 },25_000);
 
 test.each([
-  { mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: false, overflow: false },
-  { mosh: 37, instrumentation: 0, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
-  { mosh: 0, instrumentation: 23, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
-  { mosh: 0, instrumentation: 23, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: false, overflow: true },
-  { mosh: 37, instrumentation: 23, qr: 0, fdroid: 41, sdk: 0, diagnosticFailure: false, overflow: false },
-  { mosh: 0, instrumentation: 23, qr: 0, fdroid: 41, sdk: 0, diagnosticFailure: true, overflow: false },
-  { mosh: 0, instrumentation: 0, qr: 29, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
-  { mosh: 0, instrumentation: 0, qr: 0, fdroid: 41, sdk: 0, diagnosticFailure: true, overflow: false },
-  { mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 31, diagnosticFailure: true, overflow: false },
-  { owner: 'herdr-navigation', mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: false, overflow: false },
-  { owner: 'herdr-navigation', mosh: 0, instrumentation: 23, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
+  { owner:'guarded', mosh:0, instrumentation:0, qr:29, fdroid:41, sdk:31, diagnosticFailure:false, overflow:false },
+  { mosh:37, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
+  { mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
+  { mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:true },
+  { mosh:37, instrumentation:23, qr:0, fdroid:41, sdk:0, diagnosticFailure:true, overflow:false },
+  { owner:'auxiliary', mosh:37, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
+  { owner:'auxiliary', mosh:0, instrumentation:0, qr:29, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
+  { owner:'auxiliary', mosh:0, instrumentation:0, qr:0, fdroid:41, sdk:0, diagnosticFailure:true, overflow:false },
+  { owner:'auxiliary', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:31, diagnosticFailure:true, overflow:false },
+  { owner:'auxiliary', mosh:0, instrumentation:0, qr:29, fdroid:41, sdk:31, diagnosticFailure:false, overflow:true },
+  { owner:'herdr-navigation', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
+  { owner:'herdr-navigation', mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
+  { owner:'unknown', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
+  { owner:'', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
 ])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, fdroid, sdk, diagnosticFailure, overflow }) => {
   expect(commands).toHaveLength(1);
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-android-diagnostics-'));
@@ -211,21 +230,21 @@ exit "$SDK_EXIT"
     stdout: 'pipe', stderr: 'pipe',
   });
   const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  const expectedExit = mosh || instrumentation || fdroid || qr || sdk;
+  const expectedExit = owner==='guarded' ? mosh || instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : owner==='herdr-navigation' ? instrumentation : 1;
   expect(exit).toBe(expectedExit);
   expect(stdout).toBe('');
-  if (!overflow) expect(stderr).toBe('');
-  const qrExpected = owner === 'guarded' && mosh === 0 && instrumentation === 0 && fdroid === 0;
+  if (!overflow) expect(stderr).toBe(['guarded','auxiliary','herdr-navigation'].includes(owner)?'':'Unknown Android runtime owner\n');
+  const qrExpected = owner === 'auxiliary' && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
   if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
-  expect((await readFile(invocations, 'utf8')).trim().split('\n')).toEqual(owner === 'herdr-navigation' ? ['run test:android-herdr-navigation'] : [
-    'run test:android-mosh',
-    ...(mosh === 0 ? ['run test:android-ssh'] : []),
-    'run test:android-fdroid',
-    ...(qrExpected ? ['run test:android-qr'] : []),
-    ...(sdkExpected ? ['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture'] : []),
-  ]);
+  const actualInvocations=await Bun.file(invocations).exists()?(await readFile(invocations,'utf8')).trim().split('\n'):[];
+  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='guarded'?[
+    'run test:android-mosh',...(mosh===0?['run test:android-ssh']:[]),
+  ]:owner==='auxiliary'?[
+    'run test:android-fdroid',...(qrExpected?['run test:android-qr']:[]),
+    ...(sdkExpected?['cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture']:[]),
+  ]:[]);
   expect(await Bun.file(sdkSerial).exists()).toBe(sdkExpected);
   expect(await Bun.file(sdkArguments).exists()).toBe(sdkExpected);
   if (sdkExpected) {

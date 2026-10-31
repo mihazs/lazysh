@@ -90,13 +90,16 @@ test('CI actually invokes the stock two-display native case through its own unca
   expect(job.steps.find((step:any)=>step.name==='Verify same-run stock Herdr').env.STOCK_HERDR_SHA256).toBe('${{ needs.herdr-native.outputs.stock-sha256 }}');
 });
 
-test('the shared emulator wrapper rejects unknown owners and both exact command bodies parse without execution',async()=>{
+test('the shared emulator wrapper rejects unknown owners and all exact command bodies parse without execution',async()=>{
   const workflow=Bun.YAML.parse(await readFile(join(import.meta.dir,'../.github/workflows/checks.yml'),'utf8')) as any;
   const guarded=workflow.jobs['native-android-runtime'],stock=workflow.jobs['native-android-herdr-navigation'];
   expect(guarded.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('guarded');
   const action=(job:any)=>job.steps.find((step:any)=>step.uses?.startsWith('mihazs/lazysh-android-emulator-runner@'));
   const script=action(stock).with.script;
   expect(script).toBe(action(guarded).with.script);
+  const auxiliary=workflow.jobs['native-android-auxiliary'];
+  expect(auxiliary.env.LAZYSH_ANDROID_RUNTIME_OWNER).toBe('auxiliary');
+  expect(script).toBe(action(auxiliary).with.script);
   expect(script).toContain('bun run test:android-mosh && bun run test:android-ssh;');
   expect(script).toContain('bun run test:android-fdroid;');
   const body=script.slice("bash -c '".length,-1);

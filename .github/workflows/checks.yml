@@ -659,14 +659,12 @@ jobs:
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
-            guarded) ;;
+            guarded) bun run test:android-mosh && bun run test:android-ssh; exit $? ;;
+            auxiliary) ;;
             *) printf "%s\n" "Unknown Android runtime owner" >&2; exit 1 ;;
             esac;
-            bun run test:android-mosh && bun run test:android-ssh;
-            original_result=$?;
             bun run test:android-fdroid;
             fdroid_result=$?;
-            if (( original_result != 0 )); then exit "$original_result"; fi;
             if (( fdroid_result != 0 )); then exit "$fdroid_result"; fi;
             LAZYSH_ANDROID_QR_EMULATOR_PID_FILE="$RUNNER_TEMP/lazysh-qr-emulator.pid" bun run test:android-qr &&
             LAZYSH_TEST_ANDROID_SERIAL="$ANDROID_SERIAL" cargo test --locked -p lazysh-agent --lib devices::tests::android_owned_emulator_inventory_and_screenshot -- --ignored --exact --nocapture;
@@ -732,6 +730,33 @@ jobs:
           path: *android-runtime-result-paths
           if-no-files-found: warn
           retention-days: 3
+
+  native-android-auxiliary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: auxiliary
+      VITE_LAZYSH_QR_CAMERA_TRACE: '1'
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *android-java
+      - *android-sdk
+      - *android-toolchains
+      - *android-ndk
+      - *android-owned-rust
+      - *android-cache-identity
+      - *android-owned-cache
+      - run: bun install --frozen-lockfile
+      - *android-owned-kvm
+      - *android-runtime-emulator
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazysh-android-auxiliary-results
+          path: *android-runtime-result-paths
+          if-no-files-found: warn
 
   native-android-ntfy:
     runs-on: ubuntu-24.04
