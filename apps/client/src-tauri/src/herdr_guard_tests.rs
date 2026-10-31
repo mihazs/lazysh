@@ -1,4 +1,40 @@
 use super::*;
+
+#[test]
+fn isolated_navigation_requires_positive_capability_and_exact_selection() {
+    for bytes in [
+        &b"guard_invalid\n"[..],
+        &br#"{"id":"guard","result":{"type":"guard_navigation_capabilities","schema_version":1,"isolated":true,"extra":true}}"#[..],
+    ] {
+        let status = if bytes.starts_with(b"{") { Some(0) } else { Some(2) };
+        let result = if status == Some(0) { response(status, bytes, b"") } else { response(status, b"", bytes) };
+        assert_eq!(navigation_capability(result), Ok(false));
+    }
+    let capable = br#"{"id":"guard","result":{"type":"guard_navigation_capabilities","schema_version":1,"isolated":true}}"#;
+    assert_eq!(
+        navigation_capability(response(Some(0), capable, b"")),
+        Ok(true)
+    );
+    assert_eq!(
+        navigation_capability(Err(Fault::Unavailable)),
+        Err(Fault::Unavailable)
+    );
+    let target = NavigationTarget::Pane {
+        workspace: "w1".into(),
+        tab: "w1:t2".into(),
+        pane: "w1:p3".into(),
+        terminal: "original".into(),
+    };
+    let mut selection = NavigationSelection {
+        workspace: "w1".into(),
+        tab: "w1:t2".into(),
+        pane: "w1:p3".into(),
+        terminal: "other".into(),
+    };
+    assert!(!target.matches(&selection));
+    selection.terminal = "original".into();
+    assert!(target.matches(&selection));
+}
 use serde_json::json;
 
 fn private_frame() -> Vec<u8> {
@@ -179,6 +215,7 @@ async fn revoked_original_binding_lease_cannot_dispatch_through_a_fresh_call_lea
     let token = uuid::Uuid::new_v4().to_string();
     let secret = Secret::try_from("ab".repeat(32)).unwrap();
     let mut control = Control {
+        navigation: 0,
         startup: Startup {
             boot: secret.clone(),
             ownership: secret.clone(),

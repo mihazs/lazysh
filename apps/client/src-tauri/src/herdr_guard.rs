@@ -119,6 +119,8 @@ struct Prepared {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum WireResult {
     Ok {},
+    GuardNavigationCapabilities { schema_version: u32, isolated: bool },
+    GuardNavigated { selection: NavigationSelection },
     GuardClaimed { owner: Owner },
     GuardPrepared { guard: Prepared },
 }
@@ -148,6 +150,7 @@ enum Envelope {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fault {
+    NavigationUnsupported,
     Invalid,
     Stale,
     Busy,
@@ -158,6 +161,7 @@ enum Fault {
 impl Fault {
     fn error(self) -> SshError {
         let (kind, message) = match self {
+            Self::NavigationUnsupported => ("herdr_navigation_unsupported", "This Herdr server cannot navigate this original display independently; update the guarded Herdr integration"),
             Self::Invalid => (
                 "herdr_chat_invalid",
                 "Unsupported Herdr terminal input or context",
@@ -498,6 +502,10 @@ pub(crate) async fn acquire(
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     Status,
+    Navigate {
+        name: String,
+        target: NavigationTarget,
+    },
     Prepare {
         source: Source,
     },
@@ -520,6 +528,12 @@ impl Action {
         let token = |value: &str| value.len() == 36 && uuid::Uuid::parse_str(value).is_ok();
         match self {
             Self::Status => Ok(()),
+            Self::Navigate { name, target } => {
+                if name.is_empty() || name.len() > 200 || name.chars().any(char::is_control) {
+                    return Err(Fault::Invalid);
+                }
+                target.validate()
+            }
             Self::Prepare { source } => source.validate().map_err(|_| Fault::Invalid),
             Self::Confirm { candidate, source } if token(candidate) => {
                 source.validate().map_err(|_| Fault::Invalid)
@@ -545,6 +559,9 @@ impl Action {
     rename_all_fields = "camelCase"
 )]
 pub enum Reply {
+    Navigated {
+        selection: NavigationSelection,
+    },
     Status {
         available: bool,
     },
@@ -575,6 +592,7 @@ struct Control {
     startup: Startup,
     handle: Arc<SshHandle>,
     preparation: u64,
+    navigation: u64,
     bound: Option<Bound>,
 }
 #[derive(Serialize)]
@@ -603,10 +621,104 @@ fn source_hash(source: &Source) -> WireOutcome<String> {
         Sha256::digest(serde_json::to_vec(source).map_err(|_| Fault::Invalid)?)
     ))
 }
+
+#[path = "../../../../packages/herdr-guard/navigation.rs"]
+mod navigation;
+navigation::navigation_target! {
+    #[derive(Clone, Deserialize, Serialize)]
+    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NavigationSelection {
+    workspace: String,
+    tab: String,
+    pane: String,
+    terminal: String,
+}
+impl NavigationTarget {
+    fn validate(&self) -> WireOutcome<()> {
+        self.valid().then_some(()).ok_or(Fault::Invalid)
+    }
+    fn matches(&self, selection: &NavigationSelection) -> bool {
+        Self::Pane {
+            workspace: selection.workspace.clone(),
+            tab: selection.tab.clone(),
+            pane: selection.pane.clone(),
+            terminal: selection.terminal.clone(),
+        }
+        .validate()
+        .is_ok()
+            && match self {
+                Self::Workspace { workspace } => selection.workspace == *workspace,
+                Self::Tab { workspace, tab } => {
+                    selection.workspace == *workspace && selection.tab == *tab
+                }
+                Self::Pane {
+                    workspace,
+                    tab,
+                    pane,
+                    terminal,
+                } => {
+                    selection.workspace == *workspace
+                        && selection.tab == *tab
+                        && selection.pane == *pane
+                        && selection.terminal == *terminal
+                }
+            }
+    }
+}
+#[derive(Serialize)]
+struct OwnerRequest<'a> {
+    boot: &'a Secret,
+    ownership: &'a Secret,
+}
+#[derive(Serialize)]
+struct Navigate<'a> {
+    boot: &'a Secret,
+    ownership: &'a Secret,
+    operation: u64,
+    target: &'a NavigationTarget,
+}
+
+fn navigation_capability(result: WireOutcome<WireResult>) -> WireOutcome<bool> {
+    match result {
+        Ok(WireResult::GuardNavigationCapabilities {
+            schema_version: 1,
+            isolated: true,
+        }) => Ok(true),
+        Ok(_) | Err(Fault::Protocol) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 impl Control {
+    async fn navigation_available(
+        &self,
+        lease: &AccessLease,
+        cancel: &mut watch::Receiver<bool>,
+        reply: &mut Option<&mut oneshot::Sender<Result<Reply>>>,
+    ) -> WireOutcome<bool> {
+        let params = OwnerRequest {
+            boot: &self.startup.boot,
+            ownership: &self.startup.ownership,
+        };
+        navigation_capability(
+            rpc(
+                &self.handle,
+                &self.startup.name,
+                lease,
+                cancel,
+                "lazysh.guard.navigation_capabilities",
+                &params,
+                reply,
+            )
+            .await,
+        )
+    }
     fn affects_binding(&self, action: &Action) -> bool {
         match action {
-            Action::Prepare { .. } => true,
+            Action::Prepare { .. } | Action::Navigate { .. } => true,
             Action::Confirm {
                 candidate: token, ..
             }
@@ -679,6 +791,42 @@ impl Control {
     ) -> WireOutcome<Reply> {
         match action {
             Action::Status => Ok(Reply::Status { available: true }),
+            Action::Navigate { name, target } => {
+                self.bound = None;
+                if name != self.startup.name {
+                    return Err(Fault::Stale);
+                }
+                if !self.navigation_available(lease, cancel, reply).await? {
+                    return Err(Fault::NavigationUnsupported);
+                }
+                self.navigation = self
+                    .navigation
+                    .checked_add(1)
+                    .filter(|value| *value <= MAX_OPERATION)
+                    .ok_or(Fault::Stale)?;
+                let params = Navigate {
+                    boot: &self.startup.boot,
+                    ownership: &self.startup.ownership,
+                    operation: self.navigation,
+                    target: &target,
+                };
+                match rpc(
+                    &self.handle,
+                    &self.startup.name,
+                    lease,
+                    cancel,
+                    "lazysh.guard.navigate",
+                    &params,
+                    reply,
+                )
+                .await?
+                {
+                    WireResult::GuardNavigated { selection } if target.matches(&selection) => {
+                        Ok(Reply::Navigated { selection })
+                    }
+                    _ => Err(Fault::Protocol),
+                }
+            }
             Action::Prepare { source } => {
                 let bound = self.prepare(source, lease, cancel, reply).await?;
                 let response = Reply::Prepared {
@@ -820,6 +968,7 @@ pub(crate) fn start(
             startup,
             handle,
             preparation: 0,
+            navigation: 0,
             bound: None,
         };
         loop {
@@ -929,6 +1078,9 @@ pub async fn herdr_chat(
                     binding
                         .call(&lease, &mut session.cancel.subscribe(), action)
                         .await
+                }
+                None if matches!(action, Action::Navigate { .. }) => {
+                    Err(Fault::NavigationUnsupported.error())
                 }
                 None => Err(Fault::Unavailable.error()),
             }

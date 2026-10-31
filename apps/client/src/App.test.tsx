@@ -9,6 +9,7 @@ import type {DesktopMux} from './useDesktopLaunch';
 import canonicalBedMode from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {aboutLocales} from './test/aboutData';
 import {transcriptAgents,type TranscriptAgentId} from './transcriptSources';
+import {herdrNavigationTree} from './test/herdrNavigation';
 import {tmuxJumpSnapshot as navigationSnapshot} from './test/tmuxJumpData';
 import {tmuxChatReply,tmuxChatReaderSource,tmuxChatReaderPage} from './test/tmuxChat';
 vi.mock('../package.json',()=>({default:{version:'2.3.4'}}));
@@ -1632,7 +1633,7 @@ it('opens Agents on the attached default Herdr session among several running ser
   const companion=mocks.invoke.getMockImplementation()!;
   mocks.invoke.mockImplementation((command,args)=>{
     if(command==='multiplexer_sessions')return Promise.resolve([{name:'other'},{name:'named-work'}]);
-    if(command==='herdr_tree')return Promise.resolve({panes:[],agents:[]});
+    if(command==='herdr_tree')return Promise.resolve({workspaces:[],tabs:[],panes:[],agents:[]});
     return companion(command,args);
   });
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'herdr',name:'named-work'}}]);
@@ -1648,6 +1649,68 @@ it('opens Agents on the attached default Herdr session among several running ser
     ['herdr_tree',{sessionId:'agents-child',name:'named-work'},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}],
   ]);
   expect(mocks.api.write).not.toHaveBeenCalled();
+});
+it.each(['current','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','stale','unsupported'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
+  const existing=outcome==='current'||outcome==='unsupported';
+  mocks.api.listHosts.mockResolvedValue([{...host,...(existing?{defaultMultiplexer:{kind:'herdr',name:'named-work'}}:{})}]);
+  mocks.api.connect.mockResolvedValue({sessionId:'navigation-source'});
+  mocks.api.attachDefaultMultiplexer.mockResolvedValue({sessionId:'navigation-existing'});
+  mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'navigation-adopted'});
+  let complete!:(value:unknown)=>void,reads=0;
+  if(outcome==='cancel-before-publication')mocks.api.attachMultiplexer.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_sessions')return Promise.resolve([{name:'named-work'}]);
+    if(command==='herdr_tree'){
+      if(++reads===1)return Promise.resolve(herdrNavigationTree);
+      if(reads===2 && (outcome==='stale'||outcome==='adopt-held-tree'||outcome==='cancel-after-publication'||outcome==='cancel-server'||outcome==='hidden-then-visible'))return new Promise(resolve=>{complete=resolve;});
+      return Promise.resolve(outcome==='missing'?{...herdrNavigationTree,panes:[]}:herdrNavigationTree);
+    }
+    if(command==='herdr_chat'){if(outcome==='adopt-held-reply'||outcome==='cancel-pending-reply')return new Promise(resolve=>{complete=resolve;});return outcome==='unsupported'?Promise.reject({kind:'herdr_navigation_unsupported'}):Promise.resolve({kind:'navigated'});}
+    return original(command,args);
+  });
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await user.click(screen.getByRole('button',{name:'Workspaces'}));
+  const browser=within(await screen.findByRole('region',{name:t('herdrNavigationTitle')}));
+  await user.click(await browser.findByRole('button',{name:/^builder/}));
+  const cancelled=outcome.startsWith('cancel-')||outcome==='hidden-then-visible';
+  if(cancelled){
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    if(outcome!=='cancel-before-publication')await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work'}).getAttribute('aria-selected')).toBe('true'));
+    if(outcome==='hidden-then-visible'){
+      const hidden=vi.spyOn(document,'hidden','get');
+      hidden.mockReturnValue(true);act(()=>document.dispatchEvent(new Event('visibilitychange')));
+      hidden.mockReturnValue(false);act(()=>document.dispatchEvent(new Event('visibilitychange')));hidden.mockRestore();
+    }else if(outcome==='cancel-server'){
+      const server=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});await waitFor(()=>expect(server).toHaveProperty('disabled',false));await user.selectOptions(server,'');
+    }else await user.click(screen.getByRole('button',{name:t('herdrNavigationBack')}));
+    if(outcome==='cancel-pending-reply')await user.click(screen.getByRole('tab',{name:'Home'}));
+    await act(async()=>complete(outcome==='cancel-before-publication'?{sessionId:'navigation-adopted'}:outcome==='cancel-pending-reply'?{kind:'navigated'}:herdrNavigationTree));
+    if(outcome==='cancel-pending-reply')expect(screen.getByRole('tab',{name:'Home'}).getAttribute('aria-selected')).toBe('true');
+    if(outcome==='cancel-before-publication')expect(mocks.invoke).toHaveBeenCalledWith('disconnect',{sessionId:'navigation-adopted'});
+    else expect(mocks.invoke).not.toHaveBeenCalledWith('disconnect',{sessionId:'navigation-adopted'});
+  }
+  if(outcome==='adopt-held-tree'||outcome==='adopt-held-reply'){
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work'}).getAttribute('aria-selected')).toBe('true'));
+    await act(async()=>complete(outcome==='adopt-held-tree'?herdrNavigationTree:{kind:'navigated'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'Workspaces'}).closest('aside')!.classList.contains('sidebar-open')).toBe(false));
+  }
+  if(cancelled){}else if(outcome==='stale'){
+    await waitFor(()=>expect(complete).toBeTypeOf('function'));
+    await user.click(screen.getByRole('button',{name:'Connections'}));
+    await act(async()=>complete(herdrNavigationTree));
+    expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
+  } else if(outcome==='unsupported')expect(await browser.findByRole('alert')).toHaveProperty('textContent',t('herdrNavigationUnsupported'));
+  else if(outcome==='missing')expect((await screen.findByRole('alert')).textContent).toContain(t('herdrNavigationChanged'));
+  else await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_chat',{sessionId:existing?'navigation-existing':'navigation-adopted',action:{kind:'navigate',name:'named-work',target:{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'}}},{headers:{'X-Lazysh-Access':'a'.repeat(64)}}));
+  const sent=mocks.invoke.mock.calls.filter(([command])=>command==='herdr_chat');
+  expect(sent).toHaveLength(outcome==='missing'||outcome==='stale'||(cancelled&&outcome!=='cancel-pending-reply')?0:1);
+  if(existing)expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();
+  else expect(mocks.api.attachMultiplexer).toHaveBeenCalledExactlyOnceWith('navigation-source','herdr','named-work',expect.any(Function));
+  expect(mocks.api.write).not.toHaveBeenCalled();
+  if(outcome==='cancel-before-publication')expect(mocks.api.adoptSession).not.toHaveBeenCalledWith('navigation-adopted');
+  else if(!existing)expect(mocks.api.adoptSession.mock.calls.filter(([id])=>id==='navigation-adopted')).toHaveLength(1);
 });
 it('shows a selected multiplexer preflight failure and closes its bootstrap without adopting a blank terminal',async()=>{
   mocks.api.listHosts.mockResolvedValue([{...host,defaultMultiplexer:{kind:'zellij',name:'work'}}]);
@@ -1744,7 +1807,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   expect(screen.queryByRole('region',{name:'Agent activity'})).toBeNull();
   const reads=mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot').length;
   await user.click(screen.getByRole('button',{name:'Agents navigation'}));
-  await screen.findByRole('searchbox');expect(screen.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','/project');
+  await screen.findByRole('searchbox',{name:'Search reported agents'});expect(screen.getByRole('searchbox',{name:'Search reported agents'})).toBe(search);expect(search).toHaveProperty('value','/project');
   expect(settings).toHaveProperty('checked',false);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(reads+1);

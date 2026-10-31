@@ -49,6 +49,10 @@ export type Credentials = {
   passphrase?: string;
 };
 export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
+export type HerdrNavigationTarget =
+  | {kind:'workspace';workspace:string}
+  | {kind:'tab';workspace:string;tab:string}
+  | {kind:'pane';workspace:string;tab:string;pane:string;terminal:string};
 export type TmuxJumpSnapshot = {
   generation: string;
   current: { sessionId: string; windowId: string };

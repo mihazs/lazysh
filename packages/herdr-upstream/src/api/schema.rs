@@ -46,6 +46,10 @@ pub struct Request {
 // the simple serde shape and avoids boxing churn across every caller.
 #[allow(clippy::large_enum_variant)]
 pub enum Method {
+    #[serde(rename = "lazysh.guard.navigation_capabilities")]
+    GuardNavigationCapabilities(crate::guarded_input::protocol::RevokeParams),
+    #[serde(rename = "lazysh.guard.navigate")]
+    GuardNavigate(crate::guarded_input::protocol::NavigateParams),
     #[serde(rename = "lazysh.guard.claim")]
     GuardClaim(crate::guarded_input::protocol::ClaimParams),
     #[serde(rename = "lazysh.guard.cancel_preparation")]

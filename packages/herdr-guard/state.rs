@@ -23,6 +23,7 @@ struct Owner {
     ownership: Option<Secret>,
     ownership_cancellation: Option<Cancellation>,
     last_preparation: u64,
+    last_navigation: u64,
     preparing: Option<Preparation>,
     binding: Option<Binding>,
 }
@@ -119,6 +120,7 @@ impl Registry {
                 ownership: None,
                 ownership_cancellation: None,
                 last_preparation: 0,
+                last_navigation: 0,
                 preparing: None,
                 binding: None,
             },
@@ -341,6 +343,38 @@ impl Registry {
         let (client, owner) = self.owner_by_credential(receipt, true)?;
         owner.binding.take();
         Some(client)
+    }
+
+    pub(crate) fn current_owner_id(
+        &mut self,
+        boot: &Secret,
+        ownership: &Secret,
+        now: Instant,
+    ) -> Option<u64> {
+        self.current_owner(boot, ownership, now)
+            .map(|(client, _)| client)
+    }
+
+    pub(crate) fn navigate(
+        &mut self,
+        boot: &Secret,
+        ownership: &Secret,
+        operation: u64,
+        now: Instant,
+    ) -> Outcome<u64> {
+        if !valid_operation(operation) {
+            return Err("guard_invalid");
+        }
+        let (client, owner) = self
+            .current_owner(boot, ownership, now)
+            .ok_or("guard_stale")?;
+        if operation <= owner.last_navigation {
+            return Err("guard_stale");
+        }
+        owner.last_navigation = operation;
+        owner.preparing.take();
+        owner.binding.take();
+        Ok(client)
     }
 
     fn current_owner(

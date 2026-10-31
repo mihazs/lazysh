@@ -20,6 +20,7 @@ const PREFIX: &[u8] = b"\x1eLAZYSH-GUARD-1:";
 
 struct Fixture {
     base: PathBuf,
+    executable: PathBuf,
     children: Vec<Child>,
 }
 impl Fixture {
@@ -34,6 +35,7 @@ impl Fixture {
         fs::create_dir(&base).unwrap();
         fs::write(base.join("config.toml"), "onboarding = false\n[terminal]\ndefault_shell = '/bin/sh'\nshell_mode = 'non_login'\n[update]\nversion_check = false\nmanifest_check = false\n").unwrap();
         Self {
+            executable: PathBuf::from(env!("CARGO_BIN_EXE_herdr")),
             base,
             children: Vec::new(),
         }
@@ -94,7 +96,7 @@ impl Fixture {
     }
 
     fn command(&self, session: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        let mut command = Command::new(&self.executable);
         command
             .env_clear()
             .envs(self.environment())
@@ -204,7 +206,12 @@ impl Fixture {
         Self::answer(self.request(session, method, params))
     }
 
-    async fn guarded_cli(&self, session: &str, method: &str, params: Value) -> Value {
+    async fn guarded_cli_output(
+        &self,
+        session: &str,
+        method: &str,
+        params: Value,
+    ) -> (std::process::ExitStatus, Vec<u8>, Vec<u8>) {
         use tokio::io::AsyncReadExt as _;
         use tokio::io::AsyncWriteExt as _;
         let body = serde_json::to_vec(&json!({"id":"guard-test","method":method,"params":params}))
@@ -251,6 +258,11 @@ impl Fixture {
             output.len() <= 32768 && errors.len() <= 32768,
             "owned stdin CLI output bound"
         );
+        (status, output, errors)
+    }
+
+    async fn guarded_cli(&self, session: &str, method: &str, params: Value) -> Value {
+        let (status, output, errors) = self.guarded_cli_output(session, method, params).await;
         serde_json::from_slice(if status.success() { &output } else { &errors })
             .expect("owned stdin CLI structured response")
     }
@@ -630,7 +642,7 @@ impl TerminalClient {
                 pixel_height: 0,
             })
             .unwrap();
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+        let mut command = CommandBuilder::new(&fixture.executable);
         command.env_clear();
         for (key, value) in fixture.environment() {
             command.env(key, value);
@@ -776,6 +788,110 @@ impl Drop for TerminalClient {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn owned_navigation_moves_original_display_preserves_other_client_and_retires_input() {
+    let mut fixture = Fixture::new();
+    fixture.start("navigation");
+    let first = TerminalClient::attach(&fixture, "navigation");
+    let second = TerminalClient::attach(&fixture, "navigation");
+    let owner = claim(&fixture, "navigation", &first.registration());
+    let other = claim(&fixture, "navigation", &second.registration());
+    let _observer = Peer::attach(&fixture, "navigation", &"91".repeat(32));
+    let binding = prepare(&fixture, "navigation", &owner, 1, SOURCE);
+    let mut targets = Vec::new();
+    for marker in ["ORIGINAL_NAVIGATION_FIRST", "ORIGINAL_NAVIGATION_SECOND"] {
+        let result = fixture.api(
+            "navigation",
+            "workspace.create",
+            json!({"label":marker,"cwd":fixture.base.join("navigation"),"focus":false}),
+        );
+        assert!(result.get("error").is_none());
+        let snapshot = fixture.api("navigation", "session.snapshot", json!({}));
+        let snapshot = &snapshot["result"]["snapshot"];
+        let workspace = snapshot["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["label"] == marker)
+            .unwrap()["workspace_id"]
+            .clone();
+        let pane = snapshot["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["workspace_id"] == workspace)
+            .unwrap();
+        let result = fixture.api("navigation", "pane.send_input", json!({"pane_id":pane["pane_id"],"text":format!("printf '{marker}\\n'; exec sleep 60"),"keys":["Enter"]}));
+        assert!(result.get("error").is_none());
+        targets.push(json!({"kind":"pane","workspace":workspace,"tab":pane["tab_id"],"pane":pane["pane_id"],"terminal":pane["terminal_id"]}));
+    }
+    let capabilities = fixture
+        .guarded_cli(
+            "navigation",
+            "lazysh.guard.navigation_capabilities",
+            json!({"boot":owner["boot"],"ownership":owner["ownership"]}),
+        )
+        .await;
+    assert_eq!(
+        capabilities["result"],
+        json!({"type":"guard_navigation_capabilities","schema_version":1,"isolated":true})
+    );
+    for (credential, target) in [(&other, &targets[0]), (&owner, &targets[1])] {
+        let result = fixture.guarded_cli("navigation", "lazysh.guard.navigate", json!({"boot":credential["boot"],"ownership":credential["ownership"],"operation":1,"target":target})).await;
+        assert!(result.get("error").is_none(), "owned navigation rejected");
+        assert_eq!(result["result"]["selection"]["pane"], target["pane"]);
+    }
+    first.wait_screen("ORIGINAL_NAVIGATION_SECOND", true);
+    first.wait_screen("ORIGINAL_NAVIGATION_FIRST", false);
+    second.wait_screen("ORIGINAL_NAVIGATION_FIRST", true);
+    second.wait_screen("ORIGINAL_NAVIGATION_SECOND", false);
+    let stale = fixture.api(
+        "navigation",
+        "lazysh.guard.input",
+        input(&binding, 1, Some("must-not-arrive")),
+    );
+    assert!(stale.get("error").is_some());
+    assert!(fixture.bytes("navigation").is_empty());
+    let replay = fixture.api("navigation", "lazysh.guard.navigate", json!({"boot":owner["boot"],"ownership":owner["ownership"],"operation":1,"target":targets[0]}));
+    assert!(replay.get("error").is_some());
+    first.wait_screen("ORIGINAL_NAVIGATION_SECOND", true);
+    second.wait_screen("ORIGINAL_NAVIGATION_FIRST", true);
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit retained pre-navigation guarded Herdr binary"]
+async fn legacy_guarded_server_rejects_navigation_capability_without_losing_input() {
+    let mut fixture = Fixture::new();
+    fixture.executable = PathBuf::from(
+        std::env::var_os("LAZYSH_TEST_LEGACY_HERDR")
+            .expect("explicit retained legacy artifact required"),
+    );
+    assert!(fixture.executable.is_absolute() && fixture.executable.is_file());
+    fixture.start("legacy");
+    let client = TerminalClient::attach(&fixture, "legacy");
+    let owner = claim(&fixture, "legacy", &client.registration());
+    let _observer = Peer::attach(&fixture, "legacy", &"92".repeat(32));
+    let (status, output, errors) = fixture
+        .guarded_cli_output(
+            "legacy",
+            "lazysh.guard.navigation_capabilities",
+            json!({"boot":owner["boot"],"ownership":owner["ownership"]}),
+        )
+        .await;
+    assert!(!status.success() && output.is_empty());
+    assert_eq!(errors, b"guard_invalid\n");
+    let binding = prepare(&fixture, "legacy", &owner, 1, SOURCE);
+    let result = fixture
+        .guarded_cli(
+            "legacy",
+            "lazysh.guard.input",
+            input(&binding, 1, Some("legacy-still-owned")),
+        )
+        .await;
+    assert!(result.get("error").is_none());
+    wait_bytes(&fixture, "legacy", b"legacy-still-owned\r");
 }
 
 #[tokio::test]

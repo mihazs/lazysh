@@ -1,5 +1,13 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  herdrNavigationTitle: "Herdr navigation",
+  herdrNavigationBack: "Back to terminal",
+  herdrNavigationSpaces: "Spaces",
+  herdrNavigationSearch: "Search spaces, tabs and panes",
+  herdrNavigationCollapse: "Expand or collapse {{name}}",
+  herdrNavigationEmpty: "No matching live agents.",
+  herdrNavigationUnsupported: "This Herdr version cannot navigate only this terminal. Update the guarded Herdr integration, or attach and navigate in the terminal.",
+  herdrNavigationChanged: "The selected connection or destination changed. Open navigation again.",
   accountUsageRestore: "Reconnect host tools",
   accountUsageOpen: "Open AI account usage",
   accountUsageTitle: "AI account usage",

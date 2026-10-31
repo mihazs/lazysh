@@ -2,6 +2,14 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  herdrNavigationTitle: ["Navegação Herdr", "Navegación Herdr"],
+  herdrNavigationBack: ["Voltar ao terminal", "Volver al terminal"],
+  herdrNavigationSpaces: ["Espaços", "Espacios"],
+  herdrNavigationSearch: ["Buscar espaços, abas e painéis", "Buscar espacios, pestañas y paneles"],
+  herdrNavigationCollapse: ["Expandir ou recolher {{name}}", "Expandir o contraer {{name}}"],
+  herdrNavigationEmpty: ["Nenhum agente ativo corresponde à busca.", "No hay agentes activos que coincidan."],
+  herdrNavigationUnsupported: ["Esta versão do Herdr não permite navegar somente neste terminal. Atualize a integração Herdr protegida ou conecte e navegue no terminal.", "Esta versión de Herdr no permite navegar solo en este terminal. Actualiza la integración Herdr protegida o conecta y navega en el terminal."],
+  herdrNavigationChanged: ["A conexão ou o destino selecionado mudou. Abra a navegação novamente.", "La conexión o el destino seleccionado cambió. Abre la navegación de nuevo."],
   accountUsageRestore: ["Reconectar ferramentas do host", "Reconectar herramientas del host"],
   accountUsageOpen: ["Abrir uso da conta de IA", "Abrir uso de la cuenta de IA"],
   accountUsageTitle: ["Uso da conta de IA", "Uso de la cuenta de IA"],

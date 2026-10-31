@@ -905,17 +905,8 @@ impl App {
         };
 
         let response = match request.method {
-            Method::GuardClaim(_)
-            | Method::GuardPrepare(_)
-            | Method::GuardInput(_)
-            | Method::GuardRelease(_)
-            | Method::GuardCancelPreparation(_)
-            | Method::GuardRevoke(_) => {
-                return responses::encode_error(
-                    request.id,
-                    "guard_unavailable",
-                    "guard_unavailable",
-                );
+            crate::guarded_input::protocol::guard_method!() => {
+                return responses::encode_error(request.id, "guard_unavailable", "guard_unavailable");
             }
             Method::ServerStop(_) => {
                 self.state.should_quit = true;
