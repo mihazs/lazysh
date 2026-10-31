@@ -2999,9 +2999,20 @@ class NativeWorkspaceTest {
             shell("ime enable $component")
             shell("ime set $component")
             assertEquals("Only owned IME selected",component,shell("settings get secure default_input_method"))
-            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            // Native focus must precede DOM focus, as in typeInto: refocusing afterward can blur the editor.
             scenario.onActivity {activity->
-                val web=checkNotNull(webView(activity.window.decorView));web.requestFocus()
+                val web=checkNotNull(webView(activity.window.decorView))
+                if(!web.hasFocus())assertTrue("Owned IME native focus was denied",web.requestFocus())
+                assertTrue("Owned IME native focus required",web.hasFocus())
+            }
+            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            val focused=JSONObject(evaluate(scenario,"""(()=>{const area=window.ownedIme.textarea;return {
+                connected:area.isConnected, editable:!area.readOnly&&!area.disabled,
+                targetFocused:document.activeElement===area, documentFocused:document.hasFocus()};})()"""))
+            assertTrue("Owned IME editor admission: $focused",listOf("connected","editable","targetFocused","documentFocused").all {focused.getBoolean(it)})
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView))
+                assertTrue("Owned IME DOM selection lost native focus",web.hasFocus())
                 activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
                     .showSoftInput(web,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
             }
