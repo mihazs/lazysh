@@ -229,3 +229,19 @@ captured tool binaries; it never uses the operator's session catalogs or service
 This acceptance is not an agent/provider integration or physical-device proof.
 Execution results must be recorded separately: preparing or compiling this case is
 not a passing packaged-app acceptance receipt.
+
+
+The separate `LAZYSH_ANDROID_UI_HERDR_NAVIGATION=1` owner runs
+`NativeWorkspaceTest#ownedSharedHerdrNavigationThroughRealUi` against the supplied
+unchanged stock Herdr binary. It creates two app displays of one owned server,
+checks selected connection ownership and only the single visible terminal's
+positive/negative markers, and expects public focus to move both clients. Three
+raw receivers must remain empty throughout navigation. Stock private Chat input
+must remain unavailable, including after reopening the original transcript and
+destination; this case does not fabricate a guarded receipt. Its closed fixture
+mode uses the existing 600-second outer SSH budget; other ordinary SSH/Herdr
+fixtures retain 90 seconds. View controls, command calls and byte checks keep
+their existing bounds. Screenshots and exact selected-binary hashes accompany the
+case. A compiled test APK or host fixture pass alone is not Android acceptance;
+#591 remains open until actual packaged-device evidence and its remaining scope
+are qualified.

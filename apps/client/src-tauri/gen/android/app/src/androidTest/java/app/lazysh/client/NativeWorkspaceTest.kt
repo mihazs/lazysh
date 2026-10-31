@@ -1440,6 +1440,115 @@ class NativeWorkspaceTest {
         println("lazysh guarded Herdr Chat: real packaged UI/companion/native SSH preparation, confirmation, queue acknowledgement and source retirement completed")
     }
 
+    private fun verifySharedHerdrNavigation(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String) {
+        val navigation = herdr.getJSONObject("navigation")
+        val server = herdr.getString("name")
+        require(server == "owned-guard")
+        val source = navigation.getJSONObject("source")
+        val shell = navigation.getJSONObject("shell")
+        val agent = navigation.getJSONObject("agent")
+        val targets = listOf(source, shell, agent)
+        targets.forEach { target ->
+            require(Regex("w[0-9]{1,49}").matches(target.getString("workspaceId")))
+            require(Regex("w[0-9]+:t[0-9]+").matches(target.getString("tabId")) && target.getString("tabId").length <= 50)
+            require(Regex("w[0-9]+:p[0-9]+").matches(target.getString("paneId")) && target.getString("paneId").length <= 50)
+            require(Regex("NAV_(SOURCE|SHELL|AGENT)_[a-f0-9]{32}").matches(target.getString("marker")))
+        }
+        val first = "$parent / $server"
+        val second = "$first / $server"
+        val labels = listOf(parent, first, second)
+        val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
+        require(observer.length <= 4096)
+        fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='$text']")).perform(webScrollIntoView()).perform(webClick())
+        fun visible(display: Int, target: JSONObject) {
+            sessionView(scenario, "Terminal")
+            val forbidden = JSONArray(targets.filter { it !== target }.map { it.getString("marker") })
+            awaitDocument(scenario, "exact owned Herdr visible display and target", """
+                (()=>{$observer;return ownedVisibleHerdr(document,${JSONArray(labels)},$display,${JSONObject.quote(target.getString("marker"))},$forbidden);})()
+            """)
+        }
+        var capture = 0
+        fun screenshot(name: String) {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val directory = java.io.File(instrumentation.context.getExternalFilesDir(null), "herdr-navigation")
+            require(directory.mkdirs() || directory.isDirectory)
+            val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+            try { java.io.File(directory, "${++capture}-$name.png").outputStream().use { assertTrue("Owned screenshot write", bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } }
+            finally { bitmap.recycle() }
+        }
+        fun select(display: Int, target: JSONObject) {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".session-tabs .session-tab:nth-child(${display + 1}) [role=tab]")).perform(webScrollIntoView()).perform(webClick())
+            visible(display, target)
+            screenshot("display-$display-${target.getString("marker").substringBeforeLast('_')}")
+        }
+        fun reopenSource() {
+            sessionView(scenario, "Transcript")
+            val path = "input[placeholder='Absolute host path to session.jsonl']"
+            awaitDocument(scenario, "owned transcript source control", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, path)).perform(webClick())
+            onView(isAssignableFrom(WebView::class.java)).perform(
+                pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()), pressKey(KeyEvent.KEYCODE_DEL))
+            typeInto(scenario, path, herdr.getString("transcript")); closeSoftKeyboard(); click("Open transcript")
+            awaitDocument(scenario, "exact owned navigation transcript loaded", "document.querySelector('.chat-messages')?.textContent.includes(${JSONObject.quote(herdr.getString("record"))})")
+        }
+        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null) {
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+            onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
+            awaitDocument(scenario, "shared Herdr navigation scope", "Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) p')).some(x=>x.textContent==='Shared focus changes focus for other connections to this server.')")
+            val match = if (context == null) "strong[normalize-space(.)='$targetLabel']" else "strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]"
+            val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]"
+            onWebView().withElement(findElement(Locator.XPATH, row)).perform(webScrollIntoView())
+            screenshot(if (mode == "Agents") "agents" else "spaces")
+            onWebView().withElement(findElement(Locator.XPATH, row)).perform(webClick())
+            visible(2, target)
+            select(1, target) // Stock public focus must move the other real client too.
+            select(2, target)
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            for (display in 1..2) {
+                sessionView(scenario, "Sessions")
+                click("List herdr sessions")
+                awaitDocument(scenario, "owned server discovered for display $display", "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()==='Attach herdr $server').length===1")
+                click("Attach herdr $server")
+                awaitDocument(scenario, "distinct owned Herdr display $display", "document.querySelectorAll('.session-tabs [role=tab]').length===${display + 1} && document.querySelectorAll('.session-tabs [role=tab]')[${display}]?.getAttribute('aria-selected')==='true'")
+            }
+            visible(2, source)
+            reopenSource()
+            pasteOwnedText(scenario, "form.chat-composer textarea", herdr.getString("draft"), label); closeSoftKeyboard()
+            click("Choose terminal destination")
+            awaitDocument(scenario, "stock Herdr truthfully refuses private input preparation", "document.querySelector(\"section[aria-label='Terminal input'] [role=alert]\")?.textContent==='Guarded input is unavailable for this Herdr terminal. Use Stage or open the terminal.'")
+            assertEquals("Stock Herdr cannot offer a private receipt", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            navigate("Workspaces", navigation.getString("workspaceLabel"), agent)
+            navigate("Workspaces", shell.getString("label"), shell)
+            navigate("Agents", "codex", agent, agent.getString("label"))
+            navigate("Workspaces", shell.getString("paneId"), shell)
+            sessionView(scenario, "Transcript")
+            assertEquals("Navigation cannot create stock input authority", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            reopenSource()
+            assertEquals("Reopening the old transcript cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            // Restore the exact old target through public navigation; stock still has no private receipt.
+            navigate("Agents", "codex", source, source.getString("label"))
+            reopenSource()
+            assertEquals("Returning to the old destination cannot invent Send", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
+            println("lazysh shared Herdr navigation: two live display owners, visible target markers, shared focus and unavailable private Chat input; no input action dispatched")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+            for (child in listOf(second, first)) {
+                val selector = "button[aria-label='Disconnect $child']"
+                if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(selector)}))") == "true")
+                    onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector)).perform(webClick())
+            }
+            awaitDocument(scenario, "owned navigation children closed", "document.querySelectorAll('.session-tabs [role=tab]').length===1")
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            }
+        }
+    }
+
     private fun pasteOwnedText(scenario: ActivityScenario<MainActivity>, selector: String, text: String, label: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -1498,6 +1607,7 @@ class NativeWorkspaceTest {
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
+    @Test fun ownedSharedHerdrNavigationThroughRealUi() = ownedSshUi(true, requireSharedHerdr = true)
     @Test fun ownedMoshDefaultHerdrChatThroughRealUi() = ownedSshUi(true, requireHerdrMosh = true)
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
@@ -1789,7 +1899,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false) {
+        require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
         require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
         val useMosh = requireMoshBackground || requireHerdrMosh
         require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
@@ -2216,8 +2327,9 @@ class NativeWorkspaceTest {
                 awaitDocument(scenario, "remote expanded SSH challenge and returned prompt",
                     screenContains(fixture.getString("expected")) + " && Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>x.textContent.indexOf(${JSONObject.quote(fixture.getString("expected"))}))")
                 if (!requireHerdr) verifyOwnedClipboardImages(scenario, label)
-                verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
-                if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
+                if (!requireSharedHerdr) verifyBoardKeepAwake(scenario, if (requireHerdr) fixture.getJSONObject("herdr") else null)
+                if (requireSharedHerdr) verifySharedHerdrNavigation(scenario, fixture.getJSONObject("herdr"), name, label)
+                else if (requireHerdr) verifyGuardedHerdrChat(scenario, fixture.getJSONObject("herdr"), name, label)
             }
             val disconnect = "button[aria-label='Disconnect $connectedName']"
             if (evaluate(scenario, workspaceElementVisible("button.mobile-tools", true)) == "true") {

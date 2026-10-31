@@ -13,6 +13,7 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
   const port=fixture.port;
   try {
     expect((await stat(fixture.directory)).mode&0o777).toBe(0o700);
+    expect(await readFile(join(fixture.directory,'sshd_config'),'utf8')).toContain('timeout --kill-after=1s 90s');
     expect((await stat(join(fixture.directory,'user'))).mode&0o777).toBe(0o600);
     const client=await fixture.client();
     expect(fixture.challenge).not.toContain(fixture.expected);
@@ -29,6 +30,7 @@ test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only
 async function verifyCompanionFixture(privateTtyGroup:boolean) {
   const fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup});
   try {
+    expect(await readFile(join(fixture.directory,'sshd_config'),'utf8')).toContain('timeout --kill-after=1s 600s');
     const command=await fixture.client(true,'printf "%s\\n" "$HOME" "$XDG_DATA_HOME" "$LAZYSH_STATE_DIR"; if command -v lazysh-agent >/dev/null 2>&1; then exit 1; fi');
     expect((await command.finish('owned companion exec environment',5000)).trim().split('\n')).toEqual([fixture.directory,join(fixture.directory,'data'),join(fixture.directory,'state')]);
     const bytes=Buffer.from(`OWNED-SFTP:${fixture.nonce}`),source=join(fixture.directory,'source'),returned=join(fixture.directory,'returned');
@@ -167,6 +169,7 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(JSON.stringify(value.messages)).toContain(owned.record);
     const listing=await owned.ssh.client(true,'herdr session list --json');
     expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
+    expect(await readFile(join(owned.ssh.directory,'sshd_config'),'utf8')).toContain('timeout --kill-after=1s 90s');
     const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
     const {agent}=owned.metadata();
     const remote=await owned.ssh.client(true,`herdr --session '${owned.name}' api snapshot`);
@@ -208,3 +211,29 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1').each(['ssh','mosh'] as co
   catch(error){primary=true;throw error;}
   finally {await androidSshCleanup(primary,[['Herdr',()=>owned.stop()]]);}
 },610_000);
+
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Android two-display stock Herdr navigation keeps the selected display and sends zero receiver bytes',async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),undefined,true);
+  let primary=false;
+  try {await androidSshAcceptance(undefined,owned,false,false,false,true);}
+  catch(error){primary=true;throw error;}
+  finally {await androidSshCleanup(primary,[['Herdr',()=>owned.stop()]]);}
+},610_000);
+
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned shared-navigation fixture binds three distinct zero-byte receiver identities',async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),undefined,true);
+  try {
+    expect(await readFile(join(owned.ssh.directory,'sshd_config'),'utf8')).toContain('timeout --kill-after=1s 600s');
+    const {navigation}=owned.metadata();expect(navigation).toBeDefined();
+    const targets=[navigation!.source,navigation!.shell,navigation!.agent];
+    expect(new Set(targets.map(target=>target.terminalId)).size).toBe(3);
+    expect(new Set(targets.map(target=>target.paneId)).size).toBe(3);
+    expect(new Set(targets.map(target=>target.marker)).size).toBe(3);
+    const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
+    expect(snapshot.panes).toHaveLength(3);expect(snapshot.agents).toHaveLength(2);
+    for(const target of targets)expect(snapshot.panes.some((pane:Record<string,unknown>)=>pane.pane_id===target.paneId&&pane.terminal_id===target.terminalId&&pane.workspace_id===target.workspaceId&&pane.tab_id===target.tabId)).toBe(true);
+    await owned.expectNavigationBytes();
+  } finally {await owned.stop();}
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},20_000);

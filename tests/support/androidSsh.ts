@@ -287,8 +287,9 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
   return {observation:{ime:'aosp-latin' as const,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false) {
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(sharedHerdr && (!herdr || herdrMosh || companion || moshBackground))throw new Error('Owned shared navigation requires its SSH Herdr fixture');
   if(herdrMosh && (!herdr || companion || moshBackground))throw new Error('Owned Mosh Herdr requires its separate guarded fixture');
   if(moshBackground && (herdr || companion))throw new Error('Owned Android Mosh background mode must be isolated');
   if(companion && (herdr || process.arch!=='x64' || process.env.GITHUB_ACTIONS!=='true' || process.env.RUNNER_ENVIRONMENT!=='github-hosted'))throw new Error('Published Android companion acceptance requires its explicit disposable hosted runner');
@@ -312,6 +313,11 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const timing:{gradleStartMs:number|null,gradleEndMs:number|null}={gradleStartMs:null,gradleEndMs:null};
   let primary=false;
   const shell=(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args]);
+  const navigationScreenshots=async()=>{
+    const destination=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/herdr-navigation');
+    await mkdir(destination,{recursive:true});
+    await shell(['pull','/sdcard/Android/data/app.lazysh.client.test/files/herdr-navigation',destination]);
+  };
   try {
     if(moshBackground || herdrMosh) {
       const server=join(fixture.directory,'bin/mosh-server');
@@ -351,11 +357,25 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
       herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):companion?'-PlazyshCompanionAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':'-PlazyshSshAcceptance=true',
       ...(herdr?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):companion?'ownedCompanionInstallsThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr;
+    let monitoring=sharedHerdr,byteFailure:unknown;
+    const byteWitness=(async()=>{while(monitoring){
+      try{await herdr!.expectNavigationBytes();}catch(error){
+        byteFailure=error;
+        try{await gradle!.stop();}catch{console.error('Owned navigation instrumentation stop failed after receiver failure');}
+        return;
+      }
+      await Bun.sleep(25);
+    }})();
+    let instrumentationFailure:unknown;
     try {await gradle.finish('actual Android SSH UI instrumentation',600_000);}
-    finally {timing.gradleEndMs=crashes?.elapsedMs()??null;}
+    catch(error){instrumentationFailure=error;}
+    finally {monitoring=false;await byteWitness;timing.gradleEndMs=crashes?.elapsedMs()??null;}
+    if(byteFailure)throw byteFailure;
+    if(instrumentationFailure)throw instrumentationFailure;
+    if(sharedHerdr)await navigationScreenshots();
     await crashes?.stop();
     await moshWitness?.assertVerified();
     if(evidence) {
@@ -363,11 +383,13 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
       console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
     }
-    if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
+    if(sharedHerdr)await herdr!.expectNavigationBytes();
+    else if(herdr)await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));
     if(herdrMosh && await readFile(join(fixture.directory,'mosh-bootstraps'),'utf8')!=='bootstrap\n')throw new Error('Owned Mosh Herdr entry must bootstrap exactly once');
-    console.log(herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
+    console.log(sharedHerdr?'Owned stock Herdr shared navigation: all three receiver identities alive and zero bytes verified':herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;
+    if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):companion?'companion-ui':moshBackground?'mosh-background-ui':'ssh-ui');
       const crash=await crashes?.stop();
