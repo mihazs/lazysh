@@ -94,7 +94,18 @@ be available to the agent's hook environment.
 OpenCode plugin directory, preserving other plugins. The native plugin uses
 OpenCode's Bun runtime and invokes the companion with a fixed argv and a
 three-second deadline that kills and reaps the owned ingest process. Missing or unavailable companions do not reject
-OpenCode events or answer its permission requests. Successful ingestion is silent.
+OpenCode events or answer its permission requests. Successful ingestion is silent. The same asset exports the native 1.19.5 server
+factory and 2.2 setup definition; no version selector is required. Pending
+reports retain only the latest state per session, up to 64 sessions, and
+unloading clears the queue and kills/reaps its current ingest process.
+
+OpenCode 2.2 events are server-wide. Lazysh matches the plugin directory exactly
+and keeps up to 256 verified session locations, including separate child IDs.
+It subscribes before requesting one initial page of at most 128 existing sessions;
+inventory itself never creates agent rows. Live creation, moves and deletion win
+over a delayed inventory. Its three-second wait does not cancel native SDK work;
+late results are ignored. Unknown events without a verified location are ignored.
+There is no background pagination or per-event lookup.
 
 Codex reports main-thread prompt/tool activity as working, permission requests as
 needing attention and Stop, Interrupt or SessionEnd as completed. SessionStart
@@ -115,9 +126,13 @@ The Codex contract was checked against the installed CLI 0.166.0 and current
 [official hook reference](https://learn.chatgpt.com/docs/hooks). OpenCode payloads
 were checked against release
 [v1.19.5 generated SDK types](https://github.com/anomalyco/opencode/blob/v1.19.5/packages/sdk/js/src/v2/gen/types.gen.ts)
-and its [native plugin API](https://opencode.ai/docs/plugins/).
-Automated fixtures exercise these contracts; real authenticated agent sessions
-remain a separate acceptance check.
+and the pinned [2.2 plugin API](https://github.com/anomalyco/opencode/blob/v2.2.0/packages/plugin/src/promise/plugin.ts).
+Isolated native 1.19.5 and 2.2 loaders select their respective factory or setup
+once from the same module. Native 1.19.5 and 2.2 root/child session deletion APIs also
+verify separate completed rows in the real companion Store. OpenCode 2.2 native
+session forms verify an attributed attention report; completion remains tied to
+the identified session rather than its parent. Full provider turns
+and authenticated sessions remain separate acceptance checks.
 
 ## Gemini CLI, Droid and Kimi CLI
 
