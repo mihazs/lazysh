@@ -131,13 +131,26 @@ async function connectPasswordHost(page:Page,name='Navigation host'){
   await page.getByRole('button',{name:'Connect',exact:true}).click();
 }
 
+const nativeWorkspaceSource=readFileSync(new URL('../src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',import.meta.url),'utf8');
+
+function nativeWorkspaceVisibility(selector:string,touchable=false){
+  const body=/private fun workspaceElementVisible\(selector: String, touchable: Boolean = false\) = """([\s\S]*?)"""/.exec(nativeWorkspaceSource)?.[1];
+  if(!body)throw new Error('Native workspace visibility contract changed');
+  return body.replace('${JSONObject.quote(selector)}',()=>JSON.stringify(selector)).replaceAll('$touchable',String(touchable));
+}
+
 function nativeHerdrNavigationRow(label:string,context?:string){
-  const source=readFileSync(new URL('../src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt',import.meta.url),'utf8');
-  const condition=/val match = if \(context == null\) "([^"]+)" else "([^"]+)"/.exec(source);
-  const row=/val row = "([^"\n]+herdr-navigation-row[^"\n]+)"/.exec(source);
+  const condition=/val match = if \(context == null\) "([^"]+)" else "([^"]+)"/.exec(nativeWorkspaceSource);
+  const row=/val row = "([^"\n]+herdr-navigation-row[^"\n]+)"/.exec(nativeWorkspaceSource);
   if(!condition||!row)throw new Error('Native Herdr row selector contract changed');
   const match=condition[context===undefined?1:2].replaceAll('$targetLabel',()=>label).replaceAll('$context',()=>context??'');
   return 'xpath='+row[1].replace('$match',()=>match);
+}
+
+function nativeHerdrNavigationReady(label:string,context?:string){
+  const body=/awaitDocument\(scenario, "shared Herdr navigation target ready", """([\s\S]*?)"""\)/.exec(nativeWorkspaceSource)?.[1];
+  if(!body)throw new Error('Native Herdr readiness contract changed');
+  return body.replace('${JSONObject.quote(row)}',()=>JSON.stringify(nativeHerdrNavigationRow(label,context).slice('xpath='.length)));
 }
 
 test('one connected agent sidebar suspends hidden activity and preserves its drafts',async({page},testInfo)=>{
@@ -245,6 +258,18 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin'].includes(command)))).toEqual([]);
+  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdTree:boolean}}).workspaceNavigationState.holdTree=true;delete (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead;});
+  if(phone){
+    await page.getByRole('button',{name:'Switch terminal session',exact:true}).click();
+    await page.getByRole('dialog',{name:'Switch terminal session',exact:true}).locator('.session-choice').filter({has:page.getByText('Navigation host',{exact:true})}).click();
+  }else await page.getByRole('tab',{name:'Navigation host',exact:true}).click();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
+  await expect(live.getByText('Shared focus changes focus for other connections to this server.',{exact:true})).toBeVisible();
+  await expect.poll(()=>page.evaluate(()=>typeof (window as unknown as {finishHerdrRead?:()=>void}).finishHerdrRead)).toBe('function');
+  expect(await page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(false);
+  await page.evaluate(()=>(window as unknown as {finishHerdrRead:()=>void}).finishHerdrRead());
+  await expect.poll(()=>page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(true);
 });
 
 test('mobile terminal keeps one compact header and reaches every session control through More',async({page},testInfo)=>{
@@ -297,6 +322,14 @@ test('mobile terminal keeps one compact header and reaches every session control
   await page.screenshot({path:testInfo.outputPath('compact-restore.png')});
   await connectHost();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
+  const closeHosts="button[aria-label='Close hosts']";
+  await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts))).toBe(false);
+  if(phone){
+    await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+    await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts,true))).toBe(true);
+    await page.getByRole('button',{name:'Close hosts',exact:true}).click();
+    await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts))).toBe(false);
+  }
   const canvas=await page.locator('.terminal-canvas:visible').elementHandle();
   const header=page.locator('.workspace-header');
   const strip=page.locator('.session-toolbar');

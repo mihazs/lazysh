@@ -1175,8 +1175,10 @@ class NativeWorkspaceTest {
     private fun workspaceElementVisible(selector: String, touchable: Boolean = false) = """
         (()=>{const element=document.querySelector(${JSONObject.quote(selector)});
           if(!element || !element.getClientRects().length || getComputedStyle(element).visibility==='hidden')return false;
+          const bounds=element.getBoundingClientRect();
+          if(bounds.width<=0 || bounds.height<=0 || bounds.right<=0 || bounds.bottom<=0 || bounds.left>=innerWidth || bounds.top>=innerHeight)return false;
           if(!$touchable)return true;
-          const bounds=element.getBoundingClientRect(),hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+          const hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
           return bounds.left>=0 && bounds.top>=0 && bounds.right<=innerWidth && bounds.bottom<=innerHeight && Boolean(hit && element.contains(hit));})()
     """
 
@@ -1191,20 +1193,22 @@ class NativeWorkspaceTest {
     """
 
     private fun workspaceMenuAction(scenario: ActivityScenario<MainActivity>, text: String) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         val menu = "[role=dialog][aria-label='Workspace tools']"
         if (evaluate(scenario, workspaceElementVisible(menu)) != "true") {
-            awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"))
+            awaitDocument(scenario, "visible workspace More", workspaceElementVisible("button.mobile-tools"), deadline = deadline)
             val trigger = onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button.mobile-tools"))
             trigger.perform(webScrollIntoView())
-            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true))
+            awaitDocument(scenario, "touchable workspace More", workspaceElementVisible("button.mobile-tools", true), deadline = deadline)
             trigger.perform(webClick())
         }
-        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu))
+        awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu), deadline = deadline)
         val target = onWebView().withElement(findElement(Locator.XPATH,
             "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))
         target.perform(webScrollIntoView())
-        awaitDocument(scenario, "visible workspace menu action", workspaceButtonVisible(menu, text))
+        awaitDocument(scenario, "visible workspace menu action", workspaceButtonVisible(menu, text), deadline = deadline)
         target.perform(webClick())
+        awaitDocument(scenario, "workspace More action dismissed", "!Boolean(document.querySelector(${JSONObject.quote(menu)}))", deadline = deadline)
     }
 
     private fun present(selector: String) = "Boolean(document.querySelector(${JSONObject.quote(selector)}))"
@@ -1553,6 +1557,31 @@ class NativeWorkspaceTest {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val directory = java.io.File(requireNotNull(instrumentation.targetContext.getExternalFilesDir(null)), "herdr-navigation")
             require(directory.mkdirs() || directory.isDirectory)
+            if (android.os.Build.VERSION.SDK_INT < 29) throw AssertionError("Owned navigation capture requires frame commits")
+            val committed = CountDownLatch(1)
+            val frame = Runnable { committed.countDown() }
+            var observing = true
+            var tree: android.view.ViewTreeObserver? = null
+            scenario.onActivity { activity ->
+                val view = checkNotNull(webView(activity.window.decorView))
+                assertTrue("Owned navigation WebView must render frames", view.isAttachedToWindow && view.isHardwareAccelerated)
+                view.postVisualStateCallback(capture.toLong(), object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        if (observing && view.isAttachedToWindow) {
+                            tree = view.viewTreeObserver
+                            tree?.registerFrameCommitCallback(frame)
+                            view.invalidate()
+                        }
+                    }
+                })
+            }
+            val submitted = try { committed.await(5, TimeUnit.SECONDS) } finally {
+                scenario.onActivity {
+                    observing = false
+                    tree?.takeIf { it.isAlive }?.unregisterFrameCommitCallback(frame)
+                }
+            }
+            assertTrue("Owned navigation DOM must reach a committed frame", submitted)
             val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
             try { java.io.File(directory, "${++capture}-$name.png").outputStream().use { assertTrue("Owned screenshot write", bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } }
             finally { bitmap.recycle() }
@@ -1576,9 +1605,13 @@ class NativeWorkspaceTest {
         fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null) {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
-            awaitDocument(scenario, "shared Herdr navigation scope", "Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) p')).some(x=>x.textContent==='Shared focus changes focus for other connections to this server.')")
             val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
             val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]"
+            awaitDocument(scenario, "shared Herdr navigation target ready", """
+                (()=>{const rows=document.evaluate(${JSONObject.quote(row)},document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);
+                  return Array.from(document.querySelectorAll('.herdr-navigation:not([hidden]) p')).some(x=>x.textContent==='Shared focus changes focus for other connections to this server.') &&
+                    rows.snapshotLength===1 && !rows.snapshotItem(0).disabled;})()
+            """)
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webScrollIntoView())
             screenshot(if (mode == "Agents") "agents" else "spaces")
             onWebView().withElement(findElement(Locator.XPATH, row)).perform(webClick())

@@ -13,8 +13,9 @@ function fixture() {
   const screen=(textContent:string,display='flex')=>({textContent,display,getClientRects:()=>display==='none'?[]:[{}],getBoundingClientRect:()=>({width:100,height:100})});
   const pane=(text:string,display='flex')=>({...screen('',display),querySelectorAll:()=>[screen(text)]});
   const panes=[pane('source','none'),pane('target','none'),pane('target')];
-  const document={querySelectorAll:(selector:string)=>selector==='.terminal-pane'?panes:tabs};
-  return {document,labels,tabs,panes,pane};
+  const blockers:ReturnType<typeof screen>[]=[];
+  const document={querySelectorAll:(selector:string)=>selector==='.terminal-pane'?panes:selector==='[role=dialog], main[inert]'?blockers:tabs};
+  return {document,labels,tabs,panes,pane,blockers,screen};
 }
 test('native two-display oracle requires exactly the selected live connection and its sole visible terminal',async()=>{
   const observe=await oracle(),f=fixture();
@@ -35,6 +36,16 @@ test('inactive canvases, duplicate visible panes, extra children and mixed marke
   }
 });
 
+
+test('a modal or inert foreground cannot qualify a covered terminal marker',async()=>{
+  const observe=await oracle(),f=fixture();
+  f.blockers.push(f.screen('owned workspace tools'));
+  expect(observe(f.document,f.labels,2,'target',['source'])).toBe(false);
+  f.blockers[0]=f.screen('closed dialog','none');
+  expect(observe(f.document,f.labels,2,'target',['source'])).toBe(true);
+  f.blockers[0]=f.screen('inert workspace');
+  expect(observe(f.document,f.labels,2,'target',['source'])).toBe(false);
+});
 
 test('shipping live Herdr oracle requires the selected server and exact host snapshot context, never legacy cards',async()=>{
   const observe=await oracle('ownedLiveHerdrNavigation');
