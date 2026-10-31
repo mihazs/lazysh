@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Move Compose and terminal-key visibility into compact header icon controls, and use accessible icon actions beside the draft composer without overlap. On phones, long settings and forms now fill the screen with a persistent close header; short choices remain sheets and desktop dialogs keep their existing size. Authentication, trust and dismissal behavior are unchanged.
+
 - Show the lazysh logo during Android’s initial native access-policy check instead of briefly displaying an Unlock screen. Match the system launch background to the logo; retain the real lock screen, error recovery, secure cover and stale-unlock protections.
 
 - Package original lazysh host-setup and agent-reporting skills with explicit preview, profile status, install/update and removal commands. Linux/macOS Claude and Codex profile writes require an exact inspected plan and preserve foreign skills, edits and agent configuration. No skills, hooks, services or provider settings change automatically; other platforms retain preview-only capability.

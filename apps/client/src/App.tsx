@@ -279,10 +279,12 @@ function Dialog({
   title,
   children,
   close,
+  mobilePresentation = "sheet",
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
+  mobilePresentation?: "page" | "sheet";
 }) {
   useUi();
   const ref = useRef<HTMLDivElement>(null);
@@ -311,7 +313,7 @@ function Dialog({
     };
   }, []);
   return (
-    <div className="dialog-backdrop">
+    <div className="dialog-backdrop" data-mobile-presentation={mobilePresentation}>
       <div
         ref={ref}
         className="dialog"
@@ -329,7 +331,7 @@ function Dialog({
             <X size={19} />
           </button>
         </div>
-        {children}
+        {mobilePresentation === "page" ? <div className="dialog-content">{children}</div> : children}
       </div>
     </div>
   );
@@ -464,6 +466,7 @@ function HostEditor({
   }
   return (
     <Dialog
+      mobilePresentation="page"
       title={initial ? t("appEditHost") : t("appAddAHost")}
       close={() => {
         if (!busy) close();
@@ -811,6 +814,7 @@ export function ConnectDialog({
   }
   return (
     <Dialog
+      mobilePresentation={trust ? "sheet" : "page"}
       title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
@@ -1112,6 +1116,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [switcher, setSwitcher] = useState(false);
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
+  const [terminalControlsTarget,setTerminalControlsTarget] = useState<HTMLDivElement|null>(null);
   const [themeLinkTarget,setThemeLinkTarget] = useState<HTMLDivElement|null>(null);
   const [sync, setSync] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -1823,6 +1828,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             )}
           </div>
           <div className="header-right">
+            <div ref={setTerminalControlsTarget} className="workspace-terminal-controls" />
             <button
               className="icon-button mobile-tools"
               aria-label={t("appWorkspaceTools")}
@@ -1982,6 +1988,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                     session={session}
                     active={activeId === session.id && view === "terminal"}
                     reportError={setError}
+                    controlsTarget={terminalControlsTarget}
                     onOpenAttachments={!session.local && session.connected && !closingIds.includes(session.id) ? () => openTerminalAttachments(session) : undefined}
                   />
                 ))}
@@ -2172,7 +2179,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {preferences && (
-        <Dialog title={t("appPreferences")} close={() => setPreferences(false)}>
+        <Dialog mobilePresentation="page" title={t("appPreferences")} close={() => setPreferences(false)}>
           <div className="preferences-content">
           <div ref={setThemeLinkTarget} />
           {native && <section aria-label={t('defaultMuxLabel')}>
@@ -2187,7 +2194,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </div>
         </Dialog>
       )}
-      {pushSettings && <Dialog title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
+      {pushSettings && <Dialog mobilePresentation="page" title={t("appRemotePushSettings")} close={()=>setPushSettings(false)}>
         <Suspense fallback={<p>{t("appLoadingPushSettings")}</p>}><PushSettingsPanel /></Suspense>
       </Dialog>}
 
@@ -2200,12 +2207,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       </Dialog>}
       {native && <NotificationMonitor sessions={sessions.filter(session=>!session.local)} />}
       {inbox && (
-        <Dialog title={t("appNotificationInbox")} close={() => setInbox(false)}>
+        <Dialog mobilePresentation="page" title={t("appNotificationInbox")} close={() => setInbox(false)}>
           <NotificationPanel sessions={sessions.filter(session=>!session.local)} />
         </Dialog>
       )}
       {about && (
-        <Dialog title={t("appAboutLazysh")} close={() => setAbout(false)}>
+        <Dialog mobilePresentation="page" title={t("appAboutLazysh")} close={() => setAbout(false)}>
           <Suspense fallback={<p>{t("appLoadingLicense")}</p>}>
             <AboutPanel />
           </Suspense>
@@ -2257,14 +2264,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </Dialog>
       )}
       {sharing && (
-        <Dialog title={t("appShareableUploads")} close={() => setSharing(false)}>
+        <Dialog mobilePresentation="page" title={t("appShareableUploads")} close={() => setSharing(false)}>
           <Suspense fallback={<p>{t("appLoadingSharing")}</p>}>
             <SharePanel />
           </Suspense>
         </Dialog>
       )}
       {sync && (
-        <Dialog title={t("appEncryptedSync")} close={() => setSync(false)}>
+        <Dialog mobilePresentation="page" title={t("appEncryptedSync")} close={() => setSync(false)}>
           <Suspense fallback={<p>{t("appOpeningSync")}</p>}>
             <SyncPanel onHostsChanged={() => void loadHosts()} />
           </Suspense>

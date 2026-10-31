@@ -3,7 +3,7 @@ import { StrictMode, useState } from "react";
 import {uiI18n,useUi} from "./i18n/core";
 import {uiErrorText,type UiErrorCause} from "./i18n/localError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {prepareClipboardPlatform} from "./deviceClipboard";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
@@ -742,4 +742,26 @@ it("keeps ordinary terminal input usable and disables virtual modifiers when xte
   terminal._core.coreService.onUserInput = () => {throw new Error('different xterm internals');}; mount();
   for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name})).toHaveProperty('disabled',true);
   fireEvent.click(screen.getByRole('button',{name:'esc'})); expect(mocks.write).toHaveBeenCalledWith('ssh','\x1b');
+});
+
+it("portals only the active terminal controls into the existing header and retains literal drafts", () => {
+  const target=document.createElement('div'); document.body.append(target);
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const reportError=vi.fn(); const view=render(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
+  try {
+    expect(within(target).getAllByRole('button')).toHaveLength(2);
+    fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
+    fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'c'}});
+    const paste=screen.getByRole('button',{name:'Paste draft'});
+    expect(paste.textContent).toBe(''); expect(paste.querySelector('svg')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Close composer'}));
+    fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
+    expect(screen.getByLabelText('Compose text')).toHaveProperty('value','c');
+    fireEvent.click(screen.getByRole('button',{name:'Paste draft'})); expect(terminal.paste).toHaveBeenCalledWith('c');
+    view.rerender(<TerminalPane session={session} active={false} reportError={reportError} controlsTarget={target} />);
+    expect(target.childElementCount).toBe(0);
+    view.rerender(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
+    expect(within(target).getAllByRole('button')).toHaveLength(2);
+    view.unmount(); expect(target.childElementCount).toBe(0);
+  } finally {target.remove();}
 });
