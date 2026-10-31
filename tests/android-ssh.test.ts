@@ -243,7 +243,7 @@ test.each(['gradle','reverse','keyboard']).skipIf(process.platform!=='linux')('e
     let stopped=false;
     // Synthetic harness input; this test does not claim actual SSH, APK or WebView execution.
     const fixture={ssh:{directory,nonce:'a'.repeat(32),port:45678,username:'owned',privateKey:'private-fixture-key',fingerprint:'owned',prompt:'owned',challenge:'owned',expected:'owned'},
-      metadata:()=>({name:'owned'}),stop:async()=>{stopped=true;throw new Error('private-cleanup-error');}} as unknown as HerdrFixture;
+      metadata:()=>({name:'owned'}),historyDiagnostic:async()=>{throw new Error('private-diagnostic-error');},stop:async()=>{stopped=true;throw new Error('private-cleanup-error');}} as unknown as HerdrFixture;
     try {
       await expect(androidSshAcceptance(root,fixture)).rejects.toThrow(failure==='keyboard'?'Owned software keyboard requires the image AOSP LatinIME':`Owned fixture failed: ${rejected?'owned emulator command':'actual Android SSH UI instrumentation'}; exit=31`);
       const calls=(await readFile(args,'utf8')).trim().split('\n');
@@ -1047,25 +1047,22 @@ test('Herdr confirmation observation caps duplicates and retains only owned DOM 
 
 
 test('native continuous finger observation rejects restarts, identity changes, untrusted events and early release',async()=>{
-  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const match=source.match(/val fingerObservation = """([\s\S]*?)"""[.]trimIndent\(\)/)!;
-  expect(match).not.toBeNull();
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/assets/owned-herdr-finger.js'),'utf8');
   const key='owned-finger-probe';
-  const expression=match[1].replaceAll('$fingerKey',JSON.stringify(key)).replaceAll('$screens','ownedScreens');
   function setup() {
     const callbacks=new Map<string,(event:Record<string,unknown>)=>void>();
     const canvas={contains:(target:unknown)=>target===screen,addEventListener:(name:string,fn:(event:Record<string,unknown>)=>void)=>callbacks.set(name,fn),
       removeEventListener:(name:string)=>callbacks.delete(name)};
     const screen={isConnected:true,textContent:'OLD490OLD491NEW512',closest:()=>canvas};
     const window={} as Record<string,{sample:()=>{row:number;newest:boolean;active:boolean;held:boolean;moves:number};dispose:()=>void}>;
-    const install=new Function('window','ownedScreens',`return (${expression.trim()});`);
+    const install=new Function('window','ownedScreens',`${source};return ownedHerdrObserveFinger(window,${JSON.stringify(key)},ownedScreens);`);
     expect(install(window,[screen])).toBe(true);expect(install(window,[screen])).toBe(false);
     const event=(type:string,identifier=3,trusted=true)=>callbacks.get(type)!({type,isTrusted:trusted,target:screen,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier}]});
     return {screen,window,event,sample:()=>window[key].sample(),dispose:()=>window[key].dispose(),callbacks};
   }
-  const good=setup();expect(good.sample()).toEqual({row:490,newest:true,active:true,held:false,moves:0});
+  const good=setup();expect(good.sample()).toMatchObject({row:490,newest:true,active:true,held:false,moves:0});
   good.event('touchstart');good.event('touchmove');good.screen.textContent='OLD480OLD481';
-  expect(good.sample()).toEqual({row:480,newest:false,active:true,held:true,moves:1});
+  expect(good.sample()).toMatchObject({row:480,newest:false,active:true,held:true,moves:1});
   good.event('touchmove');good.screen.textContent='OLD470OLD471';expect(good.sample().row).toBeLessThan(480);expect(good.sample().moves).toBe(2);
   good.event('touchend');expect(good.sample().active).toBe(false);
   good.dispose();expect(good.callbacks.size).toBe(0);

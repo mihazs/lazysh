@@ -254,6 +254,15 @@ export class HerdrFixture {
     return {offset:info.scroll.offset_from_bottom,max:info.scroll.max_offset_from_bottom,rows:info.scroll.viewport_rows,
       oldRows:rows.filter((line:string)=>/^OLD[0-9]{3}$/.test(line)).length,newTail:rows.includes('NEW512')};
   }
+  async historyDiagnostic() {
+    try {
+      const {offset,max,rows,oldRows,newTail}=await this.history();
+      const focused=JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id;
+      return {state:'available',offset,max,rows,oldRows,newTail,
+        focusHistory:typeof focused==='string' && focused===this.historyPane?.paneId,
+        focusOriginal:typeof focused==='string' && focused===this.agent?.paneId};
+    } catch {return {state:'unavailable'};}
+  }
   async expectHistoryScrolled() {
     const sample=await this.history();
     if(sample.offset<=0 || sample.oldRows===0 || sample.newTail

@@ -1557,33 +1557,16 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
         val screens = "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).filter(x=>x.getClientRects().length>0)"
         awaitDocument(scenario, "owned history newest row visible", "(() => {const screens=$screens; return screens.length===1 && screens[0].textContent.includes('NEW512');})()")
-        val geometryScript = """
-            (()=>{
-              const screens=$screens, viewport=window.visualViewport;
-              const unavailable={ready:false,hits:['none','none','none']};
-              if(screens.length!==1 || !viewport || viewport.scale!==1) return unavailable;
-              const screen=screens[0],terminal=screen.parentElement,canvas=screen.closest('.terminal-canvas');
-              if(!terminal?.classList.contains('xterm') || !canvas || terminal.parentElement!==canvas) return unavailable;
-              const surfaces=terminal.querySelectorAll(':scope > .xterm-viewport');
-              if(surfaces.length!==1 || !surfaces[0].getClientRects().length ||
-                getComputedStyle(surfaces[0]).visibility==='hidden') return unavailable;
-              const surface=surfaces[0],r=screen.getBoundingClientRect(),s=surface.getBoundingClientRect();
-              const inside=b=>[b.left,b.top,b.right,b.bottom].every(Number.isFinite) && b.width>0 && b.height>0 &&
-                b.left>=viewport.offsetLeft && b.top>=viewport.offsetTop &&
-                b.right<=viewport.offsetLeft+viewport.width && b.bottom<=viewport.offsetTop+viewport.height;
-              const hits=[0.25,0.5,0.75].map(fraction=>{
-                const hit=document.elementFromPoint((r.left+r.right)/2,r.top+r.height*fraction);
-                return !hit?'none':hit===screen || screen.contains(hit)?'screen':hit===surface?'viewport':'other';
-              });
-              return {ready:inside(r) && inside(s) && hits.every(hit=>hit==='screen' || hit==='viewport'),hits,
-                rect:[r.left,r.top,r.right,r.bottom],viewport:[viewport.offsetLeft,viewport.offsetTop,viewport.width,viewport.height,viewport.scale],density:devicePixelRatio};
-            })()
-        """
+        val fingerSource = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-herdr-finger.js")
+            .use { it.readNBytes(16_385) }
+        require(fingerSource.size <= 16_384)
+        val fingerScript = fingerSource.toString(Charsets.UTF_8)
+        val geometryScript = "(()=>{$fingerScript;return ownedHerdrSwipeGeometry($screens,window.visualViewport,devicePixelRatio,document);})()"
         val geometryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         var geometry = JSONObject()
         while (true) {
             val remaining = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime())
-            assertTrue("Native swipe path did not settle inside its owned screen/viewport: hits=${geometry.optJSONArray("hits")}", remaining > 0)
+            assertTrue("Native swipe path did not settle inside its owned screen/viewport: diagnostic=${geometry.optJSONObject("diagnostic")}", remaining > 0)
             geometry = JSONObject(evaluate(scenario, geometryScript, remaining))
             if (geometry.getBoolean("ready") && System.nanoTime() < geometryDeadline) break
             val pause = TimeUnit.NANOSECONDS.toMillis(geometryDeadline - System.nanoTime()).coerceAtMost(50)
@@ -1629,34 +1612,7 @@ class NativeWorkspaceTest {
             return floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
         }
         val fingerKey = JSONObject.quote("__lazyshOwnedFinger_" + UUID.randomUUID().toString().replace("-", ""))
-        val fingerObservation = """
-            (()=>{
-              const key=$fingerKey, screens=$screens;
-              if(Object.hasOwn(window,key) || screens.length!==1) return false;
-              const screen=screens[0],canvas=screen.closest('.terminal-canvas');
-              if(!canvas) return false;
-              let starts=0,moves=0,ends=0,cancels=0,identifier=null,valid=true;
-              const record=event=>{
-                valid=valid && event.isTrusted && canvas.contains(event.target);
-                if(event.type==='touchstart') {
-                  starts++;valid=valid && starts===1 && event.touches.length===1;
-                  identifier=event.touches[0]?.identifier;
-                } else if(event.type==='touchmove') {
-                  moves++;valid=valid && event.touches.length===1 && event.touches[0].identifier===identifier;
-                } else if(event.type==='touchend')ends++;else cancels++;
-              };
-              const events=['touchstart','touchmove','touchend','touchcancel'];
-              events.forEach(type=>canvas.addEventListener(type,record,{capture:true,passive:true}));
-              Object.defineProperty(window,key,{configurable:true,value:{
-                sample:()=>{
-                  const match=screen.textContent.match(/OLD([0-9]{3})/);
-                  return {row:match?Number(match[1]):-1,newest:screen.textContent.includes('NEW512'),
-                    active:screen.isConnected && valid && starts<=1 && ends===0 && cancels===0,
-                    held:starts===1 && moves>0,moves:Math.min(2,moves)};
-                },dispose:()=>events.forEach(type=>canvas.removeEventListener(type,record,true))}});
-              return true;
-            })()
-        """.trimIndent()
+        val fingerObservation = "(()=>{$fingerScript;return ownedHerdrObserveFinger(window,$fingerKey,$screens);})()"
         assertEquals("Owned continuous finger observation installed", "true", evaluate(scenario, fingerObservation))
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val downTime = android.os.SystemClock.uptimeMillis()
@@ -1683,12 +1639,14 @@ class NativeWorkspaceTest {
             sendFinger(action, lastPoint)
         }
         val fingerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        var lastFingerSample = JSONObject()
         fun progress(before: Int, moves: Int): Int {
             while (true) {
                 val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
-                assertTrue("Owned continuous drag did not advance before UP", remaining > 0)
+                assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before sample=$lastFingerSample", remaining > 0)
                 val sample = JSONObject(evaluate(scenario, "window[$fingerKey].sample()", remaining.coerceAtMost(1_000)))
-                assertTrue("Trusted finger stream must not restart, end or cancel before progress", sample.getBoolean("active"))
+                lastFingerSample = sample
+                assertTrue("Trusted finger stream must not restart, end or cancel before progress: phase=$moves before=$before sample=$lastFingerSample", sample.getBoolean("active"))
                 val row = sample.getInt("row")
                 if (sample.getBoolean("held") && sample.getInt("moves") >= moves && row in 0..511 && row < before && !sample.getBoolean("newest") && System.nanoTime() < fingerDeadline) return row
                 Thread.sleep(10)
