@@ -1843,3 +1843,20 @@ it.each(['lock','hidden','closed-source','unmount'] as const)('does not publish 
   await act(async()=>complete({schemaVersion:1,status:'restored'}));
   expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();
 });
+
+it('uses the existing guarded dialog shell for long mobile tasks and keeps choices separate', async () => {
+  const user=userEvent.setup(); render(<App />);
+  const preferences=await screen.findByRole('button',{name:'Preferences'});
+  await user.click(preferences);
+  const dialog=screen.getByRole('dialog',{name:'Preferences'});
+  expect(dialog.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
+  expect(dialog.querySelector('.dialog-content')).not.toBeNull();
+  within(dialog).getByRole('button',{name:'Close Preferences'}).focus();
+  await user.keyboard('{Escape}'); expect(screen.queryByRole('dialog')).toBeNull();
+  expect(document.activeElement).toBe(preferences);
+  await user.click(screen.getByRole('button',{name:'Connect to Home'}));
+  const connection=screen.getByRole('dialog',{name:'Connect to Home'});
+  expect(connection.parentElement?.getAttribute('data-mobile-presentation')).toBe('page');
+  await user.click(within(connection).getByRole('button',{name:'Close Connect to Home'}));
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
