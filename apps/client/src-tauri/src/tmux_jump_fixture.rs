@@ -1379,7 +1379,7 @@ async fn missing_mosh_executable_is_safe_for_auto_before_any_target_creation() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned OpenSSH namespace, official Mosh, LAZYSH_TEST_HERDR_STOCK and Zellij"]
+#[ignore = "requires owned OpenSSH namespace, LAZYSH_NATIVE_MOSH_SERVER, LAZYSH_TEST_HERDR_STOCK and Zellij"]
 async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected_display() {
     use crate::multiplexer::{Entry, MultiplexerKind};
     let stock = std::env::var("LAZYSH_TEST_HERDR_STOCK").expect("absolute stock Herdr binary");
@@ -1470,7 +1470,7 @@ async fn real_mosh_ordinary_entries_require_child_receipts_and_keep_the_selected
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned OpenSSH PID namespace, official Mosh and binding-capable tmux"]
+#[ignore = "requires owned OpenSSH PID namespace, LAZYSH_NATIVE_MOSH_SERVER and binding-capable tmux"]
 async fn real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure() {
     let f = Fixture::with_mosh_mode(None, true).await;
     fs::write(f.dir.path().join(".zshrc"), "").unwrap();
@@ -3099,8 +3099,13 @@ async fn mosh_entry_child(
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = socket.local_addr().unwrap().port();
     drop(socket);
-    let options =
-        serde_json::from_value(serde_json::json!({"portMin":port,"portMax":port})).unwrap();
+    let binary =
+        std::env::var("LAZYSH_NATIVE_MOSH_SERVER").expect("explicit owned Mosh binary required");
+    assert!(std::path::Path::new(&binary).is_absolute());
+    let options = serde_json::from_value(
+        serde_json::json!({"serverPath":binary,"portMin":port,"portMax":port}),
+    )
+    .unwrap();
     let (events, receiver) = super::test_support::json_events();
     let result = connect_mosh(
         lease.clone(),
@@ -3113,7 +3118,13 @@ async fn mosh_entry_child(
         events,
     )
     .await
-    .unwrap()
+    .unwrap_or_else(|error| {
+        let kind = error
+            .into_inner()
+            .map(|error| error.kind())
+            .unwrap_or("access_changed");
+        panic!("owned Mosh entry failed: kind={kind}")
+    })
     .into_inner()
     .unwrap();
     (result, receiver)

@@ -154,7 +154,7 @@ async fn install_capture(
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-#[ignore = "requires owned OpenSSH/Mosh and current FD-capable LAZYSH_TEST_HERDR"]
+#[ignore = "requires owned OpenSSH, LAZYSH_NATIVE_MOSH_SERVER and FD-capable LAZYSH_TEST_HERDR"]
 async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure() {
     let binary = PathBuf::from(std::env::var("LAZYSH_TEST_HERDR").unwrap());
     let fixture = Fixture::with_mosh_mode(Some(&binary), true).await;
