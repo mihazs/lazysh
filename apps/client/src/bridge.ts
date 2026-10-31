@@ -49,6 +49,7 @@ export type Credentials = {
   passphrase?: string;
 };
 export type MultiplexerKind = 'tmux' | 'herdr' | 'zellij';
+export type MultiplexerEntry = {kind:MultiplexerKind;name:string;tmuxServer?:string;createIfMissing?:boolean};
 export type TmuxJumpSnapshot = {
   generation: string;
   current: { sessionId: string; windowId: string };
@@ -85,8 +86,8 @@ export const api = {
   connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession("connect_et", {sessionId, options, cols:100, rows:30},onEvent);
   },
-  connectMosh: (sessionId: string, options: {serverPath?: string; portMin?: number; portMax?: number}, onEvent: (event: SshEvent) => void) => {
-    return createRemoteSession("connect_mosh", {sessionId, options, cols:100, rows:30},onEvent);
+  connectMosh: (sessionId: string, options: {serverPath?: string; portMin?: number; portMax?: number}, onEvent: (event: SshEvent) => void, entry?:MultiplexerEntry) => {
+    return createRemoteSession("connect_mosh", {sessionId, options, cols:100, rows:30,...(entry?{entry}:{})},onEvent);
   },
   openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
   attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>

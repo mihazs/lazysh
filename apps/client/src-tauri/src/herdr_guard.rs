@@ -227,6 +227,39 @@ fn command(name: &str, guarded_attach: bool) -> String {
 pub(crate) fn attach_command(name: &str) -> String {
     command(name, true)
 }
+pub(crate) fn attach_receipt(name: &str) -> String {
+    format!("{} --startup-fd 3", attach_command(name))
+}
+fn startup_fd_capability(output: &str) -> bool {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Capabilities {
+        schema_version: u8,
+        startup_fd: bool,
+    }
+    serde_json::from_str::<Capabilities>(output)
+        .ok()
+        .is_some_and(|value| value.schema_version == 1 && value.startup_fd)
+}
+pub(crate) async fn require_startup_fd(session: &ssh::Session, lease: &AccessLease) -> Result<()> {
+    let output = ssh::exec_bounded(
+        session,
+        "herdr --guarded-attach-capabilities".into(),
+        lease,
+        DEADLINE,
+        256,
+        None,
+    )
+    .await;
+    lease.check()?;
+    if output
+        .ok()
+        .is_some_and(|value| startup_fd_capability(&value))
+    {
+        return Ok(());
+    }
+    Err(SshError::new("herdr_guard_startup_unsupported", "This guarded Herdr client cannot supply a private Mosh startup receipt. Update the compatible guarded host client or explicitly choose SSH."))
+}
 #[derive(Serialize)]
 struct Request<'a, T> {
     id: &'static str,

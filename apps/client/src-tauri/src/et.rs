@@ -172,6 +172,7 @@ pub async fn connect_et(
                 parent,
                 events,
                 crate::ssh::NativeTerminalKind::EternalTerminal,
+                None,
                 crate::ssh::check_size,
                 move |_access, input, cancelled, initial_cancel, output, ready| {
                     tauri::async_runtime::spawn(run(
