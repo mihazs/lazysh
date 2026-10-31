@@ -108,6 +108,8 @@ pub enum Agent {
     Droid,
     Kimi,
     Copilot,
+    Cursor,
+    Amp,
     Generic,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -206,7 +208,12 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             }
             serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
         }
-        Agent::Opencode => match hooks::opencode_event(payload, pane)? {
+        Agent::Opencode | Agent::Cursor | Agent::Amp => match match agent {
+            Agent::Opencode => hooks::opencode_event(payload, pane),
+            Agent::Cursor => hooks::cursor_event(payload, pane),
+            Agent::Amp => hooks::amp_event(payload, pane),
+            _ => unreachable!(),
+        }? {
             Some(event) => event,
             None => return Ok(None),
         },
@@ -510,6 +517,9 @@ impl Store {
             .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
         connection
             .execute_batch(reported_history::SCHEMA)
+            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+        connection
+            .execute_batch(hooks::AIDER_HEALTH_SCHEMA)
             .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
         relay::initialize(&connection)
             .map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;
