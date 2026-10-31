@@ -103,6 +103,14 @@ enum Command {
     },
     /// Print a Codex hook fragment; never changes settings or hook trust.
     CodexConfig,
+    /// Print a Gemini hook fragment; never changes settings.
+    GeminiConfig,
+    /// Print a standalone Droid hooks.json fragment; never changes settings.
+    DroidConfig,
+    /// Print a Kimi TOML hook fragment; never changes settings.
+    KimiConfig,
+    /// Print a Copilot CLI hook fragment; never changes settings.
+    CopilotConfig,
     /// Print an OpenCode plugin asset; never installs it.
     OpencodePlugin,
     /// Read a hook-reported Claude source hint, never live input authority.
@@ -276,6 +284,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             lazysh_agent::claude_config()
         }),
         Command::CodexConfig => Some(lazysh_agent::hooks::codex_config()),
+        Command::GeminiConfig => Some(lazysh_agent::hooks::gemini_config()),
+        Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
+        Command::KimiConfig => Some(lazysh_agent::hooks::kimi_config()),
+        Command::CopilotConfig => Some(lazysh_agent::hooks::copilot_config()),
         Command::OpencodePlugin => Some(lazysh_agent::hooks::opencode_plugin()),
         Command::ReportedHistory { session_id } => Some(
             Store::open(&lazysh_agent::state_directory()?)?
