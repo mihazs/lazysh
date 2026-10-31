@@ -1,4 +1,4 @@
-import {windowsGuiMediumSource} from './windows-installed-gui';
+import {windowsGuiMediumSource,windowsGuiTokenReasons} from './windows-installed-gui';
 import {digestFile} from './release-artifacts';
 import {native,windowsInstallerFailure} from './release-platform';
 import {copyFile,lstat,mkdir,readdir,realpath,readFile,writeFile,appendFile,rm} from 'node:fs/promises';
@@ -7,7 +7,7 @@ import {dirname,join,relative,resolve,sep} from 'node:path';
 
 export const standardWritableDirectories=['work','node_modules/.vite','node_modules/.vite-temp','node_modules/.vitest-cache','apps/client/node_modules/.vite','apps/client/node_modules/.vite-temp'] as const;
 
-const standardCodes=['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','STANDARD_OWNER_TIMEOUT','HOSTED_ONLY','ACCOUNT_BUDGET','ACCOUNT_COLLISION','ACCOUNT_CREATE_UNAVAILABLE','ACCOUNT_IDENTITY','PROFILE_IDENTITY','PROFILE_COLLISION','FIXTURE_IDENTITY','FIXTURE_ACCESS','STANDARD_LOGON_UNAVAILABLE','TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','IDENTITY_UNVERIFIED','LAUNCH_UNAVAILABLE','CLEANUP_UNVERIFIED'] as const;
+const standardCodes=['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','STANDARD_OWNER_TIMEOUT','HOSTED_ONLY','ACCOUNT_BUDGET','ACCOUNT_COLLISION','ACCOUNT_CREATE_UNAVAILABLE','ACCOUNT_IDENTITY','PROFILE_IDENTITY','PROFILE_COLLISION','FIXTURE_IDENTITY','FIXTURE_ACCESS','STANDARD_LOGON_UNAVAILABLE','TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','JOB_UNAVAILABLE','IDENTITY_UNVERIFIED','LAUNCH_UNAVAILABLE','CLEANUP_UNVERIFIED',...windowsGuiTokenReasons.map(reason=>'TOKEN_UNAVAILABLE_'+reason)] as const;
 // Test-only broker. Native account methods are reached only by the explicit hosted owner.
 export const windowsStandardUserSource=windowsGuiMediumSource+String.raw`
 public sealed partial class OwnedMediumGui {
@@ -39,6 +39,7 @@ public sealed partial class OwnedMediumGui {
   }
   static void FixtureTree(string path,string root,string parent,string child,ref int count,int depth){Need(depth<=64&&++count<=50000,"FIXTURE_IDENTITY");PlainOwned(path,root);if(System.IO.Path.GetFileName(path)=="account.owner")return;FixtureAcl(path,root,parent,child,WritableFixture(path,root));if(System.IO.Directory.Exists(path))foreach(string entry in System.IO.Directory.EnumerateFileSystemEntries(path))FixtureTree(entry,root,parent,child,ref count,depth+1);}
   static string ClosedStandardFailure(string value){switch(value){${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>'case "'+code+'":return value;').join('')}}return "UNVERIFIED";}
+  public static string StandardTokenFailure(){return ClosedStandardFailure("TOKEN_UNAVAILABLE_"+TokenFailure);}
   [DllImport("userenv.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool GetProfilesDirectory(System.Text.StringBuilder path,ref uint length);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode)] static extern int RegQueryValueEx(IntPtr key,string name,IntPtr reserved,out uint kind,[Out] byte[] data,ref uint length);
   static bool ProfilePath(string name,string path){return path!=null&&path.Length<=260&&System.Text.RegularExpressions.Regex.IsMatch(path,@"\A[A-Za-z]:\\[^\x00\r\n:/]+\z")&&path.EndsWith("\\"+name,StringComparison.OrdinalIgnoreCase)&&Array.IndexOf(path.Split('\\'),"..")<0&&Array.IndexOf(path.Split('\\'),".")<0;}
@@ -171,7 +172,7 @@ try{
 await writeFile(new URL('./work/result.json',import.meta.url),JSON.stringify({result,source:config.environment.GITHUB_SHA,binary:config.binaryHash,...(failure?{failure}:{})}),{flag:'wx'});
 if(result!=='PASSED')process.exitCode=1;
 `;
-export const standardBrokerScript=String.raw`$ErrorActionPreference='Stop';try{Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;$result=[OwnedMediumGui]::RunStandard($env:LAZYSH_WINDOWS_STANDARD_ROOT,(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'bin/bun.exe'),(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'worker.ts'),$env:LAZYSH_STANDARD_IMAGE_HASH,([Environment]::TickCount64+[long]$env:LAZYSH_STANDARD_REMAINING));[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$result)}catch{$code=$_.Exception.GetBaseException().Message;if($code -cnotin @(${standardCodes.map(code=>"'"+code+"'").join(',')}) -and !($code -cmatch '\ACLEANUP_UNVERIFIED:([A-Z_]+)\z' -and $matches[1] -cin @('UNVERIFIED',${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>"'"+code+"'").join(',')}))){$code='UNVERIFIED'};[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$code)}`;
+export const standardBrokerScript=String.raw`$ErrorActionPreference='Stop';try{Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;$result=[OwnedMediumGui]::RunStandard($env:LAZYSH_WINDOWS_STANDARD_ROOT,(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'bin/bun.exe'),(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'worker.ts'),$env:LAZYSH_STANDARD_IMAGE_HASH,([Environment]::TickCount64+[long]$env:LAZYSH_STANDARD_REMAINING));[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$result)}catch{$code=$_.Exception.GetBaseException().Message;if($code -ceq 'TOKEN_UNAVAILABLE'){$code=[OwnedMediumGui]::StandardTokenFailure()};if($code -cnotin @(${standardCodes.map(code=>"'"+code+"'").join(',')}) -and !($code -cmatch '\ACLEANUP_UNVERIFIED:([A-Z_]+)\z' -and $matches[1] -cin @('UNVERIFIED',${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>"'"+code+"'").join(',')}))){$code='UNVERIFIED'};[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$code)}`;
 export async function windowsStandardInstallation(installer:string,binary:string,version:string){
   const root=hostedStandardScope(process.env),started=Date.now(),deadline=started+650000;
   await mkdir(root);await writeFile(join(root,'fixture.owner'),process.env.GITHUB_SHA!,{flag:'wx'});
