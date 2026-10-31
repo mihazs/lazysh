@@ -2992,4 +2992,155 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
+    @Test fun ownedImeRetiresActualRemoteConnectionWithoutPrivateKeyboardFlags() {
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val arguments=InstrumentationRegistry.getArguments()
+        org.junit.Assume.assumeTrue("Owned IME acceptance only",arguments.getString("lazyshImeAcceptance")=="true")
+        assertTrue("Dedicated cached emulator required",Build.VERSION.SDK_INT==36 && Build.MODEL=="sdk_gphone64_x86_64")
+        val nonce=checkNotNull(arguments.getString("lazyshImeNonce"))
+        assertTrue("Exact owned IME nonce required",Regex("[0-9a-f]{32}").matches(nonce))
+        val port=checkNotNull(arguments.getString("lazyshImePort")).toInt()
+        assertTrue("Owned loopback fixture port required",port in 1024..65535)
+        fun shell(command:String):String {
+            val descriptor=instrumentation.uiAutomation.executeShellCommand(command)
+            return android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
+                val bytes=it.readNBytes(4097)
+                check(bytes.size<=4096) {"Owned IME shell response exceeded bound"}
+                String(bytes,Charsets.UTF_8).trim()
+            }
+        }
+        val component="${instrumentation.context.packageName}/app.lazysh.client.OwnedImeService"
+        val original=shell("settings get secure default_input_method")
+        assertTrue("Original IME must be restorable",Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+").matches(original) && original!=component)
+        val enabled=shell("settings get secure enabled_input_methods")
+        assertTrue("Fixture IME must start disabled",enabled.split(':').none {it.substringBefore(';')==component})
+        val resolver=instrumentation.targetContext.contentResolver
+        val control=Uri.parse("content://app.lazysh.client.test.imefixture")
+        fun call(method:String)=checkNotNull(resolver.call(control,method,nonce,null))
+        fun awaitIme(label:String,predicate:(android.os.Bundle)->Boolean):android.os.Bundle {
+            val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(120)
+            do {
+                val state=call("state")
+                if(predicate(state))return state
+                Thread.sleep(50)
+            }while(System.nanoTime()<deadline)
+            throw AssertionError(label)
+        }
+        fun editor(state:android.os.Bundle) {
+            assertTrue("Actual IME remote proxy required",state.getBoolean("remoteProxy"))
+            assertTrue("Normal text editor required",state.getBoolean("normalText"))
+            assertTrue("Autocomplete hint must reach native NO_SUGGESTIONS",state.getBoolean("noSuggestions"))
+            assertFalse("Native AUTO_CORRECT must stay off",state.getBoolean("autoCorrect"))
+            assertFalse("Private learning flag must remain absent",state.getBoolean("privateLearning"))
+        }
+        val scenario=NativeActivityFixture.scenario
+        val clientBefore=AtomicReference<android.webkit.WebViewClient>()
+        val documentBefore=AtomicReference<String>()
+        val documentDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30)
+        do {
+            scenario.onActivity {activity->
+                val web=webView(activity.window.decorView)
+                val location=web?.url
+                if(web!=null && location!=null) {clientBefore.set(web.webViewClient);documentBefore.set(location)}
+            }
+            if(documentBefore.get()!=null)break
+            Thread.sleep(50)
+        }while(System.nanoTime()<documentDeadline)
+        val originalClient=checkNotNull(clientBefore.get()) {"Original native WebView client unavailable"}
+        val originalDocument=checkNotNull(documentBefore.get()) {"Original document not observed within native readiness bound"}
+        val location=Uri.parse(originalDocument)
+        assertTrue("Owned packaged root document required",location.scheme in listOf("http","https") &&
+            location.host=="tauri.localhost" && location.port== -1 && location.userInfo==null &&
+            location.path in listOf("","/") && location.query==null && location.fragment==null)
+        var navigated=false
+        fun navigate(phase:String,url:String,html:String?=null) {
+            val finished=CountDownLatch(1)
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView))
+                val previous=web.webViewClient
+                web.webViewClient=object:android.webkit.WebViewClient() {
+                    override fun shouldInterceptRequest(view:WebView,request:android.webkit.WebResourceRequest)=
+                        previous.shouldInterceptRequest(view,request)
+                    override fun onPageStarted(view:WebView,url:String?,icon:android.graphics.Bitmap?) {
+                        previous.onPageStarted(view,url,icon)
+                    }
+                    override fun onPageFinished(view:WebView,completedUrl:String?) {
+                        previous.onPageFinished(view,completedUrl)
+                        if(completedUrl==url) {
+                            android.util.Log.i("lazysh-ime-owned","phase=$phase finished=true expectedUrl=true progress=${view.progress}")
+                            finished.countDown()
+                        }
+                    }
+                }
+                android.util.Log.i("lazysh-ime-owned","phase=$phase navigation=true progress=${web.progress}")
+                navigated=true
+                if(html==null)web.loadUrl(url)else web.loadDataWithBaseURL(url,html,"text/html","UTF-8",null)
+            }
+            assertTrue("Owned $phase native page completion required",finished.await(30,TimeUnit.SECONDS))
+        }
+        var primary:Throwable?=null
+        var armed=false
+        try {
+            call("arm");armed=true
+            navigate("blank","about:blank")
+            assertEquals("Owned trivial JavaScript callback required","4",evaluate(scenario,"2+2"))
+            android.util.Log.i("lazysh-ime-owned","phase=blank callback=true")
+            val html="""<!doctype html><meta charset="utf-8"><script type="module">
+              import {mountTerminalImeHarness} from '/e2e/fixtures/TerminalImeHarness.ts';
+              window.ownedIme=mountTerminalImeHarness();window.__lazyshImeOwner='$nonce';
+            </script>"""
+            navigate("harness","http://127.0.0.1:$port/owned-ime-harness/",html)
+            awaitDocument(scenario,"current-source owned IME fixture","window.__lazyshImeOwner==='$nonce' && !!window.ownedIme?.textarea")
+            shell("ime enable $component")
+            shell("ime set $component")
+            assertEquals("Only owned IME selected",component,shell("settings get secure default_input_method"))
+            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            scenario.onActivity {activity->
+                val web=checkNotNull(webView(activity.window.decorView));web.requestFocus()
+                activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .showSoftInput(web,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+            val first=awaitIme("Actual first IME editor required") {it.getBoolean("connected") && it.getBoolean("normalText")}
+            editor(first);call("capture")
+            assertTrue("Real IME preedit queued",call("preedit").getBoolean("accepted"))
+            awaitDocument(scenario,"real IME preedit in current xterm","window.ownedIme.textarea.value==='owned-preedit-$nonce'")
+            assertEquals("Preedit has not committed", "true",evaluate(scenario,"window.ownedIme.writes.length===0"))
+            evaluate(scenario,"window.ownedIme.observation.reset();true")
+            assertEquals("Renderer editor revoked", "true",evaluate(scenario,"window.ownedIme.textarea.readOnly"))
+            evaluate(scenario,"window.ownedIme.observation.resume();window.ownedIme.terminal.focus();true")
+            val second=awaitIme("Remote epoch inconclusive: distinct later framework proxy was not observed") {
+                it.getBoolean("connected") && it.getBoolean("normalText") && it.getBoolean("distinct") && it.getLong("generation")>first.getLong("generation")
+            }
+            editor(second)
+            val old=call("old")
+            assertFalse("Retired remote connection cannot read new editor",old.getBoolean("readReturned"))
+            val current=call("current")
+            assertTrue("Current remote connection accepted fixed text",current.getBoolean("accepted"))
+            assertTrue("Current remote read confirms fixed text",current.getBoolean("readMatched"))
+            awaitDocument(scenario,"current generation commits once without old preedit or old command",
+                "JSON.stringify(window.ownedIme.writes)===JSON.stringify(['owned-current-$nonce'])")
+            android.util.Log.i("lazysh-ime-owned","remoteEpoch=true noSuggestions=true privateLearning=false oldRead=false currentRead=true exactWrites=true")
+        } catch(failure:Throwable) {primary=failure;throw failure}
+        finally {
+            var cleanup:Throwable?=null
+            for(action in listOf<()->Unit>(
+                {if(armed)call("release")},
+                {shell("ime set $original");assertEquals("Original IME restored",original,shell("settings get secure default_input_method"))},
+                {shell("ime disable $component");assertEquals("Original enabled IMEs preserved",enabled,shell("settings get secure enabled_input_methods"))},
+                {
+                    try {if(navigated)navigate("restore",originalDocument)}
+                    finally {
+                        scenario.onActivity {activity->
+                            val web=checkNotNull(webView(activity.window.decorView))
+                            web.webViewClient=originalClient
+                            assertSame("Original native WebView client restored",originalClient,web.webViewClient)
+                        }
+                    }
+                    assertEquals("Original document restored","true",evaluate(scenario,"location.href===${JSONObject.quote(originalDocument)}"))
+                    android.util.Log.i("lazysh-ime-owned","originalClientRestored=true originalDocumentRestored=true")
+                }
+            ))try {action()}catch(failure:Throwable){if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
+            if(cleanup!=null){if(primary!=null)primary!!.addSuppressed(cleanup!!)else throw cleanup!!}
+        }
+    }
 }
