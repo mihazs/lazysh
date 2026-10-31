@@ -71,7 +71,7 @@ val releaseSigning = System.getenv("LAZYSH_ANDROID_SIGNING_PROPERTIES")?.let { p
 // Only the owned ntfy acceptance invocation may add a private test CA. Ordinary
 // debug/release builds never include this resource directory or change trust.
 val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAcceptanceCa").orNull?.let { path ->
-    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance")
+    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshSwiftkeyAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance")
         .none {providers.gradleProperty(it).orNull=="true"}) {"UnifiedPush acceptance requires its private report namespace"}
     val allowed = setOf("assembleUniversalDebug", "assembleUniversalDebugAndroidTest",
         "connectedUniversalDebugAndroidTest", "compileUniversalDebugAndroidTestKotlin",
@@ -192,6 +192,12 @@ android {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/mosh-background-ui"
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/mosh-background-ui"
+        }
+    }
+    if (providers.gradleProperty("lazyshSwiftkeyAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/swiftkey-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/swiftkey-ui"
         }
     }
     if (providers.gradleProperty("lazyshHerdrAcceptance").orNull == "true") {

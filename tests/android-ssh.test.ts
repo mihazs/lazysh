@@ -1,7 +1,7 @@
 import {expect,test,spyOn} from 'bun:test';
 import {chmod,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {dirname,join} from 'node:path';
+import {dirname,join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
@@ -988,4 +988,134 @@ test('Herdr confirmation observation caps duplicates and retains only owned DOM 
   for(const value of [child,draft,privateValue,'secret','/private'])expect(serialized).not.toContain(value);
   expect(serialized.length).toBeLessThan(250);
   expect(observe({regions:[{buttons:[...buttons,{textContent:'Choose terminal destination',disabled:false}]}],tabs:[{textContent:child+'-other',idle:true}],footer:['Mosh-private'],value:draft+'-other'})).toMatchObject({chooseDisabled:false,ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
+});
+
+
+test('SwiftKey acquisition rejects substitute APKs, extra splits and identity mismatches',async()=>{
+  const {admitSwiftkeySet,swiftkeyPins}=await import('./support/androidSwiftkey');
+  const rows=swiftkeyPins.files.map(file=>({...file,package:swiftkeyPins.package,versionCode:swiftkeyPins.versionCode,
+    signer:swiftkeyPins.signer,signature:true,abis:file.name.includes('config.x86_64')?['x86_64']:[]}));
+  expect(admitSwiftkeySet(rows)).toBe(true);
+  for(const change of [
+    (r:typeof rows)=>r.pop(),
+    (r:typeof rows)=>r.push({...r[0],name:'extra.apk'}),
+    (r:typeof rows)=>{r[0].sha256='0'.repeat(64);},
+    (r:typeof rows)=>{r[0].bytes++;},
+    (r:typeof rows)=>{r[0].versionCode='1236402241';},
+    (r:typeof rows)=>{r[0].signer='f'.repeat(64);},
+    (r:typeof rows)=>{r[0].signature=false;},
+    (r:typeof rows)=>{r.find(x=>x.abis.length)!.abis=['arm64-v8a'];},
+    (r:typeof rows)=>{r[0].name=r[1].name;},
+  ]) {const altered=structuredClone(rows);change(altered);expect(()=>admitSwiftkeySet(altered)).toThrow('Exact SwiftKey split admission failed');}
+});
+
+
+test.skipIf(process.env.LAZYSH_ANDROID_SWIFTKEY!=='1')('hosted SwiftKey native discovery remains unqualified until real typing admission',async()=>{
+  const {hostedSwiftkeyAdmission}=await import('./support/androidSwiftkey');await hostedSwiftkeyAdmission();
+},500_000);
+test.skipIf(process.env.LAZYSH_ANDROID_SWIFTKEY_CHILD!=='1')('isolated SwiftKey native discovery',async()=>{
+  const {swiftkeyNamespaceChild}=await import('./support/androidSwiftkey');await swiftkeyNamespaceChild();
+},340_000);
+
+
+test('SwiftKey copied source closure loads the existing owner without profiles or a guest',async()=>{
+  const {copySwiftkeyClosure}=await import('./support/androidSwiftkey');
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-swiftkey-closure-'));
+  try {
+    await copySwiftkeyClosure(resolve(import.meta.dir,'..'),directory);
+    const env={PATH:'/usr/bin:/bin',HOME:directory,TMPDIR:directory,LANG:'C.UTF-8'};
+    const child=new OwnedProcess(process.execPath,['test','tests/android-ssh.test.ts','--test-name-pattern','SwiftKey acquisition'],directory,env);
+    expect(await child.finish('copied SwiftKey owner closure',5000)).toContain('bun test');
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test('SwiftKey namespace proof rejects the actual inherited namespaces and malformed nominations',async()=>{
+  const {swiftkeyNamespaceIds,admitSwiftkeyNamespaces}=await import('./support/androidSwiftkey');
+  const actual=await swiftkeyNamespaceIds();
+  expect(()=>admitSwiftkeyNamespaces(actual,actual)).toThrow('SwiftKey namespace isolation not established');
+  const module=JSON.stringify(join(import.meta.dir,'support/androidSwiftkey.ts'));
+  const script=`import {swiftkeyNamespaceIds,admitSwiftkeyNamespaces} from ${module};
+    try {admitSwiftkeyNamespaces(JSON.parse(process.env.NOMINATED_NS),await swiftkeyNamespaceIds());}
+    catch(error) {if(error.message!=='SwiftKey namespace isolation not established')throw error;process.stdout.write('inherited-rejected');process.exitCode=7;}`;
+  const inherited=new OwnedProcess(process.execPath,['-e',script],import.meta.dir,{PATH:'/usr/bin:/bin',NOMINATED_NS:JSON.stringify(actual)});
+  await expect(inherited.finish('actual inherited namespace rejection',3000)).rejects.toThrow('Owned fixture failed: actual inherited namespace rejection; exit=7');
+  expect(inherited.stdout).toBe('inherited-rejected');
+  const separate=Object.fromEntries(Object.entries(actual).map(([name,value])=>[name,value.replace(/\d+/,digits=>String(Number(digits)+1))]));
+  expect(admitSwiftkeyNamespaces(actual,separate as typeof actual)).toEqual({parent:actual,child:separate});
+  for(const key of ['user','net','pid'] as const) {
+    expect(()=>admitSwiftkeyNamespaces(actual,{...separate,[key]:actual[key]} as typeof actual)).toThrow();
+    expect(()=>admitSwiftkeyNamespaces({...actual,[key]:''},separate as typeof actual)).toThrow();
+  }
+});
+
+test('SwiftKey fetch enforces stream limits with absent or dishonest lengths and rejects redirects',async()=>{
+  const {readSwiftkeyResponse,boundedSwiftkeyFetch}=await import('./support/androidSwiftkey');
+  expect(new TextDecoder().decode(await readSwiftkeyResponse(new Response('small'),5))).toBe('small');
+  for(const headers of [{},{'content-length':'1'},{'content-length':'100'}]) {
+    let canceled=false;
+    const body=new ReadableStream<Uint8Array>({pull(controller){controller.enqueue(new Uint8Array(6));},cancel(){canceled=true;}});
+    await expect(readSwiftkeyResponse(new Response(body,{headers}),5)).rejects.toThrow('SwiftKey response bound');
+    expect(canceled).toBe(true);
+  }
+  let destination=false;
+  const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch:request=>{
+    if(new URL(request.url).pathname==='/redirect')return new Response(null,{status:302,headers:{location:'/destination'}});
+    destination=true;return new Response('unexpected');
+  }});
+  try {await expect(boundedSwiftkeyFetch(`http://127.0.0.1:${server.port}/redirect`,20)).rejects.toThrow('SwiftKey response unavailable');expect(destination).toBe(false);}
+  finally {server.stop(true);}
+});
+
+test('SwiftKey parent canaries require real IPv4 and IPv6 nonce responses',async()=>{
+  const {ownedSwiftkeyCanary,swiftkeyCanaryConnect}=await import('./support/androidSwiftkey');
+  for(const host of ['127.0.0.1','::1']) {
+    const owned=await ownedSwiftkeyCanary(host);const port=(owned.server.address() as {port:number}).port;
+    try {await swiftkeyCanaryConnect(host,port,owned.nonce);await expect(swiftkeyCanaryConnect(host,port,'wrong-nonce')).rejects.toThrow('Parent SwiftKey canary not proven');}
+    finally {await new Promise<void>(yes=>owned.server.close(()=>yes()));}
+    await expect(swiftkeyCanaryConnect(host,port,owned.nonce)).rejects.toThrow('Parent SwiftKey canary not proven');
+  }
+});
+
+test('SwiftKey post-runtime integrity detects rewritten or missing copied inputs',async()=>{
+  const {swiftkeyInputHashes,observeSwiftkeyIntegrity}=await import('./support/androidSwiftkey');
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-swiftkey-integrity-'));const file=join(directory,'product.apk');
+  try {
+    await writeFile(file,'original',{mode:0o600});const paths={product:file};const hashes=await swiftkeyInputHashes(paths);
+    expect(await observeSwiftkeyIntegrity(paths,hashes)).toEqual({state:'unchanged',changed:[],unavailable:[]});
+    await writeFile(file,'rewritten');expect(await observeSwiftkeyIntegrity(paths,hashes)).toEqual({state:'changed',changed:['product'],unavailable:[]});
+    await rm(file);expect(await observeSwiftkeyIntegrity(paths,hashes)).toEqual({state:'unavailable',changed:[],unavailable:['product']});
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test('SwiftKey native failure summary retains fixed source frames without private assertion content',async()=>{
+  const {swiftkeyNativeFailure}=await import('./support/androidSsh');
+  const output=`INSTRUMENTATION_STATUS: class=app.lazysh.client.NativeWorkspaceTest
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: private-key DOM XML /private/fixture
+  at app.lazysh.client.NativeWorkspaceTest.awaitDocument(NativeWorkspaceTest.kt:821)
+  at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:2104)
+INSTRUMENTATION_STATUS: test=ownedSwiftkeyDiscoveryThroughRealUi
+INSTRUMENTATION_STATUS_CODE: -2`;
+  expect(swiftkeyNativeFailure(output)).toEqual({state:'observed',category:'assertion',frames:[{method:'awaitDocument',line:821},{method:'ownedSshUi',line:2104}]});
+  const serialized=JSON.stringify(swiftkeyNativeFailure(output));
+  for(const value of ['private-key','DOM','XML','/private/fixture','INSTRUMENTATION_STATUS'])expect(serialized).not.toContain(value);
+  expect(swiftkeyNativeFailure(output.replace('class=app.lazysh.client.NativeWorkspaceTest','class=foreign.PrivateTest'))).toEqual({state:'unavailable',category:'unknown',frames:[]});
+  expect(swiftkeyNativeFailure(output+'\n'+output)).toEqual({state:'unavailable',category:'unknown',frames:[]});
+  expect(swiftkeyNativeFailure(output.replace('test=ownedSwiftkeyDiscoveryThroughRealUi','test=private-secret'))).toEqual({state:'unavailable',category:'unknown',frames:[]});
+});
+
+test('SwiftKey native failure summary rejects forged frames and closes oversized or missing evidence',async()=>{
+  const {swiftkeyNativeFailure}=await import('./support/androidSsh');
+  const start='INSTRUMENTATION_STATUS: class=app.lazysh.client.NativeWorkspaceTest\nINSTRUMENTATION_STATUS: stack=java.lang.IllegalArgumentException: secret\n';
+  const end='\nINSTRUMENTATION_STATUS: test=ownedSwiftkeyDiscoveryThroughRealUi\nINSTRUMENTATION_STATUS_CODE: -2';
+  const forged=['prefix at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4)',
+    '  at app.lazysh.client.NativeWorkspaceTest.secretToken(NativeWorkspaceTest.kt:4)',
+    '  at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(PrivateSecret.kt:4)',
+    '  at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:999999)',
+    '  at foreign.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:4)'];
+  expect(swiftkeyNativeFailure(start+forged.join('\n')+end)).toEqual({state:'no-source-frame',category:'precondition',frames:[]});
+  expect(swiftkeyNativeFailure('unframed private error')).toEqual({state:'unavailable',category:'unknown',frames:[]});
+  expect(swiftkeyNativeFailure('x'.repeat(16*1024+1))).toEqual({state:'overflow',category:'unknown',frames:[]});
+  expect(swiftkeyNativeFailure(start+'x'.repeat(2049)+end)).toEqual({state:'overflow',category:'unknown',frames:[]});
+  const frames=Array.from({length:20},(_,i)=>`  at app.lazysh.client.NativeWorkspaceTest.ownedSshUi(NativeWorkspaceTest.kt:${i+1})`).join('\n');
+  expect(swiftkeyNativeFailure(start+frames+end).frames).toHaveLength(8);
 });

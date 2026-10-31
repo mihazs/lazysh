@@ -1408,6 +1408,88 @@ class NativeWorkspaceTest {
         return { remaining -> evaluateIfPresent(scenario, expression, remaining) ?: "unavailable" }
     }
 
+    private fun attachOwnedHerdr(scenario: ActivityScenario<MainActivity>, name: String) {
+        require(name == "owned-guard")
+        fun present(text: String) = "Array.from(document.querySelectorAll('button')).filter(x=>x.textContent.trim()===${JSONObject.quote(text)}).length===1"
+        fun tap(text: String) = onWebView().withElement(findElement(Locator.XPATH,
+            "//button[normalize-space(.)='$text']")).perform(webClick())
+        sessionView(scenario, "Sessions")
+        awaitDocument(scenario, "owned Herdr available", present("List herdr sessions"))
+        tap("List herdr sessions")
+        awaitDocument(scenario, "owned Herdr listed", present("Attach herdr $name"))
+        tap("Attach herdr $name")
+        awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
+    }
+
+    private fun discoverFreshSwiftkey(scenario: ActivityScenario<MainActivity>, fixture: JSONObject) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val target = instrumentation.targetContext
+        val vendor = "com.touchtype.swiftkey"
+        val directory = fixture.getJSONObject("swiftkey").getString("directory")
+        require(Regex("/data/local/tmp/lazysh-ui-ssh-[a-f0-9]{32}/vendor").matches(directory))
+        fun shell(command: String): String = instrumentation.uiAutomation.executeShellCommand(command).use { fd ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).use { stream ->
+                val bytes = stream.readNBytes(16 * 1024 + 1)
+                require(bytes.size <= 16 * 1024) { "SwiftKey shell admission output bound" }
+                String(bytes, Charsets.UTF_8).trim()
+            }
+        }
+        val before = shell("settings get secure default_input_method")
+        val enabled = shell("settings get secure enabled_input_methods")
+        require(Regex("[A-Za-z0-9_./]+").matches(before))
+        require(Regex("[A-Za-z0-9_./;:]+").matches(enabled))
+        require(!before.startsWith(vendor) && !enabled.contains(vendor)) { "No previous vendor editor is allowed" }
+        require(shell("pm path $vendor").isEmpty()) { "Fresh vendor package required" }
+        val stems = listOf("", "-LanguagesBundled", "-LanguagesBundled.config.en", "-config.en", "-config.x86_64", "-config.xxhdpi")
+        val apks = stems.joinToString(" ") { "$directory/com.touchtype.swiftkey-1236402240$it.apk" }
+        var installed = false
+        try {
+            require(shell("pm install-multiple $apks") == "Success") { "Exact fresh vendor installation failed" }
+            installed = true
+            // App-UID package/launcher queries are visibility-filtered on API30+.
+            // Use the actual public shell package/MAIN+LAUNCHER surfaces; the
+            // host already admitted exact six hashes/version/common signer.
+            assertEquals("Exact installed SwiftKey version", "package:$vendor versionCode:1236402240",
+                shell("pm list packages --show-versioncode $vendor"))
+            // Only the real product connection and public Herdr attach precede
+            // this first vendor launch. No vendor password editor, flags, prefs,
+            // account, onboarding consent or model download is manufactured.
+            val resolved = shell("cmd package resolve-activity --components -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $vendor")
+            require(resolved == "com.touchtype.swiftkey/com.touchtype.LauncherActivityIcon") {
+                "UNQUALIFIED: unique public vendor launcher absent"
+            }
+            val component = checkNotNull(android.content.ComponentName.unflattenFromString(resolved))
+            require(component.packageName == vendor)
+            target.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                .setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            val device = UiDevice.getInstance(instrumentation)
+            val visible = device.wait(androidx.test.uiautomator.Until.hasObject(By.pkg(vendor)), 5000)
+            val nodes = if (visible) device.findObjects(By.pkg(vendor)).take(64) else emptyList()
+            val facts = org.json.JSONArray()
+            for (node in nodes) facts.put(JSONObject()
+                .put("class", node.className.take(100)).put("resource", node.resourceName?.take(160))
+                .put("text", node.text?.take(160)).put("description", node.contentDescription?.take(160))
+                .put("clickable", node.isClickable).put("enabled", node.isEnabled))
+            // Fresh, offline, accountless vendor UI only; never capture the
+            // product form/SSH key or raw dumpsys/profile data in this receipt.
+            val report = JSONObject().put("stage", "vendor-ui-discovery").put("qualified", false)
+                .put("freshInstall", true).put("visible", visible).put("nodes", facts)
+                .put("settledOff", "unqualified").put("realReplacement", "not-executed")
+            java.io.File(target.cacheDir, "owned-swiftkey-discovery.json").writeText(report.toString())
+            throw AssertionError("UNQUALIFIED: inspect fresh vendor AX; settled OFF and real replacement are not admitted")
+        } finally {
+            if (installed) {
+                shell("ime set $before")
+                shell("settings put secure enabled_input_methods '$enabled'")
+                require(shell("pm uninstall $vendor") == "Success") { "Owned vendor cleanup failed" }
+                assertEquals("Default IME restored", before, shell("settings get secure default_input_method"))
+                assertEquals("Enabled IMEs restored", enabled, shell("settings get secure enabled_input_methods"))
+                target.startActivity(Intent(target, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            }
+        }
+    }
+
     private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String, alreadyAttached: Boolean = false) {
         val name = herdr.getString("name")
         val transcript = herdr.getString("transcript")
@@ -1430,14 +1512,7 @@ class NativeWorkspaceTest {
             typeInto(scenario, selector, value)
             closeSoftKeyboard()
         }
-        if (!alreadyAttached) {
-            sessionView(scenario, "Sessions")
-            awaitDocument(scenario, "owned Herdr available", hasButton("List herdr sessions"))
-            click("List herdr sessions")
-            awaitDocument(scenario, "owned Herdr listed", hasButton("Attach herdr $name"))
-            click("Attach herdr $name")
-            awaitDocument(scenario, "owned guarded child attached", "document.querySelectorAll('[role=tab]').length===2")
-        }
+        if (!alreadyAttached) attachOwnedHerdr(scenario, name)
         sessionView(scenario, "Transcript")
         awaitDocument(scenario, "owned Herdr transcript controls ready", "Boolean(document.querySelector(${JSONObject.quote(path)}))")
         typeInto(scenario, path, transcript)
@@ -1533,6 +1608,7 @@ class NativeWorkspaceTest {
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
+    @Test fun ownedSwiftkeyDiscoveryThroughRealUi() = ownedSshUi(true, requireSwiftkey = true)
     @Test fun ownedMoshDefaultHerdrChatThroughRealUi() = ownedSshUi(true, requireHerdrMosh = true)
     @Test fun ownedCompanionInstallsThroughRealUi() = ownedSshUi(false, true)
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
@@ -1824,7 +1900,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSwiftkey: Boolean = false) {
+        require(!requireSwiftkey || (requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh))
         require(!requireHerdrMosh || requireHerdr) { "Owned Mosh Herdr mode requires Herdr" }
         val useMosh = requireMoshBackground || requireHerdrMosh
         require(listOf(requireHerdr, requireCompanion, requireMoshBackground).count { it } <= 1) { "Owned SSH fixture mode is ambiguous" }
@@ -2106,7 +2183,11 @@ class NativeWorkspaceTest {
             } else if (!requireHerdrMosh) {
                 awaitDocument(scenario, "authenticated owned SSH prompt", screenContains(fixture.getString("prompt")))
             }
-            if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
+            if (requireSwiftkey) {
+                attachOwnedHerdr(scenario, fixture.getJSONObject("herdr").getString("name"))
+                sessionView(scenario, "Terminal")
+                discoverFreshSwiftkey(scenario, fixture)
+            } else if (requireCompanion) verifyCompanionInstallation() else if (requireHerdrMosh) {
                 awaitDocument(scenario, "saved default Herdr entered through Mosh", """
                     document.querySelectorAll('[role=tab]').length===1 &&
                     document.querySelector('[role=tab]')?.textContent.includes(${JSONObject.quote(connectedName)}) &&

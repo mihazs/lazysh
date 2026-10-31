@@ -300,8 +300,46 @@ export async function ownedSoftwareKeyboard(adb:string,serial:string,budget=5000
   return {observation:{ime:profile,previous:previous==='1'?'enabled' as const:previous==='0'?'disabled' as const:'unset' as const,requested:'enabled' as const},restore};
 }
 
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false) {
+type SwiftkeyFailure={state:'observed'|'no-source-frame'|'unavailable'|'overflow';category:'assertion'|'precondition'|'state'|'native-action'|'native-view'|'timeout'|'unknown';frames:{method:string;line:number}[]};
+export function swiftkeyNativeFailure(output:string):SwiftkeyFailure {
+  const empty=(state:'unavailable'|'overflow'):SwiftkeyFailure=>({state,category:'unknown',frames:[]});
+  if(Buffer.byteLength(output)>OUTPUT_LIMIT)return empty('overflow');
+  const lines=output.split(/\r?\n/);if(lines.length>512||lines.some(line=>line.length>2048))return empty('overflow');
+  const methods=new Set(['awaitDocument','evaluate','typeInto','pasteOwnedText','sessionView','attachOwnedHerdr',
+    'discoverFreshSwiftkey','ownedSshUi','ownedSwiftkeyDiscoveryThroughRealUi']);
+  const categories:Record<string,SwiftkeyFailure['category']>={'java.lang.AssertionError':'assertion','java.lang.IllegalArgumentException':'precondition',
+    'java.lang.IllegalStateException':'state','androidx.test.espresso.PerformException':'native-action',
+    'androidx.test.espresso.NoMatchingViewException':'native-view','java.util.concurrent.TimeoutException':'timeout'};
+  let classes:string[]=[],tests:string[]=[],stack=false,category:SwiftkeyFailure['category']='unknown';
+  let frames:SwiftkeyFailure['frames']=[];const failures:SwiftkeyFailure[]=[];
+  for(const line of lines) {
+    const status=line.match(/^INSTRUMENTATION_STATUS: (class|test|stack)=(.*)$/);
+    if(status) {
+      if(status[1]==='class')classes.push(status[2]);
+      else if(status[1]==='test')tests.push(status[2]);
+      else {stack=true;category=categories[status[2].match(/^([A-Za-z0-9_.$]+)(?::|$)/)?.[1]??'']??'unknown';}
+      continue;
+    }
+    const code=line.match(/^INSTRUMENTATION_STATUS_CODE: (-?[0-9]+)$/);
+    if(code) {
+      if(['-1','-2'].includes(code[1])&&stack&&classes.length===1&&classes[0]==='app.lazysh.client.NativeWorkspaceTest'&&
+        tests.length===1&&tests[0]==='ownedSwiftkeyDiscoveryThroughRealUi')failures.push({state:frames.length?'observed':'no-source-frame',category,frames});
+      classes=[];tests=[];stack=false;category='unknown';frames=[];continue;
+    }
+    if(!stack)continue;
+    // This is a localization hint from untrusted runner output, never runtime
+    // acceptance. No free-form method/message/path/DOM text can leave here.
+    const frame=line.match(/^\s+at app[.]lazysh[.]client[.]NativeWorkspaceTest(?:\$([A-Za-z][A-Za-z0-9_]*)(?:\$[A-Za-z0-9_$]+)?)?[.]([A-Za-z0-9_$]+)\(NativeWorkspaceTest[.]kt:([1-9][0-9]{0,4})\)$/);
+    if(!frame)continue;
+    const method=(frame[1]??frame[2].replace(/^access\$/,'')).split('$')[0],number=Number(frame[3]);
+    if(methods.has(method)&&number<=10000&&frames.length<8&&!frames.some(x=>x.method===method&&x.line===number))frames.push({method,line:number});
+  }
+  return failures.length===1?failures[0]:empty('unavailable');
+}
+
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,swiftkey?:{product:string;test:string;vendor:string}) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
+  if(swiftkey && (!herdr || companion || moshBackground || herdrMosh || process.env.LAZYSH_ANDROID_SWIFTKEY_CHILD!=='1'))throw new Error('SwiftKey requires its isolated Herdr owner');
   if(herdrMosh && (!herdr || companion || moshBackground))throw new Error('Owned Mosh Herdr requires its separate guarded fixture');
   if(moshBackground && (herdr || companion))throw new Error('Owned Android Mosh background mode must be isolated');
   if(companion && (herdr || process.arch!=='x64' || process.env.GITHUB_ACTIONS!=='true' || process.env.RUNNER_ENVIRONMENT!=='github-hosted'))throw new Error('Published Android companion acceptance requires its explicit disposable hosted runner');
@@ -352,7 +390,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
     await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(swiftkey?{swiftkey:{directory:remote+'/vendor'}}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
     if(moshBackground) {
       moshWitness=observeAndroidMoshBackground(fixture);
     }
@@ -360,6 +398,33 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
     try {[before,hostServerBefore]=await Promise.all([emulatorContinuity(adb,serial,reverse,fixture.port),hostAdbServerIdentity(adb)]);} catch {/* Best-effort observation never admits or blocks the acceptance. */}
     try {crashes=captureOwnedCaseCrashes(adb,serial,fixture.nonce);} catch {/* Never change test admission for unavailable diagnostics. */}
+    if(swiftkey) {
+      // Install current immutable product/test bytes, not a rebuilt or older APK.
+      for(const apk of [swiftkey.product,swiftkey.test])await shell(['install','--no-streaming',apk]);
+      retainedPackages=true;
+      await shell(['push',swiftkey.vendor,remote+'/vendor']);
+      const native=new OwnedProcess(adb,['-s',serial,'shell','am','instrument','-w','-r',
+        '-e','waitForActivitiesToComplete','false','-e','class','app.lazysh.client.NativeWorkspaceTest#ownedSwiftkeyDiscoveryThroughRealUi',
+        '-e','lazyshSshFixture',remote+'/fixture.json','app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner'],root,process.env);
+      // am instrument may return exit=0 for failed assertions: require JUnit's
+      // exact success receipt as well. This discovery gate is intentionally red.
+      let result='',instrumentBytes=0;
+      native.child.stdout!.on('data',data=>{instrumentBytes=Math.min(OUTPUT_LIMIT+1,instrumentBytes+data.length);});
+      try {result=await native.finish('native SwiftKey discovery',600_000);}
+      finally {
+        await writeFile('/work/native-failure.json',JSON.stringify(swiftkeyNativeFailure(instrumentBytes>OUTPUT_LIMIT?'x'.repeat(OUTPUT_LIMIT+1):native.stdout))+'\n',{mode:0o600});
+        // Only the fresh vendor's bounded, synthetic/accountless AX facts. No
+        // raw test log or application XML/credential screen is exported.
+        const ax=await shell(['exec-out','run-as','app.lazysh.client','cat','cache/owned-swiftkey-discovery.json']).catch(()=>'');
+        if(ax && ax.length<=32_768) {
+          const data=JSON.parse(ax);
+          if(data.stage==='vendor-ui-discovery' && data.qualified===false && Array.isArray(data.nodes) && data.nodes.length<=64)
+            await writeFile('/work/vendor-discovery.json',JSON.stringify(data)+'\n',{mode:0o600});
+        }
+      }
+      if(!/OK \(1 test\)/.test(result)||/FAILURES|INSTRUMENTATION_FAILED/.test(result))throw new Error('UNQUALIFIED: native SwiftKey admission did not pass');
+      throw new Error('UNQUALIFIED: real SwiftKey replacement oracle is not implemented');
+    }
     const android=join(root,'apps/client/src-tauri/gen/android');
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',

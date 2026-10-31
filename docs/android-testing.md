@@ -281,3 +281,87 @@ Kotlin runtime in its own process; URI/caller/content/size and file retirement c
 are preserved. No image preview was qualified by that aborted run. Host cleanup
 reported no failure; the aborted SSH native finally remains unconfirmed. Manual
 Android upload remains unexecuted; the next packaged case must qualify image reads.
+
+
+## Opt-in SwiftKey admission (#602)
+
+The `checks` workflow admits this research job only for a `pull_request` whose
+head repository is exactly `mihazs/lazysh` and whose head branch is exactly
+`test/android-swiftkey-native`. Opening or synchronizing that same-repository PR
+is the executable opt-in path after source review; forks, other branches and
+pushes do not admit it. This avoids relying on a branch-only `workflow_dispatch`
+trigger absent from default `main`. GitHub's [PR event contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request)
+runs the merge ref; `GITHUB_SHA`, checkout and build provenance therefore refer
+to that exact merge commit. No workflow has been triggered by source preparation.
+Its intermediate gate deliberately fails **UNQUALIFIED**;
+it is not vendor typing acceptance and must not replace the separate normal
+RemoteIC case or become a required green PR check. Review the finite receipt and
+fresh vendor accessibility facts before extending its public UI actions.
+
+Preparation builds the current x86_64 product/test APKs and real companion/raw
+receiver outside the offline runtime, verifies the same-run guarded Herdr,
+and privately downloads the exact six SwiftKey 9.13.18.4 splits using pinned
+goopdl 1.3.1. `tests/fixtures/swiftkey.json` records exact names, sizes, hashes,
+version, common signer and dependency versions. A changed/unavailable result
+stops the gate; there is no outer retry or latest-version substitution. The tool
+itself can perform its bounded anonymous compatibility/token refresh behavior.
+The common signer and exact bytes match retained local acquisition evidence;
+independent published Microsoft certificate binding is not established here.
+
+A new bubblewrap user/network/PID namespace encloses the emulator, private ADB,
+loopback nonce harness and owned SSH/Herdr receiver from startup. It mounts a
+private home at the runner's NSS-selected canonical home, clears the environment,
+exposes the SDK and copied source/APK/tool closure read-only, and admits only the
+runner-owned KVM device. Parent user/network/PID namespace IDs are nominated
+before launch and compared with actual child `/proc/self/ns` identities; every
+kind must differ. Parent IPv4/IPv6 canaries must answer their own nonce before
+child negative probes. Copied APKs/binaries/source and SDK image/tool hashes are
+checked again after runtime, including failure paths; missing/changed inputs are
+closed receipt failures. Real loopback and reverse nonces, negative IPv4/IPv6
+external and parent-listener probes, owned QEMU KVM descriptors and a real boot
+property of `1` must pass. The cold-boot deadline remains300s and the enclosing
+runtime bound340s; missing tools, image identities, namespace/KVM permission,
+boot, transport or cleanup fail closed. API36 Google APIs x86_64 revision7 is
+pinned; this is not an AOSP-image claim.
+
+The actual product form, explicit fingerprint trust and public Herdr attachment
+precede the first fresh vendor launch. This stage collects only bounded fresh,
+accountless vendor UI accessibility facts. It does not enable SwiftKey, type
+through it, approve onboarding/consent, log in, download a language/model, change
+private preferences or claim settled Incognito OFF. The OFF-looking label also
+covers PENDING_OFF in retained source evidence, so it cannot qualify the mode.
+Only synthetic owned data is present; raw form/credential XML, auth/token logs,
+APKs and delivery URLs are never uploaded. The two optional artifacts are finite
+ownership/provenance/phase metadata and fresh vendor-only UI facts.
+
+Remaining gates are actual public onboarding/key selectors, settled normal-mode
+admission without a previous vendor password/private editor, visible genuine
+completion or replacement under the unchanged product hints, exact receiver
+bytes including legitimate repeats/no old-prefix replay, and unapplied-edit
+safety without guessed Unicode erasure. Ordinary typing with predictions hidden
+cannot be relabeled as autocomplete proof. Physical Samsung/SwiftKey remains a
+separate acceptance gap. No local guest retry or successful vendor runtime result
+is implied by compilation or the portable support tests.
+
+Package visibility is a source/API risk, not a newly observed emulator failure:
+the target manifest has no vendor query and [Android filters package-information
+queries](https://developer.android.com/training/package-visibility). The test
+therefore reads only the exact package/version via the public shell, resolves
+its actual public MAIN/LAUNCHER component with `cmd package resolve-activity
+--components`, and rejects missing, multiple or foreign results. It does not add
+QUERY_ALL_PACKAGES or hard-code a private activity. [Android permits activity
+launch without package-query visibility](https://developer.android.com/training/package-visibility/automatic);
+the API36 [AOSP shell contract](https://android.googlesource.com/platform/frameworks/base/+/android16-release/services/core/java/com/android/server/pm/PackageManagerShellCommand.java)
+defines version-code output and component-only public resolution. Actual hosted
+availability is still unqualified.
+
+If public product connection or Herdr attachment fails before vendor discovery,
+the namespace retains `native-failure.json` and includes its finite summary in
+the parent receipt. The existing SSH support owner parses only a correlated
+failure status for the exact native test: a closed exception category and at
+most8 allowlisted NativeWorkspaceTest method/line hints. Raw messages, paths,
+DOM/XML, arguments and instrumentation output are discarded. Missing context,
+unknown methods, excessive output or ambiguous blocks cannot supply source
+frames. These hints localize an unqualified run; they are untrusted runner
+observations and never qualify runtime correctness. The fresh vendor AX artifact
+remains separate.
