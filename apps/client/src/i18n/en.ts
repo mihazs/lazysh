@@ -1,5 +1,11 @@
 /** English fallback; keys stay stable when wording changes. */
 export const english = {
+  terminalEditAnnouncement: 'Edit not sent',
+  terminalEditNotSent: 'Edit not sent · Review',
+  terminalEditContext: 'Unapplied local input context. The terminal is unchanged.',
+  terminalEditTruncated: 'Context exceeds the review limit. Copy is unavailable.',
+  terminalEditCopy: 'Copy context',
+  terminalEditDismiss: 'Dismiss and resume typing',
   hooksTitle: "Agent hook setup",
   hooksProvider: "Hook provider",
   hooksProfile: "Host profile directory",
