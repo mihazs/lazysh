@@ -150,7 +150,11 @@ test.each(['LAUNCH_WINDOW','SCROLL_OWNER','FORM_SCROLL'])('failed %s admission n
   expect(JSON.stringify(result)).not.toContain('private-node-or-package');
 }));
 
-const noReadiness={outcome:'unavailable',elapsedMs:null,polls:0,overflow:false,lastAdd:'unavailable',lastOpen:'unavailable'};
+const noReadiness={outcome:'unavailable',elapsedMs:null,polls:0,overflow:false,lastAdd:'unavailable',lastOpen:'unavailable',waitMs:null,lastPoll:null};
+const readinessPoll={remainingMs:43000,sameDevice:true,elapsedMs:31,queries:[
+  {caption:'add',selector:'text',raw:'one',visible:'zero',elapsedMs:12},
+  {caption:'add',selector:'description',raw:'one',visible:'one',elapsedMs:15},
+]};
 const noSave={operation:'unavailable',raw:'unavailable',visible:'unavailable'};
 const observedInput={inputOperation:'LOOKUP',inputField:'NAME',readbackMatched:null,foreground:'target',screenOn:true,keyguardLocked:false,editableCount:3,editableOverflow:false,hintShapes:['name-label-placeholder','hostname-placeholder','username-label'],addHostMatches:'zero',openHostsMatches:'one',webView:true,readiness:noReadiness,save:noSave};
 const observationLine=(value:unknown)=>`INSTRUMENTATION_STATUS: lazyshPublishedObservation=${JSON.stringify(value)}`;
@@ -172,16 +176,16 @@ test('workspace observations distinguish absent, unique and ambiguous exact capt
   }
 });
 test('readiness trace distinguishes original return, exception and unentered wait with bounded short-circuit samples',()=>{
-  const ready={outcome:'true',elapsedMs:37,polls:1,overflow:false,lastAdd:'one',lastOpen:'unavailable'};
+  const ready={waitMs:5000,lastPoll:readinessPoll,outcome:'true',elapsedMs:37,polls:1,overflow:false,lastAdd:'one',lastOpen:'unavailable'};
   const falseWait={...ready,outcome:'false',elapsedMs:5100,polls:51,lastAdd:'zero',lastOpen:'zero'};
   for(const readiness of [noReadiness,ready,falseWait,{...ready,outcome:'exception',lastAdd:'zero'},
-    {...ready,outcome:'exception',polls:0,lastAdd:'unavailable'},
+    {...ready,outcome:'exception',polls:0,lastAdd:'unavailable',lastPoll:null},
     {...falseWait,elapsedMs:60000,polls:64,overflow:true}]){
     expect(publishedDriverObservation(observationLine({...observedInput,readiness}))).toMatchObject({state:'available',readiness});
   }
 });
 test('readiness projection rejects unbounded, inconsistent, missing and private trace data wholesale',()=>{
-  const readiness={outcome:'false',elapsedMs:5001,polls:50,overflow:false,lastAdd:'zero',lastOpen:'zero'};
+  const readiness={waitMs:5000,lastPoll:readinessPoll,outcome:'false',elapsedMs:5001,polls:50,overflow:false,lastAdd:'zero',lastOpen:'zero'};
   for(const patch of [{outcome:'private-exception'},{elapsedMs:-1},{elapsedMs:60001},{elapsedMs:1.5},{elapsedMs:null},
     {polls:-1},{polls:65},{polls:0},{polls:1.5},{overflow:true},{overflow:'private'},
     {lastAdd:'private-caption'},{lastAdd:'one'},{lastAdd:'unavailable'},{lastOpen:'private-caption'},{message:'private-error'}]){
@@ -192,6 +196,43 @@ test('readiness projection rejects unbounded, inconsistent, missing and private 
     expect(publishedDriverObservation(observationLine({...observedInput,readiness:value}))).toEqual({state:'unavailable'});
   const {readiness:missing,...legacy}=observedInput;
   expect(publishedDriverObservation(observationLine(legacy))).toEqual({state:'unavailable'});
+});
+test('last readiness poll retains query absence, clipping and timing without sampling UI again',()=>{
+  const readiness={outcome:'false',elapsedMs:6496,polls:2,overflow:false,lastAdd:'zero',lastOpen:'zero',waitMs:5000,
+    lastPoll:{...readinessPoll,sameDevice:false,queries:[...readinessPoll.queries,
+      {caption:'open',selector:'text',raw:'zero',visible:'zero',elapsedMs:0},
+      {caption:'open',selector:'description',raw:'one',visible:'zero',elapsedMs:1}]}};
+  expect(publishedDriverObservation(observationLine({...observedInput,readiness}))).toMatchObject({state:'available',readiness});
+  const exception={...readiness,outcome:'exception',lastAdd:'unavailable',lastOpen:'unavailable',
+    lastPoll:{...readinessPoll,queries:[{caption:'add',selector:'text',raw:'unavailable',visible:'unavailable',elapsedMs:31}]}};
+  expect(publishedDriverObservation(observationLine({...observedInput,readiness:exception}))).toMatchObject({state:'available',readiness:exception});
+  const removedWrapper={...readiness,lastPoll:{...readinessPoll,queries:readinessPoll.queries.map(query=>({...query,visible:'unavailable'}))}};
+  expect(publishedDriverObservation(observationLine({...observedInput,readiness:removedWrapper}))).toMatchObject({state:'available',readiness:removedWrapper});
+});
+test('last-poll projection rejects private, reordered, inconsistent and unbounded query samples',()=>{
+  const readiness={outcome:'exception',elapsedMs:42,polls:1,overflow:false,lastAdd:'unavailable',lastOpen:'unavailable',waitMs:5000,lastPoll:readinessPoll};
+  const query=readinessPoll.queries[0];
+  const malformed=[null,[],{...readinessPoll,message:'private-root'},
+    ...[{remainingMs:-1},{remainingMs:45001},{sameDevice:'private-package'},{elapsedMs:60001},{elapsedMs:0.5},
+      {queries:[]},{queries:Array(5).fill(query)}].map(patch=>({...readinessPoll,...patch})),
+    ...[{caption:'private-caption'},{selector:'private-selector'},{raw:'private-node'},{raw:'zero',visible:'one'},
+      {raw:'unavailable',visible:'zero'},{raw:'one',visible:'multiple'},{elapsedMs:32},{elapsedMs:-1},
+      {elapsedMs:0.5},{path:'private-path'},{selector:'description'}].map(patch=>({...readinessPoll,queries:[{...query,...patch}]}))];
+  for(const lastPoll of malformed){
+    const result=publishedDriverObservation(observationLine({...observedInput,readiness:{...readiness,lastPoll}}));
+    expect(result).toEqual({state:'unavailable'});expect(JSON.stringify(result)).not.toContain('private');
+  }
+  for(const waitMs of [null,0,5001,1.5,'private-budget'])
+    expect(publishedDriverObservation(observationLine({...observedInput,readiness:{...readiness,waitMs}}))).toEqual({state:'unavailable'});
+});
+test('maximum closed readiness observation fits the existing two-KiB frame',()=>{
+  const queries=['add','open'].flatMap(caption=>['text','description'].map(selector=>
+    ({caption,selector,raw:'multiple',visible:'multiple',elapsedMs:60000})));
+  const readiness={outcome:'exception',elapsedMs:60000,polls:64,overflow:true,lastAdd:'zero',lastOpen:'unavailable',waitMs:5000,
+    lastPoll:{remainingMs:45000,sameDevice:false,elapsedMs:60000,queries}};
+  const sample={...observedInput,editableCount:8,editableOverflow:true,hintShapes:Array(8).fill('hostname-label-placeholder'),readiness};
+  expect(Buffer.byteLength(JSON.stringify(sample))).toBeLessThanOrEqual(2048);
+  expect(publishedDriverObservation(observationLine(sample))).toMatchObject({state:'available',readiness});
 });
 test('save trace distinguishes unavailable, absent, ambiguous, clipped and click-stage original matches',()=>{
   for(const save of [noSave,{operation:'lookup',raw:'unavailable',visible:'unavailable'},
@@ -221,7 +262,7 @@ test.each(['lookup','click'])('save %s failure preserves the original stage and 
   expect(f.calls.filter(args=>args.includes('instrument'))).toHaveLength(1);
 }));
 test.each(['WORKSPACE_READINESS','WORKSPACE_ADD_HOST'])('workspace %s failure survives independently of failure-only sampled counts',stage=>fixture(async asset=>{
-  const readiness={outcome:stage==='WORKSPACE_READINESS'?'exception':'true',elapsedMs:42,polls:1,overflow:false,lastAdd:stage==='WORKSPACE_READINESS'?'unavailable':'one',lastOpen:'unavailable'};
+  const readiness={waitMs:5000,lastPoll:readinessPoll,outcome:stage==='WORKSPACE_READINESS'?'exception':'true',elapsedMs:42,polls:1,overflow:false,lastAdd:stage==='WORKSPACE_READINESS'?'unavailable':'one',lastOpen:'unavailable'};
   const observation={...observedInput,inputOperation:'NONE',inputField:'NONE',addHostMatches:'multiple',openHostsMatches:'unavailable',webView:false,readiness};
   const f=fake(args=>args.includes('instrument')?observationLine(observation)+`\nINSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Published APK UI: ${stage}\nINSTRUMENTATION_STATUS_CODE: -2`:undefined);
   const result=await publishedAcceptance(asset,'/owned/driver.apk',nonce,env,f.run,admitted);
