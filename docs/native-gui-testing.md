@@ -143,6 +143,37 @@ counterfactual, open another account or retry NewSession. A passing admission
 cannot pass GUI acceptance. The earlier restricted ACCESS_DENIED and HIGH GUI
 failures remain negative historical evidence, not newly passing tests.
 
+The ordinary-user owner additionally provisions only the fresh **actual child**
+logon SID while that child remains suspended and Job-bound. It rejects missing,
+disabled, deny-only, malformed or multiple logon SID groups; the credential
+logon SID is not substituted. Parent-side `OpenWindowStation`/`OpenDesktop`
+handles must already admit READ_CONTROL and WRITE_DAC (plus the desktop
+READOBJECTS/WRITEOBJECTS rights required by that API). No privilege is enabled,
+owner changed or permission granted to Everyone, INTERACTIVE or the account SID.
+Only noninheriting allow ACEs for station `0x2` and desktop `0x83` are added;
+unchanged actual-child AccessChecks must then pass before resume. These minimum
+masks are not yet proven sufficient for the complete Windows GUI transaction.
+
+This setup requires an exclusively owned disposable GitHub-hosted VM with no
+concurrent station/desktop ACL writer. SetSecurityInfo has no compare-and-swap:
+read/check/write/readback detects changes around the write, but cannot guarantee
+preservation of an update racing between the last read and setter. The owner
+must not run this provisioning on a shared desktop. It preserves foreign ACE
+bytes and order in its observed snapshot, rejects preexisting/ambiguous own-SID
+entries, and never restores a stale whole DACL.
+
+A bounded `desktop.owner` journal records only synthetic source, caller/account,
+nonce, session, logon SID and two fixed phases. It is protected for the parent
+and SYSTEM before payload is written, flushed durably before either ACL setter,
+and excluded from artifacts. After confirmed Job retirement, ACL_RETIRING is
+recorded; cleanup removes only its exact ACEs from the then-current DACL and
+checks readback before marking each removal. Valid ACL_RETIRING recovery is
+idempotent in the same fenced session; torn/private/ambiguous journals and
+uncertain launch INTENT remain cleanup failures. No profile/account retirement
+or fixture deletion is permitted while this journal remains. VM disposal is not
+reported as successful cleanup. Portable byte-transform and compilation checks
+do not qualify actual Windows ACL access, cancellation cleanup or GUI behavior.
+
 The broker retires its Job before deleting only the initially absent exact-SID
 profile and matching account. A parent-only recovery capsule contains synthetic
 ownership metadata, never the password, and is excluded from artifacts. The

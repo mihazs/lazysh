@@ -38,7 +38,7 @@ public sealed partial class OwnedMediumGui {
     foreach(string suffix in new[]{${standardWritableDirectories.map(path=>JSON.stringify(path)).join(',')}}){string entry=System.IO.Path.GetFullPath(System.IO.Path.Combine(parent,suffix));if(String.Equals(full,entry,StringComparison.OrdinalIgnoreCase)||full.StartsWith(entry+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))return true;}
     return false;
   }
-  static void FixtureTree(string path,string root,string parent,string child,ref int count,int depth){Need(depth<=64&&++count<=50000,"FIXTURE_IDENTITY");PlainOwned(path,root);if(System.IO.Path.GetFileName(path)=="account.owner")return;FixtureAcl(path,root,parent,child,WritableFixture(path,root));if(System.IO.Directory.Exists(path))foreach(string entry in System.IO.Directory.EnumerateFileSystemEntries(path))FixtureTree(entry,root,parent,child,ref count,depth+1);}
+  static void FixtureTree(string path,string root,string parent,string child,ref int count,int depth){Need(depth<=64&&++count<=50000,"FIXTURE_IDENTITY");PlainOwned(path,root);if(System.IO.Path.GetFileName(path)=="account.owner"||System.IO.Path.GetFileName(path)=="desktop.owner")return;FixtureAcl(path,root,parent,child,WritableFixture(path,root));if(System.IO.Directory.Exists(path))foreach(string entry in System.IO.Directory.EnumerateFileSystemEntries(path))FixtureTree(entry,root,parent,child,ref count,depth+1);}
   static string ClosedStandardFailure(string value){return Array.IndexOf(new[]{${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>JSON.stringify(code)).join(',')}},value)>=0?value:"UNVERIFIED";}
   public static string StandardTokenFailure(){return ClosedStandardFailure("TOKEN_UNAVAILABLE_"+TokenFailure);}
   static string StandardDesktopFailure(){return ClosedStandardFailure(daclFailure);}
@@ -61,10 +61,10 @@ public sealed partial class OwnedMediumGui {
   static bool Hive(string sid){Need(StandardSid(sid),"PROFILE_IDENTITY");return KeyExists(0x80000003,sid);}
   static void PlainOwned(string path,string root){string full=System.IO.Path.GetFullPath(path),parent=System.IO.Path.GetFullPath(root);Need(full==parent||full.StartsWith(parent+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),"FIXTURE_IDENTITY");for(var entry=new System.IO.DirectoryInfo(System.IO.Path.GetDirectoryName(full));entry!=null;entry=entry.Parent)Need((entry.Attributes&System.IO.FileAttributes.ReparsePoint)==0,"FIXTURE_IDENTITY");if(System.IO.File.Exists(full)||System.IO.Directory.Exists(full))Need((System.IO.File.GetAttributes(full)&System.IO.FileAttributes.ReparsePoint)==0,"FIXTURE_IDENTITY");}
   static void FixtureAcl(string path,string root,string parent,string child,bool writable){PlainOwned(path,root);Need(StandardSid(parent)&&(child==null||StandardSid(child)),"FIXTURE_IDENTITY");string rules="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;"+parent+")"+(child==null?"":"(A;OICI;"+(writable?"0x1301bf":"0x1200a9")+";;;"+child+")");IntPtr descriptor=IntPtr.Zero;try{uint size;Need(ConvertStringSecurityDescriptorToSecurityDescriptor(rules,1,out descriptor,out size)&&size>0&&size<=65536&&SetFileSecurity(path,0x80000004,descriptor),"FIXTURE_ACCESS");}finally{if(descriptor!=IntPtr.Zero)Need(LocalFree(descriptor)==IntPtr.Zero,"CLEANUP_UNVERIFIED");}}
-  static string[] Capsule(string root){string path=System.IO.Path.Combine(root,"account.owner");PlainOwned(path,root);Need(new System.IO.FileInfo(path).Length<=2048,"ACCOUNT_IDENTITY");var parts=System.IO.File.ReadAllLines(path);Need(parts.Length==8&&System.Text.RegularExpressions.Regex.IsMatch(parts[0],@"\Alshci[a-f0-9]{12}\z")&&(parts[1]==""||StandardSid(parts[1]))&&System.Text.RegularExpressions.Regex.IsMatch(parts[2],@"\A[a-f0-9]{32}\z")&&(parts[3]=="0"||parts[3]=="1")&&(parts[4]=="SETUP"||parts[4]=="INTENT"||parts[4]=="RETIRED")&&System.Text.RegularExpressions.Regex.IsMatch(parts[5],@"\A[a-f0-9]{64}\z")&&System.Text.RegularExpressions.Regex.IsMatch(parts[6],@"\A[0-9]{1,19}\z")&&ProfilePath(parts[0],parts[7]),"ACCOUNT_IDENTITY");return parts;}
+  static string[] Capsule(string root){string path=System.IO.Path.Combine(root,"account.owner");PlainOwned(path,root);Need(new System.IO.FileInfo(path).Length<=2048,"ACCOUNT_IDENTITY");var parts=System.IO.File.ReadAllLines(path);Need(parts.Length==8&&System.Text.RegularExpressions.Regex.IsMatch(parts[0],@"\Alshci[a-f0-9]{12}\z")&&(parts[1]==""||StandardSid(parts[1]))&&System.Text.RegularExpressions.Regex.IsMatch(parts[2],@"\A[a-f0-9]{32}\z")&&(parts[3]=="0"||parts[3]=="1")&&(parts[4]=="SETUP"||parts[4]=="INTENT"||parts[4]=="RETIRED"||parts[4]=="ACL_RETIRING")&&System.Text.RegularExpressions.Regex.IsMatch(parts[5],@"\A[a-f0-9]{64}\z")&&System.Text.RegularExpressions.Regex.IsMatch(parts[6],@"\A[0-9]{1,19}\z")&&ProfilePath(parts[0],parts[7]),"ACCOUNT_IDENTITY");return parts;}
   static void SaveCapsule(string root,string[] data){string path=System.IO.Path.Combine(root,"account.owner");PlainOwned(path,root);System.IO.File.WriteAllLines(path,data);}
   static void CleanupAccount(string root,long deadline,bool credentialClosed){
-    Need(credentialClosed,"CLEANUP_UNVERIFIED");var data=Capsule(root);Need(data[4]!="INTENT","CLEANUP_UNVERIFIED");var actual=Account(data[0]);Need(actual==null||(actual[0]==data[1]&&actual[1]=="lazysh-owned:"+data[2]),"ACCOUNT_IDENTITY");
+    Need(credentialClosed&&!AclJournalExists(root),"CLEANUP_UNVERIFIED");var data=Capsule(root);Need(data[4]=="SETUP"||data[4]=="RETIRED","CLEANUP_UNVERIFIED");var actual=Account(data[0]);Need(actual==null||(actual[0]==data[1]&&actual[1]=="lazysh-owned:"+data[2]),"ACCOUNT_IDENTITY");
     if(data[1]!=""&&data[3]=="1"){
       while(Hive(data[1])&&Environment.TickCount64<deadline)System.Threading.Thread.Sleep(10);
       Need(!Hive(data[1]),"CLEANUP_UNVERIFIED");
@@ -74,9 +74,60 @@ public sealed partial class OwnedMediumGui {
     if(actual!=null)Need(NetUserDel(null,data[0])==0&&Account(data[0])==null,"CLEANUP_UNVERIFIED");
     System.IO.File.Delete(System.IO.Path.Combine(root,"account.owner"));
   }
-  public static void RecoverStandard(string root){HostedRoot(root);if(System.IO.File.Exists(System.IO.Path.Combine(root,"account.owner")))CleanupAccount(root,Environment.TickCount64+10000,true);}
+  public static void RecoverStandard(string root){HostedRoot(root);if(System.IO.File.Exists(System.IO.Path.Combine(root,"account.owner"))){var state=Capsule(root);if(state[4]=="ACL_RETIRING"){RetireDesktop(root);state[4]="RETIRED";SaveCapsule(root,state);}CleanupAccount(root,Environment.TickCount64+10000,true);}else Need(!AclJournalExists(root),"CLEANUP_UNVERIFIED");}
   OwnedMediumGui(bool accountOnly){Need(accountOnly,"ACCOUNT_IDENTITY");try{CreateOwnedJob();}catch{Dispose();throw;}}
   static void StandardToken(IntPtr process,string sid,uint session){IntPtr token=IntPtr.Zero;try{TokenNeed(OpenProcessToken(process,10,out token),TokenReason.STANDARD_TOKEN_OPEN);TokenNeed(TokenSid(token)==sid&&Word(token,8)==1&&Word(token,12)==session&&Word(token,20)==0&&Word(token,26)==0,TokenReason.STANDARD_TOKEN_IDENTITY);bool users=false;foreach(var group in Groups(token)){TokenNeed(!Admin(group)||(group.Attributes&4)==0,TokenReason.STANDARD_ADMIN_GROUP_ENABLED);if(Equal(group.Sid,new byte[]{1,2,0,0,0,0,0,5,32,0,0,0,33,2,0,0})&&(group.Attributes&4)!=0)users=true;}TokenNeed(users,TokenReason.STANDARD_USERS_GROUP_MISSING);var fact=OwnedGuiIntegrity.ReadToken(token);TokenNeed(fact[0]=="MEDIUM"&&fact[1]=="NOT_ELEVATED",TokenReason.STANDARD_TOKEN_INTEGRITY);}finally{if(token!=IntPtr.Zero)Need(CloseHandle(token),"CLEANUP_UNVERIFIED");}}
+  [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr OpenWindowStation(string name,bool inherit,uint access);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr OpenDesktop(string name,uint flags,bool inherit,uint access);
+  [DllImport("user32.dll")] static extern bool CloseWindowStation(IntPtr handle);
+  [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr handle);
+  [DllImport("advapi32.dll")] static extern uint SetSecurityInfo(IntPtr handle,int kind,uint information,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
+  static byte[] ChildLogonSid(Group[] groups){
+    byte[] result=null;foreach(var group in groups){if((group.Attributes&0xc0000000)==0)continue;Need((group.Attributes&0xc0000014)==0xc0000004&&result==null,"ACCOUNT_IDENTITY");byte[] sid=group.Sid;Need(sid.Length==20&&sid[0]==1&&sid[1]==3&&sid[2]==0&&sid[3]==0&&sid[4]==0&&sid[5]==0&&sid[6]==0&&sid[7]==5&&BitConverter.ToUInt32(sid,8)==5,"ACCOUNT_IDENTITY");result=sid;}
+    Need(result!=null,"ACCOUNT_IDENTITY");return result;
+  }
+  static string LogonText(byte[] sid){return "S-1-5-5-"+BitConverter.ToUInt32(sid,12).ToString(CultureInfo.InvariantCulture)+"-"+BitConverter.ToUInt32(sid,16).ToString(CultureInfo.InvariantCulture);}
+  static byte[] LogonBytes(string text){
+    Need(System.Text.RegularExpressions.Regex.IsMatch(text??"",@"\AS-1-5-5-(?:0|[1-9][0-9]{0,9})-(?:0|[1-9][0-9]{0,9})\z"),"ACCOUNT_IDENTITY");var parts=text.Split('-');uint a=0,b=0;Need(UInt32.TryParse(parts[4],out a)&&UInt32.TryParse(parts[5],out b),"ACCOUNT_IDENTITY");byte[] sid=new byte[20]{1,3,0,0,0,0,0,5,5,0,0,0,0,0,0,0,0,0,0,0};Array.Copy(BitConverter.GetBytes(a),0,sid,12,4);Array.Copy(BitConverter.GetBytes(b),0,sid,16,4);return sid;
+  }
+  static byte[] LogonAce(byte[] sid,uint mask){Need(sid!=null&&sid.Length==20,"ACCOUNT_IDENTITY");Need(mask==2||mask==0x83,"FIXTURE_ACCESS");Need(Equal(LogonBytes(LogonText(sid)),sid),"ACCOUNT_IDENTITY");byte[] ace=new byte[28];ace[2]=28;Array.Copy(BitConverter.GetBytes(mask),0,ace,4,4);Array.Copy(sid,0,ace,8,20);return ace;}
+  // Preserve every foreign ACE byte and its order. Never restore an old whole DACL.
+  static byte[] LogonAcl(byte[] acl,byte[] sid,uint mask,bool remove){
+    Need(acl!=null&&acl.Length>=8&&acl.Length<=65535&&(acl[0]==2||acl[0]==4)&&acl[1]==0&&acl[6]==0&&acl[7]==0&&BitConverter.ToUInt16(acl,2)==acl.Length,"FIXTURE_ACCESS");
+    var entries=new System.Collections.Generic.List<byte[]>();byte[] own=LogonAce(sid,mask);int offset=8,found=0,insert=-1,count=BitConverter.ToUInt16(acl,4);
+    for(int i=0;i<count;i++){Need(offset+4<=acl.Length,"FIXTURE_ACCESS");int size=BitConverter.ToUInt16(acl,offset+2);Need(size>=4&&size%4==0&&offset+size<=acl.Length,"FIXTURE_ACCESS");var entry=new byte[size];Array.Copy(acl,offset,entry,0,size);bool references=false;for(int j=4;j+sid.Length<=size;j++){bool match=true;for(int k=0;k<sid.Length;k++)match&=entry[j+k]==sid[k];references|=match;}
+      if(references){Need(Equal(entry,own)&&++found==1&&remove,"FIXTURE_ACCESS");}else{if(insert<0&&(entry[1]&16)!=0)insert=entries.Count;entries.Add(entry);}offset+=size;
+    }
+    // Refuse unknown nonzero slack rather than silently discard descriptor payload.
+    for(int i=offset;i<acl.Length;i++)Need(acl[i]==0,"FIXTURE_ACCESS");
+    if(!remove)entries.Insert(insert<0?entries.Count:insert,own);
+    int length=8;foreach(var entry in entries)length+=entry.Length;Need(length<=65535&&entries.Count<=65535,"FIXTURE_ACCESS");var output=new byte[length];output[0]=acl[0];Array.Copy(BitConverter.GetBytes((ushort)length),0,output,2,2);Array.Copy(BitConverter.GetBytes((ushort)entries.Count),0,output,4,2);offset=8;foreach(var entry in entries){Array.Copy(entry,0,output,offset,entry.Length);offset+=entry.Length;}return output;
+  }
+  static byte[] UserObjectAcl(IntPtr handle){IntPtr owner,group,dacl,sacl,descriptor=IntPtr.Zero;try{Need(GetSecurityInfo(handle,7,4,out owner,out group,out dacl,out sacl,out descriptor)==0&&descriptor!=IntPtr.Zero&&IsValidSecurityDescriptor(descriptor)&&GetSecurityDescriptorLength(descriptor)<=65536&&dacl!=IntPtr.Zero,"FIXTURE_ACCESS");int length=unchecked((ushort)Marshal.ReadInt16(dacl,2));Need(length>=8&&length<=65535,"FIXTURE_ACCESS");byte[] bytes=new byte[length];Marshal.Copy(dacl,bytes,0,length);return bytes;}finally{if(descriptor!=IntPtr.Zero)Need(LocalFree(descriptor)==IntPtr.Zero,"CLEANUP_UNVERIFIED");}}
+  static void WriteUserObjectAcl(IntPtr handle,byte[] before,byte[] after){
+    Need(Equal(UserObjectAcl(handle),before),"FIXTURE_ACCESS");IntPtr data=Marshal.AllocHGlobal(after.Length);try{Marshal.Copy(after,0,data,after.Length);Need(SetSecurityInfo(handle,7,4,IntPtr.Zero,IntPtr.Zero,data,IntPtr.Zero)==0&&Equal(UserObjectAcl(handle),after),"FIXTURE_ACCESS");}finally{Marshal.FreeHGlobal(data);}
+  }
+  static void DesktopHandles(Action<IntPtr,IntPtr> use){
+    IntPtr station=IntPtr.Zero,desktop=IntPtr.Zero;try{Need(ObjectName(GetProcessWindowStation())=="WinSta0"&&ObjectName(GetThreadDesktop(GetCurrentThreadId()))=="Default","DESKTOP_UNAVAILABLE");station=OpenWindowStation("WinSta0",false,0x60000);desktop=OpenDesktop("Default",0,false,0x60081);Need(station!=IntPtr.Zero&&desktop!=IntPtr.Zero&&ObjectName(station)=="WinSta0"&&ObjectName(desktop)=="Default","FIXTURE_ACCESS");use(station,desktop);}finally{bool closed=true;if(desktop!=IntPtr.Zero)closed&=CloseDesktop(desktop);if(station!=IntPtr.Zero)closed&=CloseWindowStation(station);Need(closed,"CLEANUP_UNVERIFIED");}
+  }
+  static bool AclJournalExists(string root){string path=System.IO.Path.Combine(root,"desktop.owner");PlainOwned(path,root);try{System.IO.File.GetAttributes(path);return true;}catch(System.IO.FileNotFoundException){return false;}}
+  static void DurableAclJournal(string root,string[] data,bool create){
+    string path=System.IO.Path.Combine(root,"desktop.owner");PlainOwned(path,root);if(create){using(var empty=new System.IO.FileStream(path,System.IO.FileMode.CreateNew,System.IO.FileAccess.Write)){}FixtureAcl(path,root,CurrentSid(),null,false);}
+    byte[] bytes=System.Text.Encoding.UTF8.GetBytes(String.Join("\n",data));Need(bytes.Length<=2048,"FIXTURE_IDENTITY");using(var file=new System.IO.FileStream(path,System.IO.FileMode.Truncate,System.IO.FileAccess.Write,System.IO.FileShare.None,4096,System.IO.FileOptions.WriteThrough)){file.Write(bytes,0,bytes.Length);file.Flush(true);}
+  }
+  static void ValidateAclJournal(string[] data,string source,string parent,string[] capsule,uint session){
+    Need(data!=null&&data.Length==8&&capsule!=null&&capsule.Length==8&&System.Text.RegularExpressions.Regex.IsMatch(source??"",@"\A[a-f0-9]{40}\z")&&data[0]==source&&StandardSid(parent)&&data[1]==parent&&data[2]==capsule[1]&&StandardSid(data[2])&&data[3]==capsule[2]&&System.Text.RegularExpressions.Regex.IsMatch(data[3]??"",@"\A[a-f0-9]{32}\z")&&(data[6]=="INTENT"||data[6]=="REMOVED")&&(data[7]=="INTENT"||data[7]=="REMOVED"),"FIXTURE_IDENTITY");LogonBytes(data[5]);Need(session!=0&&data[4]==session.ToString(CultureInfo.InvariantCulture),"DESKTOP_SESSION_UNAVAILABLE");
+  }
+  static string[] AclJournal(string root){
+    string path=System.IO.Path.Combine(root,"desktop.owner");PlainOwned(path,root);Need(new System.IO.FileInfo(path).Length<=2048,"FIXTURE_IDENTITY");string[] data=System.IO.File.ReadAllLines(path);IntPtr caller=IntPtr.Zero;try{TokenNeed(OpenProcessToken(GetCurrentProcess(),8,out caller),TokenReason.OWN_TOKEN_OPEN);ValidateAclJournal(data,System.IO.File.ReadAllText(System.IO.Path.Combine(root,"fixture.owner")),CurrentSid(),Capsule(root),Word(caller,12));}finally{if(caller!=IntPtr.Zero)Need(CloseHandle(caller),"CLEANUP_UNVERIFIED");}return data;
+  }
+  static void ProvisionDesktop(string root,IntPtr process,IntPtr credential,uint session){
+    byte[] sid=null;InspectAs(credential,()=>{IntPtr child=IntPtr.Zero;try{TokenNeed(OpenProcessToken(process,8,out child),TokenReason.STANDARD_TOKEN_OPEN);sid=ChildLogonSid(Groups(child));}finally{if(child!=IntPtr.Zero)Need(CloseHandle(child),"CLEANUP_UNVERIFIED");}});
+    DesktopHandles((station,desktop)=>{byte[] a=UserObjectAcl(station),b=UserObjectAcl(desktop),nextA=LogonAcl(a,sid,2,false),nextB=LogonAcl(b,sid,0x83,false);string[] capsule=Capsule(root);Need(capsule[4]=="INTENT","FIXTURE_IDENTITY");DurableAclJournal(root,new[]{System.IO.File.ReadAllText(System.IO.Path.Combine(root,"fixture.owner")),CurrentSid(),capsule[1],capsule[2],session.ToString(CultureInfo.InvariantCulture),LogonText(sid),"INTENT","INTENT"},true);WriteUserObjectAcl(station,a,nextA);WriteUserObjectAcl(desktop,b,nextB);});
+  }
+  static void RetireDesktop(string root){
+    string path=System.IO.Path.Combine(root,"desktop.owner");if(!AclJournalExists(root))return;Need(Capsule(root)[4]=="ACL_RETIRING","CLEANUP_UNVERIFIED");string[] data=AclJournal(root);byte[] sid=LogonBytes(data[5]);DesktopHandles((station,desktop)=>{IntPtr[] handles={station,desktop};uint[] masks={2,0x83};for(int i=0;i<2;i++){byte[] before=UserObjectAcl(handles[i]),after=LogonAcl(before,sid,masks[i],true);if(data[6+i]=="REMOVED")Need(Equal(before,after),"CLEANUP_UNVERIFIED");else{WriteUserObjectAcl(handles[i],before,after);data[6+i]="REMOVED";DurableAclJournal(root,data,false);}}});System.IO.File.Delete(path);
+  }
   public static string RunStandard(string root,string image,string worker,string imageHash,long deadline){
     HostedRoot(root);PlainOwned(image,root);PlainOwned(worker,root);Need(deadline>Environment.TickCount64&&deadline-Environment.TickCount64<=650000,"ACCOUNT_BUDGET");Need(ObjectName(GetProcessWindowStation())=="WinSta0"&&ObjectName(GetThreadDesktop(GetCurrentThreadId()))=="Default","DESKTOP_UNAVAILABLE");
     string parent=CurrentSid(),name="lshci"+Guid.NewGuid().ToString("N").Substring(0,12),nonce=Guid.NewGuid().ToString("N");Need(Account(name)==null,"ACCOUNT_COLLISION");string expectedProfile=ExpectedProfile(name);Need(!System.IO.Directory.Exists(expectedProfile)&&!System.IO.File.Exists(expectedProfile),"PROFILE_COLLISION");
@@ -96,6 +147,7 @@ public sealed partial class OwnedMediumGui {
       SaveCapsule(root,new[]{name,actual[0],nonce,"1","INTENT",imageHash,DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture),expectedProfile});
       creationAttempted=true;bool created=CreateProcessWithLogonW(name,".",password,1,image,new System.Text.StringBuilder(command),0x08000004,IntPtr.Zero,root,ref startup,out child);creationReturned=true;for(int i=0;i<98;i++)Marshal.WriteByte(password,i,0);Need(created,"STANDARD_LOGON_UNAVAILABLE");
       long start=owned.VerifyCreated(child,image,credential);using(var hash=System.Security.Cryptography.SHA256.Create())using(var file=System.IO.File.OpenRead(image))Need(Convert.ToHexString(hash.ComputeHash(file)).ToLowerInvariant()==imageHash,"IDENTITY_UNVERIFIED");InspectAs(credential,()=>StandardToken(child.Process,actual[0],session));Need(Profile(actual[0])&&Hive(actual[0]),"PROFILE_IDENTITY");OwnedProfile(actual[0],name,expectedProfile);
+      ProvisionDesktop(root,child.Process,credential,session);
       WithDesktopToken(credential,child.Process,impersonation=>Need(CheckDacl(GetProcessWindowStation(),impersonation,2,3)=="ALLOWS"&&CheckDacl(GetThreadDesktop(GetCurrentThreadId()),impersonation,3,4)=="ALLOWS",StandardDesktopFailure()));
       var process=System.Diagnostics.Process.GetProcessById(child.Id);try{Need(process.StartTime.ToUniversalTime().Ticks==start,"IDENTITY_UNVERIFIED");long remaining=deadline-Environment.TickCount64-15000;Need(remaining>0&&remaining<=650000,"ACCOUNT_BUDGET");Need(ResumeThread(child.Thread)==1,"LAUNCH_UNAVAILABLE");owned.processes.Add(child.Process);child.Process=IntPtr.Zero;retained=true;
         Need(process.WaitForExit((int)remaining),"STANDARD_OWNER_TIMEOUT");Need(process.ExitCode==0,"STANDARD_OWNER_FAILED");outcome="STANDARD_OWNER_PASSED";
@@ -107,7 +159,7 @@ public sealed partial class OwnedMediumGui {
       if(owned!=null)try{owned.Stop(DateTime.UtcNow.AddSeconds(10).Ticks);}catch{clean=false;}
       bool credentialClosed=credential==IntPtr.Zero||CloseHandle(credential);if(credentialClosed)credential=IntPtr.Zero;clean&=credentialClosed;
       for(int i=0;i<98;i++)Marshal.WriteByte(password,i,0);Marshal.FreeHGlobal(password);if(accountName!=IntPtr.Zero)Marshal.FreeHGlobal(accountName);if(comment!=IntPtr.Zero)Marshal.FreeHGlobal(comment);
-      try{if(clean){var state=Capsule(root);state[4]="RETIRED";SaveCapsule(root,state);}CleanupAccount(root,Math.Min(deadline,Environment.TickCount64+10000),credentialClosed);}catch{clean=false;}
+      try{if(clean){var state=Capsule(root);state[4]="ACL_RETIRING";SaveCapsule(root,state);RetireDesktop(root);state[4]="RETIRED";SaveCapsule(root,state);}CleanupAccount(root,Math.Min(deadline,Environment.TickCount64+10000),credentialClosed);}catch{clean=false;}
       if(!clean)throw new InvalidOperationException("CLEANUP_UNVERIFIED:"+primary);
     }return outcome;
   }
@@ -209,7 +261,7 @@ export async function windowsStandardInstallation(installer:string,binary:string
     if(receipt?.result!=='PASSED')throw new Error('Standard owner receipt rejected');
     completed=true;return 'Windows ordinary-user NSIS, installed GUI and owned account cleanup passed';
   }finally{
-    if(!await Bun.file(join(root,'account.owner')).exists()){await removeStandardFixture(root);}
+    if(!(await readdir(root)).some(name=>name==='account.owner'||name==='desktop.owner')){await removeStandardFixture(root);}
     else if(completed)throw new Error('Standard account cleanup is unverified');
   }
 }
