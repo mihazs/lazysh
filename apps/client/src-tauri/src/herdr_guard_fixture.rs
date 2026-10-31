@@ -378,6 +378,26 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
     captured(&other_bytes, &[0x1b]).await;
     assert!(guard(&app, &lease, &child, json!({"kind":"input","receipt":binding["receipt"],"source":source_a,"operation":1,"input":{"kind":"request_stop"}})).await.is_err());
     captured(&bytes, &expected).await;
+    // A fresh receipt is valid here; earlier sequence-rejection checks retired their own receipt.
+    let view_binding = confirm(&app, &lease, &child, &source_a).await;
+    crate::herdr::herdr_action(
+        app.state(),
+        child.session_id.clone(),
+        "guard-left".into(),
+        crate::herdr::HerdrAction::FocusWorkspace {
+            target: view_binding["destination"]["workspace"]
+                .as_str()
+                .unwrap()
+                .into(),
+        },
+        lease.clone(),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+    .unwrap();
+    assert!(guard(&app,&lease,&child,json!({"kind":"input","receipt":view_binding["receipt"],"source":source_a,"operation":1,"input":{"kind":"request_stop"}})).await.is_err());
+    captured(&bytes, &expected).await;
     let source_b = context("B");
     let changed = confirm(&app, &lease, &child, &source_b).await;
     guard(

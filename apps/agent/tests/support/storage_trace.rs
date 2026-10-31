@@ -229,6 +229,9 @@ pub(super) fn initialization_workers(round: u8, workers: &[super::ContendedWorke
 
 // Only reviewed source names may leave the private owner spool.
 const FAILED_TESTS: &[&str] = &[
+    "cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_hooks",
+    "amp_native_state_projection_requires_exact_version_and_bounded_identity",
+    "aider_native_callback_records_only_health_without_reading_stdin_or_changing_sessions",
     "absent_settings_read_returns_defaults_without_creating_state",
     "atomic_updates_persist_exact_values_and_reject_stale_revisions",
     "chained_custom_link_route_is_rejected_without_mutating_its_target",
@@ -246,6 +249,7 @@ const FAILED_TESTS: &[&str] = &[
     "crash_writer_child",
     "disabled_operations_fail_before_transcript_or_device_access_but_settings_remain_readable",
     "distinct_sessions_and_agents_keep_their_latest_state",
+    "hook_previews_label_their_dialect_and_platform_binding_without_creating_state",
     "invalid_events_fail_without_files_or_secret_echo",
     "invalid_snapshot_limits_fail_before_creating_storage",
     "killed_writer_recovers_committed_wal_and_discards_uncommitted_tail",

@@ -1,5 +1,62 @@
 # Agent lifecycle hooks
 
+## Managed setup for Claude Code, Codex and OpenCode
+
+In **Agents → Agent hook setup**, select the provider and its existing absolute
+profile directory on the connected SSH host, then choose **Inspect setup**.
+Installing/updating or removing requires a separate explicit action against
+that inspected plan. Install or update the host companion first when the host
+has an older version. Setup uses the resolved companion executable's absolute
+path; the agent hook environment does not need that executable on `PATH`.
+The executable's retained namespace must be owned by the current user or root
+and protected from replacement through writable or symlink ancestors. Root-owned
+standard binary directories are supported; shared writable source directories
+are refused.
+
+The equivalent local commands are:
+
+```sh
+lazysh-agent hooks preview --agent codex
+lazysh-agent hooks status --agent codex --profile-root /home/user/.codex
+lazysh-agent hooks install --agent codex --profile-root /home/user/.codex --expected-plan <installPlan>
+lazysh-agent hooks remove --agent codex --profile-root /home/user/.codex --expected-plan <removePlan>
+```
+
+`install` also updates existing owned entries. Every changed profile needs a
+fresh inspection. Claude uses `settings.json`, Codex uses `hooks.json`, and
+OpenCode uses `plugins/lazysh.js` under the selected profile. JSON must be strict,
+without comments or duplicate keys. Existing foreign JSON value bytes remain
+intact; owned entry separators and whitespace may change. A foreign same-name
+OpenCode plugin is never overwritten. The private prepared receipt records own
+templates and hashes/identities, never a copy of provider configuration.
+
+Managed writes currently support qualified local Linux filesystems without
+extended access/default ACLs. Special file permission bits, unsafe links,
+read-only files, unhandled ACLs and uncertain ownership are refused. Existing
+ordinary file permissions and group ID are retained. macOS/Windows writes
+remain unsupported; preview is available without accessing a profile. Preview
+labels POSIX shell or Bun JavaScript dialect. On Windows it returns the
+existing unbound print-only templates, explicitly without an executable
+binding or managed-setup support; it does not quote a Windows executable as
+a POSIX command. These
+limits do not disable the existing print-only configuration commands below.
+
+Configuration is separate from live reporting. Provider disable settings,
+selected-layer overrides and Codex trust review still apply. Lazysh never
+accepts Codex hook trust automatically. Review the provider's trust settings,
+start a new session and verify actual lifecycle reports in Agents.
+
+A stopped operation can leave prepared metadata. Inspect again and explicitly
+choose the next operation; setup never resumes, retries or rolls back a write
+automatically. Partial or edited owned entries produce a conflict requiring
+manual review. Foreign edits after removal can conservatively produce a
+conflict too. The cooperative profile lock and final preimage checks do not
+provide an atomic compare-and-swap against a noncooperating editor changing a
+path after the final check, or a physical power-loss durability guarantee.
+
+Other native providers retain their agent-specific print-only setup commands.
+Managed installation for them is not implemented by this first milestone.
+
 Companion lifecycle reports describe observed activity. They do not grant terminal
 input access, answer permission prompts, install an agent or discover processes
 that have not emitted a report. Transcript readers are separate from lifecycle
@@ -121,6 +178,55 @@ support differ in the cloud agent. Contracts follow the current
 [official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference);
 authenticated Copilot CLI acceptance remains unverified.
 
+## Cursor CLI, Amp and Aider
+
+`lazysh-agent cursor-config` prints a version-1 Cursor hook fragment. Merge only
+reviewed entries with the selected configuration. Prompt and post-tool activity
+report work; `stop` reports completed, interrupted or failed turns using its
+native status. `sessionEnd` reports an ended session. Conversation identity
+survives generation changes. Tool events use native `cwd`; other events use one
+workspace root, or an explicit multi-root/no-workspace label. Hook-process cwd
+is not a project identity: user and plugin hooks may execute outside the project.
+Subagent termination is ignored. Permission-capable pre-hooks are deliberately
+not registered because invocation precedes policy and cannot prove a human wait.
+Cursor documents observer errors, timeouts and empty output as fail-open by
+default for these hooks; the fragment does not enable `failClosed` or emit a decision.
+These contracts follow the [Cursor hook reference](https://cursor.com/docs/hooks)
+and [scope-specific working directories](https://cursor.com/docs/reference/third-party-hooks).
+Authenticated Cursor execution and neutral-output acceptance remain unverified.
+
+`lazysh-agent amp-plugin` prints the original plugin in `content`, with its
+suggested filename. Place reviewed content in your selected Amp plugin directory.
+It subscribes to native `ctx.thread.state` for encountered threads: `running`
+reports work, `awaiting-approval` reports attention, `idle` reports completion,
+and `error` reports a failed turn. It does not intercept tools or answer approvals.
+Per-thread writes are ordered; while a write is pending, only the latest next
+state is retained. A late initial lookup cannot overwrite a newer native state.
+The fixed companion child has a three-second hard deadline and is reaped;
+plugin disposal unsubscribes observers and terminates owned children. Companion
+absence does not reject provider callbacks. The [generated Amp API](https://ampcode.com/docs/plugin-api)
+provides these native states, subscriptions and disposal hooks; see also
+[plugin setup](https://ampcode.com/docs/customize/plugins). Fixture execution uses
+the actual asset and documented API shapes, not an authenticated Amp session.
+
+`lazysh-agent aider-config` prints supported native CLI arguments, including
+`--notifications-command 'lazysh-agent aider-notification'`. Apply those arguments
+explicitly when launching Aider; no configuration is written automatically.
+The callback reads no stdin and records only a host-wide receipt count and time
+in the existing private companion store. `lazysh-agent aider-hook-status` returns
+that health plus the explicit capability limits: `sessionAttribution` is
+`unavailable` and `lifecycleStates` is empty. Receipt is neither authenticated
+provider execution nor evidence of any particular session or completed turn.
+
+Aider [v0.86.0's notification caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py)
+runs the configured shell command without a session/state payload. It can run
+before input, including before potentially automatic confirmations within a turn.
+Mapping it to done or human-waiting would be incorrect. This adapter therefore
+creates no Aider session rows and cannot change another agent's state. The
+[notification guide](https://aider.chat/docs/usage/notifications.html) documents
+the supported command; its [embedding API](https://aider.chat/docs/scripting.html)
+is explicitly unsupported and is not used as a lifecycle substitute.
+
 ## Broader CLI coverage
 
 This ten-agent cohort is the compatibility target for issue #603. It is not a
@@ -139,13 +245,14 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [OpenCode](https://opencode.ai/docs/plugins/) | session.status busy/retry; permission.asked/question.asked; status idle/session.deleted | Native plugin and adapter; contract fixtures |
 | [Gemini CLI](https://geminicli.com/docs/hooks/reference/) | BeforeAgent/BeforeTool; Notification ToolPermission; AfterAgent/SessionEnd | Native adapter and print-only settings fragment; contract fixtures |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Native observer adapter and shell-free print-only fragment; CLI contract fixtures |
-| [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Pending native adapter; pre-tool invocation alone does not prove a waiting human prompt |
+| [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter and print-only hook fragment; actual permission-wait detection unavailable |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter and print-only standalone hook map; contract fixtures |
-| [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Pending native plugin; generated provider interface confirmed, runtime integration unverified |
-| [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Pending adapter; callback provides no state or session identity and does not prove turn completion or a waiting human |
+| [Amp](https://ampcode.com/docs/plugin-api) | Native `ctx.thread.state` observable: idle, running, awaiting-approval and error | Native state-observer plugin and bounded adapter; actual asset fixtures, authenticated runtime unverified |
+| [Aider](https://aider.chat/docs/usage/notifications.html) | Native input-boundary notification; [v0.86.0 caller](https://github.com/Aider-AI/aider/blob/v0.86.0/aider/io.py) also invokes it before potentially automatic confirmations | Native callback health only; no session attribution or lifecycle states; creates no session rows |
 | [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/customization/hooks.html) | Prompt/tool activity; permission notification; root CLI SessionEnd | Native observable callbacks and TOML fragment; unscoped per-turn completion remains unavailable; hooks are beta |
 
 Generic schema-1 ingestion remains available for explicit integrations, but a
-generic wrapper is not evidence that these pending native adapters work. This
-milestone does not close the ten-agent acceptance requirement or install hooks
-into any profile automatically.
+generic wrapper is not evidence of native parity. Nine agents have some native
+lifecycle coverage; Aider has health-only callback coverage. Cursor permission
+waits and Kimi per-turn completion remain unavailable. This milestone does not
+close issue #603 or install hooks into any profile automatically.

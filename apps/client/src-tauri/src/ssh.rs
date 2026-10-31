@@ -26,9 +26,9 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
-const FILE_LIMIT: u64 = 1024 * 1024;
+pub(crate) const FILE_LIMIT: u64 = 1024 * 1024;
 const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
-const OP_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 pub(crate) mod test_support;

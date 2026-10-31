@@ -132,14 +132,7 @@ fn shared_source_preserves_selector_and_literal_data_without_public_credentials(
 
 #[tokio::test]
 async fn dropped_waiter_does_not_release_an_owned_queued_permit() {
-    let (requests, mut queue) = mpsc::channel(1);
-    let binding = Binding {
-        requests,
-        busy: Arc::default(),
-    };
-    let lease = crate::app_lock::AccessState::disabled()
-        .lease(None)
-        .unwrap();
+    let (binding, mut queue, lease) = queued_binding();
     let (cancel, mut cancellation) = watch::channel(false);
     let worker = binding.clone();
     let original = lease.clone();
@@ -323,4 +316,55 @@ async fn a_held_ready_response_at_the_absolute_deadline_is_uncertain_without_rep
     .await;
     assert!(matches!(result, Err(Fault::Uncertain)));
     assert_eq!(polls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn view_retirement_keeps_input_reserved_after_actor_reply_until_view_finishes() {
+    for body in [
+        json!({"kind":"retire_for_view"}),
+        json!({"kind":"retireForView"}),
+    ] {
+        assert!(serde_json::from_value::<Action>(body).is_err());
+    }
+    let (binding, mut queue, lease) = queued_binding();
+    let (cancel, mut cancellation) = watch::channel(false);
+    let permit = binding.reserve().unwrap();
+    let owner = permit.clone();
+    let caller = binding.clone();
+    let original = lease.clone();
+    let retirement = tokio::spawn(async move {
+        caller
+            .call_reserved(&original, &mut cancellation, Action::RetireForView, owner)
+            .await
+    });
+    let work = queue.recv().await.unwrap();
+    assert!(matches!(work.action, Action::RetireForView));
+    work.reply
+        .send(Ok(Reply::Released))
+        .unwrap_or_else(|_| panic!("owned waiter disappeared"));
+    drop(work._permit);
+    retirement.await.unwrap().unwrap();
+    assert_eq!(
+        binding
+            .call(&lease, &mut cancel.subscribe(), Action::Status)
+            .await
+            .err()
+            .unwrap()
+            .kind(),
+        "herdr_chat_busy"
+    );
+    drop(permit);
+    assert!(!binding.busy.load(Ordering::SeqCst));
+}
+
+fn queued_binding() -> (Binding, mpsc::Receiver<Work>, AccessLease) {
+    let (requests, queue) = mpsc::channel(1);
+    let binding = Binding {
+        requests,
+        busy: Arc::default(),
+    };
+    let lease = crate::app_lock::AccessState::disabled()
+        .lease(None)
+        .unwrap();
+    (binding, queue, lease)
 }

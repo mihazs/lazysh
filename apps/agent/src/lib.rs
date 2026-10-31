@@ -2,6 +2,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
 pub mod devices;
+pub mod herdr;
+pub mod hook_setup;
 pub mod hooks;
 pub mod installation;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -75,6 +77,7 @@ pub enum Error {
     Installation(&'static str),
     UnsupportedStateFilesystem,
     Device(&'static str),
+    Herdr(&'static str),
     Settings(&'static str),
     Relay(&'static str),
     Io(io::Error),
@@ -87,7 +90,7 @@ impl Error {
             Self::InvalidArgument => "InvalidArgument",
             Self::Installation(kind) => kind,
             Self::UnsupportedStateFilesystem => "UnsupportedStateFilesystem",
-            Self::Device(kind) => kind,
+            Self::Device(kind) | Self::Herdr(kind) => kind,
             Self::Settings(kind) => kind,
             Self::Relay(kind) => kind,
             Self::Io(_) => "IoError",
@@ -108,6 +111,8 @@ pub enum Agent {
     Droid,
     Kimi,
     Copilot,
+    Cursor,
+    Amp,
     Generic,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -206,7 +211,12 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             }
             serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
         }
-        Agent::Opencode => match hooks::opencode_event(payload, pane)? {
+        Agent::Opencode | Agent::Cursor | Agent::Amp => match match agent {
+            Agent::Opencode => hooks::opencode_event(payload, pane),
+            Agent::Cursor => hooks::cursor_event(payload, pane),
+            Agent::Amp => hooks::amp_event(payload, pane),
+            _ => unreachable!(),
+        }? {
             Some(event) => event,
             None => return Ok(None),
         },
@@ -510,6 +520,9 @@ impl Store {
             .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
         connection
             .execute_batch(reported_history::SCHEMA)
+            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+        connection
+            .execute_batch(hooks::AIDER_HEALTH_SCHEMA)
             .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
         relay::initialize(&connection)
             .map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;

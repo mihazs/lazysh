@@ -61,6 +61,7 @@ import {
   type TransportMode,
   type AutoOptions,
   type MultiplexerEntry,
+  type HerdrNavigationTarget,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
@@ -68,6 +69,8 @@ import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
 import {AccountUsageBar,AccountUsageDetails} from "./AccountUsage";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
+import HerdrNavigation from "./HerdrNavigation";
+import type {HerdrTree} from "./useHerdrNavigation";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import { useClientAppearance } from "./appearance";
@@ -1129,6 +1132,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [wideSidebar,setWideSidebar]=useState(()=>typeof window.matchMedia==='function'?!window.matchMedia('(max-width: 600px)').matches:true);
   const [navigation,setNavigation]=useState<Record<string,{mode:NavigationMode;agents:boolean}>>({});
   const navigationOwner=useRef({sessionId:null as string|null,agents:false});
+  const herdrNavigationIntent=useRef<{source:string;destination?:string;navigation:{mode:NavigationMode;agents:boolean}|undefined}|null>(null);
+  useEffect(()=>{const changed=()=>{if(document.hidden)herdrNavigationIntent.current=null;};document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed);},[]);
   const pickerOwner=useRef({source:'',visible:false,revision:0});
   const [pickerState,setPickerState]=useState<{owner:object;busy:boolean}>();
   const navigationRef=useRef<HTMLElement>(null),navigationTrigger=useRef<HTMLButtonElement>(null);
@@ -1208,6 +1213,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   }
   const active = sessions.find((session) => session.id === activeId);
   const accountUsage=useAccountUsage(active?.connected ? active.id : null);
+  const navigationState=useRef(navigation);navigationState.current=navigation;
   const navigationEntry=navigation[activeId??'']??{mode:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
@@ -1216,6 +1222,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
   const remoteActive=!!active?.connected && !active.local;
   const agentsVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='agents';
+  const herdrNavigationVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode!=='connections' && !pendingMuxRequest;
+  const herdrIntent=herdrNavigationIntent.current;
+  if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible};
   const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
@@ -1606,6 +1615,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     kind: "tmux" | "herdr" | "zellij" = "tmux",
     tmuxServer?: string,
     owner:AccessLease=lease,
+    beforePublish?:()=>void,
+    attached?:(session:LiveSession)=>void,
   ) {
     const sourceApi=bindProtectedApi(nativeApi,owner);
     const pending = await prepareSession(
@@ -1624,13 +1635,56 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       ownership.add(result.sessionId);
       pending.session.attached = { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) };
       owner.assert();
+      beforePublish?.();
       sessionConnected(pending.session);
+      attached?.(pending.session);
       ownership.delete(result.sessionId);
     } catch (error) {
       await ownership.closeAll().catch(()=>{});
       disposeTerminal(pending.session);
       throw error;
     }
+  }
+  async function openHerdrTarget(source:LiveSession,name:string,target:HerdrNavigationTarget|undefined,owner:AccessLease,visible:()=>boolean) {
+    const selectedNavigation=navigationState.current[source.id];
+    if(!selectedNavigation)throw new LocalUiError('herdrNavigationChanged');
+    const matchingDisplay=(session:LiveSession)=>session.connected && !session.disposed && !closingSessions.current.has(session.id)
+      && session.hostId===source.hostId && session.destination===source.destination && session.attached?.kind==='herdr' && session.attached.name===name;
+    let destination=matchingDisplay(source)?source:sessionsRef.current.find(matchingDisplay);
+    let adopted=false;
+    const intent={source:source.id,destination:undefined as string|undefined,navigation:selectedNavigation};
+    herdrNavigationIntent.current=intent;
+    const current=()=>mounted.current && herdrNavigationIntent.current===intent && owner.current() && !document.hidden && source.connected && !source.disposed
+      && !closingSessions.current.has(source.id) && currentView.current.view==='terminal'
+      && (currentView.current.activeId===source.id ? visible() && navigationState.current[source.id]===selectedNavigation
+        : adopted && currentView.current.activeId===destination?.id && navigationState.current[destination.id]===selectedNavigation);
+    const assertCurrent=()=>{if(!current())throw new LocalUiError('herdrNavigationChanged');};
+    assertCurrent();
+    try {
+      if(!destination)await attachTmux(source,name,'herdr',undefined,owner,assertCurrent,session=>{
+        destination=session;adopted=true;intent.destination=session.id;
+        setNavigation(previous=>({...previous,[session.id]:selectedNavigation}));
+      });
+      assertCurrent();
+      if(!destination?.connected || destination.disposed || closingSessions.current.has(destination.id))throw new LocalUiError('herdrNavigationChanged');
+      if(target) {
+        const ownedInvoke=bindProtectedInvoke(owner);
+        const snapshot=await ownedInvoke<HerdrTree>('herdr_tree',{sessionId:destination.id,name});
+        assertCurrent();
+        const workspace=snapshot.workspaces.find(row=>row.workspace_id===target.workspace);
+        const tab=target.kind==='workspace'?undefined:snapshot.tabs.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab);
+        const pane=target.kind!=='pane'?undefined:snapshot.panes.find(row=>row.workspace_id===target.workspace && row.tab_id===target.tab && row.pane_id===target.pane && row.terminal_id===target.terminal);
+        if(!workspace || (target.kind!=='workspace' && !tab) || (target.kind==='pane' && !pane))throw new LocalUiError('herdrNavigationChanged');
+        const action=target.kind==='workspace'?{type:'focusWorkspace',target:target.workspace}:target.kind==='tab'?{type:'focusTab',target:target.tab}:{type:'focusPane',target:target.pane};
+        await ownedInvoke('herdr_action',{sessionId:destination.id,name,action});
+        assertCurrent();
+      }
+      setActiveId(destination.id);setView('terminal');setSidebar(false);
+    } catch(error) {
+      const cause=error && typeof error==='object' && 'kind' in error && error.kind==='herdr_focus_companion_required'?new LocalUiError('herdrNavigationCompanion'):captureUiError(error);
+      if(adopted && current()) {setView('terminal');setSidebar(false);setError(cause);}
+      throw cause;
+    } finally {if(herdrNavigationIntent.current===intent)herdrNavigationIntent.current=null;}
   }
   const shownHosts = hosts.filter((host) =>
     `${host.name} ${host.hostname} ${host.username}`
@@ -1762,6 +1816,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         >
           <Plus size={16} />{" "}{t("appAddAHost")}</button>
         </div>
+        {remoteActive && active && <HerdrNavigation key={active.id} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showNavigation('agents')} onServerChange={()=>{herdrNavigationIntent.current=null;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/> }
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
           <h3>{t('navigationLiveSessions')}</h3>
           <div className="workspace-live-sessions" role="group" aria-label={t('navigationLiveSessions')}>
@@ -1778,7 +1833,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           }}/></Suspense>}
         </div>}
         {active?.connected && !active.local && navigationEntry.agents && <div className="workspace-navigation-agents" hidden={!agentsVisible}>
-          <AgentPanel key={active.id} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
+          <AgentPanel key={active.id} showHerdr={false} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} visible={agentsVisible} onUseReportedHistory={openReportedHistory} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
             if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
           }:undefined}/>
         </div>}
