@@ -1716,8 +1716,9 @@ button svg {
 .workspace-navigation-modes button { min-height: 44px; min-width: 0; padding: 5px; font-size: 11px; white-space: normal; }
 .workspace-navigation-modes button[aria-current="page"], .workspace-live-sessions button[aria-current="location"] { border-color: var(--accent); }
 .navigation-connections { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.navigation-connections[hidden], .workspace-navigation-agents[hidden] { display: none; }
-.workspace-navigation-content, .workspace-navigation-agents { min-height: 0; min-width: 0; flex: 1; overflow: auto; }
+.navigation-connections[hidden], .workspace-navigation-scroll[hidden], .workspace-navigation-agents[hidden] { display: none; }
+.workspace-navigation-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.workspace-navigation-content, .workspace-navigation-agents { min-width: 0; }
 .workspace-navigation-content h3 { font-size: 13px; }
 .workspace-live-sessions { display: grid; gap: 8px; margin: 12px 0; }
 .workspace-live-sessions button { display: grid; gap: 5px; min-height: 44px; text-align: left; overflow-wrap: anywhere; }
