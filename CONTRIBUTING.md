@@ -5,10 +5,31 @@ GitHub Project, and open a PR targeting `main`. Do not stack branches or PRs. If
 change depends on another PR, wait for that prerequisite to merge, then branch
 from updated `main`. Follow [AGENTS.md](AGENTS.md) and the templates in `.github/`.
 
+## Contribution paths
+
+**First contributions:** documentation, translations, bug reproduction, focused
+tests, and small accessibility or UI fixes. Start with the
+[first contribution walkthrough](docs/community/first-contribution.md).
+
+**Advanced contributions:** Rust/Tauri internals, SSH and transport ownership,
+Android/iOS integration, companion lifecycle and security-sensitive changes.
+Coordinate scope and native acceptance with maintainers before implementation.
+Both paths use the same review and security requirements. The
+[public delivery epic](https://github.com/mihazs/lazysh/issues/1) and linked issues
+are available without private project membership. Maintainers track board state;
+external contributors do not need access to submit a PR.
+
+## Contributor recognition
+
+Release notes should link merged external PRs and credit their actual authors,
+including first contributions when verified from public history. Preserve Git
+authorship and third-party notices. Do not infer contributors from stars or
+include unverified testimonials. The maintainer preparing a release owns this check.
+
 ## Validation
 
 Run checks relevant to the change using the project's Cargo, Bun/Turbo, Vitest,
-Playwright, Gradle/JUnit and XCTest tasks. See the [README](README.md#checks).
+Playwright, Gradle/JUnit and XCTest tasks. See the [README contributor checks](README.md).
 Report executed, failed and unexecuted checks accurately. Documentation-only
 changes do not require native runtime tests; explain inapplicable PR checkboxes.
 Do not substitute a passing build for device or behavioral acceptance.
