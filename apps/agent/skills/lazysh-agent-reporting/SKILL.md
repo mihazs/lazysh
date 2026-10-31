@@ -1,6 +1,6 @@
 ---
 name: lazysh-agent-reporting
-description: Configure or diagnose lazysh companion lifecycle reporting from Claude Code hooks or a producer of the explicit generic event protocol; distinguish reports from live panes and transcripts.
+description: Configure or diagnose lazysh companion lifecycle reporting from Claude Code, Codex or OpenCode hooks, or the explicit generic event protocol; distinguish reports from live panes and transcripts.
 ---
 
 # lazysh agent reporting
@@ -30,6 +30,20 @@ Claude events. Do not enable it implicitly or install both forms together.
 or `needs_attention` report is not an approval request and cannot authorize an
 approval, command, prompt or keystroke. Do not install approval handling as a
 side effect of ordinary lifecycle setup.
+
+## Codex and OpenCode lifecycle integration
+
+`lazysh-agent codex-config` prints a fragment for Codex `hooks.json`; it does
+not install hooks or change trust. Review and merge it into the exact selected
+Codex profile, preserving existing hooks, then complete Codex's normal hook
+trust review. Never bypass trust or switch profiles because one is unavailable.
+
+`lazysh-agent opencode-plugin` prints JSON with the plugin's `filename` and
+`content`. Review the content before placing it in the selected OpenCode plugin
+directory, preserving other plugins. Both integrations need the companion in
+their hook environment. Lifecycle reports do not answer permission requests or
+prove live pane ownership. The [event reference](https://github.com/mihazs/lazysh/blob/main/docs/agent-hooks.md)
+describes the supported events.
 
 ## Explicit generic producers
 

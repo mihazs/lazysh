@@ -101,6 +101,10 @@ enum Command {
         #[arg(long)]
         reported_history: bool,
     },
+    /// Print a Codex hook fragment; never changes settings or hook trust.
+    CodexConfig,
+    /// Print an OpenCode plugin asset; never installs it.
+    OpencodePlugin,
     /// Read a hook-reported Claude source hint, never live input authority.
     ReportedHistory {
         #[arg(long)]
@@ -271,6 +275,8 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         } else {
             lazysh_agent::claude_config()
         }),
+        Command::CodexConfig => Some(lazysh_agent::hooks::codex_config()),
+        Command::OpencodePlugin => Some(lazysh_agent::hooks::opencode_plugin()),
         Command::ReportedHistory { session_id } => Some(
             Store::open(&lazysh_agent::state_directory()?)?
                 .reported_history(&session_id, chrono::Utc::now())?,

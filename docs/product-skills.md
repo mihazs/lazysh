@@ -2,7 +2,9 @@
 
 The companion packages two original Markdown skills: `lazysh-host-setup` for
 host/transport/companion readiness, and `lazysh-agent-reporting` for the existing
-Claude fragment and explicit generic lifecycle protocol. Installing a skill
+Claude/Codex configuration fragments, OpenCode plugin and explicit generic
+lifecycle protocol. Its guidance preserves the selected profile and normal
+Codex hook trust review. Installing a skill
 does not install hooks, change provider settings, start a service or make a
 recorded transcript into a live terminal association.
 
