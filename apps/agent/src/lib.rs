@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
 pub mod devices;
+pub mod hooks;
 pub mod installation;
 pub mod relay;
 pub mod reported_history;
@@ -98,6 +99,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Agent {
     Claude,
+    Codex,
+    Opencode,
     Generic,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -196,24 +199,33 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             }
             serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
         }
-        Agent::Claude => {
+        Agent::Opencode => match hooks::opencode_event(payload, pane)? {
+            Some(event) => event,
+            None => return Ok(None),
+        },
+        Agent::Claude | Agent::Codex => {
             let kind = payload
                 .get("hook_event_name")
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let (state, default_summary) = match kind {
                 "UserPromptSubmit" => (SessionState::Working, "Working on your prompt"),
-                "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+                "PreToolUse" | "PostToolUse" => (SessionState::Working, kind),
+                "PostToolUseFailure" if matches!(agent, Agent::Claude) => {
                     (SessionState::Working, kind)
                 }
                 "PermissionRequest" => (SessionState::NeedsAttention, "Permission requested"),
+                "Interrupt" if matches!(agent, Agent::Codex) => {
+                    (SessionState::Done, "Turn interrupted")
+                }
                 "Stop" => (SessionState::Done, "Turn finished"),
                 "SessionEnd" => (SessionState::Done, "Session ended"),
                 "Notification"
-                    if matches!(
-                        payload.get("notification_type").and_then(Value::as_str),
-                        Some("permission_prompt" | "idle_prompt" | "elicitation_dialog")
-                    ) =>
+                    if matches!(agent, Agent::Claude)
+                        && matches!(
+                            payload.get("notification_type").and_then(Value::as_str),
+                            Some("permission_prompt" | "idle_prompt" | "elicitation_dialog")
+                        ) =>
                 {
                     (SessionState::NeedsAttention, "Agent needs attention")
                 }
@@ -227,7 +239,12 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             };
             Event {
                 session_id: field(payload, "session_id", 256)?,
-                agent: "Claude Code".into(),
+                agent: if matches!(agent, Agent::Codex) {
+                    "Codex"
+                } else {
+                    "Claude Code"
+                }
+                .into(),
                 project: field(payload, "cwd", 4096)?,
                 state,
                 summary: summary.into(),
@@ -536,11 +553,7 @@ impl Store {
     }
 }
 pub fn claude_config() -> Value {
-    let mut hooks = serde_json::Map::new();
-    for kind in HOOK_EVENTS {
-        hooks.insert(kind.into(),json!([{"hooks":[{"type":"command","command":"lazysh-agent ingest --agent claude","timeout":5}]}]));
-    }
-    json!({"hooks":hooks})
+    hooks::command_config("claude", &HOOK_EVENTS, 5)
 }
 
 #[cfg(all(test, unix))]
