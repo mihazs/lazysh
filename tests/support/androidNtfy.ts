@@ -180,6 +180,19 @@ export function firstLaunchObservation(text:string) {
   if(!match)return;
   return {foreground:match[1],allow:match[2]==='true',deny:match[3]==='true',toolbar:match[4]==='true',ownedPrompt:match[5]==='true',attempted:match[6]==='true'};
 }
+export function permissionActionObservation(text:string) {
+  if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy first-launch action[').length!==2)return;
+  const match=/Ntfy first-launch action\[stage=(none|foreground|allow|deny|toolbar|prompt|menu|click) before=(unavailable|positive|expired) after=(unavailable|positive|expired) action=(none|calling|returned|threw) snapshot=(unavailable|beforeAction|afterAction) permission=(granted|denied|unavailable)\]/.exec(text);
+  if(!match)return;
+  const [,stage,before,after,action,snapshot,permission]=match;
+  if((stage==='none')!==(before==='unavailable') ||
+    (stage==='none' && (after!=='unavailable' || action!=='none' || snapshot!=='unavailable')) ||
+    (stage==='click' && action==='none') ||
+    ((action==='calling' || action==='threw') && (stage!=='click' || after!=='unavailable')) ||
+    (stage==='click' && action==='returned' && after==='unavailable') ||
+    (snapshot==='afterAction' && action!=='returned'))return;
+  return {stage,before,after,action,snapshot,permission};
+}
 export function nativeFailureStage(failure:string) {
   const stages=[['Distributor menu','distributor_menu'],['Distributor settings','distributor_settings'],
     ['Owned default server','default_server_preference'],['Default server field','distributor_server'],
@@ -220,9 +233,10 @@ async function nativeFailure(directory:string) {
     const failure=/<failure\b[\s\S]*?<\/failure>/.exec(text)?.[0]??'';
     const line=/NativeWorkspaceTest\.kt:([0-9]{1,5})/.exec(failure)?.[1];
     const firstLaunch=firstLaunchObservation(failure);
+    const permissionAction=permissionActionObservation(failure);
     const settings=settingsObservation(failure);
     const event=eventObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{})};
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{})};
   }catch{return {};}
 }
 

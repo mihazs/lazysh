@@ -81,6 +81,24 @@ private class NtfyFirstLaunch(started: Long) {
         attempted = true
         return true
     }
+    private var stage="none"
+    private var before="unavailable"
+    private var after="unavailable"
+    private var action="none"
+    private var snapshot="unavailable"
+    private fun budget(now:Long)=if(active(now))"positive" else "expired"
+    fun start(stage:String,now:Long) {
+        require(stage in listOf("foreground","allow","deny","toolbar","prompt","menu","click"))
+        this.stage=stage;before=budget(now);after="unavailable"
+        if(stage=="click")action="calling"
+    }
+    fun finish(now:Long) {after=budget(now);if(stage=="click")action="returned"}
+    fun failed() {if(action=="calling")action="threw"}
+    fun sampled() {snapshot=if(action=="none")"beforeAction" else "afterAction"}
+    fun observation(permission:String):String {
+        require(permission in listOf("granted","denied","unavailable"))
+        return "Ntfy first-launch action[stage=$stage before=$before after=$after action=$action snapshot=$snapshot permission=$permission]"
+    }
 }
 private class NtfySettingsScroll(started: Long) {
     val deadline = started + TimeUnit.SECONDS.toNanos(5)
@@ -2470,6 +2488,25 @@ class NativeWorkspaceTest {
         assertTrue("Permission action is consumed before dispatch",!policy.allow(TimeUnit.SECONDS.toNanos(5),true))
         assertTrue("Menu must settle before original total deadline",!policy.active(TimeUnit.SECONDS.toNanos(6)))
         assertTrue("Expired policy cannot dispatch",!NtfyFirstLaunch(0).allow(TimeUnit.SECONDS.toNanos(6),true))
+        val trace=NtfyFirstLaunch(0)
+        assertEquals("Ntfy first-launch action[stage=none before=unavailable after=unavailable action=none snapshot=unavailable permission=unavailable]",trace.observation("unavailable"))
+        trace.start("menu",TimeUnit.SECONDS.toNanos(4));trace.finish(TimeUnit.SECONDS.toNanos(5));trace.sampled()
+        assertTrue("A sampled prompt before the one action is not a post-action observation",trace.observation("denied").contains("snapshot=beforeAction"))
+        assertTrue("Observation does not consume admission",trace.allow(TimeUnit.SECONDS.toNanos(5),true))
+        trace.start("click",TimeUnit.SECONDS.toNanos(5));trace.finish(TimeUnit.SECONDS.toNanos(6))
+        assertEquals("Ntfy first-launch action[stage=click before=positive after=expired action=returned snapshot=beforeAction permission=granted]",trace.observation("granted"))
+        assertTrue("A returned action does not extend the original deadline or allowance",!trace.active(TimeUnit.SECONDS.toNanos(6)) && !trace.allow(TimeUnit.SECONDS.toNanos(5),true))
+        trace.start("menu",TimeUnit.SECONDS.toNanos(6));trace.finish(TimeUnit.SECONDS.toNanos(7));trace.sampled()
+        assertEquals("Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied]",trace.observation("denied"))
+        val thrown=NtfyFirstLaunch(0)
+        assertTrue(thrown.allow(1,true));thrown.start("click",1);thrown.failed()
+        assertTrue("Original action exceptions retain an incomplete stage",thrown.observation("unavailable").contains("after=unavailable action=threw"))
+        for(invalid in listOf("private","1000")) {
+            try {trace.start(invalid,0);throw AssertionError("Unknown operation rejected")}
+            catch(_:IllegalArgumentException) { }
+            try {trace.observation(invalid);throw AssertionError("Unknown permission rejected")}
+            catch(_:IllegalArgumentException) { }
+        }
         val settings=NtfySettingsScroll(0)
         assertTrue("Unowned settings cannot scroll",!settings.scroll(0,false))
         repeat(2) { assertTrue("Only two owned preference scrolls allowed",settings.scroll(TimeUnit.SECONDS.toNanos(4),true)) }
@@ -2699,22 +2736,48 @@ class NativeWorkspaceTest {
         val menuSelector=By.pkg("io.heckel.ntfy").desc("More options")
         var menu:androidx.test.uiautomator.UiObject2?=null
         var foreground="other";var allow=false;var deny=false;var toolbar=false;var ownedPrompt=false
-        while(firstLaunch.active(System.nanoTime())) {
-            foreground=when(device.currentPackageName) {"io.heckel.ntfy"->"ntfy";"com.android.permissioncontroller"->"permission";"app.lazysh.client"->"lazysh";else->"other"}
-            val choice=device.findObject(By.res("com.android.permissioncontroller","permission_allow_button"))
-            allow=choice!=null
-            deny=device.hasObject(By.res("com.android.permissioncontroller","permission_deny_button"))
-            toolbar=device.hasObject(ntfyResource("toolbar"))
-            val prompt=device.findObject(By.res("com.android.permissioncontroller","permission_message"))?.text
-            ownedPrompt=foreground=="permission" && prompt?.contains(Regex("\\bntfy\\b"))==true && prompt?.contains("notifications",ignoreCase=true)==true
-            menu=device.findObject(menuSelector)
-            if(foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime())) break
-            if(firstLaunch.allow(System.nanoTime(),ownedPrompt && allow))checkNotNull(choice).click()
-            val remaining=firstLaunch.deadline-System.nanoTime()
-            if(remaining>0)Thread.sleep(TimeUnit.NANOSECONDS.toMillis(remaining).coerceIn(1,20))
+        try {
+            while(firstLaunch.active(System.nanoTime())) {
+                firstLaunch.start("foreground",System.nanoTime())
+                foreground=when(device.currentPackageName) {"io.heckel.ntfy"->"ntfy";"com.android.permissioncontroller"->"permission";"app.lazysh.client"->"lazysh";else->"other"}
+                firstLaunch.finish(System.nanoTime())
+                firstLaunch.start("allow",System.nanoTime())
+                val choice=device.findObject(By.res("com.android.permissioncontroller","permission_allow_button"))
+                firstLaunch.finish(System.nanoTime())
+                allow=choice!=null
+                firstLaunch.start("deny",System.nanoTime())
+                deny=device.hasObject(By.res("com.android.permissioncontroller","permission_deny_button"))
+                firstLaunch.finish(System.nanoTime())
+                firstLaunch.start("toolbar",System.nanoTime())
+                toolbar=device.hasObject(ntfyResource("toolbar"))
+                firstLaunch.finish(System.nanoTime())
+                firstLaunch.start("prompt",System.nanoTime())
+                val prompt=device.findObject(By.res("com.android.permissioncontroller","permission_message"))?.text
+                firstLaunch.finish(System.nanoTime())
+                ownedPrompt=foreground=="permission" && prompt?.contains(Regex("\\bntfy\\b"))==true && prompt?.contains("notifications",ignoreCase=true)==true
+                firstLaunch.start("menu",System.nanoTime())
+                menu=device.findObject(menuSelector)
+                firstLaunch.finish(System.nanoTime())
+                firstLaunch.sampled()
+                if(foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime())) break
+                if(firstLaunch.allow(System.nanoTime(),ownedPrompt && allow)) {
+                    firstLaunch.start("click",System.nanoTime())
+                    checkNotNull(choice).click()
+                    firstLaunch.finish(System.nanoTime())
+                }
+                val remaining=firstLaunch.deadline-System.nanoTime()
+                if(remaining>0)Thread.sleep(TimeUnit.NANOSECONDS.toMillis(remaining).coerceIn(1,20))
+            }
+            assertTrue("Distributor menu; foreground=$foreground allow=$allow deny=$deny toolbar=$toolbar ownedPrompt=$ownedPrompt attempted=${firstLaunch.attempted}",
+                foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime()))
+        } catch(failure:Throwable) {
+            firstLaunch.failed()
+            val permission=runCatching {
+                if(context.packageManager.checkPermission(android.Manifest.permission.POST_NOTIFICATIONS,"io.heckel.ntfy")==PackageManager.PERMISSION_GRANTED)"granted" else "denied"
+            }.getOrDefault("unavailable")
+            failure.addSuppressed(AssertionError(firstLaunch.observation(permission)))
+            throw failure
         }
-        assertTrue("Distributor menu; foreground=$foreground allow=$allow deny=$deny toolbar=$toolbar ownedPrompt=$ownedPrompt attempted=${firstLaunch.attempted}",
-            foreground=="ntfy" && menu!=null && firstLaunch.active(System.nanoTime()))
         checkNotNull(menu).click()
         node(By.pkg("io.heckel.ntfy").text("Settings"),"Distributor settings").click()
         val settings=NtfySettingsScroll(System.nanoTime())

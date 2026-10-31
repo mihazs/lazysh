@@ -44,7 +44,7 @@ test('native fixture namespaces are admitted without privilege changes before Li
 test.skipIf(process.platform!=='linux')('decoded Android toolchain fingerprint separates host glibc and architecture for every cache caller',async()=>{
   const name='Fingerprint Android native build tools';
   const script=workflow.jobs['native-android'].steps.find(step=>step.name===name)!.run!;
-  for(const job of ['native-android','native-android-runtime','native-android-ntfy']) {
+  for(const job of ['native-android','native-android-runtime','native-android-herdr-navigation','native-android-ntfy']) {
     const steps=workflow.jobs[job].steps;
     const fingerprint=steps.findIndex(step=>step.name===name);
     const cache=steps.findIndex(step=>step.with?.['env-vars']==='LAZYSH_ANDROID_TOOLCHAIN');
@@ -152,7 +152,9 @@ test.each([
   { mosh: 0, instrumentation: 0, qr: 29, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
   { mosh: 0, instrumentation: 0, qr: 0, fdroid: 41, sdk: 0, diagnosticFailure: true, overflow: false },
   { mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 31, diagnosticFailure: true, overflow: false },
-])('emulator script preserves exits and reaps collector: %j', async ({ mosh, instrumentation, qr, fdroid, sdk, diagnosticFailure, overflow }) => {
+  { owner: 'herdr-navigation', mosh: 0, instrumentation: 0, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: false, overflow: false },
+  { owner: 'herdr-navigation', mosh: 0, instrumentation: 23, qr: 0, fdroid: 0, sdk: 0, diagnosticFailure: true, overflow: false },
+])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, fdroid, sdk, diagnosticFailure, overflow }) => {
   expect(commands).toHaveLength(1);
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-android-diagnostics-'));
   temporary.push(directory);
@@ -202,7 +204,7 @@ exit "$SDK_EXIT"
     cwd: directory,
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLECTOR_PID: marker, INVOCATIONS: invocations,
       MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
-      ANDROID_SERIAL: 'emulator-5580', SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
+      ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
       RUNNER_TEMP: directory, QR_PID_FILE: qrPidFile,
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
       DIAGNOSTIC_OVERFLOW: overflow ? '1' : '0' },
@@ -213,11 +215,11 @@ exit "$SDK_EXIT"
   expect(exit).toBe(expectedExit);
   expect(stdout).toBe('');
   if (!overflow) expect(stderr).toBe('');
-  const qrExpected = mosh === 0 && instrumentation === 0 && fdroid === 0;
+  const qrExpected = owner === 'guarded' && mosh === 0 && instrumentation === 0 && fdroid === 0;
   const sdkExpected = qrExpected && qr === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
   if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
-  expect((await readFile(invocations, 'utf8')).trim().split('\n')).toEqual([
+  expect((await readFile(invocations, 'utf8')).trim().split('\n')).toEqual(owner === 'herdr-navigation' ? ['run test:android-herdr-navigation'] : [
     'run test:android-mosh',
     ...(mosh === 0 ? ['run test:android-ssh'] : []),
     'run test:android-fdroid',
