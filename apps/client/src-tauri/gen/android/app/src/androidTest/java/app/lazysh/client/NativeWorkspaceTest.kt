@@ -1342,6 +1342,29 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun swipeViewClearOfIme(visible: Boolean?, bottom: Int?, top: Int, height: Int, rootHeight: Int): Boolean {
+        val end = top.toLong() + height
+        if (top < 0 || height <= 0 || rootHeight <= 0 || end > rootHeight) return false
+        return when (visible) {
+            false -> true
+            true -> bottom != null && bottom > 0 && end <= rootHeight.toLong() - bottom
+            null -> false
+        }
+    }
+
+    @Test fun nativeSwipeAdmissionRequiresTheWholeWebViewAboveTheDockedIme() {
+        assertTrue(swipeViewClearOfIme(false, 0, 10, 190, 200))
+        assertTrue(swipeViewClearOfIme(true, 100, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, 100, 10, 91, 200))
+        assertFalse(swipeViewClearOfIme(null, null, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, null, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(true, 0, 10, 90, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, -1, 90, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, 10, 0, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, 10, 191, 200))
+        assertFalse(swipeViewClearOfIme(false, 0, Int.MAX_VALUE, Int.MAX_VALUE, Int.MAX_VALUE))
+    }
+
     private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String) {
         val name = herdr.getString("name")
         val transcript = herdr.getString("transcript")
@@ -1443,10 +1466,17 @@ class NativeWorkspaceTest {
                 "windowFocused" to view.hasWindowFocus(), "layoutSettled" to !view.isLayoutRequested,
                 "sizePositive" to (view.width > 0 && view.height > 0), "densityValid" to (density.isFinite() && density > 0),
                 "densityMatchesDom" to (geometry.getDouble("density") == density))
-            val imeVisible = ViewCompat.getRootWindowInsets(view.rootView)?.isVisible(WindowInsetsCompat.Type.ime())
+            val insets = ViewCompat.getRootWindowInsets(view.rootView)
+            val imeVisible = insets?.isVisible(WindowInsetsCompat.Type.ime())
+            val bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom
+            val windowOrigin = IntArray(2); view.getLocationInWindow(windowOrigin)
+            val rootOrigin = IntArray(2); view.rootView.getLocationInWindow(rootOrigin)
+            val top = windowOrigin[1] - rootOrigin[1]
+            val clear = swipeViewClearOfIme(imeVisible, bottom, top, view.height, view.rootView.height)
             val imeState = when (imeVisible) { true -> "visible"; false -> "hidden"; null -> "unavailable" }
-            assertTrue("Owned swipe requires the focused, stable WebView without IME overlap: native=$predicates ime=$imeState",
-                predicates.values.all { it } && imeVisible == false)
+            val imeGeometry = listOf(top, view.height, view.rootView.height, bottom ?: -1).map { it.coerceIn(-1, 65535) }
+            assertTrue("Owned swipe requires the focused, stable WebView without IME overlap: native=$predicates ime=$imeState clear=$clear geometry=$imeGeometry",
+                predicates.values.all { it } && clear)
             val scaleX = view.width / visible[2]
             val scaleY = view.height / visible[3]
             val travel = (bounds[3] - bounds[1]) * 0.5 * scaleY
@@ -2049,8 +2079,16 @@ class NativeWorkspaceTest {
                 assertTrue(observation, completedWithinBudget)
                 assertEquals(observation, expected, outcome)
                 val text = if (reused) "Host companion $version is already installed." else "Installed host companion $version."
-                assertEquals("Owned companion version/path and cleanup must match the public fixture", "true", evaluate(scenario,
-                    "document.querySelector('$panel [role=status]')?.textContent.includes(${JSONObject.quote(text)}) && document.querySelector('$panel code')?.textContent===${JSONObject.quote(destination)} && !document.querySelector('$panel')?.textContent.includes('Some temporary installation files remain')"))
+                val proof = JSONObject(evaluate(scenario, """
+                    (()=>{const p=document.querySelector('$panel'), statuses=document.querySelectorAll('$panel [role=status]'), first=document.querySelector('$panel [role=status]');return {
+                      statusCount:!statuses.length?'zero':statuses.length===1?'one':'many',
+                      statusKind:!first?'absent':first.tagName==='P'?'progress':first.tagName==='DIV'?'result':'other',
+                      textMatches:first?.textContent.includes(${JSONObject.quote(text)})===true,
+                      pathMatches:document.querySelector('$panel code')?.textContent===${JSONObject.quote(destination)},
+                      residueAbsent:!p?.textContent.includes('Some temporary installation files remain')};})()
+                """))
+                assertTrue("Owned companion version/path and cleanup must match the public fixture: $observation iteration=$expected proof=$proof",
+                    proof.getBoolean("textMatches") && proof.getBoolean("pathMatches") && proof.getBoolean("residueAbsent"))
                 assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
             }
             awaitDocument(scenario, "visible companion Connections navigation", workspaceButtonVisible(".workspace-navigation-modes", "Connections"))
