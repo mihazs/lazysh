@@ -1339,6 +1339,40 @@ class NativeWorkspaceTest {
         }
     }
 
+    private fun herdrConfirmationObservation(scenario: ActivityScenario<MainActivity>, expectedChild: String, expectedDraft: String): (Long) -> String {
+        val expression = """
+            (()=>{
+              const expectedChild=${JSONObject.quote(expectedChild)},expectedDraft=${JSONObject.quote(expectedDraft)};
+              const regions=Array.from(document.querySelectorAll("section[aria-label='Terminal input']"));
+              const buttons=regions.flatMap(region=>Array.from(region.querySelectorAll('button')));
+              const choose=buttons.filter(button=>button.textContent.trim()==='Choose terminal destination');
+              const confirm=buttons.filter(button=>button.textContent.trim()==='Confirm this destination');
+              const send=buttons.filter(button=>button.textContent.trim()==='Send to terminal');
+              const alerts=regions.flatMap(region=>Array.from(region.querySelectorAll('[role=alert]')));
+              const categories=new Map([
+                ['Guarded input is unavailable for this Herdr terminal. Use Stage or open the terminal.','unavailable'],
+                ['The terminal destination changed. Confirm it again.','stale'],
+                ['This source or input is unsupported. Use Stage or the terminal.','invalid'],
+                ['Send accepts up to 4,096 UTF-8 bytes, including line feeds and tabs. Other control characters are unsupported. Use Stage or the terminal for other drafts.','invalid'],
+                ['Another terminal input is in progress. Confirm the destination again before trying.','busy'],
+                ['The terminal returned an unsupported destination or input response. Choose the destination again.','invalidReply'],
+                ['Queue admission was not confirmed. Input may have arrived and was not resent. Inspect the terminal before confirming again.','uncertain']
+              ]);
+              const footer=document.querySelector('.workspace-footer > span:last-child');
+              return {
+                regions:Math.min(8,regions.length),choose:Math.min(8,choose.length),confirm:Math.min(8,confirm.length),send:Math.min(8,send.length),
+                chooseDisabled:choose.length>0&&choose.every(button=>button.disabled===true),
+                pending:regions.some(region=>Array.from(region.querySelectorAll('[role=status]')).some(node=>node.textContent==='Waiting for the terminal response…')),
+                errorPresent:alerts.length>0,error:alerts.length===0?'none':alerts.length===1?(categories.get(alerts[0].textContent)||'other'):'other',
+                ownedChildDisconnected:Array.from(document.querySelectorAll('.session-tabs [role=tab]')).some(tab=>tab.textContent.trim()===expectedChild&&Boolean(tab.querySelector('.status-idle'))),
+                moshFooter:Boolean(footer&&Array.from(footer.childNodes).some(node=>node.nodeType===3&&node.textContent.trim()==='Mosh')),
+                draftMatches:document.querySelector('form.chat-composer textarea')?.value===expectedDraft
+              };
+            })()
+        """
+        return { remaining -> evaluateIfPresent(scenario, expression, remaining) ?: "unavailable" }
+    }
+
     private fun verifyGuardedHerdrChat(scenario: ActivityScenario<MainActivity>, herdr: JSONObject, parent: String, label: String, alreadyAttached: Boolean = false) {
         val name = herdr.getString("name")
         val transcript = herdr.getString("transcript")
@@ -1381,7 +1415,8 @@ class NativeWorkspaceTest {
         assertEquals("Native paste must preserve the exact draft", "true", evaluate(scenario,
             "document.querySelector('form.chat-composer textarea')?.value===${JSONObject.quote(draft)}"))
         click("Choose terminal destination")
-        awaitDocument(scenario, "owned Herdr confirmation", hasButton("Confirm this destination"))
+        awaitDocument(scenario, "owned Herdr confirmation", hasButton("Confirm this destination"),
+            herdrConfirmationObservation(scenario, "$parent / $name", draft))
         assertEquals("Preparation alone must not enable Send", "false", evaluate(scenario, hasButton("Send to terminal")))
         click("Confirm this destination")
         awaitDocument(scenario, "explicit owned Herdr binding", hasButton("Send to terminal"))

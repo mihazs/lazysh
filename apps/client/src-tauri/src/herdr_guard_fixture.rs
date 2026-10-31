@@ -194,13 +194,14 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
     let native = state.session(&child.session_id).await.unwrap();
     assert!(native.herdr.lock().unwrap().is_some());
     assert!(Arc::ptr_eq(&parent.handle, &native.handle));
-    let output = owned_terminal_output(&app, &child.session_id, &mut events, b"MOSH_GUARDED").await;
-    assert!(!output.windows(14).any(|part| part == b"LAZYSH-GUARD-1"));
-    adopt(&app, &lease, &child).await;
     disconnect_inner(&state, source.session_id.clone())
         .await
         .unwrap();
     herdr_retired(&state, &source.session_id, &parent, true).await;
+    // The Connect dialog retires its bootstrap before publishing/adopting the child.
+    adopt(&app, &lease, &child).await;
+    let output = owned_terminal_output(&app, &child.session_id, &mut events, b"MOSH_GUARDED").await;
+    assert!(!output.windows(14).any(|part| part == b"LAZYSH-GUARD-1"));
     assert_eq!(
         guard(&app, &lease, &child, json!({"kind":"status"}))
             .await
