@@ -1,10 +1,17 @@
 use chrono::{DateTime, SecondsFormat, Utc};
+pub mod account_usage;
 pub mod approvals;
 pub mod devices;
+pub mod herdr;
+pub mod hook_setup;
+pub mod hooks;
 pub mod installation;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod managed_directory;
 pub mod relay;
 pub mod reported_history;
 pub mod settings;
+pub mod skills;
 mod storage_filesystem;
 mod storage_namespace;
 pub mod transcript;
@@ -70,6 +77,7 @@ pub enum Error {
     Installation(&'static str),
     UnsupportedStateFilesystem,
     Device(&'static str),
+    Herdr(&'static str),
     Settings(&'static str),
     Relay(&'static str),
     Io(io::Error),
@@ -82,7 +90,7 @@ impl Error {
             Self::InvalidArgument => "InvalidArgument",
             Self::Installation(kind) => kind,
             Self::UnsupportedStateFilesystem => "UnsupportedStateFilesystem",
-            Self::Device(kind) => kind,
+            Self::Device(kind) | Self::Herdr(kind) => kind,
             Self::Settings(kind) => kind,
             Self::Relay(kind) => kind,
             Self::Io(_) => "IoError",
@@ -97,6 +105,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Agent {
     Claude,
+    Codex,
+    Opencode,
+    Gemini,
+    Droid,
+    Kimi,
+    Copilot,
+    Cursor,
+    Amp,
     Generic,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -195,24 +211,94 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             }
             serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
         }
-        Agent::Claude => {
+        Agent::Opencode | Agent::Cursor | Agent::Amp => match match agent {
+            Agent::Opencode => hooks::opencode_event(payload, pane),
+            Agent::Cursor => hooks::cursor_event(payload, pane),
+            Agent::Amp => hooks::amp_event(payload, pane),
+            _ => unreachable!(),
+        }? {
+            Some(event) => event,
+            None => return Ok(None),
+        },
+        Agent::Claude
+        | Agent::Codex
+        | Agent::Gemini
+        | Agent::Droid
+        | Agent::Kimi
+        | Agent::Copilot => {
             let kind = payload
                 .get("hook_event_name")
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            if matches!(agent, Agent::Copilot)
+                && matches!(kind, "Stop" | "SessionEnd")
+                && payload
+                    .get("agent_id")
+                    .is_some_and(|value| !value.is_null())
+            {
+                return Ok(None);
+            }
             let (state, default_summary) = match kind {
-                "UserPromptSubmit" => (SessionState::Working, "Working on your prompt"),
-                "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+                "UserPromptSubmit" if !matches!(agent, Agent::Gemini) => {
+                    (SessionState::Working, "Working on your prompt")
+                }
+                "BeforeAgent" if matches!(agent, Agent::Gemini) => {
+                    (SessionState::Working, "Working on your prompt")
+                }
+                "BeforeTool" | "AfterTool" if matches!(agent, Agent::Gemini) => {
                     (SessionState::Working, kind)
                 }
-                "PermissionRequest" => (SessionState::NeedsAttention, "Permission requested"),
-                "Stop" => (SessionState::Done, "Turn finished"),
+                "PreToolUse" if !matches!(agent, Agent::Gemini | Agent::Copilot) => {
+                    (SessionState::Working, kind)
+                }
+                "PostToolUse" if !matches!(agent, Agent::Gemini) => (SessionState::Working, kind),
+                "PostToolUseFailure"
+                    if matches!(agent, Agent::Claude | Agent::Kimi | Agent::Copilot) =>
+                {
+                    (SessionState::Working, kind)
+                }
+                "PermissionRequest" if matches!(agent, Agent::Claude | Agent::Codex) => {
+                    (SessionState::NeedsAttention, "Permission requested")
+                }
+                "Interrupt" if matches!(agent, Agent::Codex) => {
+                    (SessionState::Done, "Turn interrupted")
+                }
+                "Stop" if !matches!(agent, Agent::Gemini | Agent::Kimi) => {
+                    (SessionState::Done, "Turn finished")
+                }
+                "AfterAgent" if matches!(agent, Agent::Gemini) => {
+                    (SessionState::Done, "Turn finished")
+                }
                 "SessionEnd" => (SessionState::Done, "Session ended"),
                 "Notification"
-                    if matches!(
-                        payload.get("notification_type").and_then(Value::as_str),
-                        Some("permission_prompt" | "idle_prompt" | "elicitation_dialog")
-                    ) =>
+                    if matches!(agent, Agent::Claude | Agent::Droid)
+                        && matches!(
+                            payload.get("notification_type").and_then(Value::as_str),
+                            Some("permission_prompt" | "idle_prompt" | "elicitation_dialog")
+                        ) =>
+                {
+                    (SessionState::NeedsAttention, "Agent needs attention")
+                }
+                "Notification"
+                    if matches!(agent, Agent::Gemini)
+                        && payload.get("notification_type").and_then(Value::as_str)
+                            == Some("ToolPermission") =>
+                {
+                    (SessionState::NeedsAttention, "Permission requested")
+                }
+                "Notification"
+                    if matches!(agent, Agent::Kimi)
+                        && payload.get("notification_type").and_then(Value::as_str)
+                            == Some("permission_prompt") =>
+                {
+                    (SessionState::NeedsAttention, "Permission requested")
+                }
+                "Notification"
+                    if matches!(agent, Agent::Copilot)
+                        && matches!(
+                            payload.get("notification_type").and_then(Value::as_str),
+                            Some("permission_prompt" | "elicitation_dialog")
+                        ) =>
                 {
                     (SessionState::NeedsAttention, "Agent needs attention")
                 }
@@ -225,8 +311,25 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                 _ => return Err(Error::InvalidEvent),
             };
             Event {
-                session_id: field(payload, "session_id", 256)?,
-                agent: "Claude Code".into(),
+                session_id: field(
+                    payload,
+                    if matches!(agent, Agent::Copilot) && kind == "Notification" {
+                        "sessionId"
+                    } else {
+                        "session_id"
+                    },
+                    256,
+                )?,
+                agent: match agent {
+                    Agent::Claude => "Claude Code",
+                    Agent::Codex => "Codex",
+                    Agent::Gemini => "Gemini CLI",
+                    Agent::Droid => "Droid",
+                    Agent::Kimi => "Kimi CLI",
+                    Agent::Copilot => "GitHub Copilot CLI",
+                    _ => unreachable!(),
+                }
+                .into(),
                 project: field(payload, "cwd", 4096)?,
                 state,
                 summary: summary.into(),
@@ -418,6 +521,9 @@ impl Store {
         connection
             .execute_batch(reported_history::SCHEMA)
             .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
+        connection
+            .execute_batch(hooks::AIDER_HEALTH_SCHEMA)
+            .map_err(|e| storage_failure(StoragePhase::SessionsSchema, e.into()))?;
         relay::initialize(&connection)
             .map_err(|e| storage_failure(StoragePhase::RelaySchema, e))?;
         connection
@@ -535,11 +641,7 @@ impl Store {
     }
 }
 pub fn claude_config() -> Value {
-    let mut hooks = serde_json::Map::new();
-    for kind in HOOK_EVENTS {
-        hooks.insert(kind.into(),json!([{"hooks":[{"type":"command","command":"lazysh-agent ingest --agent claude","timeout":5}]}]));
-    }
-    json!({"hooks":hooks})
+    hooks::command_config("claude", &HOOK_EVENTS, 5)
 }
 
 #[cfg(all(test, unix))]

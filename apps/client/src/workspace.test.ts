@@ -95,6 +95,15 @@ it('preserves ET bootstrap options but rejects conflicting transport intentions'
   }
 });
 
+it.each(['tmux','herdr','zellij'] as const)('retains an exact Mosh %s attachment without transport secrets or input authority',kind=>{
+  const mosh={serverPath:'mosh-server',portMin:60000,portMax:61000,key:'PRIVATE'};
+  const attached={kind,name:'label',restoreName:'named-work',...(kind==='tmux'?{tmuxServer:'agents'}:{}),ticket:'PRIVATE'};
+  saveWorkspace([{hostId:'composed',mosh,attached}]);
+  expect(readWorkspace()).toEqual([{hostId:'composed',mosh:{serverPath:'mosh-server',portMin:60000,portMax:61000},
+    attached:{kind,name:'named-work',...(kind==='tmux'?{tmuxServer:'agents'}:{})}}]);
+  expect(localStorage.getItem('lazysh.workspace.v1')).not.toMatch(/PRIVATE|restoreName|ticket/);
+});
+
 it('retains Auto options instead of its last selected transport and excludes credentials',()=>{
   const mosh={serverPath:'mosh-server',portMin:60000,portMax:61000,key:'PRIVATE'};
   const et={serverPath:'etterminal',port:2022,password:'PRIVATE'};
@@ -105,7 +114,6 @@ it('retains Auto options instead of its last selected transport and excludes cre
     {hostId:'a',auto:{mosh,et},et},
     {hostId:'a',auto:{mosh:{...mosh,portMax:65536},et}},
     {hostId:'a',auto:{mosh,et:{...et,serverPath:'bad\npath'}}},
-    {hostId:'a',auto:{mosh,et},attached:{kind:'tmux',name:'agent'}},
   ]) {
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([bad]));
     expect(readWorkspace()).toEqual([]);

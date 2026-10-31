@@ -123,6 +123,13 @@ List running named servers, then attach or browse one. The Herdr tree preserves 
 
 The integration uses the [public Herdr CLI/socket snapshot contract](https://herdr.dev/docs/socket-api/) and validates its response shape and exact IDs. The native acceptance below was executed against pinned Herdr **0.9.3**; it does not establish other versions. Incompatible response shapes fail explicitly. lazysh does not install Herdr, alter its configuration, or stop existing servers.
 
+Agents initially reads the attached Herdr session when discovery lists that exact
+name, including when several servers are running. Choosing another server overrides
+that initial selection. If the attached session is absent, choose a server explicitly;
+lazysh does not substitute another one. Plain terminals automatically select a sole
+running server and require a choice when several are available. Discovery reads one
+server per refresh and does not grant terminal input or approval authority.
+
 Attached tmux and Herdr terminals also offer prefix shortcuts and numbered window/tab controls. Configure one prefix key, such as `Ctrl+b` or `F12`; it is validated with the existing terminal chord parser. The panel uses the host's default action bindings. It only appears on a terminal known to be attached to that multiplexer, so a plain shell never receives prefix input from these controls. Custom host action remappings remain available through the terminal or configurable keyboard chords.
 
 ## Zellij

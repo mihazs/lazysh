@@ -15,6 +15,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.IdentityHashMap
 
 /** External accessibility actions only: the release application is never instrumented. */
 @RunWith(AndroidJUnit4::class)
@@ -35,6 +36,13 @@ class PublishedApkTest {
     private var readinessOverflow = false
     private var readinessAdd = "unavailable"
     private var readinessOpen = "unavailable"
+    private data class QueryTrace(val caption: String, val selector: String,
+        var raw: String = "unavailable", var visible: String = "unavailable", var elapsedMs: Long = 0)
+    private data class PollTrace(val remainingMs: Long, val sameDevice: Boolean,
+        var elapsedMs: Long = 0, val queries: MutableList<QueryTrace> = mutableListOf())
+    private var readinessWaitMs: Long? = null
+    private var readinessPoll: PollTrace? = null
+    private var observingReadiness = false
     private var saveOperation = "unavailable"
     private var saveRaw = "unavailable"
     private var saveVisible = "unavailable"
@@ -47,36 +55,66 @@ class PublishedApkTest {
     private val usernameHint = "Username"
     private val deadline = System.nanoTime() + 45_000_000_000L
 
-    private fun progress(name: Stage, event: String) {
+    private var progressDepth = 0
+
+    private fun progress(name: Stage, event: String, depth: Int) {
         try {
             instrumentation.sendStatus(0, Bundle().apply {
-                putString("lazyshPublishedProgress", JSONObject().put("stage", name.name).put("event", event).toString())
+                putString("lazyshPublishedProgress", JSONObject().put("stage", name.name).put("event", event).put("depth", depth).toString())
             })
         } catch (_: Throwable) { /* Observation cannot replace the original UI result. */ }
     }
 
-    private fun <T> stage(name: Stage, action: () -> T): T = try {
-        progress(name, "entry")
-        check(System.nanoTime() < deadline)
-        action().also { progress(name, "exit") }
-    } catch (failure: Throwable) {
-        // Retain a nested owned stage; discard every arbitrary framework detail.
-        val closed = Stage.entries.firstOrNull {
-            failure is AssertionError && failure.message == "Published APK UI: ${it.name}"
-        } ?: name
-        throw AssertionError("Published APK UI: ${closed.name}")
+    private fun <T> stage(name: Stage, action: () -> T): T {
+        val depth = progressDepth
+        progressDepth++
+        return try {
+            progress(name, "entry", depth)
+            check(System.nanoTime() < deadline)
+            action().also { progress(name, "exit", depth) }
+        } catch (failure: Throwable) {
+            // Retain a nested owned stage; discard every arbitrary framework detail.
+            val closed = Stage.entries.firstOrNull {
+                failure is AssertionError && failure.message == "Published APK UI: ${it.name}"
+            } ?: name
+            throw AssertionError("Published APK UI: ${closed.name}")
+        } finally {
+            progressDepth = depth
+        }
     }
 
     private fun waitMillis(): Long = ((deadline - System.nanoTime()) / 1_000_000L).coerceIn(1, 5_000)
     private fun captions(caption: String, current: UiDevice = device): List<UiObject2> {
         val traceSave = caption == "Save host" && saveOperation == "lookup"
         if (traceSave) { saveRaw = "unavailable"; saveVisible = "unavailable" }
-        val found = (current.findObjects(By.pkg(target).text(caption)) + current.findObjects(By.pkg(target).desc(caption))).distinct()
+        val traces = if (observingReadiness) readinessPoll?.queries else null
+        fun query(selector: String, action: () -> List<UiObject2>): Pair<List<UiObject2>, QueryTrace?> {
+            val trace = traces?.let { QueryTrace(if (caption == "Add host") "add" else "open", selector).also(it::add) }
+            val started = System.nanoTime()
+            return try {
+                val result = action()
+                trace?.raw = matchCount(result.size)
+                result to trace
+            } finally { trace?.elapsedMs = elapsedMillis(started) }
+        }
+        val (text, textTrace) = query("text") { current.findObjects(By.pkg(target).text(caption)) }
+        val (description, descriptionTrace) = query("description") { current.findObjects(By.pkg(target).desc(caption)) }
+        val found = (text + description).distinct()
         if (traceSave) saveRaw = matchCount(found.size)
-        val visible = found.filter { !it.visibleBounds.isEmpty }
+        val visibility = IdentityHashMap<UiObject2, Boolean>()
+        val visible = found.filter {
+            (!it.visibleBounds.isEmpty).also { shown -> if (traces != null) visibility[it] = shown }
+        }
+        // UiObject2 equality refreshes nodes. Removed wrappers remain unavailable.
+        fun visibleCount(nodes: List<UiObject2>) = if (nodes.any { !visibility.containsKey(it) }) "unavailable"
+            else matchCount(nodes.count { visibility[it] == true })
+        textTrace?.visible = visibleCount(text)
+        descriptionTrace?.visible = visibleCount(description)
         if (traceSave) saveVisible = matchCount(visible.size)
         return visible
     }
+
+    private fun elapsedMillis(started: Long) = ((System.nanoTime() - started) / 1_000_000L).coerceIn(0, 60_000)
 
     private fun matchCount(count: Int) = when (count) {
         0 -> "zero"
@@ -171,7 +209,15 @@ class PublishedApkTest {
             .put("webView", webView ?: JSONObject.NULL)
             .put("readiness", JSONObject().put("outcome", readinessOutcome)
                 .put("elapsedMs", readinessElapsedMs ?: JSONObject.NULL).put("polls", readinessPolls)
-                .put("overflow", readinessOverflow).put("lastAdd", readinessAdd).put("lastOpen", readinessOpen))
+                .put("overflow", readinessOverflow).put("lastAdd", readinessAdd).put("lastOpen", readinessOpen)
+                .put("waitMs", readinessWaitMs ?: JSONObject.NULL).put("lastPoll", readinessPoll?.let { poll ->
+                    JSONObject().put("remainingMs", poll.remainingMs).put("sameDevice", poll.sameDevice)
+                        .put("elapsedMs", poll.elapsedMs).put("queries", JSONArray().apply {
+                            poll.queries.forEach { query -> put(JSONObject().put("caption", query.caption)
+                                .put("selector", query.selector).put("raw", query.raw).put("visible", query.visible)
+                                .put("elapsedMs", query.elapsedMs)) }
+                        })
+                } ?: JSONObject.NULL))
             .put("save", JSONObject().put("operation", saveOperation).put("raw", saveRaw).put("visible", saveVisible))
             .toString().also { check(it.length <= 2048) }
     }
@@ -189,14 +235,26 @@ class PublishedApkTest {
             readinessOutcome = "unavailable"; readinessElapsedMs = null
             readinessPolls = 0; readinessOverflow = false
             readinessAdd = "unavailable"; readinessOpen = "unavailable"
+            readinessWaitMs = null; readinessPoll = null
             val started = System.nanoTime()
             try {
-                val ready = device.wait(Condition<UiDevice, Boolean> { current ->
-                    if (readinessPolls < 64) readinessPolls++ else readinessOverflow = true
-                    readinessAdd = "unavailable"; readinessOpen = "unavailable"
-                    captions("Add host", current).also { readinessAdd = matchCount(it.size) }.isNotEmpty() ||
-                        captions("Open hosts", current).also { readinessOpen = matchCount(it.size) }.isNotEmpty()
-                }, waitMillis())
+                val condition = Condition<UiDevice, Boolean> { current ->
+                    val pollStarted = System.nanoTime()
+                    readinessPoll = PollTrace(((deadline - pollStarted) / 1_000_000L).coerceIn(0, 45_000), current === device)
+                    observingReadiness = true
+                    try {
+                        if (readinessPolls < 64) readinessPolls++ else readinessOverflow = true
+                        readinessAdd = "unavailable"; readinessOpen = "unavailable"
+                        captions("Add host", current).also { readinessAdd = matchCount(it.size) }.isNotEmpty() ||
+                            captions("Open hosts", current).also { readinessOpen = matchCount(it.size) }.isNotEmpty()
+                    } finally {
+                        readinessPoll?.elapsedMs = elapsedMillis(pollStarted)
+                        observingReadiness = false
+                    }
+                }
+                val wait = waitMillis()
+                readinessWaitMs = wait
+                val ready = device.wait(condition, wait)
                 readinessOutcome = if (ready) "true" else "false"
                 check(ready)
             } catch (failure: Throwable) {

@@ -6,12 +6,48 @@ import {createHash} from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
   const error=await owned.finish('synthetic failure',1000).catch(error=>error as Error);
   expect((error as Error).message).toBe('Owned fixture failed: synthetic failure; exit=31');
+  expect(await owned.startupDiagnostic()).toEqual({state:'early-exit',exitCode:31});
+});
+
+test.skipIf(process.platform!=='linux').each(['missing','denied'] as const)('owned startup distinguishes %s launcher without exposing paths or arguments',async failure=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-process-admission-'));
+  const executable=join(directory,'private-launcher');
+  if(failure==='denied')await writeFile(executable,'#!/bin/sh\necho private-output\n',{mode:0o600});
+  const child=new OwnedProcess(executable,['private-argument']);
+  const completion=child.done.catch(error=>error as Error);
+  try {
+    expect(await child.liveIdentity()).toBeUndefined();
+    expect(await child.startupDiagnostic()).toEqual({state:failure==='missing'?'missing-launcher':'launch-denied',exitCode:null});
+    expect(child.child.pid).toBeUndefined();
+    expect((await completion as Error).message).toBe('Owned fixture process could not start');
+  } finally {await child.stop().catch(()=>{});await rm(directory,{recursive:true,force:true});}
+});
+
+test.skipIf(process.platform!=='linux')('owned startup separates live process metadata from subsequent signaled exit',async()=>{
+  const child=new OwnedProcess('sleep',['120']);
+  try {
+    expect(await child.liveIdentity()).toBeDefined();
+    expect(await child.startupDiagnostic()).toEqual({state:'running',exitCode:null});
+    await child.stop();
+    expect(await child.startupDiagnostic()).toEqual({state:'signaled',exitCode:null});
+  } finally {await child.stop();}
+});
+
+test.skipIf(process.platform!=='linux')('SSH startup retains its closed missing-launcher diagnostic without an unhandled rejection',async()=>{
+  const original=childProcess.spawn;
+  const spawn=spyOn(childProcess,'spawn').mockImplementation((program,args,options)=>
+    original(program==='/usr/bin/bwrap'?'/nonexistent-private-fixture-launcher':program,args,options));
+  const warning=spyOn(console,'error').mockImplementation(()=>{});
+  try {
+    await expect(SshFixture.start(undefined,{privateTtyGroup:true})).rejects.toThrow(
+      'Owned SSH root identity unavailable; startup={"state":"missing-launcher","exitCode":null}');
+  } finally {spawn.mockRestore();warning.mockRestore();}
 });
 test.skipIf(process.platform!=='linux')('owned deadline stops its process group',async()=>{
   const child=new OwnedProcess('sleep',['120']);
@@ -256,7 +292,8 @@ test.each(['gradle','reverse','keyboard']).skipIf(process.platform!=='linux')('e
 },5000);
 
 const latinIme='com.android.inputmethod.latin/.LatinIME';
-async function withKeyboardAdb(options:{previous:string;failure?:string;ime?:string;installed?:string},run:(adb:string,state:()=>Promise<string>,calls:()=>Promise<string[][]>,pid:()=>Promise<number>)=>Promise<void>) {
+const googleIme='com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME';
+async function withKeyboardAdb(options:{previous:string;failure?:string;ime?:string;installed?:string;sdk?:string;model?:string;systemGoogle?:string},run:(adb:string,state:()=>Promise<string>,calls:()=>Promise<string[][]>,pid:()=>Promise<number>)=>Promise<void>) {
   await withDiagnosticAdb(options.previous,0,async(adb,args,fixture)=>{
     await writeFile(adb,`#!${process.execPath}
 const fs=require('node:fs'),a=process.argv.slice(2),state=process.env.EXIT_INFO_FIXTURE,options=${JSON.stringify(options)};
@@ -266,6 +303,10 @@ const hang=()=>{fs.writeFileSync(state+'.pid',String(process.pid));setInterval((
 if(command==='shell settings get secure default_input_method') {
   if(options.failure==='read-timeout')hang();else process.stdout.write(options.ime??latin);
 } else if(command==='shell ime list -s')process.stdout.write(options.installed??latin);
+else if(command==='shell getprop ro.build.version.sdk') {
+  if(options.failure==='image-timeout')hang();else process.stdout.write(options.sdk??'36');
+} else if(command==='shell getprop ro.product.model')process.stdout.write(options.model??'sdk_gphone64_x86_64');
+else if(command==='shell pm list packages -s com.google.android.inputmethod.latin')process.stdout.write(options.systemGoogle??'package:com.google.android.inputmethod.latin');
 else if(command==='shell settings get secure '+key) {
   const value=fs.readFileSync(state,'utf8');
   if(options.failure==='readback' && value==='1' && !fs.existsSync(state+'.gate')){fs.writeFileSync(state+'.gate','');process.stdout.write('private-keyboard-secret');}
@@ -308,6 +349,33 @@ test.each([{previous:'private-keyboard-secret'},{previous:'0',ime:'private-keybo
     const count=(await calls()).length;
     await expect(ownedSoftwareKeyboard(adb,'personal-device')).rejects.toThrow('explicit emulator');
     expect((await calls()).length).toBe(count);
+  });
+});
+test.skipIf(process.platform!=='linux')('Google image keyboard needs explicit profile and restores the original preference',async()=>{
+  await withKeyboardAdb({previous:'0',ime:googleIme,installed:googleIme},async(adb,state)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580')).rejects.toThrow('AOSP LatinIME');
+    const owner=await ownedSoftwareKeyboard(adb,'emulator-5580',5000,'google-api36-latin');
+    expect(owner.observation).toEqual({ime:'google-api36-latin',previous:'disabled',requested:'enabled'});
+    expect(await state()).toBe('1');await owner.restore();expect(await state()).toBe('0');
+  });
+});
+test.each([{ime:latinIme},{installed:latinIme},{sdk:'35'},{model:'unowned-model'},{systemGoogle:'package:other.keyboard'}]).skipIf(process.platform!=='linux')('Google keyboard rejects mismatched image identity before mutation %#',async mismatch=>{
+  await withKeyboardAdb({previous:'0',ime:googleIme,installed:googleIme,...mismatch},async(adb,state,calls)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580',5000,'google-api36-latin')).rejects.toThrow('Owned software keyboard');
+    expect(await state()).toBe('0');expect((await calls()).some(args=>args[4]==='put'||args[4]==='delete')).toBe(false);
+  });
+});
+test.skipIf(process.platform!=='linux')('Google image admission timeout retires its child without changing preference',async()=>{
+  await withKeyboardAdb({previous:'0',ime:googleIme,installed:googleIme,failure:'image-timeout'},async(adb,state,calls,pid)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580',500,'google-api36-latin')).rejects.toThrow('unavailable: Google image SDK');
+    const ownedPid=await pid();expect(()=>process.kill(ownedPid,0)).toThrow();
+    expect(await state()).toBe('0');expect((await calls()).some(args=>args[4]==='put'||args[4]==='delete')).toBe(false);
+  });
+});
+test.skipIf(process.platform!=='linux')('unknown keyboard profile is rejected before a device command',async()=>{
+  await withKeyboardAdb({previous:'0'},async(adb,state,calls)=>{
+    await expect(ownedSoftwareKeyboard(adb,'emulator-5580',5000,'unknown' as never)).rejects.toThrow('profile is unsupported');
+    expect(await calls()).toEqual([]);expect(await state()).toBe('0');
   });
 });
 test.each(['enable-applied','enable-unapplied','readback','enable-timeout']).skipIf(process.platform!=='linux')('partial software keyboard setup restores state after %s',async failure=>{
@@ -859,4 +927,65 @@ test('partial passive tap setup failure attempts listener cleanup without exposi
   const create=new Function('window',`${source};return ownedNativeTapObservation;`)(window);
   expect(()=>create({getBoundingClientRect:()=>({})})).toThrow('Owned native tap observation unavailable');
   expect(attached.size).toBe(0);
+});
+
+async function herdrConfirmationFixture() {
+  const kotlin=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const source=kotlin.match(/private fun herdrConfirmationObservation\([\s\S]*?val expression = """([\s\S]*?)"""/)!;
+  expect(source).not.toBeNull();
+  const child='owned/private-child',draft='private-draft-path-and-token';
+  const expression=source[1].replaceAll('${JSONObject.quote(expectedChild)}',JSON.stringify(child)).replaceAll('${JSONObject.quote(expectedDraft)}',JSON.stringify(draft));
+  type Button={textContent:string;disabled:boolean};
+  type Region={buttons?:Button[];alerts?:string[];statuses?:string[]};
+  const observe=({regions=[],tabs=[],footer=[],value}:{regions?:Region[];tabs?:{textContent:string;idle:boolean}[];footer?:string[];value?:string}={})=>{
+    const document={
+      querySelectorAll(selector:string) {
+        if(selector==="section[aria-label='Terminal input']")return regions.map(region=>({querySelectorAll(selector:string){
+          if(selector==='button')return region.buttons??[];
+          if(selector==='[role=alert]')return (region.alerts??[]).map(textContent=>({textContent}));
+          if(selector==='[role=status]')return (region.statuses??[]).map(textContent=>({textContent}));
+          throw new Error('Unexpected regional query');
+        }}));
+        if(selector==='.session-tabs [role=tab]')return tabs.map(tab=>({textContent:tab.textContent,querySelector:()=>tab.idle?{}:null}));
+        throw new Error('Unexpected global query');
+      },
+      querySelector(selector:string) {
+        if(selector==='.workspace-footer > span:last-child')return footer.length?{childNodes:footer.map(textContent=>({nodeType:3,textContent}))}:null;
+        if(selector==='form.chat-composer textarea')return value===undefined?null:{value};
+        throw new Error('Unexpected global selection');
+      },
+    };
+    return new Function('document',`return (${expression});`)(document);
+  };
+  return {observe,child,draft};
+}
+
+test('Herdr confirmation observation is closed when absent or pending',async()=>{
+  const {observe}=await herdrConfirmationFixture();
+  expect(observe()).toEqual({regions:0,choose:0,confirm:0,send:0,chooseDisabled:false,pending:false,errorPresent:false,error:'none',ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
+  expect(observe({regions:[{buttons:[{textContent:'Choose terminal destination',disabled:true}],statuses:['Waiting for the terminal response…']}]})).toMatchObject({regions:1,choose:1,confirm:0,chooseDisabled:true,pending:true,errorPresent:false,error:'none'});
+});
+
+test('Herdr confirmation observation classifies exact known regional copy without retaining errors',async()=>{
+  const {english}=await import('../apps/client/src/i18n/en');
+  const {observe}=await herdrConfirmationFixture();
+  const categories=[['chatHerdrUnavailable','unavailable'],['chatTerminalStale','stale'],['chatTerminalInvalid','invalid'],['chatTerminalInvalidDraft','invalid'],['chatTerminalBusy','busy'],['chatTerminalInvalidReply','invalidReply'],['chatHerdrUncertain','uncertain']] as const;
+  for(const [key,error] of categories)expect(observe({regions:[{alerts:[english[key]]}]})).toMatchObject({errorPresent:true,error});
+  for(const privateError of ['private-error-path/token',english.chatTerminalBusy+' private-token',' '+english.chatTerminalStale]){
+    const snapshot=observe({regions:[{alerts:[privateError]}]});
+    expect(snapshot.error).toBe('other');expect(JSON.stringify(snapshot)).not.toContain(privateError);
+  }
+  expect(observe({regions:[{alerts:[english.chatHerdrUnavailable,english.chatHerdrUnavailable]}]}).error).toBe('other');
+});
+
+test('Herdr confirmation observation caps duplicates and retains only owned DOM comparisons',async()=>{
+  const {observe,child,draft}=await herdrConfirmationFixture();
+  const privateValue='/private/token/'+ 'secret'.repeat(20_000);
+  const buttons=[{textContent:'Choose terminal destination',disabled:true},{textContent:'Confirm this destination',disabled:false},{textContent:'Send to terminal',disabled:false},{textContent:privateValue,disabled:true}];
+  const snapshot=observe({regions:Array.from({length:20},()=>({buttons})),tabs:[{textContent:child,idle:true},{textContent:privateValue,idle:true}],footer:['Mosh',privateValue],value:draft});
+  expect(snapshot).toEqual({regions:8,choose:8,confirm:8,send:8,chooseDisabled:true,pending:false,errorPresent:false,error:'none',ownedChildDisconnected:true,moshFooter:true,draftMatches:true});
+  const serialized=JSON.stringify(snapshot);
+  for(const value of [child,draft,privateValue,'secret','/private'])expect(serialized).not.toContain(value);
+  expect(serialized.length).toBeLessThan(250);
+  expect(observe({regions:[{buttons:[...buttons,{textContent:'Choose terminal destination',disabled:false}]}],tabs:[{textContent:child+'-other',idle:true}],footer:['Mosh-private'],value:draft+'-other'})).toMatchObject({chooseDisabled:false,ownedChildDisconnected:false,moshFooter:false,draftMatches:false});
 });

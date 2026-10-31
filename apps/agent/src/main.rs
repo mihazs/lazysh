@@ -13,10 +13,22 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Print the exact retained third-party licenses and attribution notices.
+    Licenses,
     /// Inspect or explicitly install this verified binary into its managed user namespace.
     Installation {
         #[command(subcommand)]
         command: lazysh_agent::installation::Command,
+    },
+    /// Preview and explicitly manage packaged product skills for an existing agent profile.
+    Skills {
+        #[command(subcommand)]
+        command: lazysh_agent::skills::Command,
+    },
+    /// Inspect and explicitly manage lifecycle hooks in an existing selected profile.
+    Hooks {
+        #[command(subcommand)]
+        command: lazysh_agent::hook_setup::Command,
     },
     /// Explicit opt-in relay setup and bounded drain; never installs hooks or schedules.
     Relay {
@@ -27,6 +39,19 @@ enum Command {
     Settings {
         #[command(subcommand)]
         command: SettingsCommand,
+    },
+    /// Read live account quotas using the built-in collectors or compatible ai-usagebar.
+    AccountUsage {
+        /// Stop when this private command channel closes its input.
+        #[arg(long)]
+        watch_channel: bool,
+    },
+    /// Focus an exact stock Herdr pane; focus is shared with other clients.
+    HerdrFocusPane {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        pane: String,
     },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
@@ -88,6 +113,28 @@ enum Command {
         #[arg(long)]
         reported_history: bool,
     },
+    /// Print a Codex hook fragment; never changes settings or hook trust.
+    CodexConfig,
+    /// Print a Gemini hook fragment; never changes settings.
+    GeminiConfig,
+    /// Print a standalone Droid hooks.json fragment; never changes settings.
+    DroidConfig,
+    /// Print a Kimi TOML hook fragment; never changes settings.
+    KimiConfig,
+    /// Print a Copilot CLI hook fragment; never changes settings.
+    CopilotConfig,
+    /// Print Cursor observation hooks; never changes profiles or permission policy.
+    CursorConfig,
+    /// Print an Amp native state-observer plugin; never installs it.
+    AmpPlugin,
+    /// Print native Aider callback arguments and their capability limits.
+    AiderConfig,
+    /// Record aggregate native Aider input-boundary notification health; reads no stdin.
+    AiderNotification,
+    /// Read aggregate Aider callback health, never agent session lifecycle state.
+    AiderHookStatus,
+    /// Print an OpenCode plugin asset; never installs it.
+    OpencodePlugin,
     /// Read a hook-reported Claude source hint, never live input authority.
     ReportedHistory {
         #[arg(long)]
@@ -153,7 +200,20 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
     }
     let output = match cli.command {
+        Command::HerdrFocusPane { session, pane } => {
+            Some(lazysh_agent::herdr::focus_pane(&session, &pane)?)
+        }
+        Command::Licenses => Some(serde_json::json!({
+            "schemaVersion": 1,
+            "notices": [
+                {"id": "ai-usagebar", "text": include_str!("../../../packages/ai-usagebar-vendor/LICENSE")},
+                {"id": "account-usage-adapter", "text": include_str!("../../../packages/account-usage/NOTICE")},
+                {"id": "herdr-apache", "text": include_str!("../../../packages/account-usage/licenses/HERDR-APACHE-2.0.txt")},
+            ],
+        })),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
+        Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
+        Command::Hooks { command } => Some(lazysh_agent::hook_setup::run(command)?),
         Command::Relay { command } => Some(lazysh_agent::relay::run(
             command,
             &lazysh_agent::state_directory()?,
@@ -190,6 +250,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 offset,
             )?)
             .map_err(|_| Error::InvalidEvent)?,
+        ),
+        Command::AccountUsage { watch_channel } => Some(
+            serde_json::to_value(lazysh_agent::account_usage::run(watch_channel)?)
+                .map_err(|_| Error::InvalidEvent)?,
         ),
         Command::Devices { command } => {
             if let lazysh_agent::devices::DeviceCommand::Android {
@@ -245,6 +309,23 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         } else {
             lazysh_agent::claude_config()
         }),
+        Command::CodexConfig => Some(lazysh_agent::hooks::codex_config()),
+        Command::GeminiConfig => Some(lazysh_agent::hooks::gemini_config()),
+        Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
+        Command::KimiConfig => Some(lazysh_agent::hooks::kimi_config()),
+        Command::CopilotConfig => Some(lazysh_agent::hooks::copilot_config()),
+        Command::CursorConfig => Some(lazysh_agent::hooks::cursor_config()),
+        Command::AmpPlugin => Some(lazysh_agent::hooks::amp_plugin()),
+        Command::AiderConfig => Some(lazysh_agent::hooks::aider_config()),
+        Command::AiderNotification => {
+            Store::open(&lazysh_agent::state_directory()?)?
+                .record_aider_notification(chrono::Utc::now())?;
+            None
+        }
+        Command::AiderHookStatus => {
+            Some(Store::open(&lazysh_agent::state_directory()?)?.aider_hook_status()?)
+        }
+        Command::OpencodePlugin => Some(lazysh_agent::hooks::opencode_plugin()),
         Command::ReportedHistory { session_id } => Some(
             Store::open(&lazysh_agent::state_directory()?)?
                 .reported_history(&session_id, chrono::Utc::now())?,
@@ -394,6 +475,9 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     Ok(())
 }
 fn main() -> std::process::ExitCode {
+    if let Some(code) = lazysh_account_usage::worker_main() {
+        return code;
+    }
     match execute(Cli::parse()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

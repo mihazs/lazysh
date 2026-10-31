@@ -1,10 +1,12 @@
 import {expect,test} from 'bun:test';
-import {chmod,mkdir,readFile,stat,symlink,unlink,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,readFile,realpath,stat,symlink,unlink,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
-import {SshFixture,listening,androidSshAcceptance,androidSshCleanup} from './support/androidSsh';
+import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess} from './support/androidSsh';
 import {HerdrFixture,herdrTools} from './support/androidHerdr';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
+import {observeAndroidMoshBackground} from './support/androidMoshBackground';
+import {sshCommand} from './support/sshFixture';
 
 test.skipIf(process.platform!=='linux')('actual owned OpenSSH authenticates only its ephemeral key and emits non-echoable shell proof',async()=>{
   const fixture=await SshFixture.start();
@@ -107,6 +109,30 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced 
   await expect(stat(lost.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
 
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced SSH Mosh witness attributes both receipts to the same live shell and UDP socket',async()=>{
+  const binary=await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Mosh witness binary','sh',['-c','command -v mosh-server'])).trim());
+  const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,moshBinary:binary,observeMoshBootstraps:true});
+  const observer=observeAndroidMoshBackground(fixture);
+  let client:OwnedProcess|undefined;
+  try {
+    const output=`i=0; while test $i -lt 263; do printf '%01000d' 0; i=$((i+1)); done; printf '%s\\n' "$i" >${fixture.directory}/background-samples; `;
+    const script=['before','after'].map(part=>(part==='after'?output:'')+`printf '%s %s\\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" >${fixture.directory}/background-${part}.tmp; mv ${fixture.directory}/background-${part}.tmp ${fixture.directory}/background-${part}; while ! test -f ${fixture.directory}/background-${part}-ack; do sleep .1; done;`).join(' ')+' sleep 90';
+    const command="'mosh-server' new -s -c 256 -p 60000:61000 -l 'LC_ALL=C.UTF-8' -- /bin/sh -c '"+script.replaceAll("'","'\\''")+"'";
+    const bootstrap=await fixture.client(true,command);
+    const connect=(await bootstrap.finish('owned Mosh witness bootstrap',5000)).match(/MOSH CONNECT ([0-9]+) ([A-Za-z0-9+/=]+)/);
+    expect(connect!==null).toBe(true);
+    client=new OwnedProcess('/usr/bin/script',['-q','-e','-c',`stty rows 24 cols 80; exec mosh-client 127.0.0.1 ${connect![1]}`,'/dev/null'],undefined,{...process.env,TERM:'xterm-256color',MOSH_KEY:connect![2]},false);
+    const deadline=performance.now()+5000;
+    while(!await stat(join(fixture.directory,'background-after-ack')).catch(()=>false)) {
+      observer.check();
+      expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(10);
+    }
+    await observer.assertVerified();
+    await writeFile(join(fixture.directory,'mosh-bootstraps'),'bootstrap\nbootstrap\n');
+    await expect(observer.assertVerified()).rejects.toThrow('Owned Mosh bootstrapped again');
+  } finally {await observer.stop();try{await fixture.stop();}finally{await client?.stop();}}
+},15_000);
+
 test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails explicitly while still removing its private directory',async()=>{
   const fixture=await SshFixture.start();
   await fixture.daemon.stop();
@@ -118,14 +144,23 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app perform
   await androidSshAcceptance();
 },610_000);
 
+test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android Mosh survives busy background with the same owned shell and releases its last worker',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,true);
+},610_000);
+
 test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app installs and reuses the verified public companion through its UI',async()=>{
   await androidSshAcceptance(undefined,undefined,true);
 },610_000);
 
 // Real tools are explicit; ordinary host checks never download or guess a binary.
-test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr SSH exec reads its real companion transcript in the private namespace',async()=>{
-  const owned=await HerdrFixture.start(herdrTools());
+for(const mosh of [false,true]) {
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN || (mosh && !process.env.LAZYSH_NATIVE_MOSH_SERVER))(`owned Herdr ${mosh?'Mosh':'SSH'} exec reads its real companion transcript in the private namespace`,async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),mosh?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined);
   try {
+    if(mosh) {
+      const server=await owned.ssh.client(true,'mosh-server --version');
+      expect(await server.finish('owned copied Mosh executable',5000)).toContain('mosh-server (mosh 1.4.0)');
+    }
     const companion=await owned.ssh.client(true,'lazysh-agent transcript --agent claude --path='+owned.transcript+' --offset 0');
     const value=JSON.parse(await companion.finish('owned real companion transcript',5000));
     expect(value.schemaVersion).toBe(1);expect(value.agent).toBe('claude');expect(value.messages).toHaveLength(1);
@@ -134,6 +169,22 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(await listing.finish('owned real Herdr discovery',5000)).toContain(owned.name);
     const snapshot=JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
     const {agent}=owned.metadata();
+    const remote=await owned.ssh.client(true,`herdr --session '${owned.name}' api snapshot`);
+    const remoteSnapshot=JSON.parse(await remote.finish('owned SSH-visible Herdr snapshot',5000)).result?.snapshot;
+    expect(remoteSnapshot?.focused_pane_id===agent.paneId
+      && remoteSnapshot?.agents?.length===1 && remoteSnapshot?.panes?.some((pane:Record<string,unknown>)=>
+        pane.pane_id===agent.paneId && pane.terminal_id===agent.terminalId
+        && pane.workspace_id===agent.workspaceId && pane.tab_id===agent.tabId)
+      && remoteSnapshot.agents[0].terminal_id===agent.terminalId).toBe(true);
+    const probe=await owned.ssh.client(true,`herdr --session '${owned.name}' api guarded`);
+    probe.child.stdin!.end(JSON.stringify({id:'guard',method:'lazysh.guard.cancel_preparation',
+      params:{boot:'0'.repeat(64),ownership:'0'.repeat(64),preparation:0}}));
+    await expect(probe.finish('owned SSH-visible guard preflight',3000))
+      .rejects.toThrow('Owned fixture failed: owned SSH-visible guard preflight; exit=1');
+    let invalid=false;
+    try {const response=JSON.parse(probe.stderr);invalid=response.id==='guard' && response.error?.code==='guard_invalid';}catch{/* Closed unavailable, never retain peer output. */}
+    expect(probe.stdout==='').toBe(true);
+    expect(invalid).toBe(true);
     expect(snapshot.agents).toHaveLength(1);
     expect(snapshot.agents[0]).toMatchObject({agent:'codex',agent_status:'unknown',terminal_id:agent.terminalId,
       workspace_id:agent.workspaceId,tab_id:agent.tabId,pane_id:agent.paneId});
@@ -143,12 +194,17 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(JSON.parse(await reports.finish('owned empty companion reports',5000))).toEqual({schemaVersion:1,sessions:[]});
     await owned.expectBytes(Buffer.alloc(0));
   } finally {await owned.stop();}
+  expect(await listening(owned.ssh.port)).toBe(false);
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
 },15_000);
+}
 
-test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1')('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver',async()=>{
-  const owned=await HerdrFixture.start(herdrTools());
+test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR!=='1').each(['ssh','mosh'] as const)('actual Android WebView explicitly confirms and sends to its original guarded Herdr receiver over %s',async transport=>{
+  const moshBinary=transport==='mosh'?process.env.LAZYSH_NATIVE_MOSH_SERVER:undefined;
+  if(transport==='mosh' && !moshBinary)throw new Error('Explicit pinned Mosh server required for Android Herdr entry');
+  const owned=await HerdrFixture.start(herdrTools(),moshBinary);
   let primary=false;
-  try {await androidSshAcceptance(undefined,owned);}
+  try {await androidSshAcceptance(undefined,owned,false,false,transport==='mosh');}
   catch(error){primary=true;throw error;}
   finally {await androidSshCleanup(primary,[['Herdr',()=>owned.stop()]]);}
 },610_000);

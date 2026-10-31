@@ -8,8 +8,8 @@ pub struct HerdrTree {
     pub workspaces: Vec<Workspace>,
     pub tabs: Vec<Tab>,
     pub panes: Vec<Pane>,
-    #[serde(default)]
-    pub agents: Vec<Agent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<Agent>>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Workspace {
@@ -56,18 +56,7 @@ fn text(value: &str, max: usize) -> Result<()> {
 }
 
 fn target(value: &str, kind: Option<char>) -> Result<()> {
-    let mut parts = value.split(':');
-    let workspace = parts.next().unwrap_or("");
-    let valid = |part: &str, prefix| {
-        part.starts_with(prefix) && part.len() > 1 && part[1..].bytes().all(|b| b.is_ascii_digit())
-    };
-    if value.len() > 50
-        || !valid(workspace, 'w')
-        || match kind {
-            None => parts.next().is_some(),
-            Some(kind) => !parts.next().is_some_and(|p| valid(p, kind)) || parts.next().is_some(),
-        }
-    {
+    if !lazysh_common::valid_herdr_id(value, kind) {
         return Err(SshError::new(
             "invalid_target",
             "Invalid exact Herdr target",
@@ -100,7 +89,10 @@ fn parse(output: &str) -> Result<HerdrTree> {
     if tree.workspaces.len() > 1000
         || tree.tabs.len() > 2000
         || tree.panes.len() > 4096
-        || tree.agents.len() > 4096
+        || tree
+            .agents
+            .as_ref()
+            .is_some_and(|agents| agents.len() > 4096)
     {
         return Err(SshError::new(
             "output_too_large",
@@ -152,7 +144,7 @@ fn parse(output: &str) -> Result<HerdrTree> {
         }
     }
     let mut identities = std::collections::HashSet::new();
-    for a in &tree.agents {
+    for a in tree.agents.iter().flatten() {
         if !identities.insert((&a.terminal_id, &a.pane_id))
             || text(&a.terminal_id, 256).is_err()
             || !status(&a.agent_status)
@@ -193,6 +185,9 @@ pub enum HerdrAction {
         label: String,
     },
     FocusTab {
+        target: String,
+    },
+    FocusPane {
         target: String,
     },
     FocusAgent {
@@ -257,6 +252,15 @@ fn action_command(session: &str, action: &HerdrAction) -> Result<String> {
             target(value, Some('t'))?;
             format!("tab focus {}", quote(value))
         }
+        HerdrAction::FocusPane { target: value } => {
+            target(value, Some('p'))?;
+            text(session, 200)?;
+            return Ok(format!(
+                "lazysh-agent herdr-focus-pane --session {} --pane {}",
+                quote(session),
+                quote(value)
+            ));
+        }
         HerdrAction::FocusAgent { target: value } => {
             target(value, Some('p'))?;
             format!("agent focus {}", quote(value))
@@ -305,12 +309,60 @@ pub async fn herdr_action(
     access: AccessLease,
 ) -> crate::ssh::AccessResult<()> {
     access
-        .run(crate::multiplexer::execute_action(
-            &state,
-            &access,
-            &session_id,
-            action_command(&name, &action),
-        ))
+        .run(async {
+            let command = action_command(&name, &action)?;
+            let session = state.session(&session_id).await?;
+            let pane = match &action {
+                HerdrAction::FocusPane { target } => Some(target.as_str()),
+                _ => None,
+            };
+            let command = if pane.is_some() {
+                crate::companion::required_command(&session, command, "lazysh-herdr-companion-required", &access).await?
+            } else {
+                command
+            };
+            let focus = matches!(
+                action,
+                HerdrAction::FocusWorkspace { .. }
+                    | HerdrAction::FocusTab { .. }
+                    | HerdrAction::FocusPane { .. }
+                    | HerdrAction::FocusAgent { .. }
+            );
+            let retained = if focus {
+                crate::herdr_guard::retire_for_view(&session, &access)
+                    .await?
+                    .map(|permit| permit as std::sync::Arc<dyn Send + Sync>)
+            } else {
+                None
+            };
+            let output = crate::ssh::exec_bounded(
+                &session,
+                command,
+                &access,
+                crate::ssh::OP_TIMEOUT,
+                crate::ssh::FILE_LIMIT as usize,
+                retained,
+            )
+            .await?;
+            if let Some(pane) = pane {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct Focused {
+                    schema_version: u8,
+                    status: String,
+                    pane_id: String,
+                }
+                if output.trim()=="lazysh-herdr-companion-required" {return Err(SshError::new("herdr_focus_companion_required","Install or update the companion from Agents for exact Herdr pane navigation"));}
+                let reply: Focused = serde_json::from_str(&output)?;
+                if reply.schema_version != 1 || reply.status != "focused" || reply.pane_id != pane {
+                    return Err(SshError::new(
+                        "invalid_output",
+                        "Invalid exact Herdr focus reply",
+                    ));
+                }
+            }
+            Ok(())
+        })
         .await
 }
 
@@ -342,8 +394,8 @@ mod tests {
                 agent[key] = serde_json::json!({"private":"not retained"});
             }
             let tree = parse(&source.to_string()).unwrap();
-            assert_eq!(tree.agents[0].agent_status, status);
-            let projected = serde_json::to_value(&tree.agents[0]).unwrap();
+            assert_eq!(tree.agents.as_ref().unwrap()[0].agent_status, status);
+            let projected = serde_json::to_value(&tree.agents.as_ref().unwrap()[0]).unwrap();
             assert_eq!(
                 projected,
                 serde_json::json!({"terminal_id":"terminal-3","workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","agent":"codex","name":null,"agent_status":status})
@@ -351,6 +403,61 @@ mod tests {
             assert!(!serde_json::to_string(&tree)
                 .unwrap()
                 .contains("not retained"));
+        }
+    }
+    #[test]
+    fn accepts_herdr_public_alphabet_in_snapshots_and_exact_action_targets() {
+        for suffix in [
+            "Z",
+            "2E",
+            "2N",
+            "C",
+            "F",
+            "123456789ABCDEFG",
+            "HJKMNPQRSTVWXYZ0",
+        ] {
+            let workspace = format!("w{suffix}");
+            let tab = format!("{workspace}:t{suffix}");
+            let pane = format!("{workspace}:p{suffix}");
+            let mut source = reported_snapshot();
+            let snapshot = &mut source["result"]["snapshot"];
+            for collection in ["workspaces", "tabs", "panes", "agents"] {
+                snapshot[collection][0]["workspace_id"] = workspace.clone().into();
+                if collection != "workspaces" {
+                    snapshot[collection][0]["tab_id"] = tab.clone().into();
+                }
+                if matches!(collection, "panes" | "agents") {
+                    snapshot[collection][0]["pane_id"] = pane.clone().into();
+                }
+            }
+            let tree = parse(&source.to_string()).unwrap();
+            assert_eq!(tree.agents.unwrap()[0].pane_id, pane);
+            assert!(target(&workspace, None).is_ok());
+            assert!(target(&tab, Some('t')).is_ok());
+            assert_eq!(
+                action_command(
+                    "owned",
+                    &HerdrAction::FocusPane {
+                        target: pane.clone()
+                    }
+                )
+                .unwrap(),
+                format!("lazysh-agent herdr-focus-pane --session 'owned' --pane '{pane}'")
+            );
+            assert_eq!(
+                action_command(
+                    "owned",
+                    &HerdrAction::FocusAgent {
+                        target: pane.clone()
+                    }
+                )
+                .unwrap(),
+                format!("herdr --session 'owned' agent focus '{pane}'")
+            );
+        }
+        for suffix in ["I", "L", "O", "U", "a", "é", "-", "_", "1;id", "1:2", ""] {
+            assert!(target(&format!("w{suffix}"), None).is_err());
+            assert!(target(&format!("w1:p{suffix}"), Some('p')).is_err());
         }
     }
     #[test]
@@ -364,7 +471,13 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("terminal_id");
-        assert!(parse(&legacy.to_string()).unwrap().agents.is_empty());
+        let tree = parse(&legacy.to_string()).unwrap();
+        assert!(tree.agents.is_none());
+        assert!(serde_json::to_value(&tree).unwrap().get("agents").is_none());
+        let mut empty = reported_snapshot();
+        empty["result"]["snapshot"]["agents"] = serde_json::json!([]);
+        let projected = serde_json::to_value(parse(&empty.to_string()).unwrap()).unwrap();
+        assert_eq!(projected["agents"], serde_json::json!([]));
         for directory in [
             None,
             Some(serde_json::Value::Null),
@@ -547,8 +660,9 @@ mod tests {
         )
         .unwrap());
         let reported = snapshot();
-        assert_eq!(reported.agents.len(), 1);
-        let agent = &reported.agents[0];
+        let agents = reported.agents.as_ref().unwrap();
+        assert_eq!(agents.len(), 1);
+        let agent = &agents[0];
         assert_eq!(agent.agent.as_deref(), Some("codex"));
         assert_eq!(agent.agent_status, "blocked");
         assert_eq!(agent.terminal_id, terminal);

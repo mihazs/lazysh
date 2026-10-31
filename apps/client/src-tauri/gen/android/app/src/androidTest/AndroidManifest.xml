@@ -2,6 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <queries><package android:name="app.lazysh.client" /></queries>
     <application>
+        <service android:name="app.lazysh.client.OwnedImeService" android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/owned_input_method" />
+        </service>
+        <provider android:name="app.lazysh.client.OwnedImeService$Control"
+            android:authorities="app.lazysh.client.test.imefixture" android:exported="true" />
         <provider
             android:name="app.lazysh.client.OwnedClipboardProvider"
             android:authorities="app.lazysh.client.test.clipboardfixture"

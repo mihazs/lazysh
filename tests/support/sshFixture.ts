@@ -1,7 +1,7 @@
 import {OwnedProcess, identity, descendants, type OwnedPid} from './ownedProcess';
 import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir, userInfo} from 'node:os';
-import {isAbsolute, join} from 'node:path';
+import {isAbsolute, join, normalize} from 'node:path';
 import {createServer, connect} from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -42,7 +42,7 @@ export async function stopOwnedTree(daemon:OwnedProcess,label:'SSH'|'Herdr'='SSH
     const root=await daemon.liveIdentity();
     if(!root)throw new Error(`Owned ${label} root identity unavailable`);
     await retireDescendants(root);
-    // The explicit mount supervisor exits cleanly when its owned sshd child is
+    // The explicit mount supervisor exits cleanly when its owned child is
     // retired. A root missing before retirement still fails the check above.
     if((await daemon.liveIdentity())?.start!==root.start && !(cleanSupervisorExit && daemon.child.exitCode===0))throw new Error(`Owned ${label} root identity lost`);
   } catch(error){primary=error;}
@@ -59,9 +59,15 @@ export class SshFixture {
   get expected(){return `SSH_${this.nonce}_END`;}
   get challenge(){return `printf 'SSH_%s_END\\n' '${this.nonce}'`;}
   readonly username=userInfo().username;
-  private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv,private readonly privateTtyGroup=false) {this.nonce=nonce;}
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean}={}) {
+  private constructor(readonly directory:string,readonly port:number,readonly privateKey:string,readonly fingerprint:string,readonly daemon:OwnedProcess,nonce:string,readonly environment?:NodeJS.ProcessEnv,private readonly privateTtyGroup=false,private readonly toolNamespace?:string[]) {this.nonce=nonce;}
+  herdrServer(args:string[]) {
+    if(!this.toolNamespace || !this.environment)throw new Error('Owned Herdr namespace required');
+    return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin/herdr'),...args],this.directory,this.environment);
+  }
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean}={}) {
+    if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
+    if(options.moshBinary && (options.companion || !options.privateTtyGroup))throw new Error('Mosh fixture requires its own private namespace');
     if(tools && options.companion)throw new Error('Companion installation requires a fixture without preinstalled tools');
     const directory=await mkdtemp(join(tools||options.companion?'/tmp':tmpdir(),tools?'lazysh-h-':'lazysh-android-ssh-'));
     let daemon:OwnedProcess|undefined;
@@ -83,14 +89,16 @@ export class SshFixture {
       const prompt=`UI_PROMPT_${nonce}> `;
       let environment:NodeJS.ProcessEnv|undefined;
       let subsystem:string|undefined;
-      if(options.companion) {
+      if(options.companion || options.moshBinary) {
         for(const candidate of ['/usr/lib/openssh/sftp-server','/usr/lib/ssh/sftp-server']) {
           if(await stat(candidate).then(value=>value.isFile()).catch(()=>false)){subsystem=candidate;break;}
         }
-        if(!subsystem)throw new Error('Owned companion fixture requires installed OpenSSH SFTP server');
-        environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:'/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
-        for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]) {
-          const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
+        if(!subsystem)throw new Error('Owned file-transfer fixture requires installed OpenSSH SFTP server');
+        if(!tools) {
+          environment={HOME:directory,ZDOTDIR:directory,ENV:'/dev/null',BASH_ENV:'/dev/null',PATH:'/usr/bin:/bin',SHELL:'/bin/sh',TERM:'xterm-256color',LANG:'C.UTF-8'};
+          for(const [key,child] of [['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['LAZYSH_STATE_DIR','state'],['XDG_RUNTIME_DIR','runtime']]) {
+            const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
+          }
         }
       }
       if(tools) {
@@ -104,16 +112,27 @@ export class SshFixture {
           const path=join(directory,child);await mkdir(path,{mode:0o700});environment[key]=path;
         }
       }
+      if(options.moshBinary) {
+        const binary=options.moshBinary;
+        if(!isAbsolute(binary) || !(await stat(binary)).isFile())throw new Error('Explicit owned Mosh binary required');
+        const bin=join(directory,'bin');await mkdir(bin,{mode:0o700,recursive:true});
+        await copyFile(binary,join(bin,'mosh-server'));await chmod(join(bin,'mosh-server'),0o700);
+        environment!.PATH=bin+':/usr/bin:/bin';
+      }
+      const observeBootstrap=options.observeMoshBootstraps?`case "$SSH_ORIGINAL_COMMAND" in "'mosh-server' new "*|"sh -c 'exec 3>&1; exec "*) printf 'bootstrap\\n' >> ${directory}/mosh-bootstraps;; esac; `:'';
+      const commandSeconds=options.companion?companionFixtureBudget/1000:90;
       const config=join(directory,'sshd_config');
       await writeFile(config,[`ListenAddress 127.0.0.1`,`Port ${port}`,`HostKey ${directory}/host`,
         `AuthorizedKeysFile ${directory}/authorized_keys`,`PidFile ${directory}/sshd.pid`,
         `AllowUsers ${username}`,'PermitUserRC no','PrintMotd no','PrintLastLog no','PasswordAuthentication no','KbdInteractiveAuthentication no','UsePAM no','StrictModes no','LogLevel ERROR',
         environment?`SetEnv ${Object.entries(environment).map(([key,value])=>`${key}=${value}`).join(' ')}`:`SetEnv HOME=${directory} ZDOTDIR=${directory} ENV=${directory}/no-profile BASH_ENV=${directory}/no-profile PATH=/usr/bin:/bin`,
-        ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${companionFixtureBudget/1000}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s ${companionFixtureBudget/1000}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${companionFixtureBudget/1000}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
+        ...(subsystem?[`Subsystem sftp ${subsystem}`,`ForceCommand cd ${directory} && if test "$SSH_ORIGINAL_COMMAND" = '${subsystem}'; then exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s ${subsystem} -d ${directory}; elif test -n "$SSH_ORIGINAL_COMMAND"; then ${observeBootstrap}exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s ${commandSeconds}s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`]:[
         environment?`ForceCommand cd ${directory} && if test -n "$SSH_ORIGINAL_COMMAND"; then exec /usr/bin/timeout --kill-after=1s 90s /bin/sh -c "$SSH_ORIGINAL_COMMAND"; else exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i; fi`:`ForceCommand cd ${directory} && exec /usr/bin/timeout --kill-after=1s 90s /usr/bin/env 'PS1=${prompt}' /bin/sh -i`]),
         `Banner none`,''].join('\n'),{mode:0o600});
       const arguments_=['-D','-e','-f',config];
-      if(options.privateTtyGroup) {
+      const privateTtyGroup=options.privateTtyGroup===true || !!tools;
+      let toolNamespace:string[]|undefined;
+      if(privateTtyGroup) {
         // An unprivileged user namespace maps only our primary group. OpenSSH
         // otherwise chowns its PTY to the host's unmapped tty group and rejects it.
         // Change only this daemon's read-only NSS view; never the host group file.
@@ -127,31 +146,54 @@ export class SshFixture {
         fields[2]=String(userInfo().gid);groups[tty[0]]=fields.join(':');
         const groupFile=join(directory,'namespace-group');
         await writeFile(groupFile,groups.join('\n'),{mode:0o600,flag:'wx'});
-        daemon=new OwnedProcess('/usr/bin/bwrap',['--die-with-parent','--unshare-user','--dev-bind','/','/','--ro-bind',groupFile,groupSource,'--',sshd,...arguments_]);
+        let mounts=['--dev-bind','/','/'];
+        if(tools) {
+          // Host root is unmapped in this user namespace; give the companion
+          // an owned root rather than weakening its state-ancestor checks.
+          const root=join(directory,'namespace-root');await mkdir(root,{mode:0o700});
+          mounts=['--bind',root,'/','--dev-bind','/dev','/dev','--dir','/tmp','--bind',directory,directory];
+          for(const system of ['/usr','/etc','/bin','/sbin','/lib','/lib64']) {
+            if(await stat(system).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))
+              mounts.push('--ro-bind',system,system);
+          }
+          // sshd chdirs to the NSS account home before ForceCommand, regardless
+          // of SetEnv HOME. Bind only our owned directory at that private path.
+          const accountHome=userInfo().homedir;
+          if(!isAbsolute(accountHome) || normalize(accountHome)!==accountHome || accountHome==='/' || /[\x00-\x1f\x7f]/.test(accountHome)
+            || [directory,'/usr','/etc','/bin','/sbin','/lib','/lib64','/dev','/proc','/tmp'].some(path=>
+              path===accountHome || path.startsWith(accountHome+'/') || accountHome.startsWith(path+'/')))
+            throw new Error('Unsupported owned SSH account home');
+          mounts.push('--bind',directory,accountHome);
+        }
+        const namespace=['--die-with-parent','--unshare-user',...mounts,'--ro-bind',groupFile,groupSource];
+        // Herdr shares this owned filesystem while retaining Bun's PID/network
+        // namespace, so receiver PID/start records remain directly verifiable.
+        if(tools)toolNamespace=[...namespace,'--proc','/proc'];
+        daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary?['--unshare-pid','--proc','/proc']:tools?['--proc','/proc']:[]),'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
-      if(!await daemon.liveIdentity())throw new Error('Owned SSH root identity unavailable');
-      const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,options.privateTtyGroup);
+      if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
+      const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,privateTtyGroup,toolNamespace);
       const deadline=performance.now()+3000;
       while(!await listening(port)) {
-        if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error('Owned sshd not ready');
+        if(daemon.child.exitCode!==null || performance.now()>=deadline)throw new Error(`Owned sshd not ready; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
         await delay(10);
       }
       return fixture;
     } catch(error) {
-      try{if(daemon)await stopOwnedTree(daemon,'SSH',options.privateTtyGroup===true);}catch{console.error('Owned SSH startup cleanup failed');}
+      try{if(daemon)await stopOwnedTree(daemon,'SSH',options.privateTtyGroup===true || !!tools);}catch{console.error('Owned SSH startup cleanup failed');}
       try{await rm(directory,{recursive:true,force:true});}catch{console.error('Owned SSH startup directory cleanup failed');}
       throw error;
     }
   }
-  private async keyOptions(identity=true) {
+  private async keyOptions(identity=true,port=this.port) {
     const known=join(this.directory,'known_hosts');
-    await writeFile(known,`[127.0.0.1]:${this.port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
+    await writeFile(known,`[127.0.0.1]:${port} ${await readFile(join(this.directory,'host.pub'),'utf8')}`,{mode:0o600});
     return ['-F','/dev/null','-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','IdentityAgent=none',
       '-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${known}`,'-o','GlobalKnownHostsFile=/dev/null',
       ...(identity?['-i',join(this.directory,'user')]:['-o','IdentityFile=none'])];
   }
-  async client(identity=true,remoteCommand?:string) {
-    return new OwnedProcess('ssh',[remoteCommand===undefined?'-tt':'-T','-p',String(this.port),...await this.keyOptions(identity),`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
+  async client(identity=true,remoteCommand?:string,port=this.port) {
+    return new OwnedProcess('ssh',[remoteCommand===undefined?'-tt':'-T','-p',String(port),...await this.keyOptions(identity,port),`${this.username}@127.0.0.1`,...(remoteCommand===undefined?[]:[remoteCommand])]);
   }
   async sftp() {
     return new OwnedProcess('sftp',['-b','-','-P',String(this.port),...await this.keyOptions(),`${this.username}@127.0.0.1`]);

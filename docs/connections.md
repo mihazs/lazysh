@@ -18,12 +18,34 @@ if it is absent, lazysh creates it using the selected multiplexer. It never sele
 the first available session. Choose **None — normal terminal** to restore the usual
 connection flow. Existing hosts default to None.
 
-Direct entry uses a fresh verified SSH connection and keeps the saved transport
-preference unchanged; both dialogs explain this. The remote tool must be installed
-and runnable, or connection reports an error without opening another multiplexer.
-Closing the bootstrap terminal preserves the attached display's original SSH
-connection and access lease. Disconnecting the resulting tab closes that display,
-while the remote persistent session follows the multiplexer's normal lifecycle.
+Direct entry starts with a fresh verified SSH control connection. A saved Mosh
+preference now opens the named multiplexer inside Mosh; SSH entry remains selectable.
+Auto entry tries Mosh, then SSH when the failure is known to precede entry dispatch.
+It does not attempt Eternal Terminal composition. A saved ET preference continues
+to use SSH for direct entry, without changing the saved preference. Plain-terminal
+Auto retains its existing Mosh → ET → SSH order. The dialog identifies these choices.
+
+The remote multiplexer must be installed and runnable. Mosh entry requires a Unix
+host and its private startup receipt; tmux also requires a verified display binding.
+A host advertising guarded Herdr must support its startup-FD extension. Missing
+guard support on stock Herdr retains ordinary terminal capabilities; an advertised
+guard with failed or unsupported startup is an error, never an ordinary retry.
+Choose SSH explicitly when Mosh entry is unavailable. An uncertain startup or claim
+does not automatically open a replacement display, including in Auto mode.
+
+Mosh begins UDP negotiation before the real PTY child supplies its receipt. That
+receipt stays on the original authenticated SSH bootstrap channel, outside terminal
+output. After admission, closing the bootstrap preserves the attached display and
+original access lease. Closing a Mosh receipt/control connection does not replace
+its UDP terminal or recreate input authority. Disconnecting the resulting tab closes
+that display; the remote persistent session follows the multiplexer's normal lifecycle.
+
+Workspace restoration retains the exact Mosh/Auto entry intention, multiplexer
+name and tmux server context. It authenticates afresh and never restores tickets,
+terminal contents or input authority. Zellij restoration remains manual.
+Ordinary Herdr restoration follows its existing name-based CLI semantics: if the
+named server disappears after preflight, Herdr can create a new server with that
+name. A saved name is not an immutable server identity or proof of resumed agents.
 
 Session names are literal text, at most 200 UTF-8 bytes, with no control characters.
 tmux names cannot contain colons or periods; Zellij names cannot start with a dash.

@@ -3,7 +3,7 @@ import { StrictMode, useState } from "react";
 import {uiI18n,useUi} from "./i18n/core";
 import {uiErrorText,type UiErrorCause} from "./i18n/localError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {prepareClipboardPlatform} from "./deviceClipboard";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
 import { defaults, getPreferences, savePreferences } from "./preferences";
@@ -16,7 +16,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: () => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -42,7 +42,57 @@ afterEach(async () => {cleanup(); await uiI18n.changeLanguage("en"); vi.useRealT
 function mount() {
   return render(<TerminalPane session={{id: "ssh", name: "Host", connected: true, terminal} as unknown as LiveSession} active reportError={vi.fn()} />);
 }
+function mountInputOwner() {
+  const element=document.createElement('div'), textarea=document.createElement('textarea');
+  element.append(textarea); Object.assign(terminal,{element,textarea});
+  let mark!:()=>void, receive!:(data:string)=>void;
+  terminal._core.coreService.onUserInput=(listener:()=>void)=>{mark=listener;return{dispose(){}};};
+  terminal.onData=listener=>{receive=listener;return{dispose(){}};};
+  terminal.focus.mockImplementation(()=>textarea.focus());
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const view=render(<TerminalPane session={session} active reportError={vi.fn()} />);
+  const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
+  return {textarea,session,view,emit};
+}
+function touchScrollFixture() {
+  const target = document.createElement('div');
+  Object.assign(terminal, {element: target});
+  const wheels: WheelEvent[] = [];
+  target.addEventListener('wheel', event => wheels.push(event));
+  const view = mount();
+  const canvas = screen.getByLabelText('Terminal for Host');
+  const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
+    bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
+  }));
+  return {view, canvas, wheels, touch};
+}
 describe("terminal interactions", () => {
+  it.each(['hidden','inactive','unfocused window','unfocused editor'] as const)('rejects user input for an %s context while preserving protocol replies',boundary=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(false);
+    try {
+      const owner=mountInputOwner();
+      owner.emit('foreground');expect(mocks.write).toHaveBeenLastCalledWith('ssh','foreground');mocks.write.mockClear();
+      if(boundary==='hidden'){hidden.mockReturnValue(true);fireEvent(document,new Event('visibilitychange'));}
+      else if(boundary==='inactive')owner.view.rerender(<TerminalPane session={owner.session} active={false} reportError={vi.fn()} />);
+      else if(boundary==='unfocused window')windowFocus.mockReturnValue(false);
+      else owner.textarea.blur();
+      owner.emit('late IME commit');expect(mocks.write).not.toHaveBeenCalled();
+      owner.emit('\x1b[1;1R',false);expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','\x1b[1;1R');
+    } finally {windowFocus.mockRestore();hidden.mockRestore();}
+  });
+  it('preserves guarded composer paste with a focused composer instead of the terminal editor',()=>{
+    const windowFocus=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    try {
+      const owner=mountInputOwner();terminal.paste.mockImplementation(text=>owner.emit(text));
+      fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+      const composer=screen.getByLabelText('Compose text');fireEvent.change(composer,{target:{value:'owned draft'}});composer.focus();
+      expect(document.activeElement).toBe(composer);
+      fireEvent.click(screen.getByRole('button',{name:'Paste draft'}));
+      expect(mocks.write).toHaveBeenCalledExactlyOnceWith('ssh','owned draft');
+    } finally {windowFocus.mockRestore();}
+  });
+
   it('offers a metadata-only retry, reports loading, and requires a new Paste gesture after readiness', async () => {
     vi.stubGlobal('isTauri', true);
     mocks.clipboardIsAndroid.mockRejectedValueOnce(new Error('private metadata failure'));
@@ -307,7 +357,8 @@ describe("terminal interactions", () => {
     expect(mocks.writeSequence).toHaveBeenLastCalledWith("ssh", ["\x02","T"]);
     fireEvent.click(screen.getByRole("button", {name: "D-pad right corner"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x7f");
-    fireEvent.doubleClick(screen.getByRole("button", {name: "ctrl"}));
+    fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
+    fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
     fireEvent.click(screen.getByRole("button", {name: "c"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x03");
     fireEvent.click(screen.getByRole("button", {name: "d"}));
@@ -317,12 +368,12 @@ describe("terminal interactions", () => {
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "c");
   });
   it("uses terminal modifier sequences for toolbar arrows and Backspace", () => {
-    savePreferences({...defaults, toolbar: [...defaults.toolbar, "meta", "backspace"]});
+    savePreferences({...defaults, toolbar: [...defaults.toolbar, "backspace"]});
     mount();
     fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
     fireEvent.click(screen.getByRole("button", {name: "Arrow left"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x1b[1;5D");
-    fireEvent.click(screen.getByRole("button", {name: "meta"}));
+    fireEvent.click(screen.getByRole("button", {name: "Alt"}));
     fireEvent.click(screen.getByRole("button", {name: "Arrow right"}));
     expect(mocks.write).toHaveBeenLastCalledWith("ssh", "\x1b[1;3C");
     fireEvent.click(screen.getByRole("button", {name: "ctrl"}));
@@ -350,17 +401,11 @@ describe("terminal interactions", () => {
   });
   it("routes vertical touch through xterm wheel handling even with configurable gestures disabled", () => {
     savePreferences({...defaults, pinchZoom: false, gestures: {left:'none',right:'none',up:'none',down:'none'}, bodyGestures: {...defaults.bodyGestures,tap:'none',doubleTap:'none',tripleTap:'none',swipeLeft:'none',swipeRight:'none'}});
-    const target = document.createElement('div');
-    Object.assign(terminal, {element: target});
-    const wheels: WheelEvent[] = [];
-    target.addEventListener('wheel', event => wheels.push(event));
-    const view = mount();
-    const canvas = screen.getByLabelText('Terminal for Host');
-    const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {bubbles:true,cancelable:true,touches:[{identifier:1,clientX:x,clientY:y}] as Touch[]}));
+    const {view, canvas, wheels, touch} = touchScrollFixture();
     touch('touchstart',100,100);
     expect(touch('touchmove',101,70)).toBe(false);
     touch('touchmove',102,130);
-    expect(wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[30,101,70],[-60,102,130]]);
+    expect(wheels.map(event=>[event.deltaY,event.clientX,event.clientY])).toEqual([[30,100,100],[-60,100,100]]);
     touch('touchend',102,130);
     touch('touchmove',102,160);
     expect(wheels).toHaveLength(2);
@@ -377,6 +422,24 @@ describe("terminal interactions", () => {
     view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
     touch('touchstart',100,100); touch('touchmove',100,160);
     expect(wheels).toHaveLength(3);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it('keeps one continuous drag routed to its original pane across boundaries and reversal until end or cancel', () => {
+    const {wheels, touch} = touchScrollFixture();
+    touch('touchstart',140,180);
+    const trace=[[142,168],[144,145],[245,100],[280,55],[281,12],[280,90],[141,190]];
+    for (const [x,y] of trace) expect(touch('touchmove',x,y)).toBe(false);
+    // Herdr dispatches each wheel to the pane under that report's coordinates.
+    const originalPane = wheels.filter(event=>event.clientX>=80&&event.clientX<200&&event.clientY>=120&&event.clientY<300);
+    expect(originalPane).toHaveLength(trace.length);
+    expect(wheels.map(event=>[event.clientX,event.clientY])).toEqual(trace.map(()=>[140,180]));
+    expect(wheels.map(event=>event.deltaY)).toEqual([12,23,45,45,43,-78,-100]);
+    touch('touchend',141,190); touch('touchmove',141,210);
+    expect(wheels).toHaveLength(trace.length);
+    touch('touchstart',310,240); touch('touchmove',315,200);
+    expect([wheels.at(-1)!.clientX,wheels.at(-1)!.clientY,wheels.at(-1)!.deltaY]).toEqual([310,240,40]);
+    touch('touchcancel',315,200); touch('touchmove',315,100);
+    expect(wheels).toHaveLength(trace.length+1);
     expect(mocks.write).not.toHaveBeenCalled();
   });
   it("preserves system touch gestures in screen-reader mode and reserves configured multitouch", () => {
@@ -551,7 +614,7 @@ it.each([
 
 it('retains search result, modifier state and exact input bytes across language changes',async()=>{
   render(<LocaleTerminal/>);
-  const ctrl=screen.getByRole('button',{name:'ctrl'});fireEvent.doubleClick(ctrl);
+  const ctrl=screen.getByRole('button',{name:'ctrl'});fireEvent.click(ctrl);fireEvent.click(ctrl);
   fireEvent.click(screen.getByRole('button',{name:'Find'}));
   const input=screen.getByRole('textbox',{name:'Search terminal history'});
   fireEvent.change(input,{target:{value:'world'}});input.focus();fireEvent.submit(input.closest('form')!);
@@ -636,7 +699,7 @@ it.each(['key','chord'] as const)('retains a synchronous %s parser cause without
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw new LocalUiError('validationUnknownKeyValue1','{{<literal>}}');});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'c':'Parser fixture'}));
+    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Parser fixture'}));
     expect(parse).toHaveBeenCalledTimes(1);
     for(const locale of ['pt-BR','es','en']){
       await act(async()=>{await uiI18n.changeLanguage(locale);});
@@ -651,8 +714,116 @@ it.each(['key','chord'] as const)('preserves the original raw formatting of the 
   if(branch==='key')fireEvent.click(screen.getByRole('button',{name:'ctrl'}));
   const parse=vi.spyOn(parser,branch==='key'?'parseChord':'parseChordSteps').mockImplementation(()=>{throw raw;});
   try{
-    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'c':'Raw parser fixture'}));
+    fireEvent.click(screen.getByRole('button',{name:branch==='key'?'tab':'Raw parser fixture'}));
     await act(async()=>{await uiI18n.changeLanguage('es');});
     expect(screen.getByRole('alert').textContent).toBe(branch==='key'?String(raw):raw.message);
   }finally{parse.mockRestore();}
+});
+
+
+describe("extended touch toolbar", () => {
+  it("keeps Tab, arrows and Attach momentary and dispatches only once after a touch release", () => {
+    vi.useFakeTimers(); const onOpenAttachments=vi.fn();
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    for (const name of ['tab','Arrow right','Attach']) {
+      const button=screen.getByRole('button',{name});
+      fireEvent.pointerDown(button,{pointerId:11,pointerType:'touch'});
+      fireEvent.pointerUp(button,{pointerId:11,pointerType:'touch'}); fireEvent.click(button,{detail:1});
+      expect(button.getAttribute('aria-pressed')).toBeNull();
+      act(()=>vi.advanceTimersByTime(1200));
+    }
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\t','\x1b[C']);
+    expect(onOpenAttachments).toHaveBeenCalledOnce();
+  });
+  it("cycles one-shot and locked modifiers, latches navigation Shift, and sends named keys", () => {
+    savePreferences({...defaults, toolbar:[...defaults.toolbar,"altgr","F12","PageUp",","]}); mount();
+    const key=(name:string)=>screen.getByRole('button',{name});
+    fireEvent.click(key('ctrl')); fireEvent.click(key('ctrl'));
+    expect(key('ctrl · lock').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(key('F12')); fireEvent.click(key('PageUp'));
+    expect(mocks.write.mock.calls.map(call=>call[1])).toEqual(['\x1b[24;5~','\x1b[5;5~']);
+    fireEvent.click(key('ctrl · lock')); fireEvent.click(key('Shift')); fireEvent.click(key('Arrow left'));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;2D');
+    expect(key('Shift').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(key('tab')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[Z');
+    expect(key('Shift').getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(key('AltGr')); fireEvent.click(key('Arrow right'));
+    expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[1;7C');
+    fireEvent.click(key(',')); expect(mocks.write).toHaveBeenLastCalledWith('ssh',',');
+    fireEvent.click(key('ctrl')); fireEvent.click(key('ctrl')); fireEvent.click(key('AltGr'));
+    expect(key('ctrl · lock').getAttribute('aria-pressed')).toBe('true');
+    expect(key('Alt').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(key('PageUp')); expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[5;7~');
+  });
+  it("repeats held navigation and stops on pointer cancellation and inactive sessions", () => {
+    vi.useFakeTimers(); const view=mount();
+    const left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.pointerDown(left,{pointerId:7});
+    expect(mocks.write).not.toHaveBeenCalled();
+    act(()=>vi.advanceTimersByTime(560)); expect(mocks.write).toHaveBeenCalledTimes(3);
+    fireEvent.pointerCancel(left,{pointerId:7}); act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
+    fireEvent.pointerDown(left,{pointerId:8});
+    view.rerender(<TerminalPane session={{id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession} active={false} reportError={vi.fn()} />);
+    act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(3);
+  });
+  it.each((["pending", "repeating"] as const).flatMap(phase=>[true,false].map(notify=>({phase,notify}))))("cancels a $phase held key when hidden (visibility event=$notify)", ({phase,notify}) => {
+    vi.useFakeTimers(); mount();
+    for (const name of ['ctrl','Alt']) {
+      const modifier=screen.getByRole('button',{name}); fireEvent.click(modifier); fireEvent.click(modifier);
+    }
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+    const left=screen.getByRole('button',{name:'Arrow left'});
+    fireEvent.pointerDown(left,{pointerId:9});
+    if (phase === 'repeating') act(()=>vi.advanceTimersByTime(560));
+    const sent=mocks.write.mock.calls.length;
+    expect(sent).toBe(phase === 'pending' ? 0 : 3);
+    const hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);
+    try {
+      if(notify)fireEvent(document,new Event('visibilitychange'));
+      act(()=>vi.advanceTimersByTime(2000)); expect(mocks.write).toHaveBeenCalledTimes(sent);
+      for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name}).getAttribute('aria-pressed')).toBe('false');
+      hidden.mockReturnValue(false); fireEvent(document,new Event('visibilitychange'));
+      act(()=>vi.advanceTimersByTime(800)); expect(mocks.write).toHaveBeenCalledTimes(sent);
+      fireEvent.pointerUp(left,{pointerId:9}); fireEvent.click(left,{detail:1});
+      expect(mocks.write).toHaveBeenCalledTimes(sent);
+      fireEvent.click(screen.getByRole('button',{name:'Arrow right'}));
+      expect(mocks.write).toHaveBeenLastCalledWith('ssh','\x1b[C');
+    } finally {hidden.mockRestore();}
+  });
+  it("opens the existing attachment flow only for an active connected remote terminal", () => {
+    const onOpenAttachments=vi.fn();
+    const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+    const view=render(<TerminalPane session={session} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    fireEvent.click(screen.getByRole('button',{name:'Attach'})); expect(onOpenAttachments).toHaveBeenCalledOnce();
+    view.rerender(<TerminalPane session={{...session,local:true}} active reportError={vi.fn()} onOpenAttachments={onOpenAttachments} />);
+    expect(screen.getByRole('button',{name:'Attach'})).toHaveProperty('disabled',true);
+  });
+});
+
+it("keeps ordinary terminal input usable and disables virtual modifiers when xterm provenance is unavailable", () => {
+  terminal._core.coreService.onUserInput = () => {throw new Error('different xterm internals');}; mount();
+  for (const name of ['ctrl','Alt','Shift']) expect(screen.getByRole('button',{name})).toHaveProperty('disabled',true);
+  fireEvent.click(screen.getByRole('button',{name:'esc'})); expect(mocks.write).toHaveBeenCalledWith('ssh','\x1b');
+});
+
+it("portals only the active terminal controls into the existing header and retains literal drafts", () => {
+  const target=document.createElement('div'); document.body.append(target);
+  const session={id:'ssh',name:'Host',connected:true,terminal} as unknown as LiveSession;
+  const reportError=vi.fn(); const view=render(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
+  try {
+    expect(within(target).getAllByRole('button')).toHaveLength(2);
+    fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
+    fireEvent.change(screen.getByLabelText('Compose text'),{target:{value:'c'}});
+    const paste=screen.getByRole('button',{name:'Paste draft'});
+    expect(paste.textContent).toBe(''); expect(paste.querySelector('svg')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Close composer'}));
+    fireEvent.click(within(target).getByRole('button',{name:'Compose'}));
+    expect(screen.getByLabelText('Compose text')).toHaveProperty('value','c');
+    fireEvent.click(screen.getByRole('button',{name:'Paste draft'})); expect(terminal.paste).toHaveBeenCalledWith('c');
+    view.rerender(<TerminalPane session={session} active={false} reportError={reportError} controlsTarget={target} />);
+    expect(target.childElementCount).toBe(0);
+    view.rerender(<TerminalPane session={session} active reportError={reportError} controlsTarget={target} />);
+    expect(within(target).getAllByRole('button')).toHaveLength(2);
+    view.unmount(); expect(target.childElementCount).toBe(0);
+  } finally {target.remove();}
 });

@@ -2,6 +2,70 @@
 
 ## [Unreleased]
 
+- Extend explicit managed hook setup to Gemini CLI and Cursor CLI through the companion and SSH-connected Agents view. Preserve Gemini's 5000 ms deadline and existing disable settings; retain Cursor's version-1 envelope, five-second fail-open observers and permission-hook exclusions. Existing foreign values/policy, filesystem checks and trust defaults remain unchanged; incompatible Cursor versions are refused.
+
+- Support OpenCode 2.2 native plugin loading with the same reviewed hook asset used by OpenCode 1.19.5. Serialize companion writes, coalesce pending session states, bound queued sessions, and stop owned ingest processes when the plugin unloads. Hook installation remains explicit and does not alter agent trust or permissions.
+
+- Honor a saved Mosh preference when entering a default tmux, Herdr or Zellij session. Auto entry tries Mosh and then SSH only for safe failures before entry dispatch; uncertain startup or guard admission never opens a replacement display. Keep the exact transport and attachment together for workspace restore (Zellij restore remains manual). SSH entry stays selectable; saved ET entry continues to use SSH. Native Mosh entry requires its private startup receipt, and tmux additionally requires a verified display binding. Guarded Herdr requires the positively advertised startup-FD extension; stock Herdr keeps ordinary display capabilities.
+
+- Prevent Android and desktop terminal IME composition from replaying after Enter or a canceled input context, and apply owned trailing ASCII corrections as edits. Keep ordinary Unicode composition, hardware keys, paste and virtual modifiers; complex non-ASCII erasures retain upstream behavior pending remote-editor compatibility. Flush current preedit before toolbar modifier changes. Android terminals now request browser autocomplete off alongside their existing autocorrect-off policy; Compose hints are unchanged and no private keyboard mode is requested.
+
+- Add explicit managed Claude Code, Codex and OpenCode hook setup from the Agents view or companion CLI on supported Linux filesystems. Inspect a selected existing profile before installing/updating or removing only lazysh-owned entries; preserve foreign values and ordinary permission/group metadata. Persisted executable paths require retained, non-writable, non-symlink namespaces, including support for read-only root-owned binary directories. No hooks or trust settings change automatically. macOS/Windows retain preview-only capability pending filesystem qualification.
+
+- Add a dedicated Herdr Spaces hierarchy and live agent groups to workspace navigation, with one selected-server reader and search. Reuse a matching display or attach the selected server before validating the destination. Workspace and tab jumps use stock Herdr; exact shell and agent pane jumps use the updated companion. Focus is shared with other connections to that server. Navigation retires prior Chat confirmation, and server focus metadata is not presented as this client’s current selection. Connection defaults are unchanged.
+
+- Pipeline companion verification through a fixed window of SFTP reads, preserving ordered full-file hashes, partial reads, EOF and metadata checks, existing time limits and conservative deletion guards. Retain closed cleanup stage/reason observations when completion is not verified; residue remains distinct from installation success.
+
+- Add native Cursor CLI activity/completion hooks, an Amp thread-state observer plugin and aggregate Aider notification health. Print reviewed configuration/assets without changing profiles or approvals; Aider callbacks have no session identity or lifecycle states and never alter running session rows. Cursor permission waits and Kimi per-turn completion remain unsupported.
+
+- Add native Gemini CLI, Droid, Kimi CLI and GitHub Copilot CLI lifecycle reporting with print-only configuration fragments. Preserve each agent's exact event semantics, hook-file envelope and timeout units; no agent profile or trust settings are changed. Ignore Kimi's unscoped Stop/StopFailure events because child souls share the parent session identity; Kimi turn completion remains unavailable through these callbacks.
+
+- Keep continuous terminal touch scrolling targeted at the pane where the drag began, including Herdr. Moving across pane or header boundaries no longer redirects wheel reports mid-gesture; reversals keep scrolling and a new drag can select another pane.
+
+- Move Compose and terminal-key visibility into compact header icon controls, and use accessible icon actions beside the draft composer without overlap. On phones, long settings and forms now fill the screen with a persistent close header; short choices remain sheets and desktop dialogs keep their existing size. Authentication, trust and dismissal behavior are unchanged.
+
+- Show the lazysh logo during Android’s initial native access-policy check instead of briefly displaying an Unlock screen. Match the system launch background to the logo; retain the real lock screen, error recovery, secure cover and stale-unlock protections.
+
+- Package original lazysh host-setup and agent-reporting skills with explicit preview, profile status, install/update and removal commands. Linux/macOS Claude and Codex profile writes require an exact inspected plan and preserve foreign skills, edits and agent configuration. No skills, hooks, services or provider settings change automatically; other platforms retain preview-only capability.
+
+- Fall back to the built-in account-usage collectors when an optional external ai-usagebar returns no accounts, while preserving explicit provider disabling and cached error reports. Show a contextual companion install/update action for missing or outdated Unix companions instead of generic unavailability, and distinguish empty accounts in the compact usage button.
+
+- Add native Codex lifecycle ingestion and an OpenCode lifecycle plugin alongside Claude Code hooks. Print configuration/assets without changing agent settings or trust; report working, attention and completed states without recording prompts, tool arguments or approval decisions.
+
+- Align the workspace restore action with accessible 44px details and dismiss icons in one compact row. Keep the saved-credential and multiplexer restoration explanation available on demand; restore, dismissal and connection defaults are unchanged.
+
+- Return momentary terminal keys to their resting appearance after touch release. Preserve intentional modifier locks, held-key feedback, mouse hover, keyboard focus outlines and custom theme colors; key dispatch and repeat behavior are unchanged.
+
+- Shorten common attachment, transcript and preferences guidance while keeping safety limits visible. Show a compact capability notice for unavailable Apple status features; preserve sharing controls and privacy guidance after any sharing request.
+
+- Detect live Herdr agents and accept exact workspace, tab and pane actions when their public IDs contain Herdr’s encoded letters, such as `wZ` and `w2E:pF`. Preserve target bounds, relationships and command quoting; connection and server-selection defaults are unchanged.
+
+- Retain bounded last-poll selector counts and timing when public Android APK workspace readiness fails. Reuse existing accessibility queries without changing actions, readiness checks or deadlines; no cold-start cause or Google runtime qualification is inferred.
+
+- Open live Agents on the current terminal's attached Herdr session when it is present in discovery, including hosts with several running sessions. An explicit server choice takes precedence; a missing attached session requires choosing a server instead of silently showing another one. Plain terminals retain their existing selection behavior.
+
+- Permit an explicitly acknowledged repair source for unpublished 1.3.0 after its Windows companion acceptance failure. Rebuild every publication gate for that source; never replace a published tag or reuse the failed attempt's partial artifacts. Label the retained development changelog without implying every entry was added after version preparation.
+
+- Preserve upload-specific SSH closure guidance, including partial-file warnings and Reconnect uploads. Distinguish closed host-tools connections so Agents only offers command recovery for that purpose.
+
+- Keep Android terminal connections active while switching apps using a private foreground service and a generic ongoing notification. Backgrounded renderer output pauses without expiring the connection; the last native connection releases the service and wake lock. Held terminal keys stop while the app is hidden. Existing app-lock protections remain in place. Android system battery restrictions, Doze and force-stop can still interrupt connectivity.
+
+- Add compact AI account quota and credit reports for Android remote hosts and desktop remote/local terminals. Prefer a compatible ai-usagebar installation and use built-in companion collectors when it is absent or unsupported; existing provider sign-ins stay on the session machine. Account usage refreshes while the terminal is visible. Standalone companions expose retained collector and adapter license notices through `lazysh-agent licenses`.
+
+- Add explicit Reconnect host tools recovery for a Mosh session whose SSH command connection closed. Saved or manual credentials reauthenticate the original verified host without opening a terminal or changing upload-only recovery. Authentication remains user initiated.
+
+- Distinguish Herdr snapshots without live agent metadata from a confirmed empty agent list. Agents shows an explicit capability warning while Sessions keeps legacy tree compatibility; upload-only SSH recovery continues to leave host command access unchanged.
+
+- Keep live Herdr results, companion counts and empty states stable while Agents refreshes. Preserve a failed-read warning until its replacement completes, and remove failed live rows instead of presenting them as a successful empty discovery. Polling frequency, server selection and connection defaults are unchanged.
+
+- Expand the default terminal key row with Alt, Shift and Attach; offer AltGr, navigation, function and symbol keys in preferences. Ctrl and Alt cycle between one-shot, locked and off, and held keys repeat. Preserve custom and empty layouts. Use branded icon buttons for Compose and terminal-key visibility, and reduce terminal side padding to safe-area-aware 2px.
+
+- Select Use saved credentials by default after confirming availability in the native vault. Explicit Password/Private key choices and credentials entered while the availability check is pending keep manual authentication selected. Connect still requires an explicit action and stored secrets stay in the native vault.
+
+- Open the current saved host’s Default multiplexer setting directly from More, with the selector focused. Save a named Herdr, tmux or Zellij default for future connections without changing the running terminal or its saved transport preference. Connection defaults are unchanged.
+
+- Update installation and release acceptance notes with the explicit in-app Unix companion path, current Android/Linux installer proof and published-APK qualification limits. Keep documentation links usable in the attached guide and release notes.
+
 - Discover live Codex and other agent panes reported by Herdr independently of companion lifecycle reports. A single running Herdr server is selected automatically; choose a server when several are running. Only that server is refreshed, and its Idle, Working, Needs attention, Done and Unknown statuses remain distinct from companion history. No input, approval or history authority is inferred from discovery.
 
 - Enable direct vertical touch scrolling through the terminal’s wheel handling, including Herdr mouse reporting and alternate-screen applications. Active phone terminals now default to one compact header: single-session tabs, tool navigation and the workspace restore prompt collapse into More, where their actions remain reachable. Multiple-session navigation, desktop/nonterminal layouts, terminal keys above the keyboard and accessibility gestures remain supported.

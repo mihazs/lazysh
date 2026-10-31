@@ -3,7 +3,7 @@ use super::*;
 
 /// Runs the thin client and enters the main event loop.
 pub fn run_client() -> io::Result<()> {
-    run_client_with_mode(None, None, "connecting to server", false)
+    run_client_with_mode(None, None, "connecting to server", None)
 }
 
 #[cfg(unix)]
@@ -12,7 +12,7 @@ pub fn run_terminal_attach(terminal_id: String, takeover: bool) -> io::Result<()
         Some((terminal_id, takeover)),
         Some(AttachEscapeState::default()),
         "attaching to terminal",
-        false,
+        None,
     )
 }
 
@@ -26,6 +26,6 @@ pub fn run_terminal_attach(_terminal_id: String, _takeover: bool) -> io::Result<
 }
 
 /// The caller privately consumes the startup credential before display bytes.
-pub fn run_guarded_client() -> io::Result<()> {
-    run_client_with_mode(None, None, "connecting guarded client", true)
+pub fn run_guarded_client(output: crate::guarded_input::startup::TicketOutput) -> io::Result<()> {
+    run_client_with_mode(None, None, "connecting guarded client", Some(output))
 }

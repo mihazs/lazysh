@@ -121,11 +121,14 @@ it('keeps edited attachment and destination through explicit upload recovery wit
   let restored!:()=>void;const recover=vi.fn((done:()=>void)=>{restored=done;});
   await openEditableImage(recover);
   vi.spyOn(HTMLCanvasElement.prototype,'toBlob').mockImplementation(callback=>callback({size:3,arrayBuffer:async()=>new Uint8Array([7,8,9]).buffer} as Blob));
-  vi.mocked(api.uploadFile).mockRejectedValue({kind:'ssh_control_closed',message:'SSH control closed'});
+  const warning='The SSH file-transfer connection is closed. A partial new file may remain; uploads never overwrite existing files.';
+  vi.mocked(api.uploadFile).mockRejectedValue({kind:'ssh_control_closed',message:warning});
   fireEvent.change(screen.getByLabelText('Crop x'),{target:{value:'10'}});
   fireEvent.change(screen.getByLabelText('Crop width'),{target:{value:'40'}});
   fireEvent.change(screen.getByLabelText('Destination path'),{target:{value:'./original-edited.png'}});
   fireEvent.click(screen.getByRole('button',{name:'Upload attachment'}));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent',warning);
+  expect(screen.queryByRole('button',{name:'Reconnect host tools'})).toBeNull();
   fireEvent.click(await screen.findByRole('button',{name:'Reconnect uploads'}));
   expect(recover).toHaveBeenCalledOnce();
   await act(async()=>restored());

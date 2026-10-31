@@ -6,15 +6,16 @@ edition = "2021"
 description = "Lifecycle event companion with explicit opt-in bound relay publishing"
 
 [dependencies]
+lazysh-account-usage = { path = "../../packages/account-usage", features = ["collector"] }
 lazysh-notification-client = { path = "../../packages/notification-client" }
-tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "io-std", "io-util"] }
 lazysh-common = { path = "../../packages/common" }
 clap = { version = "4.6", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7"
 rusqlite = { version = "0.41", features = ["bundled", "hooks", "limits"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"

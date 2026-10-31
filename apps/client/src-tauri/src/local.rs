@@ -148,6 +148,21 @@ pub fn local_disconnect(state: State<'_, LocalState>, session_id: String) -> Res
         Ok(())
     }
 }
+pub(crate) fn usage_session(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<tokio::sync::watch::Receiver<bool>, String> {
+    #[cfg(desktop)]
+    {
+        desktop::usage_session(state, id, lease)
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (state, id, lease);
+        Err("Local terminals are unavailable".into())
+    }
+}
 pub(crate) fn adopt(state: &LocalState, id: &str, request: &AccessLease) -> Result<bool, String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
@@ -938,6 +953,24 @@ mod desktop {
             }
         });
     }
+    pub(super) fn usage_session(
+        state: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+    ) -> Result<watch::Receiver<bool>, String> {
+        lease
+            .with_current(|| {
+                let session = state.0.session(id)?;
+                if !session.adopted.load(Ordering::SeqCst)
+                    || *session.renderer_gone.borrow()
+                    || *session.cancel.borrow()
+                {
+                    return Err("Local terminal is disconnected".into());
+                }
+                Ok(session.cancel.subscribe())
+            })
+            .map_err(String::from)?
+    }
     pub(super) fn adopt(
         state: &LocalState,
         id: &str,
@@ -1144,6 +1177,36 @@ mod tests {
         .unwrap();
         let pid = owned_pid(&mut rx).await;
         (connected, rx, pid)
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn account_usage_gate_requires_adoption_current_access_and_live_local_session() {
+        let state = LocalState::default();
+        let access = unlocked_access();
+        let lease = ready_lease(&access);
+        let (event, mut output) = events();
+        let connected = desktop::start_with_access(
+            &state,
+            lease.clone(),
+            shell("exec sleep 120"),
+            80,
+            24,
+            event,
+        )
+        .await
+        .unwrap();
+        assert!(usage_session(&state, &connected.session_id, &lease).is_err());
+        desktop::adopt(&state, &connected.session_id, &lease).unwrap();
+        let cancellation = usage_session(&state, &connected.session_id, &lease).unwrap();
+        assert!(!*cancellation.borrow());
+        access.lock().unwrap();
+        assert!(usage_session(&state, &connected.session_id, &lease).is_err());
+        access.authorize(access.generation().unwrap()).unwrap();
+        access.ready(access.generation().unwrap()).unwrap();
+        desktop::disconnect(&state, &connected.session_id);
+        assert!(*cancellation.borrow());
+        assert!(usage_session(&state, &connected.session_id, &lease).is_err());
+        closed(&mut output).await;
     }
     #[tokio::test]
     async fn failed_local_spawn_closes_its_unregistered_pty() {

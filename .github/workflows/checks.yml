@@ -57,7 +57,7 @@ jobs:
         id: agent-checks
         env:
           LAZYSH_TEST_STORAGE_TRACE_DIR: ${{ runner.temp }}/lazysh-storage-traces
-        run: bunx turbo run build check check:rust test test:rust lint format:check --filter=@lazysh/agent --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service --filter=@lazysh/notification-client
+        run: bunx turbo run build check check:rust test test:rust lint format:check --filter=@lazysh/agent --filter=@lazysh/account-usage --filter=@lazysh/share-service --filter=@lazysh/transcription-service --filter=@lazysh/notification-service --filter=@lazysh/notification-client
       - name: Upload owned concurrent hook syscall excerpts
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
@@ -229,13 +229,21 @@ jobs:
           components: rustfmt, clippy
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev cmake libclang-dev libprotobuf-dev protobuf-compiler libssl-dev zlib1g-dev pkg-config libncurses-dev libevent-dev bison openssh-server tmux dbus-daemon xdg-desktop-portal xvfb xauth webkit2gtk-driver bubblewrap
       - name: Verify native GUI namespace prerequisites
-        run: |
+        env:
+          LAZYSH_NATIVE_NAMESPACE_NETWORK: private
+        run: &native-fixture-namespace |
+          namespace_command=(bwrap --unshare-user)
+          case "${LAZYSH_NATIVE_NAMESPACE_NETWORK:-}" in
+            private) namespace_command=(bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net) ;;
+            shared) ;;
+            *) printf '%s\n' 'Unsupported native fixture namespace mode' >&2; exit 1 ;;
+          esac
           test "$(id -u)" -ne 0
           test -x /usr/bin/bwrap
           bwrap --version
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/^(bwrap|unprivileged_userns)/' || true
-          bwrap --unshare-user --unshare-net --dev-bind / / -- bwrap --unshare-user --unshare-net --unshare-pid --dev-bind / / --proc /proc -- /usr/bin/true
+          "${namespace_command[@]}" --unshare-pid --dev-bind / / --proc /proc --ro-bind /etc/group /etc/group -- /usr/bin/true
       - name: Build the pinned official tmux fixture outside the checkout
         timeout-minutes: 10
         run: |
@@ -254,7 +262,8 @@ jobs:
           test "$(tmux -V)" = 'tmux 3.4'
           echo "$tmux_root/install/bin" >> "$GITHUB_PATH"
           echo "LAZYSH_TEST_TMUX=$tmux_root/install/bin/tmux" >> "$GITHUB_ENV"
-      - name: Build the pinned official Mosh fixture outside the checkout
+      - &official-mosh-fixture
+        name: Build the pinned official Mosh fixture outside the checkout
         timeout-minutes: 10
         run: |
           mosh_root=$(mktemp -d "$RUNNER_TEMP/lazysh-mosh-1.4.0-XXXXXX")
@@ -270,20 +279,39 @@ jobs:
           mosh_version=$(mosh-server --version)
           test "${mosh_version%%$'\n'*}" = 'mosh-server (mosh 1.4.0) [build mosh 1.4.0]'
           echo "$mosh_root/install/bin" >> "$GITHUB_PATH"
+          echo "LAZYSH_NATIVE_MOSH_SERVER=$mosh_root/install/bin/mosh-server" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           # Native dependency objects must match this runner's glibc baseline.
           prefix-key: v0-rust-ubuntu-22.04
       - run: bun install --frozen-lockfile
       - run: bunx turbo run build test:rust lint format:check --filter=@lazysh/client...
-      - name: Exercise owned companion transfer and managed execution over SSH
+      - uses: actions/download-artifact@v4
+        with:
+          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lazysh-guarded-herdr
+      - name: Verify same-run guarded binary and exercise owned SSH binding
+        env:
+          GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
+          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-guarded-herdr/herdr
+        run: |
+          cd "$RUNNER_TEMP/lazysh-guarded-herdr"
+          printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
+          chmod 700 herdr
+          timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
+          cd "$GITHUB_WORKSPACE"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
+          printf '%s\n' "LAZYSH_TEST_HERDR=$LAZYSH_TEST_HERDR" "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/release/lazysh-agent" "LAZYSH_TEST_RECEIVER_BIN=$GITHUB_WORKSPACE/target/release/examples/owned_terminal_receiver" >> "$GITHUB_ENV"
+      - name: Exercise owned companion transfer and exact Mosh entry over SSH
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
         run: |
-          cargo build --release --locked -p lazysh-agent --bin lazysh-agent
-          case_name=ssh::tests::openssh_companion_install_and_managed_path
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          cargo build --release --locked -p lazysh-agent --bin lazysh-agent --example owned_terminal_receiver
+          cases=(ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure)
+          for case_name in "${cases[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          done
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx turbo run test:rust lint format:check --filter=@lazysh/parakeet-runtime
       - name: Check combined native voice startup and clean shutdown without models
@@ -342,21 +370,6 @@ jobs:
           case_name=ssh::tmux_jump_fixture::real_tmux_unsupported_client_loops_keep_terminal_without_binding
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
-      - uses: actions/download-artifact@v4
-        with:
-          name: guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/lazysh-guarded-herdr
-      - name: Verify same-run guarded binary and exercise owned SSH binding
-        env:
-          GUARDED_HERDR_SHA256: ${{ needs.herdr-native.outputs.guarded-sha256 }}
-          LAZYSH_TEST_HERDR: ${{ runner.temp }}/lazysh-guarded-herdr/herdr
-        run: |
-          cd "$RUNNER_TEMP/lazysh-guarded-herdr"
-          printf '%s  herdr\n' "$GUARDED_HERDR_SHA256" | sha256sum --check --strict
-          chmod 700 herdr
-          timeout --kill-after=2s 5s "$LAZYSH_TEST_HERDR" --version
-          cd "$GITHUB_WORKSPACE"
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_guard::real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lease -- --ignored --exact
 
   native-desktop:
     strategy:
@@ -384,6 +397,8 @@ jobs:
         env:
           LAZYSH_TEST_WINDOWS_HASH: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
+      - name: Exercise account quota collectors and process ownership
+        run: bunx turbo run test:rust --filter=@lazysh/account-usage
       - uses: actions/setup-node@v4
         if: runner.os == 'Windows'
         with:
@@ -498,7 +513,9 @@ jobs:
         run: |
           cmake_identity=$(cmake --version)
           clang_identity=$("$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version)
-          toolchain_digest=$(printf '%s\n' "$NDK_HOME" "$cmake_identity" "$clang_identity" | sha256sum)
+          host_glibc=$(getconf GNU_LIBC_VERSION)
+          host_arch=$(uname -m)
+          toolchain_digest=$(printf '%s\n' "$NDK_HOME" "$cmake_identity" "$clang_identity" "$host_glibc" "$host_arch" | sha256sum)
           printf 'LAZYSH_ANDROID_TOOLCHAIN=%s\n' "${toolchain_digest%% *}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -524,7 +541,7 @@ jobs:
 
   native-android-runtime:
     needs: herdr-native
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
       ANDROID_SERIAL: emulator-5580
@@ -543,7 +560,12 @@ jobs:
         with:
           targets: x86_64-linux-android
       - name: Install native Mosh fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev pkg-config cmake perl
+        run: sudo apt-get update && sudo apt-get install -y openssh-server openssh-client iproute2 mosh bubblewrap protobuf-compiler libprotobuf-dev libssl-dev zlib1g-dev libncurses-dev pkg-config cmake perl
+      - name: Verify native GUI namespace prerequisites
+        env:
+          LAZYSH_NATIVE_NAMESPACE_NETWORK: shared
+        run: *native-fixture-namespace
+      - *official-mosh-fixture
       - *android-cache-identity
       - uses: Swatinem/rust-cache@v2
         with: *android-cache-environment

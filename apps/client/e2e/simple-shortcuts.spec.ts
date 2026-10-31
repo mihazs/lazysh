@@ -29,6 +29,81 @@ async function fixture(page:Page) {
   await page.getByText('Keyboard chords',{exact:true}).click();
 }
 
+test('momentary terminal touch feedback clears after release while modifiers remain intentional',async({page},testInfo)=>{
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await fixture(page);
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if(testInfo.project.name==='phone') await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await page.clock.install();
+  const keys=page.getByLabel('Terminal keys',{exact:true});
+  const colors=(button:import('@playwright/test').Locator)=>button.evaluate(element=>({background:getComputedStyle(element).backgroundColor,color:getComputedStyle(element).color}));
+  const resting=await colors(keys.getByRole('button',{name:'esc',exact:true}));
+  const activate=async(button:import('@playwright/test').Locator)=>{
+    if(testInfo.project.name==='phone') await button.tap();
+    else {await button.click();await page.mouse.move(0,0);}
+  };
+  const expected:string[]=[];
+  for(const [name,bytes] of [['tab','\t'],['Arrow right','\x1b[C']]){
+    const button=keys.getByRole('button',{name,exact:true});
+    await activate(button);
+    expected.push(bytes); await page.clock.runFor(1000);
+    expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(expected);
+    expect(await button.getAttribute('aria-pressed')).toBeNull();
+    await testInfo.attach(`${name}-state.json`,{body:JSON.stringify({hover:await button.evaluate(element=>element.matches(':hover')),pressed:await button.getAttribute('aria-pressed'),colors:await colors(button),writes:expected}),contentType:'application/json'});
+    await page.screenshot({path:testInfo.outputPath('momentary-toolbar.png')});
+    await expect.poll(()=>colors(button)).toEqual(resting);
+  }
+  for(const name of ['ctrl','Alt']){
+    const modifier=keys.getByRole('button',{name:new RegExp(`^${name}(?: · lock)?$`)});
+    await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','true');
+    expect(await colors(modifier)).not.toEqual(resting);
+    await activate(modifier);await expect(modifier).toContainText('lock');
+    await activate(modifier);await expect(modifier).toHaveAttribute('aria-pressed','false');
+    await expect.poll(()=>colors(modifier)).toEqual(resting);
+  }
+  const shift=keys.getByRole('button',{name:'Shift',exact:true});
+  await activate(shift);await expect(shift).toHaveAttribute('aria-pressed','true');
+  expect(await colors(shift)).not.toEqual(resting);await activate(shift);
+  const right=keys.getByRole('button',{name:'Arrow right',exact:true});
+  await right.scrollIntoViewIfNeeded();
+  const point=(await right.boundingBox())!;
+  const cdp=await page.context().newCDPSession(page);
+  const location={x:point.x+point.width/2,y:point.y+point.height/2};
+  if(testInfo.project.name==='phone') await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[location]});
+  else {await page.mouse.move(location.x,location.y);await page.mouse.down();}
+  if(testInfo.project.name==='desktop') expect(await colors(right)).not.toEqual(resting);
+  await page.clock.runFor(560);
+  const held=await page.evaluate(()=>window.simpleShortcutWrites);
+  expect(held.slice(0,expected.length)).toEqual(expected);
+  expect(held.length).toBeGreaterThanOrEqual(expected.length+2);
+  expect(held.slice(expected.length).every(value=>value==='\x1b[C')).toBe(true);
+  if(testInfo.project.name==='phone') await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});
+  else {await page.mouse.up();await page.mouse.move(0,0);}
+  const released=await page.evaluate(()=>window.simpleShortcutWrites);
+  expect(released.slice(0,held.length)).toEqual(held);
+  expect(released.slice(held.length).every(value=>value==='\x1b[C')).toBe(true);
+  await page.clock.runFor(1000);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(released);
+  await expect.poll(()=>colors(right)).toEqual(resting);
+  if(testInfo.project.name==='desktop') {
+    await right.hover();expect(await colors(right)).not.toEqual(resting);await page.mouse.move(0,0);
+  }
+  await right.focus();await page.keyboard.press('Shift+Tab');await page.keyboard.press('Tab');
+  await expect(right).toBeFocused();
+  expect(await right.evaluate(element=>getComputedStyle(element).outlineStyle)).not.toBe('none');
+  await page.keyboard.down('Space');
+  await expect.poll(()=>right.evaluate(element=>element.matches(':active'))).toBe(true);
+  await expect.poll(()=>colors(right)).not.toEqual(resting);
+  await page.keyboard.up('Space');
+  await expect.poll(()=>colors(right)).toEqual(resting);
+  await keys.evaluate(element=>{element.style.setProperty('--theme-control','rgb(10, 20, 30)');element.style.setProperty('--theme-text','rgb(220, 230, 240)');element.style.setProperty('--theme-hover','rgb(40, 50, 60)');element.style.setProperty('--theme-accent','rgb(70, 80, 90)');});
+  await activate(right);
+  await expect.poll(()=>colors(right)).toEqual({background:'rgb(10, 20, 30)',color:'rgb(220, 230, 240)'});
+  await activate(shift);
+  await expect.poll(()=>colors(shift)).toEqual({background:'rgb(40, 50, 60)',color:'rgb(70, 80, 90)'});
+});
+
+
 test('Simple custom text survives reload and sends exact toolbar bytes only on explicit click',async({page})=>{
   await fixture(page);
   await expect(page.getByLabel('Shortcut builder')).toHaveValue('advanced');
@@ -264,7 +339,7 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1049h\x1b[?1000h\x1b[?1006h'));
   await expect(page.locator('.terminal-canvas:visible .xterm')).toHaveClass(/enable-mouse-events/);
   for(const delta of [60,-60]){
-    await page.mouse.move(x,y);
+    await page.mouse.move(x,y+delta);
     await page.mouse.wheel(0,delta);
     await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites.length)).toBe(1);
     const wheel=await page.evaluate(()=>window.simpleShortcutWrites[0]);
@@ -274,6 +349,32 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
     await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([wheel]);
     await page.evaluate(()=>{window.simpleShortcutWrites=[];});
   }
+  const origin={x,y:y+160};
+  const reports=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  await page.mouse.move(origin.x,origin.y);
+  await page.mouse.wheel(0,48);
+  await page.mouse.wheel(0,-48);
+  await expect.poll(async()=>(await reports()).length).toBe(2);
+  const [down,up]=await reports();
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+  const trace=[{x:x+2,y:origin.y-48},{x:x+110,y:origin.y-96},{x:x+130,y:origin.y-144},{x:x+3,y:origin.y-96}];
+  for(const [index,point] of trace.entries()){
+    await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[point]});
+    await expect.poll(reports).toEqual(Array.from({length:index+1},(_,i)=>i===3?up:down));
+  }
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  const next={x:x+80,y:origin.y};
+  await page.mouse.move(next.x,next.y);await page.mouse.wheel(0,48);
+  await expect.poll(async()=>(await reports()).length).toBe(1);
+  const second=(await reports())[0];expect(second).not.toBe(down);
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[next]});
+  await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:next.x+3,y:next.y-48}]});
+  await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await expect.poll(reports).toEqual([second]);
+  await page.evaluate(()=>{window.simpleShortcutWrites=[];});
   await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000l\x1b[?1006l'));
   await expect(page.locator('.terminal-canvas:visible .xterm')).not.toHaveClass(/enable-mouse-events/);
   await page.mouse.wheel(0,60);
@@ -284,4 +385,115 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   await swipe(y+60,y);
   await expect.poll(()=>page.evaluate(()=>window.simpleShortcutWrites)).toEqual([arrows]);
   await input.detach();
+});
+
+
+async function openShortcutTerminal(page:Page) {
+  await fixture(page);
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if ((page.viewportSize()?.width??1280)<=600) await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+}
+
+for(const android of [false,true])test.describe(android ? 'Android IME' : 'ordinary keyboard',()=>{
+  if(android)test.use({userAgent:'Mozilla/5.0 (Linux; Android 14; Owned IME fixture) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'});
+test('Haven-style toolbar modifiers classify real xterm IME, paste, mouse and protocol input', async ({page,context}) => {
+  await openShortcutTerminal(page);
+  const keys=page.getByLabel('Terminal keys',{exact:true});
+  const input=page.locator('.xterm-helper-textarea');
+  const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  const clear=()=>page.evaluate(()=>{window.simpleShortcutWrites=[];});
+  const ctrl=()=>keys.getByRole('button',{name:'ctrl',exact:true}).click();
+  const alt=()=>keys.getByRole('button',{name:'Alt',exact:true}).click();
+  await ctrl(); await input.focus(); await page.keyboard.type('c');
+  await expect.poll(writes).toEqual(['\x03']); await clear();
+  await alt(); await input.focus(); await page.keyboard.type('x');
+  await expect.poll(writes).toEqual(['\x1bx']); await clear();
+  const cdp=await context.newCDPSession(page);
+  await ctrl(); await input.focus();
+  await cdp.send('Input.imeSetComposition',{text:'你',selectionStart:1,selectionEnd:1});
+  // DSR during composition must neither acquire modifiers nor consume the pending IME lane.
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[6n'));
+  await expect.poll(async()=> (await writes()).some(value=>/^\x1b\[\d+;\d+R$/.test(value))).toBe(true);
+  await cdp.send('Input.insertText',{text:'你好'});
+  await expect.poll(async()=> (await writes()).at(-1)).toBe('你好'); await clear();
+  await alt(); await input.focus(); await cdp.send('Input.insertText',{text:'世界'});
+  await expect.poll(writes).toEqual(['\x1b世界']); await clear();
+  await context.grantPermissions(['clipboard-read','clipboard-write']);
+  await page.evaluate(()=>navigator.clipboard.writeText('c'));
+  await ctrl(); await input.focus(); await page.keyboard.press('Control+Shift+v');
+  await expect.poll(writes).toEqual(['c']);
+  await expect(keys.getByRole('button',{name:'ctrl',exact:true})).toHaveAttribute('aria-pressed','true');
+  await clear(); await page.keyboard.type('c'); await expect.poll(writes).toEqual(['\x03']); await clear();
+  await alt();
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.getByLabel('Compose text',{exact:true}).fill('x');
+  await page.getByRole('button',{name:'Paste draft',exact:true}).click();
+  await expect.poll(writes).toEqual(['x']);
+  await expect(keys.getByRole('button',{name:'Alt',exact:true})).toHaveAttribute('aria-pressed','true');
+  await page.getByRole('button',{name:'Close composer',exact:true}).click(); await clear();
+  await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000h\x1b[?1006h'));
+  await input.focus();
+  await page.locator('.xterm-screen').click({position:{x:12,y:12}});
+  await expect.poll(async()=> (await writes()).some(value=>value.startsWith('\x1b[<'))).toBe(true);
+  expect((await writes()).every(value=>!value.startsWith('\x1b\x1b'))).toBe(true);
+  await expect(keys.getByRole('button',{name:'Alt',exact:true})).toHaveAttribute('aria-pressed','true');
+  await clear(); await page.keyboard.type('x'); await expect.poll(writes).toEqual(['\x1bx']);
+  await expect(input).toBeFocused();
+  await clear(); await alt(); await alt(); await page.keyboard.type('x');
+  await expect.poll(writes).toEqual(['\x1bx']); await clear();
+  await page.locator('.xterm-screen').click({position:{x:12,y:12}});
+  await expect.poll(async()=> (await writes()).length).toBe(2);
+  expect(await writes()).toEqual([expect.stringMatching(/^\x1b\[</),expect.stringMatching(/^\x1b\[</)]);
+  await keys.getByRole('button',{name:'Alt · lock',exact:true}).click();
+  await clear(); await keys.getByRole('button',{name:'ctrl',exact:true}).click();
+  await expect(input).toBeFocused();
+  if ((page.viewportSize()?.width??1280)<=600) {
+    const bounds=await keys.boundingBox(); if (!bounds) throw new Error('toolbar must be visible');
+    const y=bounds.y+bounds.height/2, x=bounds.x+bounds.width-30;
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+    for (const offset of [30,80,160]) await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-offset,y}]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await expect.poll(()=>keys.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
+    expect(await writes()).toEqual([]);
+  }
+});
+
+for(const [label,expected] of [['ctrl','\x03'],['Alt','\x1bc']] as const)test(`current preedit stays literal when ${label} latches before a fresh native key and release`,async({page,context})=>{
+  await openShortcutTerminal(page);
+  const input=page.locator('.xterm-helper-textarea'),keys=page.getByLabel('Terminal keys',{exact:true});
+  const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  const modifier=()=>keys.getByRole('button',{name:label,exact:true}).click();
+  const cdp=await context.newCDPSession(page);
+  await input.focus();
+  await cdp.send('Input.imeSetComposition',{text:'a',selectionStart:1,selectionEnd:1});
+  expect(await writes()).toEqual([]);
+  await modifier();const afterLatch=await writes();
+  await modifier();
+  await expect(keys.getByRole('button',{name:`${label} · lock`,exact:true})).toHaveAttribute('aria-pressed','true');
+  await cdp.send('Input.insertText',{text:'c'});
+  await expect.poll(async()=>(await writes()).at(-1)).toBe(expected);
+  await keys.getByRole('button',{name:`${label} · lock`,exact:true}).click();
+  await expect(keys.getByRole('button',{name:label,exact:true})).toHaveAttribute('aria-pressed','false');
+  await cdp.send('Input.insertText',{text:'plain'});
+  await expect.poll(async()=>(await writes()).at(-1)).toBe('plain');
+  expect(afterLatch).toEqual(['a']);
+  expect(await writes()).toEqual(['a',expected,'plain']);
+  await cdp.detach();
+});
+
+test('terminal completion hints stay distinct from the normal Compose editor',async({page})=>{
+  await openShortcutTerminal(page);
+  const input=page.locator('.xterm-helper-textarea');
+  expect(await input.getAttribute('autocomplete')).toBe(android?'off':null);
+  await expect(input).toHaveAttribute('autocorrect','off');
+  await expect(input).toHaveAttribute('autocapitalize','off');
+  await expect(input).toHaveAttribute('spellcheck','false');
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  const composer=page.getByLabel('Compose text',{exact:true});
+  expect(await composer.getAttribute('autocomplete')).toBeNull();
+  expect(await composer.getAttribute('autocorrect')).toBeNull();
+  expect(await composer.evaluate(element=>element.tagName)).toBe('TEXTAREA');
+});
+
 });

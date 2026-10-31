@@ -45,3 +45,23 @@ pub use hex_digest::valid_sha256;
 
 mod guarded_target;
 pub use guarded_target::valid_guarded_target;
+
+/// Exact public Herdr workspace, tab or pane identifier; no labels or aliases.
+pub fn valid_herdr_id(value: &str, kind: Option<char>) -> bool {
+    let mut parts = value.split(':');
+    let valid = |part: &str, prefix| {
+        part.starts_with(prefix)
+            && part.len() > 1
+            && part[1..]
+                .bytes()
+                .all(|byte| b"123456789ABCDEFGHJKMNPQRSTVWXYZ0".contains(&byte))
+    };
+    value.len() <= 50
+        && valid(parts.next().unwrap_or(""), 'w')
+        && match kind {
+            None => parts.next().is_none(),
+            Some(kind) => {
+                parts.next().is_some_and(|part| valid(part, kind)) && parts.next().is_none()
+            }
+        }
+}

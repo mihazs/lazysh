@@ -227,6 +227,39 @@ fn command(name: &str, guarded_attach: bool) -> String {
 pub(crate) fn attach_command(name: &str) -> String {
     command(name, true)
 }
+pub(crate) fn attach_receipt(name: &str) -> String {
+    format!("{} --startup-fd 3", attach_command(name))
+}
+fn startup_fd_capability(output: &str) -> bool {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Capabilities {
+        schema_version: u8,
+        startup_fd: bool,
+    }
+    serde_json::from_str::<Capabilities>(output)
+        .ok()
+        .is_some_and(|value| value.schema_version == 1 && value.startup_fd)
+}
+pub(crate) async fn require_startup_fd(session: &ssh::Session, lease: &AccessLease) -> Result<()> {
+    let output = ssh::exec_bounded(
+        session,
+        "herdr --guarded-attach-capabilities".into(),
+        lease,
+        DEADLINE,
+        256,
+        None,
+    )
+    .await;
+    lease.check()?;
+    if output
+        .ok()
+        .is_some_and(|value| startup_fd_capability(&value))
+    {
+        return Ok(());
+    }
+    Err(SshError::new("herdr_guard_startup_unsupported", "This guarded Herdr client cannot supply a private Mosh startup receipt. Update the compatible guarded host client or explicitly choose SSH."))
+}
 #[derive(Serialize)]
 struct Request<'a, T> {
     id: &'static str,
@@ -498,6 +531,8 @@ pub(crate) async fn acquire(
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     Status,
+    #[serde(skip)]
+    RetireForView,
     Prepare {
         source: Source,
     },
@@ -519,7 +554,7 @@ impl Action {
     fn validate(&self) -> WireOutcome<()> {
         let token = |value: &str| value.len() == 36 && uuid::Uuid::parse_str(value).is_ok();
         match self {
-            Self::Status => Ok(()),
+            Self::Status | Self::RetireForView => Ok(()),
             Self::Prepare { source } => source.validate().map_err(|_| Fault::Invalid),
             Self::Confirm { candidate, source } if token(candidate) => {
                 source.validate().map_err(|_| Fault::Invalid)
@@ -606,7 +641,7 @@ fn source_hash(source: &Source) -> WireOutcome<String> {
 impl Control {
     fn affects_binding(&self, action: &Action) -> bool {
         match action {
-            Action::Prepare { .. } => true,
+            Action::Prepare { .. } | Action::RetireForView => true,
             Action::Confirm {
                 candidate: token, ..
             }
@@ -670,6 +705,39 @@ impl Control {
             _ => Err(Fault::Protocol),
         }
     }
+    async fn release_bound(
+        &mut self,
+        expected: Option<&str>,
+        cancel: &mut watch::Receiver<bool>,
+        reply: &mut Option<&mut oneshot::Sender<Result<Reply>>>,
+    ) -> WireOutcome<Reply> {
+        if self
+            .bound
+            .as_ref()
+            .is_some_and(|bound| expected.is_none_or(|token| bound.token == token))
+        {
+            let bound = self.bound.take().ok_or(Fault::Stale)?;
+            let params = Release {
+                boot: &self.startup.boot,
+                receipt: &bound.remote,
+            };
+            match rpc(
+                &self.handle,
+                &self.startup.name,
+                &bound.owner,
+                cancel,
+                "lazysh.guard.release",
+                &params,
+                reply,
+            )
+            .await?
+            {
+                WireResult::Ok {} => {}
+                _ => return Err(Fault::Protocol),
+            }
+        }
+        Ok(Reply::Released)
+    }
     async fn action(
         &mut self,
         action: Action,
@@ -712,34 +780,8 @@ impl Control {
                 self.bound = Some(current);
                 Ok(response)
             }
-            Action::Release { receipt } => {
-                if self
-                    .bound
-                    .as_ref()
-                    .is_some_and(|bound| bound.token == receipt)
-                {
-                    let bound = self.bound.take().ok_or(Fault::Stale)?;
-                    let params = Release {
-                        boot: &self.startup.boot,
-                        receipt: &bound.remote,
-                    };
-                    match rpc(
-                        &self.handle,
-                        &self.startup.name,
-                        &bound.owner,
-                        cancel,
-                        "lazysh.guard.release",
-                        &params,
-                        reply,
-                    )
-                    .await?
-                    {
-                        WireResult::Ok {} => {}
-                        _ => return Err(Fault::Protocol),
-                    }
-                }
-                Ok(Reply::Released)
-            }
+            Action::Release { receipt } => self.release_bound(Some(&receipt), cancel, reply).await,
+            Action::RetireForView => self.release_bound(None, cancel, reply).await,
             Action::Input {
                 receipt,
                 source,
@@ -797,7 +839,7 @@ pub(crate) struct Binding {
     requests: mpsc::Sender<Work>,
     busy: Arc<AtomicBool>,
 }
-struct Permit(Arc<AtomicBool>);
+pub(crate) struct Permit(Arc<AtomicBool>);
 impl Drop for Permit {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
@@ -807,7 +849,7 @@ struct Work {
     action: Action,
     lease: AccessLease,
     reply: oneshot::Sender<Result<Reply>>,
-    _permit: Permit,
+    _permit: Arc<Permit>,
 }
 pub(crate) fn start(
     startup: Startup,
@@ -874,10 +916,22 @@ impl Binding {
         cancel: &mut watch::Receiver<bool>,
         action: Action,
     ) -> Result<Reply> {
+        let permit = self.reserve()?;
+        self.call_reserved(lease, cancel, action, permit).await
+    }
+    fn reserve(&self) -> Result<Arc<Permit>> {
         self.busy
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| Fault::Busy.error())?;
-        let permit = Permit(self.busy.clone());
+        Ok(Arc::new(Permit(self.busy.clone())))
+    }
+    async fn call_reserved(
+        &self,
+        lease: &AccessLease,
+        cancel: &mut watch::Receiver<bool>,
+        action: Action,
+        permit: Arc<Permit>,
+    ) -> Result<Reply> {
         let (reply, response) = oneshot::channel();
         lease.with_current(|| {
             if *cancel.borrow() {
@@ -898,6 +952,31 @@ impl Binding {
             response = response => response.map_err(|_| Fault::Unavailable.error())?,
         }
     }
+}
+
+/// Keep the input turn reserved until the caller's view command/channel settles.
+pub(crate) async fn retire_for_view(
+    session: &ssh::Session,
+    lease: &AccessLease,
+) -> Result<Option<Arc<Permit>>> {
+    let binding = session
+        .herdr
+        .lock()
+        .map_err(|_| Fault::Unavailable.error())?
+        .clone();
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    let permit = binding.reserve()?;
+    binding
+        .call_reserved(
+            lease,
+            &mut session.cancel.subscribe(),
+            Action::RetireForView,
+            permit.clone(),
+        )
+        .await?;
+    Ok(Some(permit))
 }
 
 #[tauri::command]

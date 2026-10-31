@@ -141,8 +141,24 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
         expect(bounds.y).toBeGreaterThanOrEqual(0);
         expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
       }
+      const field = (await composer.getByRole('textbox', {name: 'Compose text', exact: true}).boundingBox())!;
+      const actionBounds = [];
+      for (const name of ['Paste draft', 'Close composer']) {
+        const action = composer.getByRole('button', {name, exact: true});
+        await expect(action).toBeInViewport();
+        await expect(action.locator('svg')).toHaveCount(1);
+        expect(await action.textContent()).toBe('');
+        const bounds = (await action.boundingBox())!;
+        expect(bounds.width).toBeGreaterThanOrEqual(44);
+        expect(bounds.height).toBeGreaterThanOrEqual(44);
+        expect(bounds.x).toBeGreaterThanOrEqual(field.x + field.width);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+        expect(bounds.y).toBeGreaterThanOrEqual(0);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
+        actionBounds.push(bounds);
+      }
+      expect(actionBounds[0].x + actionBounds[0].width).toBeLessThanOrEqual(actionBounds[1].x);
       if (height === 420) {
-        await expect.poll(() => composer.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
         await page.getByRole('button', {name: 'Close composer', exact: true}).scrollIntoViewIfNeeded();
         await expect(page.getByRole('button', {name: 'Close composer', exact: true})).toBeInViewport();
         await (await workspaceControl(page,'Preferences')).click();

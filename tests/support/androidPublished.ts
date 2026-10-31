@@ -70,7 +70,7 @@ export function publishedInstrumentation(output:string,phase:'create'|'verify'){
     && !lines.some(line=>/^INSTRUMENTATION_STATUS_CODE: -|^INSTRUMENTATION_FAILED|^INSTRUMENTATION_RESULT: shortMsg=/.test(line));
 }
 const driverStages=['ARGUMENTS','DEVICE_ADMISSION','LAUNCH','LAUNCH_WINDOW','WORKSPACE','WORKSPACE_READINESS','WORKSPACE_ADD_HOST','DRAWER','ADD_HOST','NAME','HOSTNAME','USERNAME','KEYBOARD','SCROLL_OWNER','FORM_SCROLL','SAVE_HOST','SAVED_HOST','EDIT_HOST','READBACK','COMPLETE'] as const;
-type DriverProgress={state:'unavailable'}|{state:'available';stage:typeof driverStages[number];event:'entry'|'exit'};
+type DriverProgress={state:'unavailable'}|{state:'available';stage:typeof driverStages[number];event:'entry'|'exit';depth:0|1|2|null};
 export function publishedDriverProgress(output:string):DriverProgress{
   const unavailable=():DriverProgress=>({state:'unavailable'});
   if(Buffer.byteLength(output)>65536||output.includes('\0'))return unavailable();
@@ -86,9 +86,12 @@ export function publishedDriverProgress(output:string):DriverProgress{
     if(lines[index+1].replace(/\r$/,'')!=='INSTRUMENTATION_STATUS_CODE: 0')return unavailable();
     try{
       const value=JSON.parse(line.slice(prefix.length));
-      if(!value||Array.isArray(value)||JSON.stringify(value)!==line.slice(prefix.length)||Object.keys(value).sort().join(',')!=='event,stage'
+      const keys=value&&typeof value==='object'?Object.keys(value).sort().join(','):'';
+      if(!value||Array.isArray(value)||JSON.stringify(value)!==line.slice(prefix.length)||!['event,stage','depth,event,stage'].includes(keys)
         ||!driverStages.includes(value.stage)||(value.event!=='entry'&&value.event!=='exit'))return unavailable();
-      last={state:'available',stage:value.stage,event:value.event};
+      // FORM_SCROLL→SCROLL_OWNER→input and WORKSPACE→DRAWER→named reach depth2.
+      if(keys==='depth,event,stage'&&(!Number.isInteger(value.depth)||value.depth<0||value.depth>2))return unavailable();
+      last={state:'available',stage:value.stage,event:value.event,depth:keys==='event,stage'?null:value.depth};
     }catch{return unavailable();}
   }
   return last;
@@ -104,7 +107,9 @@ const inputFields=['NONE','NAME','HOSTNAME','USERNAME'] as const;
 const hintShapes=['empty','other','unavailable','name-label','name-placeholder','name-label-placeholder','hostname-label','hostname-placeholder','hostname-label-placeholder','username-label','username-placeholder','username-label-placeholder'] as const;
 const captionMatches=['zero','one','multiple','unavailable'] as const;
 const readinessOutcomes=['true','false','exception','unavailable'] as const;
-type ReadinessTrace={outcome:typeof readinessOutcomes[number];elapsedMs:number|null;polls:number;overflow:boolean;lastAdd:typeof captionMatches[number];lastOpen:typeof captionMatches[number]};
+type ReadinessQuery={caption:'add'|'open';selector:'text'|'description';raw:typeof captionMatches[number];visible:typeof captionMatches[number];elapsedMs:number};
+type ReadinessPoll={remainingMs:number;sameDevice:boolean;elapsedMs:number;queries:ReadinessQuery[]};
+type ReadinessTrace={outcome:typeof readinessOutcomes[number];elapsedMs:number|null;polls:number;overflow:boolean;lastAdd:typeof captionMatches[number];lastOpen:typeof captionMatches[number];waitMs:number|null;lastPoll:ReadinessPoll|null};
 const saveOperations=['unavailable','lookup','click','complete'] as const;
 type SaveTrace={operation:typeof saveOperations[number];raw:typeof captionMatches[number];visible:typeof captionMatches[number]};
 type DriverObservation={state:'unavailable'}|{state:'available';inputOperation:typeof inputOperations[number];inputField:typeof inputFields[number];readbackMatched:boolean|null;foreground:'target'|'driver'|'other'|'unavailable';screenOn:boolean|null;keyguardLocked:boolean|null;editableCount:number|null;editableOverflow:boolean|null;hintShapes:typeof hintShapes[number][];addHostMatches:typeof captionMatches[number];openHostsMatches:typeof captionMatches[number];webView:boolean|null;readiness:ReadinessTrace;save:SaveTrace};
@@ -123,15 +128,33 @@ export function publishedDriverObservation(output:string):DriverObservation{
       ||![data.addHostMatches,data.openHostsMatches].every(value=>captionMatches.includes(value))
       ||!Array.isArray(data.hintShapes)||data.hintShapes.length>8||data.hintShapes.some((value:unknown)=>!hintShapes.includes(value as typeof hintShapes[number])))return unavailable();
     const trace=data.readiness;
-    if(!trace||typeof trace!=='object'||Array.isArray(trace)||Object.keys(trace).sort().join(',')!=='elapsedMs,lastAdd,lastOpen,outcome,overflow,polls'
+    if(!trace||typeof trace!=='object'||Array.isArray(trace)||Object.keys(trace).sort().join(',')!=='elapsedMs,lastAdd,lastOpen,lastPoll,outcome,overflow,polls,waitMs'
       ||!readinessOutcomes.includes(trace.outcome)||!Number.isInteger(trace.polls)||trace.polls<0||trace.polls>64||typeof trace.overflow!=='boolean'
       ||(trace.overflow&&trace.polls!==64)||![trace.lastAdd,trace.lastOpen].every(value=>captionMatches.includes(value))
       ||(trace.lastOpen!=='unavailable'&&trace.lastAdd!=='zero'))return unavailable();
     if(trace.outcome==='unavailable'){
-      if(trace.elapsedMs!==null||trace.polls!==0||trace.overflow||trace.lastAdd!=='unavailable'||trace.lastOpen!=='unavailable')return unavailable();
+      if(trace.elapsedMs!==null||trace.polls!==0||trace.overflow||trace.lastAdd!=='unavailable'||trace.lastOpen!=='unavailable'
+        ||trace.waitMs!==null||trace.lastPoll!==null)return unavailable();
     }else if(!Number.isInteger(trace.elapsedMs)||trace.elapsedMs<0||trace.elapsedMs>60000
       ||(trace.outcome!=='exception'&&trace.polls===0)
       ||(trace.polls===0&&(trace.lastAdd!=='unavailable'||trace.lastOpen!=='unavailable')))return unavailable();
+    if(trace.outcome!=='unavailable'&&(!Number.isInteger(trace.waitMs)||trace.waitMs<1||trace.waitMs>5000))return unavailable();
+    const poll=trace.lastPoll;
+    if(trace.polls===0){if(poll!==null)return unavailable();}
+    else{
+      const boundedMs=(value:unknown,maximum=60000)=>Number.isInteger(value)&&Number(value)>=0&&Number(value)<=maximum;
+      if(!poll||typeof poll!=='object'||Array.isArray(poll)||Object.keys(poll).sort().join(',')!=='elapsedMs,queries,remainingMs,sameDevice'
+        ||!boundedMs(poll.remainingMs,45000)||typeof poll.sameDevice!=='boolean'||!boundedMs(poll.elapsedMs)
+        ||!Array.isArray(poll.queries)||poll.queries.length<1||poll.queries.length>4)return unavailable();
+      for(const [index,query] of poll.queries.entries()){
+        if(!query||typeof query!=='object'||Array.isArray(query)||Object.keys(query).sort().join(',')!=='caption,elapsedMs,raw,selector,visible'
+          ||query.caption!==(index<2?'add':'open')||query.selector!==(index%2?'description':'text')
+          ||![query.raw,query.visible].every(value=>captionMatches.includes(value))||!boundedMs(query.elapsedMs,poll.elapsedMs)
+          ||(query.raw==='unavailable'&&query.visible!=='unavailable')
+          ||(query.raw==='zero'&&!['zero','unavailable'].includes(query.visible))
+          ||(query.raw==='one'&&query.visible==='multiple'))return unavailable();
+      }
+    }
     const save=data.save;
     if(!save||typeof save!=='object'||Array.isArray(save)||Object.keys(save).sort().join(',')!=='operation,raw,visible'
       ||!saveOperations.includes(save.operation)||![save.raw,save.visible].every(value=>captionMatches.includes(value))
@@ -149,7 +172,7 @@ export function publishedDriverObservation(output:string):DriverObservation{
       foreground:data.foreground,screenOn:data.screenOn,keyguardLocked:data.keyguardLocked,
       editableCount:data.editableCount,editableOverflow:data.editableOverflow,hintShapes:[...data.hintShapes],
       addHostMatches:data.addHostMatches,openHostsMatches:data.openHostsMatches,webView:data.webView,
-      readiness:{outcome:trace.outcome,elapsedMs:trace.elapsedMs,polls:trace.polls,overflow:trace.overflow,lastAdd:trace.lastAdd,lastOpen:trace.lastOpen},save:{operation:save.operation,raw:save.raw,visible:save.visible}};
+      readiness:{outcome:trace.outcome,elapsedMs:trace.elapsedMs,polls:trace.polls,overflow:trace.overflow,lastAdd:trace.lastAdd,lastOpen:trace.lastOpen,waitMs:trace.waitMs,lastPoll:poll===null?null:{remainingMs:poll.remainingMs,sameDevice:poll.sameDevice,elapsedMs:poll.elapsedMs,queries:poll.queries.map((query:ReadinessQuery)=>({caption:query.caption,selector:query.selector,raw:query.raw,visible:query.visible,elapsedMs:query.elapsedMs}))}},save:{operation:save.operation,raw:save.raw,visible:save.visible}};
   }catch{return unavailable();}
 }
 export function translatedGuest(values:string[]){

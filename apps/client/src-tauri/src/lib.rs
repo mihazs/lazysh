@@ -1,3 +1,4 @@
+mod account_usage;
 mod app_icons;
 mod app_lock;
 mod apple_speech;
@@ -25,6 +26,7 @@ mod previews;
 mod push;
 mod repository;
 mod routing;
+mod session_background;
 mod sftp_stream;
 mod share;
 mod ssh;
@@ -38,6 +40,16 @@ mod ui_locale;
 mod vault;
 mod voice;
 mod zellij;
+
+/// Exact internal collection worker mode runs before any desktop UI is initialized.
+#[cfg(desktop)]
+pub fn account_usage_worker() -> Option<std::process::ExitCode> {
+    lazysh_account_usage::worker_main()
+}
+#[cfg(not(desktop))]
+pub fn account_usage_worker() -> Option<std::process::ExitCode> {
+    None
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -61,6 +73,7 @@ pub fn run() {
         .plugin(tauri_plugin_lazysh_apple_status::init())
         .plugin(tauri_plugin_lazysh_display_idle::init())
         .plugin(clipboard::init())
+        .plugin(session_background::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
         .plugin(
@@ -80,10 +93,15 @@ pub fn run() {
         .manage(voice::cloud::CloudState::default())
         .manage(sync::SyncState::default())
         .manage(local::LocalState::default())
+        .manage(account_usage::UsageState::default())
         .manage(desktop_launch::LaunchState::new(directory))
         .setup(|app| {
             use tauri::Manager;
-            let state = ssh::AppState::new(app.path().app_config_dir()?)?;
+            let mut state = ssh::AppState::new(app.path().app_config_dir()?)?;
+            state.background = app
+                .state::<session_background::Controller>()
+                .inner()
+                .clone();
             app.manage(state);
             local::install_cleanup(app)?;
             voice::cloud::install_cleanup(app)?;
@@ -100,6 +118,7 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                account_usage::account_usage,
                 clipboard::clipboard_read,
                 clipboard::clipboard_cancel,
                 clipboard::clipboard_is_android,
@@ -231,6 +250,7 @@ pub fn run() {
                 ssh::trust_host_key,
                 ssh::connect,
                 ssh::file_control::restore_file_transfer,
+                ssh::file_control::restore_host_tools,
                 ssh::adopt_session,
                 ssh::write_stdin,
                 ssh::ack_output,
@@ -248,6 +268,7 @@ pub fn run() {
                 ssh::agent_snapshot,
                 ssh::agent_reported_history,
                 companion::install_companion,
+                companion::hooks::companion_hooks,
                 companion_settings::get_companion_settings,
                 companion_settings::update_companion_settings,
                 ssh::agent_transcript,
