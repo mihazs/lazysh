@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>lazysh — SSH into your development workspace</title>
+<meta name="description" content="An open-source SSH workspace for mobile and desktop, with host-side persistent sessions and optional coding-agent visibility. Development preview.">
+<meta property="og:title" content="lazysh — SSH into your development workspace">
+<meta property="og:description" content="Direct SSH. Your host-side sessions. Optional coding-agent visibility. Development preview.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://raw.githubusercontent.com/mihazs/lazysh/main/brand/lazysh/platform/play-store-512.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="../../../brand/lazysh/svg/favicon-gradient.svg" type="image/svg+xml">
+<style>
+:root{color-scheme:dark;--surface:#0b1728;--text:#f8fcff;--accent:#77f3ec;--line:#53657b}
+*{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--text);font:18px/1.6 system-ui,sans-serif}
+a{color:var(--accent);text-underline-offset:4px}a:focus-visible{outline:3px solid #ad81f9;outline-offset:5px}
+.skip{position:absolute;left:1rem;top:-5rem;background:var(--surface);padding:.6rem}.skip:focus{top:1rem}
+header,main,footer{max-width:1050px;margin:auto;padding:1.5rem clamp(1rem,4vw,3rem)}
+header{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap}header img{width:180px;max-width:100%;height:auto}
+nav{display:flex;gap:1.2rem;flex-wrap:wrap}.eyebrow{font-size:.85rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+h1{font-size:clamp(2.2rem,6.5vw,4.4rem);line-height:1.1;max-width:16ch;margin:1rem 0 1.5rem;letter-spacing:-.035em}
+h2{font-size:1.8rem;line-height:1.2}p{max-width:68ch}.lead{font-size:1.2rem;max-width:52ch}
+.actions{display:flex;gap:1rem;flex-wrap:wrap;margin:2rem 0}.button{border:1px solid var(--accent);border-radius:.5rem;padding:.7rem 1rem;text-decoration:none;min-height:48px;display:inline-flex;align-items:center}.primary{background:var(--accent);color:var(--surface);font-weight:650}
+section{padding:2rem 0;border-bottom:1px solid var(--line)}.steps{padding-left:1.4rem}.steps li{padding:.5rem 0;max-width:67ch}
+.note{border-left:3px solid #ad81f9;padding:.4rem 1rem}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left}th,td{padding:.9rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--accent)}footer{font-size:.9rem}
+@media(max-width:480px){body{font-size:16px}nav{gap:.9rem}th,td{padding:.7rem .4rem}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header><a href="https://github.com/mihazs/lazysh" aria-label="lazysh on GitHub"><img src="../../../brand/lazysh/svg/lockup-horizontal-white.svg" width="180" height="60" alt="lazysh"></a><nav aria-label="Main"><a href="#availability">Downloads</a><a href="https://github.com/mihazs/lazysh/tree/main/docs">Documentation</a><a href="https://github.com/mihazs/lazysh/blob/main/CONTRIBUTING.md">Contribute</a></nav></header>
+<main id="main">
+<section aria-labelledby="title"><p class="eyebrow">Open source · Development preview</p><h1 id="title">Your workspace stays on your host.</h1><p class="lead">SSH from your phone or desktop. Return to persistent host-side terminal sessions, and optionally check supported coding-agent records.</p><div class="actions"><a class="button primary" href="https://github.com/mihazs/lazysh/releases">Download preview</a><a class="button" href="https://github.com/mihazs/lazysh/blob/main/docs/install-and-update.md#android">Android: Obtainium setup</a></div><p class="note">Platform acceptance varies. Review the exact release's architecture, signing status and known limitations before installing.</p></section>
+<section aria-labelledby="workflow"><h2 id="workflow">From a phone to the work already running</h2><ol class="steps"><li><strong>Connect directly.</strong> Use your own SSH host and verify its full host-key fingerprint. Ordinary SSH needs no hosted lazysh account.</li><li><strong>Return to a session.</strong> Discover and attach to supported tmux, Herdr or Zellij sessions. The host-side multiplexer supplies persistence.</li><li><strong>Check agent activity when needed.</strong> An optional companion exposes supported records for workflows such as Claude Code and Codex remote development. Agents run on your host; recorded activity is not proof of a live process.</li></ol><p><a href="https://github.com/mihazs/lazysh/blob/main/docs/connections.md">First SSH connection</a> · <a href="https://github.com/mihazs/lazysh/blob/main/docs/multiplexers.md">Session requirements</a></p></section>
+<section aria-labelledby="demo"><h2 id="demo">Real demonstration: capture pending</h2><p>No reviewed product recording is included in this artifact. The capture plan covers connection, session discovery and reconnect on an owned host. No synthetic app screenshots are presented.</p><a href="https://github.com/mihazs/lazysh/blob/main/docs/community/demonstrations.md">Capture procedure and missing evidence</a></section>
+<section id="availability" aria-labelledby="platforms"><h2 id="platforms">Choose a verified download route</h2><p>Observed public v1.3.3 asset names establish availability, not full feature parity or acceptance on your device. Check current release notes.</p><div class="table-wrap"><table><caption>Preview distribution routes</caption><thead><tr><th scope="col">Platform</th><th scope="col">Route and limits</th></tr></thead><tbody><tr><th scope="row">Android</th><td>ARM64, API 24+. Prefer Obtainium with an explicit FOSS or Google APK filter; keep the chosen signing channel.</td></tr><tr><th scope="row">Linux</th><td>x64 AppImage or Debian package; native runtime requirements apply.</td></tr><tr><th scope="row">Windows</th><td>x64 installer; inspect publisher/signing disclosure and acceptance limits.</td></tr><tr><th scope="row">Apple apps</th><td>Public macOS/iOS app distribution deferred. Source/simulator builds are separate; companion executables do not establish app availability.</td></tr></tbody></table></div><p><a href="https://github.com/mihazs/lazysh/blob/main/docs/install-and-update.md">Installation, SHA256 checks and updates</a> · <a href="https://github.com/mihazs/lazysh/releases">Release assets</a></p></section>
+<section aria-labelledby="join"><h2 id="join">Help make the preview easier to use</h2><p>Share a sanitized reproduction, improve a guide, translate a small interface, or contribute a focused fix. Read the public issues and contribution rules before starting.</p><div class="actions"><a class="button" href="https://github.com/mihazs/lazysh/issues/1">Public roadmap</a><a class="button" href="https://github.com/mihazs/lazysh/blob/main/CONTRIBUTING.md">Contribution guide</a></div></section>
+</main><footer>lazysh · <a href="https://github.com/mihazs/lazysh/blob/main/LICENSE">GPL-3.0-or-later</a> · Direct SSH and optional self-hosted companion. No analytics or external fonts are loaded by this page.</footer>
+</body></html>

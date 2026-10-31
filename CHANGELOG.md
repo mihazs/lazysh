@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add public community, support, contribution and evidence-capture guidance, a launch kit, growth scorecard and local static landing artifact. No application defaults change.
+
 - Show reported prepaid spend-cap percentages in AI usage details and the compact usage button. Keep formatted monetary amounts and over-cap numbers intact; uncapped balances and missing percentages remain unmetered.
 
 - Reduce workspace clutter by removing the redundant explanation beneath the session manager action.
