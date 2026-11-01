@@ -1952,6 +1952,7 @@ it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-hel
       hidden.mockReturnValue(true);act(()=>document.dispatchEvent(new Event('visibilitychange')));
       hidden.mockReturnValue(false);act(()=>document.dispatchEvent(new Event('visibilitychange')));hidden.mockRestore();
     }else if(outcome==='cancel-server'){
+      await user.click(browser.getByText(`${t('herdrAgentsServer')} · named-work`));
       const server=await screen.findByRole('combobox',{name:t('herdrAgentsServer')});await waitFor(()=>expect(server).toHaveProperty('disabled',false));await user.selectOptions(server,'');
     }else await user.click(screen.getByRole('button',{name:t('herdrNavigationBack')}));
     if(outcome==='cancel-pending-reply')await user.click(screen.getByRole('tab',{name:'Home'}));

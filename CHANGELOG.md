@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prioritize connected app sessions above discovered Herdr spaces and refine compact themed navigation. Healthy Herdr server setup in Workspaces is now collapsed by default. Missing selections and unhealthy readers still reveal setup automatically. Keep shared-focus warnings visible and preserve session identity, reader drafts, contextual return, authentication and transport defaults.
+
 - Keep delayed terminal, composer and search focus inside their pane from taking focus away from an open credential or other modal dialog. Preserve terminal protocol replies, sessions and explicit input after dismissal; no authentication or transport defaults change.
 
 - Add explicit V3 discovery and inspected managed Amp system-plugin setup with absolute companion binding. Setup tries V3 metadata with one bounded V2 compatibility fallback; V1/V2 provider mappings stay unchanged. Same-name foreign plugins block installation while fresh exact-owned removal remains available; settings, trust and live reporting are not enabled or verified.

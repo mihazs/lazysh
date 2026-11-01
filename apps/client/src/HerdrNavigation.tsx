@@ -78,15 +78,16 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}
     {data?.servers.length===0 && <p>{t('herdrAgentsNoServers')}</p>}
     {!!data?.servers.length && <>
-      <details className="herdr-server-setup" open={mode!=='agents' || !data.loaded || !data.server || failure?.host===sessionId || agentFailure?.host===sessionId ? true : undefined}>
-      <summary hidden={mode!=='agents'}>{t('herdrAgentsServer')}{data.server ? ` · ${data.server}` : ''}</summary>
+      <details className="herdr-server-setup" open={!data.loaded || !data.server || failure?.host===sessionId || agentFailure?.host===sessionId ? true : undefined}>
+      <summary>{t('herdrAgentsServer')}{data.server ? ` · ${data.server}` : ''}</summary>
       <label>{t('herdrAgentsServer')}<select value={data.server} disabled={working} onChange={event=>{onServerChange?.();selectServer(event.target.value);}}><option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}</select></label>
       {data.server && <>
-        <p className="muted">{t('herdrNavigationShared')}</p>
+        {mode==='agents' && <p className="muted">{t('herdrNavigationShared')}</p>}
         <button className="subtle-button" disabled={working} onClick={()=>void open()}>{t('muxAttachKind',{kind:'Herdr',name:data.server})}</button>
       </>}
       </details>
       {data.server && <>
+        {mode==='spaces' && <p className="herdr-shared-focus-note muted">{t('herdrNavigationShared')}</p>}
         <label><span className="sr-only">{t('herdrNavigationSearch')}</span><input type="search" placeholder={t('herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
