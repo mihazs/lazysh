@@ -2760,9 +2760,31 @@ class NativeWorkspaceTest {
                 val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
                     "$panel > .tool-bar > button"))
                 button.perform(webScrollIntoView())
+                val companionReadinessObservation = """
+                    (()=>{const p=document.querySelector(${JSONObject.quote(panel)});
+                      const direct=Array.from(document.querySelectorAll(${JSONObject.quote("$panel > .tool-bar > button")}));
+                      const button=direct.length===1?direct[0]:null;
+                      const closed=(value,allowed)=>allowed.includes(value)?value:'unavailable';
+                      const outcome=p?.getAttribute('data-install-outcome');
+                      return {
+                        expectedActionVisible:(${workspaceButtonVisible(panel, action)}),
+                        matchingExpectedActionEnabled:direct.some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled),
+                        outcomeExpected:outcome===${JSONObject.quote(if(reused) "installed" else "idle")},
+                        panelPresent:!!p,panelVisible:!!p&&(${workspaceElementVisible(panel)}),detailsOpen:p?.open===true,
+                        directActionPresent:direct.length>0,
+                        directActionVisible:direct.length===1&&(${workspaceElementVisible("$panel > .tool-bar > button", true)}),
+                        directActionEnabled:!!button&&!button.disabled,
+                        labelKind:button?.textContent==='Install companion'?'install':button?.textContent==='Update companion'?'update':button?.textContent==='Installing…'?'busy':'other',
+                        outcome:closed(outcome,['idle','pending','failed','uncertain','installed','reused']),
+                        phase:closed(p?.getAttribute('data-install-phase'),${JSONArray(phases)}),
+                        failure:closed(p?.getAttribute('data-install-failure'),${JSONArray(failures)}),
+                        parentAgentErrorPresent:!!p?.closest('.agent-panel')?.querySelector('.agent-setup [role=alert]')
+                      };})()
+                """
                 awaitDocument(scenario, "owned companion $expected action ready", workspaceButtonVisible(panel, action) +
                     " && Array.from(document.querySelectorAll('$panel > .tool-bar > button')).some(x=>x.textContent===${JSONObject.quote(action)}&&!x.disabled)" +
-                    " && document.querySelector('$panel')?.getAttribute('data-install-outcome')===${JSONObject.quote(if(reused) "installed" else "idle")}")
+                    " && document.querySelector('$panel')?.getAttribute('data-install-outcome')===${JSONObject.quote(if(reused) "installed" else "idle")}",
+                    observe = { remaining -> evaluate(scenario, companionReadinessObservation, remaining) })
                 button.perform(webClick())
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(245)
                 var phase = "unavailable"; var failure = "unavailable"; var outcome = "unavailable"; var reason = "unavailable"
