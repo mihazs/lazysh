@@ -141,6 +141,8 @@ export const english = {
   attachmentRestoreTitle: "Reconnect uploads to {{value1}}",
   attachmentRestored: "Uploads reconnected. Select Upload attachment to retry.",
   attachmentRestoreInvalid: "Invalid file-transfer recovery response.",
+  workspaceMoreTools: "More tools",
+  workspaceApplicationOptions: "Application options",
   navigationUsageShortcut: "Open usage from navigation",
   navigationContext: "Tool navigation",
   navigationBack: "Back",

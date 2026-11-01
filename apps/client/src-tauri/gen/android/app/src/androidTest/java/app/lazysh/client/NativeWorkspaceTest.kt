@@ -1220,6 +1220,23 @@ class NativeWorkspaceTest {
             trigger.perform(webClick())
         }
         awaitDocument(scenario, "workspace More opened", workspaceElementVisible(menu), deadline = deadline)
+        for (group in listOf("workspace-more-tools", "workspace-connection-actions", "workspace-application-options")) {
+            val details = "$menu details.$group"
+            val ownsHiddenAction = """
+                (()=>{const owner=document.querySelector(${JSONObject.quote(details)});
+                  const target=Array.from(document.querySelectorAll(${JSONObject.quote(menu + " button")}))
+                    .find(button=>button.textContent.trim()===${JSONObject.quote(text)});
+                  return Boolean(owner&&!owner.open&&target?.closest('details')===owner);})()
+            """
+            if (evaluate(scenario, ownsHiddenAction) == "true") {
+                val selector = "$details > summary"
+                val disclosure = onWebView().withElement(findElement(Locator.CSS_SELECTOR, selector))
+                disclosure.perform(webScrollIntoView())
+                awaitDocument(scenario, "touchable workspace disclosure", workspaceElementVisible(selector, true), deadline = deadline)
+                disclosure.perform(webClick())
+                awaitDocument(scenario, "workspace disclosure expanded", "Boolean(document.querySelector(${JSONObject.quote(details)})?.open)", deadline = deadline)
+            }
+        }
         val target = onWebView().withElement(findElement(Locator.XPATH,
             "//*[@role='dialog' and @aria-label='Workspace tools']//button[normalize-space(.)='$text']"))
         target.perform(webScrollIntoView())

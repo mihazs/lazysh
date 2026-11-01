@@ -142,6 +142,8 @@ const translations = {
 
   clipboardChecking: ["Verificando suporte à área de transferência…", "Comprobando compatibilidad del portapapeles…"],
   clipboardRetry: ["Tentar verificar a área de transferência novamente", "Reintentar comprobación del portapapeles"],
+  workspaceMoreTools: ["Mais ferramentas", "Más herramientas"],
+  workspaceApplicationOptions: ["Opções do aplicativo", "Opciones de la aplicación"],
   navigationUsageShortcut: ["Abrir uso pela navegação", "Abrir uso desde navegación"],
   navigationContext: ["Navegação da ferramenta", "Navegación de herramientas"],
   navigationBack: ["Voltar", "Atrás"],
