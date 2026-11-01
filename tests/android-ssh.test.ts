@@ -7,7 +7,7 @@ import * as childProcess from 'node:child_process';
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,validateSharedHerdrReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('owned process failures never include captured output or arguments',async()=>{
   const owned=new OwnedProcess(process.execPath,['-e',"process.stderr.write('private-fixture-secret');process.exit(31)"]);
@@ -1139,7 +1139,7 @@ test('owned attachment readback detects changed content, inode, size and timesta
 test('manual attachment native checkpoint is selected by the existing uncached SSH owner and admitted Mosh fixture',async()=>{
   const root=join(import.meta.dir,'..');
   const script=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts['test:android-ssh'];
-  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
+  expect(script).toBe('LAZYSH_ANDROID_UI_SSH=1 LAZYSH_ANDROID_UI_ATTACHMENTS=1 LAZYSH_ANDROID_UI_IME=1 bun test ../../tests/android-ssh.test.ts ../../tests/android-ssh-host.test.ts');
   const scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
   expect(scripts['test:android']).toContain('app.lazysh.client.NativeWorkspaceTest#ownedMoshUploadsLargeClipboardImageThroughRealUi');
   const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
@@ -1336,4 +1336,41 @@ test('companion readiness observation retains only closed enums and booleans',as
   expect(sample).toMatchObject({labelKind:'other',outcome:'unavailable',phase:'unavailable',failure:'unavailable',parentAgentErrorPresent:true});
   expect(JSON.stringify(sample)).not.toContain(secret);
   expect(Object.values(sample).every(value=>typeof value==='boolean'||['other','unavailable'].includes(value as string))).toBe(true);
+});
+
+
+test('owned SSH IME wire oracle rejects replay, lost erasure, stale commits and duplicated current marker',()=>{
+  const nonce='0123456789abcdef'.repeat(2),current=`owned-current-${nonce}`;
+  const expected=Buffer.from(`there\x7f\x7fthe${current}`);
+  expect(()=>verifyImeReceiverBytes(expected,nonce)).not.toThrow();
+  for(const bytes of [Buffer.alloc(0),Buffer.from(`thethe${current}`),Buffer.from(`therethe${current}`),
+    Buffer.from(`there\x7f\x7ftheowned-old-${nonce}${current}`),Buffer.concat([expected,Buffer.from(current)]),
+    Buffer.from(`there\x7f\x7fthethe${current}`),Buffer.from(`there\x7fthe${current}`)]) {
+    expect(()=>verifyImeReceiverBytes(bytes,nonce)).toThrow('Owned IME receiver bytes differ');
+  }
+  expect(()=>verifyImeReceiverBytes(expected,'private-invalid')).toThrow('Owned IME nonce invalid');
+  let visible='';for(const byte of Buffer.from('there\x7f\x7fthe'))visible=byte===127?visible.slice(0,-1):visible+String.fromCharCode(byte);
+  expect(visible).toBe('thethe');
+});
+
+test('packaged SSH IME case uses ordinary native routing, a separate report, and no harness navigation',async()=>{
+  const root=join(import.meta.dir,'..'),scripts=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).scripts;
+  expect(scripts['test:android-ssh']).toContain('LAZYSH_ANDROID_UI_IME=1');
+  expect(scripts['test:android']).toContain('NativeWorkspaceTest#ownedSshImeTransactionsThroughRealUi');
+  const native=await readFile(join(root,'tests/android-ssh-host.test.ts'),'utf8');
+  expect(native).toContain("test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')");
+  expect(native).toContain('await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true)');
+  const support=await readFile(join(root,'tests/support/androidSsh.ts'),'utf8');
+  expect(support).toContain("ime?{privateTtyGroup:true}");
+  expect(support).toContain("ime?'-PlazyshSshImeAcceptance=true'");
+  expect(support).toContain("ime?'ownedSshImeTransactionsThroughRealUi'");
+  const gradle=await readFile(join(root,'apps/client/src-tauri/gen/android/app/build.gradle.kts'),'utf8');
+  expect(gradle).toContain('outputs/androidTest-results/ssh-ime-ui');
+  expect(gradle).toContain('"lazyshSshAcceptance","lazyshSshImeAcceptance","lazyshAttachmentAcceptance"');
+  const kotlin=await readFile(join(root,'apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=kotlin.split('private fun verifySshImeTransactions(')[1].split('private class OwnedImeControl(')[0];
+  for(const forbidden of ['loadUrl(', 'loadData', 'ownedIme.', 'dispatchEvent(', 'terminal.input('])expect(body).not.toContain(forbidden);
+  expect(/\.value\s*=(?!=)/.test(body)).toBe(false);
+  expect(body).toContain('ime.restore()');expect(body).toContain('ime.call("old")');expect(body).toContain('ime.call("current")');
+  expect(body).toContain('assertSame("Packaged WebView must remain original"');
 });
