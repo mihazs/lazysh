@@ -4,6 +4,7 @@ import {SshFixture} from '../../../tests/support/sshFixture';
 
 type Terminal=Awaited<ReturnType<NonNullable<NativeGui['browser']>['$']>>;
 type Owner=Awaited<ReturnType<NativeGui['appOwner']>>;
+type OwnedHostLabel='Owned SSH GUI host'|'Owned SSH GUI second host';
 
 export async function typeText(browser:NonNullable<NativeGui['browser']>,text:string) {
   const action=browser.action('key');
@@ -31,18 +32,18 @@ async function enterKey(gui:NativeGui,ssh:SshFixture,connect:Terminal,recovery:b
   await (await connect.$(`button=${recovery?'Reconnect uploads':'Connect'}`)).click();
 }
 
-export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh'='ssh',port=ssh.port,entry?:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>) {
-  return openSsh(gui,ssh,transport,port,entry,false);
+export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh'='ssh',port=ssh.port,entry?:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>,name:OwnedHostLabel='Owned SSH GUI host') {
+  return openSsh(gui,ssh,transport,port,entry,false,name);
 }
 export async function openOwnedRememberedSsh(gui:NativeGui,ssh:SshFixture) {
   return openSsh(gui,ssh,'ssh',ssh.port,undefined,true);
 }
-async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:number,entry:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>|undefined,rememberKey:boolean) {
+async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:number,entry:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>|undefined,rememberKey:boolean,name:OwnedHostLabel='Owned SSH GUI host') {
   const browser=gui.browser!,owner=await gui.appOwner();
   gui.stage='owned SSH host editor';
   const add=await browser.$('button[aria-label="Add host"]');await add.waitForDisplayed({timeout:30_000});await add.click();
   const editor=await browser.$('[role="dialog"][aria-label="Add a host"]');await editor.waitForDisplayed();
-  await (await editor.$('input[placeholder="Home workstation"]')).setValue('Owned SSH GUI host');
+  await (await editor.$('input[placeholder="Home workstation"]')).setValue(name);
   await (await editor.$('input[placeholder="workstation.local"]')).setValue('127.0.0.1');
   await (await editor.$('label.port-field input')).setValue(String(port));
   await (await editor.$('input[placeholder="Your SSH username"]')).setValue(ssh.username);
@@ -53,8 +54,8 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   await (await (await editor.$('label*=Preferred transport')).$('select')).selectByAttribute('value',transport);
   await (await editor.$('button=Save host')).click();await editor.waitForDisplayed({reverse:true});
   gui.stage='owned SSH manual key';
-  await (await browser.$('button[aria-label="Connect to Owned SSH GUI host"]')).click();
-  const connect=await browser.$('[role="dialog"][aria-label="Connect to Owned SSH GUI host"]');await connect.waitForDisplayed();
+  await (await browser.$(`button[aria-label=${JSON.stringify(`Connect to ${name}`)}]`)).click();
+  const connect=await browser.$(`[role="dialog"][aria-label=${JSON.stringify(`Connect to ${name}`)}]`);await connect.waitForDisplayed();
   expect(await (await connect.$('select')).getValue()).toBe(transport);
   await enterKey(gui,ssh,connect,false,rememberKey);
   gui.stage='owned SSH explicit fingerprint review';
@@ -62,7 +63,8 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   expect(await trust.getText()).toContain(ssh.fingerprint);
   await (await trust.$('button=Trust key and connect')).click();
   gui.stage='owned SSH terminal prompt';
-  const terminal=await browser.$('.terminal-canvas .xterm-screen');
+  const terminalName=entry?`${name} / ${entry.name}`:name;
+  const terminal=await browser.$(`.terminal-canvas[aria-label=${JSON.stringify(`Terminal for ${terminalName}`)}] .xterm-screen`);
   await browser.waitUntil(async()=>{
     const alert=await browser.$('[role="dialog"] .inline-error[role="alert"]');
     if(await alert.isDisplayed()) {
@@ -79,7 +81,7 @@ async function openSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|'mosh',port:
   return {browser,terminal,owner};
 }
 
-export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,checkpoint:boolean|'AFTER_CLOSURE'|'AFTER_RECOVERY'|'AFTER_SAVED_RECONNECT'=false) {
+export async function challengeOwnedSsh(gui:NativeGui,ssh:SshFixture,terminal:Terminal,owner:Owner,checkpoint:boolean|'AFTER_CLOSURE'|'AFTER_RECOVERY'|'AFTER_SAVED_RECONNECT'|'AFTER_WORKSPACES'=false) {
   const browser=gui.browser!;
   const suffix=typeof checkpoint==='string'?`_${checkpoint}`:checkpoint?'_AFTER_INSTALL':'';
   const expected=ssh.expected+suffix;
