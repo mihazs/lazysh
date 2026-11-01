@@ -1,18 +1,34 @@
 # F-Droid source-build validation
 
-This is an initial, manual-update recipe for the public source revision in
-`metadata/app.lazysh.client.yml`. It does not create tags, publish APKs, sign
-anything, or submit metadata to F-Droid. Automatic updates stay disabled until
-the separate release/tagging gates under #333 are complete.
+This directory contains the manually pinned F-Droid **source-build candidate** for
+the published stable GitHub release `v1.4.0`:
+`app.lazysh.client`, `versionName=1.4.0`, `versionCode=1004000`, source
+commit `95bbb8c8cf986d69a8f249e1bb6852706776b1f3`. The application has a GPL-3.0-or-later
+license and a Google-free Android feature path. The downloadable GitHub FOSS
+APK is **not** an independently built or reviewed F-Droid APK.
 
-The current candidate pins 0.22.0 / 22000 at
-`3dc44f47dac1c5fa29a8e3220ee82efd46484f4d`, including the FOSS UnifiedPush
-registration foundation and the separately gated native event-display source.
-Removing the unused normal `android` project retains the selected
-`android-unifiedpush` project and its `android-shared` sources. This metadata
-update does not establish distributor delivery, retained inbox behavior or
-complete free-software remote push. The original provider-none 0.12.2 execution
-is recorded separately below.
+**Review status:** The updated 1.4.0 recipe has not yet completed a fresh
+official-buildserver source scan, native unsigned APK build, binary scan and
+third-party dependency/toolchain review. Historical 0.12.2/0.14.0 receipts below
+do not establish these properties for 1.4.0. In particular, the pinned Bun
+bootstrap is a downloaded prebuilt build tool; verifying its SHA-256 alone does
+not establish F-Droid toolchain-policy acceptance.
+
+This upstream recipe intentionally retains `AutoUpdateMode: None` and
+`UpdateCheckMode: None`, as required by the exact-template digest guard in
+`.changeset/release-tag.ts`. The GitHub verified-tag workflow substitutes an
+exact main source commit and version into its own private candidate; it does
+not submit to F-Droid. For the **downstream fdroiddata recipe**, reviewers may
+enable `AutoUpdateMode: Version` and a stable-only `Tags` check with
+`UpdateCheckData` pointing to `apps/client/android-version.properties` once
+the current release is independently accepted and the update scanner has been
+tested. Do not turn on unchecked auto-updates by modifying the upstream
+release-policy template.
+
+The request-for-packaging submission is tracked under
+[GitHub issue #333](https://github.com/mihazs/lazysh/issues/333).
+This preparation does not create a signing key, alter published GitHub
+releases, certify reproducibility, or imply F-Droid approval.
 
 The recipe follows the official [metadata reference](https://f-droid.org/docs/Build_Metadata_Reference/).
 Run it with the official `fdroidserver` tools from this directory. Its
@@ -20,8 +36,8 @@ Run it with the official `fdroidserver` tools from this directory. Its
 fdroiddata definitions; the selected category entry is copied unchanged from
 [fdroiddata's category configuration](https://gitlab.com/fdroid/fdroiddata/-/blob/master/config/categories.yml).
 The [How2Vote recipe](https://gitlab.com/fdroid/fdroiddata/-/blob/master/metadata/au.how2vote.app.yml)
-provides the source-built esbuild/Rollup precedent. Lazysh's pins match its own
-Bun lockfile rather than that application's versions.
+provides the source-built esbuild/Rollup precedent. Lazysh's pins match its
+own Bun lockfile rather than that application's versions.
 
 ## Inputs and boundaries
 
@@ -72,8 +88,8 @@ globally or change signing configuration. The metadata commands are:
 ```sh
 fdroid readmeta
 fdroid lint app.lazysh.client
-fdroid scanner --exit-code app.lazysh.client:14000
-fdroid build --test --stop --scan-binary app.lazysh.client:14000
+fdroid scanner --exit-code app.lazysh.client:1004000
+fdroid build --test --stop --scan-binary app.lazysh.client:1004000
 ```
 
 `--test` retains unsigned outputs in the test directory; it is not a scan

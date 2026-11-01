@@ -9,9 +9,9 @@ RepoType: git
 Repo: https://github.com/mihazs/lazysh.git
 
 Builds:
-  - versionName: 0.22.0
-    versionCode: 22000
-    commit: 3dc44f47dac1c5fa29a8e3220ee82efd46484f4d
+  - versionName: 1.4.0
+    versionCode: 1004000
+    commit: 95bbb8c8cf986d69a8f249e1bb6852706776b1f3
     sudo:
       - apt-get update
       - apt-get install -y rustup nodejs golang-go build-essential cmake ninja-build
@@ -55,8 +55,8 @@ Builds:
       - cargo tauri android build --target aarch64 --apk --ci --features fdroid -- --locked
     output: apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
 
-# Initial recipe validation only; tagging and automatic publishing are separate gates.
+# Pinned official-listing candidate; F-Droid source-build approval remains separate from GitHub releases.
 AutoUpdateMode: None
 UpdateCheckMode: None
-CurrentVersion: 0.22.0
-CurrentVersionCode: 22000
+CurrentVersion: 1.4.0
+CurrentVersionCode: 1004000

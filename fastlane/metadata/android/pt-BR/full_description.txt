@@ -1,0 +1,11 @@
+Trabalhe nos seus próprios servidores SSH por um terminal Android.
+
+O lazysh é gratuito e de código aberto; todos os recursos do aplicativo são gratuitos. Servidores, provedores de IA e outros serviços externos podem ter custos próprios.
+
+O lazysh reúne terminal, transferências SFTP e controles para sessões remotas de tmux, Herdr e Zellij. Os recursos de multiplexadores exigem as ferramentas correspondentes no servidor.
+
+Um agente auxiliar opcional, escrito em Rust, permite inspecionar registros de conversas de agentes de programação compatíveis. O suporte varia conforme o agente; uma conversa registrada não comprova que o agente esteja em execução no momento.
+
+Na primeira conexão, você pode revisar a impressão digital do servidor. As credenciais permanecem em memória, salvo quando você escolhe salvá-las no armazenamento seguro do dispositivo.
+
+Esta é uma versão de desenvolvimento. As verificações e limitações variam conforme a funcionalidade e o dispositivo; alguns recursos exigem software ou serviços configurados separadamente. Uma conexão SSH comum não exige uma conta hospedada.

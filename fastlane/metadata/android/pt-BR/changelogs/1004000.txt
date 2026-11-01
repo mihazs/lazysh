@@ -1,0 +1,1 @@
+Navegue pelos espaços e painéis de agentes do Herdr. Configure explicitamente hooks de ciclo de vida para agentes compatíveis após revisar o plano. Melhorias na abertura do app Android, no terminal, na navegação e nos controles móveis.

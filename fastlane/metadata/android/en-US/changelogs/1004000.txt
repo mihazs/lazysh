@@ -1,0 +1,1 @@
+Browse Herdr spaces and live agent panes from the workspace. Add explicit inspected lifecycle-hook setup for supported coding agents. Improve Android startup branding, terminal input, navigation and mobile controls.

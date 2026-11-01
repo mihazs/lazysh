@@ -32,6 +32,8 @@ test('recipe versions describe the exact public source commit rather than a movi
   expect(build.commit).toMatch(/^[a-f0-9]{40}$/);
   const properties = invoke(checkout, ['git', 'show', `${build.commit}:apps/client/android-version.properties`]);
   expect(properties).toBe(`versionName=${build.versionName}\nversionCode=${build.versionCode}`);
+  // Publication metadata must describe a real, immutable stable release tag.
+  expect(invoke(checkout, ['git', 'rev-parse', `v${build.versionName}^{commit}`])).toBe(build.commit);
 });
 
 test('actual scanner prunes unused browser tooling while still rejecting unexpected binaries', async () => {
@@ -80,3 +82,26 @@ test('actual scanner prunes unused browser tooling while still rejecting unexpec
   await publish('remove unexpected binaries', true);
   expect(scan().errors).toEqual([]);
 }, 60_000);
+
+test('F-Droid storefront assets are real PNGs with bounded version-specific release notes', async () => {
+  const root = join(checkout, 'fastlane/metadata/android');
+  const images = [
+    ['en-US/images/icon.png', 512, 512],
+    ['en-US/images/phoneScreenshots/1.png', 393, 852],
+    ['en-US/images/phoneScreenshots/2.png', 393, 852],
+    ['en-US/images/phoneScreenshots/3.png', 393, 852],
+  ] as const;
+  for (const [path, width, height] of images) {
+    const data = Buffer.from(await Bun.file(join(root, path)).arrayBuffer());
+    expect(data.subarray(0, 8).toString('hex'), path).toBe('89504e470d0a1a0a');
+    expect(data.readUInt32BE(16), path).toBe(width);
+    expect(data.readUInt32BE(20), path).toBe(height);
+  }
+  for (const locale of ['en-US', 'pt-BR']) {
+    const path = join(root, locale, 'changelogs/1004000.txt');
+    const notes = await Bun.file(path).text();
+    expect(notes.length, path).toBeGreaterThan(0);
+    expect(notes.length, path).toBeLessThanOrEqual(500);
+    expect(notes.endsWith('\n'), path).toBe(true);
+  }
+});

@@ -22,19 +22,25 @@ The existing `bun run test:release` workflow also executes these checks.
 They validate the actual committed files, text encoding, character bounds and
 application-name agreement. They do not replace F-Droid metadata/build checks.
 
-There are no listing screenshots, promotional graphics or release notes yet.
-Only add screenshots from actual reviewed application captures with synthetic
-data and verified permission to redistribute. Test image fixtures are not
-product screenshots. Existing app icons need a documented provenance/license
-basis before being copied into the listing; no vendor artwork is included here.
-Create `changelogs/<versionCode>.txt` only for a corresponding reviewed release,
-using its literal Android versionCode and at most 500 characters. The presence
-of source version metadata alone does not mean a release has been published.
+The listing now includes the project's original, GPL-licensed 512px icon
+(`brand/lazysh/platform/play-store-512.png`) and three existing 393x852
+mobile-width application frontend captures from the reviewed 1.4.0 UX study:
+Home, Hosts, and Terminal. Those screenshots use **synthetic host/session
+data and a synthetic native bridge in Playwright**, not an actual Android
+device. Their exact sources and limitations are documented in
+`docs/ux/android-workspace-benchmark.md`. Do not treat these captures as
+native execution, live SSH or current full product acceptance. Replace them
+with separately reviewed native Android screenshots if F-Droid maintainers
+require device-native evidence.
 
-Basic listing text does not meet the separate Latest-tab criteria: graphics,
-release notes and translated metadata remain unprovided. F-Droid acceptance,
-the Google-free build, source-build scanning, signing/tagging and the first
-real build recipe remain separate gates under
-[#333](https://github.com/mihazs/lazysh/issues/333). No store submission or
-publication is performed by adding these files. The eventual recipe and
-source checkout must also pass the supported F-Droid buildserver tools.
+An English and Brazilian Portuguese release note was added for the published
+`v1.4.0` Android `versionCode=1004000`; both are bounded to 500 characters.
+The listing descriptions and notes should reflect only verified product
+capabilities and make clear that third-party hosts/services can incur
+independent costs.
+
+The graphics, translations and notes support the listing; they do not prove
+F-Droid policy compliance or release readiness. The source-build toolchain,
+transitive dependency licensing, pinned Bun bootstrap, review of optional
+external services, source/binary scanning, approval and publishing remain
+separate gates in [#333](https://github.com/mihazs/lazysh/issues/333).
