@@ -88,8 +88,8 @@ it.each(['hidden','other-source','revoked'])('drops a %s reveal request without 
 
 
 it.each([
-  ['codex','Open /hooks in Codex and review the lazysh hooks, then start a new turn. Existing disabled hooks stay disabled.'],
-  ['claude','Open /hooks in Claude Code to inspect loaded hooks, then start a new turn. Existing hook restrictions still apply.'],
+  ['codex','Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.'],
+  ['claude','Start a new Claude Code session with this profile, open /hooks to inspect loaded hooks, then start a turn. Existing hook restrictions still apply.'],
   ['opencode','Plugins load when the OpenCode server starts with this profile. Start a new turn to verify reporting.'],
 ] as const)('guides configured %s reporting without executing provider commands',async(agent,guide)=>{
   hooks.mockResolvedValue({...inspected,state:'configured'});

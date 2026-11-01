@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Explain the next verification step for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
+- Explain the selected-profile startup and verification steps for configured Codex, Claude Code and OpenCode hooks. Provider trust, disabled hooks, server startup and live reporting remain under user control; setup still does not verify event delivery.
 
 - Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
 
