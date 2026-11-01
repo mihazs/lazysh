@@ -1056,3 +1056,71 @@ test('background Mosh document observations distinguish renderer state without r
   expect(sample()).toMatchObject({helperCount:'many',activeKind:'control',readOnly:null});
   expect(JSON.stringify(sample())).not.toContain('private');expect(JSON.stringify(sample())).not.toContain(name);
 });
+
+
+test('board Setup observations cross native JSON callbacks as strict booleans or null',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const script=source.match(/val expanded = evaluate\(scenario, """([\s\S]*?)"""/)!;
+  expect(script).not.toBeNull();
+  const selector='.agent-panel:not([hidden]) > .tool-bar button[aria-expanded]';
+  const expression=script[1].replaceAll('${JSONObject.quote(setup)}',JSON.stringify(selector));
+  const callback=(attributes:string[])=>JSON.stringify(new Function('document',`return (${expression});`)({querySelectorAll:(value:string)=>{
+    expect(value).toBe(selector);return attributes.map(attribute=>({getAttribute:()=>attribute}));
+  }}));
+  expect(callback(['false'])).toBe('false');expect(callback(['true'])).toBe('true');
+  for(const attributes of [[],['false','true'],['private-unexpected-value'],['']])expect(callback(attributes)).toBe('null');
+});
+
+test('whole-value native clipboard paste selects existing text before paste within its original budget',async()=>{
+  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const body=source.match(/private fun pasteOwnedText\([\s\S]*?\n    @Test/)![0];
+  const actions=Array.from(body.matchAll(/(?:withKeyCode\(KeyEvent\.|pressKey\(KeyEvent\.)(KEYCODE_[A-Z_]+)/g),match=>match[1]);
+  expect(actions).toEqual(['KEYCODE_A','KEYCODE_PASTE']);
+  const select=body.indexOf('withKeyCode(KeyEvent.KEYCODE_A)'),paste=body.indexOf('pressKey(KeyEvent.KEYCODE_PASTE)');
+  expect(body.slice(select,paste)).toContain('withCtrlPressed(true)');
+  expect(body.slice(select,paste)).toContain('requireTime()');
+  expect(body).toContain('TimeUnit.SECONDS.toNanos(5)');
+  expect(body).toContain('?.value===${JSONObject.quote(text)}');
+});
+
+async function herdrVisualFixture() {
+  const directory=join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest');
+  const source=await readFile(join(directory,'java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
+  const script=source.match(/val visualObservation = """([\s\S]*?)"""/)![1];
+  const viewport=await readFile(join(directory,'assets/owned-keyboard-viewport.js'),'utf8');
+  const rectangle=(left:number,top:number,right:number,bottom:number)=>({left,top,right,bottom,width:right-left,height:bottom-top});
+  const labels=Array.from({length:3},(_,i)=>({bounds:rectangle(10,10+i*30,80,30+i*30),glyphs:[] as object[],contains:(hit:unknown)=>(hit as {ownedLabel?:number})?.ownedLabel===i,textContent:'private terminal text'}));
+  labels.forEach(label=>label.glyphs=[label.bounds]);
+  const card={getClientRects:()=>[{}],getBoundingClientRect:()=>rectangle(0,0,200,110),contains:(_hit:unknown)=>false,
+    querySelector:(selector:string)=>labels[['strong',':scope > small','span > small'].indexOf(selector)]};
+  const state={cards:[card],blockers:[] as object[],hit:undefined as object|undefined,live:true};
+  const window={visualViewport:{offsetLeft:0,offsetTop:0,width:411,height:659,scale:1}};
+  const document={querySelectorAll:(selector:string)=>selector.includes('.herdr-navigation-row')?state.cards:state.blockers,
+    elementFromPoint:(_x:number,y:number)=>state.hit??labels.find(label=>y>=label.bounds.top&&y<=label.bounds.bottom),
+    createRange:()=>{let selected=labels[0];return {selectNodeContents:(label:typeof selected)=>{selected=label;},getClientRects:()=>selected.glyphs,getBoundingClientRect:()=>selected.bounds};}};
+  return {labels,card,state,window,observe:()=>new Function('document','window',`return (${script.replace('$viewportOracle',viewport).replace('$liveHerdr',String(state.live))});`)(document,window)};
+}
+
+test('Herdr visual failure observations distinguish viewport and glyph-hit clauses without changing admission',async()=>{
+  const f=await herdrVisualFixture();
+  expect(f.observe()).toMatchObject({state:'observed',liveReady:true,cards:1,cardShown:true,viewportReady:true,blockers:0});
+  f.state.hit=f.card;
+  expect(f.observe().labels[0]).toMatchObject({present:true,glyphs:1,truncated:false,hit:'card',failedRect:[10,10,80,30]});
+  f.state.live=false;f.labels[0].bounds.left=-10;
+  expect(f.observe()).toMatchObject({liveReady:false,viewportReady:false});
+  f.state.cards=[];expect(f.observe()).toMatchObject({cards:0,cardShown:false,cardRect:null,viewportReady:false});
+});
+
+test('Herdr visual observations bound rectangles and counts and discard private DOM and exceptions',async()=>{
+  const f=await herdrVisualFixture();
+  f.state.hit={id:'private-session-id',textContent:'private output'};f.state.cards=Array(80).fill(f.card);
+  f.state.blockers=Array(80).fill({getClientRects:()=>[{}]});f.labels[0].glyphs=Array(80).fill(f.labels[0].bounds);
+  f.labels[0].bounds.left=-1e9;f.labels[1].bounds.right=Infinity;
+  const sample=f.observe();
+  expect(sample).toMatchObject({cards:8,blockers:8,viewportReady:false});
+  expect(sample.labels[0]).toMatchObject({rect:[-65535,10,80,30],glyphs:64,truncated:true,hit:'other'});
+  expect(sample.labels[1].rect).toEqual([10,40,null,60]);
+  expect(JSON.stringify(sample)).not.toMatch(/private|session-id|terminal text/);expect(JSON.stringify(sample).length).toBeLessThan(2048);
+  f.card.getBoundingClientRect=()=>{throw new Error('private host/path');};
+  expect(f.observe()).toEqual({state:'unavailable'});
+});
