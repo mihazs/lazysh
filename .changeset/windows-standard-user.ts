@@ -7,9 +7,12 @@ import {dirname,join,relative,resolve,sep} from 'node:path';
 
 export const standardWritableDirectories=['work','node_modules/.vite','node_modules/.vite-temp','node_modules/.vitest-cache','apps/client/node_modules/.vite','apps/client/node_modules/.vite-temp'] as const;
 
-const standardCodes=['STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','STANDARD_OWNER_TIMEOUT','HOSTED_ONLY','ACCOUNT_BUDGET','ACCOUNT_COLLISION','ACCOUNT_CREATE_UNAVAILABLE','ACCOUNT_IDENTITY','PROFILE_IDENTITY','PROFILE_COLLISION','FIXTURE_IDENTITY','FIXTURE_ACCESS','STANDARD_LOGON_UNAVAILABLE','TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','DESKTOP_SESSION_UNAVAILABLE','DESKTOP_ACCESS_UNAVAILABLE','WINSTA_OPEN_UNAVAILABLE','DESKTOP_OPEN_UNAVAILABLE','WINSTA_BORROWED_NAME_UNAVAILABLE','DESKTOP_BORROWED_NAME_UNAVAILABLE','WINSTA_OPENED_NAME_UNAVAILABLE','DESKTOP_OPENED_NAME_UNAVAILABLE','JOB_UNAVAILABLE','IDENTITY_UNVERIFIED','LAUNCH_UNAVAILABLE','CLEANUP_UNVERIFIED',...windowsGuiDaclFailures,...windowsGuiTokenReasons.map(reason=>'TOKEN_UNAVAILABLE_'+reason)] as const;
+const standardCodes=['NAME_ACCESS_DENIED','STANDARD_OWNER_PASSED','STANDARD_OWNER_FAILED','STANDARD_OWNER_TIMEOUT','HOSTED_ONLY','ACCOUNT_BUDGET','ACCOUNT_COLLISION','ACCOUNT_CREATE_UNAVAILABLE','ACCOUNT_IDENTITY','PROFILE_IDENTITY','PROFILE_COLLISION','FIXTURE_IDENTITY','FIXTURE_ACCESS','STANDARD_LOGON_UNAVAILABLE','TOKEN_UNAVAILABLE','DESKTOP_UNAVAILABLE','DESKTOP_SESSION_UNAVAILABLE','DESKTOP_ACCESS_UNAVAILABLE','WINSTA_OPEN_UNAVAILABLE','DESKTOP_OPEN_UNAVAILABLE','WINSTA_BORROWED_NAME_UNAVAILABLE','DESKTOP_BORROWED_NAME_UNAVAILABLE','WINSTA_OPENED_NAME_UNAVAILABLE','DESKTOP_OPENED_NAME_UNAVAILABLE','JOB_UNAVAILABLE','IDENTITY_UNVERIFIED','LAUNCH_UNAVAILABLE','CLEANUP_UNVERIFIED',...windowsGuiDaclFailures,...windowsGuiTokenReasons.map(reason=>'TOKEN_UNAVAILABLE_'+reason)] as const;
 // Test-only broker. Native account methods are reached only by the explicit hosted owner.
-export const windowsStandardUserSource=windowsGuiMediumCommonSource+String.raw`
+export const windowsStandardUserSource=windowsGuiMediumCommonSource.replace(
+  'Need(handle!=IntPtr.Zero&&GetUserObjectInformation(handle,2,text,256,out needed)&&needed<=256,"DESKTOP_UNAVAILABLE");',
+  'Need(handle!=IntPtr.Zero,"DESKTOP_UNAVAILABLE");bool ok=GetUserObjectInformation(handle,2,text,256,out needed);int error=Marshal.GetLastWin32Error();Need(ok&&needed<=256,!ok&&error==5?"NAME_ACCESS_DENIED":"DESKTOP_UNAVAILABLE");',
+)+String.raw`
 public sealed partial class OwnedMediumGui {
   [StructLayout(LayoutKind.Sequential)] struct AccountInfo {public IntPtr Name,Password;public uint Age,Privilege;public IntPtr Home,Comment;public uint Flags;public IntPtr Script;}
   [StructLayout(LayoutKind.Sequential)] struct AccountIdentity {public IntPtr Name,FullName,Comment;public uint Flags;public IntPtr Sid;}
