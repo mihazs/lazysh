@@ -146,6 +146,10 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_SSH!=='1')('actual Android app perform
   await androidSshAcceptance();
 },610_000);
 
+test.skipIf(process.env.LAZYSH_ANDROID_UI_DPAD!=='1')('actual Android packaged D-pad pans one held native pointer and stops its original SSH receiver',async()=>{
+  await androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,true);
+},610_000);
+
 test.skipIf(process.env.LAZYSH_ANDROID_UI_IME!=='1')('actual Android packaged terminal sends native IME transactions once through its original SSH receiver',async()=>{
   await androidSshAcceptance(undefined,undefined,false,false,false,false,false,true);
 },610_000);

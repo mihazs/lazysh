@@ -37,6 +37,79 @@ async function fixture(page:Page) {
   await page.getByText('Keyboard chords',{exact:true}).click();
 }
 
+async function openExpandedDpad(page:Page,phone:boolean) {
+  await fixture(page);
+  await page.getByText('Toolbar keys and order',{exact:true}).click();
+  await page.getByRole('button',{name:'Add dpad',exact:true}).click();
+  await page.getByRole('button',{name:'Close Preferences',exact:true}).click();
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('button',{name:'Open local terminal',exact:true}).click();
+  await page.getByRole('button',{name:'dpad',exact:true}).click();
+}
+async function observeDpadPointers(page:Page) {
+  await page.evaluate(()=>{const events:unknown[]=[];Reflect.set(window,'dpadEvents',events);for(const type of ['pointerdown','pointermove','pointerup','gotpointercapture','lostpointercapture'])document.addEventListener(type,event=>{const pointer=event as PointerEvent;events.push({type,x:pointer.clientX,y:pointer.clientY,id:pointer.pointerId,primary:pointer.isPrimary,target:(event.target as HTMLElement).className});},true);});
+}
+
+test('expanded D-pad pans one held pointer with paced bytes and an idle dead zone',async({page},testInfo)=>{
+  await openExpandedDpad(page,testInfo.project.name==='phone');
+  const up=page.getByRole('button',{name:'D-pad up',exact:true});
+  await up.scrollIntoViewIfNeeded();await page.clock.install();await page.clock.pauseAt(new Date(Date.now()+1000));
+  const box=(await up.boundingBox())!,origin={x:box.x+box.width/2,y:box.y+box.height/2};
+  const cdp=await page.context().newCDPSession(page);
+  const touch=testInfo.project.name==='phone';
+  const move=async(x:number,y:number)=>{
+    if(touch)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y}]});
+    else await page.mouse.move(x,y);
+    await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadEvents').filter((event:{type:string})=>event.type==='pointermove').at(-1))).toMatchObject({x,y});
+  };
+  await observeDpadPointers(page);
+  const writes=()=>page.evaluate(()=>window.simpleShortcutWrites);
+  if(touch)await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
+  else{await page.mouse.move(origin.x,origin.y);await page.mouse.down();}
+  await page.clock.runFor(399);expect(await writes()).toEqual([]);
+  await page.clock.runFor(1);expect(await writes()).toEqual(['\x1b[A']);
+  await move(origin.x+40,origin.y);
+  expect(await writes()).toEqual(['\x1b[A']);await page.clock.runFor(80);
+  expect(await writes()).toEqual(['\x1b[A','\x1b[C']);
+  await move(origin.x,origin.y);await page.clock.runFor(800);
+  expect(await writes(),JSON.stringify(await page.evaluate(()=>Reflect.get(window,'dpadEvents')))).toEqual(['\x1b[A','\x1b[C']);
+  await move(origin.x,origin.y+40);await page.clock.runFor(80);
+  expect(await writes()).toEqual(['\x1b[A','\x1b[C','\x1b[B']);
+  if(touch)await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  else await page.mouse.up();
+  await page.clock.runFor(1000);expect(await writes()).toEqual(['\x1b[A','\x1b[C','\x1b[B']);
+  await expect(up).not.toHaveAttribute('aria-pressed');
+  await up.focus();await page.keyboard.press('Enter');
+  expect(await writes()).toEqual(['\x1b[A','\x1b[C','\x1b[B','\x1b[A']);
+  await page.screenshot({path:testInfo.outputPath('expanded-dpad.png')});
+});
+
+test('expanded D-pad rejects a secondary contact and admits a later primary touch',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Requires two real touch contacts.');
+  await openExpandedDpad(page,true);await observeDpadPointers(page);
+  const up=page.getByRole('button',{name:'D-pad up',exact:true});await up.scrollIntoViewIfNeeded();
+  const box=(await up.boundingBox())!,first={id:1,x:5,y:5},second={id:2,x:box.x+box.width/2,y:box.y+box.height/2};
+  await page.clock.install();await page.clock.pauseAt(new Date(Date.now()+1000));
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[first]});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[first,second]});
+  await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'dpadEvents').filter((event:{type:string})=>event.type==='pointerdown').map((event:{primary:boolean})=>event.primary))).toEqual([true,false]);
+  await page.clock.runFor(800);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await page.clock.runFor(800);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual([]);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...second,id:3}]});
+  await page.clock.runFor(400);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A']);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await page.clock.runFor(800);expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A']);
+  const events=await page.evaluate(()=>Reflect.get(window,'dpadEvents')) as Array<{type:string;primary:boolean;id:number;target:string}>;
+  const starts=events.filter(event=>event.type==='pointerdown');expect(starts.map(event=>event.primary)).toEqual([true,false,true]);
+  for(const type of ['gotpointercapture','lostpointercapture'])expect(events.some(event=>event.type===type&&event.id===starts[2].id&&event.target==='terminal-dpad')).toBe(true);
+  await testInfo.attach('dpad-primary-capture-events.json',{body:JSON.stringify(events),contentType:'application/json'});
+  await page.getByRole('button',{name:'D-pad left corner',exact:true}).tap();
+  await page.getByRole('button',{name:'D-pad right corner',exact:true}).tap();
+  expect(await page.evaluate(()=>window.simpleShortcutWrites)).toEqual(['\x1b[A','\x03','\x7f']);
+});
+
 test('delayed terminal controls preserve modal form focus and resume input after dismissal',async({page},testInfo)=>{
   await fixture(page);
   await page.getByRole('button',{name:'Close Preferences',exact:true}).click();

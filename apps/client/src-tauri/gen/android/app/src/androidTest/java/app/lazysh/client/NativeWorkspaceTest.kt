@@ -64,6 +64,7 @@ import androidx.test.uiautomator.Until
 import androidx.test.uiautomator.Configurator
 import org.json.JSONArray
 import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -2189,6 +2190,7 @@ class NativeWorkspaceTest {
 
     // Dedicated, serialized Gradle invocation. The fixture contains only ephemeral owned data.
     @Test fun ownedOpenSshConnectsThroughRealUi() = ownedSshUi(false)
+    @Test fun ownedSshDpadPanThroughRealUi() = ownedSshUi(false, requireDpad = true)
     @Test fun ownedSshImeTransactionsThroughRealUi() = ownedSshUi(false, requireIme = true)
     @Test fun ownedGuardedHerdrChatThroughRealUi() = ownedSshUi(true)
     @Test fun ownedSharedHerdrNavigationThroughRealUi() = ownedSshUi(true, requireSharedHerdr = true)
@@ -2581,7 +2583,8 @@ class NativeWorkspaceTest {
         }
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false) {
+        require(!requireDpad || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme)) { "Owned D-pad mode must be isolated" }
         require(!requireIme || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments)) { "Owned IME mode must be isolated" }
         require(!requireAttachments || (!requireHerdr && !requireCompanion && !requireMoshBackground)) { "Owned attachment mode must be isolated" }
         require(!requireSharedHerdr || (requireHerdr && !requireHerdrMosh)) { "Shared Herdr navigation requires its SSH fixture" }
@@ -2610,6 +2613,7 @@ class NativeWorkspaceTest {
         catch (_: Exception) { throw AssertionError("Owned SSH fixture JSON is invalid") }
         if (requireHerdr) require(fixture.getJSONObject("herdr").getString("name") == "owned-guard") { "Owned Herdr fixture required" }
         require(requireHerdrMosh == fixture.optBoolean("herdrMosh", false)) { "Owned Herdr transport fixture mismatch" }
+        require(requireDpad == fixture.has("dpad")) { "Owned D-pad fixture mode mismatch" }
         require(requireIme == fixture.has("ime")) { "Owned IME fixture mode mismatch" }
         require(requireAttachments == fixture.has("attachments")) { "Owned attachment fixture mode mismatch" }
         val nonce = fixture.getString("nonce")
@@ -2907,6 +2911,8 @@ class NativeWorkspaceTest {
                 assertEquals("Private Mosh startup bytes must stay out of terminal output", "true", evaluate(scenario,
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
+            } else if (requireDpad) {
+                verifySshDpadPan(scenario, fixture, label)
             } else if (requireIme) {
                 verifySshImeTransactions(scenario, fixture, label)
             } else if (requireAttachments) {
@@ -3812,38 +3818,207 @@ class NativeWorkspaceTest {
         evaluate(scenario, "delete window.__lazyshCloudIpcResult")
     }
 
-    private fun verifySshImeTransactions(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
-        val nonce = fixture.getString("nonce")
-        val directory = fixture.getJSONObject("ime").getString("directory")
-        require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/ime").matches(directory))
-        assertEquals("Owned emulator API required", 36, Build.VERSION.SDK_INT)
-        val originalWeb = AtomicReference<WebView>()
-        val packagedUrl = AtomicReference<String>()
-        scenario.onActivity {
-            val web = requireNotNull(webView(it.window.decorView))
-            originalWeb.set(web); packagedUrl.set(web.url)
+    private fun verifySshDpadPan(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
+        val raw = OwnedRawSshInput(scenario, fixture, label, "dpad")
+        val nonce = raw.nonce
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        raw.start()
+        var added = false
+        fun preferences(action: String) {
+            if (evaluate(scenario, "Boolean(document.querySelector('[role=dialog][aria-label=Preferences]'))") != "true") raw.clickIcon("Preferences")
+            for (title in listOf("Keyboard and gestures", "Toolbar keys and order")) {
+                if (evaluate(scenario, "Array.from(document.querySelectorAll('[role=dialog] summary')).find(x=>x.textContent.trim()===${JSONObject.quote(title)})?.parentElement.open===true") != "true")
+                    onWebView().withElement(findElement(Locator.XPATH, "//*[@role='dialog']//summary[normalize-space(.)='$title']")).perform(webScrollIntoView()).perform(webClick())
+            }
+            val selector = if (action == "Add") "//*[@role='dialog']//button[normalize-space(.)='Add dpad']" else "//*[@role='dialog']//button[@aria-label='Remove dpad']"
+            if (action == "Add") {
+                awaitDocument(scenario,"known original toolbar has no D-pad","!document.querySelector('[role=dialog] button[aria-label=\"Remove dpad\"]')")
+                added = true
+            }
+            onWebView().withElement(findElement(Locator.XPATH, selector)).perform(webScrollIntoView()).perform(webClick())
+            raw.clickIcon("Close Preferences")
+            awaitDocument(scenario, "owned D-pad preference dialog closed", "!document.querySelector('[role=dialog][aria-label=Preferences]')")
         }
-        val originalUrl = packagedUrl.get()
-        require(originalUrl == "http://tauri.localhost/" || originalUrl == "https://tauri.localhost/")
+        val countExpression = """
+            (()=>{const pads=document.querySelectorAll('.terminal-dpad');
+              if(pads.length!==1||pads[0].querySelectorAll('button[data-dpad-direction]').length!==4)return null;
+              const text=document.querySelector('.terminal-canvas .xterm-screen')?.textContent||'';
+              const rows=Array.from(text.matchAll(/D_${nonce}_([0-9]{1,2})_([0-9]{1,2})_([0-9]{1,2})_([0-9]{1,2})/g));
+              if(!rows.length)return null;const counts=rows[rows.length-1].slice(1).map(Number);
+              return counts.every(x=>Number.isInteger(x)&&x>=0&&x<=32)?counts:null;})()
+        """.trimIndent()
+        var primary: Throwable? = null
+        try {
+            preferences("Add")
+            onWebView().withElement(findElement(Locator.XPATH, "//div[contains(@class,'terminal-keys')]//button[normalize-space(.)='dpad']")).perform(webScrollIntoView()).perform(webClick())
+            val up = ".terminal-dpad button[aria-label='D-pad up']"
+            awaitDocument(scenario, "owned expanded D-pad ready", "document.querySelectorAll(${JSONObject.quote(up)}).length===1")
+            assertEquals("D-pad directions are momentary controls", "true", evaluate(scenario,
+                "Array.from(document.querySelectorAll('.terminal-dpad button[data-dpad-direction]')).every(x=>!x.hasAttribute('aria-pressed'))"))
+            // One actual tap must send once before the separate held-pointer epoch.
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, up)).perform(webScrollIntoView())
+            val bounds = JSONArray(evaluate(scenario, """
+                (()=>{const r=document.querySelector(${JSONObject.quote(up)}).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()
+            """))
+            val web = raw.originalWeb.get()
+            val origin = IntArray(2)
+            var scale = 0.0
+            instrumentation.runOnMainSync { web.getLocationOnScreen(origin); scale = web.width / bounds.getDouble(2) }
+            val start = floatArrayOf((origin[0]+bounds.getDouble(0)*scale).toFloat(), (origin[1]+bounds.getDouble(1)*scale).toFloat())
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE,
+                { start }, Press.FINGER))
+            awaitDocument(scenario, "one native D-pad tap delivered once", "JSON.stringify($countExpression)==='[1,0,0,0]'")
+            raw.original()
+            val epoch = android.os.SystemClock.uptimeMillis()
+            val deadline = System.nanoTime()+TimeUnit.SECONDS.toNanos(5)
+            val pointer = android.view.MotionEvent.PointerProperties().apply { id=0;toolType=android.view.MotionEvent.TOOL_TYPE_FINGER }
+            var point = start
+            var held = false
+            var observer: OwnedFingerWindowObserver? = null
+            var fingerFailure: Throwable? = null
+            fun remaining(): Long {
+                val value=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime())
+                assertTrue("Owned D-pad gesture exceeded original five-second budget", value>0)
+                return value.coerceAtMost(1000)
+            }
+            fun dispatch(action: Int, dx: Int = 0, dy: Int = 0) {
+                if (action!=android.view.MotionEvent.ACTION_CANCEL) remaining()
+                point=floatArrayOf(start[0]+(dx*scale).toFloat(),start[1]+(dy*scale).toFloat())
+                val coordinate=android.view.MotionEvent.PointerCoords().apply {x=point[0];y=point[1];pressure=1f;size=1f}
+                val event=android.view.MotionEvent.obtain(epoch,android.os.SystemClock.uptimeMillis(),action,1,
+                    arrayOf(pointer),arrayOf(coordinate),0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
+                try {
+                    assertEquals("One owned D-pad pointer",0,event.getPointerId(0));assertEquals("One owned D-pad DOWN epoch",epoch,event.downTime)
+                    instrumentation.sendPointerSync(event)
+                } finally {event.recycle()}
+            }
+            fun counts(): IntArray {
+                val rows=JSONArray(evaluate(scenario,countExpression,remaining()))
+                require(rows.length()==4) { "Owned D-pad count observation invalid" }
+                return IntArray(4) { rows.getInt(it).also { value->require(value in 0..32) } }
+            }
+            fun phase(index: Int) {
+                while (true) {
+                    val values=counts()
+                    if(values[index]>=(if(index==0)3 else 2) && (index+1..3).all {values[it]==0})return
+                    Thread.sleep(10)
+                }
+            }
+            fun pause() { assertTrue("Owned D-pad pause requires original budget",remaining()>=240);Thread.sleep(240);remaining() }
+            var stopped = IntArray(0)
+            try {
+                scenario.onActivity { activity ->
+                    assertSame("Original D-pad WebView before DOWN",web,webView(activity.window.decorView))
+                    val target=activity.window
+                    val owned=OwnedFingerWindowObserver(checkNotNull(target.callback),epoch)
+                    target.callback=owned;observer=owned
+                }
+                held=true;dispatch(android.view.MotionEvent.ACTION_DOWN);phase(0)
+                for ((index,offset) in listOf(-24 to 0,0 to 24,24 to 0).withIndex()) {
+                    dispatch(android.view.MotionEvent.ACTION_MOVE,offset.first,offset.second);phase(index+1)
+                }
+                dispatch(android.view.MotionEvent.ACTION_MOVE)
+                while(evaluate(scenario,"(()=>{const buttons=document.querySelectorAll('.terminal-dpad button[data-dpad-direction]');return buttons.length===4&&Array.from(buttons).every(x=>!x.style.outline);})()",remaining())!="true")Thread.sleep(10)
+                pause();stopped=counts();pause();assertArrayEquals("Dead-zone output must stop",stopped,counts())
+                val before=JSONObject(checkNotNull(observer).snapshot()).getJSONArray("events")
+                assertEquals("Held D-pad has exactly DOWN plus four MOVE events",5,before.length())
+                assertTrue("No UP before all ordered receiver phases",(0 until before.length()).none {before.getJSONObject(it).getString("action")=="up"})
+                dispatch(android.view.MotionEvent.ACTION_UP);held=false
+                pause();assertArrayEquals("Final UP must not repeat or click the original arrow",stopped,counts())
+                val trace=JSONObject(checkNotNull(observer).snapshot())
+                assertFalse("Native pointer trace remains bounded",trace.getBoolean("overflow"))
+                val events=trace.getJSONArray("events")
+                assertEquals("One held native gesture has exactly six events",6,events.length())
+                assertEquals("Native D-pad starts once","down",events.getJSONObject(0).getString("action"))
+                assertEquals("Native D-pad releases once","up",events.getJSONObject(5).getString("action"))
+                for(index in 0 until events.length()) {
+                    val row=events.getJSONObject(index)
+                    assertTrue("Original native touch pointer delivered",row.getBoolean("pointerMatches")&&row.getBoolean("finger")&&row.getBoolean("touchscreen"))
+                    assertEquals("Native D-pad dispatch handled","handled",row.getString("outcome"))
+                    if(index in 1..4)assertEquals("Four MOVE phases before UP","move",row.getString("action"))
+                }
+            } catch(failure: Throwable) {fingerFailure=failure;throw failure}
+            finally {
+                var cleanup: Throwable?=null
+                try {if(held)dispatch(android.view.MotionEvent.ACTION_CANCEL)}catch(error: Throwable){cleanup=error}
+                try {scenario.onActivity {activity->observer?.restore(activity.window)}}catch(error: Throwable){if(cleanup==null)cleanup=error else cleanup!!.addSuppressed(error)}
+                if(cleanup!=null){if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!)else throw cleanup!!}
+            }
+            raw.send("owned-dpad-$nonce", false)
+            awaitDocument(scenario,"actual D-pad receiver delivered ordered stopped runs and final marker",raw.proof("DPAD_${nonce}_DELIVERED"))
+            raw.original()
+            val receipt=JSONObject().put("schemaVersion",1).put("nonce",nonce)
+            for((index,name) in listOf("up","left","down","right").withIndex())receipt.put(name,stopped[index])
+            val file=java.io.File(instrumentation.targetContext.filesDir,"owned-dpad-$nonce.json")
+            require(!java.nio.file.Files.isSymbolicLink(file.toPath()) && file.createNewFile()) { "Owned D-pad receipt must be fresh" }
+            val text=receipt.toString();require(text.length<=512);file.writeText(text)
+            android.util.Log.i("lazysh-dpad-owned","nativePointer=true ordered=true deadZoneStopped=true afterUpStopped=true receiverDelivered=true")
+        } catch(failure: Throwable){primary=failure;throw failure}
+        finally {
+            if(added)try {preferences("Remove")}catch(cleanup: Throwable){if(primary!=null)primary!!.addSuppressed(cleanup)else throw cleanup}
+        }
+    }
+
+    private inner class OwnedRawSshInput(
+        private val scenario: ActivityScenario<MainActivity>, private val fixture: JSONObject,
+        private val label: String, private val mode: String,
+    ) {
+        val nonce = fixture.getString("nonce")
+        private val directory = fixture.getJSONObject(mode).getString("directory")
+        val originalWeb = AtomicReference<WebView>()
+        private val packagedUrl = AtomicReference<String>()
+        val tag = mode.uppercase()
+        init {
+            require(mode in setOf("ime", "dpad"))
+            require(Regex("/tmp/lazysh-android-ssh-[A-Za-z0-9_-]+/$mode").matches(directory))
+            scenario.onActivity {
+                val web = requireNotNull(webView(it.window.decorView))
+                originalWeb.set(web); packagedUrl.set(web.url)
+            }
+            require(packagedUrl.get() == "http://tauri.localhost/" || packagedUrl.get() == "https://tauri.localhost/")
+        }
         fun clickIcon(name: String) = onWebView().withElement(findElement(Locator.CSS_SELECTOR,
             "button[aria-label='$name']")).perform(webScrollIntoView()).perform(webClick())
-        fun send(command: String) {
+        fun proof(marker: String) = "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes(${JSONObject.quote(marker)})"
+        fun send(command: String, enter: Boolean = true) {
             if (evaluate(scenario, "Boolean(document.querySelector('.terminal-compose textarea'))") != "true") clickIcon("Compose")
             pasteOwnedText(scenario, ".terminal-compose textarea", command, label)
             closeSoftKeyboard(); clickIcon("Paste draft"); closeSoftKeyboard(); clickIcon("Close composer")
             awaitDocument(scenario, "owned IME command terminal focused", "document.activeElement===document.querySelector('.terminal-canvas .xterm-helper-textarea')")
-            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
+            if (enter) onView(isAssignableFrom(WebView::class.java)).perform(pressKey(KeyEvent.KEYCODE_ENTER))
         }
-        send(fixture.getString("challenge"))
-        awaitDocument(scenario, "owned IME SSH challenge and returned prompt", """
-            (()=>{const text=document.querySelector('.terminal-canvas .xterm-screen')?.textContent||'';
-              return text.includes(${JSONObject.quote(fixture.getString("expected"))}) &&
-                text.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>text.indexOf(${JSONObject.quote(fixture.getString("expected"))});})()
-        """)
-        assertEquals("Receiver banner must be fresh", "false", evaluate(scenario,
-            "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_READY')"))
-        send("exec './ime-receiver' '$directory' --ime-transactions '$nonce'")
-        awaitDocument(scenario, "owned raw receiver actually ready", "document.querySelector('.terminal-canvas .xterm-screen').textContent.includes('IME_${nonce}_READY')")
+        fun start() {
+            send(fixture.getString("challenge"))
+            awaitDocument(scenario, "owned IME SSH challenge and returned prompt", """
+                (()=>{const text=document.querySelector('.terminal-canvas .xterm-screen')?.textContent||'';
+                  return text.includes(${JSONObject.quote(fixture.getString("expected"))}) &&
+                    text.lastIndexOf(${JSONObject.quote(fixture.getString("prompt"))})>text.indexOf(${JSONObject.quote(fixture.getString("expected"))});})()
+            """)
+            assertEquals("Receiver banner must be fresh", "false", evaluate(scenario, proof("${tag}_${nonce}_READY")))
+            val option = if (mode == "ime") "--ime-transactions" else "--dpad-pan"
+            val command = "exec './$mode-receiver' '$directory' $option '$nonce'"
+            require(!command.contains("${tag}_${nonce}_READY") && !command.contains("${tag}_${nonce}_DELIVERED"))
+            send(command)
+            awaitDocument(scenario, "owned raw receiver actually ready", proof("${tag}_${nonce}_READY"))
+        }
+        fun original() {
+            scenario.onActivity {
+                val web = requireNotNull(webView(it.window.decorView))
+                assertSame("Packaged WebView must remain original", originalWeb.get(), web)
+                assertEquals("Packaged document must not navigate", packagedUrl.get(), web.url)
+                assertTrue("Native terminal window must stay focused", web.hasWindowFocus() && web.hasFocus())
+            }
+            assertEquals("Original one-session SSH identity required", "true", evaluate(scenario,
+                "document.querySelectorAll('.terminal-canvas').length===1 && Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}))"))
+        }
+    }
+
+    private fun verifySshImeTransactions(scenario: ActivityScenario<MainActivity>, fixture: JSONObject, label: String) {
+        val raw = OwnedRawSshInput(scenario, fixture, label, "ime")
+        val nonce = raw.nonce
+        assertEquals("Owned emulator API required", 36, Build.VERSION.SDK_INT)
+        raw.start()
+        fun clickIcon(name: String) = raw.clickIcon(name)
         val ime = OwnedImeControl(nonce)
         fun terminalEditor() {
             awaitDocument(scenario, "packaged terminal current normal editable helper", """
@@ -3853,12 +4028,7 @@ class NativeWorkspaceTest {
                     area.getAttribute('autocorrect')==='off' && area.spellcheck===false &&
                     Boolean(document.querySelector(${JSONObject.quote("button[aria-label='Disconnect ${fixture.getString("name")}']")}));})()
             """)
-            scenario.onActivity {
-                val web = requireNotNull(webView(it.window.decorView))
-                assertSame("Packaged WebView must remain original", originalWeb.get(), web)
-                assertEquals("Packaged document must not navigate", originalUrl, web.url)
-                assertTrue("Native terminal window must stay focused", web.hasWindowFocus() && web.hasFocus())
-            }
+            raw.original()
         }
         fun tapTerminal() {
             val bounds = JSONArray(evaluate(scenario, """

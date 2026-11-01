@@ -26,8 +26,8 @@ beforeEach(() => {
   access();
   vi.clearAllMocks();
   vi.stubGlobal("PointerEvent", class extends MouseEvent {
-    pointerId: number; pointerType: string;
-    constructor(type: string, options: MouseEventInit & {pointerId?: number; pointerType?: string} = {}) {super(type, options); this.pointerId = options.pointerId ?? 1; this.pointerType = options.pointerType ?? "touch";}
+    pointerId: number; pointerType: string; isPrimary:boolean;
+    constructor(type: string, options: MouseEventInit & {pointerId?: number; pointerType?: string; isPrimary?:boolean} = {}) {super(type, options); this.pointerId = options.pointerId ?? 1; this.pointerType = options.pointerType ?? "touch"; this.isPrimary=options.isPrimary??true;}
   });
   mocks.write.mockResolvedValue(undefined); mocks.writeSequence.mockResolvedValue(undefined); mocks.resize.mockResolvedValue(undefined);
   mocks.openWebUrl.mockResolvedValue(undefined);
@@ -68,6 +68,152 @@ function mountInputOwner(initial = "") {
   const emit=(data:string,user=true)=>{if(user)mark();receive(data);};
   return {textarea,session,view,emit,reportError};
 }
+function dpadFixture(initial="") {
+  vi.useFakeTimers();savePreferences({...defaults,toolbar:['dpad','ctrl','meta','shift']});
+  const owner=mountInputOwner(initial);fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+  const pad=screen.getByRole('group',{name:'Terminal D-pad'});
+  pad.setPointerCapture=vi.fn();
+  const arrow=(direction:string)=>within(pad).getByRole('button',{name:`D-pad ${direction}`,hidden:true});
+  const point={pointerId:41,pointerType:'touch',button:0,clientX:100,clientY:100};
+  const down=()=>fireEvent.pointerDown(arrow('up'),point);
+  const move=(x:number,y:number)=>fireEvent.pointerMove(pad,{...point,clientX:x,clientY:y});
+  const up=()=>fireEvent.pointerUp(pad,point);
+  const advance=(milliseconds:number)=>act(()=>vi.advanceTimersByTime(milliseconds));
+  const bytes=()=>mocks.write.mock.calls.map(call=>call[1]);
+  return {...owner,pad,arrow,point,down,move,up,advance,bytes};
+}
+describe('expanded D-pad pointer ownership',()=>{
+  it('sends one tap, preserves accessible activation and modifiers without arrow toggles',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(399);expect(pad.bytes()).toEqual([]);pad.up();
+    fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual(['\x1b[A']);
+    fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+    fireEvent.click(pad.arrow('right'),{detail:0});expect(pad.bytes()).toEqual(['\x1b[A','\x1b[1;2C']);
+    expect(pad.arrow('right').hasAttribute('aria-pressed')).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'D-pad left corner'}));expect(pad.bytes().at(-1)).toBe('\x03');
+  });
+  it('preserves a corner touch click when its implicit pointer capture ends',()=>{
+    const pad=dpadFixture(),corner=screen.getByRole('button',{name:'D-pad left corner'});
+    fireEvent.pointerDown(corner,pad.point);fireEvent.pointerUp(corner,pad.point);
+    fireEvent.lostPointerCapture(corner,pad.point);fireEvent.click(corner,{detail:1});
+    expect(pad.bytes()).toEqual(['\x03']);
+  });
+  it('paces held arrows and direction changes independently of move event volume, pausing in the dead zone',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(399);expect(pad.bytes()).toEqual([]);
+    pad.advance(1);expect(pad.bytes()).toEqual(['\x1b[A']);pad.advance(160);
+    expect(pad.bytes()).toEqual(Array(3).fill('\x1b[A'));
+    for(let x=120;x<150;x++)pad.move(x,101);
+    expect(pad.bytes()).toHaveLength(3);pad.advance(79);expect(pad.bytes()).toHaveLength(3);pad.advance(1);
+    expect(pad.bytes().at(-1)).toBe('\x1b[C');
+    pad.move(100,100);pad.advance(800);expect(pad.bytes()).toHaveLength(4);
+    pad.move(101,140);pad.advance(80);expect(pad.bytes().at(-1)).toBe('\x1b[B');
+    pad.up();fireEvent.click(pad.arrow('down'),{detail:1});pad.advance(1000);expect(pad.bytes()).toHaveLength(5);
+  });
+  it('does not turn a pan without a delivered move event into an arrow tap',()=>{
+    const pad=dpadFixture();pad.down();fireEvent.pointerUp(pad.pad,{...pad.point,clientX:150});
+    fireEvent.click(pad.arrow('up'),{detail:1});pad.advance(1000);expect(pad.bytes()).toEqual([]);
+  });
+  it.each(['pending','repeating'] as const)('cancels every %s gesture at each input boundary',phase=>{
+    // Each boundary starts with a fresh lease and gesture; no canceled timer may resume.
+    for(const boundary of ['cancel','capture','blur','hidden','lock','inactive','disconnect','session','terminal','close','keys','modal','dispose']){
+      const pad=dpadFixture();pad.down();if(phase==='repeating')pad.advance(400);
+      const sent=pad.bytes().length;let hidden:ReturnType<typeof vi.spyOn>|undefined,dialog:HTMLElement|undefined;
+      if(boundary==='cancel')fireEvent.pointerCancel(pad.pad,pad.point);
+      if(boundary==='capture')fireEvent.lostPointerCapture(pad.pad,pad.point);
+      if(boundary==='blur')fireEvent(window,new Event('blur'));
+      if(boundary==='hidden')hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);
+      if(boundary==='lock')act(()=>access(true));
+      if(['inactive','disconnect','session','terminal'].includes(boundary)){
+        const session=boundary==='session'?{...pad.session,id:'replacement'}:boundary==='terminal'?{...pad.session,terminal:createMockTerminal() as unknown as LiveSession['terminal']}:boundary==='disconnect'?{...pad.session,connected:false}:pad.session;
+        pad.view.rerender(<TerminalPane session={session} active={boundary!=='inactive'} reportError={pad.reportError} />);
+      }
+      if(boundary==='close')fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+      if(boundary==='keys')fireEvent.click(screen.getByRole('button',{name:'Hide terminal keys'}));
+      if(boundary==='modal'){dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');document.body.append(dialog);}
+      if(boundary==='dispose')pad.view.unmount();
+      pad.advance(1000);expect(pad.bytes(),`${phase}/${boundary}`).toHaveLength(sent);
+      hidden?.mockRestore();dialog?.remove();
+      fireEvent.pointerUp(document,pad.point);
+      if(pad.pad.isConnected)fireEvent.click(pad.arrow('up'),{detail:1});
+      pad.advance(1000);expect(pad.bytes(),`trailing ${phase}/${boundary}`).toHaveLength(sent);
+      cleanup();act(()=>access());mocks.write.mockClear();
+    }
+  });
+  it('keeps the same live input owner across metadata replacement but retires a replaced terminal',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);
+    const renamed={...pad.session,name:'Renamed host'};
+    pad.view.rerender(<TerminalPane session={renamed} active reportError={pad.reportError} />);
+    pad.move(140,100);pad.advance(80);expect(pad.bytes()).toEqual(['\x1b[A','\x1b[C']);
+    pad.view.rerender(<TerminalPane session={{...renamed,terminal:createMockTerminal() as unknown as LiveSession['terminal']}} active reportError={pad.reportError} />);
+    pad.advance(800);expect(pad.bytes()).toHaveLength(2);pad.up();
+    pad.down();pad.advance(800);expect(pad.bytes()).toHaveLength(2);pad.up();
+  });
+  it('retains the initial hold deadline when panning before it, and permits a fresh gesture after cancellation',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(200);pad.move(60,100);pad.advance(199);expect(pad.bytes()).toEqual([]);
+    pad.advance(1);expect(pad.bytes()).toEqual(['\x1b[D']);fireEvent(window,new Event('blur'));pad.up();
+    pad.down();pad.advance(400);expect(pad.bytes()).toEqual(['\x1b[D','\x1b[A']);pad.up();
+  });
+  it('falls back to single accessible clicks when pointer capture is unavailable',()=>{
+    const pad=dpadFixture();Object.defineProperty(pad.pad,'setPointerCapture',{value:undefined});
+    pad.down();pad.advance(1000);expect(pad.bytes()).toEqual([]);pad.up();
+    fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual(['\x1b[A']);
+  });
+  it('flushes the owned IME composition once before repeating named arrows',()=>{
+    const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+    try {
+      const pad=dpadFixture();screen.getByLabelText('Terminal for Host').append(pad.textarea.parentElement!);pad.textarea.focus();
+      Object.assign(terminal,{input:(data:string)=>pad.emit(data)});
+      fireEvent.compositionStart(pad.textarea);
+      pad.textarea.value='owned composition';pad.textarea.setSelectionRange(17,17);
+      pad.down();pad.advance(400);expect(pad.bytes()).toEqual(['owned composition','\x1b[A']);
+      pad.advance(160);pad.up();expect(pad.bytes()).toEqual(['owned composition','\x1b[A','\x1b[A','\x1b[A']);
+    } finally {focused.mockRestore();}
+  });
+  it('stops rather than bypassing an unapplied IME edit',()=>{
+    const focused=vi.spyOn(document,'hasFocus').mockReturnValue(true);
+    Object.assign(terminal._core,{_compositionHelper:{_isComposing:false,_isSendingComposition:false,_compositionView:document.createElement('span')}});
+    try {
+      const pad=dpadFixture('previous');
+      act(()=>{pad.textarea.value='local correction';pad.textarea.dispatchEvent(new InputEvent('input',{data:'local correction',inputType:'insertReplacementText',bubbles:true}));});
+      expect(screen.getByText('Edit not sent · Review')).toBeDefined();
+      pad.down();pad.advance(800);pad.up();fireEvent.click(pad.arrow('up'),{detail:1});expect(pad.bytes()).toEqual([]);
+    } finally {focused.mockRestore();}
+  });
+  it('rejects a secondary finger that arrives before any D-pad-owned pointer',()=>{
+    const pad=dpadFixture();fireEvent.pointerDown(document,{...pad.point,pointerId:40});
+    fireEvent.pointerDown(pad.arrow('up'),{...pad.point,isPrimary:false});pad.advance(800);
+    fireEvent.pointerUp(pad.pad,{...pad.point,isPrimary:false});fireEvent.click(pad.arrow('up'),{detail:1});
+    expect(pad.bytes()).toEqual([]);
+  });
+  it.each(['blur','capture','hidden'] as const)('recovers after %s without requiring an undelivered old release',boundary=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);let hidden:ReturnType<typeof vi.spyOn>|undefined;
+    if(boundary==='blur')fireEvent(window,new Event('blur'));
+    if(boundary==='capture')fireEvent.lostPointerCapture(pad.pad,pad.point);
+    if(boundary==='hidden'){hidden=vi.spyOn(document,'hidden','get').mockReturnValue(true);fireEvent(document,new Event('visibilitychange'));}
+    pad.advance(800);expect(pad.bytes()).toHaveLength(1);hidden?.mockRestore();
+    fireEvent.pointerDown(pad.arrow('up'),{...pad.point,pointerId:43,isPrimary:true});pad.advance(400);
+    expect(pad.bytes()).toEqual(['\x1b[A','\x1b[A']);fireEvent.pointerUp(pad.pad,{...pad.point,pointerId:43});
+  });
+  it('does not confuse a different pointer type primary with release of held contacts',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);
+    fireEvent.pointerDown(document,{...pad.point,pointerId:42,pointerType:'mouse',isPrimary:true});
+    fireEvent.pointerDown(pad.arrow('up'),{...pad.point,pointerId:43,isPrimary:true});pad.advance(800);
+    expect(pad.bytes()).toHaveLength(1);
+    fireEvent.pointerUp(document,{...pad.point,pointerId:42,pointerType:'mouse'});fireEvent.pointerUp(document,{...pad.point,pointerId:43});
+    pad.down();pad.advance(400);expect(pad.bytes()).toHaveLength(2);pad.up();
+  });
+  it('uses elapsed hold time across a wall-clock jump',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(200);vi.setSystemTime(new Date(Date.now()-60000));
+    pad.move(140,100);pad.advance(200);expect(pad.bytes()).toEqual(['\x1b[C']);pad.up();
+  });
+  it('blocks rearming after another pointer until all involved pointers end',()=>{
+    const pad=dpadFixture();pad.down();pad.advance(400);
+    fireEvent.pointerDown(document,{...pad.point,pointerId:42,isPrimary:false});pad.advance(800);expect(pad.bytes()).toHaveLength(1);
+    pad.up();fireEvent.pointerDown(pad.arrow('up'),{...pad.point,pointerId:44,isPrimary:false});pad.advance(800);expect(pad.bytes()).toHaveLength(1);fireEvent.pointerUp(document,{...pad.point,pointerId:44});
+    fireEvent.pointerUp(document,{...pad.point,pointerId:42});pad.up();
+    pad.down();pad.advance(400);expect(pad.bytes()).toHaveLength(2);pad.up();
+  });
+});
 it.each(['terminal','composer','search'])('keeps a credential dialog focused when delayed %s focus runs',mode=>{
   const frames:Array<()=>void>=[];
   vi.stubGlobal('requestAnimationFrame',(callback:()=>void)=>{frames.push(callback);return frames.length;});
