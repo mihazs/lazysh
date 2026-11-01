@@ -85,3 +85,31 @@ it.each(['hidden','other-source','revoked'])('drops a %s reveal request without 
   view.rerender(<CompanionHooksPanel sessionId={request.sessionId} visible reveal={request}/>);
   expect(disclosure.open).toBe(false);expect(hooks).not.toHaveBeenCalled();
 });
+
+
+it.each([
+  ['codex','Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.'],
+  ['claude','Start a new Claude Code session with this profile, open /hooks to inspect loaded hooks, then start a turn. Existing hook restrictions still apply.'],
+  ['opencode','Plugins load when the OpenCode server starts with this profile. Start a new turn to verify reporting.'],
+] as const)('guides configured %s reporting without executing provider commands',async(agent,guide)=>{
+  hooks.mockResolvedValue({...inspected,state:'configured'});
+  render(<CompanionHooksPanel sessionId="owned-guide" visible/>);
+  fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:agent}});selectProfile();
+  expect(screen.queryByText(guide)).toBeNull();expect(hooks).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  expect(await screen.findByText(guide)).toBeTruthy();
+  expect(screen.getByText('Hooks configured. Live reporting has not been verified.')).toBeTruthy();
+  expect(hooks.mock.calls).toEqual([['owned-guide',{agent,action:'status',profileRoot:'/owned/profile'}]]);
+  fireEvent.change(screen.getByLabelText('Host profile directory'),{target:{value:'/owned/other-profile'}});
+  expect(screen.queryByText(guide)).toBeNull();expect(hooks).toHaveBeenCalledTimes(1);
+});
+
+it('retains generic trust guidance for other configured providers',async()=>{
+  hooks.mockResolvedValue({...inspected,state:'configured'});
+  render(<CompanionHooksPanel sessionId="owned-fallback" visible/>);
+  fireEvent.change(screen.getByLabelText('Hook provider'),{target:{value:'gemini'}});selectProfile();
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  await screen.findByText('Hooks configured. Live reporting has not been verified.');
+  expect(screen.getByText('Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.')).toBeTruthy();
+  expect(hooks).toHaveBeenCalledTimes(1);
+});

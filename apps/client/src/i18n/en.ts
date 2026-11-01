@@ -26,6 +26,9 @@ export const english = {
   hooksUnsupported: "Managed hook setup is not supported on this host filesystem yet.",
   hooksConflict: "The profile changed. Review its hooks before continuing.",
   hooksUncertain: "Setup could not be confirmed. Inspect again before retrying.",
+  hooksCodexGuide: "Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.",
+  hooksClaudeGuide: "Start a new Claude Code session with this profile, open /hooks to inspect loaded hooks, then start a turn. Existing hook restrictions still apply.",
+  hooksOpenCodeGuide: "Plugins load when the OpenCode server starts with this profile. Start a new turn to verify reporting.",
   hooksTrust: "Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.",
   hooksInvalid: "Invalid hook setup response.",
 
