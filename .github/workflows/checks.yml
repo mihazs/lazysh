@@ -458,22 +458,82 @@ jobs:
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows SHA256'
       - name: Exercise account quota collectors and process ownership
         run: bunx turbo run test:rust --filter=@lazysh/account-usage
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: 24
+      - name: Prepare owned Windows GUI drivers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'lazysh-installed-gui-tools'
+          if (Test-Path -LiteralPath $tools) { throw 'GUI tools directory already exists' }
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          cargo install --locked --version 2.1.0 tauri-driver --root $tools
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned tauri-driver installation failed' }
+          $runtimeId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $runtime = @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$runtimeId", "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$runtimeId") |
+            ForEach-Object { if (Test-Path -LiteralPath $_) { (Get-Item -LiteralPath $_).GetValue('pv') } } |
+            Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and [Version]$_ -gt [Version]'0.0.0.0' } | Select-Object -First 1
+          if (!$runtime) { throw 'Installed WebView2 runtime is required' }
+          $archive = Join-Path $tools 'edge.zip'
+          Invoke-WebRequest -Uri "https://msedgedriver.microsoft.com/$runtime/edgedriver_win64.zip" -OutFile $archive -TimeoutSec 60
+          if ((Get-Item -LiteralPath $archive).Length -gt 52428800) { throw 'EdgeDriver archive exceeds its bound' }
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $tools 'edge')
+      - name: Verify owned Windows launch contracts without creating accounts
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        env:
+          LAZYSH_TEST_WINDOWS_GUI: '1'
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'Windows launch portable contracts without process creation|owned UIA candidate contract|Windows standard broker portable'
       - run: bun run build:native
+        id: native_build
       - run: bunx turbo run test:rust --filter=@lazysh/credential-vault
+        id: credential_check
       - name: Package and validate native macOS permission localizations
         if: runner.os == 'macOS'
         run: |
           bun run --cwd apps/client tauri build --bundles app
           plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
       - name: Package the actual Windows NSIS installer
+        id: windows_package
         if: runner.os == 'Windows'
         run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
       - name: Exercise actual Windows install, same-version repair and uninstall
+        id: windows_installer
         if: runner.os == 'Windows'
         timeout-minutes: 10
         env:
           LAZYSH_TEST_WINDOWS_INSTALLER: '1'
         run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows NSIS'
+      - name: Exercise the actual installed Windows GUI and owned uninstall
+        id: windows_gui
+        if: runner.os == 'Windows'
+        timeout-minutes: 12
+        env:
+          LAZYSH_TEST_WINDOWS_GUI: '1'
+          LAZYSH_GUI_DRIVER: ${{ runner.temp }}/lazysh-installed-gui-tools/bin/tauri-driver.exe
+          LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual Windows (installed GUI|GUI (endpoint|window))'
+      - name: Retire only the owned Windows standard-user scope
+        id: windows_gui_retirement
+        if: ${{ always() && runner.os == 'Windows' }}
+        timeout-minutes: 1
+        run: bun .changeset/windows-standard-user.ts --recover
+      - name: Observe the Windows Node bootstrap exit non-acceptance control
+        id: windows_bootstrap_control
+        if: ${{ always() && runner.os == 'Windows' && steps.windows_package.outcome == 'success' && steps.windows_installer.outcome == 'success' && contains(fromJSON('["success","failure"]'), steps.windows_gui.outcome) && steps.windows_gui_retirement.outcome == 'success' }}
+        timeout-minutes: 12
+        env:
+          LAZYSH_TEST_WINDOWS_NODE_BOOTSTRAP_EXIT: '1'
+          LAZYSH_GUI_DRIVER: ${{ runner.temp }}/lazysh-installed-gui-tools/bin/tauri-driver.exe
+          LAZYSH_GUI_EDGE: ${{ runner.temp }}/lazysh-installed-gui-tools/edge/msedgedriver.exe
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern '^actual Windows Node bootstrap exit is a non-acceptance control$'
+      - name: Retire only the owned Windows bootstrap control scope
+        if: ${{ always() && runner.os == 'Windows' && contains(fromJSON('["success","failure","cancelled"]'), steps.windows_bootstrap_control.outcome) }}
+        timeout-minutes: 1
+        run: bun .changeset/windows-standard-user.ts --recover
       - name: Reject unverified Windows private-file permissions
         if: runner.os == 'Windows'
         run: cargo test --locked -p lazysh-common --features service --lib service_secrets::tests::public_storage_helpers_reject_unverified_host_permissions -- --exact
