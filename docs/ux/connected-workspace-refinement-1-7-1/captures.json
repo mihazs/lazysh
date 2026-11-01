@@ -25,25 +25,25 @@
     },
     {
       "file": "workspaces-phone-after.png",
-      "sha256": "6c6bd4b9a5e6ed645517cb7bd91840e8f79da5e5d60fa3d5cd4022e90c049100",
+      "sha256": "d1193b4fe45bb83341030323d9f576235263dab3e50a4946cbaf0d1a42b86936",
       "viewport": [
         393,
         852
       ],
       "state": "Two synthetic connected app sessions, selected Other navigation host, one discovered Herdr workspace/tab/pane",
-      "clientVersion": "1.7.1 + uncommitted refinement",
-      "source": "Real client, synthetic browser fixture; not native acceptance"
+      "clientVersion": "1.7.2 + workspace refinement",
+      "source": "Real client after integrating prerequisite #740; original synthetic capture without terminal-ready admission; not native acceptance"
     },
     {
       "file": "workspaces-desktop-after.png",
-      "sha256": "9dacf93b8247a23b40afd2cadfd6f9af0a47588017278e7fc515d746534b63e2",
+      "sha256": "5c31d5745ccf737b1af2d6567d04c9f6bd4b0b3969808d9962a9a3b602e08782",
       "viewport": [
         1280,
         850
       ],
       "state": "Two synthetic connected app sessions, selected Other navigation host, one discovered Herdr workspace/tab/pane",
-      "clientVersion": "1.7.1 + uncommitted refinement",
-      "source": "Real client, synthetic browser fixture; not native acceptance"
+      "clientVersion": "1.7.2 + workspace refinement",
+      "source": "Real client after integrating prerequisite #740; original synthetic capture without terminal-ready admission; not native acceptance"
     }
   ],
   "references": [
@@ -109,5 +109,42 @@
       "sha256": "829ccfbd75cf2ab7688fa226e3304d9b0a75af31b75a80dabaf5d7452b120e6f",
       "evidence": "Downloaded and frame-decoded in this run; not native execution"
     }
-  ]
+  ],
+  "afterSourceCommit": "4db704d9ab7c024ccdd973a51ea63bee4d6ed089",
+  "integratedMain": "64b88aee4223a01b46184c3642e270d1eb58b262",
+  "renderSourceSha256": {
+    "apps/client/src/App.tsx": "0ff256a1ccc36f2eb81ec3e1026729219e8184e849a1b0346befbb4d997cdc58",
+    "apps/client/src/HerdrNavigation.tsx": "14d9af33778a89ea784495381e195e331b9013131d631b34cca752403d694f42",
+    "apps/client/src/HerdrNavigation.css": "85ce84af641f3a55be8c66239a0d9bd06e193af03da790e7fb153e33138b06ad",
+    "apps/client/src/styles.css": "6f7d182a696dd722e1888247a6a7c215a9cd6aed4ac9ea9fbd664fb5060df371",
+    "apps/client/src/i18n/en.ts": "9f6bb2419555ac9abb473277252e63e86f422f27e3615eb7a4e1e104f1b0a066",
+    "apps/client/src/i18n/translations.ts": "1062ff2eebd706a27db7554ad4bb40550ebdb39c86c6b127500395bc36854685",
+    "apps/client/src/TerminalPane.tsx": "0bb1349faada8ab447f92bf1f9685a3a577aafe7b599bccd8f11a726406b3938"
+  },
+  "measuredBrandPalette": {
+    "selectedForeground": [
+      248,
+      252,
+      255
+    ],
+    "selectedBackground": [
+      36,
+      75,
+      94
+    ],
+    "selectedContrast": 9.07658225361491,
+    "warningForeground": [
+      173,
+      196,
+      218
+    ],
+    "readingBackground": [
+      16,
+      34,
+      54
+    ],
+    "warningContrast": 8.960286467431393,
+    "textOpacity": 1,
+    "readingBackdropFilter": "none"
+  }
 }
