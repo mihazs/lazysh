@@ -1,4 +1,4 @@
-import {workspaceControl} from './fixtures/workspaceControl';
+import {workspaceControl,openPreferenceCategory} from './fixtures/workspaceControl';
 import { installNativeBridge } from './fixtures/nativeBridge';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -45,6 +45,7 @@ test('list remains default; cards persist across reload and select the exact exi
   expect(second!.y).toBeGreaterThanOrEqual(first!.y + first!.height);
   await page.keyboard.press('Escape');
   await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Appearance');
   await page.getByRole('combobox', {name: 'Session switcher layout', exact: true}).selectOption('cards');
   await page.keyboard.press('Escape');
   await page.reload();
@@ -78,8 +79,10 @@ test('invalid persisted layout falls back to list and reset clears the cards cho
   await expect(dialog.locator('.session-switcher')).toHaveAttribute('data-layout', 'list');
   await page.keyboard.press('Escape');
   await (await workspaceControl(page,'Preferences')).click();
+  await openPreferenceCategory(page,'Appearance');
   const layout = page.getByRole('combobox', {name: 'Session switcher layout', exact: true});
   await layout.selectOption('cards');
+  await openPreferenceCategory(page,'Reset');
   await page.getByRole('button', {name: 'Reset preferences', exact: true}).click();
   await expect(layout).toHaveValue('list');
   await page.keyboard.press('Escape');
@@ -162,6 +165,7 @@ for (const width of [360, 412]) for (const fontSize of [14, 32]) {
         await page.getByRole('button', {name: 'Close composer', exact: true}).scrollIntoViewIfNeeded();
         await expect(page.getByRole('button', {name: 'Close composer', exact: true})).toBeInViewport();
         await (await workspaceControl(page,'Preferences')).click();
+        await openPreferenceCategory(page,'Appearance');
         await page.getByRole('spinbutton', {name: 'Font size', exact: true}).fill(fontSize === 14 ? '32' : '14');
         await page.keyboard.press('Escape');
         await expectFittedRows();

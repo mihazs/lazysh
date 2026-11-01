@@ -1,3 +1,4 @@
+import {openPreferenceCategory} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 declare global{interface Window{iconLocaleFixture:{calls:{command:string;args:Record<string,unknown>}[];allowRead:()=>void;finishApply:(value:unknown)=>void;}}}
@@ -21,6 +22,7 @@ for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} icon errors st
   });
   const external:string[]=[];page.on('request',request=>{if(!request.url().startsWith('http://127.0.0.1:1420'))external.push(request.url());});
   await page.goto('/');await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await openPreferenceCategory(page,'Appearance');
   const locale=async(value:string)=>page.evaluate(async value=>{const{uiI18n}=await import('/src/i18n/core.ts');if(value==='en-XA'){const{enablePseudoLocale}=await import('/src/test/pseudoLocale.ts');await enablePseudoLocale(uiI18n);}else await uiI18n.changeLanguage(value);},value);
   const labels=()=>page.evaluate(async()=>{const{t}=await import('/src/i18n/core.ts');return {group:t('iconsAppIcon'),select:t('iconsHomeScreenIcon'),readFailure:t('iconsCannotReadTheCurrentAppIconTryRefreshing'),invalid:t('iconsCannotReadTheCurrentAppIcon'),refresh:t('iconsRefreshAppIcon'),apply:t('iconsApplyAppIcon'),changing:t('iconsChangingIcon')};});
   await expect(page.getByRole('alert')).toBeVisible();await locale(initial);let names=await labels();

@@ -1,3 +1,4 @@
+import {openPreferenceCategory} from './fixtures/workspaceControl';
 import {expect,test} from '@playwright/test';
 import {openLocalizedApp} from './fixtures/localizedApp';
 import type {observeFontOperations} from './fixtures/fontOperations';
@@ -14,6 +15,7 @@ for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} retained font 
   await page.getByRole('button',{name:preferencesName,exact:true}).click();
   const labels=()=>page.evaluate(async()=>{const{t}=await import('/src/i18n/core.ts');return {import:t('preferencesImportFontFile'),summary:t('preferencesImportedFonts'),primary:t('preferencesImportedTerminalFont'),invalid:t('validationChooseAFontFileNoLargerThan24MiB'),delete:t('preferencesDeleteFontValue1',{value1:'LiberationMono-Regular.ttf'})};});
   let names=await labels();
+  await openPreferenceCategory(page,'Appearance');
   await page.getByText(names.summary,{exact:true}).click();
   await page.getByLabel(names.import,{exact:true}).setInputFiles({name:'RAW {{file}}.ttf',mimeType:'font/ttf',buffer:Buffer.from('bad')});
   await expect(page.getByRole('alert')).toHaveText(names.invalid);
@@ -61,8 +63,9 @@ test('retained missing-role and rejected-font warnings translate without font or
     localStorage.setItem('lazysh.device-fonts.v1',JSON.stringify({primary:id,cjk:'22222222-2222-4222-8222-222222222222'}));
   },rawName);
   await page.reload();await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await openPreferenceCategory(page,'Appearance');
   await page.getByText('Imported fonts',{exact:true}).click();
-  const warnings=page.locator('details').filter({has:page.locator('input[accept=".ttf,.otf,.woff,.woff2,.ttc"]')}).getByRole('status');
+  const warnings=page.locator('details:not(.preferences-category)').filter({has:page.locator('input[accept=".ttf,.otf,.woff,.woff2,.ttc"]')}).getByRole('status');
   await expect(warnings).toHaveCount(2);
   await page.evaluate(async()=>{const{observeFontOperations}=await import('/e2e/fixtures/fontOperations.ts');window.fontOperations=observeFontOperations();});
   const nodes=await warnings.elementHandles();
