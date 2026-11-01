@@ -4,7 +4,8 @@ import {windowsGuiMediumCommonSource,windowsGuiTokenReasons,windowsGuiDaclFailur
 import {digestFile} from './release-artifacts';
 import {native,windowsInstallerFailure} from './release-platform';
 import {copyFile,lstat,mkdir,readdir,realpath,readFile,writeFile,appendFile,rm} from 'node:fs/promises';
-import {basename,dirname,join,resolve} from 'node:path';
+import {basename,dirname,join,resolve,win32} from 'node:path';
+import {createHash} from 'node:crypto';
 
 
 export const standardWritableDirectories=['work','node_modules/.vite','node_modules/.vite-temp','node_modules/.vitest-cache','apps/client/node_modules/.vite','apps/client/node_modules/.vite-temp'] as const;
@@ -227,19 +228,29 @@ export function standardWorkerEnvironment(current:NodeJS.ProcessEnv,configured:R
   const selected=Object.fromEntries(Object.entries(current).filter(([key,value])=>inheritedStandardKeys.has(key.toUpperCase())&&value!==undefined));
   return {...selected,...configured};
 }
-function standardOwnerMode(value:unknown):'gui'|'bootstrap-exit'{
-  if(value!=='gui'&&value!=='bootstrap-exit')throw new Error('Unknown standard owner mode');return value;
+function standardOwnerMode(value:unknown):'gui'|'bootstrap-exit'|'node-bootstrap-exit'{
+  if(value!=='gui'&&value!=='bootstrap-exit'&&value!=='node-bootstrap-exit')throw new Error('Unknown standard owner mode');return value;
 }
-export function standardOwnerCompletion(mode:unknown,receiptPresent:boolean,receipt:ReturnType<typeof parseStandardReceipt>|undefined){
-  if(standardOwnerMode(mode)==='gui'){
+export function standardNodeRuntimeIdentity(runtime:unknown){
+  if(!runtime||typeof runtime!=='object'||Array.isArray(runtime))throw new Error('Node control runtime identity unverified');
+  const value=runtime as Record<string,unknown>;
+  if(Object.keys(value).sort().join(',')!=='runtimeSha256,runtimeVersion'||!standardNodeVersion(value.runtimeVersion)||typeof value.runtimeSha256!=='string'||value.runtimeSha256.length!==64||!/^[a-f0-9]{64}$/.test(value.runtimeSha256))throw new Error('Node control runtime identity unverified');
+  return {runtimeVersion:value.runtimeVersion,runtimeSha256:value.runtimeSha256};
+}
+export function standardOwnerCompletion(mode:unknown,receiptPresent:boolean,receipt:ReturnType<typeof parseStandardReceipt>|undefined,runtime?:unknown){
+  const selected=standardOwnerMode(mode);
+  if(selected==='gui'){
     if(!receiptPresent||receipt?.result!=='PASSED')throw new Error('Standard owner receipt rejected');
     return 'Windows ordinary-user NSIS, installed GUI and owned account cleanup passed';
   }
   if(receiptPresent||receipt!==undefined)throw new Error('Bootstrap control unexpectedly wrote a receipt');
+  if(selected==='node-bootstrap-exit')return {kind:'NON_ACCEPTANCE_NODE_BOOTSTRAP',observation:'NODE_CHILD_EXITED_ZERO',...standardNodeRuntimeIdentity(runtime)} as const;
   return {kind:'NON_ACCEPTANCE_BOOTSTRAP',observation:'CHILD_EXITED_ZERO'} as const;
 }
 export function standardWorker(fixture:string,source:string,binary:string,mode:unknown='gui'){
-  if(standardOwnerMode(mode)==='bootstrap-exit')return 'process.exit(0);';
+  const selected=standardOwnerMode(mode);
+  if(selected==='bootstrap-exit')return standardZeroExitSource;
+  if(selected==='node-bootstrap-exit')return '';
   return String.raw`
 import {readFile,writeFile} from 'node:fs/promises';
 import {publishStandardProgress} from './.changeset/windows-standard-progress';
@@ -272,6 +283,37 @@ await publishStandardProgress(root,config.environment.GITHUB_SHA,config.binaryHa
 if(result!=='PASSED')process.exitCode=1;
 `;}
 export const standardBrokerScript=String.raw`$ErrorActionPreference='Stop';try{Add-Type -TypeDefinition ([Console]::In.ReadToEnd()) -ErrorAction Stop;$result=[OwnedMediumGui]::RunStandard($env:LAZYSH_WINDOWS_STANDARD_ROOT,(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'bin/bun.exe'),(Join-Path $env:LAZYSH_WINDOWS_STANDARD_ROOT 'worker.ts'),$env:LAZYSH_STANDARD_IMAGE_HASH,([Environment]::TickCount64+[long]$env:LAZYSH_STANDARD_REMAINING));[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$result)}catch{$code=$_.Exception.GetBaseException().Message;if($code -ceq 'TOKEN_UNAVAILABLE'){$code=[OwnedMediumGui]::StandardTokenFailure()};if($code -cnotin @(${standardCodes.map(code=>"'"+code+"'").join(',')}) -and !($code -cmatch '\ACLEANUP_UNVERIFIED:([A-Z_]+)\z' -and $matches[1] -cin @('UNVERIFIED',${standardCodes.filter(code=>code!=='STANDARD_OWNER_PASSED').map(code=>"'"+code+"'").join(',')}))){$code='UNVERIFIED'};[Console]::Out.Write('LAZYSH_STANDARD_OWNER:'+$code)}`;
+const standardZeroExitSource='process.exit(0);';
+const standardZeroExitHash=createHash('sha256').update(standardZeroExitSource).digest('hex');
+function standardNodeVersion(value:unknown):value is string{return typeof value==='string'&&value.trim()===value&&/^v24\.(?:0|[1-9][0-9]{0,3})\.(?:0|[1-9][0-9]{0,3})$/.test(value);}
+export function standardNodeToolcache(source:unknown,cache:unknown,version:unknown){
+  if(typeof source!=='string'||typeof cache!=='string'||!standardNodeVersion(version)||!/^[A-Za-z]:\\/.test(source)||!/^[A-Za-z]:\\/.test(cache)||/[\0-\x1f]/.test(source+cache)||win32.normalize(source)!==source||win32.normalize(cache)!==cache||source.toLowerCase()!==win32.join(cache,'node',version.slice(1),'x64','node.exe').toLowerCase())throw new Error('Node control toolcache provenance unverified');
+  return version;
+}
+async function standardNodeEntryPath(root:string){
+  if(root!==resolve(root)||basename(root).trim()!==basename(root)||!/^lazysh-standard-[0-9]{1,20}-[0-9]{1,20}$/.test(basename(root)))throw new Error('Node control entry unverified');
+  const entry=await lstat(root),actual=await realpath(root);
+  if(!entry.isDirectory()||entry.isSymbolicLink()||!insideStandardRoot(actual,root)||!insideStandardRoot(root,actual))throw new Error('Node control entry unverified');
+  return join(root,'run');
+}
+export async function verifyStandardNodeEntry(root:string){
+  try{
+    const path=await standardNodeEntryPath(root),before=await lstat(path);
+    if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.size!==Buffer.byteLength(standardZeroExitSource)||!insideStandardRoot(await realpath(path),root)||(await digestFile(path)).sha256!==standardZeroExitHash)throw new Error();
+    const after=await lstat(path);
+    if(!after.isFile()||after.isSymbolicLink()||after.nlink!==1||after.dev!==before.dev||after.ino!==before.ino||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs)throw new Error();
+  }catch{throw new Error('Node control entry unverified');}
+}
+export async function stageStandardNodeEntry(root:string){
+  try{await writeFile(await standardNodeEntryPath(root),standardZeroExitSource,{flag:'wx'});await verifyStandardNodeEntry(root);}
+  catch{throw new Error('Node control entry unverified');}
+}
+export function standardOwnerBroker(mode:unknown){
+  if(standardOwnerMode(mode)!=='node-bootstrap-exit')return standardBrokerScript;
+  const target="'bin/bun.exe'";
+  if(standardBrokerScript.split(target).length!==2)throw new Error('Node control broker identity changed');
+  return standardBrokerScript.replace(target,"'bin/node.exe'");
+}
 export async function windowsStandardInstallation(installer:string,binary:string,version:string){
   const result=await runStandardOwner(installer,binary,version,'gui');
   if(typeof result!=='string')throw new Error('Standard GUI owner mode changed');return result;
@@ -279,6 +321,10 @@ export async function windowsStandardInstallation(installer:string,binary:string
 export async function windowsStandardBootstrapExit(installer:string,binary:string,version:string){
   const result=await runStandardOwner(installer,binary,version,'bootstrap-exit');
   if(typeof result==='string')throw new Error('Bootstrap control mode changed');return result;
+}
+export async function windowsStandardNodeBootstrapExit(installer:string,binary:string,version:string){
+  const result=await runStandardOwner(installer,binary,version,'node-bootstrap-exit');
+  if(typeof result==='string'||result.kind!=='NON_ACCEPTANCE_NODE_BOOTSTRAP')throw new Error('Node bootstrap control mode changed');return result;
 }
 async function runStandardOwner(installer:string,binary:string,version:string,mode:unknown){
   const selected=standardOwnerMode(mode);
@@ -293,27 +339,43 @@ async function runStandardOwner(installer:string,binary:string,version:string,mo
     await mkdir(join(root,'bin'));for(const path of standardWritableDirectories)await mkdir(join(root,path),{recursive:true});await mkdir(join(root,'work','temp'));
     const node=(await native('node',['-p','process.execPath'])).trim();
     const pwsh=(await native('pwsh.exe',['-NoProfile','-NonInteractive','-Command','[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName'])).trim();
+    let runtime:{runtimeVersion:string;runtimeSha256:string}|undefined;
+    if(selected==='node-bootstrap-exit'){
+      try{
+        const cache=process.env.RUNNER_TOOL_CACHE,entry=await lstat(node),expectedVersion='v'+win32.basename(win32.dirname(win32.dirname(node)));
+        if(!cache||!entry.isFile()||entry.isSymbolicLink())throw new Error();
+        standardNodeToolcache(node,cache,expectedVersion);standardNodeToolcache(await realpath(node),await realpath(cache),expectedVersion);
+        const initialHash=(await digestFile(node)).sha256,budget=Math.min(30000,deadline-Date.now()-15000);
+        if(budget<=0)throw new Error();
+        const version=(await native(node,['--version'],process.env,budget)).trim();standardNodeToolcache(node,cache,version);
+        runtime={runtimeVersion:version,runtimeSha256:initialHash};
+      }catch{throw new Error('Node control runtime admission unverified');}
+    }
     if(!insideStandardRoot(pwsh,process.env.ProgramFiles??'')||!/^\d+\.\d+\.\d+$/.test(version))throw new Error('Standard system tool scope unavailable');
     for(const [from,to] of [[process.execPath,join(root,'bin','bun.exe')],[node,join(root,'bin','node.exe')],[binary,join(root,'binary.exe')],[installer,join(root,'installer.exe')]] as const){if(!(await lstat(from)).isFile()||(await lstat(from)).isSymbolicLink())throw new Error('Standard artifact must be a regular file');await copyFile(from,to);if((await digestFile(from)).sha256!==(await digestFile(to)).sha256)throw new Error('Standard artifact copy changed identity');}
+    if(runtime&&(await digestFile(join(root,'bin','node.exe'))).sha256!==runtime.runtimeSha256)throw new Error('Node control copied image identity changed');
     const driverRoot=dirname(dirname(process.env.LAZYSH_GUI_DRIVER??''));
     if(!insideStandardRoot(driverRoot,process.env.RUNNER_TEMP!))throw new Error('Standard driver scope unavailable');
     await copyStandardClosure(driverRoot,join(root,'tools'),driverRoot);
     const binaryHash=(await digestFile(join(root,'binary.exe'))).sha256;
     const environment={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_REPOSITORY:'mihazs/lazysh',GITHUB_SHA:process.env.GITHUB_SHA!,RUNNER_TEMP:join(root,'work'),TEMP:join(root,'work','temp'),TMP:join(root,'work','temp'),PATH:[join(root,'bin'),dirname(pwsh),join(process.env.SystemRoot!,'System32')].join(';'),LAZYSH_TEST_WINDOWS_GUI:'1',LAZYSH_GUI_DRIVER:join(root,'tools','bin','tauri-driver.exe'),LAZYSH_GUI_EDGE:join(root,'tools','edge','msedgedriver.exe')};
     await writeFile(join(root,'owner.json'),JSON.stringify({environment,installer:join(root,'installer.exe'),binary:join(root,'binary.exe'),binaryHash,version}),{flag:'wx'});await writeFile(join(root,'worker.ts'),standardWorker(basename(root),process.env.GITHUB_SHA!,binaryHash,selected),{flag:'wx'});
+    if(selected==='node-bootstrap-exit')await stageStandardNodeEntry(root);
     await writeFile(join(root,diagnosticName),JSON.stringify({fixture:basename(root),source:process.env.GITHUB_SHA!,binary:binaryHash,stage:'UNKNOWN'}),{flag:'wx'}).catch(()=>{});
     await publishStandardProgress(root,process.env.GITHUB_SHA!,binaryHash,'PREPARED');
     const prepared=await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash);
     const remaining=deadline-Date.now()-1000;if(remaining<=15000)throw new Error('Standard owner setup exhausted its budget');
-    const script=standardBrokerScript;
-    const imageHash=(await digestFile(join(root,'bin','bun.exe'))).sha256;
+    const script=standardOwnerBroker(selected);
+    const imageHash=(await digestFile(join(root,'bin',selected==='node-bootstrap-exit'?'node.exe':'bun.exe'))).sha256;
+    if(runtime&&runtime.runtimeSha256!==imageHash)throw new Error('Node control launch image identity changed');
+    if(selected==='node-bootstrap-exit')console.info(JSON.stringify({kind:'NON_ACCEPTANCE_NODE_RUNTIME_ADMITTED',...standardNodeRuntimeIdentity(runtime)}));
     const wire=await native(pwsh,['-NoProfile','-NonInteractive','-Command',script],{...process.env,LAZYSH_WINDOWS_STANDARD_ROOT:root,LAZYSH_STANDARD_REMAINING:String(remaining),LAZYSH_STANDARD_IMAGE_HASH:imageHash},remaining,windowsStandardUserSource);
     let receipt:ReturnType<typeof parseStandardReceipt>|undefined;
     const resultFile=join(root,'work','result.json');
     const receiptPresent=selected==='gui'?await Bun.file(resultFile).exists():await lstat(resultFile).then(()=>true,error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw new Error('Bootstrap control receipt presence unverified');});
     if(selected==='gui'&&receiptPresent){const entry=await lstat(resultFile);if(!entry.isFile()||entry.isSymbolicLink()||!insideStandardRoot(await realpath(resultFile),root))throw new Error('Standard owner receipt escapes its scope');if(entry.size>2048)throw new Error('Standard owner receipt exceeds its bound');receipt=parseStandardReceipt(JSON.parse(await readFile(resultFile,'utf8')),process.env.GITHUB_SHA!,binaryHash);}
     if(standardOwnerCode(wire)!=='STANDARD_OWNER_PASSED')throw new Error(standardOwnerRejection(wire,receipt?.failure,await readStandardDiagnostic(root,process.env.GITHUB_SHA!,binaryHash),prepared));
-    const result=standardOwnerCompletion(selected,receiptPresent,receipt);
+    const result=standardOwnerCompletion(selected,receiptPresent,receipt,runtime);
     completed=true;return result;
   }finally{
     if(!(await readdir(root)).some(name=>name==='account.owner'||name==='desktop.owner')){await removeStandardFixture(root);}
