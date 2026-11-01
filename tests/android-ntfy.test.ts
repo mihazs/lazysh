@@ -50,6 +50,20 @@ test('one permission action retains closed stage budgets without changing legacy
   expect(JSON.stringify(permissionActionObservation(trace))).not.toMatch(/private|elapsed|[0-9]/);
 });
 
+test('post-click menu samples preserve the actual click budgets and first measured expiry',()=>{
+  const legacy='Ntfy first-launch action[stage=menu before=expired after=expired action=returned snapshot=afterAction permission=denied]';
+  const trace=legacy.replace('permission=denied]','permission=denied clickBefore=positive clickAfter=positive firstExpiry=prompt]');
+  expect(permissionActionObservation(trace)).toEqual({...permissionActionObservation(legacy),clickBefore:'positive',clickAfter:'positive',firstExpiry:'prompt'});
+  for(const firstExpiry of ['none','between','foreground','allow','deny','toolbar','prompt','menu','click'])
+    expect(permissionActionObservation(trace.replace('firstExpiry=prompt',`firstExpiry=${firstExpiry}`))?.firstExpiry).toBe(firstExpiry);
+  for(const bad of [trace.replace('clickBefore=positive','clickBefore=private'),trace.replace('clickAfter=positive','clickAfter=1000'),
+    trace.replace('firstExpiry=prompt','firstExpiry=private-operation'),trace.replace(' clickAfter=positive',''),
+    trace.replace(' clickBefore=positive',''),trace.replace(' firstExpiry=prompt',''),trace.replace('clickBefore=positive','clickBefore=unavailable'),
+    trace.replace('action=returned','action=none'),trace.replace('clickAfter=positive','clickAfter=unavailable')])
+    expect(permissionActionObservation(bad)).toBeUndefined();
+  expect(JSON.stringify(permissionActionObservation(trace))).not.toMatch(/private|elapsed|[0-9]/);
+});
+
 test('settings observation admits only finite flags and the two-scroll limit',()=>{
   const diagnostic='Owned default server; settingsForeground=true settingsToolbar=true preferenceList=true preferenceTarget=false scrollAttempts=2';
   expect(settingsObservation('private-prefix '+diagnostic+' private-suffix')).toEqual({foreground:true,toolbar:true,list:true,target:false,scrollAttempts:2});

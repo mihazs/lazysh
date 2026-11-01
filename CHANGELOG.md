@@ -3,6 +3,24 @@
 ## [Unreleased]
 
 - Add optional Herdr reported-session details for bounded Codex, Claude Code and OpenCode IDs, with same-connection companion report matches, stale-reference labels and selected-server shared-reference counts. These read-only details do not establish pane ownership or enable Chat.
+
+- Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
+
+- Add contextual Back and Return to terminal for workspace tools and AI usage, retaining the opening live session and terminal draft. Keep mobile tools in compact navigation and let Android Back close the current local surface first; connection and transport defaults are unchanged.
+
+
+- Distinguish a full terminal input queue from a closed input channel, and record content-free write-caller and ownership diagnostics for investigating Android session navigation failures. Input delivery, queue capacity and error visibility are unchanged.
+- Open Preferences at the top with collapsed categories for appearance, language, terminal behavior, keyboard controls, security and connection settings. Preserve mounted drafts, async operations and safety text; opening settings no longer focuses Font size or requests text input. Saved settings and permission defaults are unchanged.
+
+- Prioritize Connect when opening a saved host: connection options now start collapsed with the effective transport shown. Focus required credentials when needed or Connect when saved credentials are available, without stealing focus from a manual entry. Advanced Mosh/ET settings, saved defaults and validation remain available.
+- Keep the native branded startup cover until the current renderer acknowledges its first workspace commit when app lock is disabled, including after renderer recreation. Confirmed locks retain their native unlock controls.
+
+- Offer Agent hook setup directly from empty Activity, opening the existing inspected setup workflow for the selected host. Hook installation and provider trust remain explicit; an empty list does not establish whether live reporting is configured.
+
+- Refine theme-aware frosted navigation and short action sheets, keeping long forms and terminal output opaque and preserving reduced-transparency and forced-color fallbacks. No theme defaults change.
+
+- Prioritize live agents and reported activity over optional configuration. Healthy Agents setup and single-server Herdr selection now start collapsed; explicit setup preserves mounted drafts and operations, while companion repair and pending approvals remain visible. Connection, permission and collection defaults are unchanged.
+
 - Classify failed companion installer tag rechecks with closed diagnostics while preserving localized errors, provenance verification and installation defaults.
 
 - Add explicit managed Droid hook setup for an existing standalone `.factory/hooks.json`, including the connected Agents selector. Preserve foreign event groups and fallback/settings policy, bind the inspected absolute companion, and refuse missing files rather than shadowing legacy hooks. Fresh-profile migration and native Droid runtime qualification remain unsupported; no defaults or trust settings change.

@@ -14,15 +14,18 @@ export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports
   const rows=data?.rows.filter(row=>[row.name,row.agent,row.cwd,row.pane_id].some(text=>text?.toLowerCase().includes(query.trim().toLowerCase())))??[];
   return <section className="herdr-agents" aria-label={t('herdrAgentsTitle')} aria-busy={busy}>
     <div className="tool-bar"><h3>{t('herdrAgentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={()=>void refresh()}>{t('herdrAgentsRefresh')}</button></div>
-    <p>{t('herdrAgentsHint')}</p>
     {busy && !data?.loaded && failure?.host!==sessionId && <p role="status">{t('herdrReading')}</p>}
     {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={busy || !visible || !lease.current()} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
     {data && <>
       {data.servers.length===0?<p>{t('herdrAgentsNoServers')}</p>:<>
+        <details className="herdr-server-setup" open={!data.loaded || !data.server || failure?.host===sessionId ? true : undefined}>
+        <summary>{t('herdrAgentsServer')}{data.server ? ` · ${data.server}` : ''}</summary>
+        <p>{t('herdrAgentsHint')}</p>
         <label>{t('herdrAgentsServer')}<select value={data.server} disabled={busy} onChange={event=>selectServer(event.target.value)}>
           <option value="">{t('herdrAgentsChoose')}</option>{data.servers.map(name=><option key={name}>{name}</option>)}
         </select></label>
         <p>{t('herdrAgentsScope',{servers:formatNumber(data.servers.length)})}</p>
+        </details>
         {data.server && <><label>{t('herdrAgentsSearch')}<input type="search" value={query} onChange={event=>setQuery(event.target.value)}/></label>
           {data.loaded && failure?.host!==sessionId && <p role="status">{t('herdrAgentsCount',{shown:formatNumber(rows.length),total:formatNumber(data.rows.length)})}</p>}
           <div className="live-agent-list">{rows.map(row=>{

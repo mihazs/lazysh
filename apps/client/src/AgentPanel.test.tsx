@@ -94,13 +94,13 @@ it.each(['missing','ambiguous'] as const)('keeps the board/settings and manual f
   render(<AgentPanel sessionId="ssh-one" onUseReportedHistory={route}/>);fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));
   await screen.findByText(t(status==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous'));
   expect(screen.getByText(t('agentsHistoryManual'))).toBeTruthy();expect(screen.getByText('Permission requested')).toBeTruthy();
-  expect(screen.getByRole('region',{name:'Host companion settings'})).toBeTruthy();expect(route).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));expect(screen.getByRole('region',{name:'Host companion settings'})).toBeTruthy();expect(route).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await waitFor(()=>expect(invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(2));
 });
 it.each(['old companion: unrecognized arguments: reported-history','agentsHistoryInvalid'])('keeps old companion/raw failures verbatim with a static manual hint: %s',async raw=>{
   await historyFixture(()=>Promise.reject(raw));render(<AgentPanel sessionId="ssh-one" onUseReportedHistory={vi.fn()}/>);
   fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));expect(await screen.findByRole('alert')).toHaveProperty('textContent',raw);
-  expect(screen.getByText(t('agentsHistoryManual'))).toBeTruthy();expect(screen.getByRole('region',{name:'Host companion settings'})).toBeTruthy();
+  expect(screen.getByText(t('agentsHistoryManual'))).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));expect(screen.getByRole('region',{name:'Host companion settings'})).toBeTruthy();
 });
 it.each(['/path/with spaces/世界.jsonl ',String.raw`C:\Users\owner\Claude.jsonl`,String.raw`\\host\share\Claude.jsonl`,String.raw`\\?\C:\owner\Claude.jsonl`])('admits exact absolute metadata spelling without UI filesystem resolution: %s',path=>{
   expect(parseReportedHistory({...reported,path},'a')).toEqual({...reported,path});
@@ -246,6 +246,7 @@ it('suspends the same board while preserving its query and settings draft, then 
   const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="visible-board"/>);
   await screen.findByText('Permission requested');
   const query=screen.getByRole('searchbox');fireEvent.change(query,{target:{value:'/work'}});
+  fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
   const usage=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});fireEvent.click(usage);
   const before=invoke.mock.calls.length;
   view.rerender(<AgentPanel sessionId="visible-board" visible={false}/>);
@@ -368,10 +369,10 @@ it('keeps the companion empty state stable during polling and retains an error u
 
 describe('live Herdr discovery',()=>{
 
-  it('shares the selected server reader across Spaces and live Agents without treating reports as navigation authority',()=>pollingClock(async invoke=>{
-    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+  it.each([1,2])('shares the selected reader and collapses healthy setup with %s servers',count=>pollingClock(async invoke=>{
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'},...(count===2?[{name:'review'}]:[])]:tree);
     const navigate=vi.fn(async()=>{}),attach=vi.fn(async()=>{}),close=vi.fn();
-    const props={sessionId:'navigation-host',hostLabel:'Owned host',visible:true,onNavigate:navigate,onAttach:attach,onClose:close};
+    const props={sessionId:'navigation-host',hostLabel:'Owned host',herdrSession:'default',visible:true,onNavigate:navigate,onAttach:attach,onClose:close};
     const view=render(<HerdrNavigation {...props} mode="spaces"/>);
     await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
@@ -380,6 +381,11 @@ describe('live Herdr discovery',()=>{
     const search=browser.getByRole('searchbox');fireEvent.change(search,{target:{value:'codex'}});
     expect(browser.getByText('builder')).toBeTruthy();
     view.rerender(<HerdrNavigation {...props} mode="agents"/>);
+    const chooser=browser.getByText(`${t('herdrAgentsServer')} · default`).closest('details')!;
+    expect(chooser.open).toBe(false);
+    fireEvent.click(chooser.querySelector('summary')!);
+    expect(chooser.open).toBe(true);
+    expect(browser.getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','default');
     expect(browser.getByRole('heading',{name:t('herdrAgentsTitle')})).toBeTruthy();
     expect(browser.getByRole('searchbox')).toBe(search);expect(search).toHaveProperty('value','codex');
     expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_tree')).toHaveLength(1);
@@ -524,6 +530,9 @@ describe('live Herdr discovery',()=>{
     const view=render(<AgentPanel sessionId="attached-host" herdrSession="attached"/>);
     await screen.findByText('builder-attached');
     const live=within(screen.getByRole('region',{name:t('herdrAgentsTitle')}));
+    const chooser=live.getByText(`${t('herdrAgentsServer')} · attached`).closest('details')!;
+    expect(chooser.open).toBe(false);
+    fireEvent.click(chooser.querySelector('summary')!);
     const select=live.getByRole('combobox',{name:t('herdrAgentsServer')});
     expect(select).toHaveProperty('value','attached');
     fireEvent.change(select,{target:{value:'first'}});
@@ -739,4 +748,61 @@ describe('Herdr reported-session details',()=>{
     expect(screen.getAllByText('Referenced by 2 panes here.').length).toBe(1);
     expect(screen.getByText('Reports unavailable')).toBeTruthy();
   });
+
+});
+
+it('keeps healthy setup collapsed while preserving mounted settings and hook drafts across explicit toggles',async()=>{
+  const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="healthy-setup" showHerdr={false}/>);
+  await screen.findByText('Permission requested');
+  const setup=screen.getByRole('button',{name:t('agentsSetupAction')});
+  expect(setup.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
+  fireEvent.click(setup);
+  const settings=await screen.findByRole('region',{name:'Host companion settings'});
+  fireEvent.click(screen.getByText(t('hooksTitle')));
+  const hookProfile=screen.getByPlaceholderText('/home/user/.codex');fireEvent.change(hookProfile,{target:{value:'/owned/private/.codex'}});
+  const usage=within(settings).getByRole('checkbox',{name:'Recorded usage inspection'});fireEvent.click(usage);
+  fireEvent.click(setup);expect(setup.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.getByText('Permission requested')).toBeTruthy();
+  fireEvent.click(setup);expect(screen.getByRole('region',{name:'Host companion settings'})).toBe(settings);
+  expect(hookProfile).toHaveProperty('value','/owned/private/.codex');expect(usage).toHaveProperty('checked',false);
+  expect(invoke.mock.calls.filter(([name])=>name==='get_companion_settings')).toHaveLength(1);
+  view.rerender(<AgentPanel sessionId="other-setup" showHerdr={false}/>);
+  await waitFor(()=>expect(setup.getAttribute('aria-expanded')).toBe('false'));
+  expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
+});
+it.each(['standalone','navigation'])('collapses the healthy single-server %s chooser and retains its selected reader when expanded',async surface=>{
+  const {invoke}=await import('@tauri-apps/api/core');
+  vi.mocked(invoke).mockImplementation(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'owned'}]:tree));
+  render(surface==='standalone'?<HerdrAgentsPanel sessionId="compact-server" visible/>:<HerdrNavigation sessionId="compact-server" hostLabel="Owned host" visible mode="agents" onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/>);
+  const live=screen.getByRole('region',{name:t(surface==='standalone'?'herdrAgentsTitle':'herdrNavigationTitle')});
+  await within(live).findByText('builder',{exact:true});
+  const summary=within(live).getByText(`${t('herdrAgentsServer')} · owned`);
+  const details=summary.closest('details')!;
+  expect(details.open).toBe(false);
+  fireEvent.click(summary);
+  expect(within(live).getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','owned');
+  expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree')).toHaveLength(1);
+});
+
+it('offers empty Activity a direct hook-setup action without automatic inspection or installation',async()=>{
+  const invoke=await historyFixture(reported,[]);
+  render(<AgentPanel sessionId="empty-activity" showHerdr={false}/>);
+  await screen.findByText(t('agentsEmpty'));
+  expect(screen.getByRole('button',{name:t('agentsSetupAction')}).getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(screen.getByRole('button',{name:t('hooksTitle')}));
+  const setup=screen.getByRole('region',{name:t('agentsSetupAction')});
+  const provider=within(setup).getByLabelText(t('hooksProvider'));
+  expect(provider.closest('details')).toHaveProperty('open',true);expect(document.activeElement).toBe(provider);
+  expect(within(setup).getByLabelText(t('hooksProfile'))).toHaveProperty('value','');
+  expect(within(setup).queryByRole('button',{name:t('hooksInstall')})).toBeNull();
+  expect(invoke.mock.calls.filter(([command])=>command==='companion_hooks')).toHaveLength(0);
+});
+
+it('never mistakes filtered reports for an empty Activity setup failure',async()=>{
+  await historyFixture(reported);render(<AgentPanel sessionId="filter-empty" showHerdr={false}/>);
+  await screen.findByText('Permission requested');
+  fireEvent.change(screen.getByRole('searchbox',{name:t('agentsSearch')}),{target:{value:'no matching report'}});
+  expect(screen.getByText(t('agentsNoMatches'))).toBeTruthy();
+  expect(screen.queryByRole('button',{name:t('hooksTitle')})).toBeNull();
 });

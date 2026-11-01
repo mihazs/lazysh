@@ -75,6 +75,7 @@ test('saved named multiplexer entry is explicit and reachable on phone and deskt
   await editor.getByRole('button',{name:'Save host',exact:true}).click();
   await page.getByRole('button',{name:'Connect to Direct workspace',exact:true}).click();
   const connection=page.getByRole('dialog',{name:'Connect to Direct workspace',exact:true});
+  await connection.locator('.connection-options > summary').click();
   const transport=connection.getByRole('combobox',{name:'Transport',exact:true});
   await expect(transport).toHaveValue('mosh');
   await expect(transport).toBeEnabled();
@@ -93,7 +94,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
   await installNativeBridge(page);
   await page.clock.install();
   await page.addInitScript((geometry)=>{
-    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
+    const calls:string[]=[];const state={updated:false,installed:false,missing:false,holdTree:false,holdReport:false,connects:0,hooksConfigured:false,hookActions:[] as string[],navigations:[] as unknown[]};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
       calls.push(command);
       if(command==='list_hosts')return [{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];
@@ -118,6 +119,14 @@ async function installWorkspaceNavigation(page:Page,geometry=false){
         const report={schemaVersion:1,sessions:[{sessionId:'r'.repeat(256),agent:'Codex',project:'/nav/project',state:'working',updatedAt:'2026-10-29T12:00:00Z',summary:state.updated?'Refreshed work':'Reported work',paneId:'%7',eventCount:3}]};
         if(state.holdReport)return new Promise(resolve=>{Object.assign(window,{finishOldReport:()=>{state.holdReport=false;resolve(report);}});});
         return report;
+      }
+      if(command==='companion_hooks'){
+        const request=args.request as {agent:string;action:string;profileRoot:string;expectedPlan?:string};
+        if(args.sessionId!=='owned-navigation-ssh' || request.agent!=='codex' || request.profileRoot!=='/owned/profile')throw new Error('Wrong owned hook inspection target');
+        state.hookActions.push(request.action);
+        if(request.action==='status')return {schemaVersion:1,supported:true,state:state.hooksConfigured?'configured':null,installPlan:'a'.repeat(64),removePlan:'b'.repeat(64),trust:'notChecked',reporting:'notChecked'};
+        if(request.action==='install' && request.expectedPlan==='a'.repeat(64)){state.hooksConfigured=true;return {schemaVersion:1,outcome:{status:'configured'},trust:'notChecked',reporting:'notChecked'};}
+        throw new Error('Uninspected hook mutation');
       }
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:4,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
@@ -197,13 +206,30 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command==='install_companion'))).toEqual([]);
   await board.getByRole('button',{name:'Install companion',exact:true}).click();
   await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
+  const setup=board.getByRole('button',{name:'Setup',exact:true});
+  await expect(setup).toHaveAttribute('aria-expanded','true');
+  await setup.click();
+  await expect(setup).toHaveAttribute('aria-expanded','false');
+  await expect(board.getByRole('region',{name:'Host companion settings',exact:true})).toBeHidden();
+  await setup.click();
   await expect(board.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
+  await setup.click();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
+  const serverSetup=live.locator('.herdr-server-setup');
+  await expect(serverSetup).not.toHaveAttribute('open');
+  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
+  await serverSetup.locator('summary').click();
+  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
+  await serverSetup.locator('summary').click();
+  if(phone)await page.setViewportSize({width:393,height:844});
+  await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=0;});
+  await expect(live.getByRole('button',{name:/^codex-builder/})).toBeInViewport({ratio:0.75});
+  await page.screenshot({path:testInfo.outputPath('healthy-agents-first-row.png')});
   await expect(live.getByRole('heading',{name:'Idle · 1',exact:true})).toBeVisible();
-  const details=live.locator('details');
+  const details=live.locator('details').filter({has:page.getByText('Reported session',{exact:true})});
   await expect(details).not.toHaveAttribute('open');
   await details.locator('summary').click();
   await expect(details.getByText('/nav/project',{exact:true})).toBeVisible();
@@ -235,6 +261,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await board.getByRole('button',{name:'Refresh',exact:true}).click();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
+  await setup.click();
   const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
   const original=await settings.elementHandle();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{updated:boolean}}).workspaceNavigationState.updated=true;});
@@ -437,8 +464,8 @@ test('mobile terminal keeps one compact header and reaches every session control
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     await more.getByRole('button',{name:'Attach',exact:true}).click();
     await expect(page.getByRole('heading',{name:'Attach to this host',exact:true})).toBeVisible();
-    await expect(strip).toBeVisible();await expect(tabs).toBeVisible();
-    await strip.getByRole('button',{name:'Terminal',exact:true}).click();
+    await expect(strip).toBeHidden();await expect(tabs).toBeHidden();
+    await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
     await expect(strip).toBeHidden();expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
     await page.screenshot({path:testInfo.outputPath('compact-terminal.png')});
   }else{
@@ -508,4 +535,70 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
     await page.screenshot({path:testInfo.outputPath(`herdr-drawer-${height}.png`)});
   }
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin','attach_multiplexer','herdr_action'].includes(command)))).toEqual([]);
+});
+
+
+test('empty Activity opens inspected hook repair without inventing reports',async({page},testInfo)=>{
+  await installWorkspaceNavigation(page,true);
+  await page.goto('/');
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await page.getByRole('button',{name:'Agents',exact:true}).click();
+  const board=page.getByRole('region',{name:'Agent activity',exact:true});
+  await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
+  await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
+  const provider=board.getByRole('combobox',{name:'Hook provider',exact:true});
+  await expect(provider).toBeFocused();await expect(provider).toBeInViewport();
+  const actions=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookActions:string[]}}).workspaceNavigationState.hookActions);
+  expect(await actions()).toEqual([]);
+  await expect(board.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
+  await board.getByLabel('Host profile directory',{exact:true}).fill('/owned/profile');
+  await board.getByRole('button',{name:'Inspect setup',exact:true}).click();
+  await expect(board.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
+  expect(await actions()).toEqual(['status']);
+  await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
+  await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  expect(await actions()).toEqual(['status','install','status']);
+  await expect(board.locator('.agent-card')).toHaveCount(0);
+  expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  const source=await page.request.get('/src/AgentPanel.tsx');
+  expect(await source.text()).toContain('setHookSetupRequest');
+  await page.screenshot({path:testInfo.outputPath('empty-activity-hook-setup.png')});
+});
+
+test('usage returns to its exact terminal and Agents context without expanding mobile chrome',async({page},testInfo)=>{
+  await installWorkspaceNavigation(page);
+  await page.goto('/');
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  const canvas=page.locator('.terminal-canvas').first();const original=await canvas.elementHandle();
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.getByRole('textbox',{name:'Compose text',exact:true}).fill('owned retained terminal draft');
+  await page.getByRole('button',{name:'Open AI account usage',exact:true}).click();
+  const context=page.getByRole('navigation',{name:'Tool navigation',exact:true});
+  await expect(context).toBeVisible();
+  await expect(page.getByRole('region',{name:'AI account usage',exact:true})).toBeVisible();
+  if(testInfo.project.name==='phone'){
+    await expect(page.locator('.session-toolbar')).toBeHidden();
+    await expect(page.locator('.session-tabs')).toBeHidden();
+    expect(await page.locator('.workspace-header').evaluate(node=>node.getBoundingClientRect().height)).toBeLessThanOrEqual(45);
+  }
+  await page.screenshot({path:testInfo.outputPath('contextual-usage.png')});
+  await context.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toHaveValue('owned retained terminal draft');
+  expect(await canvas.evaluate((node,prior)=>node===prior,original)).toBe(true);
+  await page.getByRole('button',{name:'Close composer',exact:true}).click();
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
+  await sidebar.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await sidebar.getByRole('button',{name:'Open usage from navigation',exact:true}).click();
+  await context.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(sidebar.getByRole('button',{name:'Agents navigation',exact:true})).toHaveAttribute('aria-current','page');
+  await expect.poll(async()=>{const bounds=await sidebar.boundingBox();return !!bounds&&bounds.x>=0&&bounds.x+bounds.width<=page.viewportSize()!.width;}).toBe(true);
+  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(calls.filter(command=>command==='connect')).toHaveLength(1);
+  expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('contextual-back-agents.png')});
 });
