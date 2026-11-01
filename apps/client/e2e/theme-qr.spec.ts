@@ -1,4 +1,5 @@
 import {expect,test} from '@playwright/test';
+import {openPreferenceCategory} from './fixtures/workspaceControl';
 import {readFileSync} from 'node:fs';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {openLocalizedApp} from './fixtures/localizedApp';
@@ -32,7 +33,7 @@ const language=async(page:import('@playwright/test').Page,value:string)=>page.ev
 const labels=(page:import('@playwright/test').Page)=>page.evaluate(async()=>{const{t}=await import('/src/i18n/core.ts');return {preferences:t('appPreferences'),summary:t('themeImportAndShareTheme'),file:t('themeQrFile'),scan:t('themeQrScan'),cancel:t('themeQrCancel'),source:t('themeThemeJSONOrShareCode'),apply:t('themeApplyToAppAndTerminal'),title:t('themeQrTitle'),finishing:t('themeQrFinishing')};});
 for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} owned PNG bytes reach native decoding once and only explicit Apply changes the theme`,async({page})=>{
   await fixture(page);const external=await openLocalizedApp(page,initial==='en-XA'?'en':initial);await language(page,initial);let names=await labels(page);
-  await page.getByRole('button',{name:names.preferences,exact:true}).click();await page.getByText(names.summary,{exact:true}).click();
+  await page.getByRole('button',{name:names.preferences,exact:true}).click();await openPreferenceCategory(page,'Appearance');await page.getByText(names.summary,{exact:true}).click();
   const draft=page.getByLabel(names.source,{exact:true});await draft.fill('unfinished manual theme');
   expect(await page.evaluate(()=>({permissions:window.themeQrFixture.permissions,requests:window.themeQrFixture.requests}))).toEqual({permissions:[],requests:[]});
   const before=await page.evaluate(()=>localStorage.getItem('lazysh.preferences.v1'));
@@ -52,7 +53,7 @@ for(const initial of ['en','pt-BR','es','en-XA'])test(`${initial} owned PNG byte
 });
 test('explicit synthetic camera permission/capture stops on collapse and cancellation without reviving old work',async({page})=>{
   await fixture(page);await openLocalizedApp(page,'en');let names=await labels(page);
-  await page.getByRole('button',{name:names.preferences,exact:true}).click();await page.getByText(names.summary,{exact:true}).click();
+  await page.getByRole('button',{name:names.preferences,exact:true}).click();await openPreferenceCategory(page,'Appearance');await page.getByText(names.summary,{exact:true}).click();
   await page.getByRole('button',{name:names.scan,exact:true}).click();await expect.poll(()=>page.evaluate(()=>window.themeQrFixture.permissions.length)).toBe(1);
   await page.getByText(names.summary,{exact:true}).click();await page.getByText(names.summary,{exact:true}).click();await page.evaluate(()=>window.themeQrFixture.permission());
   await expect.poll(()=>page.evaluate(()=>window.themeQrFixture.stops)).toBe(1);expect(await page.evaluate(()=>window.themeQrFixture.requests)).toEqual([]);
