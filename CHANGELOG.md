@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Shorten the default Workspace tools sheet to six frequent session actions, with explicit More tools, Connections and Application options disclosures. Keep End session distinct, all actions and capability checks available, and touch targets at least 44 pixels; no connection or permission defaults change.
+- Collapse the Herdr server chooser for every healthy selected server, including hosts with multiple servers. Missing selections and unhealthy readers still expose setup automatically; alternate servers remain available on demand.
 
 - Add contextual Back and Return to terminal for workspace tools and AI usage, retaining the opening live session and terminal draft. Keep mobile tools in compact navigation and let Android Back close the current local surface first; connection and transport defaults are unchanged.
 
