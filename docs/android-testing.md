@@ -1,5 +1,51 @@
 # Android instrumentation
 
+## Controlled clock state for owned ntfy acceptance
+
+The dedicated ntfy owner uses the source-pinned API36/default AOSP provisioner,
+the attested QEMU process/AVD, and stable local ADB-server, transport, guest boot
+and adbd identities. Guest SDK36 and absence of all three fixture packages are
+required. This is never an operation on a physical device or an operator-selected
+host. System-image field provenance and actual shell command support still need
+qualification on the workflow-owned image; source support alone is not execution.
+
+After downloads, APK preparation and trust inspection, before fixture packages or
+enrollment state exist, the owner saves the exact automatic-time boolean, disables
+and reads it back, then sets OS wall time **once** to freshly sampled host time plus
+1000ms using ordinary-shell `cmd alarm set-time`. It does not request root, grant
+permissions, change authenticated host timestamps, or retry a failed setup.
+An independent Toybox `date +%s%3N` read with host wall/monotonic brackets must put
+the entire guest-minus-host interval strictly above zero and at most2000ms.
+Both millisecond quantization intervals are included; the readback uncertainty and
+monotonic span must each be at most250ms. These are fixed fixture-admission bounds,
+not production tolerances or increased acceptance deadlines. Exit0 from the setter
+is insufficient: Android16's service deliberately reports success independently
+of the native clock setter result.
+
+The original notification callback, future/stale-event checks, replay protection,
+durable receipts and native deadlines remain unchanged. Initial readback does not
+prove later drift or exact UTC synchronization; a real native pass is still
+required. This controlled positive-offset fixture does not qualify arbitrary user
+clocks, automatic-time operation, near-expiry delivery, performance or physical
+Samsung behavior. Exported receipts contain only closed setup/readback/restoration
+states and declared bounds, never raw timestamps or command output.
+
+Cleanup first stops owned children/reverses and removes fixture packages, then
+independently verifies package/state absence before restoring and reading back the
+original automatic-time boolean. Lost ownership or unestablished teardown blocks
+restoration rather than changing time beneath retained high-water state. Primary
+acceptance failures and closed cleanup-failure stages remain in the finite failure
+receipt; setup/cleanup failure cannot produce a successful acceptance receipt.
+
+The existing `tests/android-ntfy.test.ts` Bun owner covers interval boundaries,
+quantization, host discontinuities, unsupported/unchanged readback, ownership,
+single-setting policy and teardown/restoration. The actual task remains
+`bun run test:android-ntfy`; unit success does not replace its three native cases.
+Primary Android16 source: [alarm service](https://android.googlesource.com/platform/frameworks/base/+/99b01a65cc4c104933788b3143285ab6bae65827/apex/jobscheduler/service/java/com/android/server/alarm/AlarmManagerService.java),
+[shell permissions](https://android.googlesource.com/platform/frameworks/base/+/99b01a65cc4c104933788b3143285ab6bae65827/packages/Shell/AndroidManifest.xml),
+[automatic-time commands](https://android.googlesource.com/platform/frameworks/base/+/99b01a65cc4c104933788b3143285ab6bae65827/services/core/java/com/android/server/timedetector/TimeDetectorShellCommand.java)
+and [Toybox date precision](https://android.googlesource.com/platform/external/toybox/+/e21e76d30fa15996188b79affbc25cfd0c13deff/toys/posix/date.c).
+
 ## Build SDK
 
 Install `platforms;android-36` and `platforms;android-37.0`. The app and shared push library compile
