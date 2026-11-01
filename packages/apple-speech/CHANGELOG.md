@@ -1,5 +1,11 @@
 # @lazysh/apple-speech
 
+## 1.7.5
+
+### Patch Changes
+
+- @lazysh/common@1.7.5
+
 ## 1.7.4
 
 ### Patch Changes

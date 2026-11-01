@@ -2,13 +2,7 @@
 
 lazysh connects directly using SSH, with password or private-key authentication. The first connection stops before authentication and displays the server's SHA256 host-key fingerprint. Verify it independently before trusting it. A changed key blocks the connection.
 
-To route through a bastion, first save that bastion as a direct SSH host. Select it in the destination host's **Bastion** setting. A route supports one jump host; recursive routes and cycles are rejected. Remove dependent routes before deleting a bastion.
-
-The bastion and destination have separate credentials and host-key pins. The connection dialog can use credentials previously saved for the bastion or a separately entered bastion password. To use a bastion private key, connect to that bastion directly and explicitly save its credentials in the device credential store first. Destination credentials are never reused for the bastion. The trust dialog identifies which server needs verification.
-
-Routing uses an SSH `direct-tcpip` channel to the destination address and port, then starts a second host-key-verified SSH connection inside that channel. The bastion must permit TCP forwarding to the destination. The destination hostname is resolved by the bastion. Files, agent snapshots, and previews use the resulting destination connection.
-
-This implementation supports SSH routing. Bastion routes and selected-identity forwarding are SSH-terminal features. A bastion's forwarding permission error is reported by the SSH server; lazysh does not change server configuration.
+For a jump host, follow [connect through a bastion](how-to/connect-through-bastion.md). For a guided direct connection, complete [your first SSH session](tutorials/first-ssh-session.md).
 
 ## Enter a saved default multiplexer
 
@@ -66,6 +60,8 @@ The 12-byte UTF-8 generation requirement and explicit connection/OS-store action
 are unchanged. The panel keeps keys in memory; localization does not add storage.
 
 ## Cold saved-host desktop launch
+
+For selector syntax and bounds, see [desktop launch arguments](reference/desktop-launch.md).
 
 With lazysh fully closed, run `lazysh --host SAVED_ID` (or `-host`, including
 `--host=SAVED_ID`). Obtain the exact opaque ID using **Edit host → Copy host ID**

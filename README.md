@@ -118,16 +118,15 @@ Development builds and CI artifacts are not verified production downloads. Read 
 
 ## Documentation
 
-| Topic | Guide |
+Start with the [documentation map](docs/README.md), organized by the outcome you need.
+
+| Need | Start here |
 | --- | --- |
-| SSH, bastions, and host-key verification | [Connections](docs/connections.md) |
-| Saved secrets and native credential storage | [Credentials](docs/credentials.md) |
-| Remote sessions and multiplexers | [Durable workspaces](docs/multiplexers.md) |
-| Coding-agent events and transcript access | [Companion](docs/companion.md) |
-| Remote previews, files, and voice | [Previews](docs/previews.md) · [Attachments](docs/attachments.md) · [Voice](docs/voice.md) |
-| Architecture, security boundaries, and feature limits | [Architecture](docs/architecture.md) · [Implementation evidence](docs/reference-evidence.md) |
-| Planned work and platform verification | [Roadmap](docs/roadmap.md) |
-| Builds, releases, and updates | [Install and update](docs/install-and-update.md) · [Release artifacts](docs/release-artifacts.md) |
+| Learn with a guided first connection | [First SSH session](docs/tutorials/first-ssh-session.md) |
+| Complete a setup or usage task | [How-to guides](docs/README.md#how-to-guides) |
+| Look up commands, settings or protocols | [Reference](docs/README.md#reference) |
+| Understand security and session lifetime | [Explanation](docs/README.md#explanation) |
+| Check delivery and native acceptance | [Evidence and delivery](docs/README.md#evidence-and-delivery) |
 
 ## Join the project
 
@@ -156,6 +155,8 @@ Only if your remote setup keeps it alive—for example, by running it in a host-
 **Is lazysh free and self-hosted?**
 
 The application source is licensed under GPL-3.0-or-later and does not require a hosted lazysh account for SSH. Your SSH server and optional companion run under your control; optional external services are separately configured.
+
+<a id="checks"></a>
 
 <details>
 <summary><strong>For contributors: stack, monorepo, and checks</strong></summary>
