@@ -72,6 +72,60 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
+// Instrumentation-only: observe the original Window dispatch without consuming or rewriting input.
+private class OwnedFingerWindowObserver(
+    private val original: android.view.Window.Callback,
+    private val epoch: Long,
+    private val now: () -> Long = { android.os.SystemClock.uptimeMillis() },
+) : android.view.Window.Callback by original {
+    private val rows = JSONArray()
+    @Volatile private var unavailable = false
+    private var overflow = false
+    companion object {
+        fun coordinate(value: Float): Any = if (value.isFinite()) value.coerceIn(-65_535f, 65_535f).toDouble() else JSONObject.NULL
+    }
+    private fun elapsed(value: Long) = (value - epoch).coerceIn(0, 65_535)
+    private fun record(row: JSONObject?, outcome: String) {
+        try {
+            if (row != null) synchronized(rows) {
+                if (rows.length() < 6) rows.put(row.put("outcome", outcome).put("returnedAtMs", elapsed(now())))
+                else overflow = true
+            }
+        } catch (_: Throwable) { unavailable = true }
+    }
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        val row = try {
+            if (event.downTime != epoch) null else JSONObject()
+                .put("action", when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> "down"
+                    android.view.MotionEvent.ACTION_MOVE -> "move"
+                    android.view.MotionEvent.ACTION_UP -> "up"
+                    android.view.MotionEvent.ACTION_CANCEL -> "cancel"
+                    else -> "other"
+                })
+                .put("eventAtMs", elapsed(event.eventTime)).put("dispatchAtMs", elapsed(now()))
+                .put("point", JSONArray(listOf(event.x, event.y, event.rawX, event.rawY).map(::coordinate)))
+                .put("historyCount", event.historySize.coerceIn(0, 8))
+                .put("pointerMatches", event.pointerCount == 1 && event.getPointerId(0) == 0)
+                .put("finger", event.pointerCount > 0 && event.getToolType(0) == android.view.MotionEvent.TOOL_TYPE_FINGER)
+                .put("touchscreen", event.isFromSource(android.view.InputDevice.SOURCE_TOUCHSCREEN))
+        } catch (_: Throwable) { unavailable = true; null }
+        try {
+            val handled = original.dispatchTouchEvent(event)
+            record(row, if (handled) "handled" else "unhandled")
+            return handled
+        } catch (failure: Throwable) { record(row, "threw"); throw failure }
+    }
+    fun snapshot(): String = try {
+        synchronized(rows) { JSONObject().put("state", if (unavailable) "unavailable" else "observed")
+            .put("overflow", overflow).put("events", JSONArray(rows.toString())).toString() }
+    } catch (_: Throwable) { "{\"state\":\"unavailable\"}" }
+    fun restore(window: android.view.Window) {
+        check(window.callback === this) { "Owned finger Window callback changed" }
+        window.callback = original
+    }
+}
+
 private class NtfyFirstLaunch(started: Long) {
     val deadline = started + TimeUnit.SECONDS.toNanos(6)
     var attempted = false
@@ -1435,6 +1489,72 @@ class NativeWorkspaceTest {
         }
     }
 
+    @Test fun ownedFingerWindowObservationPreservesDispatchAndExactRestoration() {
+        NativeActivityFixture.scenario.onActivity { activity ->
+            val window = activity.window
+            val original = checkNotNull(window.callback)
+            val epoch = android.os.SystemClock.uptimeMillis()
+            val event = android.view.MotionEvent.obtain(epoch, epoch + 1, android.view.MotionEvent.ACTION_MOVE, 10f, 20f, 0)
+            var calls = 0
+            var expected = event
+            var handled = false
+            var failure: Throwable? = null
+            val sentinel = AssertionError("private delegate failure")
+            val delegate = object : android.view.Window.Callback by original {
+                override fun dispatchTouchEvent(received: android.view.MotionEvent): Boolean {
+                    calls++; assertSame(expected, received)
+                    failure?.let { throw it }
+                    return handled
+                }
+            }
+            val observer = OwnedFingerWindowObserver(delegate, epoch) { epoch + 2 }
+            try {
+                assertFalse(observer.dispatchTouchEvent(event)); assertEquals(1, calls)
+                handled = true
+                assertTrue(observer.dispatchTouchEvent(event)); assertEquals(2, calls)
+                failure = sentinel
+                assertSame(sentinel, runCatching { observer.dispatchTouchEvent(event) }.exceptionOrNull())
+                assertEquals(3, calls)
+                failure = null
+                repeat(8) { observer.dispatchTouchEvent(event) }
+                val trace = JSONObject(observer.snapshot())
+                assertEquals(6, trace.getJSONArray("events").length()); assertTrue(trace.getBoolean("overflow"))
+                assertEquals("unhandled", trace.getJSONArray("events").getJSONObject(0).getString("outcome"))
+                assertEquals("handled", trace.getJSONArray("events").getJSONObject(1).getString("outcome"))
+                assertEquals("threw", trace.getJSONArray("events").getJSONObject(2).getString("outcome"))
+                assertFalse(trace.toString().contains("private"))
+                val unavailable = OwnedFingerWindowObserver(delegate, epoch) { throw IllegalStateException("private observation failure") }
+                handled = false
+                assertFalse(unavailable.dispatchTouchEvent(event))
+                failure = sentinel
+                assertSame(sentinel, runCatching { unavailable.dispatchTouchEvent(event) }.exceptionOrNull())
+                assertEquals("unavailable", JSONObject(unavailable.snapshot()).getString("state"))
+                assertSame(JSONObject.NULL, OwnedFingerWindowObserver.coordinate(Float.NaN))
+                assertSame(JSONObject.NULL, OwnedFingerWindowObserver.coordinate(Float.POSITIVE_INFINITY))
+                assertEquals(65_535.0, OwnedFingerWindowObserver.coordinate(Float.MAX_VALUE))
+                failure = null
+                val foreign = android.view.MotionEvent.obtain(epoch + 10, epoch + 11, android.view.MotionEvent.ACTION_MOVE, 10f, 20f, 0)
+                try {
+                    expected = foreign
+                    val filtered = OwnedFingerWindowObserver(delegate, epoch) { epoch + 2 }
+                    val before = calls
+                    assertFalse(filtered.dispatchTouchEvent(foreign)); assertEquals(before + 1, calls)
+                    assertEquals(0, JSONObject(filtered.snapshot()).getJSONArray("events").length())
+                } finally { foreign.recycle(); expected = event }
+                window.callback = delegate
+                window.callback = observer
+                observer.restore(window); assertSame(delegate, window.callback)
+                window.callback = observer
+                window.callback = original
+                assertTrue(runCatching { observer.restore(window) }.isFailure)
+                assertSame(original, window.callback)
+            } finally {
+                if (window.callback === observer || window.callback === delegate) window.callback = original
+                event.recycle()
+            }
+        }
+    }
+
     @Test fun nativeSwipeAdmissionRequiresTheWholeWebViewAboveTheDockedIme() {
         assertTrue(swipeViewClearOfIme(false, 0, 10, 190, 200))
         assertTrue(swipeViewClearOfIme(true, 100, 10, 90, 200))
@@ -1590,6 +1710,7 @@ class NativeWorkspaceTest {
         lateinit var fingerView: WebView
         lateinit var fingerDecor: View
         lateinit var fingerRoot: View
+        var fingerWindow: OwnedFingerWindowObserver? = null
         scenario.onActivity { activity ->
             fingerActivity = activity; fingerDecor = activity.window.decorView
             fingerView = checkNotNull(webView(fingerDecor)); fingerRoot = fingerView.rootView
@@ -1602,6 +1723,7 @@ class NativeWorkspaceTest {
         fun ownsFingerView() = !fingerActivity.isFinishing && !fingerActivity.isDestroyed &&
             fingerActivity.window.decorView === fingerDecor && fingerView.rootView === fingerRoot &&
             fingerView.isAttachedToWindow && fingerView.isShown && fingerView.hasWindowFocus() &&
+            (fingerWindow == null || fingerActivity.window.callback === fingerWindow) &&
             (startFrame == null || fingerFrame(fingerView) == startFrame)
         fun fingerPoint(view: View, fraction: Double): FloatArray {
             val frame = fingerFrame(view)
@@ -1702,7 +1824,7 @@ class NativeWorkspaceTest {
         fun progress(before: Int, moves: Int): Int {
             while (true) {
                 val remaining = TimeUnit.NANOSECONDS.toMillis(fingerDeadline - System.nanoTime())
-                assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches sample=$lastFingerSample", remaining > 0)
+                assertTrue("Owned continuous drag did not advance before UP: phase=$moves before=$before samplePhase=$samplePhase sampleSequence=$sampleSequence sampleAtMs=$sampleAtMs dispatches=$dispatches window=${fingerWindow?.snapshot()} sample=$lastFingerSample", remaining > 0)
                 val sample = JSONObject(fingerSample(remaining.coerceAtMost(1_000)))
                 lastFingerSample = sample
                 samplePhase = moves; sampleSequence++; sampleAtMs = elapsed()
@@ -1713,6 +1835,13 @@ class NativeWorkspaceTest {
             }
         }
         try {
+            instrumentation.runOnMainSync {
+                check(ownsFingerView()) { "Owned finger Window installation lost its view" }
+                val window = fingerActivity.window
+                val observer = OwnedFingerWindowObserver(checkNotNull(window.callback), downTime)
+                window.callback = observer
+                fingerWindow = observer
+            }
             fingerDown = true
             injectFinger(android.view.MotionEvent.ACTION_DOWN, 0.25)
             injectFinger(android.view.MotionEvent.ACTION_MOVE, 0.5)
@@ -1728,6 +1857,8 @@ class NativeWorkspaceTest {
             try {
                 if (fingerDown && lastPoint.size == 2) sendFinger(android.view.MotionEvent.ACTION_CANCEL, lastPoint)
             } catch (failure: Throwable) {cleanup = failure}
+            try { instrumentation.runOnMainSync { fingerWindow?.restore(fingerActivity.window) } }
+            catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
             try {evaluate(scenario, "window[$fingerKey]?.dispose();delete window[$fingerKey];true")}
             catch (failure: Throwable) {if(cleanup==null)cleanup=failure else cleanup!!.addSuppressed(failure)}
             if(cleanup!=null) {if(fingerFailure!=null)fingerFailure!!.addSuppressed(cleanup!!) else throw cleanup!!}
