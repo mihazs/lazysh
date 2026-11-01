@@ -2031,6 +2031,9 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
   expect(mocks.invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(reads+1);
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.connect).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole('button',{name:'Workspaces'}));
+  expect(screen.getByRole('group',{name:'Spaces'})).toBe(live);
+  expect(screen.queryByRole('group',{name:'Live Herdr agents'})).toBeNull();
 });
 it('keeps late picker cleanup scoped while a new source is busy, then admits queued CLI intent once the wide picker is idle',async()=>{
   enableHostLaunch({...host,defaultMultiplexer:{kind:'tmux',name:'work'}});mocks.hostLaunchReceipt=null;
