@@ -475,3 +475,39 @@ for(const action of ['dom','playwright'] as const)test(`live Herdr navigation st
   }
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>['herdr_chat','write_stdin','attach_multiplexer','herdr_action'].includes(command)))).toEqual([]);
 });
+
+test('usage returns to its exact terminal and Agents context without expanding mobile chrome',async({page},testInfo)=>{
+  await installWorkspaceNavigation(page);
+  await page.goto('/');
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await connectPasswordHost(page);
+  const canvas=page.locator('.terminal-canvas').first();const original=await canvas.elementHandle();
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.getByRole('textbox',{name:'Compose text',exact:true}).fill('owned retained terminal draft');
+  await page.getByRole('button',{name:'Open AI account usage',exact:true}).click();
+  const context=page.getByRole('navigation',{name:'Tool navigation',exact:true});
+  await expect(context).toBeVisible();
+  await expect(page.getByRole('region',{name:'AI account usage',exact:true})).toBeVisible();
+  if(testInfo.project.name==='phone'){
+    await expect(page.locator('.session-toolbar')).toBeHidden();
+    await expect(page.locator('.session-tabs')).toBeHidden();
+    expect(await page.locator('.workspace-header').evaluate(node=>node.getBoundingClientRect().height)).toBeLessThanOrEqual(45);
+  }
+  await page.screenshot({path:testInfo.outputPath('contextual-usage.png')});
+  await context.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toHaveValue('owned retained terminal draft');
+  expect(await canvas.evaluate((node,prior)=>node===prior,original)).toBe(true);
+  await page.getByRole('button',{name:'Close composer',exact:true}).click();
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  const sidebar=page.getByRole('complementary',{name:'Hosts and connections',exact:true});
+  await sidebar.getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await sidebar.getByRole('button',{name:'Open usage from navigation',exact:true}).click();
+  await context.getByRole('button',{name:'Back',exact:true}).click();
+  await expect(sidebar.getByRole('button',{name:'Agents navigation',exact:true})).toHaveAttribute('aria-current','page');
+  await expect.poll(async()=>{const bounds=await sidebar.boundingBox();return !!bounds&&bounds.x>=0&&bounds.x+bounds.width<=page.viewportSize()!.width;}).toBe(true);
+  const calls=await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  expect(calls.filter(command=>command==='connect')).toHaveLength(1);
+  expect(calls.filter(command=>command==='disconnect'||command==='write_stdin')).toEqual([]);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('contextual-back-agents.png')});
+});

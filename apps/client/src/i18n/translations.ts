@@ -114,6 +114,10 @@ const translations = {
 
   clipboardChecking: ["Verificando suporte à área de transferência…", "Comprobando compatibilidad del portapapeles…"],
   clipboardRetry: ["Tentar verificar a área de transferência novamente", "Reintentar comprobación del portapapeles"],
+  navigationUsageShortcut: ["Abrir uso pela navegação", "Abrir uso desde navegación"],
+  navigationContext: ["Navegação da ferramenta", "Navegación de herramientas"],
+  navigationBack: ["Voltar", "Atrás"],
+  navigationReturnTerminal: ["Voltar ao terminal", "Volver al terminal"],
   navigationAgents: ["Navegação de agentes", "Navegación de agentes"],
   navigationTitle: ["Navegação do espaço de trabalho", "Navegación del espacio de trabajo"],
   navigationConnections: ["Conexões", "Conexiones"],
