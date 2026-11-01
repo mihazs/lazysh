@@ -207,7 +207,7 @@ impl Inspection {
         match self.target.agent {
             Agent::Claude | Agent::Gemini => "settings.json",
             Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
-            Agent::Opencode => "lazysh.js",
+            Agent::Opencode | Agent::Cline => "lazysh.js",
         }
     }
     pub(super) fn manifest_name(&self) -> String {
@@ -223,9 +223,9 @@ impl Inspection {
     }
     pub(super) fn desired(&self) -> Result<Owned> {
         let entries = render::entries(self.target.agent, &self.binary.path).map_err(rejected)?;
-        let plugin_sha256 = if self.target.agent == Agent::Opencode {
+        let plugin_sha256 = if self.target.agent.is_plugin() {
             Some(record::hash(
-                render::plugin(&self.binary.path)
+                render::plugin(self.target.agent, &self.binary.path)
                     .map_err(rejected)?
                     .as_bytes(),
             ))
@@ -246,7 +246,7 @@ impl Inspection {
             Action::Install => Some(self.desired()?),
             Action::Remove => None,
         };
-        if self.target.agent == Agent::Opencode
+        if self.target.agent.is_plugin()
             && previous.is_none()
             && next.is_some()
             && self.provider.contents.is_some()
@@ -294,9 +294,9 @@ impl Inspection {
         if previous.is_none() && next.is_none() {
             return Ok(self.provider.contents.clone());
         }
-        if self.target.agent == Agent::Opencode {
+        if self.target.agent.is_plugin() {
             return next
-                .map(|_| render::plugin(&self.binary.path).map_err(rejected))
+                .map(|_| render::plugin(self.target.agent, &self.binary.path).map_err(rejected))
                 .transpose();
         }
         let previous = previous
@@ -322,7 +322,7 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     let profile = Directory::profile(&target.profile)?;
     storage_filesystem::require_local(&profile.path)?;
     directory_admission(&profile)?;
-    let plugins = if target.agent == Agent::Opencode {
+    let plugins = if target.agent.is_plugin() {
         match profile.child("plugins", false) {
             Ok(directory) => Some(directory),
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => None,
@@ -337,9 +337,9 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
     let provider_name = match target.agent {
         Agent::Claude | Agent::Gemini => "settings.json",
         Agent::Codex | Agent::Droid | Agent::Cursor => "hooks.json",
-        Agent::Opencode => "lazysh.js",
+        Agent::Opencode | Agent::Cline => "lazysh.js",
     };
-    let provider = if target.agent == Agent::Opencode && plugins.is_none() {
+    let provider = if target.agent.is_plugin() && plugins.is_none() {
         ReadFile {
             state: FileState::Missing,
             contents: None,

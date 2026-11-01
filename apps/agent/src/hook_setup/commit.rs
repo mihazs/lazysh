@@ -223,25 +223,22 @@ pub(super) fn apply(
     {
         return Err(rejected("HooksReadOnlyConfiguration"));
     }
-    let new_plugins = if current.target.agent == record::Agent::Opencode
-        && current.plugins.is_none()
-        && after.is_some()
-    {
-        files::directory_admission(&current.profile)?;
-        current.profile.mkdir("plugins")?;
-        current.profile.file.sync_all()?;
-        Some(current.profile.child("plugins", false)?)
-    } else {
-        None
-    };
+    let new_plugins =
+        if current.target.agent.is_plugin() && current.plugins.is_none() && after.is_some() {
+            files::directory_admission(&current.profile)?;
+            current.profile.mkdir("plugins")?;
+            current.profile.file.sync_all()?;
+            Some(current.profile.child("plugins", false)?)
+        } else {
+            None
+        };
     let provider = current
         .plugins
         .as_ref()
         .or(new_plugins.as_ref())
         .unwrap_or(&current.profile);
-    let missing_parent = current.target.agent == record::Agent::Opencode
-        && current.plugins.is_none()
-        && new_plugins.is_none();
+    let missing_parent =
+        current.target.agent.is_plugin() && current.plugins.is_none() && new_plugins.is_none();
     let receipt = String::from_utf8(record.encode().map_err(rejected)?)
         .map_err(|_| rejected("HooksInvalidRecord"))?;
     let mut staged_record = Stage::new(&current.profile, &receipt)?;

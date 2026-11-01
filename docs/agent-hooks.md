@@ -2,8 +2,14 @@
 
 ## Managed lifecycle hook setup
 
-In **Agents → Agent hook setup**, select the provider and its existing absolute
-profile directory on the connected SSH host, then choose **Inspect setup**.
+Opening **Agents → Agent hook setup** detects installed agents and known profile
+locations on the connected SSH host. Select an agent and profile, then choose
+**Inspect setup**. Detection does not execute agents or install hooks. A found
+profile is shown separately from an installed executable; manual-only adapters
+cannot use managed installation.
+Use manual setup for an alternate absolute profile directory. The SSH environment
+can differ from a running agent's environment, so an inferred path does not prove
+which profile that agent loaded. Missing profiles are not created automatically.
 Installing/updating or removing requires a separate explicit action against
 that inspected plan. Install or update the host companion first when the host
 has an older version. Setup uses the resolved companion executable's absolute
@@ -13,11 +19,11 @@ and protected from replacement through writable or symlink ancestors. Root-owned
 standard binary directories are supported; shared writable source directories
 are refused.
 
-Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI and OpenCode
+Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI, OpenCode and Cline CLI
 on the qualified Linux filesystems described below. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
-layer; setup does not discover or enable the provider's active layer.
+layer; detection does not establish or enable the provider's active layer.
 
 Gemini's six native groups retain their 5000 **millisecond** deadline and preserve
 `hooksConfig.enabled` and `hooksConfig.disabled` exactly. Cursor retains its
@@ -31,26 +37,47 @@ global hooks are enabled, trusted, or reporting in the running provider.
 The equivalent local commands are:
 
 ```sh
+lazysh-agent hooks discover
 lazysh-agent hooks preview --agent codex
 lazysh-agent hooks status --agent codex --profile-root /home/user/.codex
 lazysh-agent hooks install --agent codex --profile-root /home/user/.codex --expected-plan <installPlan>
 lazysh-agent hooks remove --agent codex --profile-root /home/user/.codex --expected-plan <removePlan>
 ```
 
+Discovery uses executable metadata on bounded absolute `PATH` entries and known
+Codex standalone locations. It respects `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`GEMINI_CLI_HOME` (with `.gemini` appended), and OpenCode's
+`OPENCODE_CONFIG_DIR`/XDG configuration directory, plus Cline's `CLINE_DIR` or `~/.cline`. `OPENCODE_CONFIG` names a file,
+so it is not used as a hook profile directory. Invalid overrides are reported
+instead of silently selecting another profile. A truncated scan is labelled;
+manual selection remains available. No credential or profile contents are read
+by discovery. Discovery and managed installation have separate platform limits.
+Cursor hook discovery uses its [documented hook location](https://prod.cursor.com/docs/hooks), `~/.cursor/hooks.json`;
+CLI configuration overrides are not assumed to relocate hooks. Use manual
+selection for another verified hook layer.
+
 `install` also updates existing owned entries. Every changed profile needs a
 fresh inspection. Claude and Gemini use `settings.json`, Codex and Cursor use `hooks.json`,
-and OpenCode uses `plugins/lazysh.js` under the selected profile. JSON must be strict,
+and OpenCode and Cline use `plugins/lazysh.js` under the selected profile. JSON must be strict,
 without comments or duplicate keys. Existing foreign JSON value bytes remain
 intact; owned entry separators and whitespace may change. A foreign same-name
-OpenCode plugin is never overwritten. The private prepared receipt records own
+plugin is never overwritten. The private prepared receipt records own
 templates and hashes/identities, never a copy of provider configuration.
+
+Cline setup installs only the existing root lifecycle plugin, bound to the inspected
+absolute companion. Select the `.cline` directory used by `--config`, `CLINE_DIR`,
+or the workspace explicitly; discovery cannot determine a running session's layer.
+Start a new Cline session with that profile to load the plugin, then start a turn.
+Existing disabled-plugin settings and plugin restrictions are preserved, and setup
+does not establish live reporting. See Cline's [plugin locations](https://docs.cline.bot/sdk/plugin-install)
+and [plugin lifecycle](https://docs.cline.bot/sdk/plugins).
 
 Managed writes currently support qualified local Linux filesystems without
 extended access/default ACLs. Special file permission bits, unsafe links,
 read-only files, unhandled ACLs and uncertain ownership are refused. Existing
 ordinary file permissions and group ID are retained. macOS/Windows writes
 remain unsupported; preview is available without accessing a profile. Preview
-labels POSIX shell or Bun JavaScript dialect. On Windows it returns the
+labels POSIX shell, Bun JavaScript or Cline JavaScript dialect. On Windows it returns the
 existing unbound print-only templates, explicitly without an executable
 binding or managed-setup support; it does not quote a Windows executable as
 a POSIX command. These
@@ -169,16 +196,24 @@ active process. Missing companions never change the callbacks' control results.
 Initial support is deliberately root-only. Delegated children can inherit the
 parent plugin while using another directory, so their callbacks are ignored;
 parent workspace context is never attributed to a child. Shared root-session IDs
-are not native run identity. Permission/question waits and managed Cline setup
-are unsupported. A loaded plugin is not proof of fresh reporting, and native
-worker failure or a missed callback can leave an observation stale.
+are not native run identity. Permission/question waits remain unsupported.
+Explicit Linux managed setup is available as described above. A loaded plugin is
+not proof of fresh reporting, and native worker failure or a missed callback can
+leave an observation stale.
 
 Contract source: [Cline CLI 3.0.74 runtime hooks](https://github.com/cline/cline/blob/071e1b25b48f9ef5dff7fc32085e6a16f02bf02e/docs/sdk/plugins.mdx).
 The official Linux CLI 3.0.74 was qualified with a private loopback provider:
 one interactive root retained its exact agent/conversation IDs across two native
 run IDs and reported working, done, working, done to the actual companion Store.
-Root-only child omission also has plugin/ingestion regression coverage; actual
-child directory binding remains unqualified. Windows and real authenticated
+A fresh owned Cline 3.0.74 session also qualified the managed absolute companion
+binding with a private loopback provider: working advanced to the same row's
+completed done state with `Turn finished` and fixed response readback. In a
+separate owned profile, an existing exact-path `disabledPlugins` setting stayed
+unchanged through installation and native response readback, with no companion
+rows. This negative qualifies pre-run suppression; it does not identify after-run
+callback timing. Both use an isolated local source-built companion, not a public
+release artifact. Root-only child omission also has plugin/ingestion regression
+coverage; actual child directory binding remains unqualified. Windows and real authenticated
 provider sessions require separate qualification.
 
 ## Gemini CLI, Droid and Kimi CLI
@@ -197,11 +232,35 @@ activity indicates work; permission, idle and elicitation notifications indicate
 attention. Droid also emits an idle notification after cancellation, so a
 canceled turn is not reported as a successful final response.
 
-`lazysh-agent kimi-config` prints JSON containing a TOML fragment in `content`
-for Kimi's `[[hooks]]` entries. Kimi prompt/tool activity indicates work, including
+`lazysh-agent kimi-config` retains the legacy Kimi CLI **1.52.0** contract and
+prints the same JSON containing a TOML fragment in `content` for its `[[hooks]]`
+entries. It does not configure or qualify Kimi Code 2.4.1. Legacy prompt/tool
+activity indicates work, including
 failed tools while the agent continues. Only the documented permission_prompt
 notification is treated as a permission wait. SessionStart and child lifecycle
 notifications do not finish a parent or create a fictitious working turn.
+
+Hook discovery reports separate metadata candidates for current Kimi Code 2.4.1
+(`KIMI_CODE_HOME`, otherwise `~/.kimi-code`) and legacy Kimi CLI 1.52.0
+(`KIMI_SHARE_DIR`, otherwise `~/.kimi`), in that order. Nonempty overrides are
+used literally: discovery does not trim whitespace, expand `~`, or resolve
+relative paths. Paths outside its absolute-path admission are labelled invalid;
+an invalid override does not fall back to the default for that dialect. Empty
+overrides use the default. The other dialect remains a separate candidate, not a
+fallback or automatic selection. Identical unresolved HOME diagnostics appear
+once. Discovery reads directory metadata only: it
+does not execute Kimi, open/create configuration, migrate profiles, or identify
+the installed version. Kimi remains manual-only in discovery schema 1; the seven
+managed providers and existing printer/ingestion behavior are unchanged.
+
+Kimi Code 2.4.1 native lifecycle remains unqualified. Its external hooks omit
+agent identity from several turn/tool events; blockable `Stop` is not successful
+turn completion, and `PermissionRequest` is an observation that approval was
+requested, not proof it is still waiting. Metadata presence does not establish
+hook loading, current root state or per-turn completion. See [#696](https://github.com/mihazs/lazysh/issues/696).
+The path contracts are pinned to [Kimi Code 2.4.1](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/apps/kimi-code/src/utils/paths.ts#L35)
+and [Kimi CLI 1.52.0](https://github.com/MoonshotAI/kimi-cli/blob/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82/src/kimi_cli/share.py#L7);
+the current event limits follow the [2.4.1 emitters](https://github.com/MoonshotAI/kimi-code/blob/2c73f3f50af4fa7f2540ca0d2e33b07a1408e3a7/packages/agent-core-v2/src/features/externalHooks/agent/agentExternalHooksService.ts#L178).
 
 Kimi 1.52.0 shares the parent's session and hook engine with child souls. Both
 root and child turns emit identical unscoped Stop/StopFailure payloads, so those

@@ -1,19 +1,25 @@
-import {useEffect,useRef,useState} from 'react';
-import type {AccessLease} from './access';
+import {ArrowLeft,RefreshCw} from 'lucide-react';
+import {useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useAccessSnapshot,type AccessLease} from './access';
+import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
 import type {HerdrNavigationTarget} from './bridge';
 import {t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {herdrStatusKeys,useHerdrNavigation,type HerdrTree,type LiveAgent} from './useHerdrNavigation';
 import './HerdrNavigation.css';
 
+export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
+
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,onOpenCompanion,onServerChange,onNavigate,onAttach,onClose,onRestoreHostTools}:{
-  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools}:{
+  sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
+  onContentSettled?:(receipt:HerdrContentReceipt)=>void;
   onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
 }) {
   useUi();
+  useAccessSnapshot();
   const model=useHerdrNavigation({sessionId,herdrSession,visible});
   const {data,failure,agentFailure,busy,query,setQuery,lease,refresh,selectServer}=model;
   const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
@@ -23,7 +29,16 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
   const action=useRef(false);
   const current=useRef({sessionId,visible,mode,server:data?.server});current.current={sessionId,visible,mode,server:data?.server};
   useEffect(()=>()=>{current.current={...current.current,visible:false};},[]);
+  const settledCallback=useRef(onContentSettled);settledCallback.current=onContentSettled;
+  const settledFailure=mode==='agents' && agentFailure?.host===sessionId?agentFailure:failure?.host===sessionId?failure:undefined;
+  const settledIdentity=data?.snapshot??settledFailure??(data?.loaded?data:undefined);
+  const settledFailed=!!settledFailure;
+  useLayoutEffect(()=>{
+    if(visible && !busy && lease.current() && !document.hidden && settledIdentity)
+      settledCallback.current?.({host:sessionId,server:data?.server??'',mode,identity:settledIdentity,failed:settledFailed});
+  },[sessionId,visible,busy,lease,mode,data?.server,settledIdentity,settledFailed]);
   const tree=data?.snapshot;
+  const referenceCounts=reportedSessionCounts(data?.rows??[]);
   const term=query.trim().toLocaleLowerCase();
   const match=(...values:(string|null|undefined)[])=>values.some(value=>value?.toLocaleLowerCase().includes(term));
   const working=actionBusy || (busy && !data?.loaded);
@@ -56,8 +71,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,
     tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label))??[];
   return <section className="herdr-navigation" hidden={!visible} aria-label={t('herdrNavigationTitle')} aria-busy={busy||actionBusy}>
-    <header><div><strong>{t('herdrNavigationTitle')}</strong><small>{hostLabel}</small></div><button className="subtle-button" onClick={onClose}>{t('herdrNavigationBack')}</button></header>
-    <div className="tool-bar"><button className="subtle-button" disabled={busy||actionBusy} onClick={()=>void refresh()}>{t('herdrRefresh')}</button></div>
+    <header><div><h3>{t(mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3><small>{hostLabel}</small></div><button className="icon-button" title={t('herdrRefresh')} disabled={busy||actionBusy} onClick={()=>void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('herdrRefresh')}</span></button><button className="icon-button" title={t('herdrNavigationBack')} onClick={onClose}><ArrowLeft size={18} aria-hidden="true"/><span className="sr-only">{t('herdrNavigationBack')}</span></button></header>
     {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={working} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
     {actionError && <p className="inline-error" role="alert">{uiErrorText(actionError)}</p>}
     {actionError instanceof LocalUiError && actionError.key==='herdrNavigationCompanion' && onOpenCompanion && <button className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}
@@ -73,8 +87,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
       </>}
       </details>
       {data.server && <>
-        <h3>{t(mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3>
-        <label>{t('herdrNavigationSearch')}<input type="search" value={query} onChange={event=>setQuery(event.target.value)}/></label>
+        <label><span className="sr-only">{t('herdrNavigationSearch')}</span><input type="search" placeholder={t('herdrNavigationSearch')} value={query} onChange={event=>setQuery(event.target.value)}/></label>
         {query && <button className="subtle-button" onClick={()=>setQuery('')}>{t('agentsClearFilters')}</button>}
         {mode==='spaces' && tree && <ul className="herdr-navigation-tree">{tree.workspaces.map(workspace=>{
           const tabs=tree.tabs.filter(tab=>tab.workspace_id===workspace.workspace_id);
@@ -89,7 +102,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
         })}</ul>}
         {mode==='agents' && (agentFailure?<p role="status">{uiErrorText(agentFailure.cause)}</p>:<div>{statuses.map(status=>{
           const matching=rows.filter(agent=>agent.agent_status===status);
-          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{t(herdrStatusKeys[status])} · {matching.length}</h4>{matching.map(agent=><div key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}</div>)}</section>;
+          return matching.length>0 && <section key={status} aria-label={t(herdrStatusKeys[status])}><h4>{t(herdrStatusKeys[status])} · {matching.length}</h4>{matching.map(agent=><div key={JSON.stringify([agent.terminal_id,agent.pane_id])}>{row({kind:'pane',workspace:agent.workspace_id,tab:agent.tab_id,pane:agent.pane_id,terminal:agent.terminal_id},agent.name??agent.agent??agent.pane_id,status,[tree?.workspaces.find(value=>value.workspace_id===agent.workspace_id)?.label,tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label,agent.cwd].filter(Boolean).join(' / '))}{agent.agent_session && <HerdrSessionDetails reference={agent.agent_session} count={referenceCounts.get(JSON.stringify([agent.agent_session.agent,agent.agent_session.value]))??0} sessionId={sessionId} available={visible && lease.current()} reports={reports}/>}</div>)}</section>;
         })}{data.loaded && rows.length===0 && <p>{t('herdrNavigationEmpty')}</p>}</div>)}
       </>}
     </>}

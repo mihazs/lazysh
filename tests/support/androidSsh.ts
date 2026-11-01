@@ -490,6 +490,14 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     console.log(sharedHerdr?'Owned stock Herdr shared navigation: all three receiver identities alive and zero bytes verified':herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
   } catch(error) {
     primary=true;
+    // Preserve the existing witness's closed stage before removing its owned host.
+    // The instrumentation error remains primary, including if observation fails.
+    let moshBackgroundObservation:ReturnType<ReturnType<typeof observeAndroidMoshBackground>['diagnostic']>|{state:'unavailable'}|undefined;
+    if(moshWitness)try {
+      await moshWitness.stop();
+      moshBackgroundObservation=moshWitness.diagnostic();
+      if(moshBackgroundObservation.failure)console.error('Owned Mosh secondary witness failure: witness-failure');
+    } catch {moshBackgroundObservation={state:'unavailable'};}
     if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':'ssh-ui');
@@ -498,7 +506,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       const hostServerAfter=await hostAdbServerIdentity(adb);
       const persistedCrash={scope:'persisted-crash-buffer-sample',...await crashes?.recover()??{state:'ineligible',exceptions:[]}};
       const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
-      const summary={...exitInfo,...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
+      const summary={...exitInfo,...(moshBackgroundObservation?{moshBackground:moshBackgroundObservation}:{}),...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}

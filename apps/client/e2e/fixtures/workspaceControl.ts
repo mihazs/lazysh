@@ -8,6 +8,13 @@ export async function workspaceControl(page:Page,name:string) {
   if(await dialogButton.isVisible())return dialogButton;
   if(await button.isVisible())return button;
   await page.locator('.mobile-tools:visible').click();
+  for(const group of ['workspace-more-tools','workspace-connection-actions','workspace-application-options']) {
+    const owner=page.getByRole('dialog').locator(`details.${group}`);
+    if(await owner.count() && await owner.evaluate((node,name)=>!(node as HTMLDetailsElement).open
+      && Array.from(node.querySelectorAll('button')).some(button=>button.textContent?.trim()===name && button.closest('details')===node),name)) {
+      await owner.locator(':scope > summary').click();
+    }
+  }
   const revealed=page.getByRole('dialog').getByRole('button',{name,exact:true}).first();
   await expect(revealed).toBeVisible();
   return revealed;
@@ -24,4 +31,10 @@ export async function openThemeImport(page: Page) {
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Appearance');
   await page.getByText('Import and share theme',{exact:true}).click();
+}
+
+export async function openAgentSetup(page: Page) {
+  const label=await page.evaluate(async()=>{const {t}=await import('/src/i18n/core.ts');return t('agentsSetupAction');});
+  const button=page.getByRole('button',{name:label,exact:true});
+  if(await button.getAttribute('aria-expanded')!=='true')await button.click();
 }
