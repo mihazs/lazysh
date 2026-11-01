@@ -2,6 +2,11 @@ import type {english} from './en';
 
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
+  agentsSections: ["Seções de agentes", "Secciones de agentes"],
+  agentsJumpLive: ["Agentes ativos", "Agentes activos"],
+  agentsJumpActivity: ["Atividade", "Actividad"],
+  agentsReportedActivity: ["Atividade informada dos agentes", "Actividad informada de agentes"],
+
   appConnectionOptions: ['Opções de conexão', 'Opciones de conexión'],
   preferencesCategoryLanguage: ["Idioma e região", "Idioma y región"],
   preferencesCategoryAppearance: ["Aparência e fontes", "Apariencia y fuentes"],
