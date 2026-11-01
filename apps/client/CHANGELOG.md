@@ -1,5 +1,16 @@
 # @lazysh/client
 
+## 1.7.6
+
+### Patch Changes
+
+- 85195e3: Record closed native companion action-readiness diagnostics without changing install/reuse acceptance or its deadlines.
+- @lazysh/account-usage@1.7.6
+  - @lazysh/common@1.7.6
+  - @lazysh/display-idle@1.7.6
+  - @lazysh/et-transport@1.7.6
+  - @lazysh/mosh-transport@1.7.6
+
 ## 1.7.5
 
 ### Patch Changes
