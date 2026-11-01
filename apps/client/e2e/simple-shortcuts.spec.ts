@@ -2,7 +2,7 @@ import {openPreferenceCategory} from './fixtures/workspaceControl';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
-declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutTouchMoves:number;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
+declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutTouchMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed'}}
 async function fixture(page:Page) {
   await page.addInitScript(()=>{
     window.simpleShortcutWrites=[];window.simpleShortcutSteps=[];
@@ -424,6 +424,34 @@ test('direct finger scrolling uses real xterm history and the same mouse reports
   }
   expect(batches[0]).toHaveLength(12);
   expect(batches[1]).toEqual(batches[0]);
+  if(await page.evaluate(()=>matchMedia('(pointer:coarse)').matches)) {
+    // A real host redraw replaces xterm spans while the same finger is still down.
+    await page.evaluate(()=>window.simpleShortcutOutput('\x1b[2J\x1b[H'+Array.from({length:40},(_,i)=>`owned-row-${i} ${' '.repeat(30)}`).join('\r\n')));
+    await expect(screen).toContainText('owned-row-');
+    const start=await screen.evaluate(element=>{
+      const spans=Array.from(element.querySelectorAll('.xterm-rows span')).filter(node=>node.getBoundingClientRect().width>20);
+      const span=spans[Math.floor(spans.length/4)],r=span.getBoundingClientRect(),bounds=element.getBoundingClientRect();
+      window.simpleShortcutTouchMoves=0;window.simpleShortcutWrites=[];window.simpleShortcutTouchTarget=null;
+      element.closest('.terminal-canvas')!.addEventListener('touchstart',event=>{
+        window.simpleShortcutTouchTarget=event.target instanceof Element?event.target:null;
+      },{capture:true,passive:true,once:true});
+      return {x:r.left+10,y:r.top+r.height/2,travel:Math.min(40,(bounds.bottom-r.bottom)/3)};
+    });
+    expect(start.travel).toBeGreaterThan(12);
+    await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:start.x,y:start.y}]});
+    try {
+      await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x,y:start.y+start.travel}]});
+      await expect.poll(()=>page.evaluate(()=>window.simpleShortcutTouchMoves)).toBe(1);
+      await expect.poll(async()=>(await reports()).length).toBeGreaterThan(0);
+      const first=(await reports()).length;
+      await page.evaluate(()=>window.simpleShortcutOutput('\x1b[2J\x1b[H'+Array.from({length:40},(_,i)=>`updated-owned-row-${i} ${' '.repeat(30)}`).join('\r\n')));
+      await expect(screen).toContainText('updated-owned-row-');
+      await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x,y:start.y+start.travel*2}]});
+      await expect.poll(()=>page.evaluate(()=>window.simpleShortcutTouchMoves)).toBe(2);
+      await expect.poll(async()=>(await reports()).length).toBeGreaterThan(first);
+      expect(await page.evaluate(()=>window.simpleShortcutTouchTarget?.isConnected)).toBe(true);
+    } finally {await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+  }
   await page.evaluate(()=>{window.simpleShortcutWrites=[];});
   await page.evaluate(()=>window.simpleShortcutOutput('\x1b[?1000l\x1b[?1006l'));
   await expect(page.locator('.terminal-canvas:visible .xterm')).not.toHaveClass(/enable-mouse-events/);

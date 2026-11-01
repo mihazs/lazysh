@@ -689,6 +689,12 @@ button svg {
 .terminal-canvas .xterm {
   height: 100%;
 }
+@media (pointer: coarse) {
+  /* Row redraws replace touched spans; keep the finger on the stable screen. */
+  .terminal-canvas:not(.terminal-screen-reader) .xterm-rows {
+    pointer-events: none;
+  }
+}
 .terminal-canvas .xterm-viewport {
   scrollbar-width: thin;
   scrollbar-color: var(--theme-text, #37462b) transparent;

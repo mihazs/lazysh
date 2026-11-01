@@ -556,6 +556,7 @@ describe("terminal interactions", () => {
     const view = mount();
     let canvas = screen.getByLabelText("Terminal for Host");
     expect(canvas.style.touchAction).toBe("auto");
+    expect(canvas.classList.contains("terminal-screen-reader")).toBe(true);
     const accessiblePinch = new TouchEvent("touchmove", {bubbles: true, cancelable: true, touches: [{identifier: 1}, {identifier: 2}] as Touch[]});
     canvas.dispatchEvent(accessiblePinch);
     expect(accessiblePinch.defaultPrevented).toBe(false);
@@ -563,6 +564,7 @@ describe("terminal interactions", () => {
     savePreferences({...defaults});
     mount();
     canvas = screen.getByLabelText("Terminal for Host");
+    expect(canvas.classList.contains("terminal-screen-reader")).toBe(false);
     const oneTouch = new TouchEvent("touchmove", {bubbles: true, cancelable: true, touches: [{identifier: 1}] as Touch[]});
     canvas.dispatchEvent(oneTouch);
     expect(oneTouch.defaultPrevented).toBe(false);

@@ -1,5 +1,37 @@
 # @lazysh/client
 
+## 1.5.5
+
+### Patch Changes
+
+- da17fde: Qualify closing one SSH relay stream through its owned server subtree for Android upload-recovery testing. Refuse stale, missing or ambiguous server attribution and preserve the original Mosh UDP daemon. Android recovery UI acceptance remains separate.
+- @lazysh/account-usage@1.5.5
+  - @lazysh/common@1.5.5
+  - @lazysh/display-idle@1.5.5
+  - @lazysh/et-transport@1.5.5
+  - @lazysh/mosh-transport@1.5.5
+
+## 1.5.4
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.4
+  - @lazysh/common@1.5.4
+  - @lazysh/display-idle@1.5.4
+  - @lazysh/et-transport@1.5.4
+  - @lazysh/mosh-transport@1.5.4
+
+## 1.5.3
+
+### Patch Changes
+
+- cd969ee: Correct native Android fixture Setup-state reads and whole-value clipboard replacement, and retain bounded visual-readiness observations without changing gesture or transport acceptance.
+- @lazysh/account-usage@1.5.3
+  - @lazysh/common@1.5.3
+  - @lazysh/display-idle@1.5.3
+  - @lazysh/et-transport@1.5.3
+  - @lazysh/mosh-transport@1.5.3
+
 ## 1.5.2
 
 ### Patch Changes

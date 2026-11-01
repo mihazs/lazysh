@@ -1,5 +1,31 @@
 # @lazysh/agent
 
+## 1.5.5
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.5
+  - @lazysh/common@1.5.5
+  - @lazysh/notification-client@1.5.5
+
+## 1.5.4
+
+### Patch Changes
+
+- 9bb174c: Finish Copilot child reports with a separate validated session identity while preserving parent state and shared-session completion guards.
+- @lazysh/account-usage@1.5.4
+  - @lazysh/common@1.5.4
+  - @lazysh/notification-client@1.5.4
+
+## 1.5.3
+
+### Patch Changes
+
+- b98d878: Document Linux Copilot CLI 1.0.105 manual-hook qualification for completed root turns and unanswered elicitation attention, including remaining runtime limits.
+- @lazysh/account-usage@1.5.3
+  - @lazysh/common@1.5.3
+  - @lazysh/notification-client@1.5.3
+
 ## 1.5.2
 
 ### Patch Changes
