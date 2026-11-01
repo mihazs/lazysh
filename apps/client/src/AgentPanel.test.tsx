@@ -667,6 +667,7 @@ it('keeps healthy setup collapsed while preserving mounted settings and hook dra
   fireEvent.click(setup);
   const settings=await screen.findByRole('region',{name:'Host companion settings'});
   fireEvent.click(screen.getByText(t('hooksTitle')));
+  fireEvent.change(screen.getByLabelText(t('hooksProvider')),{target:{value:'codex'}});
   const hookProfile=screen.getByPlaceholderText('/home/user/.codex');fireEvent.change(hookProfile,{target:{value:'/owned/private/.codex'}});
   const usage=within(settings).getByRole('checkbox',{name:'Recorded usage inspection'});fireEvent.click(usage);
   fireEvent.click(setup);expect(setup.getAttribute('aria-expanded')).toBe('false');
@@ -700,7 +701,7 @@ it('offers empty Activity a direct hook-setup action without automatic inspectio
   fireEvent.click(screen.getByRole('button',{name:t('hooksTitle')}));
   const setup=screen.getByRole('region',{name:t('agentsSetupAction')});
   const provider=within(setup).getByLabelText(t('hooksProvider'));
-  expect(provider.closest('details')).toHaveProperty('open',true);expect(document.activeElement).toBe(provider);
+  expect(provider.closest('details')).toHaveProperty('open',true);expect(document.activeElement).toBe(provider.closest('details')?.querySelector('summary'));
   expect(within(setup).getByLabelText(t('hooksProfile'))).toHaveProperty('value','');
   expect(within(setup).queryByRole('button',{name:t('hooksInstall')})).toBeNull();
   expect(invoke.mock.calls.filter(([command])=>command==='companion_hooks')).toHaveLength(0);

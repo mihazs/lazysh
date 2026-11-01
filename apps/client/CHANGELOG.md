@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.4.2
+
+### Patch Changes
+
+- cf4b9f3: Qualify compact settings and workspace navigation through visible browser acceptance preconditions while retaining existing locale, display ownership, QR privacy and stale dictation assertions.
+- 8d7a15d: Show concise provider-specific verification guidance after inspected hook configuration without changing trust, loading or reporting status.
+- 0844aa3: Keep Workspace tools short by default with explicit session-tool, connection and application disclosures, preserving existing guarded actions and touch targets.
+- @lazysh/account-usage@1.4.2
+  - @lazysh/common@1.4.2
+  - @lazysh/display-idle@1.4.2
+  - @lazysh/et-transport@1.4.2
+  - @lazysh/mosh-transport@1.4.2
+
 ## 1.4.1
 
 ### Patch Changes
