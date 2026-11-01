@@ -312,7 +312,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await page.getByRole('button',{name:'Connect',exact:true}).click();
   if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
-  await live.locator('summary').click();
+  await live.getByText('Reported session',{exact:true}).click();
   await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
   await page.evaluate(()=>(window as unknown as {finishOldReport:()=>void}).finishOldReport());
   await expect(live.getByText('No matching report',{exact:true})).toBeVisible();
