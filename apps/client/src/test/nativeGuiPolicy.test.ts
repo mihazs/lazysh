@@ -1,3 +1,6 @@
+import {chmod,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {executable} from '../../native-e2e/tools';
 import {expect,it} from 'vitest';
 import {disposableVaultArguments,secretServicePid,credentialItemPaths} from '../../native-e2e/fixture';
 import {assertDirectDriverEnvironment,guiEnvironment,listenerInode,namespaceArguments} from '../../native-e2e/policy';
@@ -37,7 +40,10 @@ it('keeps the disposable vault foreground, secrets-only and within the existing 
   for(const bad of ['relative','/tmp/lazysh-native-gui-a/../other','/home/owned','/tmp/lazysh-native-gui-vault\n'])expect(()=>disposableVaultArguments(bad)).toThrow();
   const env=guiEnvironment(directory,`unix:path=${directory}/runtime/bus`);
   for(const key of ['GNOME_KEYRING_CONTROL','GPG_AGENT_INFO','SSH_AUTH_SOCK','DBUS_STARTER_ADDRESS'])expect(env).not.toHaveProperty(key);
-  const args=namespaceArguments('/usr/bin/gnome-keyring-daemon',disposableVaultArguments(directory),directory,'/home/owned','/tmp/.X11-unix/X1200',[]);
+  const image='/home/owned/tools/gnome-keyring-daemon';
+  const args=namespaceArguments(image,disposableVaultArguments(directory),directory,'/home/owned','/tmp/.X11-unix/X1200',[image]);
+  expect(args.join(' ')).toContain(`--ro-bind ${image} ${image}`);
+  expect(args.indexOf(image)).toBeGreaterThan(args.indexOf('--tmpfs'));
   expect(args.join(' ')).toContain('--tmpfs /home/owned --tmpfs /run --tmpfs /tmp');
   expect(args).not.toContain('--start');expect(args).not.toContain('--daemonize');
 });
@@ -51,4 +57,17 @@ it('observes credential identity/count through object-path metadata without acce
   const item='/org/freedesktop/secrets/collection/login/1';
   expect(credentialItemPaths(header+` array [ object path "${item}" ]\n array [ ]`)).toEqual([item]);
   for(const body of [`array [ object path "${item}" object path "${item}" ] array []`,'array [ object path "/foreign" ] array []',`array [ object path "${item}/" ] array []`,`array [ object path "${item.replace('/login/','/login//')}" ] array []`,'array [] array [] string "private value"','array []','array [ array [','array [ ] ] array [ ]','] array [ ] array [','x'.repeat(4097)])expect(()=>credentialItemPaths(header+body)).toThrow();
+});
+
+it('requires an explicit protected prepared Secret Service image without executing it',async()=>{
+  const directory=await mkdtemp('/tmp/lazysh-native-tool-policy-'),image=join(directory,'gnome-keyring-daemon');
+  try {
+    await expect(executable('','disposable Secret Service','gnome-keyring-daemon')).rejects.toThrow('absolute path');
+    await writeFile(image,'owned admission bytes only',{mode:0o500});
+    expect(await executable(image,'disposable Secret Service','gnome-keyring-daemon')).toBe(image);
+    await chmod(image,0o777);
+    await expect(executable(image,'disposable Secret Service','gnome-keyring-daemon')).rejects.toThrow('Untrusted');
+    await chmod(image,0o500);
+    await expect(executable(image,'disposable Secret Service','other-daemon')).rejects.toThrow('Untrusted');
+  }finally{await rm(directory,{recursive:true,force:true});}
 });

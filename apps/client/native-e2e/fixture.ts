@@ -171,7 +171,7 @@ export class NativeGui {
     console.info(`Owned native GUI binary sha256=${digest.digest('hex')}`);
   }
   private namespaced(program:string,args:string[],captureOutput=true) {
-    return new OwnedProcess('/usr/bin/bwrap',namespaceArguments(program,args,this.directory,this.home,this.xSocket,[this.binary,this.driverFile,this.nativeDriverFile,...(this.resolverFile?[this.resolverFile]:[])]),this.directory,this.env,captureOutput);
+    return new OwnedProcess('/usr/bin/bwrap',namespaceArguments(program,args,this.directory,this.home,this.xSocket,[this.binary,this.driverFile,this.nativeDriverFile,...(this.resolverFile?[this.resolverFile]:[]),...(this.secretImage?[this.secretImage]:[])]),this.directory,this.env,captureOutput);
   }
   private async connectionOrigin(socket:Socket) {
     const stage=this.stage;
@@ -217,7 +217,7 @@ export class NativeGui {
     if(!name)throw new Error('Owned private bus name unavailable');return name;
   }
   private async startDisposableVault() {
-    this.secretImage=await executable('/usr/bin/gnome-keyring-daemon','disposable Secret Service','gnome-keyring-daemon');
+    this.secretImage=await executable(process.env.LAZYSH_NATIVE_GUI_SECRET_SERVICE??'','disposable Secret Service','gnome-keyring-daemon');
     if((await readdir(this.env.XDG_DATA_HOME!)).length)throw new Error('Disposable vault data directory was not empty');
     this.secretService=this.namespaced(this.secretImage,disposableVaultArguments(this.directory),false);
     this.secretService.child.stdin!.end('lazysh-owned-disposable-keyring-only');
