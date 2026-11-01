@@ -64,7 +64,9 @@ export class SshFixture {
     if(!this.toolNamespace || !this.environment)throw new Error('Owned Herdr namespace required');
     return new OwnedProcess('/usr/bin/bwrap',[...this.toolNamespace,'--',join(this.directory,'bin/herdr'),...args],this.directory,this.environment);
   }
-  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean}={}) {
+  static async start(tools?:HerdrTools,options:{privateTtyGroup?:boolean;companion?:boolean;moshBinary?:string;observeMoshBootstraps?:boolean;sharedNavigation?:boolean;ownedReceiverRoot?:boolean}={}) {
+    if(options.ownedReceiverRoot && (options.privateTtyGroup!==true || tools || options.companion || options.moshBinary || options.sharedNavigation))throw new Error('Owned receiver root requires its isolated private TTY fixture');
+    const ownedRoot=!!tools || options.ownedReceiverRoot===true;
     if(options.sharedNavigation && (!tools || options.moshBinary || options.companion))throw new Error('Shared navigation requires its closed SSH Herdr fixture');
     if(options.observeMoshBootstraps && !options.moshBinary)throw new Error('Mosh bootstrap observation requires its owned binary');
     if(process.platform!=='linux')throw new Error('Owned SSH host fixture requires Linux');
@@ -149,8 +151,8 @@ export class SshFixture {
         const groupFile=join(directory,'namespace-group');
         await writeFile(groupFile,groups.join('\n'),{mode:0o600,flag:'wx'});
         let mounts=['--dev-bind','/','/'];
-        if(tools) {
-          // Host root is unmapped in this user namespace; give the companion
+        if(ownedRoot) {
+          // Host root is unmapped in this user namespace; give the receiver/companion
           // an owned root rather than weakening its state-ancestor checks.
           const root=join(directory,'namespace-root');await mkdir(root,{mode:0o700});
           mounts=['--bind',root,'/','--dev-bind','/dev','/dev','--dir','/tmp','--bind',directory,directory];
@@ -171,7 +173,7 @@ export class SshFixture {
         // Herdr shares this owned filesystem while retaining Bun's PID/network
         // namespace, so receiver PID/start records remain directly verifiable.
         if(tools)toolNamespace=[...namespace,'--proc','/proc'];
-        daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary?['--unshare-pid','--proc','/proc']:tools?['--proc','/proc']:[]),'--',sshd,...arguments_]);
+        daemon=new OwnedProcess('/usr/bin/bwrap',[...namespace,...(options.moshBinary?['--unshare-pid','--proc','/proc']:ownedRoot?['--proc','/proc']:[]),'--',sshd,...arguments_]);
       } else daemon=new OwnedProcess(sshd,arguments_);
       if(!await daemon.liveIdentity())throw new Error(`Owned SSH root identity unavailable; startup=${JSON.stringify(await daemon.startupDiagnostic())}`);
       const fixture=new SshFixture(directory,port,privateKey,fingerprint,daemon,nonce,environment,privateTtyGroup,toolNamespace);
