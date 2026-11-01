@@ -10,6 +10,7 @@ pub enum Agent {
     Cursor,
     Opencode,
     Cline,
+    Copilot,
 }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +48,7 @@ impl Request {
             Agent::Cursor => "cursor",
             Agent::Opencode => "opencode",
             Agent::Cline => "cline",
+            Agent::Copilot => "copilot",
         };
         let suffix = match (&self.action, &self.expected_plan) {
             (Action::Status, None) => String::new(),
@@ -73,20 +75,24 @@ pub async fn companion_hooks(
     request: Request,
     access: AccessLease,
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<SshError>> {
-    dispatch(state, session_id, access, Some(request)).await
+    dispatch(state, session_id, access, Some(request), None).await
 }
 async fn dispatch(
     state: State<'_, AppState>,
     session_id: String,
     access: AccessLease,
     request: Option<Request>,
+    schema_version: Option<u8>,
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<SshError>> {
     access
         .run(async {
             let session = state.session(&session_id).await?;
             match request {
                 Some(request) => execute(&session, request, &access).await,
-                None => discover(&session, &access).await,
+                None => match schema_version {
+                    None => discover(&session, &access).await,
+                    Some(version) => discover_version(&session, &access, version).await,
+                },
             }
         })
         .await
@@ -103,12 +109,30 @@ pub(crate) async fn execute(
 pub async fn companion_hook_discovery(
     state: State<'_, AppState>,
     session_id: String,
+    schema_version: Option<u8>,
     access: AccessLease,
 ) -> std::result::Result<Guarded<serde_json::Value>, GuardedError<SshError>> {
-    dispatch(state, session_id, access, None).await
+    dispatch(state, session_id, access, None, schema_version).await
 }
 pub(crate) async fn discover(session: &Session, access: &AccessLease) -> Result<serde_json::Value> {
-    execute_command(session, "lazysh-agent hooks discover", access).await
+    execute_command(session, discovery_command(None)?, access).await
+}
+pub(crate) async fn discover_version(
+    session: &Session,
+    access: &AccessLease,
+    schema_version: u8,
+) -> Result<serde_json::Value> {
+    execute_command(session, discovery_command(Some(schema_version))?, access).await
+}
+fn discovery_command(schema_version: Option<u8>) -> Result<&'static str> {
+    match schema_version {
+        None | Some(1) => Ok("lazysh-agent hooks discover"),
+        Some(2) => Ok("lazysh-agent hooks discover --schema-version 2"),
+        _ => Err(error(
+            "invalid_request",
+            "Unsupported hook discovery schema",
+        )),
+    }
 }
 async fn execute_command(
     session: &Session,
@@ -135,6 +159,22 @@ fn parse_response(text: &str) -> Result<serde_json::Value> {
 mod tests {
     use super::*;
     #[test]
+    fn hook_discovery_defaults_to_v1_and_only_explicit_v2_changes_the_command() {
+        for version in [None, Some(1)] {
+            assert_eq!(
+                discovery_command(version).unwrap(),
+                "lazysh-agent hooks discover"
+            );
+        }
+        assert_eq!(
+            discovery_command(Some(2)).unwrap(),
+            "lazysh-agent hooks discover --schema-version 2"
+        );
+        for version in [0, 3, u8::MAX] {
+            assert!(discovery_command(Some(version)).is_err());
+        }
+    }
+    #[test]
     fn hook_responses_reject_oversized_and_malformed_output() {
         assert!(parse_response("not JSON").is_err());
         assert!(parse_response(&format!("\"{}\"", "x".repeat(128 * 1024))).is_err());
@@ -160,6 +200,7 @@ mod tests {
             (Agent::Cursor, "cursor"),
             (Agent::Cline, "cline"),
             (Agent::Droid, "droid"),
+            (Agent::Copilot, "copilot"),
         ] {
             request.agent = agent;
             assert!(request.command().unwrap().starts_with(&format!(

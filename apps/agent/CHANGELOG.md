@@ -1,5 +1,44 @@
 # @lazysh/agent
 
+## 1.6.0
+
+### Minor Changes
+
+- aad0990: Add opt-in version-2 hook discovery and inspected, profile-scoped Copilot hook setup while preserving version-1 compatibility, foreign settings and provider trust.
+
+### Patch Changes
+
+- 99d1b8e: Avoid reporting a completed Amp turn from an initially idle thread. The updated manual plugin reports idle only after observing that thread running, and does not treat an error followed by idle as recovery. Replace previously copied Amp plugin files to receive this fix; existing historical reports are unchanged.
+- @lazysh/account-usage@1.6.0
+  - @lazysh/common@1.6.0
+  - @lazysh/notification-client@1.6.0
+
+## 1.5.5
+
+### Patch Changes
+
+- @lazysh/account-usage@1.5.5
+  - @lazysh/common@1.5.5
+  - @lazysh/notification-client@1.5.5
+
+## 1.5.4
+
+### Patch Changes
+
+- 9bb174c: Finish Copilot child reports with a separate validated session identity while preserving parent state and shared-session completion guards.
+- @lazysh/account-usage@1.5.4
+  - @lazysh/common@1.5.4
+  - @lazysh/notification-client@1.5.4
+
+## 1.5.3
+
+### Patch Changes
+
+- b98d878: Document Linux Copilot CLI 1.0.105 manual-hook qualification for completed root turns and unanswered elicitation attention, including remaining runtime limits.
+- @lazysh/account-usage@1.5.3
+  - @lazysh/common@1.5.3
+  - @lazysh/notification-client@1.5.3
+
 ## 1.5.2
 
 ### Patch Changes

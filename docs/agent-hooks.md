@@ -20,7 +20,8 @@ standard binary directories are supported; shared writable source directories
 are refused.
 
 Managed setup supports Claude Code, Codex, Droid, Gemini CLI, Cursor CLI, OpenCode and Cline CLI
-on the qualified Linux filesystems described below. Gemini uses the selected
+on the qualified Linux filesystems described below. Explicit version-2 discovery
+also enables managed GitHub Copilot CLI setup. Gemini uses the selected
 `.gemini/settings.json`; Cursor uses `.cursor/hooks.json`. Select the actual
 existing profile directory explicitly, including any alternate configuration
 layer; detection does not establish or enable the provider's active layer.
@@ -302,6 +303,37 @@ the printed TOML with Bun. Real authenticated agent sessions remain unverified.
 
 ## GitHub Copilot CLI
 
+### Explicit managed setup
+
+Use `lazysh-agent hooks discover --schema-version 2` to discover the selected
+Copilot profile and its managed capability. The app requests this version when
+hook setup is explicitly opened. Default discovery and `--schema-version 1`
+retain the original seven managed providers and label Copilot manual, preserving
+released clients. An older companion must be updated before Copilot setup;
+the original seven providers still permit manual profile inspection when
+detection is unavailable.
+
+Select an existing absolute profile, then inspect and separately install/update
+or remove its exact plan using `--agent copilot`. The companion owns only
+`hooks/lazysh.json` and `.lazysh-hooks-copilot.json` in that profile. It binds the
+six shell-free handlers to its inspected absolute executable. A foreign or
+manually installed `hooks/lazysh.json` is a conflict, even if its content matches
+the printed template; it is never adopted or overwritten. Other hook files,
+opaque JSONC/configuration, providers, settings, trust and disabled-hook policy
+remain unchanged. Removal leaves unrelated files and the hooks directory.
+Remove owned hooks with the current companion before downgrading to an older
+companion that does not understand the Copilot ownership record.
+
+Copilot 1.0.105's shipped resolver preserves nonempty `COPILOT_HOME` literally,
+including trailing whitespace; only empty/unset values fall back to `~/.copilot`.
+Unsafe or relative overrides are reported invalid, never replaced with a guessed
+default. The deprecated `--config-dir` can select a different profile that SSH
+environment metadata cannot identify. Start a new Copilot session with the
+selected profile and review `/hooks` under normal policy; installation alone
+does not verify that hooks are enabled, loaded or reporting.
+
+### Manual hooks and lifecycle qualification
+
 `lazysh-agent copilot-config` prints a version-1 hook file for the selected
 Copilot CLI hook scope. It uses shell-free `exec` and fixed `args`, with a
 five-second `timeoutSec`. PascalCase compatible events provide the explicit
@@ -319,8 +351,38 @@ permissionRequest because that fires before automatic rules and does not prove
 that a human prompt is waiting. No approval decision or additional context is
 returned. This targets Copilot CLI; notification and shell-free execution
 support differ in the cloud agent. Contracts follow the current
-[official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference);
-authenticated Copilot CLI acceptance remains unverified.
+[official hook reference](https://docs.github.com/en/copilot/reference/hooks-reference).
+
+On Linux, CLI **1.0.105** loaded the manually placed printed hooks with a local
+companion built from [`91d6f8ba`](https://github.com/mihazs/lazysh/commit/91d6f8ba7f800170939a1946dae18322c5569ac9).
+Isolated mock-provider turns verified root `working` → `done` with `Turn finished`
+and native response readback, and root `working` → `needs_attention` while an
+elicitation question and both choices remained visible and unanswered. The latter
+is an attention notice, not a valid actionable approval. Each case used one
+provider request and ordinary session-only folder consent; no question answer or
+tool approval was sent. [Issue #704](https://github.com/mihazs/lazysh/issues/704)
+retains binary/source bindings, receipt hashes and earlier failed attempts.
+
+A separate Linux 1.0.105 no-tools child probe used a passive producer observer
+and a local companion from [`2435d50c`](https://github.com/mihazs/lazysh/commit/2435d50ca61709940a583874b4ee0089d2ebd7d7)
+to verify child `done` before the parent's final response, while the parent stayed
+`working`. Tagged completion requires `session_id == agent_id` and a valid,
+distinct `parent_agent_id`; shared-parent callbacks remain ignored. Native child
+`Stop` was exercised; child `SessionEnd` has CLI contract coverage. See
+[#713](https://github.com/mihazs/lazysh/issues/713) for the preserved stale-child
+baseline and candidate replay.
+
+Those earlier checks used manually loaded files. Separately, a local **1.5.4**
+companion built from [`3ea4ef20`](https://github.com/mihazs/lazysh/commit/3ea4ef20369905601bc7636f7c0000d249b42a84)
+installed the six absolute-executable hooks using an inspected managed plan.
+Fresh Linux CLI **1.0.105** sessions then verified the same root completion,
+unanswered attention and no-tools child behavior with isolated mock providers.
+The child case retained its separately labeled passive producer observer. Hook,
+ownership-receipt and provider files remained unchanged; process, socket and
+terminal cleanup passed. [Issue #717](https://github.com/mihazs/lazysh/issues/717)
+retains the source/binary bindings and separate case receipts. Other child
+configurations, real-provider/account behavior, public companion artifacts and
+Android delivery remain unqualified.
 
 ## Cursor CLI, Amp and Aider
 
@@ -388,7 +450,7 @@ usage; commercial issue trackers and action repositories are not comparable.
 | [Codex](https://learn.chatgpt.com/docs/hooks) | UserPromptSubmit/tool events; PermissionRequest; Stop/Interrupt/SessionEnd | Native adapter and print-only configuration; contract fixtures |
 | [OpenCode](https://opencode.ai/docs/plugins/) | session.status busy/retry; permission.asked/question.asked; status idle/session.deleted | Native plugin and adapter; contract fixtures |
 | [Gemini CLI](https://geminicli.com/docs/hooks/reference/) | BeforeAgent/BeforeTool; Notification ToolPermission; AfterAgent/SessionEnd | Native adapter, print-only fragment and explicit Linux managed setup; contract fixtures |
-| [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Native observer adapter and shell-free print-only fragment; CLI contract fixtures |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/hooks-reference) | Prompt/post-tool aliases; attention notifications; Stop/SessionEnd | Explicit V2 managed setup and manual shell-free hooks; scoped Linux 1.0.105 root/attention/no-tools child qualification |
 | [Cursor CLI](https://cursor.com/docs/hooks) | beforeSubmitPrompt/tool events; permission-capable hooks; stop/sessionEnd | Native activity/completion adapter, print-only fragment and explicit Linux managed setup; actual permission-wait detection unavailable |
 | [Droid](https://docs.factory.com/harness/hooks) | UserPromptSubmit/tool events; Notification permission_prompt; Stop/SessionEnd | Native adapter, standalone printer and explicit existing-file Linux setup; contract fixtures, native runtime unverified |
 | [Cline CLI](https://docs.cline.bot/sdk/plugins) | Awaited root beforeRun; afterRun completed/aborted/failed | Root-only native runtime plugin; child directory binding and permission waits unsupported |

@@ -378,6 +378,87 @@ fn unscoped_kimi_terminal_hooks_do_not_finish_or_fault_the_parent() {
 }
 
 #[test]
+fn copilot_distinct_children_complete_without_retiring_the_parent() {
+    for completion in ["Stop", "SessionEnd"] {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["owned-parent", "owned-child"] {
+            let mut payload = json!({"hook_event_name":"UserPromptSubmit","session_id":id,"cwd":"/owned/project"});
+            if id == "owned-child" {
+                payload["agent_id"] = json!(id);
+                payload["parent_agent_id"] = json!("owned-parent");
+            }
+            assert!(ingest(dir.path(), "copilot", &payload).status.success());
+        }
+        let before = snapshot(dir.path(), "20");
+        for (child, parent, session) in [
+            (
+                json!("owned-child"),
+                json!("owned-parent"),
+                json!("owned-parent"),
+            ),
+            (json!("owned-child"), Value::Null, json!("owned-child")),
+            (
+                json!("owned-child"),
+                json!("owned-child"),
+                json!("owned-child"),
+            ),
+            (
+                json!({"invalid":"identity"}),
+                json!("owned-parent"),
+                json!("owned-child"),
+            ),
+            (json!("owned-child"), json!(" "), json!("owned-child")),
+            (
+                json!("owned-child"),
+                json!("private\nparent"),
+                json!("owned-child"),
+            ),
+            (
+                json!("owned-child"),
+                json!("x".repeat(257)),
+                json!("owned-child"),
+            ),
+            (
+                json!("x".repeat(257)),
+                json!("owned-parent"),
+                json!("x".repeat(257)),
+            ),
+        ] {
+            let output = ingest(
+                dir.path(),
+                "copilot",
+                &json!({"hook_event_name":completion,"session_id":session,"agent_id":child,"parent_agent_id":parent,"cwd":"/owned/project"}),
+            );
+            assert!(output.status.success());
+            assert!(output.stdout.is_empty() && output.stderr.is_empty());
+            assert_eq!(snapshot(dir.path(), "20"), before);
+        }
+        assert!(ingest(dir.path(), "copilot", &json!({"hook_event_name":completion,"session_id":"owned-child","agent_id":"owned-child","parent_agent_id":"owned-parent","cwd":"/owned/project","last_assistant_message":"PRIVATE-CHILD-RESPONSE"})).status.success());
+        let current = snapshot(dir.path(), "20");
+        let rows = current["sessions"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        for (id, state, count) in [("owned-parent", "working", 1), ("owned-child", "done", 2)] {
+            let row = rows.iter().find(|row| row["sessionId"] == id).unwrap();
+            assert_eq!(row["state"], state);
+            assert_eq!(row["eventCount"], count);
+        }
+        assert!(!current.to_string().contains("PRIVATE-CHILD-RESPONSE"));
+        assert!(ingest(
+            dir.path(),
+            "copilot",
+            &json!({"hook_event_name":"Stop","session_id":"owned-parent","cwd":"/owned/project"})
+        )
+        .status
+        .success());
+        let finished = snapshot(dir.path(), "20");
+        for row in finished["sessions"].as_array().unwrap() {
+            assert_eq!(row["state"], "done");
+            assert_eq!(row["eventCount"], 2);
+        }
+    }
+}
+
+#[test]
 fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
     for (agent, name, events, unsupported, attention_type) in [
         (
@@ -1117,6 +1198,7 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
         ("gemini", "posix-shell"),
         ("cursor", "posix-shell"),
         ("opencode", "bun-javascript"),
+        ("copilot", "shell-free-exec"),
     ] {
         let output = run(
             directory.path(),
@@ -1214,4 +1296,19 @@ fn cline_distinct_roots_sharing_a_conversation_keep_separate_stable_report_rows(
     assert_eq!(after["sessions"][0]["eventCount"], 2);
     assert_eq!(after["sessions"][1]["state"], "done");
     assert_eq!(after["sessions"][1]["eventCount"], 1);
+}
+
+#[test]
+fn hook_discovery_refuses_unrecognized_schema_versions_before_reading_profiles() {
+    let directory = tempfile::tempdir().unwrap();
+    for version in ["0", "3", "-1", "latest", "256"] {
+        let output = run(
+            directory.path(),
+            &["hooks", "discover", "--schema-version", version],
+            b"",
+        );
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 }

@@ -16,7 +16,7 @@ vi.mock("@xterm/addon-web-links", () => ({WebLinksAddon: class {constructor(hand
 let osc: (data: string) => boolean;
 let terminal: ReturnType<typeof createMockTerminal>;
 function createMockTerminal() {
-  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
+  return {_core: {coreService: {onUserInput: (_listener:()=>void) => ({dispose() {}})}}, options: {}, modes:{mouseTrackingMode:'none'}, rows:24, hasSelection: vi.fn(() => false), loadAddon: vi.fn(), parser: {registerOscHandler: vi.fn((_code: number, handler: typeof osc) => {osc = handler; return {dispose() {}};})}, attachCustomKeyEventHandler: vi.fn(), open: vi.fn(), onData: (_callback: (data:string)=>void) => ({dispose() {}}), onResize: (_listener:(size:{cols:number;rows:number})=>void) => ({dispose() {}}), focus: vi.fn(), blur: vi.fn(), paste: vi.fn(), getSelection: () => "selected", buffer: {active: {length: 2, getLine: (index: number) => ({translateToString: () => ["hello", "world"][index]})}}, scrollToLine: vi.fn(), select: vi.fn()};
 }
 function access(locked=false) {
   applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked,
@@ -125,7 +125,7 @@ function touchScrollFixture() {
   const touch = (type: string, x: number, y: number) => canvas.dispatchEvent(new TouchEvent(type, {
     bubbles:true,cancelable:true,touches:type==='touchend'||type==='touchcancel'?[]:[{identifier:1,clientX:x,clientY:y}] as Touch[],
   }));
-  return {view, canvas, wheels, touch};
+  return {view, canvas, wheels, touch, target};
 }
 describe("terminal interactions", () => {
   it.each(['hidden','inactive','disconnect','lock','dispose'] as const)('clears unapplied local context at the %s boundary',boundary=>{
@@ -510,6 +510,29 @@ describe("terminal interactions", () => {
     expect(wheels).toHaveLength(3);
     expect(mocks.write).not.toHaveBeenCalled();
   });
+  it('uses touch distance rather than move frequency for mouse wheel notches, preserving direction and gesture ownership',()=>{
+    terminal.modes.mouseTrackingMode='vt200';
+    const {target,wheels,touch}=touchScrollFixture();
+    const surface=document.createElement('div');surface.className='xterm-screen';
+    surface.getBoundingClientRect=()=>({height:480} as DOMRect);target.append(surface);
+    for(const segments of [2,8]) {
+      wheels.length=0;touch('touchstart',100,300);
+      for(let step=1;step<=segments;step++)touch('touchmove',100,300-180*step/segments);
+      expect(wheels.map(event=>[event.deltaY,event.deltaMode,event.clientX,event.clientY])).toEqual(Array.from({length:9},()=>[1,WheelEvent.DOM_DELTA_LINE,100,300]));
+      touch('touchend',100,120);
+    }
+    wheels.length=0;touch('touchstart',100,300);touch('touchmove',100,290);
+    expect(wheels).toHaveLength(0);
+    touch('touchmove',100,295);touch('touchmove',100,310);
+    expect(wheels.map(event=>event.deltaY)).toEqual([-1]);
+    touch('touchcancel',100,310);touch('touchmove',100,100);
+    expect(wheels).toHaveLength(1);
+    wheels.length=0;touch('touchstart',100,1500);touch('touchmove',100,300);
+    expect(wheels).toHaveLength(10);
+    touch('touchmove',100,299);expect(wheels).toHaveLength(20);
+    touch('touchend',100,299);wheels.length=0;
+    touch('touchstart',100,300);touch('touchmove',100,290);expect(wheels).toHaveLength(0);
+  });
   it('keeps one continuous drag routed to its original pane across boundaries and reversal until end or cancel', () => {
     const {wheels, touch} = touchScrollFixture();
     touch('touchstart',140,180);
@@ -533,6 +556,7 @@ describe("terminal interactions", () => {
     const view = mount();
     let canvas = screen.getByLabelText("Terminal for Host");
     expect(canvas.style.touchAction).toBe("auto");
+    expect(canvas.classList.contains("terminal-screen-reader")).toBe(true);
     const accessiblePinch = new TouchEvent("touchmove", {bubbles: true, cancelable: true, touches: [{identifier: 1}, {identifier: 2}] as Touch[]});
     canvas.dispatchEvent(accessiblePinch);
     expect(accessiblePinch.defaultPrevented).toBe(false);
@@ -540,6 +564,7 @@ describe("terminal interactions", () => {
     savePreferences({...defaults});
     mount();
     canvas = screen.getByLabelText("Terminal for Host");
+    expect(canvas.classList.contains("terminal-screen-reader")).toBe(false);
     const oneTouch = new TouchEvent("touchmove", {bubbles: true, cancelable: true, touches: [{identifier: 1}] as Touch[]});
     canvas.dispatchEvent(oneTouch);
     expect(oneTouch.defaultPrevented).toBe(false);

@@ -49,6 +49,8 @@ export const english = {
   hooksCodexGuide: "Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.",
   hooksClaudeGuide: "Start a new Claude Code session with this profile, open /hooks to inspect loaded hooks, then start a turn. Existing hook restrictions still apply.",
   hooksOpenCodeGuide: "Plugins load when the OpenCode server starts with this profile. Start a new turn to verify reporting.",
+  hooksCopilotGuide: "Start a new Copilot session with this profile, then review /hooks under your existing trust and disabled-hook policy. Setup does not verify live reporting.",
+  hooksCopilotCapability: "Detect GitHub Copilot with an updated companion before configuring its hooks.",
   hooksClineGuide: "Start a new Cline session with this profile to load the root-only plugin, then start a turn. Existing plugin restrictions still apply.",
   hooksTrust: "Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.",
   hooksInvalid: "Invalid hook setup response.",
