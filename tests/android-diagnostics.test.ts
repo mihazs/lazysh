@@ -137,24 +137,26 @@ test('Android and Linux share the guarded official Mosh producer before emulator
   for(const task of ['test:android-ssh','test:native-gui'])expect(tasks[task].passThroughEnv).toContain('LAZYSH_NATIVE_MOSH_SERVER');
 });
 
-test('actual Turbo task forwards pinned Mosh path, companion opt-in and hosted metadata while filtering unrelated environment',async()=>{
+for(const {taskName,keys,values,required} of [
+  {taskName:'test:android-ssh',keys:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'],values:['1','/owned/pinned/mosh-server','true','github-hosted'],required:['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER']},
+  {taskName:'test:native-gui',keys:['LAZYSH_NATIVE_GUI_SECRET_SERVICE'],values:['/owned/pinned/gnome-keyring-daemon'],required:['LAZYSH_NATIVE_GUI_SECRET_SERVICE']},
+])test(`actual Turbo ${taskName} forwards admitted native fixture environment and filters unrelated values`,async()=>{
   const directory=await mkdtemp(join(tmpdir(),'lazysh-android-turbo-'));temporary.push(directory);
   const client=join(directory,'apps/client');await mkdir(client,{recursive:true});
   const config=await Bun.file(new URL('../turbo.json',import.meta.url)).json();
   const pkg=await Bun.file(new URL('../package.json',import.meta.url)).json();
   await writeFile(join(directory,'package.json'),JSON.stringify({name:'owned-android-env',private:true,packageManager:pkg.packageManager,workspaces:['apps/*']}));
-  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{'test:android-ssh':'bun env-probe.ts'}}));
-  const keys=['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER','GITHUB_ACTIONS','RUNNER_ENVIRONMENT'];
+  await writeFile(join(client,'package.json'),JSON.stringify({name:'@lazysh/client',version:'0.0.0',scripts:{[taskName]:'bun env-probe.ts'}}));
   await writeFile(join(client,'env-probe.ts'),`await Bun.write('../../observed.json',JSON.stringify({values:${JSON.stringify(keys)}.map(key=>process.env[key]??null),unrelatedFiltered:process.env.LAZYSH_UNRELATED_SENTINEL===undefined}));`);
   for(const admitted of [true,false]) {
-    const task={...config.tasks['test:android-ssh']};
-    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!['LAZYSH_ANDROID_UI_COMPANION','LAZYSH_NATIVE_MOSH_SERVER'].includes(key));
-    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,'test:android-ssh':task}}));
+    const task={...config.tasks[taskName]};
+    if(!admitted)task.passThroughEnv=task.passThroughEnv.filter((key:string)=>!required.includes(key));
+    await writeFile(join(directory,'turbo.json'),JSON.stringify({...config,tasks:{...config.tasks,[taskName]:task}}));
     await rm(join(directory,'observed.json'),{force:true});
-    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run','test:android-ssh','--filter=@lazysh/client','--only'],directory,
-      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',LAZYSH_ANDROID_UI_COMPANION:'1',LAZYSH_NATIVE_MOSH_SERVER:'/owned/pinned/mosh-server',GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
+    const child=new OwnedProcess(process.execPath,[join(import.meta.dir,'../node_modules/turbo/bin/turbo'),'run',taskName,'--filter=@lazysh/client','--only'],directory,
+      {PATH:process.env.PATH,HOME:directory,CI:'true',TURBO_TELEMETRY_DISABLED:'1',...Object.fromEntries(keys.map((key,index)=>[key,values[index]])),LAZYSH_UNRELATED_SENTINEL:'must-stay-filtered'});
     await child.finish('actual Turbo task environment',10_000);
-    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:[admitted?'1':null,admitted?'/owned/pinned/mosh-server':null,'true','github-hosted'],unrelatedFiltered:true});
+    expect(JSON.parse(await readFile(join(directory,'observed.json'),'utf8'))).toEqual({values:values.map((value,index)=>admitted||!required.includes(keys[index])?value:null),unrelatedFiltered:true});
   }
 },25_000);
 

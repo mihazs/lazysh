@@ -337,3 +337,20 @@ This case requires the owned API36 AOSP emulator and the existing explicit recei
 The existing `test:android-ssh` owner selects the D-pad checkpoint with `LAZYSH_ANDROID_UI_DPAD=1` and separate `ssh-dpad-ui` reports; the generic Android suite excludes its fixture-dependent method. The packaged app authenticates to the owned SSH server, uses normal Preferences → Keyboard and gestures → Toolbar keys and order → Add dpad, and restores that toolbar change afterward. A real native tap sends one Up; a separate trusted MotionEvent stream retains one pointer/downTime from DOWN through held Up, Left, Down, Right and neutral MOVE phases before one UP. No injected DOM events or replacement terminal are used.
 
 The closed test-only receiver mode `DIRECTORY --dpad-pan NONCE` validates a 32-lowercase-hex nonce before output mutation. READY follows raw mode/PID setup. Bounded nonce-bound counts are emitted only after each complete arrow has been written/flushed; progress alone is not a quiescence barrier. Within the original five-second gesture budget, native checks the rendered neutral state, allows 240ms to settle, snapshots counts, then verifies no change across another 240ms neutral pause and a 240ms post-UP pause. Native sends exactly `owned-dpad-NONCE` once through ordinary Compose/Paste draft without Enter and waits for the real server DELIVERED banner before Disconnect. A fresh private count-only receipt is read using the existing retained-APK/run-as pattern; independent host PID/birth/executable/ancestor checks and final exact raw bytes must match that snapshot. Extra, malformed or reordered bytes remain failures even after an earlier progress/DELIVERED banner. Default silent receiver and IME mode behavior, hard 16KiB bound, private no-overwrite files and original timeouts remain intact. Local compilation/contracts are not actual Android execution, physical-device, keyboard or performance qualification.
+
+The two packaged raw-input cases explicitly request `ownedReceiverRoot` in the
+existing private-TTY SSH fixture. This reuses the protected owned root and private
+NSS-home mounts already used by the Herdr fixture; it does not weaken the receiver's
+ancestor ownership checks. Other SSH/Mosh/companion callers retain their prior
+namespace. The option rejects tool, companion, Mosh, shared-navigation or non-private
+TTY combinations before starting a process. The existing host owner includes an
+`owned namespaced SSH raw receiver root` negative/positive control selected by
+`LAZYSH_TEST_SSH_USER_NAMESPACE=1` and `LAZYSH_TEST_RECEIVER_BIN`: the old root must
+reject before receiver output creation, while the owned root must deliver the exact
+fixed IME wire through the same source-bound receiver. This host check is not an
+Android input or gesture acceptance result.
+
+The existing Linux namespaced-SSH CI selector includes this host control. Its source
+image may retain Cargo executable permissions: admission requires an owned regular
+non-link file (including Cargo hardlinks), owner execute and no group/other write. The actual
+private execution copy remains single-link mode0500 with byte equality and ancestry checks.
