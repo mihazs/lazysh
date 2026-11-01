@@ -3,6 +3,15 @@ import type {english} from './en';
 /** Each row must supply Brazilian Portuguese and Spanish for the same English key. */
 const translations = {
   appConnectionOptions: ['Opções de conexão', 'Opciones de conexión'],
+  preferencesCategoryLanguage: ["Idioma e região", "Idioma y región"],
+  preferencesCategoryAppearance: ["Aparência e fontes", "Apariencia y fuentes"],
+  preferencesCategoryTerminal: ["Terminal e acessibilidade", "Terminal y accesibilidad"],
+  preferencesCategoryInput: ["Teclado e gestos", "Teclado y gestos"],
+  preferencesCategoryReset: ["Redefinir configurações", "Restablecer configuración"],
+  preferencesCategoryConnections: ["Conexões", "Conexiones"],
+  preferencesCategorySecurity: ["Segurança e bloqueio", "Seguridad y bloqueo"],
+  preferencesCategoryNotifications: ["Notificações", "Notificaciones"],
+
   terminalEditAnnouncement: ['Edição não enviada', 'Edición no enviada'],
   terminalEditNotSent: ['Edição não enviada · Revisar', 'Edición no enviada · Revisar'],
   terminalEditContext: ['Contexto de entrada local não aplicado. O terminal permanece inalterado.', 'Contexto de entrada local sin aplicar. El terminal no cambió.'],

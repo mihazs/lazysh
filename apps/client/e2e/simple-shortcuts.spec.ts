@@ -1,3 +1,4 @@
+import {openPreferenceCategory} from './fixtures/workspaceControl';
 import { openGestureSettings, saveAdvancedGesture, expectGestureBinding } from './fixtures/gestureSettings';
 import {expect,test,type Page} from '@playwright/test';
 
@@ -32,6 +33,7 @@ async function fixture(page:Page) {
   });
   await page.goto('/');
   await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Keyboard chords',{exact:true}).click();
 }
 
@@ -162,6 +164,7 @@ test('Simple limits and unsupported modifiers reject saving without truncating t
 
 test('custom gesture and D-pad builders save isolated bindings and send only on explicit activation',async({page})=>{
   await fixture(page);
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Terminal touch gestures',{exact:true}).click();
   await page.getByRole('combobox',{name:'Single tap',exact:true}).selectOption('custom');
   await page.getByLabel('Single tap chord',{exact:true}).fill('F12, M-h');
@@ -210,6 +213,7 @@ test('custom gesture and D-pad builders save isolated bindings and send only on 
 
 test('invalid slot drafts survive other-slot saves and builder switches never rewrite stored Advanced bindings',async({page})=>{
   await fixture(page);
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Terminal touch gestures',{exact:true}).click();
   await saveAdvancedGesture(page, 'Double tap', 'C-b, S-t');
   await page.getByRole('combobox',{name:'Double tap shortcut builder',exact:true}).selectOption('simple');
@@ -297,6 +301,7 @@ test('named key pickers persist toolbar and gesture bindings and deliver exact s
   await expect(page.getByLabel('Option / Alt',{exact:true})).toBeChecked();
   await page.getByLabel('Chord name',{exact:true}).fill('Agent action');
   await page.getByRole('button',{name:'Add chord',exact:true}).click();
+  await openPreferenceCategory(page,'Input');
   await page.getByText('Terminal touch gestures',{exact:true}).click();
   await page.getByRole('combobox',{name:'Single tap',exact:true}).selectOption('custom');
   await page.getByLabel('Single tap shortcut builder',{exact:true}).selectOption('named');
