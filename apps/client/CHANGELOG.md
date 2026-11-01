@@ -1,5 +1,21 @@
 # @lazysh/client
 
+## 1.6.0
+
+### Minor Changes
+
+- aad0990: Add opt-in version-2 hook discovery and inspected, profile-scoped Copilot hook setup while preserving version-1 compatibility, foreign settings and provider trust.
+
+### Patch Changes
+
+- b6c3bd3: Keep a held touch scroll on the stable terminal screen when output redraws its text spans. Preserve screen-reader mode and desktop hit testing.
+- b6c3bd3: Normalize mouse-tracking touch scroll by finger travel instead of event frequency, retaining partial distance, original targeting and bounded wheel batches until the gesture ends. Keep the outer terminal canvas anchored during keyboard-sized resize and input visibility requests. Plain terminal history and physical wheel behavior remain unchanged.
+- @lazysh/account-usage@1.6.0
+  - @lazysh/common@1.6.0
+  - @lazysh/display-idle@1.6.0
+  - @lazysh/et-transport@1.6.0
+  - @lazysh/mosh-transport@1.6.0
+
 ## 1.5.5
 
 ### Patch Changes
