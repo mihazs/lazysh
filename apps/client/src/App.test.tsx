@@ -1994,6 +1994,7 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   expect(screen.getByRole('button',{name:'Connections'})).toHaveProperty('ariaCurrent','page');
   await user.click(screen.getByRole('button',{name:'Agents'}));
   const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
+  await user.click(screen.getByRole('button',{name:'Setup'}));
   const settings=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});await user.click(settings);
   expect(screen.getByText('Live SSH terminal')).toBeTruthy();
   expect(screen.getAllByRole('region',{name:'Agent activity'})).toHaveLength(1);

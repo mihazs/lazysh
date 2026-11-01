@@ -1414,6 +1414,7 @@ const translations = {
   agentsRefreshing: ["Atualizando…", "Actualizando…"],
   agentsReportedHint: ["Últimos eventos informados por este servidor. Responda às solicitações dos agentes no terminal.", "Últimos eventos comunicados por este servidor. Responde a las solicitudes de los agentes en el terminal."],
   agentsConnect: ["Conecte seus agentes.", "Conecta tus agentes."],
+  agentsSetupAction: ["Configurar", "Configurar"],
   agentsSetup: ["Instale o companion opcional lazysh-agent neste servidor e ative seus hooks de ciclo de vida. O terminal funciona de forma independente.", "Instala el companion opcional lazysh-agent en este servidor y activa sus hooks de ciclo de vida. El terminal funciona de forma independiente."],
   agentsSetupDocs: ["Consulte {{path}} no repositório lazysh para configurar.", "Consulta {{path}} en el repositorio de lazysh para configurarlo."],
   agentsReading: ["Lendo eventos por SSH…", "Leyendo eventos por SSH…"],

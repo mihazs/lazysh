@@ -192,11 +192,28 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command==='install_companion'))).toEqual([]);
   await board.getByRole('button',{name:'Install companion',exact:true}).click();
   await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
+  const setup=board.getByRole('button',{name:'Setup',exact:true});
+  await expect(setup).toHaveAttribute('aria-expanded','true');
+  await setup.click();
+  await expect(setup).toHaveAttribute('aria-expanded','false');
+  await expect(board.getByRole('region',{name:'Host companion settings',exact:true})).toBeHidden();
+  await setup.click();
   await expect(board.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
+  await setup.click();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
   await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
+  const serverSetup=live.locator('.herdr-server-setup');
+  await expect(serverSetup).not.toHaveAttribute('open');
+  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toBeHidden();
+  await serverSetup.locator('summary').click();
+  await expect(live.getByRole('combobox',{name:'Herdr server',exact:true})).toHaveValue('default');
+  await serverSetup.locator('summary').click();
+  if(phone)await page.setViewportSize({width:393,height:844});
+  await page.locator('.workspace-navigation-scroll').evaluate(node=>{node.scrollTop=0;});
+  await expect(live.getByRole('button',{name:/^codex-builder/})).toBeInViewport({ratio:0.75});
+  await page.screenshot({path:testInfo.outputPath('healthy-agents-first-row.png')});
   await expect(live.getByRole('heading',{name:'Idle · 1',exact:true})).toBeVisible();
   await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Development / Codex tasks / /nav/codex'))).toHaveCount(1);
   await expect(page.locator(nativeHerdrNavigationRow('codex-builder','Idle'))).toHaveCount(0);
@@ -220,6 +237,7 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await board.getByRole('button',{name:'Refresh',exact:true}).click();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
+  await setup.click();
   const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
   const original=await settings.elementHandle();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{updated:boolean}}).workspaceNavigationState.updated=true;});
@@ -403,8 +421,8 @@ test('mobile terminal keeps one compact header and reaches every session control
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     await more.getByRole('button',{name:'Attach',exact:true}).click();
     await expect(page.getByRole('heading',{name:'Attach to this host',exact:true})).toBeVisible();
-    await expect(strip).toBeVisible();await expect(tabs).toBeVisible();
-    await strip.getByRole('button',{name:'Terminal',exact:true}).click();
+    await expect(strip).toBeHidden();await expect(tabs).toBeHidden();
+    await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
     await expect(strip).toBeHidden();expect(await canvas!.evaluate(node=>node.isConnected)).toBe(true);
     await page.screenshot({path:testInfo.outputPath('compact-terminal.png')});
   }else{
