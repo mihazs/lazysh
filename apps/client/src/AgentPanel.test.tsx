@@ -683,3 +683,25 @@ it.each(['standalone','navigation'])('collapses the healthy single-server %s cho
   expect(within(live).getByRole('combobox',{name:t('herdrAgentsServer')})).toHaveProperty('value','owned');
   expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree')).toHaveLength(1);
 });
+
+it('offers empty Activity a direct hook-setup action without automatic inspection or installation',async()=>{
+  const invoke=await historyFixture(reported,[]);
+  render(<AgentPanel sessionId="empty-activity" showHerdr={false}/>);
+  await screen.findByText(t('agentsEmpty'));
+  expect(screen.getByRole('button',{name:t('agentsSetupAction')}).getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(screen.getByRole('button',{name:t('hooksTitle')}));
+  const setup=screen.getByRole('region',{name:t('agentsSetupAction')});
+  const provider=within(setup).getByLabelText(t('hooksProvider'));
+  expect(provider.closest('details')).toHaveProperty('open',true);expect(document.activeElement).toBe(provider);
+  expect(within(setup).getByLabelText(t('hooksProfile'))).toHaveProperty('value','');
+  expect(within(setup).queryByRole('button',{name:t('hooksInstall')})).toBeNull();
+  expect(invoke.mock.calls.filter(([command])=>command==='companion_hooks')).toHaveLength(0);
+});
+
+it('never mistakes filtered reports for an empty Activity setup failure',async()=>{
+  await historyFixture(reported);render(<AgentPanel sessionId="filter-empty" showHerdr={false}/>);
+  await screen.findByText('Permission requested');
+  fireEvent.change(screen.getByRole('searchbox',{name:t('agentsSearch')}),{target:{value:'no matching report'}});
+  expect(screen.getByText(t('agentsNoMatches'))).toBeTruthy();
+  expect(screen.queryByRole('button',{name:t('hooksTitle')})).toBeNull();
+});

@@ -59,3 +59,29 @@ it('explains required native Droid standalone setup without enabling mutation',a
   expect(await screen.findByText('Create standalone hooks.json in Droid’s /hooks UI, then inspect again. Existing settings and legacy hooks are not migrated.')).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();expect(hooks).toHaveBeenCalledTimes(1);
 });
+
+it('reveals the exact hook workflow once without inspecting or installing and preserves its drafts',()=>{
+  const request={sessionId:'owned-hook-setup'};
+  const view=render(<CompanionHooksPanel sessionId="owned-hook-setup" visible reveal={request}/>);
+  const disclosure=view.container.querySelector('details')!;
+  expect(disclosure.open).toBe(true);
+  expect(document.activeElement).toBe(screen.getByLabelText('Hook provider'));
+  selectProfile();expect(hooks).not.toHaveBeenCalled();
+  fireEvent.click(disclosure.querySelector('summary')!);expect(disclosure.open).toBe(false);
+  view.rerender(<CompanionHooksPanel sessionId="owned-hook-setup" visible={false} reveal={request}/>);
+  view.rerender(<CompanionHooksPanel sessionId="owned-hook-setup" visible reveal={request}/>);
+  expect(disclosure.open).toBe(false);expect(screen.getByLabelText('Host profile directory')).toHaveProperty('value','/owned/profile');
+  view.rerender(<CompanionHooksPanel sessionId="owned-hook-setup" visible reveal={{sessionId:'owned-hook-setup'}}/>);
+  expect(disclosure.open).toBe(true);expect(hooks).not.toHaveBeenCalled();
+});
+
+it.each(['hidden','other-source','revoked'])('drops a %s reveal request without replaying it later',state=>{
+  if(state==='revoked')applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:true,generation:String(++epoch)});
+  const request={sessionId:state==='other-source'?'old-source':'owned-hook-setup'};
+  const view=render(<CompanionHooksPanel sessionId="owned-hook-setup" visible={state!=='hidden'} reveal={request}/>);
+  const disclosure=view.container.querySelector('details')!;
+  expect(disclosure.open).toBe(false);expect(hooks).not.toHaveBeenCalled();
+  if(state==='revoked')applyAccessStatus({initialized:true,supported:true,reason:'',enabled:true,locked:false,generation:String(++epoch),nonce:'d'.repeat(64)});
+  view.rerender(<CompanionHooksPanel sessionId={request.sessionId} visible reveal={request}/>);
+  expect(disclosure.open).toBe(false);expect(hooks).not.toHaveBeenCalled();
+});
